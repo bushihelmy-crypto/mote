@@ -1,0 +1,185 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Tests for the Grep tool (``metagpt.executor.tools.grep``).
+
+Exercises the three output modes, glob/type filters, case-insensitivity,
+pagination, and the error guards through the public ``call`` (ripgrep is present
+in this environment, so this covers the real binary path). The pure-Python
+fallback engine and the pure helper functions are also tested directly so they
+stay covered regardless of whether ripgrep is installed.
+"""
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from metagpt.executor.tool_result import ToolError
+from metagpt.executor.tools.grep import Grep, _apply_head_limit, _split_glob, _find_ripgrep
+
+from .conftest import run, write_file
+
+
+def _grep(**kwargs):
+    return run(Grep().call(**kwargs))
+
+
+@pytest.fixture
+def tree(workspace):
+    """A small file tree to search."""
+    write_file(workspace / "a.py", "import os\ndef foo():\n    return ERROR\n")
+    write_file(workspace / "b.py", "x = 1\nfoo()\n")
+    write_file(workspace / "c.txt", "no match here\nERROR in text\n")
+    sub = workspace / "sub"
+    sub.mkdir()
+    write_file(sub / "d.py", "def bar():\n    pass\n")
+    return workspace
+
+
+class TestFilesWithMatches:
+    def test_lists_matching_files_with_lineno(self, tree):
+        out = _grep(pattern="ERROR")
+        # Default mode emits "path:line" so it can be fed to Read's offset.
+        assert "a.py:3" in out
+        assert "c.txt:2" in out
+        assert "b.py" not in out
+
+    def test_no_matches(self, tree):
+        out = _grep(pattern="zzz-not-present-anywhere")
+        assert out == "No files found"
+
+    def test_glob_filter(self, tree):
+        out = _grep(pattern="ERROR", glob="*.py")
+        assert "a.py:3" in out
+        assert "c.txt" not in out
+
+    def test_type_filter(self, tree):
+        out = _grep(pattern="ERROR", type="py")
+        assert "a.py" in out
+        assert "c.txt" not in out
+
+
+class TestContentMode:
+    def test_content_with_line_numbers(self, tree):
+        out = _grep(pattern="ERROR", output_mode="content")
+        assert "a.py:3:" in out
+        assert "return ERROR" in out
+
+    def test_case_insensitive(self, tree):
+        write_file(tree / "e.py", "lowercase error\n")
+        out = _grep(pattern="error", output_mode="content", case_insensitive=True)
+        assert "e.py" in out
+        # uppercase ERROR lines also match case-insensitively
+        assert "a.py" in out
+
+    def test_context_lines(self, tree):
+        out = _grep(pattern="return ERROR", output_mode="content", context=1)
+        # Context pulls in the surrounding def line.
+        assert "def foo" in out
+
+
+class TestCountMode:
+    def test_per_file_counts_and_summary(self, tree):
+        write_file(tree / "many.txt", "ERROR\nERROR\nERROR\n")
+        out = _grep(pattern="ERROR", output_mode="count")
+        assert "many.txt:3" in out
+        assert "Found" in out and "occurrences" in out
+
+
+class TestPagination:
+    def test_head_limit_truncates(self, workspace):
+        for i in range(10):
+            write_file(workspace / f"f{i}.txt", "ERROR\n")
+        out = _grep(pattern="ERROR", head_limit=3)
+        # 3 result lines + the "Found ..." header.
+        body = [ln for ln in out.splitlines() if ln and not ln.startswith("Found")]
+        assert len(body) == 3
+        assert "limit: 3" in out
+
+    def test_offset_paginates(self, workspace):
+        for i in range(5):
+            write_file(workspace / f"f{i}.txt", "ERROR\n")
+        out = _grep(pattern="ERROR", head_limit=2, offset=2)
+        assert "offset: 2" in out
+
+
+class TestGuards:
+    def test_empty_pattern_raises(self, workspace):
+        with pytest.raises(ToolError, match="'pattern' argument is required"):
+            _grep(pattern="  ")
+
+    def test_invalid_output_mode_raises(self, workspace):
+        with pytest.raises(ToolError, match="invalid output_mode"):
+            _grep(pattern="x", output_mode="bogus")
+
+    def test_missing_path_raises(self, workspace):
+        with pytest.raises(ToolError, match="path does not exist"):
+            _grep(pattern="x", path=str(workspace / "nope"))
+
+
+# --- Pure-Python fallback engine (independent of ripgrep) --------------------
+
+
+class TestPythonEngine:
+    def test_run_python_files_with_matches(self, tree):
+        rows = Grep()._run_python(
+            str(tree), "ERROR", "", "", "files_with_matches", False, True, False
+        )
+        joined = "\n".join(rows)
+        assert any("a.py:" in r for r in rows)
+        assert any("c.txt:" in r for r in rows)
+        assert "b.py" not in joined
+
+    def test_run_python_content(self, tree):
+        rows = Grep()._run_python(
+            str(tree), "ERROR", "", "py", "content", False, True, False
+        )
+        # type=py filter excludes the .txt match.
+        assert all(".txt" not in r for r in rows)
+        assert any("return ERROR" in r for r in rows)
+
+    def test_run_python_count(self, tree):
+        write_file(tree / "many.txt", "ERROR\nERROR\n")
+        rows = Grep()._run_python(
+            str(tree), "ERROR", "*.txt", "", "count", False, True, False
+        )
+        assert any(r.endswith(":2") for r in rows)
+
+
+# --- Pure helpers ------------------------------------------------------------
+
+
+class TestHelpers:
+    def test_split_glob_brace_preserved(self):
+        assert _split_glob("*.{ts,tsx}") == ["*.{ts,tsx}"]
+
+    def test_split_glob_comma_and_space(self):
+        assert _split_glob("*.js,*.ts *.py") == ["*.js", "*.ts", "*.py"]
+
+    def test_apply_head_limit_unlimited(self):
+        items = list(range(10))
+        sliced, applied = _apply_head_limit(items, 0, 0)
+        assert sliced == items
+        assert applied is None
+
+    def test_apply_head_limit_truncates(self):
+        items = list(range(10))
+        sliced, applied = _apply_head_limit(items, 3, 0)
+        assert sliced == [0, 1, 2]
+        assert applied == 3
+
+    def test_apply_head_limit_offset(self):
+        items = list(range(10))
+        sliced, applied = _apply_head_limit(items, 2, 5)
+        assert sliced == [5, 6]
+        assert applied == 2
+
+    def test_apply_head_limit_no_truncation_when_within(self):
+        sliced, applied = _apply_head_limit([1, 2], 5, 0)
+        assert sliced == [1, 2]
+        assert applied is None
+
+    def test_find_ripgrep_returns_str_or_none(self):
+        # Just exercise the probe; either a path or None is acceptable.
+        rg = _find_ripgrep()
+        assert rg is None or isinstance(rg, str)
