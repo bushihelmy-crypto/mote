@@ -1,0 +1,113 @@
+"""Bash command tool — aligned with Claude Code's Bash tool.
+
+Runs a shell command in the role's current working directory and keeps the
+live cwd in sync: after each command we probe `pwd` so that a `cd` inside the
+command persists to the next turn, the same way Claude Code calls setCwd()
+after resolving the shell's working directory.
+
+aexecute() spawns a fresh subprocess per call (no persistent shell), so a bare
+`cd` would not survive across calls. We emulate persistence by always running
+in the role's cwd and writing the probed directory back via set_cwd.
+
+Cwd ownership stays in the Role. This tool only borrows two narrow accessors
+(get_cwd / set_cwd) injected by bind(); it never sees RoleState or memory.
+"""
+from __future__ import annotations
+
+import os
+from typing import Callable, ClassVar
+
+from metagpt.executor.base_tool import BaseTool
+from metagpt.executor.tool_registry import register_tool
+from metagpt.executor.tool_result import ToolError
+from metagpt.common.logs import logger
+from metagpt.common.utils.common import aexecute
+
+# Unique marker so we can split the command's real output from the trailing
+# pwd probe without clashing with normal output.
+_CWD_MARKER = "__METAGPT_CWD__:"
+
+
+@register_tool
+class Bash(BaseTool):
+    """Run a bash command in the current working directory and return its output."""
+
+    name = "Bash"
+    aliases = ["Bash.run", "bash"]
+    # Shell output can be verbose; cap below the default (CC).
+    max_result_size_chars: ClassVar[int] = 30_000
+    description = "Execute a bash command. State (cwd) persists across calls within a session."
+    requires = ("get_cwd", "set_cwd")
+
+    # Injected from Role by bind() — only these two cwd accessors, never RoleState
+    # or memory.
+    get_cwd: Callable[[], str]
+    set_cwd: Callable[[str], None]
+
+    async def call(self, *, command: str, timeout: float = 300.0) -> str:
+        """Execute a bash command in the session's current working directory.
+
+        Args:
+            command: The bash command to execute.
+            timeout: Maximum seconds to wait for the command (default 300).
+        """
+        if not command or not command.strip():
+            raise ToolError("Error: 'command' argument is required.")
+
+        cwd = self.get_cwd()
+        if not cwd or not os.path.isdir(cwd):
+            cwd = None  # let aexecute fall back to the process default
+
+        # Append a probe so we can capture the command's real exit code and the
+        # directory it ended in (e.g. after a `cd`), then persist cwd back via
+        # set_cwd. `$?` here reflects the user command, since the probe runs
+        # immediately after it.
+        probe = f'echo "{_CWD_MARKER}$?:$(pwd)"'
+        wrapped = f"{command}\n{probe}"
+
+        try:
+            _rc, stdout, stderr = await aexecute(wrapped, working_dir=cwd, wait=True, timeout=timeout)
+        except TimeoutError:
+            raise ToolError(f"Error: command timed out after {timeout} seconds.")
+        except Exception as e:
+            logger.error(f"Bash command failed to launch: {e}")
+            raise ToolError(f"Error executing command: {e}")
+
+        output, rc, new_cwd = self._split_probe(stdout)
+        if new_cwd and os.path.isdir(new_cwd):
+            self.set_cwd(new_cwd)
+
+        parts = []
+        if output:
+            parts.append(output)
+        if stderr:
+            parts.append(stderr)
+        if rc:
+            parts.append(f"[exit code: {rc}]")
+        return "\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _split_probe(stdout: str) -> tuple[str, int, str]:
+        """Split command output from the trailing probe marker.
+
+        The probe is ``__METAGPT_CWD__:<exit_code>:<cwd>``. Returns
+        (output_without_probe, exit_code, probed_cwd). If the marker is missing
+        (e.g. the command crashed before the probe ran), returns (stdout, 0, "").
+        """
+        if not stdout:
+            return "", 0, ""
+        idx = stdout.rfind(_CWD_MARKER)
+        if idx < 0:
+            return stdout, 0, ""
+        output = stdout[:idx].rstrip("\n")
+        tail = stdout[idx + len(_CWD_MARKER):].strip()
+        code_str, _, new_cwd = tail.partition(":")
+        try:
+            rc = int(code_str)
+        except ValueError:
+            rc = 0
+        return output, rc, new_cwd
+
+    def cleanup_session(self, session_id: str) -> None:
+        """No persistent process to tear down; aexecute spawns per-call."""
+        pass
