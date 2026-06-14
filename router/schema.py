@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from metagpt.common.config.llm_config import LLMConfig
+from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const.llm import MULTI_MODAL_MODELS
 from metagpt.common.utils.token_counter import count_message_tokens, count_string_tokens
 

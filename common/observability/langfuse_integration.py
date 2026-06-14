@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from metagpt.common.logs import logger
 
 if TYPE_CHECKING:
-    from metagpt.common.config.langfuse_config import LangfuseConfig
+    from metagpt.common.config.config.langfuse_config import LangfuseConfig
 
 _ENABLED: bool = False
 _STEPS_ENABLED: bool = False

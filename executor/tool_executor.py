@@ -66,10 +66,21 @@ class ToolExecutor(BaseToolExecutor):
         role=None,
         limit_config: ToolResultLimitConfig | None = None,
         permission_config: PermissionConfig | None = None,
+        hook_manager=None,
+        lsp_notifier=None,
     ) -> None:
         self._session_id = session_id
         self._mcp: UniversalMCP | None = None
         self._tools: dict[str, Any] = {}  # name -> BaseTool instance (static + dynamic)
+        # Optional hook runner (``common.interface.HookRunner``). When set,
+        # PreToolUse / PostToolUse fire around the tool call. None => no hook
+        # layer (legacy behavior), exactly like the permission engine opt-in.
+        self._hook_manager = hook_manager
+        # Optional LSP notifier (``common.interface.LspNotifier``). When set, a
+        # successful filesystem-mutating tool call reports the written path so
+        # the LSP layer can sync the doc + collect diagnostics. None => no LSP
+        # layer (legacy behavior), same opt-in model as the hook layer.
+        self._lsp_notifier = lsp_notifier
         # Tool-result size limiting knobs (per-tool cap + disk persistence). A
         # default config reproduces CC's out-of-the-box behavior.
         self._limit_config = limit_config or ToolResultLimitConfig()
@@ -170,16 +181,47 @@ class ToolExecutor(BaseToolExecutor):
         args = kwargs or {}
 
         with maybe_span(f"tool:{name}", **(kwargs or {})):
+            # PreToolUse hook: fires before the permission gate. It may rewrite
+            # the args (updated_args) or block the call outright (deny). Hook
+            # deny composes with the permission engine via deny-wins: a hook
+            # block returns immediately; a hook allow never overrides an engine
+            # deny (the engine still runs below).
+            if self._hook_manager is not None:
+                outcome = await self._hook_manager.fire(
+                    "PreToolUse",
+                    {"tool_name": name, "tool_input": args, "tool_use_id": result_id},
+                )
+                if outcome.updated_args is not None:
+                    args = outcome.updated_args
+                if outcome.behavior == "deny" or outcome.stop:
+                    reason = outcome.system_message or outcome.stop_reason or "blocked by PreToolUse hook"
+                    return ToolResult(output=f"[PERMISSION DENIED] {reason}", success=False)
+
             # Permission gate: when enabled, evaluate the call before executing. A
             # denied call never reaches tool.call(); an approver may also narrow the
             # arguments via updated_args.
             if self._permission_engine is not None:
-                decision = await self._permission_engine.check(
-                    name,
-                    target=tool.permission_target(args),
-                    tool_check=tool.check_permissions(args),
-                    mutates_fs=getattr(tool, "mutates_filesystem", False),
-                )
+                # Most tools touch a single target; a few (ApplyPatch) act on
+                # several paths in one call. Evaluate them together via
+                # check_multi so a multi-path patch yields one consolidated
+                # approval; single-target tools keep the existing check() path.
+                targets = tool.permission_targets(args)
+                mutates_fs = getattr(tool, "mutates_filesystem", False)
+                tool_check = tool.check_permissions(args)
+                if len(targets) > 1:
+                    decision = await self._permission_engine.check_multi(
+                        name,
+                        targets=targets,
+                        tool_check=tool_check,
+                        mutates_fs=mutates_fs,
+                    )
+                else:
+                    decision = await self._permission_engine.check(
+                        name,
+                        target=targets[0] if targets else "",
+                        tool_check=tool_check,
+                        mutates_fs=mutates_fs,
+                    )
                 if decision.behavior == "deny":
                     return ToolResult(output=f"[PERMISSION DENIED] {decision.message}", success=False)
                 if decision.updated_args is not None:
@@ -205,6 +247,35 @@ class ToolExecutor(BaseToolExecutor):
             # signalled structurally (raise ToolError above, or return
             # ToolResult(success=False)), never by sniffing the output text.
             result = ToolResult.from_tool_return(raw)
+
+            # PostToolUse hook: fires after the tool ran (and was normalized). It
+            # may append extra context to the output or block (mark the result
+            # failed with a reason) for the model to react to.
+            if self._hook_manager is not None:
+                outcome = await self._hook_manager.fire(
+                    "PostToolUse",
+                    {"tool_name": name, "tool_input": args, "tool_response": result.output, "tool_use_id": result_id},
+                )
+                if outcome.additional_context:
+                    extra = "\n".join(outcome.additional_context)
+                    result.output = f"{result.output}\n{extra}" if result.output else extra
+                if outcome.is_blocking:
+                    reason = outcome.system_message or outcome.stop_reason or "blocked by PostToolUse hook"
+                    result.success = False
+                    result.output = f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
+
+            # LSP after-edit notify: a successful filesystem-mutating tool reports
+            # its written path so the LSP layer can sync the document + collect
+            # diagnostics (surfaced into context at the next turn). Best-effort
+            # and gated on opt-in (no notifier => skipped).
+            if self._lsp_notifier is not None and result.success and getattr(tool, "mutates_filesystem", False):
+                path = tool.permission_target(args)
+                if path:
+                    try:
+                        await self._lsp_notifier.file_saved(path)
+                    except Exception:  # noqa: BLE001 — never break the tool call
+                        pass
+
             return self._limit_result(result, name, result_id)
 
     def _limit_result(self, result: ToolResult, name: str, result_id: str | None) -> ToolResult:
@@ -362,4 +433,11 @@ class ToolExecutor(BaseToolExecutor):
 
         if self._mcp is not None:
             await self._mcp.cleanup_clients()
+
+        # Tear down any language servers the LSP layer launched this session.
+        if self._lsp_notifier is not None:
+            try:
+                await self._lsp_notifier.shutdown()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
             self._mcp = None

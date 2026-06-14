@@ -133,6 +133,17 @@ class BaseTool(ABC):
         """
         return ""
 
+    def permission_targets(self, args: dict) -> list[str]:
+        """Return *all* permission-target strings this call touches.
+
+        The default wraps :meth:`permission_target` (single target) so existing
+        tools are unaffected. A tool that acts on multiple paths in one call
+        (e.g. ``ApplyPatch``) overrides this to list every path; the executor
+        then evaluates them together via ``PermissionEngine.check_multi``.
+        """
+        target = self.permission_target(args)
+        return [target] if target else []
+
     def check_permissions(self, args: dict) -> "PermissionDecision | None":
         """Tool-specific permission self-check, run before mode/rule fallback.
 

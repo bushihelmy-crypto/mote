@@ -1,0 +1,167 @@
+# ============================================================================
+# MetaGPT / AgentFrame 配置模板
+# ----------------------------------------------------------------------------
+# 本文件是受信任的 PROJECT 层配置（metagpt/config.yaml）。
+#
+# 配置加载优先级（低 -> 高，高者覆盖低者）：
+#   defaults < system < user < project < workdir < profile < env < cli < programmatic < managed
+#   - project  : 本文件 (metagpt/config.yaml)
+#   - user     : ~/.agentframe/config.yaml  (兼容 ~/.metagpt/config2.yaml)
+#   - workdir  : <cwd>/.agentframe/config.yaml  (不受信任，凭据字段会被剥离)
+#   - profile  : ~/.agentframe/<name>.config.yaml  (用 AGENTFRAME_PROFILE 选择)
+#   - env      : 环境变量 AGENTFRAME_* / METAGPT_*
+#                例: AGENTFRAME_LLM__BASE_URL=...  ->  llm.base_url
+#                    (__ 分隔层级, 值按 YAML 解析: true / 8000 / ...)
+#   - cli      : 运行时 -c key=value 覆盖
+#   - managed  : /etc/agentframe/managed.config.yaml  (管理员策略，覆盖一切)
+#
+# 只有 `llm` 是必填项；其余均有默认值，按需取消注释覆盖。
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# LLM —— 主模型（必填）
+# ----------------------------------------------------------------------------
+llm:
+  api_key: "sk-YOUR_API_KEY"            # 单个 key，或 key 列表（轮换）；配置 oauth 时可留空
+  api_type: "openai"                     # openai | fireworks | open_llm | moonshot | mistral | yi | open_router | deepseek | siliconflow
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"                        # 模型名 / 部署名
+  # api_version: null                    # Azure 等需要时填写
+  # pricing_plan: null                   # 成本结算计划
+
+  # 生成参数
+  max_token: 4096
+  temperature: 0.0
+  top_p: 1.0
+  # top_k: 0
+  # repetition_penalty: 1.0
+  # presence_penalty: 0.0
+  # frequency_penalty: 0.0
+  # stop: null
+  # stream: false
+  # n: null
+  # best_of: null
+  # logprobs: null
+  # top_logprobs: null
+  timeout: 600
+
+  # 网络与成本
+  # proxy: null
+  calc_usage: true                       # 是否统计 token 用量/成本
+  compress_type: ""                      # "" | post_cut_by_msg | post_cut_by_token | balanced_cut_by_token | pre_cut_by_msg | pre_cut_by_token
+
+  # OAuth（可选）：设置后用 bearer token 取代静态 api_key
+  # oauth:
+  #   provider: "openai"                 # 预设名（自动填充 token_url/scopes 等）；显式字段优先
+  #   client_id: "YOUR_CLIENT_ID"        # 必填
+  #   client_secret: "YOUR_CLIENT_SECRET"
+  #   grant_type: "client_credentials"   # client_credentials | refresh_token
+  #   token_url: "https://.../oauth/token"
+  #   refresh_token: null
+  #   scopes: []
+  #   audience: null
+  #   store_backend: "fallback"          # file | keyring | fallback
+  #   expiry_buffer_s: 300
+  #   headers_extra: {}
+
+# ----------------------------------------------------------------------------
+# 路由与任务级模型
+# ----------------------------------------------------------------------------
+# 智能路由：true 时按请求从注册的 model cards 选模型；false 用上面固定的 llm
+enable_router: false
+
+# 上下文压缩模型（autocompact）。默认仅 model 不同，transport/凭据继承自 llm
+# compress_llm:
+#   model: "claude-sonnet-4-8"
+
+# 会话结束总结模型。默认仅 model 不同，transport/凭据继承自 llm
+# summary_llm:
+#   model: "claude-sonnet-4-8"
+
+# ----------------------------------------------------------------------------
+# 杂项
+# ----------------------------------------------------------------------------
+# proxy: ""                              # 全局代理（供浏览器等工具用，非 LLM）
+# api_key_helper: ""                     # 打印 api key 到 stdout 的 shell 命令（仅受信任层生效）
+# repair_llm_output: false               # 修复 LLM 原始输出
+
+# ----------------------------------------------------------------------------
+# 经验池 (Experience Pool)
+# ----------------------------------------------------------------------------
+# exp_pool:
+#   enabled: false
+#   enable_read: false
+#   enable_write: false
+#   persist_path: ".chroma_exp_data"
+#   retrieval_type: "bm25"               # bm25 | chroma
+#   use_llm_ranker: true
+#   collection_name: "experience_pool"
+
+# ----------------------------------------------------------------------------
+# RoleZero
+# ----------------------------------------------------------------------------
+# role_zero:
+#   # 长期记忆
+#   enable_longterm_memory: false
+#   longterm_memory_persist_path: ".role_memory_data"
+#   memory_k: 30                         # 短期记忆容量
+#   similarity_top_k: 5                  # 检索的长期记忆条数
+#   use_llm_ranker: false
+#
+#   # 可压缩记忆
+#   enable_compressable_memory: false
+#   compress_type: "compaction"          # compaction | compressable
+#   compress_k: 15                       # 压缩后保留的最新消息数
+#   compress_model_name: "gpt-4o-mini"
+#   compress_trigger_token_threshold: 0  # 0 表示不触发
+#
+#   # AdaptiveCompactionMemory
+#   max_context_tokens: 128000
+#   compression_threshold: 0.8           # 触发压缩的 token 占比
+#   target_after_compression: 0.50       # 压缩后目标 token 占比
+#   protected_recent_messages: 8
+#   min_compression_ratio: 0.08
+#
+#   # P0 Skills
+#   skills:
+#     enabled: false
+#     max_tokens: 2000
+
+# ----------------------------------------------------------------------------
+# MCP (Model Context Protocol)
+# ----------------------------------------------------------------------------
+# mcp:
+#   servers:
+#     - name: "my-sse-server"
+#       type: "sse"                      # sse | stdio
+#       enabled: true
+#       url: "http://localhost:8000/sse" # SSE 必填
+#       sse_read_timeout: 600
+#       tool_call_timeout: 3600
+#     - name: "my-stdio-server"
+#       type: "stdio"
+#       enabled: false
+#       command: "python"                # STDIO 必填
+#       args: ["-m", "my_mcp_server"]
+#       env: {}
+#       aliases: {}                      # {原始工具名: [别名1, 别名2]}
+
+# ----------------------------------------------------------------------------
+# 可观测性 / 监控
+# ----------------------------------------------------------------------------
+# Langfuse LLM tracing
+# langfuse:
+#   enabled: false
+#   host: "https://cloud.langfuse.com"
+#   public_key: ""
+#   secret_key: ""
+#   sample_rate: 1.0
+#   trace_steps: true
+
+# Sentry 错误追踪
+# sentry:
+#   enable: false
+#   dsn: ""
+#   environment: "algo-debug"
+#   send_default_pii: true
+#   extra_data: {}

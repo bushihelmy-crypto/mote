@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional
 
-from metagpt.common.config.llm_config import LLMConfig
+from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.exception import ModelNotFoundError
 from metagpt.common.logs import log_class, logger
 from metagpt.router.llm.base_llm import BaseLLM

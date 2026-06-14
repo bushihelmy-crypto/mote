@@ -9,13 +9,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.config2 import Config
-from metagpt.common.config.llm_config import LLMConfig, LLMType
-from metagpt.common.utils.cost_manager import (
-    CostManager,
-    FireworksCostManager,
-    TokenCostManager,
-)
+from metagpt.common.config.meta_config import Config
+from metagpt.common.config.config.llm_config import LLMConfig, LLMType
+from metagpt.router.cost import CostTracker, PricingMode
 from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.router.llm.llm_provider_registry import create_llm_instance
 
@@ -23,23 +19,28 @@ from metagpt.router.llm.llm_provider_registry import create_llm_instance
 class Context(BaseModel):
     """LLM build context for MetaGPT.
 
-    Bundles the global :class:`Config` with a :class:`CostManager` and exposes
+    Bundles the global :class:`Config` with a :class:`CostTracker` and exposes
     the only capability the router needs: build a :class:`BaseLLM` from the
     default config (``llm``) or an explicit ``LLMConfig``, wiring the right cost
-    manager in each case.
+    tracker in each case.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     config: Config = Field(default_factory=Config.default)
-    cost_manager: CostManager = CostManager()
+    cost_manager: CostTracker = Field(default_factory=CostTracker)
 
-    def _select_costmanager(self, llm_config: LLMConfig) -> CostManager:
-        """Return a CostManager instance matching the config's api_type."""
+    def _select_costmanager(self, llm_config: LLMConfig) -> CostTracker:
+        """Return a CostTracker whose pricing mode matches the config's api_type.
+
+        Self-hosted open models cost nothing (FREE), Fireworks bills by model
+        size (FIREWORKS), everything else uses the standard cache-aware table
+        and shares the session-wide tracker so per-model totals roll up.
+        """
         if llm_config.api_type == LLMType.FIREWORKS:
-            return FireworksCostManager()
+            return CostTracker(mode=PricingMode.FIREWORKS)
         elif llm_config.api_type == LLMType.OPEN_LLM:
-            return TokenCostManager()
+            return CostTracker(mode=PricingMode.FREE)
         else:
             return self.cost_manager
 

@@ -11,7 +11,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from metagpt.common.config.compress_msg_config import CompressType
+from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.const.context import (
     AUTOCOMPACT_BUFFER_TOKENS as _AUTOCOMPACT_BUFFER_TOKENS,
     AUTOCOMPACT_KEEP_TAIL_MESSAGES as _AUTOCOMPACT_KEEP_TAIL_MESSAGES,

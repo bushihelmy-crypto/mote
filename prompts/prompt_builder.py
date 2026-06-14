@@ -20,6 +20,7 @@ from string import Template
 from typing import Any, Optional
 
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
+from metagpt.common.git_state import collect_git_state, render_git_section
 from metagpt.prompts.role import (
     CONSTRAINT_TEMPLATE,
     FRC_SECTION,
@@ -288,8 +289,19 @@ class PromptBuilder:
 
         ctx.tool_info = json.dumps(subsystems.executor.get_tool_schemas())
         ctx.mcp_info = json.dumps(subsystems.executor.get_mcp_tool_schemas())
+        # Git working-tree state is collected per-turn and rendered into the env
+        # section. It lives below the cache boundary (the ${env_section} slot is
+        # after SYSTEM_PROMPT_DYNAMIC_BOUNDARY in the template), so changing git
+        # state never busts the cacheable system-prompt prefix. Auto-detected:
+        # injected whenever cwd is inside a repo, no config switch. Best-effort —
+        # collect_git_state returns None off-repo / on any failure.
+        git_state = await collect_git_state(ctx.working_dir)
+        git_section = render_git_section(git_state) if git_state else ""
         ctx.env_section = PromptBuilder._make_env_section(
-            subsystems.llm, working_dir=ctx.working_dir, project_root=inputs.project_root
+            subsystems.llm,
+            working_dir=ctx.working_dir,
+            project_root=inputs.project_root,
+            git_section=git_section,
         )
         ctx.skills_info = PromptBuilder._make_skills_info(subsystems.skill_manager, config)
 
@@ -390,10 +402,10 @@ class PromptBuilder:
         )
 
     @staticmethod
-    def _make_env_section(llm, working_dir: str = "", project_root=None) -> str:
+    def _make_env_section(llm, working_dir: str = "", project_root=None, git_section: str = "") -> str:
         cwd = working_dir or str(DEFAULT_WORKSPACE_ROOT)
         root = str(project_root) if project_root else str(DEFAULT_WORKSPACE_ROOT)
-        return "\n".join([
+        lines = [
             "# Environment",
             "You have been invoked in the following environment:",
             f" - {get_time_info()}",
@@ -403,8 +415,12 @@ class PromptBuilder:
             f" - Shell: {os.environ.get('SHELL', '')}",
             f" - OS Version: {platform.platform()}",
             f" - You are powered by the model named {llm.model}.",
-            "",
-        ])
+        ]
+        # Git block (branch / status / recent commits) appended when in a repo.
+        if git_section:
+            lines.append(git_section)
+        lines.append("")
+        return "\n".join(lines)
 
     @staticmethod
     def _make_skills_info(skill_manager, config) -> str:

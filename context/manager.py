@@ -69,11 +69,21 @@ class ContextManager:
         llm=None,
         config: ContextManagerConfig | None = None,
         model: str | None = None,
+        recorder=None,
+        hook_manager=None,
     ):
         self._context = context if context is not None else LLMCallContext()
         self._llm = llm
         self.config = config or ContextManagerConfig()
         self._model = model
+        # Optional durable-log sink (``common.interface.SessionRecorder``). When
+        # set, appended messages and compaction checkpoints are streamed to the
+        # session rollout. Injected by Role; None in standalone/test use.
+        self._recorder = recorder
+        # Optional hook runner (``common.interface.HookRunner``). When set,
+        # PreCompact / PostCompact fire around an autocompact. Injected by Role;
+        # None => no hook layer (legacy behavior).
+        self._hook_manager = hook_manager
         # Circuit-breaker counter threaded across autocompact attempts.
         self._consecutive_failures = 0
 
@@ -105,6 +115,8 @@ class ContextManager:
         if message is None:
             return
         self._context.messages.append(message)
+        if self._recorder is not None:
+            self._recorder.record_message(message)
 
     def add_batch(self, messages) -> None:
         """Append several messages, skipping falsy entries (old ``add_batch``)."""
@@ -154,6 +166,16 @@ class ContextManager:
         changed = False
         model = self.model
 
+        # PreCompact hook: a chance to veto the whole management pass (stop) or
+        # to supply/override the autocompact custom_instructions (via the hook's
+        # additional_context). Fires only when a hook layer is wired.
+        if self._hook_manager is not None:
+            pre = await self._hook_manager.fire("PreCompact", {"trigger": "auto"})
+            if pre.stop:
+                return False
+            if pre.additional_context:
+                custom_instructions = "\n".join(pre.additional_context)
+
         # Pass 1 — cheap, no LLM. Fold old compactable tool results in place.
         micro = microcompact(
             self._context.messages,
@@ -184,6 +206,17 @@ class ContextManager:
             # backing context so the rebuilt history is what gets checkpointed.
             self._context.messages[:] = result.messages
             changed = True
+            # Persist the rebuilt history as a replay checkpoint (Codex style):
+            # resume starts from the latest compaction rather than replaying all.
+            if self._recorder is not None:
+                self._recorder.record_compaction(result.messages, result.summary or "")
+            # PostCompact hook: notify that a compaction just happened (carries
+            # the summary). Best-effort; folded outcome is currently advisory.
+            if self._hook_manager is not None:
+                await self._hook_manager.fire(
+                    "PostCompact",
+                    {"trigger": "auto", "compact_summary": result.summary or ""},
+                )
 
         return changed
 

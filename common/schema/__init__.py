@@ -69,6 +69,13 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # permission_config
     "PermissionConfig": ("permission_config", "PermissionConfig"),
     "SandboxConfig": ("permission_config", "SandboxConfig"),
+    # hook_config
+    "HookConfig": ("hook_config", "HookConfig"),
+    "HookCommandHandler": ("hook_config", "HookCommandHandler"),
+    "HookMatcherGroup": ("hook_config", "HookMatcherGroup"),
+    # lsp_config
+    "LspConfig": ("lsp_config", "LspConfig"),
+    "LspServerConfig": ("lsp_config", "LspServerConfig"),
     # think
     "ThinkResult": ("think", "ThinkResult"),
 }

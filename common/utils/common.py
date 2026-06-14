@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import contextlib
 import functools
 import importlib
 import inspect
@@ -530,6 +531,11 @@ def log_time(method):
 
 
 
+# Conventional exit code reported for a command killed by timeout (aligns with
+# codex's EXEC_TIMEOUT_EXIT_CODE and the `timeout(1)` utility convention).
+EXEC_TIMEOUT_EXIT_CODE = 124
+
+
 @remotable
 async def aexecute(
     cmd: str,
@@ -539,10 +545,10 @@ async def aexecute(
     timeout: Optional[float] = None,
     check: bool = False,
     wait: bool = False,
-) -> Union[None, Tuple[int, str, str]]:
+    return_partial_on_timeout: bool = False,
+) -> Union[None, Tuple[int, str, str], Tuple[int, str, str, bool]]:
     """
     Generic async function to execute shell commands
-    IMPORTANT: When the MCP default server configuration is enabled, it will execute commands in the remote tool server.
 
     Args:
         cmd: Command to execute
@@ -553,13 +559,20 @@ async def aexecute(
         check: If True and return code is non-zero, raise exception (default: False)
         wait: If True, wait for process to complete and return results (default: False)
              If False, return immediately without waiting
+        return_partial_on_timeout: If True, drain stdout/stderr incrementally so a
+             timeout returns the output captured so far instead of discarding it.
+             In this mode aexecute NEVER raises on timeout and ALWAYS returns the
+             4-tuple ``(return_code, stdout, stderr, timed_out)``; on timeout the
+             return code is ``EXEC_TIMEOUT_EXIT_CODE`` (124).
 
     Returns:
-        If wait=True: tuple (return_code, stdout, stderr)
         If wait=False: None
+        If wait=True and return_partial_on_timeout=False: (return_code, stdout, stderr)
+        If wait=True and return_partial_on_timeout=True: (return_code, stdout, stderr, timed_out)
 
     Raises:
-        asyncio.TimeoutError: If command execution times out
+        asyncio.TimeoutError: If command execution times out (only when
+            return_partial_on_timeout=False)
         RuntimeError: If check=True and command returns non-zero status code
     """
     process = await asyncio.create_subprocess_shell(
@@ -569,6 +582,9 @@ async def aexecute(
     # If not waiting, return immediately
     if not wait:
         return
+
+    if return_partial_on_timeout:
+        return await _aexecute_capture_partial(process, cmd, timeout, check)
 
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
@@ -594,6 +610,63 @@ async def aexecute(
             process.kill()
 
         raise asyncio.TimeoutError(f"Command '{cmd}' timed out after {timeout} seconds")
+
+
+async def _aexecute_capture_partial(
+    process: "asyncio.subprocess.Process",
+    cmd: str,
+    timeout: Optional[float],
+    check: bool,
+) -> Tuple[int, str, str, bool]:
+    """Run ``process`` draining its pipes into external buffers.
+
+    Reading into buffers we own means that when ``wait_for`` cancels the
+    collector on timeout, whatever was already read is still available — that is
+    how the partial output survives. On timeout the child is terminated (then
+    killed) and any output produced before the kill is returned with
+    ``EXEC_TIMEOUT_EXIT_CODE``.
+    """
+    stdout_buf = bytearray()
+    stderr_buf = bytearray()
+
+    async def _drain(stream, buf: bytearray) -> None:
+        if stream is None:
+            return
+        while True:
+            chunk = await stream.read(8192)
+            if not chunk:
+                break
+            buf.extend(chunk)
+
+    async def _collect() -> None:
+        await asyncio.gather(_drain(process.stdout, stdout_buf), _drain(process.stderr, stderr_buf))
+        await process.wait()
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(_collect(), timeout=timeout)
+    except asyncio.TimeoutError:
+        timed_out = True
+        # _collect (and its drain tasks) are cancelled by wait_for, but the
+        # buffers above already hold the bytes read so far.
+        try:
+            process.terminate()
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            with contextlib.suppress(Exception):
+                await process.wait()
+
+    stdout_str = bytes(stdout_buf).decode(errors="replace").strip()
+    stderr_str = bytes(stderr_buf).decode(errors="replace").strip()
+    rc = EXEC_TIMEOUT_EXIT_CODE if timed_out else (process.returncode if process.returncode is not None else -1)
+
+    if check and not timed_out and rc != 0:
+        raise RuntimeError(
+            f"Command '{cmd}' failed with return code {rc}\nSTDOUT: {stdout_str}\nSTDERR: {stderr_str}"
+        )
+
+    return rc, stdout_str, stderr_str, timed_out
 
 
 

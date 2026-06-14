@@ -22,8 +22,8 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from metagpt.common.config.compress_msg_config import CompressType
-from metagpt.common.config.llm_config import LLMConfig
+from metagpt.common.config.config.compress_msg_config import CompressType
+from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
 from metagpt.common.exception import RecoveryAction, is_retryable
 from metagpt.common.logs import logger
@@ -32,8 +32,8 @@ from metagpt.router.llm.recovery import RecoveryRunner
 from metagpt.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
 from metagpt.router.llm.request_context_builder import RequestContextBuilder
 from metagpt.common.utils.common import log_and_reraise, pdfs_within_limits
-from metagpt.common.utils.cost_manager import CostManager, Costs
 from metagpt.common.utils.token_counter import count_message_tokens
+from metagpt.router.cost import CostTracker, Costs, TokenUsage
 
 
 class BaseLLM(ABC):
@@ -45,7 +45,7 @@ class BaseLLM(ABC):
 
     # OpenAI / Azure / Others
     aclient: Optional[Union[AsyncOpenAI]] = None
-    cost_manager: Optional[CostManager] = None
+    cost_manager: Optional[CostTracker] = None
     # Maintain model name in own instance in case the global config has changed,
     # Should always use model not config.model within this class
     model: Optional[str] = None
@@ -170,12 +170,12 @@ class BaseLLM(ABC):
         calc_usage = self.config.calc_usage and local_calc_usage
         model = model or self.pricing_plan
         model = model or self.model
-        usage = usage.model_dump() if isinstance(usage, BaseModel) else usage
         if calc_usage and self.cost_manager:
             try:
-                prompt_tokens = int(usage.get("prompt_tokens", 0))
-                completion_tokens = int(usage.get("completion_tokens", 0))
-                self.cost_manager.update_cost(prompt_tokens, completion_tokens, model)
+                # Normalize any provider usage shape (incl. nested cache/reasoning
+                # token details) into the unified TokenUsage before recording.
+                token_usage = TokenUsage.from_usage(usage)
+                self.cost_manager.add(token_usage, model)
             except Exception as e:
                 logger.error(f"{self.__class__.__name__} updates costs failed! exp: {e}")
 

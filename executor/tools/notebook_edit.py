@@ -34,7 +34,7 @@ from typing import Any, ClassVar, Optional
 
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools._file_base import FileMutatingTool
+from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_NOTEBOOK_SIZE_BYTES
 
 # JSON indent CC uses when writing .ipynb back (IPYNB_INDENT).
@@ -236,6 +236,8 @@ class NotebookEdit(FileMutatingTool):
             raise ToolError(f"Error: cannot serialize notebook '{notebook_path}': {e}")
         if line_ending != "\n":
             updated = updated.replace("\n", line_ending)
+        # Capture a before-image for file history just before we overwrite.
+        self._snapshot_pre_write(full_path)
         try:
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(updated)

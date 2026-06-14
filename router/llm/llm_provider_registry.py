@@ -6,7 +6,7 @@
 @File    : llm_provider_registry.py
 """
 from metagpt.common.base.singleton import Singleton
-from metagpt.common.config.llm_config import LLMConfig, LLMType
+from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.common.exception import ProviderNotFoundError
 from metagpt.router.llm.base_llm import BaseLLM
 
