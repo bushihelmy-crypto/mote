@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.session.fork`` + ``Role.fork_session`` (Phase 4).
+"""Tests for ``metagpt.session.fork`` + ``Role.fork_session`` (Phase 4).
 
 Covers: fork() seeds a new rollout from the parent's final history, records
 parent_session_id + copied cwd/model anchors on session_meta, and stays
@@ -13,15 +13,15 @@ from __future__ import annotations
 import pytest
 
 from metagpt.common.schema import UserMessage
-from metagpt.roles.session.events import (
+from metagpt.session.events import (
     CompactedEvent,
     MessageEvent,
     SessionMetaEvent,
 )
-from metagpt.roles.session.fork import fork
-from metagpt.roles.session.listing import list_sessions
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.replay import replay
+from metagpt.session.fork import fork
+from metagpt.session.listing import list_sessions
+from metagpt.session.log import SessionLog
+from metagpt.session.replay import replay
 
 
 def _seed(tmp_path, sid, *, working_dir="/w", project_root="/p", model="m", messages=()):
@@ -105,7 +105,7 @@ def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypatch):
     from metagpt.roles import Role
     from metagpt.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
 
     parent = Role(name="P", context=Context())
     parent.context_manager.add(UserMessage(content="one"))

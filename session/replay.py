@@ -28,8 +28,8 @@ from typing import Dict, List, Optional
 
 from metagpt.common.logs import log_call
 from metagpt.common.schema import Message
-from metagpt.roles.session.events import COMPACTED, MESSAGE, SESSION_META
-from metagpt.roles.session.log import SessionLog
+from metagpt.session.events import COMPACTED, MESSAGE, SESSION_META
+from metagpt.session.log import SessionLog
 
 
 @dataclass

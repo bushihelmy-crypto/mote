@@ -35,8 +35,8 @@ from typing import Optional
 
 from metagpt.common.git_state import find_git_root
 from metagpt.common.logs import log_class, logger
-from metagpt.roles.session.events import FileSnapshotEvent
-from metagpt.roles.session.log import SessionLog
+from metagpt.session.events import FileSnapshotEvent
+from metagpt.session.log import SessionLog
 
 #: Directory (inside a session dir) holding content-addressed before-images.
 BLOBS_DIRNAME = "blobs"

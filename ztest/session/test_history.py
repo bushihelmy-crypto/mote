@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import os
 
-from metagpt.roles.session.history import (
+from metagpt.session.history import (
     SnapshotEntry,
     diff_snapshot,
     file_history,
     restore,
 )
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.snapshot import FileSnapshotRecorder
+from metagpt.session.log import SessionLog
+from metagpt.session.snapshot import FileSnapshotRecorder
 
 
 def _recorder(tmp_path):

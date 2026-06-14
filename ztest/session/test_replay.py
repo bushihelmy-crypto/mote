@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.session.replay`` — rebuild history from a rollout.
+"""Tests for ``metagpt.session.replay`` — rebuild history from a rollout.
 
 Covers: plain message stream replays in order; a ``compacted`` checkpoint resets
 the history to its self-contained ``replacement_history``; messages after a
@@ -10,14 +10,14 @@ skipped (counted) without aborting; turn_context is ignored for history.
 from __future__ import annotations
 
 from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.roles.session.events import (
+from metagpt.session.events import (
     CompactedEvent,
     MessageEvent,
     SessionMetaEvent,
     TurnContextEvent,
 )
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.replay import replay
+from metagpt.session.log import SessionLog
+from metagpt.session.replay import replay
 
 
 def _fresh_log(tmp_path, sid="r"):

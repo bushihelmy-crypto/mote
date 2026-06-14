@@ -24,9 +24,9 @@ from typing import Optional
 from uuid import uuid4
 
 from metagpt.common.logs import log_call
-from metagpt.roles.session.events import MessageEvent, SessionMetaEvent
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.replay import replay
+from metagpt.session.events import MessageEvent, SessionMetaEvent
+from metagpt.session.log import SessionLog
+from metagpt.session.replay import replay
 
 
 @log_call(level="DEBUG")

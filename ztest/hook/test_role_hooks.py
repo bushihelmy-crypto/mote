@@ -29,7 +29,7 @@ class _StubLoop:
 def role_in_tmp(tmp_path, monkeypatch):
     from metagpt.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
     role = Role(name="Hooked", context=Context())
     # Replace the loop with a no-op stub so run() exercises only the hook seams.
     monkeypatch.setattr(role, "_make_loop", lambda: _StubLoop())
@@ -86,7 +86,7 @@ async def test_hook_config_engages_manager(tmp_path, monkeypatch):
     from metagpt.router.llm.context import Context
     from metagpt.common.schema import HookConfig
 
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
     role = Role(role_schema=RoleSchema(name="Cfg", hooks=HookConfig()), context=Context())
     # A declared HookConfig (even empty events) engages the manager.
     assert role.hook_manager is not None

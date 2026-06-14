@@ -18,8 +18,8 @@ from typing import List
 
 from metagpt.common.logs import log_class, logger
 from metagpt.common.schema import Message
-from metagpt.roles.session.events import CompactedEvent, MessageEvent
-from metagpt.roles.session.log import SessionLog
+from metagpt.session.events import CompactedEvent, MessageEvent
+from metagpt.session.log import SessionLog
 
 
 @log_class(level="DEBUG", exclude={"record_message", "record_compaction"})

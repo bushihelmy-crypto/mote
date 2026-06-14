@@ -2,11 +2,11 @@
 
 The narrow face ``ContextManager`` uses to stream the events it produces
 (appended messages + compaction checkpoints) to a durable session log,
-without importing the concrete ``roles/session`` implementation.
+without importing the concrete ``session`` implementation.
 
-Why a Protocol here (not in ``roles/session``): ``context`` must never import
-the ``roles`` layer (the strict downward-only layering rule). The concrete
-``SessionRecorder``/``SessionLog`` live in ``roles/session`` and are *injected*
+Why a Protocol here (not in ``session``): ``context`` must never import
+the ``session`` layer (the strict downward-only layering rule). The concrete
+``SessionRecorder``/``SessionLog`` live in ``session`` and are *injected*
 into ``ContextManager``; the manager only depends on this structural face, so
 no upward import is introduced.
 """
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class SessionRecorder(Protocol):
     """The durable-log sink ``ContextManager`` writes its events to.
 
-    Implemented by ``roles.session.SessionRecorder`` (production) and any test
+    Implemented by ``session.SessionRecorder`` (production) and any test
     double. Only the two events the manager emits are part of the contract; the
     sink is responsible for its own enable/disable, batching, and persistence.
     Calls must be cheap and non-throwing from the manager's point of view.

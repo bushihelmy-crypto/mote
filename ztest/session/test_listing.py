@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.session.listing`` — lite session discovery.
+"""Tests for ``metagpt.session.listing`` — lite session discovery.
 
 Covers: empty/missing base; sessions sorted newest-first by mtime; meta + first
 message preview from the head; latest meta_update (title/last_prompt) from the
@@ -11,9 +11,9 @@ from __future__ import annotations
 import os
 
 from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.roles.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
-from metagpt.roles.session.listing import list_sessions
-from metagpt.roles.session.log import SessionLog
+from metagpt.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
+from metagpt.session.listing import list_sessions
+from metagpt.session.log import SessionLog
 
 
 def _make(tmp_path, sid, *, working_dir="/w", project_root="/p", model="gpt-4", first=None):
