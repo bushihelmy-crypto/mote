@@ -25,6 +25,9 @@ MAX_NOTEBOOK_SIZE_BYTES = 10 * 1024 * 1024   # NotebookEdit: notebook size cap (
 # ---------------------------------------------------------------------------
 DEFAULT_MAX_LINES = 2000    # default lines returned when limit unspecified
 MAX_LINE_LENGTH = 2000      # lines longer than this are truncated
+MAX_IMAGE_DIMENSION = 2048  # Read: images whose longest edge exceeds this are
+                            # downscaled (detail="high") before being shown to
+                            # the model; detail="original" skips the resize.
 
 # ---------------------------------------------------------------------------
 # Search / Grep tool

@@ -7,10 +7,10 @@ from functools import partial
 from typing import Callable, Optional
 
 from metagpt.common.config.mcp_config import MCPServerConfig
-from metagpt.common.logs import logger
 from metagpt.executor.mcp.client import get_mcp_client
 from metagpt.executor.mcp.client.base import MCPBaseClient
 from metagpt.executor.mcp.mcp_registry import MCP_REGISTRY
+from metagpt.common.logs import logger
 from metagpt.common.utils.async_helper import run_coroutine_sync
 
 
@@ -80,12 +80,10 @@ class MCPClientManager:
                         self._mcp_tool_executor, server_config, original_tool_name
                     )
 
-                logger.info(f"Registered {len(tools)} MCP tools with namespace '{namespace}'")
             except Exception as e:
-                logger.error(f"Failed to register tools from {server_config.name}: {e}")
+                logger.warning(f"Failed to register tools from {server_config.name}: {e}")
 
         self._tools_registered = True
-        logger.info(f"MCP tool registration completed, total: {len(self.tool_executors)} tools")
 
     def get_tool_executor(self, tool_name: str) -> Optional[Callable]:
         """Get the executor function for a specific tool by its name"""

@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 from typing import Callable, Optional
 
-from metagpt.common.logs import logger
 from metagpt.tasks.pool import BackgroundTaskPool
 
 
@@ -41,10 +40,6 @@ def require_bg_complete(
                     if meta and meta.command_name:
                         task_names.append(meta.command_name)
                 tasks_desc = ", ".join(task_names) if task_names else f"{pending} task(s)"
-                logger.info(
-                    f"[require_bg_complete] {fn.__qualname__} requires all background tasks to finish first. "
-                    f"Waiting for: {tasks_desc}..."
-                )
                 # Push waiting status to frontend
                 from metagpt.common.utils.report import ThoughtReporter
 
@@ -60,9 +55,6 @@ def require_bg_complete(
                     "object",
                 )
                 await pool.wait_all()
-                logger.info(
-                    f"[require_bg_complete] All background tasks completed. Now executing {fn.__qualname__}."
-                )
             return await fn(*args, **kwargs)
 
         return wrapper

@@ -17,7 +17,7 @@ import asyncio
 import pytest
 
 from metagpt.common.schema import BgStatus, MessageQueue, TaskMeta
-from tasks import StallDetector
+from metagpt.tasks import StallDetector
 from metagpt.tasks.stall_detector import _matches_interactive_prompt
 
 

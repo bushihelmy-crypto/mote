@@ -1,9 +1,5 @@
 """Inject Skills metadata and alwaysApply instructions into system prompts."""
 
-from pathlib import Path
-from typing import Optional
-
-from metagpt.common.logs import logger
 from metagpt.skills.skill_pool import SkillPool
 from metagpt.common.utils.prompt_sanitizer import count_tokens, sanitize, truncate_to_tokens
 
@@ -19,9 +15,8 @@ _LOADING_GUIDE = (
 class SkillInjector:
     """Inject Skills index + alwaysApply instructions into system prompts."""
 
-    def __init__(self, pool: SkillPool, skills_md_path: Optional[Path] = None):
+    def __init__(self, pool: SkillPool):
         self._pool = pool
-        self._skills_md_path = skills_md_path
 
     def build_content(self, max_tokens: int = 2000) -> str:
         """Build Skills injection content without appending to a prompt.
@@ -34,8 +29,8 @@ class SkillInjector:
 
         parts = []
 
-        # 1. SKILLS.md index (sanitized like alwaysApply content)
-        index_content = self._read_skills_index()
+        # 1. Skills index built in-memory from the pool (sanitized like alwaysApply content)
+        index_content = self._build_index()
         if index_content:
             parts.append(f"## Available Skills\n{sanitize(index_content)}")
 
@@ -56,10 +51,6 @@ class SkillInjector:
         # Token control
         token_count = count_tokens(injection)
         if token_count > max_tokens:
-            logger.warning(
-                f"SkillInjector: injection content ({token_count} tokens) exceeds "
-                f"max_tokens ({max_tokens}), truncating"
-            )
             injection = truncate_to_tokens(injection, max_tokens)
 
         return injection
@@ -79,20 +70,25 @@ class SkillInjector:
             return system_prompt
         return f"{system_prompt}\n\n{injection}"
 
-    def _read_skills_index(self) -> str:
-        """Read SKILLS.md content, stripping YAML frontmatter."""
-        if not self._skills_md_path or not self._skills_md_path.exists():
+    def _build_index(self) -> str:
+        """Build the Skills index table in-memory from the pool.
+
+        Paths point at each Skill's source SKILL.md in the builtin directory so
+        the agent can load full instructions on-demand via ``Editor.read()``.
+        """
+        skills = self._pool.get_all()
+        if not skills:
             return ""
-        try:
-            text = self._skills_md_path.read_text(encoding="utf-8")
-            # Strip frontmatter
-            if text.startswith("---"):
-                end = text.find("---", 3)
-                if end != -1:
-                    text = text[end + 3:].lstrip("\n")
-            return text.strip()
-        except Exception as e:
-            logger.warning(f"SkillInjector: failed to read SKILLS.md: {e}")
-            return ""
+        lines = [
+            "The following Skills are available in this project. Use `Editor.read()`",
+            "to load the full SKILL.md for detailed instructions when needed.",
+            "",
+            "| Skill | Description | Path |",
+            "|-------|-------------|------|",
+        ]
+        for s in skills:
+            safe_desc = s.description.replace("\n", " ").replace("|", r"\|")
+            lines.append(f"| {s.name} | {safe_desc} | {s.source_path} |")
+        return "\n".join(lines)
 
     # sanitize and truncate_to_tokens are provided by metagpt.common.utils.prompt_sanitizer

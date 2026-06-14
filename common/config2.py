@@ -19,6 +19,7 @@ from metagpt.common.config.exp_pool_config import ExperiencePoolConfig
 from metagpt.common.config.frontend_engineer_config import FrontendEngineerConfig
 from metagpt.common.config.funcsea_config import FuncseaConfig
 from metagpt.common.config.image_search_config import ImageSearchConfig
+from metagpt.common.config.langfuse_config import LangfuseConfig
 from metagpt.common.config.llm_config import LLMConfig, LLMType
 from metagpt.common.config.mcp_config import MCPConfig
 from metagpt.common.config.mermaid_config import MermaidConfig
@@ -147,6 +148,9 @@ class Config(CLIParams, YamlModel):
     # Sentry
     sentry: SentryConfig = Field(default_factory=SentryConfig)
 
+    # Langfuse LLM observability
+    langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
+
     # FuncSea
     funcsea: FuncseaConfig = Field(default_factory=FuncseaConfig)
 
@@ -185,6 +189,15 @@ class Config(CLIParams, YamlModel):
                 task_llm.api_type = self.llm.api_type
             if task_llm.api_version is None:
                 task_llm.api_version = self.llm.api_version
+        return self
+
+    @model_validator(mode="after")
+    def activate_langfuse(self):
+        """Idempotently activate Langfuse so env/client are ready before any
+        LLM client is built. No-op (and no langfuse import) when disabled."""
+        from metagpt.common.observability.langfuse_integration import init_langfuse
+
+        init_langfuse(self.langfuse)
         return self
 
     @model_validator(mode="after")

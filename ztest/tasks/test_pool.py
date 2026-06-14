@@ -17,7 +17,7 @@ import pytest
 
 from metagpt.common.const.tasks import MAX_RESULT_LEN
 from metagpt.common.schema import BackgroundTaskNotification, BgStatus, MessagePriority, TaskType
-from tasks import BackgroundTaskPool
+from metagpt.tasks import BackgroundTaskPool
 
 from .conftest import boom, echo, forever, gated, started_gated, wait_started
 

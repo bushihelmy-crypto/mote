@@ -14,8 +14,8 @@ from anyio.abc import TaskStatus
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from httpx_sse import aconnect_sse
 
-from metagpt.common.logs import logger
 from metagpt.executor.mcp.client.base import EnhancedClientSession, MCPBaseClient
+from metagpt.common.logs import logger
 from metagpt.common.utils.pydantic_compat import model_dump, model_dump_json, model_validate_json
 
 
@@ -111,7 +111,6 @@ async def enhanced_sse_client(
                                             error_msg = (
                                                 "Endpoint origin does not match " f"connection origin: {endpoint_url}"
                                             )
-                                            logger.error(error_msg)
                                             raise ValueError(error_msg)
 
                                         task_status.started(endpoint_url)
@@ -129,7 +128,6 @@ async def enhanced_sse_client(
                                     case _:
                                         logger.warning(f"Unknown SSE event: {sse.event}")
                         except Exception as exc:
-                            logger.error(f"Error in enhanced sse_reader: {exc}")
                             await read_stream_writer.send(exc)
                             raise exc  # Enhanced: handle the error, such as 'peer closed connection without sending complete message body (incomplete chunked read)', raise it and retry
                         finally:
@@ -145,7 +143,6 @@ async def enhanced_sse_client(
                                     )
                                     response.raise_for_status()
                         except Exception as exc:
-                            logger.error(f"Error in enhanced post_writer: {exc}")
                             raise exc  # Enhanced: handle the error, such as 'Name or service not known', raise it and retry
                         finally:
                             await write_stream.aclose()

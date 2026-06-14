@@ -14,7 +14,6 @@ import asyncio
 import re
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.logs import logger
 from metagpt.common.schema import BackgroundTaskNotification, BgStatus, CauseBy, MessagePriority
 from metagpt.common.const.tasks import (
     STALL_CHECK_INTERVAL,
@@ -164,9 +163,6 @@ class StallDetector:
                         )
                         self._msg_buffer.push(
                             notification, priority=MessagePriority.NEXT
-                        )
-                        logger.info(
-                            f"Stall warning for {task_id}: interactive prompt detected"
                         )
                         stall_notified = True
         except asyncio.CancelledError:

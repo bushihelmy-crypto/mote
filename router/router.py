@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from metagpt.common.config.llm_config import LLMConfig
 from metagpt.common.exception import ModelNotFoundError
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class, logger
 from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
 from metagpt.router.strategy import RoutingStrategy, RuleBasedStrategy
@@ -40,6 +40,7 @@ DEFAULT_TASK_MODELS: dict[str, str] = {
 }
 
 
+@log_class(level="DEBUG")
 class LLMRouter:
     """Routes requests to a concrete :class:`BaseLLM` via three methods.
 
@@ -166,6 +167,7 @@ class LLMRouter:
                     return self._build(candidate)
                 except Exception as e:
                     logger.warning(f"Fallback build failed for {candidate!r}: {e}")
+                    continue
             return None
 
         return supplier
@@ -188,7 +190,6 @@ class LLMRouter:
         name = self.task_map.get(task)
         if name and name in self._cards:
             return self._build(name)
-        logger.debug(f"No model mapped for task {task!r}; falling back to default {self._default!r}.")
         return self._build(self._default)
 
     # ----------------------------------------- method 3: intelligent route

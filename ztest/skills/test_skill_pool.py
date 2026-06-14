@@ -87,7 +87,6 @@ class TestLoadSkillFromDir:
             description="Rich skill",
             always_apply=True,
             globs=["*.py", "*.md"],
-            roles=["Engineer"],
             instructions="The instructions body.",
             extra_meta={"version": 2},
         )
@@ -98,7 +97,6 @@ class TestLoadSkillFromDir:
         assert s.description == "Rich skill"
         assert s.always_apply is True
         assert s.globs == ["*.py", "*.md"]
-        assert s.roles == ["Engineer"]
         assert s.instructions.strip() == "The instructions body."
         assert s.metadata["version"] == 2
         assert s.source_path.name == "SKILL.md"
@@ -156,6 +154,6 @@ class TestGetters:
 
 
 def test_default_builtin_dir_is_package_dir():
-    # No arg -> uses the packaged builtin directory.
+    # No arg -> uses the packaged skills directory.
     pool = SkillPool()
-    assert pool._builtin_dir == Path(__file__).parents[2] / "skills" / "builtin"
+    assert pool._builtin_dir == Path(__file__).parents[2] / "skills" / "yamls"

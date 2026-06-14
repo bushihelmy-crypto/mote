@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from roles import Role
+from metagpt.roles import Role
 
 
 class FakeLLM:

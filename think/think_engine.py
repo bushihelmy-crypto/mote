@@ -9,7 +9,7 @@ import asyncio
 from typing import TYPE_CHECKING, Optional
 
 from metagpt.common.schema import ThinkResult
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class
 from metagpt.common.base import BaseThinkEngine
 from metagpt.common.utils.report import ThoughtReporter
 from metagpt.common.utils.role_zero_utils import (
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from metagpt.common.interface import LLMClient, MessageStore
 
 
+@log_class(level="DEBUG")
 class ThinkEngine(BaseThinkEngine):
     """Encapsulates LLM think call, streaming, and dedup check.
 
@@ -73,7 +74,6 @@ class ThinkEngine(BaseThinkEngine):
                 content = await self._cached_aask(
                     req=req, system_msgs=[system_prompt], state_data=state_data
                 )
-        logger.info(f"Command response:\n{content}")
         # Duplicate detection differs by protocol. XML compares raw response text;
         # native compares a structured-call signature (the text may be empty or
         # repeat while the calls differ), and on a hard repeat overrides the calls

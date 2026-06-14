@@ -109,7 +109,7 @@ class TestResultLimiting:
 
         ex = make_executor(BigTool(), session_id="limit-sess")
         # Point persistence at a tmp dir via the module default base_dir.
-        import executor.tool_result_limit as trl
+        import metagpt.executor.tool_result_limit as trl
 
         orig = trl.DEFAULT_WORKSPACE_ROOT
         trl.DEFAULT_WORKSPACE_ROOT = tmp_path

@@ -155,7 +155,7 @@ allure-results
 .DS_Store
 .vscode
 .cursor
-
+.claude
 key.yaml
 /data/
 data.ms

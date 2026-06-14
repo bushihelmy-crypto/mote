@@ -258,7 +258,6 @@ class AgentControl:
         self._scheduler.add_runtime(restored)
         self._residency.touch(agent_id)
         self._store.forget(agent_id)
-        logger.info(f"AgentControl: rehydrated agent {agent_id}")
         return restored
 
     # ------------------------------------------------------------------

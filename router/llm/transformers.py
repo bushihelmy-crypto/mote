@@ -34,8 +34,8 @@ import base64
 import io
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.exception import RecoveryAction
 from metagpt.common.logs import logger
+from metagpt.common.exception import RecoveryAction
 
 if TYPE_CHECKING:
     from metagpt.common.exception import MetaGPTError
@@ -160,16 +160,8 @@ async def shrink_image(messages: list[dict], exc: "MetaGPTError") -> Optional[li
                     unshrinkable += 1
 
     if unshrinkable:
-        logger.warning(
-            f"shrink_image: {unshrinkable} oversized image part(s) could not be shrunk "
-            f"under {_IMAGE_TARGET_BYTES / (1024 * 1024):.0f}MB — not retrying"
-        )
         return None
     if shrunk:
-        logger.info(
-            f"shrink_image: re-encoded {shrunk} image part(s) under "
-            f"{_IMAGE_TARGET_BYTES / (1024 * 1024):.0f}MB"
-        )
         return messages
     return None
 
@@ -222,7 +214,6 @@ async def downgrade_tool_content(messages: list[dict], exc: "MetaGPTError") -> O
         changed = True
 
     if changed:
-        logger.info("downgrade_tool_content: downgraded list-type tool message(s) to text")
         return messages
     return None
 
@@ -264,7 +255,6 @@ async def strip_request_state(messages: list[dict], exc: "MetaGPTError") -> Opti
                 changed = True
 
     if changed:
-        logger.info("strip_request_state: stripped opaque request state from messages")
         return messages
     return None
 

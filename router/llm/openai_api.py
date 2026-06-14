@@ -12,7 +12,7 @@ import json
 import re
 from typing import Optional, Union
 
-from openai import AsyncOpenAI, AsyncStream
+from openai import AsyncStream
 from openai._base_client import AsyncHttpxClientWrapper
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -33,6 +33,7 @@ from metagpt.common.exception import (
 )
 from metagpt.common.const import USE_CONFIG_TIMEOUT
 from metagpt.common.logs import log_llm_stream, logger
+from metagpt.common.observability.langfuse_integration import make_async_openai
 from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
 from metagpt.router.llm.llm_provider_registry import register_provider
@@ -78,7 +79,7 @@ class OpenAILLM(BaseLLM):
         self._api_keys: list[str] = list(keys) if isinstance(keys, list) else [keys]
         self._api_key_index: int = 0
         kwargs = self._make_client_kwargs()
-        self.aclient = AsyncOpenAI(**kwargs)
+        self.aclient = make_async_openai(**kwargs)
 
     def _current_api_key(self) -> str:
         return self._api_keys[self._api_key_index]
@@ -101,8 +102,7 @@ class OpenAILLM(BaseLLM):
         if self._api_key_index + 1 >= len(self._api_keys):
             return False
         self._api_key_index += 1
-        self.aclient = AsyncOpenAI(**self._make_client_kwargs())
-        logger.warning(f"Rotated to API key #{self._api_key_index} of {len(self._api_keys)}")
+        self.aclient = make_async_openai(**self._make_client_kwargs())
         return True
 
     def _get_proxy_params(self) -> dict:
@@ -252,7 +252,6 @@ class OpenAILLM(BaseLLM):
     def _parse_arguments(self, arguments: str) -> dict:
         """parse arguments in openai function call"""
         if "language" not in arguments and "code" not in arguments:
-            logger.warning(f"Not found `code`, `language`, We assume it is pure code:\n {arguments}\n. ")
             return {"language": "python", "code": arguments}
 
         # 匹配language
@@ -265,7 +264,6 @@ class OpenAILLM(BaseLLM):
         try:
             code_value = re.findall(code_pattern, arguments)[-1][-1]
         except Exception as e:
-            logger.error(f"{e}, when re.findall({code_pattern}, {arguments})")
             code_value = None
 
         if code_value is None:
@@ -291,10 +289,6 @@ class OpenAILLM(BaseLLM):
             try:
                 return json.loads(message.tool_calls[0].function.arguments, strict=False)
             except json.decoder.JSONDecodeError as e:
-                error_msg = (
-                    f"Got JSONDecodeError for \n{'--'*40} \n{message.tool_calls[0].function.arguments}, {str(e)}"
-                )
-                logger.error(error_msg)
                 return self._parse_arguments(message.tool_calls[0].function.arguments)
         elif message.tool_calls is None and message.content is not None:
             # reponse is code, fix openai tools_call respond bug,
@@ -306,7 +300,6 @@ class OpenAILLM(BaseLLM):
             # reponse is message
             return {"language": "markdown", "code": self.get_choice_text(rsp)}
         else:
-            logger.error(f"Failed to parse \n {rsp}\n")
             raise LLMResponseParseError(f"Failed to parse \n {rsp}\n")
 
     def get_choice_text(self, rsp: ChatCompletion) -> str:

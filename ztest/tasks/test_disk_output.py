@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tasks import DiskTaskOutput, TaskOutputStore
+from metagpt.tasks import DiskTaskOutput, TaskOutputStore
 
 
 class TestDiskTaskOutputAsync:

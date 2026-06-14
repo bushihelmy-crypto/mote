@@ -23,7 +23,7 @@ from typing import Optional
 import pytest
 
 from metagpt.common.schema import MessageQueue
-from tasks import BackgroundTaskPool
+from metagpt.tasks import BackgroundTaskPool
 
 
 # ---------------------------------------------------------------------------

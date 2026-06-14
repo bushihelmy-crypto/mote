@@ -25,8 +25,8 @@ from typing import Any, Dict, Optional, Set
 
 from pydantic import ConfigDict, PrivateAttr
 
-from metagpt.common.const import MESSAGE_ROUTE_TO_ALL
 from metagpt.common.logs import logger
+from metagpt.common.const import MESSAGE_ROUTE_TO_ALL
 from metagpt.common.schema import Message
 from metagpt.common.schema.env import BaseEnvAction, BaseEnvironment, BaseEnvObsParams
 from metagpt.environment.control import AgentControl

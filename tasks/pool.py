@@ -20,7 +20,7 @@ import traceback
 from typing import Coroutine, Literal, Optional
 from xml.sax.saxutils import escape as _escape_xml
 
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class
 from metagpt.common.schema import BackgroundTaskNotification, BgStatus, CauseBy, MessagePriority, MessageQueue, TaskType
 from metagpt.common.schema import TaskMeta
 from metagpt.common.const.tasks import (
@@ -32,6 +32,11 @@ from metagpt.common.const.tasks import (
 )
 
 
+@log_class(
+    level="DEBUG",
+    # Hot/trivial state queries polled by the loop — tracing them only adds noise.
+    exclude={"has_pending", "pending_count", "pending_ids", "get_task_info", "list_tasks", "list_tasks_for_agent"},
+)
 class BackgroundTaskPool:
     """Pool of background asyncio tasks with event-driven completion notification."""
 
@@ -99,7 +104,6 @@ class BackgroundTaskPool:
         task = asyncio.create_task(coro)
         self._tasks[task_id] = task
         task.add_done_callback(lambda t: self._on_done(task_id, command_name, t))
-        logger.info(f"Background task submitted: {task_id} ({command_name})")
         return task_id
 
     def has_pending(self) -> bool:
@@ -270,7 +274,6 @@ class BackgroundTaskPool:
         self._meta[task_id] = meta
         self._tasks[task_id] = task
         task.add_done_callback(lambda t: self._on_done(task_id, command_name, t))
-        logger.info(f"Background task adopted: {task_id} ({command_name})")
         return task_id
 
     async def wait_all(self) -> None:
@@ -386,7 +389,6 @@ class BackgroundTaskPool:
             result=result,
         )
         self._msg_buffer.push(notification, priority=MessagePriority.NEXT)
-        logger.info(f"Background task done: {task_id} ({command_name}) [{status}]")
 
         # Resolve every registered one-shot completion future (fan-out
         # broadcast). Iterate a snapshot so a re-entrant completion is safe;

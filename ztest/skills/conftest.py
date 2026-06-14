@@ -3,11 +3,11 @@
 """Shared fixtures + helpers for the skills test suite.
 
 The skills subsystem is filesystem-driven: ``SkillPool`` scans a *builtin*
-directory of ``SKILL.md`` files, ``SkillDeployer`` copies those dirs into a
-workspace and writes ``SKILLS.md``, and ``SkillInjector`` reads ``SKILLS.md``
-back to build prompt content.  The real builtin dir ships empty, so every
-test fabricates its own skill tree under ``tmp_path`` via ``write_skill`` and
-points the relevant module constant at it.
+directory of ``SKILL.md`` files and ``SkillInjector`` builds prompt content
+(an in-memory index + alwaysApply instructions) from the loaded pool.  The
+real builtin dir ships empty, so every test fabricates its own skill tree
+under ``tmp_path`` via ``write_skill`` and points the relevant module
+constant at it.
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ def write_skill(
     description: str = "A test skill that does a thing.",
     always_apply: bool = False,
     globs: Optional[list[str]] = None,
-    roles: Optional[list[str]] = None,
     instructions: str = "Step 1. Do the thing.\nStep 2. Profit.",
     extra_meta: Optional[dict] = None,
     dir_name: Optional[str] = None,
@@ -53,8 +52,6 @@ def write_skill(
         meta["alwaysApply"] = always_apply
     if globs is not None:
         meta["globs"] = globs
-    if roles is not None:
-        meta["roles"] = roles
     if extra_meta:
         meta.update(extra_meta)
 
@@ -87,14 +84,6 @@ def make_skill_def(
 def builtin_dir(tmp_path: Path) -> Path:
     """An empty builtin directory tests populate with write_skill()."""
     d = tmp_path / "builtin"
-    d.mkdir()
-    return d
-
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> Path:
-    """A workspace root for deployer/manager tests."""
-    d = tmp_path / "workspace"
     d.mkdir()
     return d
 

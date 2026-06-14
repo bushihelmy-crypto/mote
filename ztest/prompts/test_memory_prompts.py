@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from string import Template
 
-from prompts import memory as M
+from metagpt.prompts import memory as M
 
 
 class TestInstructions:

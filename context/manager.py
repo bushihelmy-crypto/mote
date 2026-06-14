@@ -33,13 +33,20 @@ the other way around.
 from __future__ import annotations
 
 from metagpt.common.schema import AutocompactResult, ContextManagerConfig, MicrocompactResult
-from context import token_budget
+from metagpt.context import token_budget
 from metagpt.context.autocompact import autocompact
 from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class
 from metagpt.common.schema import LLMCallContext, Message
 
 
+@log_class(
+    level="DEBUG",
+    # The message-store CRUD slice is called on every turn for every message —
+    # tracing it would flood the log. The compaction/request orchestration
+    # methods (manage_history / token_state / prepare_request) stay traced.
+    exclude={"get", "add", "add_batch", "delete", "count", "clear"},
+)
 class ContextManager:
     """Owns the stored conversation and orchestrates its compaction.
 
@@ -156,10 +163,6 @@ class ContextManager:
         )
         if micro.changed:
             changed = True
-            logger.info(
-                f"context_manager: microcompact folded {len(micro.cleared_tool_use_ids)} "
-                f"tool result(s), freed ~{micro.tokens_freed} tokens"
-            )
 
         # Pass 2 — expensive, LLM summarize. Skipped without an llm or when the
         # post-fold history is still under the autocompact threshold.
@@ -181,12 +184,6 @@ class ContextManager:
             # backing context so the rebuilt history is what gets checkpointed.
             self._context.messages[:] = result.messages
             changed = True
-            logger.info(
-                f"context_manager: autocompact summarized history "
-                f"{result.pre_compact_tokens} → {result.post_compact_tokens} tokens"
-            )
-        elif result.error:
-            logger.warning(f"context_manager: autocompact did not run: {result.error}")
 
         return changed
 

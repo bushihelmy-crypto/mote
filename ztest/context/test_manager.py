@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 
 from metagpt.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
-from context import ContextManager
+from metagpt.context import ContextManager
 
 from .conftest import FakeLLM, make_pairs, text_msg
 

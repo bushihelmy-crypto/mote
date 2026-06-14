@@ -7,8 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from metagpt.common.config2 import Config
 from metagpt.common.config.exp_pool_config import ExperiencePoolRetrievalType
-from exp_pool.schema import DEFAULT_SIMILARITY_TOP_K, Experience, QueryType
-from metagpt.common.logs import logger
+from metagpt.memory.procedural_memory.schema import DEFAULT_SIMILARITY_TOP_K, Experience, QueryType
 from metagpt.common.utils.exceptions import handle_exception
 
 if TYPE_CHECKING:
@@ -33,8 +32,6 @@ class ExperienceManager(BaseModel):
     @property
     def storage(self) -> "SimpleEngine":
         if self._storage is None:
-            logger.info(f"exp_pool config: {self.config.exp_pool}")
-
             self._storage = self._resolve_storage()
 
         return self._storage
@@ -168,7 +165,6 @@ class ExperienceManager(BaseModel):
         ranker_configs = self._get_ranker_configs()
 
         if not docstore_path.exists():
-            logger.debug(f"Path `{docstore_path}` not exists, try to create a new bm25 storage.")
             exps = [Experience(req="req", resp="resp")]
 
             retriever_configs = [BM25RetrieverConfig(create_index=True, similarity_top_k=DEFAULT_SIMILARITY_TOP_K)]
@@ -178,7 +174,6 @@ class ExperienceManager(BaseModel):
             )
             return storage
 
-        logger.debug(f"Path `{docstore_path}` exists, try to load bm25 storage.")
         retriever_configs = [BM25RetrieverConfig(similarity_top_k=DEFAULT_SIMILARITY_TOP_K)]
         storage = SimpleEngine.from_index(
             BM25IndexConfig(persist_path=persist_path),

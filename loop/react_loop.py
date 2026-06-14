@@ -17,7 +17,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable, Optional
 
 from metagpt.common.base import BaseLoop, LoopContext
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class
+from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.loop.prompt import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
 from metagpt.common.schema import (
     AIMessage,
@@ -31,10 +32,11 @@ if TYPE_CHECKING:
     from metagpt.common.interface import BackgroundPool, MessageStore
     from metagpt.executor.base_executor import BaseToolExecutor
     from metagpt.common.base import BaseThinkEngine
-    from parser import CommandChannel
+    from metagpt.parser import CommandChannel
     from metagpt.roles.context_provider import BaseContextProvider
 
 
+@log_class(level="DEBUG")
 class ReActLoop(BaseLoop):
     """Think→act cycle with protocol-aware termination.
 
@@ -115,9 +117,6 @@ class ReActLoop(BaseLoop):
 
         self.latest_observed_msg = filtered[-1] if filtered else None
 
-        if filtered:
-            news_text = [f"{m.role}: {m.content[:20]}..." for m in filtered]
-            logger.debug(f"{ctx.display_name} observed: {news_text}")
         return len(filtered)
 
     # ------------------------------------------------------------------
@@ -133,68 +132,68 @@ class ReActLoop(BaseLoop):
         if not self._is_active():
             return False
 
-        logger.info(f"{self._ctx.display_name}, ready to think")
-        tr = await self._context_provider.prepare()
-        # Trigger the router only now that an LLM is actually needed, picking the
-        # model from this request's messages when intelligent routing is enabled.
-        llm = await self._context_provider.resolve_llm(tr.req)
-        await self._think_engine.start(
-            tr.req, tr.system_prompt, tr.state_data, tool_specs=tr.tool_specs, llm=llm
-        )
+        with maybe_span("think"):
+            tr = await self._context_provider.prepare()
+            # Trigger the router only now that an LLM is actually needed, picking the
+            # model from this request's messages when intelligent routing is enabled.
+            llm = await self._context_provider.resolve_llm(tr.req)
+            await self._think_engine.start(
+                tr.req, tr.system_prompt, tr.state_data, tool_specs=tr.tool_specs, llm=llm
+            )
         return True
 
     async def _step_act(self) -> Message:
-        valid_names = set(self._ctx.tools)
-        commands = [
-            cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)
-        ]
+        with maybe_span("act"):
+            valid_names = set(self._ctx.tools)
+            commands = [
+                cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)
+            ]
 
-        # Execute in order. On the first failure, stop running further commands
-        # but still RECORD a result for each remaining one: native tool-use
-        # requires every emitted tool_call to have a paired tool_result, so we
-        # cannot simply drop them.
-        executed: list[dict] = []
-        failed = False
-        for cmd in commands:
-            name = cmd["command_name"]
-            entry = {"id": cmd.get("id"), "name": name, "args": cmd.get("args") or {}, "output": "", "success": True}
-            if failed:
-                entry["output"] = (
-                    f"[SKIPPED] Command {name} was not executed because an earlier "
-                    "command failed. Please replan in the next round."
-                )
-                entry["success"] = False
+            # Execute in order. On the first failure, stop running further commands
+            # but still RECORD a result for each remaining one: native tool-use
+            # requires every emitted tool_call to have a paired tool_result, so we
+            # cannot simply drop them.
+            executed: list[dict] = []
+            failed = False
+            for cmd in commands:
+                name = cmd["command_name"]
+                entry = {"id": cmd.get("id"), "name": name, "args": cmd.get("args") or {}, "output": "", "success": True}
+                if failed:
+                    entry["output"] = (
+                        f"[SKIPPED] Command {name} was not executed because an earlier "
+                        "command failed. Please replan in the next round."
+                    )
+                    entry["success"] = False
+                    executed.append(entry)
+                    continue
+                result = await self._executor.run_command(name, cmd.get("args") or {}, result_id=cmd.get("id"))
+                entry["output"] = result.output
+                entry["success"] = result.success
+                # Media (base64 images / PDFs) surfaced to the model as a supplemental
+                # multimodal message by the channel's record_turn.
+                if result.images:
+                    entry["images"] = result.images
+                if result.pdfs:
+                    entry["pdfs"] = result.pdfs
                 executed.append(entry)
-                continue
-            result = await self._executor.run_command(name, cmd.get("args") or {}, result_id=cmd.get("id"))
-            entry["output"] = result.output
-            entry["success"] = result.success
-            # Media (base64 images / PDFs) surfaced to the model as a supplemental
-            # multimodal message by the channel's record_turn.
-            if result.images:
-                entry["images"] = result.images
-            if result.pdfs:
-                entry["pdfs"] = result.pdfs
-            executed.append(entry)
-            if not result.success:
-                failed = True
+                if not result.success:
+                    failed = True
 
-        outputs = "\n\n".join(e["output"] for e in executed) if executed else (
-            "No valid commands found for execution, pay attention to the output format."
-        )
-        logger.info(f"Commands outputs: \n{outputs}")
+            outputs = "\n\n".join(e["output"] for e in executed) if executed else (
+                "No valid commands found for execution, pay attention to the output format."
+            )
 
-        # The channel writes this turn into memory in its protocol's shape
-        # (XML: text + merged outputs; native: tool_calls + per-call tool results).
-        self._channel.record_turn(self._memory, self._think_engine.result.content, executed)
+            # The channel writes this turn into memory in its protocol's shape
+            # (XML: text + merged outputs; native: tool_calls + per-call tool results).
+            self._channel.record_turn(self._memory, self._think_engine.result.content, executed)
 
-        await self._think_engine.join()
+            await self._think_engine.join()
 
-        return AIMessage(
-            content=f"I have finished the task, please mark my task as finished. Outputs: {outputs}",
-            sent_from=self._ctx.name,
-            cause_by=CauseBy.RUN_COMMAND,
-        )
+            return AIMessage(
+                content=f"I have finished the task, please mark my task as finished. Outputs: {outputs}",
+                sent_from=self._ctx.name,
+                cause_by=CauseBy.RUN_COMMAND,
+            )
 
     async def _finish(self) -> Message:
         """Finalize a native turn that ended without tool calls.
@@ -221,7 +220,6 @@ class ReActLoop(BaseLoop):
 
         # Initial gate: if no messages observed, nothing to do.
         if not self._observe():
-            logger.debug(f"{self._ctx.display_name}: no news. waiting.")
             return None
 
         self._set_active(True)
@@ -238,10 +236,6 @@ class ReActLoop(BaseLoop):
             if not has_todo:
                 bg_pool = self._get_bg_pool()
                 if bg_pool and bg_pool.has_pending():
-                    logger.info(
-                        f"No todo but {bg_pool.pending_count} background "
-                        f"task(s) still running, waiting..."
-                    )
                     while bg_pool.has_pending():
                         await bg_pool.wait_any()
                         break
@@ -259,7 +253,6 @@ class ReActLoop(BaseLoop):
                 rsp = await self._finish()
                 break
             # act
-            logger.debug(f"{self._ctx.display_name}: will act")
             rsp = await self._step_act()
             actions_taken += 1
             self._consecutive += 1
@@ -267,7 +260,6 @@ class ReActLoop(BaseLoop):
             # post-check
             can_ask = "ask_human" in self._ctx.tools
             if self._ctx.max_react_loop >= 10 and actions_taken >= self._ctx.max_react_loop:
-                logger.warning(f"reached max_react_loop: {actions_taken}")
                 if not can_ask:
                     break
                 result = await self._executor.run_command(

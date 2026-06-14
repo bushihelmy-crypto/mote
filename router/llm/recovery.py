@@ -40,6 +40,7 @@ equivalent to having no loop at all.
 """
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, Awaitable, Callable, Mapping, Optional
 
 from metagpt.common.exception import MetaGPTError, RecoveryAction
@@ -70,6 +71,28 @@ _TRANSFORM_ACTIONS = frozenset(
         RecoveryAction.STRIP_REQUEST_STATE,
     }
 )
+
+
+def _log_recovery(fn):
+    """Log each recovery dispatch outcome (applied / skipped, per action).
+
+    Failover events are otherwise invisible: ``_recover`` swallows its control
+    flow (a missing callback / unrepairable payload just returns ``(False, ...)``
+    rather than raising), so neither ``@log_class`` (skips private methods) nor
+    the tenacity ``after_log`` (only sees propagating errors) can observe them.
+    The ``action`` arg and the ``handled`` half of the return already encode the
+    event, so wrapping the single dispatch chokepoint keeps the method body clean.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(self, action, exc, messages):
+        handled, updated = await fn(self, action, exc, messages)
+        logger.info(
+            f"recovery {action.name}: {'applied' if handled else 'skipped'} ({type(exc).__name__})"
+        )
+        return handled, updated
+
+    return wrapper
 
 
 class RecoveryRunner:
@@ -124,16 +147,13 @@ class RecoveryRunner:
                     # RETRY is owned by the lower-layer tenacity loop; ABORT gives up.
                     raise
                 if recoveries >= self.max_recoveries:
-                    logger.warning(
-                        f"RecoveryRunner exhausted {self.max_recoveries} recoveries; "
-                        f"re-raising {type(exc).__name__}"
-                    )
                     raise
                 handled, messages = await self._recover(action, exc, messages)
                 if not handled:
                     raise
                 recoveries += 1
 
+    @_log_recovery
     async def _recover(
         self, action: RecoveryAction, exc: MetaGPTError, messages: Optional[list[dict]]
     ) -> tuple[bool, Optional[list[dict]]]:
@@ -141,13 +161,11 @@ class RecoveryRunner:
         if action == RecoveryAction.COMPRESS:
             if self._compressor is None:
                 return False, messages
-            logger.info(f"RecoveryRunner: COMPRESS after {type(exc).__name__}")
             messages = await self._compressor(messages)
             return True, messages
         if action == RecoveryAction.ROTATE_CREDENTIAL:
             if self._credential_rotator is None:
                 return False, messages
-            logger.info(f"RecoveryRunner: ROTATE_CREDENTIAL after {type(exc).__name__}")
             return bool(self._credential_rotator()), messages
         if action == RecoveryAction.FALLBACK:
             if self._fallback_supplier is None:
@@ -155,7 +173,6 @@ class RecoveryRunner:
             provider = self._fallback_supplier()
             if provider is None:
                 return False, messages
-            logger.info(f"RecoveryRunner: FALLBACK after {type(exc).__name__}")
             self._fallback_llm = provider
             return True, messages
         if action in _TRANSFORM_ACTIONS:
@@ -165,6 +182,5 @@ class RecoveryRunner:
             repaired = await transformer(messages, exc)
             if repaired is None:
                 return False, messages
-            logger.info(f"RecoveryRunner: {action.value} after {type(exc).__name__}")
             return True, repaired
         return False, messages

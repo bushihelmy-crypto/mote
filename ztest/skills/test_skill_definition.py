@@ -18,7 +18,6 @@ class TestDefaults:
         assert s.description == ""
         assert s.always_apply is False
         assert s.globs == []
-        assert s.roles == []
         assert s.instructions == ""
         assert s.source_path == Path()
         assert s.token_count == 0
@@ -28,10 +27,8 @@ class TestDefaults:
         a = SkillDefinition()
         b = SkillDefinition()
         a.globs.append("*.py")
-        a.roles.append("Engineer")
         a.metadata["k"] = 1
         assert b.globs == []
-        assert b.roles == []
         assert b.metadata == {}
 
 

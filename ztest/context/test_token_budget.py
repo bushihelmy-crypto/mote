@@ -25,7 +25,7 @@ from metagpt.common.const.context import (
 )
 from metagpt.common.schema import TokenState, UserMessage
 from metagpt.common.utils.token_counter import TOKEN_MAX
-from context import token_budget
+from metagpt.context import token_budget
 
 UNKNOWN_MODEL = "definitely-not-a-real-model"
 

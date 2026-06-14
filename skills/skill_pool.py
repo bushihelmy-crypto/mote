@@ -3,12 +3,11 @@
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.logs import logger
 from metagpt.common.utils.markdown_meta_parser import MarkdownMetaParser
 from metagpt.skills.skill_definition import SkillDefinition
 
-# Default builtin directory relative to this package
-_BUILTIN_DIR = Path(__file__).parent / "builtin"
+# Default skills directory relative to this package
+_BUILTIN_DIR = Path(__file__).parent / "yamls"
 
 
 class SkillPool:
@@ -30,7 +29,6 @@ class SkillPool:
         for name in names:
             skill_dir = available.get(name)
             if skill_dir is None:
-                logger.debug(f"SkillPool: skill '{name}' not found in builtin dir")
                 continue
             self._load_skill_from_dir(skill_dir)
 
@@ -63,17 +61,14 @@ class SkillPool:
                 description=meta.get("description", ""),
                 always_apply=meta.get("alwaysApply", False),
                 globs=meta.get("globs", []),
-                roles=meta.get("roles", []),
                 instructions=doc.content,
                 source_path=skill_md,
                 metadata=meta,
             )
         except Exception as e:
-            logger.warning(f"SkillPool: failed to load {skill_md}: {e}")
             return
 
         if not skill.is_valid():
-            logger.warning(f"SkillPool: invalid skill definition in {skill_md} (name={skill.name!r})")
             return
 
         self._skills[skill.name] = skill
