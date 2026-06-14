@@ -14,10 +14,10 @@ import asyncio
 import hashlib
 import os
 
-from metagpt.roles.session.events import FILE_SNAPSHOT
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.replay import replay
-from metagpt.roles.session.snapshot import BlobStore, FileSnapshotRecorder
+from metagpt.session.events import FILE_SNAPSHOT
+from metagpt.session.log import SessionLog
+from metagpt.session.replay import replay
+from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ def test_repeated_snapshots_dedup_blob(tmp_path):
 
 def test_replay_ignores_file_snapshot_events(tmp_path):
     from metagpt.common.schema import UserMessage
-    from metagpt.roles.session.events import MessageEvent
+    from metagpt.session.events import MessageEvent
 
     log = SessionLog("mix", base_dir=str(tmp_path))
     log.append(MessageEvent(message=UserMessage(content="hi")))

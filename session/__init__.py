@@ -10,7 +10,7 @@ resume/list. Core pieces:
   to ``metagpt.common.interface.SessionRecorder``).
 """
 
-from metagpt.roles.session.events import (
+from metagpt.session.events import (
     CompactedEvent,
     FileSnapshotEvent,
     MessageEvent,
@@ -18,18 +18,18 @@ from metagpt.roles.session.events import (
     SessionMetaEvent,
     TurnContextEvent,
 )
-from metagpt.roles.session.fork import fork
-from metagpt.roles.session.history import (
+from metagpt.session.fork import fork
+from metagpt.session.history import (
     SnapshotEntry,
     diff_snapshot,
     file_history,
     restore,
 )
-from metagpt.roles.session.listing import SessionInfo, list_sessions
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.recorder import SessionRecorder
-from metagpt.roles.session.replay import ReplayResult, replay
-from metagpt.roles.session.snapshot import BlobStore, FileSnapshotRecorder
+from metagpt.session.listing import SessionInfo, list_sessions
+from metagpt.session.log import SessionLog
+from metagpt.session.recorder import SessionRecorder
+from metagpt.session.replay import ReplayResult, replay
+from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
 
 __all__ = [
     "SessionLog",

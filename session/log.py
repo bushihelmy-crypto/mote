@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from metagpt.common.logs import log_class
-from metagpt.roles.session.events import SessionEvent, SessionMetaEvent, parse_line, to_line
+from metagpt.session.events import SessionEvent, SessionMetaEvent, parse_line, to_line
 
 #: Directory name under the workspace root holding all session logs.
 SESSIONS_DIRNAME = ".agent_sessions"

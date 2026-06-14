@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.session.events`` — event schema + line serde.
+"""Tests for ``metagpt.session.events`` — event schema + line serde.
 
 Covers: each event serializes to a ``{type, ts, payload}`` line; message
 payloads round-trip back through ``Message.load``; compaction carries the full
@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.roles.session.events import (
+from metagpt.session.events import (
     COMPACTED,
     MESSAGE,
     SCHEMA_VERSION,

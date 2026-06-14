@@ -21,7 +21,7 @@ def role_in_tmp(tmp_path, monkeypatch):
     from metagpt.router.llm.context import Context
 
     # Redirect all session logs to the temp dir.
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
     return Role(name="Logger", context=Context())
 
 
@@ -63,7 +63,7 @@ def test_turn_boundary_noop_without_recorder(role_in_tmp):
 def test_resume_session_missing_log_returns_false(tmp_path, monkeypatch):
     from metagpt.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
     role = Role(name="NoLog", context=Context())
     assert role.resume_session() is False
     assert role.state.recovered is False
@@ -72,7 +72,7 @@ def test_resume_session_missing_log_returns_false(tmp_path, monkeypatch):
 def test_resume_session_rebuilds_history(tmp_path, monkeypatch):
     from metagpt.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
 
     # Session A writes some history through the live recorder path.
     role_a = Role(name="A", context=Context())
@@ -91,7 +91,7 @@ def test_resume_session_rebuilds_history(tmp_path, monkeypatch):
 def test_resume_does_not_re_record_replayed_history(tmp_path, monkeypatch):
     from metagpt.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.roles.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
 
     role_a = Role(name="A", context=Context())
     sid = role_a.session_id
@@ -104,7 +104,7 @@ def test_resume_does_not_re_record_replayed_history(tmp_path, monkeypatch):
     # not re-recorded (assigned straight into the backing context).
     role_b.context_manager.add(UserMessage(content="two"))
 
-    from metagpt.roles.session.log import SessionLog
+    from metagpt.session.log import SessionLog
 
     msgs = [r for r in SessionLog(sid, base_dir=str(tmp_path)).iter_raw() if r["type"] == "message"]
     assert [m["payload"]["content"] for m in msgs] == ["one", "two"]

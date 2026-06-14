@@ -1,6 +1,6 @@
 """File-history queries — diff / restore over the session's before-images (Phase 2).
 
-Phase 1 captures a :class:`~metagpt.roles.session.events.FileSnapshotEvent` (plus
+Phase 1 captures a :class:`~metagpt.session.events.FileSnapshotEvent` (plus
 a content-addressed blob) just before every file-mutating tool overwrites a file.
 This module turns that append-only record into the read side: list a file's
 history, diff a stored before-image against what is on disk now, and restore a
@@ -8,7 +8,7 @@ file back to one of its captured states.
 
 Everything is a forward scan of the same ``rollout.jsonl`` the session already
 owns — no second index. The blob bytes come from the session's
-:class:`~metagpt.roles.session.snapshot.BlobStore`, rooted next to the log.
+:class:`~metagpt.session.snapshot.BlobStore`, rooted next to the log.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from metagpt.roles.session.events import FILE_SNAPSHOT
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.snapshot import make_blob_store
+from metagpt.session.events import FILE_SNAPSHOT
+from metagpt.session.log import SessionLog
+from metagpt.session.snapshot import make_blob_store
 
 
 @dataclass

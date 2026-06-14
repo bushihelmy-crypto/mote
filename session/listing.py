@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from metagpt.common.logs import log_call
-from metagpt.roles.session.events import MESSAGE, META_UPDATE, SESSION_META, parse_line
-from metagpt.roles.session.log import ROLLOUT_FILENAME, SESSIONS_DIRNAME
+from metagpt.session.events import MESSAGE, META_UPDATE, SESSION_META, parse_line
+from metagpt.session.log import ROLLOUT_FILENAME, SESSIONS_DIRNAME
 
 #: How many leading lines to scan for the meta + first message preview.
 _HEAD_LINES = 16

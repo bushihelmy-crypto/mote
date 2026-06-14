@@ -10,15 +10,24 @@ from metagpt.common.schema.messages import UserMessage
 from metagpt.common.schema.queue import MessageQueue
 from metagpt.environment.mailbox import Mailbox
 from metagpt.environment.runtime import AgentRuntime
-from metagpt.environment.store import ResidencyRecord, ResidencyStore
+from metagpt.environment.store import ResidencyRecord, ResidencyStore, _strip_history
+from metagpt.session import SessionLog
+from metagpt.session.events import MessageEvent, SessionMetaEvent
 
 
 class FakeRole:
-    """Duck-typed Role for store round-trips."""
+    """Duck-typed Role for store round-trips.
 
-    def __init__(self, session_id="sess-1", payload=None):
+    Mirrors the real RoleState shape closely enough to exercise history
+    stripping/refilling: ``state.context.messages`` is a real list.
+    """
+
+    def __init__(self, session_id="sess-1", payload=None, messages=None):
         self._session_id = session_id
-        self.state = types.SimpleNamespace(msg_buffer=MessageQueue())
+        self.state = types.SimpleNamespace(
+            msg_buffer=MessageQueue(),
+            context=types.SimpleNamespace(messages=list(messages or [])),
+        )
         self.payload = payload or {}
 
     @property
@@ -26,19 +35,40 @@ class FakeRole:
         return self._session_id
 
     def dump(self):
-        return {"session_id": self._session_id, "payload": self.payload}
+        return {
+            "session_id": self._session_id,
+            "payload": self.payload,
+            "state": {
+                "context": {"messages": [m.dump() for m in self.state.context.messages]},
+            },
+        }
 
 
 def make_role_loader():
     """A role_loader that rebuilds a FakeRole from its dump."""
 
     def loader(role_dump):
+        state = role_dump.get("state", {})
+        context = state.get("context", {})
+        from metagpt.common.schema import Message
+
+        messages = [Message.load(m) for m in context.get("messages", [])]
         return FakeRole(
             session_id=role_dump.get("session_id", "sess-1"),
             payload=role_dump.get("payload", {}),
+            messages=[m for m in messages if m is not None],
         )
 
     return loader
+
+
+def seed_rollout(sessions_dir, session_id, contents):
+    """Create a rollout.jsonl with session_meta + the given message contents."""
+    log = SessionLog(session_id, base_dir=str(sessions_dir))
+    log.create(SessionMetaEvent(session_id=session_id))
+    for text in contents:
+        log.append(MessageEvent(message=UserMessage(text)))
+    return log
 
 
 def test_record_json_round_trip():
@@ -78,7 +108,9 @@ async def test_materialize_writes_record(tmp_path):
 
     rec = await store.materialize(rt)
     assert store.has("abc")
-    assert rec.role_dump == {"session_id": "abc", "payload": {"k": "v"}}
+    # No rollout for this session, so history is not stripped.
+    assert rec.role_dump["session_id"] == "abc"
+    assert rec.role_dump["payload"] == {"k": "v"}
     assert rec.mailbox_dump  # non-empty
     assert "buffered" in rec.msg_buffer_dump
 
@@ -130,3 +162,84 @@ async def test_materialize_empty_buffer_and_mailbox(tmp_path):
     restored = store.rehydrate("empty", role_loader=make_role_loader())
     assert restored.msg_buffer.empty()
     assert restored.mailbox.empty()
+
+
+# ---------------------------------------------------------------------------
+# History stripping + rollout-backed refill
+# ---------------------------------------------------------------------------
+
+
+def test_strip_history_clears_messages():
+    dump = {"state": {"context": {"messages": [{"a": 1}, {"b": 2}]}}, "other": "kept"}
+    stripped = _strip_history(dump)
+    assert stripped["state"]["context"]["messages"] == []
+    assert stripped["other"] == "kept"
+    # original is not mutated
+    assert dump["state"]["context"]["messages"] == [{"a": 1}, {"b": 2}]
+
+
+def test_strip_history_tolerates_missing_shape():
+    assert _strip_history({}) == {}
+    assert _strip_history({"state": "nope"}) == {"state": "nope"}
+    assert _strip_history({"state": {"context": {}}}) == {"state": {"context": {}}}
+
+
+@pytest.mark.asyncio
+async def test_materialize_strips_history_when_rollout_exists(tmp_path):
+    sessions = tmp_path / "sessions"
+    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
+    seed_rollout(sessions, "sid", ["hello", "world"])
+
+    role = FakeRole(session_id="sid", messages=[UserMessage("hello"), UserMessage("world")])
+    rec = await store.materialize(AgentRuntime(role))
+
+    # History dropped from the record — the rollout owns it.
+    assert rec.role_dump["state"]["context"]["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_refills_history_from_rollout(tmp_path):
+    sessions = tmp_path / "sessions"
+    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
+    seed_rollout(sessions, "sid", ["first", "second", "third"])
+
+    role = FakeRole(session_id="sid", messages=[UserMessage("first"), UserMessage("second"), UserMessage("third")])
+    await store.materialize(AgentRuntime(role))
+
+    restored = store.rehydrate("sid", role_loader=make_role_loader())
+    contents = [m.content for m in restored.role.state.context.messages]
+    assert contents == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_no_rollout_keeps_loaded_history(tmp_path):
+    """With no rollout, history isn't stripped and replay refill is a no-op."""
+    sessions = tmp_path / "sessions"
+    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
+
+    role = FakeRole(session_id="sid", messages=[UserMessage("kept")])
+    await store.materialize(AgentRuntime(role))
+
+    restored = store.rehydrate("sid", role_loader=make_role_loader())
+    contents = [m.content for m in restored.role.state.context.messages]
+    assert contents == ["kept"]
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_refill_survives_compaction_checkpoint(tmp_path):
+    """A compacted checkpoint in the rollout is the post-compaction truth."""
+    from metagpt.session.events import CompactedEvent
+
+    sessions = tmp_path / "sessions"
+    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
+    log = seed_rollout(sessions, "sid", ["pre1", "pre2"])
+    # Compaction resets history to the replacement, then a new message appends.
+    log.append(CompactedEvent(messages=[UserMessage("summary")], summary="s"))
+    log.append(MessageEvent(message=UserMessage("after")))
+
+    role = FakeRole(session_id="sid")
+    await store.materialize(AgentRuntime(role))
+
+    restored = store.rehydrate("sid", role_loader=make_role_loader())
+    contents = [m.content for m in restored.role.state.context.messages]
+    assert contents == ["summary", "after"]

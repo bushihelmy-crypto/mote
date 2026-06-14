@@ -16,9 +16,9 @@ import pytest
 
 from metagpt.common.schema import AIMessage, AutocompactResult, MicrocompactResult, UserMessage
 from metagpt.context.manager import ContextManager
-from metagpt.roles.session.events import COMPACTED, MESSAGE
-from metagpt.roles.session.log import SessionLog
-from metagpt.roles.session.recorder import SessionRecorder
+from metagpt.session.events import COMPACTED, MESSAGE
+from metagpt.session.log import SessionLog
+from metagpt.session.recorder import SessionRecorder
 
 
 class SpyRecorder:

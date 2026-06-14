@@ -46,7 +46,7 @@ from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
 from metagpt.common.utils.role_zero_utils import attach_media, detach_media
 
 if TYPE_CHECKING:
-    from metagpt.roles.session import FileSnapshotRecorder, SessionRecorder
+    from metagpt.session import FileSnapshotRecorder, SessionRecorder
 
 
 @log_class(
@@ -275,7 +275,7 @@ class Role(BaseRole):
         log already exists, so restart/resume never re-writes metadata.
         """
         if self._session_recorder is None:
-            from metagpt.roles.session import SessionLog, SessionMetaEvent, SessionRecorder
+            from metagpt.session import SessionLog, SessionMetaEvent, SessionRecorder
 
             log = SessionLog(self.state.session_id)
             log.create(
@@ -305,8 +305,8 @@ class Role(BaseRole):
         the plain blob store.
         """
         if self._file_snapshot_recorder is None:
-            from metagpt.roles.session import FileSnapshotRecorder
-            from metagpt.roles.session.snapshot import detect_blob_backend
+            from metagpt.session import FileSnapshotRecorder
+            from metagpt.session.snapshot import detect_blob_backend
 
             backend = self.role_schema.snapshot_backend
             if backend == "auto":
@@ -791,12 +791,12 @@ class Role(BaseRole):
 
     @staticmethod
     def list_sessions(base_dir: str | None = None, *, cwd: str | None = None) -> list:
-        """List resumable sessions (newest first); see ``roles.session.list_sessions``.
+        """List resumable sessions (newest first); see ``session.list_sessions``.
 
         A thin, discoverable entry point onto the lite directory scan. ``cwd``
         filters to sessions started under that working dir / project root.
         """
-        from metagpt.roles.session import list_sessions as _list
+        from metagpt.session import list_sessions as _list
 
         return _list(base_dir, cwd=cwd)
 
@@ -813,7 +813,7 @@ class Role(BaseRole):
         the recorder stays live for messages added after resume, and
         ``SessionLog.create`` no-ops on the existing file (no duplicate meta).
         """
-        from metagpt.roles.session import SessionLog, replay
+        from metagpt.session import SessionLog, replay
 
         log = SessionLog(self.state.session_id)
         if not log.exists():
@@ -843,7 +843,7 @@ class Role(BaseRole):
         inherited history. The two sessions are independent afterwards: mutating
         the fork never touches this role's log.
         """
-        from metagpt.roles.session import fork
+        from metagpt.session import fork
 
         child_id = fork(self.state.session_id)
 
@@ -876,7 +876,7 @@ class Role(BaseRole):
             from dataclasses import asdict
             from uuid import uuid4
 
-            from metagpt.roles.session import TurnContextEvent
+            from metagpt.session import TurnContextEvent
 
             token_state = None
             try:
