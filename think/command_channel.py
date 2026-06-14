@@ -30,7 +30,6 @@ from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Optional
 
 from const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS
-from logs import logger
 from metagpt.think.role_zero import OUTPUT_SECTION
 from schema import AIMessage, CauseBy, UserMessage
 from utils.role_zero_utils import parse_commands2
@@ -156,10 +155,8 @@ class XmlCommandChannel(CommandChannel):
         try:
             command_list, error_msg = await parse_commands2(command_rsp, valid_names)
         except Exception as e:  # noqa: BLE001 — parsing is best-effort
-            logger.error(f"Error parsing commands: {e}")
             return
         if error_msg:
-            logger.error(f"Parse commands error: {error_msg}")
             return
         for cmd in command_list or []:
             yield {"id": None, **cmd, "status": "running", "error_msg": ""}
@@ -204,7 +201,6 @@ class NativeToolChannel(CommandChannel):
         for cmd in think_engine.result.tool_calls or []:
             name = cmd["command_name"]
             if valid_names and name not in valid_names:
-                logger.warning(f"Skipping unknown command: {name}")
                 continue
             yield {
                 "id": cmd.get("id"),

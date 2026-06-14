@@ -16,16 +16,18 @@ Design:
 """
 from __future__ import annotations
 
-import traceback
 import uuid
 from typing import Any
 
-from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, ToolResultLimitConfig
-from executor import tool_result_limit
+from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, ToolResultLimitConfig
+from metagpt.executor import tool_result_limit
 from metagpt.executor.base_executor import BaseToolExecutor
+from metagpt.executor.permission import PermissionEngine, RuleStore
+from metagpt.executor.permission.sandbox import SandboxGuard
 from metagpt.executor.tool_result import ToolError, ToolResult
 from metagpt.executor.tool_registry import registry as tool_registry
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class
+from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.common.schema import BgTaskResult
 from metagpt.executor.tool_spec_adapter import to_native_tool_specs
@@ -35,6 +37,12 @@ from metagpt.executor.tool_spec_adapter import to_native_tool_specs
 # ---------------------------------------------------------------------------
 
 
+@log_class(
+    level="DEBUG",
+    # Schema introspection getters are pure/derived and called frequently when
+    # building prompts — tracing them only adds noise.
+    exclude={"get_tool_schemas", "get_mcp_tool_schemas", "get_all_tool_schemas", "get_native_tool_specs"},
+)
 class ToolExecutor(BaseToolExecutor):
     """Dispatch LLM tool calls to BaseTool instances.
 
@@ -57,6 +65,7 @@ class ToolExecutor(BaseToolExecutor):
         tools: list[str] | None = None,
         role=None,
         limit_config: ToolResultLimitConfig | None = None,
+        permission_config: PermissionConfig | None = None,
     ) -> None:
         self._session_id = session_id
         self._mcp: UniversalMCP | None = None
@@ -64,6 +73,32 @@ class ToolExecutor(BaseToolExecutor):
         # Tool-result size limiting knobs (per-tool cap + disk persistence). A
         # default config reproduces CC's out-of-the-box behavior.
         self._limit_config = limit_config or ToolResultLimitConfig()
+
+        # Permission engine. Built ONLY when a Role opts in with a
+        # PermissionConfig — otherwise None and run_command behaves exactly as
+        # before (no approval layer), preserving backward compatibility.
+        self._permission_engine: PermissionEngine | None = None
+        if permission_config is not None:
+            ask_human = None
+            get_cwd = None
+            if role is not None:
+                # The interactive approval channel + cwd accessor are published
+                # via the Role's capability allowlist (never via getattr).
+                caps = role.tool_capabilities()
+                ask_human = caps.get("request_approval")
+                get_cwd = caps.get("get_cwd")
+            # The sandbox boundary (axis B) is orthogonal to the approval mode.
+            # Built only when a SandboxConfig is supplied — otherwise no
+            # filesystem boundary is enforced.
+            sandbox = None
+            if permission_config.sandbox is not None:
+                sandbox = SandboxGuard(permission_config.sandbox, get_cwd=get_cwd)
+            self._permission_engine = PermissionEngine(
+                mode=permission_config.mode,
+                store=RuleStore.from_config(permission_config),
+                ask_human=ask_human,
+                sandbox=sandbox,
+            )
 
         # Ensure all @register_tool classes under the scanned packages are loaded
         # before we look them up by name. Idempotent — runs the package scan once.
@@ -132,29 +167,45 @@ class ToolExecutor(BaseToolExecutor):
             available = list(self._tools.keys())
             return ToolResult(output=f"Error: unknown tool '{name}'. Available: {available}", success=False)
 
-        try:
-            raw = await tool.call(**(kwargs or {}))
-        except ToolError as e:
-            # Expected, recoverable failure the tool signalled deliberately.
-            # Not logged as an error: it is normal control flow (bad args,
-            # missing file, etc.), surfaced to the model as a failed tool result.
-            return ToolResult(output=str(e), success=False)
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f"Tool '{name}' raised: {e}\n{tb}")
-            return ToolResult(output=f"Error executing '{name}': {e}", success=False)
+        args = kwargs or {}
 
-        # BgTaskResult: pass through for Role to handle
-        if isinstance(raw, BgTaskResult):
-            output = str(raw.result) if raw.result else ""
-            return ToolResult(output=output, success=True, data=raw)
+        with maybe_span(f"tool:{name}", **(kwargs or {})):
+            # Permission gate: when enabled, evaluate the call before executing. A
+            # denied call never reaches tool.call(); an approver may also narrow the
+            # arguments via updated_args.
+            if self._permission_engine is not None:
+                decision = await self._permission_engine.check(
+                    name,
+                    target=tool.permission_target(args),
+                    tool_check=tool.check_permissions(args),
+                    mutates_fs=getattr(tool, "mutates_filesystem", False),
+                )
+                if decision.behavior == "deny":
+                    return ToolResult(output=f"[PERMISSION DENIED] {decision.message}", success=False)
+                if decision.updated_args is not None:
+                    args = decision.updated_args
 
-        # Normalize the raw return into a ToolResult. A returned ToolResult is
-        # used as-is; a plain value is always treated as success — failure is
-        # signalled structurally (raise ToolError above, or return
-        # ToolResult(success=False)), never by sniffing the output text.
-        result = ToolResult.from_tool_return(raw)
-        return self._limit_result(result, name, result_id)
+            try:
+                raw = await tool.call(**args)
+            except ToolError as e:
+                # Expected, recoverable failure the tool signalled deliberately.
+                # Not logged as an error: it is normal control flow (bad args,
+                # missing file, etc.), surfaced to the model as a failed tool result.
+                return ToolResult(output=str(e), success=False)
+            except Exception as e:
+                return ToolResult(output=f"Error executing '{name}': {e}", success=False)
+
+            # BgTaskResult: pass through for Role to handle
+            if isinstance(raw, BgTaskResult):
+                output = str(raw.result) if raw.result else ""
+                return ToolResult(output=output, success=True, data=raw)
+
+            # Normalize the raw return into a ToolResult. A returned ToolResult is
+            # used as-is; a plain value is always treated as success — failure is
+            # signalled structurally (raise ToolError above, or return
+            # ToolResult(success=False)), never by sniffing the output text.
+            result = ToolResult.from_tool_return(raw)
+            return self._limit_result(result, name, result_id)
 
     def _limit_result(self, result: ToolResult, name: str, result_id: str | None) -> ToolResult:
         """Cap a tool result's text per the tool's declared size limit.

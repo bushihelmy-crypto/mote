@@ -16,7 +16,6 @@ from typing import Awaitable, Callable, ClassVar
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
-from metagpt.common.logs import logger
 from metagpt.common.utils.report import ArtifactsReporter
 
 
@@ -77,7 +76,5 @@ class Sleep(BaseTool):
         slept_seconds, interrupted = await self.wait_interruptible(duration_seconds)
 
         if interrupted:
-            logger.info(f"Sleep interrupted after {slept_seconds}s (new message)")
             return f"Sleep interrupted after {slept_seconds}s"
-        logger.info(f"Slept for {slept_seconds}s")
         return f"Slept for {slept_seconds}s"

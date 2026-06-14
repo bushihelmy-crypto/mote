@@ -108,7 +108,6 @@ class MCPBaseClient:
 
             # If one tool fails, it should stop early, especially when multiple tools need to be run.
             error_msg = format_method_name(error_msg)
-            logger.warning(f"MCP call tool: {error_msg} (name: {name}, args: {arguments})")
             raise NonRetryableToolError(error_msg)
 
         # Handle empty content

@@ -31,11 +31,11 @@ an ``async aask(msg, system_msgs=...)`` works; tests pass a fake.
 
 from __future__ import annotations
 
-from metagpt.common.schema import AutocompactResult, Message, UserMessage
-from context import prompt as compact_prompt
-from context import token_budget
-from metagpt.common.schema import ContextManagerConfig
 from metagpt.common.logs import logger
+from metagpt.common.schema import AutocompactResult, Message, UserMessage
+from metagpt.context import prompt as compact_prompt
+from metagpt.context import token_budget
+from metagpt.common.schema import ContextManagerConfig
 from metagpt.common.utils.token_counter import count_string_tokens
 
 

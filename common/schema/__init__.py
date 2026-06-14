@@ -66,6 +66,9 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "TOOL_MAX_RESULT_SIZE_CHARS": ("tool_config", "TOOL_MAX_RESULT_SIZE_CHARS"),
     "TOOL_RESULTS_SUBDIR": ("tool_config", "TOOL_RESULTS_SUBDIR"),
     "ToolResultLimitConfig": ("tool_config", "ToolResultLimitConfig"),
+    # permission_config
+    "PermissionConfig": ("permission_config", "PermissionConfig"),
+    "SandboxConfig": ("permission_config", "SandboxConfig"),
     # think
     "ThinkResult": ("think", "ThinkResult"),
 }

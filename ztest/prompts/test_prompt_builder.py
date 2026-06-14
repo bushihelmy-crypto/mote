@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 
-from prompts import role as R
+from metagpt.prompts import role as R
 from metagpt.prompts.prompt_builder import (
     PromptBuilder,
     ThinkContext,

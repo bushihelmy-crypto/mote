@@ -102,7 +102,7 @@ async def test_success_rebuilds_summary_plus_tail(force_autocompact_threshold):
 
 @pytest.mark.asyncio
 async def test_success_summarizes_head_with_partial_prompt(force_autocompact_threshold):
-    from context import prompt as compact_prompt
+    from metagpt.context import prompt as compact_prompt
 
     msgs = _history(6)
     llm = FakeLLM()

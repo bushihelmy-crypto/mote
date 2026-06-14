@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-import parser as parser_pkg
-from parser import (
+import metagpt.parser as parser_pkg
+from metagpt.parser import (
     NativeToolChannel,
     XmlCommandChannel,
     infer_native_tool_provider,

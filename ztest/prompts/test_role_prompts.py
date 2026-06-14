@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from prompts import role as R
+from metagpt.prompts import role as R
 
 
 class TestIdentityTemplates:

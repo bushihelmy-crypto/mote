@@ -95,10 +95,6 @@ class BaseLLM(ABC):
         if pdfs:
             ok_to_attach, total_pdf_bytes, total_pdf_pages = pdfs_within_limits(pdfs)
             if not ok_to_attach:
-                logger.info(
-                    f"Skip attaching PDFs: total_size={total_pdf_bytes/1024/1024:.2f}MB (limit=15MB), "
-                    f"total_pages={total_pdf_pages} (limit=80)"
-                )
                 pdfs = []
         content = [{"type": "text", "text": msg}]
         # images
@@ -232,9 +228,7 @@ class BaseLLM(ABC):
         stream=True,
     ) -> str:
         message = self._build_messages(msg, system_msgs, format_msgs, images, pdfs)
-        logger.debug(message)
         compressed_message = self.compress_messages(message, compress_type=self.config.compress_type)
-        logger.debug(f"The number of tokens sent to llm is: {self.count_tokens(compressed_message)}")
 
         async def _send(llm: "BaseLLM", messages: list[dict]) -> str:
             return await llm.acompletion_text(messages, stream=stream, timeout=self.get_timeout(timeout))

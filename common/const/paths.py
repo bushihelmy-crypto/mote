@@ -71,8 +71,6 @@ SWAGGER_PATH = UT_PATH / "files/api/"
 UT_PY_PATH = UT_PATH / "files/ut/"
 API_QUESTIONS_PATH = UT_PATH / "files/question/"
 
-ATOMS_DIR_NAME = ".atoms"
-
 # P1 Context Protocol file names
 CONTEXT_FILE_ATOMS = "ATOMS.md"
 CONTEXT_FILE_PROGRESS = "PROGRESS.md"

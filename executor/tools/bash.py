@@ -18,9 +18,10 @@ import os
 from typing import Callable, ClassVar
 
 from metagpt.executor.base_tool import BaseTool
+from metagpt.executor.permission.classifier import classify_command
+from metagpt.executor.permission.types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.common.logs import logger
 from metagpt.common.utils.common import aexecute
 
 # Unique marker so we can split the command's real output from the trailing
@@ -38,11 +39,40 @@ class Bash(BaseTool):
     max_result_size_chars: ClassVar[int] = 30_000
     description = "Execute a bash command. State (cwd) persists across calls within a session."
     requires = ("get_cwd", "set_cwd")
+    # Arbitrary command execution — the highest-risk tool.
+    risk_level = "high"
 
     # Injected from Role by bind() — only these two cwd accessors, never RoleState
     # or memory.
     get_cwd: Callable[[], str]
     set_cwd: Callable[[str], None]
+
+    def permission_target(self, args: dict) -> str:
+        """The command string — matched against ``Bash(pattern)`` rules."""
+        return args.get("command") or ""
+
+    def check_permissions(self, args: dict) -> "PermissionDecision | None":
+        """Classify the command and short-circuit the obvious cases.
+
+        Uses the shared :func:`classify_command` (Codex-style safety pre-check):
+
+          * destructive (``rm -rf``, ``mkfs``, ``sudo`` ...) -> ``ask``
+            (bypass-immune — forces a prompt regardless of allow rules / mode);
+          * verifiably read-only (``ls``, ``cat``, ``git status`` ...) ->
+            ``allow`` (auto-approved, no prompt in ``default`` mode);
+          * anything unrecognised -> ``None`` to defer to rules/mode.
+        """
+        command = args.get("command") or ""
+        assessment = classify_command(command)
+        if assessment.risk == "high":
+            return PermissionDecision.ask(
+                "tool_check",
+                "potentially destructive command",
+                message=f"This command looks destructive: {command}",
+            )
+        if assessment.known_safe:
+            return PermissionDecision.allow("tool_check", assessment.reason)
+        return None
 
     async def call(self, *, command: str, timeout: float = 300.0) -> str:
         """Execute a bash command in the session's current working directory.
@@ -70,7 +100,6 @@ class Bash(BaseTool):
         except TimeoutError:
             raise ToolError(f"Error: command timed out after {timeout} seconds.")
         except Exception as e:
-            logger.error(f"Bash command failed to launch: {e}")
             raise ToolError(f"Error executing command: {e}")
 
         output, rc, new_cwd = self._split_probe(stdout)

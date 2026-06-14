@@ -11,7 +11,7 @@ branches).
 """
 from __future__ import annotations
 
-from context import prompt
+from metagpt.context import prompt
 
 
 def test_compact_prompt_has_preamble_body_trailer():

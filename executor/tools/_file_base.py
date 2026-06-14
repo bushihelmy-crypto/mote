@@ -39,9 +39,18 @@ class FileMutatingTool(BaseTool):
     # only these; absent (unbound) they stay unset and the guards self-skip.
     requires = ("get_file_read_mtime", "record_file_read")
 
+    # Permission metadata: these tools write to disk — high risk, and eligible
+    # for the ``acceptEdits`` permission mode.
+    risk_level = "high"
+    mutates_filesystem = True
+
     # Injected from Role by bind().
     get_file_read_mtime: Callable[[str], Optional[int]]
     record_file_read: Callable[[str, int], None]
+
+    def permission_target(self, args: dict) -> str:
+        """The path being written — matched against ``Tool(pattern)`` rules."""
+        return args.get("file_path") or args.get("notebook_path") or ""
 
     @staticmethod
     def _detect_line_ending(full_path: str) -> str:

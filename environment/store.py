@@ -84,7 +84,6 @@ class ResidencyStore:
         )
         self._base.mkdir(parents=True, exist_ok=True)
         self._path(runtime.session_id).write_text(record.to_json(), encoding="utf-8")
-        logger.info(f"ResidencyStore: materialized agent {runtime.session_id}")
         return record
 
     # ------------------------------------------------------------------

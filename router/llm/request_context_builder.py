@@ -16,7 +16,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from metagpt.common.config.compress_msg_config import CompressType
-from metagpt.common.logs import logger
 from metagpt.common.utils.token_counter import TOKEN_MAX
 
 if TYPE_CHECKING:
@@ -93,17 +92,9 @@ class RequestContextBuilder:
                             from_end=True,
                             balanced=False,
                         )
-                        logger.info(
-                            f"Token length of the truncated message {i}: {self.llm.count_tokens([truncated_msg])}"
-                        )
                         compressed.insert(len(system_msgs), truncated_msg)
                         token_count = self.llm.count_tokens([truncated_msg])
                         current_token_count += token_count
-                    logger.warning(
-                        f"Truncated messages with {compress_type} to fit within the token limit. "
-                        f"The first user or assistant message after truncation (originally the {i}-th message from last): "
-                        f"{compressed[len(system_msgs)]}.current_token_count: {current_token_count}, keep_token: {keep_token}"
-                    )
                     break
 
         elif compress_type in [CompressType.PRE_CUT_BY_TOKEN, CompressType.PRE_CUT_BY_MSG]:
@@ -119,11 +110,6 @@ class RequestContextBuilder:
                         compressed.append(truncated_msg)
                         token_count = self.llm.count_tokens([truncated_msg])
                         current_token_count += token_count
-                    logger.warning(
-                        f"Truncated messages with {compress_type} to fit within the token limit. "
-                        f"The last user or assistant message after truncation (originally the {i}-th message): "
-                        f"{compressed[-1]}.current_token_count: {current_token_count}, keep_token: {keep_token}"
-                    )
                     break
 
         return compressed
@@ -181,11 +167,6 @@ class RequestContextBuilder:
 
         def _return_phase1_only() -> list[dict]:
             compressed.extend(compressed_msgs)
-            final_tokens = self.llm.count_tokens(compressed)
-            logger.info(
-                f"Balanced compression Phase 1 only: compressed {phase1_compressed_count} "
-                f"editor.read messages, reduced from {original_total_tokens + system_tokens} to {final_tokens} tokens. keep_token: {keep_token}"
-            )
             return compressed
 
         if total_tokens <= available_tokens:
@@ -242,20 +223,6 @@ class RequestContextBuilder:
             final_msgs = list(reversed(kept_reverse))
 
         compressed.extend(final_msgs)
-        final_tokens = self.llm.count_tokens(compressed)
-        if phase3_dropped_count:
-            logger.warning(
-                f"Balanced compression Phase 1+2+3: compressed {phase1_compressed_count} editor.read messages, "
-                f"{phase2_compressed_count} large messages (avg: {int(avg_tokens)} tokens), "
-                f"and dropped {phase3_dropped_count} oldest messages (post_cut strategy), "
-                f"reduced from {original_total_tokens + system_tokens} to {final_tokens} tokens"
-            )
-        else:
-            logger.info(
-                f"Balanced compression Phase 1+2: compressed {phase1_compressed_count} editor.read messages "
-                f"and {phase2_compressed_count} large messages (avg: {int(avg_tokens)} tokens), "
-                f"reduced from {original_total_tokens + system_tokens} to {final_tokens} tokens"
-            )
         return compressed
 
     def _compact_message(

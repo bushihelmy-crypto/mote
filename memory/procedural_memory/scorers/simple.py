@@ -6,7 +6,7 @@ from pydantic import Field
 
 from metagpt.memory.procedural_memory.schema import Score
 from metagpt.memory.procedural_memory.scorers.base import BaseScorer
-from router import LLM
+from metagpt.router import LLM
 from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.common.utils.common import CodeParser
 

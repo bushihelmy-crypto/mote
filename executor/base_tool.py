@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
+from metagpt.executor.permission.types import PermissionDecision
 from metagpt.executor.tool_convert import function_docstring_to_schema
 
 
@@ -69,6 +70,14 @@ class BaseTool(ABC):
     # per-tool `maxResultSizeChars`.
     max_result_size_chars: ClassVar[int] = DEFAULT_MAX_RESULT_SIZE_CHARS
 
+    # --- Permission metadata (consumed by the PermissionEngine) ---
+    # Coarse risk label a tool self-declares (advisory in phase 1). See
+    # metagpt.executor.permission.types.RiskLevel.
+    risk_level: ClassVar[str] = "low"
+    # Whether this tool mutates the filesystem. Drives the ``acceptEdits``
+    # permission mode (auto-approve edits). Set True on file-writing tools.
+    mutates_filesystem: ClassVar[bool] = False
+
     # --- Execution ---
 
     def __init__(self) -> None:
@@ -110,6 +119,28 @@ class BaseTool(ABC):
     def cleanup_session(self, session_id: str) -> None:
         """Clean up per-session resources when a Role exits. Default no-op."""
         pass
+
+    # ------------------------------------------------------------------
+    # Permission hooks (consumed by the PermissionEngine before call())
+    # ------------------------------------------------------------------
+
+    def permission_target(self, args: dict) -> str:
+        """Return the string matched against rule patterns for this call.
+
+        E.g. ``Bash`` returns its ``command``, file tools return the path. The
+        default is empty, meaning only whole-tool rules (``Tool`` without a
+        pattern) can match. Override to enable ``Tool(pattern)`` rules.
+        """
+        return ""
+
+    def check_permissions(self, args: dict) -> "PermissionDecision | None":
+        """Tool-specific permission self-check, run before mode/rule fallback.
+
+        Return a :class:`PermissionDecision` to force ``allow``/``deny``/``ask``
+        (deny/ask here are bypass-immune safety checks), or ``None`` to defer to
+        rules and the permission mode. Default defers.
+        """
+        return None
 
     def tool_schema(self) -> dict:
         """Return this tool's LLM-facing schema (instance-level).

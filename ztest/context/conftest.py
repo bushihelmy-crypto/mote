@@ -103,7 +103,7 @@ def force_autocompact_threshold(monkeypatch):
     time, so patching it here forces ``should_autocompact`` True for any
     non-trivial history while leaving the rest of the real math intact.
     """
-    from context import token_budget
+    from metagpt.context import token_budget
 
     monkeypatch.setattr(token_budget, "autocompact_threshold", lambda model: 1)
     return token_budget

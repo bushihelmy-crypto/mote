@@ -1,27 +1,27 @@
 """SkillManager — Skills subsystem lifecycle management.
 
-Extracted from Role to decouple skill init/deploy/inject from the core
-role class.  Role holds a lazy ``skill_manager`` property that delegates
-all skill-related bookkeeping here.
+Extracted from Role to decouple skill init/inject from the core role class.
+Role holds a lazy ``skill_manager`` property that delegates all skill-related
+bookkeeping here.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
-from metagpt.common.const import ATOMS_DIR_NAME, DEFAULT_WORKSPACE_ROOT
-from metagpt.common.logs import logger
-from metagpt.skills.skill_deployer import SkillDeployer
+from metagpt.common.logs import log_class
 from metagpt.skills.skill_injector import SkillInjector
 from metagpt.skills.skill_pool import SkillPool
 
 
+@log_class(level="DEBUG")
 class SkillManager:
     """Skills subsystem lifecycle management.
 
     Mirrors ToolExecutor's pattern: takes a declarative list of skill names,
-    empty list = disabled, non-empty = load and deploy those skills.
+    empty list = disabled, non-empty = load those skills and prepare the
+    injector. Skills are read directly from the builtin directory; nothing is
+    copied to disk.
     """
 
     def __init__(self, skills: list[str]):
@@ -35,7 +35,7 @@ class SkillManager:
         return self._ready
 
     def ensure_ready(self):
-        """Idempotent init — load, deploy, and prepare injector."""
+        """Idempotent init — load skills and prepare the injector."""
         if self._ready:
             return
 
@@ -46,30 +46,6 @@ class SkillManager:
         self.pool = SkillPool()
         self.pool.load_by_names(self._skills)
 
-        workspace = Path(DEFAULT_WORKSPACE_ROOT)
-        if not workspace.exists():
-            logger.warning(f"Skills: workspace {workspace} does not exist, skipping deployment")
-            self._ready = True
-            return
+        self.injector = SkillInjector(pool=self.pool)
 
-        atoms_dir = workspace / ATOMS_DIR_NAME
-        index_path = atoms_dir / "SKILLS.md"
-        skills = self.pool.get_all()
-
-        needs_deploy = not index_path.exists() or any(
-            not (atoms_dir / "skills" / s.name).exists() for s in skills
-        )
-        if needs_deploy:
-            deployer = SkillDeployer()
-            deployer.deploy(workspace=workspace, skills=skills)
-            deployer.generate_index(workspace=workspace, skills=skills)
-
-        self.injector = SkillInjector(
-            pool=self.pool,
-            skills_md_path=index_path,
-        )
-
-        logger.info(
-            f"Skills subsystem initialized ({self.pool.get_skill_count()} skills)"
-        )
         self._ready = True

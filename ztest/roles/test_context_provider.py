@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 
 from metagpt.common.base import LoopContext
-from roles import Role
+from metagpt.roles import Role
 from metagpt.roles.context_provider import ContextProvider
 from metagpt.roles.context_provider.base import BaseContextProvider
 from metagpt.roles.context_provider.request import ThinkRequest

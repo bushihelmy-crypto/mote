@@ -11,7 +11,6 @@ from metagpt.memory.procedural_memory.context_builders import BaseContextBuilder
 from metagpt.memory.procedural_memory.manager import ExperienceManager, get_exp_manager
 from metagpt.memory.procedural_memory.perfect_judges import BasePerfectJudge, SimplePerfectJudge
 from metagpt.memory.procedural_memory.schema import (
-    LOG_NEW_EXPERIENCE_PREFIX,
     Experience,
     Metric,
     QueryType,
@@ -19,7 +18,6 @@ from metagpt.memory.procedural_memory.schema import (
 )
 from metagpt.memory.procedural_memory.scorers import BaseScorer, SimpleScorer
 from metagpt.memory.procedural_memory.serializers import BaseSerializer, SimpleSerializer
-from metagpt.common.logs import logger
 from metagpt.common.utils.async_helper import run_coroutine_sync
 from metagpt.common.utils.exceptions import handle_exception
 
@@ -140,14 +138,12 @@ class ExpCacheHandler(BaseModel):
         """Fetch experiences by query_type."""
 
         self._exps = await self.exp_manager.query_exps(self._req, query_type=self.query_type, tag=self.tag)
-        logger.info(f"Found {len(self._exps)} experiences for tag '{self.tag}'")
 
     async def get_one_perfect_exp(self) -> Optional[Any]:
         """Get a potentially perfect experience, and resolve resp."""
 
         for exp in self._exps:
             if await self.exp_perfect_judge.is_perfect_exp(exp, self._req, *self.args, **self.kwargs):
-                logger.info(f"Got one perfect experience for req '{exp.req[:20]}...'")
                 return self.serializer.deserialize_resp(exp.resp)
 
         return None
@@ -223,6 +219,4 @@ class ExpCacheHandler(BaseModel):
         return self.func(*self.args, **self.kwargs)
 
     def _log_exp(self, exp: Experience):
-        log_entry = exp.model_dump_json(include={"uuid", "req", "resp", "tag"})
-
-        logger.debug(f"{LOG_NEW_EXPERIENCE_PREFIX}{log_entry}")
+        pass

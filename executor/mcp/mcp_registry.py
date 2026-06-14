@@ -68,19 +68,14 @@ class ToolRegistry(BaseModel):
         self.tools[tool_name] = tool
         for tag in tags:
             self.tools_by_tags[tag].update({tool_name: tool})
-        if verbose:
-            logger.info(f"{tool_name} registered")
-            logger.info(f"schema made at {str(schema_path)}, can be used for checking")
 
     def register_mcp_tool(self, tool: MCPTool):
         if self.has_tool(tool.name):
-            logger.warning(f"MCP Tool {tool.name} already exists, skipping registration")
             return
 
         schema = {"description": tool.description, "parameters": tool.inputSchema}
         tool = Tool(name=tool.name, schemas=schema, path="")
         self.tools[tool.name] = tool
-        logger.info(f"registering mcp tool: {tool.name} success")
 
     def has_tool(self, key: str) -> Tool:
         return key in self.tools
@@ -235,8 +230,8 @@ def make_schema(tool_source_object, include, path):
     try:
         schema = convert_code_to_tool_schema(tool_source_object, include=include)
     except Exception as e:
-        schema = {}
         logger.error(f"Fail to make schema: {e}")
+        schema = {}
 
     return schema
 
@@ -261,7 +256,7 @@ def validate_tool_names(tools: list[str]) -> dict[str, Tool]:
                     if method_name in class_tool.schemas["methods"]:
                         methods_filtered[method_name] = class_tool.schemas["methods"][method_name]
                     else:
-                        logger.warning(f"invalid method {method_name} under tool {class_tool_name}, skipped")
+                        pass
                 class_tool_filtered = class_tool.model_copy(deep=True)
                 class_tool_filtered.schemas["methods"] = methods_filtered
 
@@ -272,7 +267,7 @@ def validate_tool_names(tools: list[str]) -> dict[str, Tool]:
         elif TOOL_REGISTRY.has_tool_tag(key):
             valid_tools.update(TOOL_REGISTRY.get_tools_by_tag(key))
         else:
-            logger.warning(f"invalid tool name or tool type name: {key}, skipped")
+            pass
     return valid_tools
 
 

@@ -6,10 +6,11 @@ RoleSchema — static configuration, determined at deploy time.
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from metagpt.common.schema import PermissionConfig
 from metagpt.prompts.role import (
     CMD_PROMPT,
     ROLE_INSTRUCTION,
@@ -62,7 +63,13 @@ class RoleSchema(BaseModel):
     tools: list[str] = []
     mcps: list[str] = []
     agents: list[str] = []
-    skills: list[str] = []  
+    skills: list[str] = []
+
+    # --- Permissions ---
+    # Opt-in tool-approval policy. When None (default), tools run with no
+    # approval layer (legacy behavior). Set a PermissionConfig to engage the
+    # PermissionEngine (allow/deny/ask rules + mode).
+    permissions: Optional[PermissionConfig] = None
 
     # --- Memory / summary config ---
     enable_memory: bool = True

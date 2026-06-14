@@ -17,8 +17,12 @@ Rich documents (PDF / Word / Excel) are read two ways, chosen by ``mode``:
   ``pdfs`` content, like CC's PDF reading.
 
 Differences from Claude Code's tool, by design:
-- Images aren't resized/compressed here (no sharp dependency); raw base64 is
-  handed to the LLM client, which is responsible for any media encoding.
+- Images are downscaled to fit MAX_IMAGE_DIMENSION (longest edge) before being
+  shown to the model, mirroring codex's view_image "high" detail. The original
+  format and ICC/EXIF (orientation) metadata are preserved on re-encode. Pass
+  ``detail="original"`` to skip the resize and send the raw bytes. This requires
+  Pillow; if Pillow is unavailable or the image cannot be decoded, the read
+  fails (no silent fallback).
 - Notebooks are rendered to text (cells + outputs) rather than structured cells,
   since this framework's tool result is text + media, not arbitrary blocks.
 - Dedup state is kept per tool instance (one instance per Role/session) instead
@@ -31,6 +35,7 @@ tool so model behavior stays familiar.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 from typing import Callable, ClassVar, Optional
@@ -48,6 +53,7 @@ from metagpt.common.const.tools import (
     MAX_LINE_LENGTH,
     MAX_FILE_SIZE_BYTES,
     MAX_MEDIA_SIZE_BYTES,
+    MAX_IMAGE_DIMENSION,
 )
 
 FILE_UNCHANGED_STUB = (
@@ -194,6 +200,7 @@ class Read(BaseTool):
         offset: int = 1,
         limit: Optional[int] = None,
         mode: str = "text",
+        detail: str = "high",
     ):
         """Read a file from the local filesystem.
 
@@ -220,6 +227,11 @@ class Read(BaseTool):
                 (default; extract text with line numbers, aligned to Grep's
                 offsets) or "visual" (render the document to the model as bytes;
                 PDF only). Ignored for plain text and notebooks.
+            detail: For images, the level of detail to send to the model: "high"
+                (default; downscale so the longest edge fits within 2048 px to
+                save tokens, preserving aspect ratio and format) or "original"
+                (send the image at its native resolution). Ignored for non-image
+                files.
         """
         if not file_path or not file_path.strip():
             raise ToolError("Error: 'file_path' argument is required.")
@@ -227,6 +239,12 @@ class Read(BaseTool):
         if mode not in ("text", "visual"):
             raise ToolError(
                 f"Error: invalid mode '{mode}'. Must be 'text' or 'visual'."
+            )
+
+        if detail not in ("high", "original"):
+            raise ToolError(
+                f"Error: invalid detail '{detail}'. Must be 'high' (downscale to "
+                f"fit {MAX_IMAGE_DIMENSION} px) or 'original' (native resolution)."
             )
 
         full_path = os.path.abspath(os.path.expanduser(file_path.strip()))
@@ -266,7 +284,9 @@ class Read(BaseTool):
         # (raising) call, so a failed read never marks the file as seen.
         # --- Image: return bytes as supplemental media ---
         if ext in _IMAGE_EXTENSIONS:
-            result = self._read_image(file_path, full_path, ext, stat.st_size)
+            result = self._read_image(
+                file_path, full_path, ext, stat.st_size, detail
+            )
             self._mark_read(full_path, stat.st_mtime_ns)
             return result
         # --- Rich documents (PDF/Word/Excel) ---
@@ -420,8 +440,14 @@ class Read(BaseTool):
             )
         return body
 
-    def _read_image(self, file_path, full_path, ext, size) -> ToolResult:
-        """Read an image and return it as supplemental multimodal content."""
+    def _read_image(self, file_path, full_path, ext, size, detail) -> ToolResult:
+        """Read an image and return it as supplemental multimodal content.
+
+        With ``detail="high"`` (default) the image is downscaled so its longest
+        edge fits within MAX_IMAGE_DIMENSION (mirrors codex view_image), keeping
+        aspect ratio, source format and ICC/EXIF metadata; images already within
+        the limit are sent unchanged. ``detail="original"`` sends the raw bytes.
+        """
         if size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
                 f"Error: image '{file_path}' ({size} bytes) exceeds the "
@@ -429,14 +455,82 @@ class Read(BaseTool):
             )
         try:
             with open(full_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
+                raw = f.read()
         except OSError as e:
             raise ToolError(f"Error: cannot read '{file_path}': {e}")
+
+        final_bytes, note = self._prepare_image_bytes(file_path, raw, detail)
+        b64 = base64.b64encode(final_bytes).decode("ascii")
         return ToolResult(
-            output=f"Read image {file_path} ({ext}, {size} bytes). Shown below.",
+            output=(
+                f"Read image {file_path} ({ext}, {size} bytes; {note}). "
+                f"Shown below."
+            ),
             images=[b64],
-            data={"type": "image", "path": full_path, "size": size},
+            data={
+                "type": "image",
+                "path": full_path,
+                "size": size,
+                "detail": detail,
+                "sent_bytes": len(final_bytes),
+            },
         )
+
+    def _prepare_image_bytes(
+        self, file_path: str, raw: bytes, detail: str
+    ) -> tuple[bytes, str]:
+        """Return (bytes_to_send, human_note), downscaling when detail='high'.
+
+        No silent fallback: when ``detail='high'`` requires Pillow and it is
+        missing, or the image cannot be decoded, this raises ToolError instead
+        of sending the raw bytes.
+        """
+        if detail == "original":
+            return raw, "original"
+
+        try:
+            from PIL import Image
+        except ImportError:
+            raise ToolError(
+                f"Error: cannot process image '{file_path}' with detail='high': "
+                f"Pillow is not installed. Install Pillow or pass detail="
+                f"'original' to send the image at its native resolution."
+            )
+
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                im.load()
+                width, height = im.size
+                if max(width, height) <= MAX_IMAGE_DIMENSION:
+                    return raw, "unchanged"
+
+                fmt = im.format or "PNG"
+                # Preserve color/orientation metadata across the re-encode.
+                save_kwargs = {}
+                exif = im.info.get("exif")
+                if exif:
+                    save_kwargs["exif"] = exif
+                icc = im.info.get("icc_profile")
+                if icc:
+                    save_kwargs["icc_profile"] = icc
+
+                im.thumbnail(
+                    (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.BILINEAR
+                )
+                buf = io.BytesIO()
+                im.save(buf, format=fmt, **save_kwargs)
+                new_w, new_h = im.size
+                return (
+                    buf.getvalue(),
+                    f"resized {width}x{height} -> {new_w}x{new_h}",
+                )
+        except ToolError:
+            raise
+        except Exception as e:  # noqa: BLE001 — surface any decode/encode failure
+            raise ToolError(
+                f"Error: cannot process image '{file_path}': {e}. Pass "
+                f"detail='original' to send the raw bytes without resizing."
+            )
 
     def _read_pdf(self, file_path, full_path, size) -> ToolResult:
         """Read a PDF and return it as a supplemental document."""

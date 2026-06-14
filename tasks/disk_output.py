@@ -12,10 +12,10 @@ This module is standalone — it does **not** modify ``BackgroundTaskPool`` or
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import Callable, Optional, Union
 
+from metagpt.common.logs import logger
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.const.tasks import (
     MAX_TASK_OUTPUT_BYTES,
@@ -23,8 +23,6 @@ from metagpt.common.const.tasks import (
     DEFAULT_MAX_READ_BYTES,
 )
 from metagpt.common.utils import disk_io
-
-logger = logging.getLogger(__name__)
 
 # Sentinel object to signal drain loop shutdown (never confused with real data).
 _SENTINEL = object()
@@ -111,8 +109,8 @@ class DiskTaskOutput:
         """Delete the disk file."""
         try:
             disk_io.remove_file(self._file_path)
-        except OSError:
-            logger.warning("Failed to remove task output file %s", self._file_path, exc_info=True)
+        except OSError as e:
+            logger.warning(f"Failed to remove task output file {self._file_path}: {e}")
 
     # ------------------------------------------------------------------
     # Internal
@@ -207,18 +205,13 @@ class DiskTaskOutput:
 
         if capped:
             self._capped = True
-            logger.warning(
-                "Task %s output exceeded %s cap, truncating.",
-                self.task_id,
-                MAX_TASK_OUTPUT_BYTES_DISPLAY,
-            )
             # Notify the owner (e.g. BackgroundTaskPool) so it can kill the
             # source task — aligned with Claude Code's output watchdog.
             if self._on_cap is not None:
                 try:
                     self._on_cap(self.task_id)
-                except Exception:
-                    logger.warning("on_cap callback failed for task %s", self.task_id, exc_info=True)
+                except Exception as e:
+                    logger.warning(f"on_cap callback failed for task {self.task_id}: {e}")
 
 
 class TaskOutputStore:

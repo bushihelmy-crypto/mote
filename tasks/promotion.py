@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Coroutine, Optional
 
-from metagpt.common.logs import logger
 from metagpt.tasks.pool import BackgroundTaskPool
 from metagpt.common.schema import BgTaskResult
 
@@ -63,10 +62,6 @@ async def auto_background(
 
     # Still running — promote to background.
     task_id = pool.adopt(task, command_name=command_name)
-    logger.info(
-        f"auto_background: {command_name} exceeded {foreground_timeout}s "
-        f"foreground limit, promoted to {task_id}"
-    )
     return BgTaskResult(
         result=(
             f"Task exceeded {foreground_timeout}s foreground limit, "

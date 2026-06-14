@@ -12,7 +12,7 @@ from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
 from metagpt.common.exception import RoleContextNotSetError
 from metagpt.common.schema import AIMessage, Message
 from metagpt.common.utils.common import any_to_str
-from roles import Role, RoleSchema, RoleState
+from metagpt.roles import Role, RoleSchema, RoleState
 
 from .conftest import FakeContextManager, FakeEnv, FakeLLM, FakeRouter, FakeThinkEngine, _FakeThinkResult
 
@@ -234,8 +234,9 @@ class TestCapabilities:
     def test_capability_map_keys(self):
         caps = Role(name="X").tool_capabilities()
         assert set(caps) == {
-            "get_cwd", "set_cwd", "deactivate", "ask_human", "reply_to_human",
-            "end_session", "record_file_read", "get_file_read_mtime", "wait_interruptible",
+            "get_cwd", "set_cwd", "deactivate", "ask_human", "request_approval",
+            "reply_to_human", "end_session", "record_file_read", "get_file_read_mtime",
+            "wait_interruptible",
         }
 
     def test_capability_values_are_bound_methods(self):

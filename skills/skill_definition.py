@@ -17,7 +17,6 @@ class SkillDefinition(BaseModel):
     description: str = Field(default="", max_length=1024)
     always_apply: bool = False
     globs: list[str] = Field(default_factory=list)
-    roles: list[str] = Field(default_factory=list)
     instructions: str = ""
     source_path: Path = Field(default_factory=lambda: Path())
     token_count: int = 0

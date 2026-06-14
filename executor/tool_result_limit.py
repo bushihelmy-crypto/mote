@@ -26,7 +26,6 @@ to factor common disk I/O into one place).
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Union
 
@@ -41,9 +40,8 @@ from metagpt.common.schema import (
     ToolResultLimitConfig,
 )
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
+from metagpt.common.logs import logger
 from metagpt.common.utils import disk_io
-
-logger = logging.getLogger(__name__)
 
 PathLike = Union[str, Path]
 
@@ -134,8 +132,8 @@ def _persist(output: str, result_id: str, session_id: str, base_dir: PathLike | 
         if not path.exists():
             disk_io.write_bytes(path, output.encode("utf-8"), append=False)
         return str(path)
-    except OSError:
-        logger.warning("Failed to persist tool result %s", path, exc_info=True)
+    except OSError as e:
+        logger.warning(f"Failed to persist tool result {path}: {e}")
         return None
 
 
@@ -198,12 +196,6 @@ def enforce_tool_result_limit(
         filepath = _persist(output, result_id, session_id, base_dir)
         if filepath is not None:
             preview, has_more = generate_preview(output, PREVIEW_SIZE_BYTES)
-            logger.debug(
-                "Persisted tool result for %s to %s (%s)",
-                tool_name,
-                filepath,
-                format_file_size(len(output)),
-            )
             return _build_persisted_message(filepath, len(output), preview, has_more)
 
     # Persistence disabled or failed — fall back to inline truncation.

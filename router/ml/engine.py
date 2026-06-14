@@ -48,10 +48,6 @@ class SquillaMLEngine:
             return
         self._loaded = True
         if not self.model_dir.is_dir():
-            logger.info(
-                f"router ML bundle not found at {self.model_dir}; "
-                "falling back to heuristic routing"
-            )
             return
         try:
             # Lazy import: pulls lightgbm/onnxruntime/sklearn only on demand.
@@ -63,14 +59,10 @@ class SquillaMLEngine:
                 use_aux_head=self.use_aux_head,
             )
             self._available = True
-            logger.info(f"router ML engine loaded from {self.model_dir}")
         except Exception as e:  # ImportError, missing files, bad artifacts, ...
+            logger.warning(f"router ML engine load failed ({type(e).__name__}: {e}); disabled")
             self._core = None
             self._available = False
-            logger.info(
-                f"router ML engine unavailable ({type(e).__name__}: {e}); "
-                "falling back to heuristic routing"
-            )
 
     def predict(self, request: InferenceRequest) -> Optional[InferenceResult]:
         """Run ML inference; return ``None`` when the engine is unavailable."""

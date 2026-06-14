@@ -9,6 +9,7 @@ dedup cache, and the shared file-read-state recording used by Write/Edit.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 
@@ -188,6 +189,57 @@ class TestReadImage:
         result = _read(Read(), file_path=p)
         assert isinstance(result, ToolResult)
         assert result.images and isinstance(result.images[0], str)
-        # The embedded base64 round-trips to the original bytes.
+        # A 1x1 image is within MAX_IMAGE_DIMENSION, so it's sent unchanged and
+        # the embedded base64 round-trips to the original bytes.
         assert base64.b64decode(result.images[0]) == png
         assert result.data["type"] == "image"
+        assert result.data["detail"] == "high"
+
+    def test_large_image_is_downscaled_to_fit(self, workspace):
+        from PIL import Image
+
+        from metagpt.common.const.tools import MAX_IMAGE_DIMENSION
+
+        p = os.path.join(str(workspace), "big.png")
+        Image.new("RGB", (4000, 2000), (123, 50, 200)).save(p)
+
+        result = _read(Read(), file_path=p)
+        assert isinstance(result, ToolResult)
+        out = Image.open(io.BytesIO(base64.b64decode(result.images[0])))
+        # Longest edge clamped to MAX_IMAGE_DIMENSION, aspect ratio preserved.
+        assert max(out.size) == MAX_IMAGE_DIMENSION
+        assert out.size == (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION // 2)
+        assert result.data["sent_bytes"] == len(base64.b64decode(result.images[0]))
+
+    def test_original_detail_sends_raw_bytes(self, workspace):
+        from PIL import Image
+
+        p = os.path.join(str(workspace), "big.png")
+        Image.new("RGB", (4000, 2000), (10, 20, 30)).save(p)
+        with open(p, "rb") as f:
+            raw = f.read()
+
+        result = _read(Read(), file_path=p, detail="original")
+        assert base64.b64decode(result.images[0]) == raw
+        assert result.data["detail"] == "original"
+
+    def test_small_image_high_detail_unchanged(self, workspace):
+        from PIL import Image
+
+        p = os.path.join(str(workspace), "small.png")
+        Image.new("RGB", (100, 80), (1, 2, 3)).save(p)
+        with open(p, "rb") as f:
+            raw = f.read()
+
+        result = _read(Read(), file_path=p, detail="high")
+        assert base64.b64decode(result.images[0]) == raw
+
+    def test_invalid_detail_raises(self, workspace):
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        p = os.path.join(str(workspace), "img.png")
+        with open(p, "wb") as f:
+            f.write(png)
+        with pytest.raises(ToolError, match="invalid detail"):
+            _read(Read(), file_path=p, detail="low")

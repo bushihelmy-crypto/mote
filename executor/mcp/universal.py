@@ -1,5 +1,4 @@
 import json
-import logging
 from enum import Enum
 from typing import Any, Dict, List
 
@@ -8,9 +7,7 @@ from fastmcp import Client
 from metagpt.common.config2 import Config
 from metagpt.common.config.mcp_config import MCPServerConfig, MCPTransportType
 from metagpt.common.exception import ToolNotFoundError
-
-
-logger = logging.getLogger(__name__)
+from metagpt.common.logs import logger
 
 
 class MCPInitState(str, Enum):
@@ -56,13 +53,11 @@ class UniversalMCP:
         for server_config in servers:
             server_name = server_config.name
             identifier = server_config.url or server_config.command or server_name
-            logger.info("Initializing MCP server '%s': type=%s identifier=%s", server_name, server_config.type.value, identifier)
 
             try:
                 client = self._build_client(server_config)
                 async with client:
                     tools = await client.list_tools()
-                    logger.info("Received %s tool(s) from MCP server '%s'", len(tools), server_name)
 
                     for tool in tools:
                         namespaced_name = f"{server_name}:{tool.name}"
@@ -82,11 +77,10 @@ class UniversalMCP:
                         "identifier": identifier,
                     }
             except Exception as e:
+                logger.exception(f"Failed to initialize tools from {server_name}: {e}")
                 self.initialization_errors[server_name] = str(e)
-                logger.exception("Failed to initialize tools from %s: %s", server_name, e)
 
         self.state = MCPInitState.READY if self.tool_registry else MCPInitState.FAILED if self.initialization_errors else MCPInitState.UNCONFIGURED
-        logger.info("UniversalMCP init done: state=%s tools=%s failures=%s", self.state.value, len(self.tool_registry), len(self.initialization_errors))
 
     async def call_tool(self, tool_name: str, parameters: Dict[str, Any]) -> str:
         """Call a tool by name, return JSON string result."""
@@ -169,7 +163,7 @@ class UniversalMCP:
             try:
                 await client.__aexit__(None, None, None)
             except Exception as e:
-                logger.warning("Error closing client for %s: %s", server_name, e)
+                logger.warning(f"Error closing MCP client for {server_name}: {e}")
         self.clients.clear()
 
     async def _close_client(self, server_name: str) -> None:

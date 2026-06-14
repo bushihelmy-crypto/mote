@@ -26,7 +26,7 @@ import asyncio
 from enum import Enum
 from typing import Any, Optional
 
-from metagpt.common.logs import logger
+from metagpt.common.logs import log_class
 from metagpt.environment.agent_path import AgentPath
 from metagpt.environment.mailbox import Mailbox
 
@@ -50,6 +50,10 @@ def is_final(status: AgentStatus) -> bool:
     return status in FINAL_STATUSES
 
 
+@log_class(
+    level="DEBUG",
+    exclude={"wake", "session_id", "msg_buffer", "stopped"},
+)
 class AgentRuntime:
     """A live ``Role`` plus its scheduling state."""
 
@@ -106,9 +110,8 @@ class AgentRuntime:
             except asyncio.CancelledError:
                 self.status = AgentStatus.INTERRUPTED
                 raise
-            except Exception as exc:  # noqa: BLE001 — record + surface failure as status
+            except Exception:  # noqa: BLE001 — record + surface failure as status
                 self.status = AgentStatus.ERRORED
-                logger.warning(f"AgentRuntime[{self.session_id}] turn errored: {exc}")
                 raise
             finally:
                 self.active_turn = False

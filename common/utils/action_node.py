@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Tuple, Type, Union
 from pydantic import BaseModel, Field, create_model, model_validator
 
 from metagpt.common.const import MARKDOWN_TITLE_PREFIX
-from router import BaseLLM
+from metagpt.router import BaseLLM
 from metagpt.common.logs import logger
 
 

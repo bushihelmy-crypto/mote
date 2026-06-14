@@ -17,12 +17,13 @@ from typing import Any, Optional, Set
 from metagpt.common.base import BaseRole
 from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
 from metagpt.common.exception import RoleContextNotSetError
-from context import ContextManager
+from metagpt.context import ContextManager
 from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.common.logs import logger
+from metagpt.common.logs import bind_trace, log_class
+from metagpt.common.observability.langfuse_integration import maybe_trace
 from metagpt.prompts.prompt_builder import PromptBuilder
 from metagpt.roles.context_provider import ContextProvider
-from loop import BaseLoop, ReActLoop
+from metagpt.loop import BaseLoop, ReActLoop
 from metagpt.router.router import COMPRESSION_TASK, SUMMARY_TASK, LLMRouter, get_router
 from metagpt.roles.role_schema import RoleSchema
 from metagpt.roles.role_state import RoleState
@@ -33,18 +34,37 @@ from metagpt.common.schema import (
     UserMessage,
 )
 from metagpt.skills.skill_manager import SkillManager
-from parser import (
+from metagpt.parser import (
     CommandChannel,
     infer_native_tool_provider,
     make_command_channel,
 )
 from metagpt.think.think_engine import ThinkEngine
-from tasks import BackgroundTaskPool
+from metagpt.tasks import BackgroundTaskPool
 from metagpt.common.utils.common import any_to_str, role_raise_decorator
 from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
 from metagpt.common.utils.role_zero_utils import attach_media, detach_media
 
 
+@log_class(
+    level="DEBUG",
+    exclude={
+        # Hot / trivial accessors and signal setters — wrapping them only adds
+        # noise. `run` is excluded here and traced explicitly below (bind_trace).
+        "run",
+        "get_cwd",
+        "set_cwd",
+        "record_file_read",
+        "get_file_read_mtime",
+        "put_message",
+        "publish_message",
+        "tool_capabilities",
+        "deactivate",
+        "get_memories",
+        "set_env",
+        "set_addresses",
+    },
+)
 class Role(BaseRole):
     """Unified Role/Agent — pure orchestration via composition.
 
@@ -200,7 +220,10 @@ class Role(BaseRole):
         if self._executor is None:
             all_tools = self.role_schema.mcps + self.role_schema.tools
             self._executor = ToolExecutor(
-                session_id=self.state.session_id, tools=all_tools, role=self,
+                session_id=self.state.session_id,
+                tools=all_tools,
+                role=self,
+                permission_config=self.role_schema.permissions,
             )
         return self._executor
 
@@ -370,6 +393,7 @@ class Role(BaseRole):
             "set_cwd": self.set_cwd,
             "deactivate": self.deactivate,
             "ask_human": self.ask_human,
+            "request_approval": self.request_approval,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,
             "record_file_read": self.record_file_read,
@@ -411,6 +435,20 @@ class Role(BaseRole):
             response += " The user has asked me to stop because I have encountered a problem."
             self.deactivate()
         return response
+
+    async def request_approval(self, prompt: str) -> str:
+        """Ask the human to approve a tool call and return their raw reply.
+
+        The interactive channel for the PermissionEngine's ``ask`` decisions.
+        Unlike ask_human(), this does NOT treat a trailing 'stop' as a kill
+        switch — an approval prompt should never silently deactivate the Role.
+        Outside an MGXEnv there is no channel, so it returns "" and the engine
+        fails closed (denies).
+        """
+        env = self.state.env
+        if env is None:
+            return ""
+        return await env.ask_human(prompt, sent_from=self.role_schema.name)
 
     async def reply_to_human(self, content: str) -> str:
         """Reply to the human user with the provided content.
@@ -473,7 +511,6 @@ class Role(BaseRole):
 
         outputs = ""
         if self.role_schema.use_summary:
-            logger.info("end current run and summarize")
             need_recommend = self.role_schema.need_end_recommendations_tag
             reporter_cls = RecommendReporter if need_recommend else ThoughtReporter
             summary_prompt = PromptBuilder.pick_summary_prompt(
@@ -543,37 +580,40 @@ class Role(BaseRole):
     @role_raise_decorator
     async def run(self, with_message=None) -> Message | None:
         """Observe, and think and act based on the results of the observation"""
-        await self._ensure_ready()
+        # Bind the session_id as the trace_id so every log line emitted during
+        # this run (across the loop, think engine, executor, etc.) is correlated.
+        with bind_trace(self.session_id), maybe_trace(self.session_id, name=f"role.run:{self.name}"):
+            await self._ensure_ready()
 
-        if with_message:
-            msg = None
-            if isinstance(with_message, str):
-                msg = Message(content=with_message)
-            elif isinstance(with_message, Message):
-                msg = with_message
-            elif isinstance(with_message, list):
-                msg = Message(content="\n".join(with_message))
-            if not msg.cause_by:
-                msg.cause_by = CauseBy.USER_REQUIREMENT
-            msg.send_to.add(self.role_schema.name)
-            self.put_message(msg)
+            if with_message:
+                msg = None
+                if isinstance(with_message, str):
+                    msg = Message(content=with_message)
+                elif isinstance(with_message, Message):
+                    msg = with_message
+                elif isinstance(with_message, list):
+                    msg = Message(content="\n".join(with_message))
+                if not msg.cause_by:
+                    msg.cause_by = CauseBy.USER_REQUIREMENT
+                msg.send_to.add(self.role_schema.name)
+                self.put_message(msg)
 
-        loop = self._make_loop()
-        try:
-            rsp = await loop.run()
-        finally:
-            # Always propagate for recovery (role_raise_decorator reads it).
-            self.state.latest_observed_msg = loop.latest_observed_msg
-        if rsp is None:
-            return None
+            loop = self._make_loop()
+            try:
+                rsp = await loop.run()
+            finally:
+                # Always propagate for recovery (role_raise_decorator reads it).
+                self.state.latest_observed_msg = loop.latest_observed_msg
+            if rsp is None:
+                return None
 
-        # Post-loop finalization (was Role.react): clear the active signal
-        # and tag the response with this Role's display name.
-        self.state._active = False
-        if isinstance(rsp, AIMessage):
-            rsp.with_agent(self.role_schema.display_name)
-        self.publish_message(rsp)
-        return rsp
+            # Post-loop finalization (was Role.react): clear the active signal
+            # and tag the response with this Role's display name.
+            self.state._active = False
+            if isinstance(rsp, AIMessage):
+                rsp.with_agent(self.role_schema.display_name)
+            self.publish_message(rsp)
+            return rsp
 
     # =========================================================================
     # Readiness

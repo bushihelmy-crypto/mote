@@ -15,15 +15,6 @@ def _pool(builtin_dir, names):
     return pool
 
 
-def _index_file(tmp_path, body="| alpha | Alpha desc | /x/SKILL.md |"):
-    p = tmp_path / "SKILLS.md"
-    p.write_text(
-        "---\nauto_generated: true\n---\n\n# Available Skills\n\n" + body + "\n",
-        encoding="utf-8",
-    )
-    return p
-
-
 class TestBuildContentEmpty:
     def test_empty_when_no_skills(self, builtin_dir):
         injector = SkillInjector(pool=_pool(builtin_dir, []))
@@ -35,25 +26,24 @@ class TestBuildContentEmpty:
 
 
 class TestBuildContentIndex:
-    def test_includes_index_section(self, builtin_dir, tmp_path):
+    def test_includes_index_section(self, builtin_dir):
         write_skill(builtin_dir, "alpha")
-        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]), skills_md_path=_index_file(tmp_path))
+        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         content = injector.build_content()
         assert "## Available Skills" in content
         assert "alpha" in content
 
-    def test_includes_loading_guide(self, builtin_dir, tmp_path):
+    def test_includes_loading_guide(self, builtin_dir):
         write_skill(builtin_dir, "alpha")
-        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]), skills_md_path=_index_file(tmp_path))
+        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         assert "Skill Loading Guide" in injector.build_content()
 
-    def test_no_index_section_when_path_missing(self, builtin_dir):
-        write_skill(builtin_dir, "alpha")
-        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]), skills_md_path=None)
+    def test_index_path_points_at_source_skill_md(self, builtin_dir):
+        skill_md = write_skill(builtin_dir, "alpha")
+        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         content = injector.build_content()
-        # loading guide still present, but no index section
-        assert "Skill Loading Guide" in content
-        assert "## Available Skills" not in content
+        # The on-demand load path points at the builtin source SKILL.md.
+        assert str(skill_md) in content
 
 
 class TestAlwaysActive:
@@ -90,29 +80,24 @@ class TestInject:
         assert "Always Active Skills" in result
 
 
-class TestReadSkillsIndex:
-    def test_strips_frontmatter(self, builtin_dir, tmp_path):
-        write_skill(builtin_dir, "alpha")
-        idx = _index_file(tmp_path)
-        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]), skills_md_path=idx)
-        text = injector._read_skills_index()
-        assert not text.startswith("---")
-        assert "auto_generated" not in text
-        assert "# Available Skills" in text
+class TestBuildIndex:
+    def test_empty_when_no_skills(self, builtin_dir):
+        injector = SkillInjector(pool=_pool(builtin_dir, []))
+        assert injector._build_index() == ""
 
-    def test_returns_empty_when_path_none(self, builtin_dir):
-        injector = SkillInjector(pool=_pool(builtin_dir, []), skills_md_path=None)
-        assert injector._read_skills_index() == ""
+    def test_table_lists_each_skill(self, builtin_dir):
+        write_skill(builtin_dir, "alpha", description="Alpha desc")
+        write_skill(builtin_dir, "beta", description="Beta desc")
+        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha", "beta"]))
+        text = injector._build_index()
+        assert "| Skill | Description | Path |" in text
+        assert "alpha" in text and "Alpha desc" in text
+        assert "beta" in text and "Beta desc" in text
 
-    def test_returns_empty_when_file_missing(self, builtin_dir, tmp_path):
-        injector = SkillInjector(pool=_pool(builtin_dir, []), skills_md_path=tmp_path / "nope.md")
-        assert injector._read_skills_index() == ""
-
-    def test_no_frontmatter_kept_as_is(self, builtin_dir, tmp_path):
-        p = tmp_path / "SKILLS.md"
-        p.write_text("# Just A Heading\n\nbody", encoding="utf-8")
-        injector = SkillInjector(pool=_pool(builtin_dir, []), skills_md_path=p)
-        assert injector._read_skills_index() == "# Just A Heading\n\nbody"
+    def test_escapes_pipe_in_description(self, builtin_dir):
+        write_skill(builtin_dir, "alpha", description="a | b")
+        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
+        assert r"a \| b" in injector._build_index()
 
 
 class TestSanitizeAndTruncate:
