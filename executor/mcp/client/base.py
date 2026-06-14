@@ -7,7 +7,7 @@ from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextConten
 from mcp.types import Tool as MCPTool
 from tenacity import after_log, retry, stop_after_delay, wait_random_exponential
 
-from metagpt.common.config.mcp_config import MCPServerConfig
+from metagpt.common.config.config.mcp_config import MCPServerConfig
 from metagpt.common.logs import logger
 from metagpt.executor.mcp.client.exceptions import (
     NonRetryableToolError,

@@ -26,7 +26,7 @@ from metagpt.common.schema import (
     MicrocompactResult,
     TokenState,
 )
-from metagpt.common.config.compress_msg_config import CompressType
+from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.context import prompt, token_budget
 from metagpt.context.autocompact import autocompact
 from metagpt.context.manager import ContextManager

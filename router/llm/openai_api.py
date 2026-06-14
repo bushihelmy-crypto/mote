@@ -12,6 +12,7 @@ import json
 import re
 from typing import Optional, Union
 
+from json_repair import repair_json
 from openai import AsyncStream
 from openai._base_client import AsyncHttpxClientWrapper
 from openai.types import CompletionUsage
@@ -24,7 +25,7 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from metagpt.common.config.llm_config import LLMConfig, LLMType
+from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.common.exception import (
     LLMEmptyResponseError,
     LLMResponseParseError,
@@ -38,8 +39,8 @@ from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
 from metagpt.router.llm.llm_provider_registry import register_provider
 from metagpt.common.utils.common import CodeParser, decode_image, log_and_reraise
-from metagpt.common.utils.cost_manager import CostManager
 from metagpt.common.utils.exceptions import handle_exception
+from metagpt.router.cost import CostTracker
 from metagpt.common.utils.token_counter import (
     count_message_tokens,
     count_string_tokens,
@@ -67,7 +68,7 @@ class OpenAILLM(BaseLLM):
         self.config = config
         self._init_client()
         self.auto_max_tokens = False
-        self.cost_manager: Optional[CostManager] = None
+        self.cost_manager: Optional[CostTracker] = None
 
     def _init_client(self):
         """https://github.com/openai/openai-python#async-usage"""
@@ -78,14 +79,32 @@ class OpenAILLM(BaseLLM):
         keys = self.config.api_key
         self._api_keys: list[str] = list(keys) if isinstance(keys, list) else [keys]
         self._api_key_index: int = 0
+        # Opt-in OAuth: when configured, the bearer token comes from the OAuth
+        # manager (proactive-refresh) instead of the static api_key list.
+        self._oauth = self._build_oauth_manager()
         kwargs = self._make_client_kwargs()
         self.aclient = make_async_openai(**kwargs)
+
+    def _build_oauth_manager(self):
+        """Construct an OAuthManager when ``config.oauth`` is set, else None."""
+        if not getattr(self.config, "oauth", None):
+            return None
+        from metagpt.router.oauth import OAuthManager
+
+        return OAuthManager(self.config.oauth)
 
     def _current_api_key(self) -> str:
         return self._api_keys[self._api_key_index]
 
     def _make_client_kwargs(self) -> dict:
-        kwargs = {"api_key": self._current_api_key(), "base_url": self.config.base_url}
+        if self._oauth is not None:
+            # OAuth path: inject the (proactively refreshed) bearer token as the
+            # OpenAI SDK api_key and merge any provider-specific extra headers.
+            kwargs = {"api_key": self._oauth.get_valid_token(), "base_url": self.config.base_url}
+            if self.config.oauth.headers_extra:
+                kwargs["default_headers"] = dict(self.config.oauth.headers_extra)
+        else:
+            kwargs = {"api_key": self._current_api_key(), "base_url": self.config.base_url}
 
         # to use proxy, openai v1 needs http_client
         if proxy_params := self._get_proxy_params():
@@ -98,7 +117,17 @@ class OpenAILLM(BaseLLM):
 
         Consumed by the recovery loop on ROTATE_CREDENTIAL (auth/billing errors).
         Returns False when no further key remains (rotation exhausted).
+
+        In OAuth mode, "rotation" means force-refreshing the bearer token: a new
+        token rebuilds the client and returns True; a permanently failed refresh
+        returns False.
         """
+        if self._oauth is not None:
+            token = self._oauth.force_refresh()
+            if token is None:
+                return False
+            self.aclient = make_async_openai(**self._make_client_kwargs())
+            return True
         if self._api_key_index + 1 >= len(self._api_keys):
             return False
         self._api_key_index += 1
@@ -324,9 +353,28 @@ class OpenAILLM(BaseLLM):
             try:
                 args = json.loads(raw_args, strict=False) if isinstance(raw_args, str) else (raw_args or {})
             except json.JSONDecodeError:
-                args = {}
+                # A model emitting a large multi-line string argument (e.g.
+                # ApplyPatch's whole patch) sometimes produces invalid JSON —
+                # unescaped newlines/quotes or a truncated tail. Try json_repair
+                # to recover the call rather than dropping the entire argument.
+                args = self._repair_tool_arguments(raw_args)
             out.append({"id": getattr(call, "id", ""), "name": getattr(fn, "name", ""), "arguments": args})
         return out
+
+    @staticmethod
+    def _repair_tool_arguments(raw_args: str) -> dict:
+        """Best-effort recover a tool call's malformed JSON ``arguments``.
+
+        Returns the repaired argument dict, or ``{}`` when even repair fails
+        (``repair_json`` returns a non-dict — e.g. ``""`` — for unsalvageable
+        input). Used only on the ``JSONDecodeError`` fallback path; well-formed
+        arguments never reach here.
+        """
+        try:
+            repaired = repair_json(raw_args, return_objects=True)
+        except Exception:  # noqa: BLE001 — repair is best-effort, never raise
+            return {}
+        return repaired if isinstance(repaired, dict) else {}
 
     def _calc_usage(self, messages: list[dict], rsp: str) -> CompletionUsage:
         usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)

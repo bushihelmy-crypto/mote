@@ -93,10 +93,48 @@ class TestBashGuards:
         with pytest.raises(ToolError, match="'command' argument is required"):
             _bash(tool, command="   ")
 
-    def test_timeout_raises(self, workspace):
+    def test_timeout_returns_message(self, workspace):
         tool, _ = _ready(workspace)
-        with pytest.raises(ToolError, match="timed out"):
-            _bash(tool, command="sleep 5", timeout=0.2)
+        # Timeout no longer raises: the command is terminated and a "timed out"
+        # message is returned (in milliseconds, codex-style).
+        out = _bash(tool, command="sleep 5", timeout=0.2)
+        assert "timed out after 200 milliseconds" in out
+
+    def test_timeout_returns_partial_output(self, workspace):
+        tool, _ = _ready(workspace)
+        # Output produced before the timeout is preserved.
+        out = _bash(tool, command="echo early; sleep 5", timeout=0.5)
+        assert "timed out" in out
+        assert "early" in out
+
+
+class TestBashWorkdir:
+    def test_runs_in_relative_workdir(self, workspace):
+        sub = workspace / "rel"
+        sub.mkdir()
+        tool, _ = _ready(workspace)
+        out = _bash(tool, command="pwd", workdir="rel")
+        assert os.path.realpath(out) == os.path.realpath(str(sub))
+
+    def test_runs_in_absolute_workdir(self, workspace):
+        sub = workspace / "abs"
+        sub.mkdir()
+        tool, _ = _ready(workspace)
+        out = _bash(tool, command="pwd", workdir=str(sub))
+        assert os.path.realpath(out) == os.path.realpath(str(sub))
+
+    def test_workdir_does_not_persist(self, workspace):
+        sub = workspace / "transient"
+        sub.mkdir()
+        tool, role = _ready(workspace)
+        _bash(tool, command="pwd", workdir="transient")
+        # The transient workdir must NOT change the session's persistent cwd.
+        assert os.path.realpath(role.get_cwd()) == os.path.realpath(str(workspace))
+
+    def test_missing_workdir_raises(self, workspace):
+        tool, _ = _ready(workspace)
+        with pytest.raises(ToolError, match="workdir does not exist"):
+            _bash(tool, command="pwd", workdir="nope")
 
 
 # --- Pure-helper unit tests --------------------------------------------------

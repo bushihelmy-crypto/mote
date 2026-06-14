@@ -13,6 +13,7 @@ from metagpt.common.exception import RoleContextNotSetError
 from metagpt.common.schema import AIMessage, Message
 from metagpt.common.utils.common import any_to_str
 from metagpt.roles import Role, RoleSchema, RoleState
+from metagpt.roles.role import _resolve_shell_tools
 
 from .conftest import FakeContextManager, FakeEnv, FakeLLM, FakeRouter, FakeThinkEngine, _FakeThinkResult
 
@@ -236,7 +237,7 @@ class TestCapabilities:
         assert set(caps) == {
             "get_cwd", "set_cwd", "deactivate", "ask_human", "request_approval",
             "reply_to_human", "end_session", "record_file_read", "get_file_read_mtime",
-            "wait_interruptible",
+            "record_file_snapshot", "wait_interruptible",
         }
 
     def test_capability_values_are_bound_methods(self):
@@ -425,3 +426,28 @@ class TestGetMemories:
         r._context_manager = FakeContextManager(msgs)
         assert r.get_memories() == msgs
         assert r.get_memories(k=1) == msgs[-1:]
+
+
+# =============================================================================
+# shell_tool resolution (mutually-exclusive Bash <-> terminal)
+# =============================================================================
+class TestResolveShellTools:
+    def test_terminal_replaces_bash(self):
+        assert _resolve_shell_tools(["Bash"], "terminal") == ["terminal"]
+
+    def test_bash_keeps_bash(self):
+        assert _resolve_shell_tools(["Bash"], "bash") == ["Bash"]
+
+    def test_non_bash_tools_untouched(self):
+        assert _resolve_shell_tools(["Read", "Write"], "terminal") == ["Read", "Write"]
+
+    def test_explicit_terminal_tool_preserved_and_deduped(self):
+        # Bash + explicitly listed terminal -> no duplicate terminal.
+        assert _resolve_shell_tools(["terminal", "Bash"], "terminal") == ["terminal"]
+
+    def test_order_preserved(self):
+        assert _resolve_shell_tools(["Read", "Bash", "Write"], "terminal") == [
+            "Read",
+            "terminal",
+            "Write",
+        ]

@@ -31,7 +31,7 @@ from typing import ClassVar, Optional
 
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools._file_base import FileMutatingTool
+from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
 
 # Curly quotes. The model emits straight quotes; files may contain curly ones.
@@ -317,6 +317,8 @@ class Edit(FileMutatingTool):
         normalized = updated
         if line_ending != "\n":
             normalized = updated.replace("\n", line_ending)
+        # Capture a before-image for file history just before we overwrite.
+        self._snapshot_pre_write(full_path)
         try:
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(normalized)
@@ -357,6 +359,8 @@ class Edit(FileMutatingTool):
             except OSError as e:
                 raise ToolError(f"Error: cannot create parent directory for '{file_path}': {e}")
 
+        # Capture a before-image for file history just before we write.
+        self._snapshot_pre_write(full_path)
         try:
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(content)

@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.config2 import Config
-from metagpt.common.config.exp_pool_config import ExperiencePoolRetrievalType
+from metagpt.common.config.meta_config import Config
+from metagpt.common.config.config.exp_pool_config import ExperiencePoolRetrievalType
 from metagpt.memory.procedural_memory.schema import DEFAULT_SIMILARITY_TOP_K, Experience, QueryType
 from metagpt.common.utils.exceptions import handle_exception
 

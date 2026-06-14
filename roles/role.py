@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Optional, Set
+from typing import TYPE_CHECKING, Any, Optional, Set
 
 from metagpt.common.base import BaseRole
 from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
@@ -45,6 +45,9 @@ from metagpt.common.utils.common import any_to_str, role_raise_decorator
 from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
 from metagpt.common.utils.role_zero_utils import attach_media, detach_media
 
+if TYPE_CHECKING:
+    from metagpt.roles.session import FileSnapshotRecorder, SessionRecorder
+
 
 @log_class(
     level="DEBUG",
@@ -56,6 +59,7 @@ from metagpt.common.utils.role_zero_utils import attach_media, detach_media
         "set_cwd",
         "record_file_read",
         "get_file_read_mtime",
+        "record_file_snapshot",
         "put_message",
         "publish_message",
         "tool_capabilities",
@@ -114,6 +118,15 @@ class Role(BaseRole):
         self._context_provider: Optional[ContextProvider] = None
         self._context_manager: Optional[ContextManager] = None
         self._router: Optional[LLMRouter] = None
+        self._session_recorder = None
+        self._file_snapshot_recorder = None
+        self._hook_manager = None
+        self._lsp_service = None
+        # Programmatic Python hook callbacks, seeded into the HookManager when it
+        # is built (register_hook appends here before run()).
+        self._hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
+        # Guards firing SessionStart exactly once across this Role's run() calls.
+        self._session_started = False
 
         # Post-init
         self._init_addresses()
@@ -219,11 +232,14 @@ class Role(BaseRole):
     def executor(self) -> ToolExecutor:
         if self._executor is None:
             all_tools = self.role_schema.mcps + self.role_schema.tools
+            all_tools = _resolve_shell_tools(all_tools, self.role_schema.shell_tool)
             self._executor = ToolExecutor(
                 session_id=self.state.session_id,
                 tools=all_tools,
                 role=self,
                 permission_config=self.role_schema.permissions,
+                hook_manager=self.hook_manager,
+                lsp_notifier=self.lsp_service,
             )
         return self._executor
 
@@ -245,8 +261,119 @@ class Role(BaseRole):
                 self.state.context,
                 llm=self.router.route_for_task(COMPRESSION_TASK),
                 model=getattr(self.config.llm, "model", None),
+                recorder=self.session_recorder,
+                hook_manager=self.hook_manager,
             )
         return self._context_manager
+
+    @property
+    def session_recorder(self) -> "SessionRecorder":
+        """Durable session-log sink (lazy-init), streamed to by ContextManager.
+
+        Builds the append-only ``rollout.jsonl`` for this session and writes the
+        ``session_meta`` first line on first access. ``create`` no-ops when the
+        log already exists, so restart/resume never re-writes metadata.
+        """
+        if self._session_recorder is None:
+            from metagpt.roles.session import SessionLog, SessionMetaEvent, SessionRecorder
+
+            log = SessionLog(self.state.session_id)
+            log.create(
+                SessionMetaEvent(
+                    session_id=self.state.session_id,
+                    parent_session_id=self.state.parent_session_id,
+                    working_dir=self.state.working_dir,
+                    original_working_dir=self.state.original_working_dir,
+                    project_root=self.state.project_root,
+                    model=getattr(self.config.llm, "model", None),
+                    role_class=f"{type(self).__module__}.{type(self).__qualname__}",
+                )
+            )
+            self._session_recorder = SessionRecorder(log)
+        return self._session_recorder
+
+    @property
+    def file_snapshot_recorder(self) -> "FileSnapshotRecorder":
+        """Before-image file-history sink (lazy-init), shared with the rollout log.
+
+        Reuses the same :class:`SessionLog` as :attr:`session_recorder` so file
+        snapshots interleave with the session's other events; the blob store
+        lives alongside ``rollout.jsonl``. ``enabled`` follows the schema flag
+        ``record_file_history`` (default True) so snapshotting can be turned off
+        per role. ``snapshot_backend`` selects the store: ``"auto"`` (default)
+        picks the git object db when the working dir is inside a code repo, else
+        the plain blob store.
+        """
+        if self._file_snapshot_recorder is None:
+            from metagpt.roles.session import FileSnapshotRecorder
+            from metagpt.roles.session.snapshot import detect_blob_backend
+
+            backend = self.role_schema.snapshot_backend
+            if backend == "auto":
+                backend = detect_blob_backend(self.state.working_dir or None)
+
+            self._file_snapshot_recorder = FileSnapshotRecorder(
+                self.session_recorder.log,
+                enabled=self.role_schema.record_file_history,
+                backend=backend,
+            )
+        return self._file_snapshot_recorder
+
+    @property
+    def hook_manager(self):
+        """Opt-in agent-lifecycle hook runner (lazy-init), or ``None``.
+
+        Built only when a ``HookConfig`` is declared on the schema OR a Python
+        callback was registered via :meth:`register_hook`. When neither exists it
+        stays ``None`` so every call site short-circuits with zero overhead —
+        the same opt-in model as the permission engine. The cwd accessor is
+        passed so the hook input tracks ``cd``; the session_id ties hooks to the
+        durable log.
+        """
+        if self._hook_manager is None:
+            if self.role_schema.hooks is None and not self._hook_callbacks:
+                return None
+            from metagpt.common.hook import HookManager
+
+            self._hook_manager = HookManager(
+                self.role_schema.hooks,
+                session_id=self.state.session_id,
+                get_cwd=self.get_cwd,
+            )
+            for event, fn, matcher in self._hook_callbacks:
+                self._hook_manager.register(event, fn, matcher)
+        return self._hook_manager
+
+    @property
+    def lsp_service(self):
+        """Opt-in language-server diagnostics service (lazy-init), or ``None``.
+
+        Built only when an ``LspConfig`` with ``enabled=True`` and at least one
+        server is declared on the schema; otherwise stays ``None`` so the
+        executor's after-edit seam short-circuits with zero overhead (same
+        opt-in model as the hook/permission layers). Rooted at the project root
+        so language servers resolve imports against the right workspace.
+        """
+        if self._lsp_service is None:
+            cfg = self.role_schema.lsp
+            if cfg is None or not cfg.enabled or not cfg.servers:
+                return None
+            from metagpt.roles.lsp import LspService
+
+            root = self.state.project_root or self.get_cwd()
+            self._lsp_service = LspService(cfg, root)
+        return self._lsp_service
+
+    def register_hook(self, event: str, fn, matcher: Optional[str] = None) -> None:
+        """Register an in-process Python hook callback (the SDK-style path).
+
+        Engages the hook layer even with no ``HookConfig`` declared. Register
+        before ``run()`` so the executor / context manager pick up the manager.
+        """
+        if self._hook_manager is not None:
+            self._hook_manager.register(event, fn, matcher)
+        else:
+            self._hook_callbacks.append((event, fn, matcher))
 
     @property
     def think_engine(self) -> ThinkEngine:
@@ -374,6 +501,18 @@ class Role(BaseRole):
         """
         return self.state._file_read_state.get(path)
 
+    def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
+        """Capture a before-image of a file a tool is about to overwrite.
+
+        Delegates to the session's :attr:`file_snapshot_recorder`, which stores
+        the prior on-disk content content-addressed and appends a snapshot event
+        to the rollout log (the truth source for diff/undo). Ownership of the
+        file-history sink lives in the Role; the Write/Edit/NotebookEdit tools
+        call this capability without ever touching the session log directly.
+        Best-effort — never raises into the tool.
+        """
+        self.file_snapshot_recorder.snapshot(full_path, tool=tool)
+
     # =========================================================================
     # Narrow capabilities exposed to tools (injected via BaseTool.requires).
     # Tools call these instead of receiving RoleState/memory/env directly, so
@@ -398,6 +537,7 @@ class Role(BaseRole):
             "end_session": self.end_session,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
+            "record_file_snapshot": self.record_file_snapshot,
             "wait_interruptible": self.wait_interruptible,
         }
 
@@ -585,6 +725,11 @@ class Role(BaseRole):
         with bind_trace(self.session_id), maybe_trace(self.session_id, name=f"role.run:{self.name}"):
             await self._ensure_ready()
 
+            # SessionStart hook: fired once per Role across its run() calls.
+            if self.hook_manager is not None and not self._session_started:
+                self._session_started = True
+                await self.hook_manager.fire("SessionStart", {"source": "startup"})
+
             if with_message:
                 msg = None
                 if isinstance(with_message, str):
@@ -596,6 +741,29 @@ class Role(BaseRole):
                 if not msg.cause_by:
                     msg.cause_by = CauseBy.USER_REQUIREMENT
                 msg.send_to.add(self.role_schema.name)
+
+                # UserPromptSubmit hook: may inject extra context (prepended to
+                # the prompt) or veto the turn (stop -> deactivate before loop).
+                if self.hook_manager is not None:
+                    outcome = await self.hook_manager.fire(
+                        "UserPromptSubmit", {"prompt": msg.content}
+                    )
+                    if outcome.additional_context:
+                        injected = "\n".join(outcome.additional_context)
+                        msg.content = f"{injected}\n{msg.content}" if msg.content else injected
+                    if outcome.stop:
+                        self.deactivate()
+
+                # LSP diagnostics回流: surface any diagnostics produced by the
+                # previous turn's file edits as per-turn context (prepended,
+                # ephemeral — like memory_context). Drained here so the model
+                # reacts to errors it just introduced. No-op when LSP is off.
+                lsp = self.lsp_service
+                if lsp is not None:
+                    block = lsp.drain_diagnostics()
+                    if block:
+                        msg.content = f"{block}\n{msg.content}" if msg.content else block
+
                 self.put_message(msg)
 
             loop = self._make_loop()
@@ -604,6 +772,12 @@ class Role(BaseRole):
             finally:
                 # Always propagate for recovery (role_raise_decorator reads it).
                 self.state.latest_observed_msg = loop.latest_observed_msg
+                # Mark the turn boundary in the durable log (working_dir may have
+                # moved via `cd`, so capture the live value at turn end).
+                self._record_turn_boundary()
+                # Stop (TurnEnd) hook: fired after the turn boundary is recorded.
+                if self.hook_manager is not None:
+                    await self.hook_manager.fire("Stop", {})
             if rsp is None:
                 return None
 
@@ -614,6 +788,113 @@ class Role(BaseRole):
                 rsp.with_agent(self.role_schema.display_name)
             self.publish_message(rsp)
             return rsp
+
+    @staticmethod
+    def list_sessions(base_dir: str | None = None, *, cwd: str | None = None) -> list:
+        """List resumable sessions (newest first); see ``roles.session.list_sessions``.
+
+        A thin, discoverable entry point onto the lite directory scan. ``cwd``
+        filters to sessions started under that working dir / project root.
+        """
+        from metagpt.roles.session import list_sessions as _list
+
+        return _list(base_dir, cwd=cwd)
+
+    def resume_session(self) -> bool:
+        """Rebuild this role's stored history from its durable rollout log.
+
+        The rollout (truth source) is replayed into ``state.context.messages``
+        for the role's current ``session_id``. Returns False when no log exists
+        (nothing to resume). On success the cwd/project anchors are restored from
+        the session_meta and ``state.recovered`` is set.
+
+        History is assigned straight into the backing context (not via
+        ``ContextManager.add``), so the replayed messages are NOT re-recorded;
+        the recorder stays live for messages added after resume, and
+        ``SessionLog.create`` no-ops on the existing file (no duplicate meta).
+        """
+        from metagpt.roles.session import SessionLog, replay
+
+        log = SessionLog(self.state.session_id)
+        if not log.exists():
+            return False
+
+        result = replay(log)
+        # Assign in place so the ContextManager (which backs onto this same list)
+        # sees the rebuilt history without re-recording it.
+        self.state.context.messages[:] = result.messages
+
+        meta = result.meta or {}
+        for field_name in ("working_dir", "original_working_dir", "project_root"):
+            value = meta.get(field_name)
+            if value:
+                setattr(self.state, field_name, value)
+
+        self.state.recovered = True
+        return True
+
+    def fork_session(self) -> "Role":
+        """Branch a sibling role off this session at its current history.
+
+        Seeds a brand-new ``rollout.jsonl`` from this role's session (replayed to
+        its final state) and records ``parent_session_id`` lineage on the child's
+        ``session_meta``. Returns a fresh role of the same class, sharing the
+        injected context/config, pinned to the new session and resumed onto the
+        inherited history. The two sessions are independent afterwards: mutating
+        the fork never touches this role's log.
+        """
+        from metagpt.roles.session import fork
+
+        child_id = fork(self.state.session_id)
+
+        child_state = RoleState(
+            session_id=child_id,
+            parent_session_id=self.state.session_id,
+            working_dir=self.state.working_dir,
+            original_working_dir=self.state.original_working_dir,
+            project_root=self.state.project_root,
+        )
+        forked = type(self)(
+            role_schema=self.role_schema.model_copy(deep=True),
+            state=child_state,
+            context=self._context,
+            config=self._config,
+        )
+        forked.resume_session()
+        return forked
+
+    def _record_turn_boundary(self) -> None:
+        """Append a ``turn_context`` event delimiting one completed turn.
+
+        Best-effort: a logging failure must never break a turn. Skipped when the
+        recorder was never built (e.g. the run failed before _ensure_ready).
+        """
+        recorder = self._session_recorder
+        if recorder is None or not getattr(recorder, "enabled", False):
+            return
+        try:
+            from dataclasses import asdict
+            from uuid import uuid4
+
+            from metagpt.roles.session import TurnContextEvent
+
+            token_state = None
+            try:
+                token_state = asdict(self.context_manager.token_state())
+            except Exception:  # noqa: BLE001 — token math is optional metadata
+                token_state = None
+            recorder.log.append(
+                TurnContextEvent(
+                    turn_id=uuid4().hex,
+                    working_dir=self.state.working_dir,
+                    model=getattr(self.config.llm, "model", None),
+                    token_state=token_state,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            from metagpt.common.logs import logger
+
+            logger.warning(f"session: failed to record turn boundary: {exc}")
 
     # =========================================================================
     # Readiness
@@ -627,5 +908,29 @@ class Role(BaseRole):
 
         self.skill_manager.ensure_ready()
         await self.executor.init_mcp(self.role_schema.mcps)
+
+
+def _resolve_shell_tools(tools: list[str], shell_tool: str) -> list[str]:
+    """Resolve the shell generation for a tool list (mutually exclusive).
+
+    A declared ``"Bash"`` becomes either the one-shot Bash tool
+    (``shell_tool="bash"``) or the persistent PTY-backed ``terminal``
+    (``shell_tool="terminal"``). Tools the caller listed explicitly (including
+    ``terminal``) are left as-is — explicit wins. Order is preserved and
+    duplicates removed.
+    """
+    resolved: list[str] = []
+    for tool in tools:
+        if tool == "Bash" and shell_tool == "terminal":
+            resolved.append("terminal")
+        else:
+            resolved.append(tool)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for tool in resolved:
+        if tool not in seen:
+            seen.add(tool)
+            deduped.append(tool)
+    return deduped
 
 

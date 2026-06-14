@@ -2,7 +2,7 @@ import asyncio
 import functools
 from typing import Any, Callable, Optional, TypeVar
 
-from metagpt.common.config2 import Config
+from metagpt.common.config.meta_config import Config
 from metagpt.common.logs import logger
 
 ReturnType = TypeVar("ReturnType")

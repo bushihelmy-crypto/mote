@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from metagpt.common.config.compress_msg_config import CompressType
+from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.utils.token_counter import TOKEN_MAX
 
 if TYPE_CHECKING:

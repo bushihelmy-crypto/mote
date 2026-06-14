@@ -23,7 +23,7 @@ from typing import ClassVar
 
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools._file_base import FileMutatingTool
+from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_CONTENT_SIZE_BYTES
 
 
@@ -97,6 +97,10 @@ class Write(FileMutatingTool):
                 os.makedirs(parent, exist_ok=True)
             except OSError as e:
                 raise ToolError(f"Error: cannot create parent directory for '{file_path}': {e}")
+
+        # Capture a before-image for file history (undo/diff) just before we
+        # overwrite. No-op when unbound; best-effort (never blocks the write).
+        self._snapshot_pre_write(full_path)
 
         try:
             # newline="" disables Python's own translation; we translate

@@ -10,7 +10,7 @@ from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.schema import PermissionConfig
+from metagpt.common.schema import HookConfig, LspConfig, PermissionConfig
 from metagpt.prompts.role import (
     CMD_PROMPT,
     ROLE_INSTRUCTION,
@@ -65,11 +65,47 @@ class RoleSchema(BaseModel):
     agents: list[str] = []
     skills: list[str] = []
 
+    # --- Shell generation selector (mutually exclusive) ---
+    # Which shell tool a declared ``"Bash"`` resolves to at executor-build time:
+    #   "terminal" -> the persistent PTY-backed interactive terminal (one per
+    #                 session, typed into across calls; cwd/env/venv persist,
+    #                 foreground programs receive stdin — REPLs, servers, prompts).
+    #   "bash"     -> the one-shot Bash tool (fresh subprocess per call).
+    # ``role_schema.tools`` stays pristine; the substitution happens when the
+    # ToolExecutor is built.
+    shell_tool: Literal["terminal", "bash"] = "terminal"
+
     # --- Permissions ---
     # Opt-in tool-approval policy. When None (default), tools run with no
     # approval layer (legacy behavior). Set a PermissionConfig to engage the
     # PermissionEngine (allow/deny/ask rules + mode).
     permissions: Optional[PermissionConfig] = None
+
+    # --- Hooks ---
+    # Opt-in agent-lifecycle hooks (command handlers). When None (default) and
+    # no callbacks are registered programmatically, no hook layer is engaged
+    # (legacy behavior). Python callbacks are registered on the HookManager, not
+    # declared here.
+    hooks: Optional[HookConfig] = None
+
+    # --- LSP ---
+    # Opt-in language-server diagnostics. When None (default), no LSP layer is
+    # engaged (legacy behavior). Set an LspConfig (with servers) to launch
+    # language servers lazily on relevant file edits and surface diagnostics
+    # back into context at the next turn boundary.
+    lsp: Optional[LspConfig] = None
+
+    # --- File history ---
+    # When True (default), file-mutating tools (Write/Edit/NotebookEdit) record a
+    # before-image of each file just before overwriting it, into the session's
+    # blob store + rollout log (the truth source for diff/undo/rollback). Set
+    # False to disable snapshotting (saves disk; loses undo history).
+    record_file_history: bool = True
+    # Storage backend for the before-images. "auto" (default) picks "git" (an
+    # independent bare git object db, cheaper on disk) when the working dir is
+    # inside a code repo and the git binary is present, else the plain "blob"
+    # store. Force "blob" or "git" to override the heuristic.
+    snapshot_backend: Literal["auto", "blob", "git"] = "auto"
 
     # --- Memory / summary config ---
     enable_memory: bool = True

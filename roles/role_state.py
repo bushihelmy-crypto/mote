@@ -30,6 +30,9 @@ class RoleState(SerializationMixin):
 
     # Session
     session_id: str = Field(default_factory=lambda: uuid4().hex)
+    # Fork lineage: the session_id this session was forked from (None for roots).
+    # Recorded on the rollout's session_meta first line so listing can show the tree.
+    parent_session_id: Optional[str] = None
     # Three working-directory paths, aligned with Claude Code (cwd/originalCwd/projectRoot):
     #   working_dir          — live cwd, follows `cd` (updated by the Bash tool each run)
     #   original_working_dir — set at startup, fallback only; never follows `cd`

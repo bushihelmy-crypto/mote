@@ -107,6 +107,162 @@ class PermissionEngine:
 
         return decision
 
+    async def check_multi(
+        self,
+        tool_name: str,
+        *,
+        targets: list[str],
+        tool_check: Optional[PermissionDecision] = None,
+        mutates_fs: bool = False,
+    ) -> PermissionDecision:
+        """Resolve a call that touches *multiple* paths to one terminal decision.
+
+        Each path is evaluated non-interactively against the same axis-A pipeline
+        (rules + mode + ``tool_check``) and axis-B sandbox boundary as
+        :meth:`check`, then folded **strictest-wins**:
+
+          * any path denies                     -> deny (first reason)
+          * else any path needs ask/escalation  -> ONE consolidated prompt
+                                                    listing all such paths
+          * else                                -> allow
+
+        On a consolidated "always" grant, a session allow rule is remembered for
+        each path that needed asking and each sandbox-escalation directory is
+        widened, so the same multi-path call is not re-prompted.
+
+        ``check()`` is intentionally left untouched — single-target tools keep
+        their exact existing behavior.
+        """
+        if not targets:
+            return await self.check(
+                tool_name, target="", tool_check=tool_check, mutates_fs=mutates_fs
+            )
+
+        ask_paths: list[str] = []        # rule/default/tool_check ask
+        escalation_paths: list[str] = []  # sandbox boundary violations
+        reasons: list[str] = []
+
+        for target in targets:
+            decision = self._decide_static(tool_name, target, tool_check, mutates_fs)
+
+            if decision.behavior == "deny":
+                # Strictest wins immediately.
+                return decision
+
+            if decision.behavior == "ask":
+                ask_paths.append(target)
+                reasons.append(decision.message or decision.reason.detail)
+                continue
+
+            # allow — apply the sandbox boundary (axis B) just like check().
+            if (
+                mutates_fs
+                and self._sandbox is not None
+                and decision.reason.type != "user"
+            ):
+                verdict = self._sandbox.check_write(target)
+                if not verdict.allowed:
+                    escalation_paths.append(target)
+                    reasons.append(verdict.reason)
+
+        if not ask_paths and not escalation_paths:
+            return PermissionDecision.allow("multi", "all paths allowed")
+
+        # One consolidated prompt for every path that needs confirmation.
+        if self._ask_human is None:
+            blocked = ", ".join(ask_paths + escalation_paths)
+            return PermissionDecision.deny(
+                "default",
+                "multi-path approval required",
+                message=(
+                    f"'{tool_name}' needs approval for {blocked} but no "
+                    f"interactive channel is available."
+                ),
+            )
+
+        pending = ask_paths + escalation_paths
+        reason = "; ".join(r for r in reasons if r) or "this action needs your approval"
+        prompt = build_approval_prompt(tool_name, "\n  ".join(pending), reason)
+        reply = await self._ask_human(prompt)
+        choice = parse_approval_response(reply)
+
+        if choice == "deny":
+            return PermissionDecision.deny(
+                "user",
+                "user denied",
+                message=f"The user denied running '{tool_name}'.",
+            )
+        if choice == "allow_session":
+            for path in ask_paths:
+                self._store.add_session_rule(
+                    PermissionRule(
+                        tool_name=tool_name,
+                        pattern=path or None,
+                        behavior="allow",
+                        source="session",
+                    )
+                )
+            if self._sandbox is not None:
+                for path in escalation_paths:
+                    self._sandbox.add_session_root(os.path.dirname(path) or path)
+        return PermissionDecision.allow("user", f"user approved ({choice})")
+
+    def _decide_static(
+        self,
+        tool_name: str,
+        target: str,
+        tool_check: Optional[PermissionDecision],
+        mutates_fs: bool,
+    ) -> PermissionDecision:
+        """Non-interactive twin of :meth:`_decide`: returns ``ask`` unresolved.
+
+        Mirrors the 11-step axis-A precedence exactly but never prompts, so a
+        caller (``check_multi``) can fold several paths before issuing a single
+        consolidated approval prompt.
+        """
+        rule_behavior = self._store.resolve(tool_name, target)
+
+        if rule_behavior == "deny":
+            return PermissionDecision.deny(
+                "rule",
+                f"denied by rule for '{tool_name}'",
+                message=f"'{tool_name}' is blocked by a deny rule.",
+            )
+        if tool_check is not None and tool_check.behavior == "deny":
+            return tool_check
+
+        if rule_behavior == "ask":
+            return PermissionDecision.ask("rule", "an ask rule requires confirmation")
+        if tool_check is not None and tool_check.behavior == "ask":
+            return tool_check
+
+        if self._mode == "bypass":
+            return PermissionDecision.allow("mode", "bypass mode")
+
+        if rule_behavior == "allow":
+            return PermissionDecision.allow("rule", f"allowed by rule for '{tool_name}'")
+        if tool_check is not None and tool_check.behavior == "allow":
+            return tool_check
+
+        if self._mode == "acceptEdits" and mutates_fs:
+            return PermissionDecision.allow("mode", "acceptEdits mode")
+
+        if self._mode == "plan":
+            return PermissionDecision.deny(
+                "mode",
+                "plan mode",
+                message=f"'{tool_name}' is blocked in plan mode (read-only preview).",
+            )
+
+        if self._mode == "dontAsk":
+            return PermissionDecision.deny(
+                "mode",
+                "dontAsk mode",
+                message=f"'{tool_name}' requires approval, denied in dontAsk mode.",
+            )
+
+        return PermissionDecision.ask("default", "this action needs your approval")
+
     # ------------------------------------------------------------------
     # Axis A — approval decision
     # ------------------------------------------------------------------

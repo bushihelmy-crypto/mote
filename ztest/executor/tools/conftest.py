@@ -57,6 +57,8 @@ class CapRole:
         self._cwd = cwd or os.getcwd()
         # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
         self.read_state: dict[str, int] = {}
+        # Before-image snapshot calls: (full_path, tool) recorded for assertions.
+        self.snapshots: list[tuple[str, str]] = []
         # Scriptable human/session behaviour.
         self.ask_reply = ask_reply
         self.ask_questions: list[str] = []  # records every prompt sent to ask_human
@@ -78,6 +80,10 @@ class CapRole:
 
     def get_file_read_mtime(self, path: str) -> Optional[int]:
         return self.read_state.get(path)
+
+    # --- file-history snapshot (Write/Edit/NotebookEdit capture before-images) ---
+    def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
+        self.snapshots.append((full_path, tool))
 
     # --- human / session ---
     async def ask_human(self, question: str) -> str:
@@ -104,6 +110,7 @@ class CapRole:
             "set_cwd": self.set_cwd,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
+            "record_file_snapshot": self.record_file_snapshot,
             "ask_human": self.ask_human,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,

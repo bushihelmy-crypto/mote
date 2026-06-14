@@ -43,7 +43,7 @@ from typing import Callable, ClassVar, Optional
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.tools._document import (
+from metagpt.executor.dependency._document import (
     document_lines,
     extract_document_text,
     is_document,

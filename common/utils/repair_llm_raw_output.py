@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Union
 import regex as re
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_fixed
 
-from metagpt.common.config2 import Config
+from metagpt.common.config.meta_config import Config
 from metagpt.common.logs import logger
 from metagpt.common.utils.custom_decoder import CustomDecoder
 

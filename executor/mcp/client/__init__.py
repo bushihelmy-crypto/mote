@@ -1,7 +1,7 @@
-from metagpt.common.config.mcp_config import MCPServerConfig, MCPTransportType
+from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 from metagpt.executor.mcp.client.sse import MCPSSEClient
 from metagpt.executor.mcp.client.stdio import MCPStdioClient
-from metagpt.common.config2 import Config
+from metagpt.common.config.meta_config import Config
 
 from typing import Union
 

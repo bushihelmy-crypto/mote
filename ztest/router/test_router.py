@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.config.llm_config import LLMConfig
+from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.exception import ModelNotFoundError
 from metagpt.router.schema import RoutingRequest
 from metagpt.router.strategy import RuleBasedStrategy

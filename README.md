@@ -122,7 +122,7 @@ role = Role(
 ```python
 import asyncio
 from metagpt.router.llm.context import Context
-from metagpt.common.config.llm_config import LLMConfig, LLMType
+from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.roles.role import Role
 
 # 构建 Context（默认从全局 Config 读取 llm 字段）
@@ -278,7 +278,7 @@ class Bash(BaseTool):
 
 ```python
 from metagpt.router.router import get_router
-from metagpt.common.config.llm_config import LLMConfig
+from metagpt.common.config.config.llm_config import LLMConfig
 
 router = get_router()
 

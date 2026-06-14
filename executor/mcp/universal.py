@@ -4,8 +4,8 @@ from typing import Any, Dict, List
 
 from fastmcp import Client
 
-from metagpt.common.config2 import Config
-from metagpt.common.config.mcp_config import MCPServerConfig, MCPTransportType
+from metagpt.common.config.meta_config import Config
+from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 from metagpt.common.exception import ToolNotFoundError
 from metagpt.common.logs import logger
 

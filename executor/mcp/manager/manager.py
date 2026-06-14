@@ -6,7 +6,7 @@ import threading
 from functools import partial
 from typing import Callable, Optional
 
-from metagpt.common.config.mcp_config import MCPServerConfig
+from metagpt.common.config.config.mcp_config import MCPServerConfig
 from metagpt.executor.mcp.client import get_mcp_client
 from metagpt.executor.mcp.client.base import MCPBaseClient
 from metagpt.executor.mcp.mcp_registry import MCP_REGISTRY
@@ -41,7 +41,7 @@ class MCPClientManager:
 
     async def register_tools(self, server_configs: Optional[list[MCPServerConfig]] = None):
         """Register all tools from MCP servers"""
-        from metagpt.common.config2 import Config
+        from metagpt.common.config.meta_config import Config
 
         if self._tools_registered:
             return

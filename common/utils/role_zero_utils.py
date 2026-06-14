@@ -8,7 +8,6 @@ import pytz
 
 from metagpt.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
 from metagpt.prompts.role import (
-    ASK_HUMAN_COMMAND,
     ASK_HUMAN_GUIDANCE_FORMAT,
     SUMMARIZE_PROBLEM_WHEN_DUPLICATE,
 )
@@ -17,7 +16,7 @@ from metagpt.common.utils.common import (
     extract_and_encode_images,
     extract_and_encode_pdfs,
 )
-from metagpt.common.utils.stream_xml import PythonObjectParser
+from metagpt.common.utils.stream_xml import LexerState, PythonObjectParser
 
 
 def attach_media(memory: list[Message], k: int = 3) -> list[Message]:
@@ -60,8 +59,12 @@ async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str
         if past_rsp.count(command_rsp) >= 3:
             context = llm.format_msg(req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)])
             problem = await llm.aask(context)
-            ASK_HUMAN_COMMAND[0]["args"]["question"] = ASK_HUMAN_GUIDANCE_FORMAT.format(problem=problem).strip()
-            ask_human_command = "```json\n" + json.dumps(ASK_HUMAN_COMMAND, indent=4, ensure_ascii=False) + "\n```"
+            # Build a fresh command rather than mutating the shared ASK_HUMAN_COMMAND
+            # template in place (that leaked the question across calls and polluted
+            # any consumer of the constant). Mirrors check_duplicate_calls below.
+            question = ASK_HUMAN_GUIDANCE_FORMAT.format(problem=problem).strip()
+            command = [{"command_name": "ask_human", "args": {"question": question}}]
+            ask_human_command = "```json\n" + json.dumps(command, indent=4, ensure_ascii=False) + "\n```"
             return ask_human_command
     return command_rsp
 
@@ -150,4 +153,51 @@ async def loads_xml(data, valid_names: set[str]) -> Tuple[list[dict], str]:
         await lexer.loads_xml(xml=data)
         return lexer.get_commands(), ""
     except ValueError as e:
+        # A long freeform argument (e.g. ApplyPatch's whole patch carried as the
+        # single <input> body) sometimes arrives truncated: the model's output is
+        # cut off before its closing </input></Command> tags, leaving the streaming
+        # lexer mid-value and raising "Invalid XML". Mirror the native channel's
+        # json_repair fallback — synthesize the missing close tags from the lexer's
+        # own open state and re-parse, recovering the command rather than dropping it.
+        recovered = await _repair_unclosed_xml(data, lexer, valid_names)
+        if recovered:
+            return recovered, ""
         return lexer.get_commands(), str(e)
+
+
+def _missing_closers(lexer: PythonObjectParser) -> str:
+    """Build the close tags the lexer was still waiting for when it choked.
+
+    The streaming lexer raises "Invalid XML" if input ends while still inside a
+    function (``PARSE_ARG_NAME``) or an argument value (``PARSE_ARG_VALUE``). Its
+    tracked ``functions`` tell us exactly which argument/function tags remain open,
+    so we can append the matching closers (innermost first).
+    """
+    if not lexer.functions:
+        return ""
+    parts: list[str] = []
+    if lexer.state == LexerState.PARSE_ARG_VALUE and lexer.functions[-1].args:
+        parts.append(lexer.functions[-1].args[-1].end_variable_name)
+    if lexer.state in (LexerState.PARSE_ARG_NAME, LexerState.PARSE_ARG_VALUE):
+        parts.append(lexer.functions[-1].end_function_name)
+    return "".join(parts)
+
+
+async def _repair_unclosed_xml(
+    data: str, failed_lexer: PythonObjectParser, valid_names: set[str]
+) -> Optional[list[dict]]:
+    """Best-effort recover a truncated command block by closing its open tags.
+
+    Returns the recovered commands, or ``None`` when nothing is recoverable (no
+    open tags, or the repaired text still fails to parse) so the caller keeps the
+    original failure.
+    """
+    closers = _missing_closers(failed_lexer)
+    if not closers:
+        return None
+    lexer = PythonObjectParser(ignore_text=True, valid_names=valid_names)
+    try:
+        await lexer.loads_xml(xml=data + closers)
+    except ValueError:
+        return None
+    return lexer.get_commands() or None

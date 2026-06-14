@@ -74,19 +74,38 @@ class Bash(BaseTool):
             return PermissionDecision.allow("tool_check", assessment.reason)
         return None
 
-    async def call(self, *, command: str, timeout: float = 300.0) -> str:
+    async def call(self, *, command: str, timeout: float = 300.0, workdir: str = "") -> str:
         """Execute a bash command in the session's current working directory.
 
         Args:
             command: The bash command to execute.
-            timeout: Maximum seconds to wait for the command (default 300).
+            timeout: Maximum seconds to wait for the command (default 300). On
+                timeout the command is terminated and whatever output it produced
+                so far is returned (rather than raising), mirroring codex.
+            workdir: Optional directory to run this one command in. Relative paths
+                resolve against the session's current working directory. Prefer
+                this over a leading ``cd``. Using ``workdir`` is transient — it
+                does NOT change the session's persistent cwd; omit it and use a
+                ``cd`` if you want the directory change to stick across calls.
         """
         if not command or not command.strip():
             raise ToolError("Error: 'command' argument is required.")
 
         cwd = self.get_cwd()
-        if not cwd or not os.path.isdir(cwd):
-            cwd = None  # let aexecute fall back to the process default
+        base_cwd = cwd if cwd and os.path.isdir(cwd) else None
+
+        # `workdir` is a transient per-call override: resolve it (relative to the
+        # persistent cwd) and run there WITHOUT persisting the result back. When
+        # omitted we run in the persistent cwd and persist any `cd` the command
+        # makes (probed below).
+        if workdir:
+            run_cwd = workdir if os.path.isabs(workdir) else os.path.join(base_cwd or os.getcwd(), workdir)
+            if not os.path.isdir(run_cwd):
+                raise ToolError(f"Error: workdir does not exist: {workdir}")
+            persist_cwd = False
+        else:
+            run_cwd = base_cwd  # may be None -> aexecute uses the process default
+            persist_cwd = True
 
         # Append a probe so we can capture the command's real exit code and the
         # directory it ended in (e.g. after a `cd`), then persist cwd back via
@@ -96,22 +115,26 @@ class Bash(BaseTool):
         wrapped = f"{command}\n{probe}"
 
         try:
-            _rc, stdout, stderr = await aexecute(wrapped, working_dir=cwd, wait=True, timeout=timeout)
-        except TimeoutError:
-            raise ToolError(f"Error: command timed out after {timeout} seconds.")
+            _rc, stdout, stderr, timed_out = await aexecute(
+                wrapped, working_dir=run_cwd, wait=True, timeout=timeout, return_partial_on_timeout=True
+            )
         except Exception as e:
             raise ToolError(f"Error executing command: {e}")
 
         output, rc, new_cwd = self._split_probe(stdout)
-        if new_cwd and os.path.isdir(new_cwd):
+        # On timeout the probe never ran, so the marker is absent and cwd cannot
+        # be trusted; skip persistence. Otherwise persist the probed cwd.
+        if persist_cwd and not timed_out and new_cwd and os.path.isdir(new_cwd):
             self.set_cwd(new_cwd)
 
         parts = []
+        if timed_out:
+            parts.append(f"command timed out after {int(timeout * 1000)} milliseconds")
         if output:
             parts.append(output)
         if stderr:
             parts.append(stderr)
-        if rc:
+        if not timed_out and rc:
             parts.append(f"[exit code: {rc}]")
         return "\n".join(parts) if parts else ""
 
