@@ -14,7 +14,7 @@ import pytest
 
 from metagpt.common.base import CommandChannel
 from metagpt.common.const import IMAGES, PDFS
-from metagpt.parser.prompts import OUTPUT_SECTION
+from metagpt.common.prompt.output import OUTPUT_SECTION
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command

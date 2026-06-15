@@ -26,6 +26,7 @@ from metagpt.tasks.attachment import (
     TaskAttachmentGenerator,
     format_attachment_xml,
 )
+from metagpt.tasks.turn_context_source import BackgroundTaskContextSource
 
 __all__ = [
     "BgTaskResult",
@@ -45,4 +46,5 @@ __all__ = [
     "TaskAttachmentGenerator",
     "GenerateResult",
     "format_attachment_xml",
+    "BackgroundTaskContextSource",
 ]

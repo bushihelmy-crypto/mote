@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from string import Template
 
-from metagpt.prompts import memory as M
+from metagpt.common.prompt import memory as M
 
 
 class TestInstructions:
@@ -24,11 +24,12 @@ class TestInstructions:
         assert "/tmp/mem/" in out
         assert "${memory_dir}" not in out
 
-    def test_double_braces_survive_substitution(self):
-        # The frontmatter example uses {{...}} so safe_substitute leaves it alone
-        # and never raises on the literal braces.
+    def test_literal_braces_survive_substitution(self):
+        # The frontmatter example uses single {...} placeholders (display only).
+        # Template only treats $-prefixed names as fields, so safe_substitute
+        # leaves the literal braces alone and never raises on them.
         out = Template(M.MEMORY_INSTRUCTIONS).safe_substitute(memory_dir="/x")
-        assert "{{memory name}}" in out
+        assert "{memory name}" in out
 
     def test_lists_four_memory_types(self):
         for t in ("user:", "feedback:", "project:", "reference:"):

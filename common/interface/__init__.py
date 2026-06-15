@@ -29,6 +29,7 @@ from metagpt.common.interface.message_activity import MessageActivity
 from metagpt.common.interface.message_store import MessageStore
 from metagpt.common.interface.request_assembler import RequestAssembler
 from metagpt.common.interface.session_recorder import SessionRecorder
+from metagpt.common.interface.turn_context import EphemeralContextSource
 
 __all__ = [
     "MessageStore",
@@ -40,4 +41,5 @@ __all__ = [
     "HookRunner",
     "FileSnapshotStore",
     "LspNotifier",
+    "EphemeralContextSource",
 ]

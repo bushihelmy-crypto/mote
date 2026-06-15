@@ -33,6 +33,7 @@ from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
+from metagpt.common.prompt.tools import EDIT_DESCRIPTION
 
 # Curly quotes. The model emits straight quotes; files may contain curly ones.
 # We normalize curly→straight for matching, then re-apply curly on write.
@@ -200,12 +201,7 @@ class Edit(FileMutatingTool):
     aliases: ClassVar[list[str]] = ["Edit.run", "edit", "Update", "update"]
     # Success messages can echo a code snippet; allow a higher cap (CC).
     max_result_size_chars: ClassVar[int] = 100_000
-    description = (
-        "Performs exact string replacements in files. You must Read the file at "
-        "least once before editing it. The edit fails if old_string is not unique "
-        "in the file — provide more surrounding context to make it unique, or set "
-        "replace_all to replace every occurrence (useful for renaming)."
-    )
+    description = EDIT_DESCRIPTION
 
     async def call(
         self,

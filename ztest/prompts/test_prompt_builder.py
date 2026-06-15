@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.prompts.prompt_builder — PromptBuilder + ThinkContext.
+"""Tests for metagpt.think.prompt_builder — PromptBuilder + ThinkContext.
 
 PromptBuilder is a stateless assembler: every method is a pure function over
 ThinkInputs / ThinkContext / the four subsystems. The tests cover the identity
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.prompts import role as R
-from metagpt.prompts.prompt_builder import (
+from metagpt.common import prompt as R
+from metagpt.think.prompt_builder import (
     PromptBuilder,
     ThinkContext,
     ThinkInputs,
@@ -199,7 +199,7 @@ class TestMakeMemory:
         assert "- [A](a.md) — hook" in context
 
     def test_missing_index_uses_empty_state(self, tmp_path):
-        from metagpt.prompts.memory import MEMORY_EMPTY_STATE
+        from metagpt.common.prompt.memory import MEMORY_EMPTY_STATE
 
         instructions, context = PromptBuilder._make_memory(tmp_path)
         assert instructions  # still produces instructions
@@ -216,8 +216,41 @@ class TestReadMemoryIndex:
 
 
 class TestMakeReminders:
-    def test_stub_returns_empty(self):
-        assert PromptBuilder._make_reminders() == ""
+    def test_none_bus_returns_empty(self):
+        import asyncio
+
+        assert asyncio.run(PromptBuilder._make_reminders(None, "/work")) == ""
+
+    def test_delegates_to_bus_collect(self):
+        import asyncio
+
+        class FakeBus:
+            def __init__(self):
+                self.seen_cwd = "unset"
+
+            async def collect(self, *, cwd=None):
+                self.seen_cwd = cwd
+                return "<system-reminder>\nhi\n</system-reminder>"
+
+        bus = FakeBus()
+        out = asyncio.run(PromptBuilder._make_reminders(bus, "/work"))
+        assert out == "<system-reminder>\nhi\n</system-reminder>"
+        assert bus.seen_cwd == "/work"
+
+    def test_blank_cwd_passed_as_none(self):
+        import asyncio
+
+        class FakeBus:
+            def __init__(self):
+                self.seen_cwd = "unset"
+
+            async def collect(self, *, cwd=None):
+                self.seen_cwd = cwd
+                return ""
+
+        bus = FakeBus()
+        asyncio.run(PromptBuilder._make_reminders(bus, ""))
+        assert bus.seen_cwd is None
 
 
 class TestMakeLanguage:

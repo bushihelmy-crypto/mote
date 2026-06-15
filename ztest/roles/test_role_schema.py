@@ -30,9 +30,6 @@ class TestDefaults:
         assert s.agents == []
         assert s.skills == []
 
-    def test_shell_tool_default_is_terminal(self):
-        assert RoleSchema().shell_tool == "terminal"
-
     def test_memory_summary_defaults(self):
         s = RoleSchema()
         assert s.enable_memory is True

@@ -167,6 +167,27 @@ class TestProperties:
         assert role._router is first
 
 
+class TestTurnContextBus:
+    def test_slot_starts_none(self):
+        assert Role(name="X")._turn_context_bus is None
+
+    def test_lazy_built_and_cached(self, role):
+        bus = role.turn_context_bus
+        assert bus is not None
+        assert role.turn_context_bus is bus  # cached
+        assert role._turn_context_bus is bus
+
+    def test_wires_all_four_sources(self, role):
+        bus = role.turn_context_bus
+        names = {getattr(s, "name", "") for s in bus._sources}
+        assert names == {"git", "token", "background_tasks", "lsp"}
+
+    def test_sources_sorted_by_priority(self, role):
+        bus = role.turn_context_bus
+        priorities = [getattr(s, "priority", 0) for s in bus._sources]
+        assert priorities == sorted(priorities)
+
+
 # =============================================================================
 # Framework properties + cwd / file-read state
 # =============================================================================
@@ -429,24 +450,21 @@ class TestGetMemories:
 
 
 # =============================================================================
-# shell_tool resolution (mutually-exclusive Bash <-> terminal)
+# shell_tool resolution (Bash always -> terminal)
 # =============================================================================
 class TestResolveShellTools:
     def test_terminal_replaces_bash(self):
-        assert _resolve_shell_tools(["Bash"], "terminal") == ["terminal"]
-
-    def test_bash_keeps_bash(self):
-        assert _resolve_shell_tools(["Bash"], "bash") == ["Bash"]
+        assert _resolve_shell_tools(["Bash"]) == ["terminal"]
 
     def test_non_bash_tools_untouched(self):
-        assert _resolve_shell_tools(["Read", "Write"], "terminal") == ["Read", "Write"]
+        assert _resolve_shell_tools(["Read", "Write"]) == ["Read", "Write"]
 
     def test_explicit_terminal_tool_preserved_and_deduped(self):
         # Bash + explicitly listed terminal -> no duplicate terminal.
-        assert _resolve_shell_tools(["terminal", "Bash"], "terminal") == ["terminal"]
+        assert _resolve_shell_tools(["terminal", "Bash"]) == ["terminal"]
 
     def test_order_preserved(self):
-        assert _resolve_shell_tools(["Read", "Bash", "Write"], "terminal") == [
+        assert _resolve_shell_tools(["Read", "Bash", "Write"]) == [
             "Read",
             "terminal",
             "Write",

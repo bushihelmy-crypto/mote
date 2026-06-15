@@ -36,6 +36,7 @@ from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_NOTEBOOK_SIZE_BYTES
+from metagpt.common.prompt.tools import NOTEBOOK_EDIT_DESCRIPTION
 
 # JSON indent CC uses when writing .ipynb back (IPYNB_INDENT).
 _IPYNB_INDENT = 1
@@ -88,13 +89,7 @@ class NotebookEdit(FileMutatingTool):
 
     name = "NotebookEdit"
     aliases: ClassVar[list[str]] = ["NotebookEdit.run", "notebook_edit"]
-    description = (
-        "Completely replaces the contents of a specific cell in a Jupyter "
-        "notebook (.ipynb file) with new source. The notebook_path must be "
-        "absolute. Use edit_mode=insert to add a new cell after the cell named "
-        "by cell_id (or at the start if omitted), and edit_mode=delete to "
-        "remove the cell named by cell_id."
-    )
+    description = NOTEBOOK_EDIT_DESCRIPTION
 
     async def call(
         self,

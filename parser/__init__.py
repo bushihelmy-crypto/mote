@@ -5,7 +5,7 @@ from metagpt.parser.native_channel import (
     infer_native_tool_provider,
     make_command_channel,
 )
-from metagpt.parser.prompts import OUTPUT_SECTION
+from metagpt.common.prompt.output import OUTPUT_SECTION
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 __all__ = [

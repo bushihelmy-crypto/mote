@@ -11,7 +11,7 @@ from typing import ClassVar, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from metagpt.common.schema import HookConfig, LspConfig, PermissionConfig
-from metagpt.prompts.role import (
+from metagpt.common.prompt.role import (
     CMD_PROMPT,
     ROLE_INSTRUCTION,
     SUMMARY_PROMPT,
@@ -64,16 +64,6 @@ class RoleSchema(BaseModel):
     mcps: list[str] = []
     agents: list[str] = []
     skills: list[str] = []
-
-    # --- Shell generation selector (mutually exclusive) ---
-    # Which shell tool a declared ``"Bash"`` resolves to at executor-build time:
-    #   "terminal" -> the persistent PTY-backed interactive terminal (one per
-    #                 session, typed into across calls; cwd/env/venv persist,
-    #                 foreground programs receive stdin — REPLs, servers, prompts).
-    #   "bash"     -> the one-shot Bash tool (fresh subprocess per call).
-    # ``role_schema.tools`` stays pristine; the substitution happens when the
-    # ToolExecutor is built.
-    shell_tool: Literal["terminal", "bash"] = "terminal"
 
     # --- Permissions ---
     # Opt-in tool-approval policy. When None (default), tools run with no

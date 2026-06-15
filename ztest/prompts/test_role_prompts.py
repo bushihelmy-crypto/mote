@@ -10,19 +10,20 @@ careless edit to a template string is caught.
 from __future__ import annotations
 
 import re
+from string import Template
 
-from metagpt.prompts import role as R
+from metagpt.common import prompt as R
 
 
 class TestIdentityTemplates:
     def test_prefix_template_formats(self):
-        out = R.PREFIX_TEMPLATE.format(profile="Engineer", name="Bob", goal="ship")
+        out = Template(R.PREFIX_TEMPLATE).safe_substitute(profile="Engineer", name="Bob", goal="ship")
         assert "Engineer" in out
         assert "Bob" in out
         assert "ship" in out
 
     def test_constraint_template_formats(self):
-        out = R.CONSTRAINT_TEMPLATE.format(constraints="be terse")
+        out = Template(R.CONSTRAINT_TEMPLATE).safe_substitute(constraints="be terse")
         assert "be terse" in out
 
 
@@ -77,18 +78,18 @@ class TestDynamicSectionPlaceholders:
 
 class TestDomainInfo:
     def test_mgx_info_formats_models(self):
-        out = R.MGX_INFO.format(ai_capability_models="m1, m2")
+        out = Template(R.MGX_INFO).safe_substitute(ai_capability_models="m1, m2")
         assert "m1, m2" in out
 
     def test_mgx_info_only_models_placeholder(self):
-        # The single positional/keyword field is ai_capability_models. Any other
-        # brace must be doubled/literal; .format with just that key must succeed.
-        R.MGX_INFO.format(ai_capability_models="x")
+        # The single placeholder is ${ai_capability_models}; safe_substitute
+        # leaves any literal braces (JSON/code examples) untouched.
+        assert "${ai_capability_models}" in R.MGX_INFO
 
 
 class TestAgentPrompts:
     def test_agent_task_prompt_formats(self):
-        out = R.AGENT_TASK_PROMPT.format(parent_name="Mike", context="ctx", task="do it")
+        out = Template(R.AGENT_TASK_PROMPT).safe_substitute(parent_name="Mike", context="ctx", task="do it")
         assert "Mike" in out
         assert "ctx" in out
         assert "do it" in out

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from string import Template
+
 from metagpt.executor.agent_registry import registry as agent_registry
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.common.schema import UserMessage
-from execute.prompts import AGENT_TASK_PROMPT
+from metagpt.common.prompt.agent import AGENT_TASK_PROMPT
+from metagpt.common.prompt.tools import AGENT_DESCRIPTION
 
 @register_tool
 class Agent(BaseTool):
@@ -18,7 +21,7 @@ class Agent(BaseTool):
 
     name = "Agent"
     aliases = ["run_agent"]
-    description = "Spawn a typed child agent for bounded subtasks."
+    description = AGENT_DESCRIPTION
 
     async def call(self, *, agent_type: str, prompt: str, context: str = "") -> str:
         """Spawn a typed child agent and return its summary.
@@ -41,7 +44,7 @@ class Agent(BaseTool):
 
         # Agent type defines everything itself — we only pass parent session_id
         agent = agent_cls(parent_session_id=self.session_id)
-        msg = UserMessage(content=AGENT_TASK_PROMPT.format(
+        msg = UserMessage(content=Template(AGENT_TASK_PROMPT).safe_substitute(
             parent_name=self.session_id,
             context=context or "(no additional context)",
             task=prompt,

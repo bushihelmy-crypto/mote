@@ -37,6 +37,7 @@ from metagpt.common.const.tools import (
     VCS_DIRECTORIES_TO_EXCLUDE,
 )
 from metagpt.executor.tools.grep import _find_ripgrep
+from metagpt.common.prompt.tools import GLOB_DESCRIPTION
 
 
 @register_tool
@@ -47,12 +48,7 @@ class Glob(BaseTool):
     aliases: ClassVar[list[str]] = ["Glob.run", "glob"]
     # Glob can list many paths; allow a higher cap before persisting (CC).
     max_result_size_chars: ClassVar[int] = 100_000
-    description = (
-        "Fast file pattern matching tool that works with any codebase size. "
-        "Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". Returns "
-        "matching file paths sorted by modification time (most recent first). "
-        "Use this to find files by name; for content search use Grep instead."
-    )
+    description = GLOB_DESCRIPTION
 
     async def call(
         self,

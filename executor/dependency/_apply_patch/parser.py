@@ -32,6 +32,7 @@ wrapper (GPT-4.1 sometimes formats the call that way) before parsing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from string import Template
 from typing import List, Optional, Union
 
 # --- Markers (byte-for-byte the codex constants) ---
@@ -46,12 +47,12 @@ CHANGE_CONTEXT_MARKER = "@@ "
 EMPTY_CHANGE_CONTEXT_MARKER = "@@"
 
 _INVALID_HUNK_HEADER = (
-    "'{got}' is not a valid hunk header. Valid hunk headers: "
-    "'*** Add File: {{path}}', '*** Delete File: {{path}}', "
-    "'*** Update File: {{path}}'"
+    "'${got}' is not a valid hunk header. Valid hunk headers: "
+    "'*** Add File: {path}', '*** Delete File: {path}', "
+    "'*** Update File: {path}'"
 )
 _UNEXPECTED_UPDATE_LINE = (
-    "Unexpected line found in update hunk: '{line}'. Every line should start "
+    "Unexpected line found in update hunk: '${line}'. Every line should start "
     "with ' ' (context line), '+' (added line), or '-' (removed line)"
 )
 
@@ -191,7 +192,7 @@ class _StreamingPatchParser:
                         "Update hunk does not contain any lines", self._line_number
                     )
                 raise ApplyPatchError(
-                    _UNEXPECTED_UPDATE_LINE.format(line=line), self._line_number
+                    Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number
                 )
 
     def _handle_hunk_headers_and_end_patch(self, trimmed: str) -> bool:
@@ -231,7 +232,7 @@ class _StreamingPatchParser:
             if self._handle_hunk_headers_and_end_patch(trimmed):
                 return
             raise ApplyPatchError(
-                _INVALID_HUNK_HEADER.format(got=trimmed), self._line_number
+                Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number
             )
 
         if self._mode == _ADD_FILE:
@@ -243,14 +244,14 @@ class _StreamingPatchParser:
                     last.contents += line[1:] + "\n"
                     return
             raise ApplyPatchError(
-                _INVALID_HUNK_HEADER.format(got=trimmed), self._line_number
+                Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number
             )
 
         if self._mode == _DELETE_FILE:
             if self._handle_hunk_headers_and_end_patch(trimmed):
                 return
             raise ApplyPatchError(
-                _INVALID_HUNK_HEADER.format(got=trimmed), self._line_number
+                Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number
             )
 
         if self._mode == _UPDATE_FILE:
@@ -299,7 +300,7 @@ class _StreamingPatchParser:
             or update_line.startswith(CHANGE_CONTEXT_MARKER)
         ) and last_chunk_empty():
             raise ApplyPatchError(
-                _UNEXPECTED_UPDATE_LINE.format(line=line), self._line_number
+                Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number
             )
 
         if update_line == EMPTY_CHANGE_CONTEXT_MARKER:
@@ -355,7 +356,7 @@ class _StreamingPatchParser:
             )
 
         raise ApplyPatchError(
-            _UNEXPECTED_UPDATE_LINE.format(line=line), self._line_number
+            Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number
         )
 
 

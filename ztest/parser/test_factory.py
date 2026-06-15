@@ -100,6 +100,6 @@ class TestPackageExports:
         assert parser_pkg.CommandChannel is CommandChannel
 
     def test_output_section_reexported(self):
-        from metagpt.parser.prompts import OUTPUT_SECTION
+        from metagpt.common.prompt.output import OUTPUT_SECTION
 
         assert parser_pkg.OUTPUT_SECTION is OUTPUT_SECTION

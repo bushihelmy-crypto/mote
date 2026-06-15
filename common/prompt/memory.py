@@ -17,7 +17,7 @@ Two-part split (mirrors Claude Code's main-session design):
 
 Assembly (mirrors role_zero / PromptBuilder):
     from string import Template
-    from metagpt.prompts.memory import (
+    from metagpt.common.prompt.memory import (
         MEMORY_INSTRUCTIONS, MEMORY_CONTEXT, MEMORY_EMPTY_STATE,
     )
 
@@ -44,12 +44,12 @@ MEMORY_EMPTY_STATE = (
 # future relevance decisions, so they must stay specific and up-to-date.
 MEMORY_FRONTMATTER_EXAMPLE = """```markdown
 ---
-name: {{memory name}}
-description: {{one-line description — used to decide relevance in future conversations, so be specific}}
-type: {{user, feedback, project, reference}}
+name: {memory name}
+description: {one-line description — used to decide relevance in future conversations, so be specific}
+type: {user, feedback, project, reference}
 ---
 
-{{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}}
+{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}
 ```"""
 
 # --- System prompt section (static, cacheable) -----------------------------
@@ -83,12 +83,12 @@ Saving a memory is a two-step process:
 
 ```markdown
 ---
-name: {{memory name}}
-description: {{one-line description — used to decide relevance in future conversations, so be specific}}
-type: {{user, feedback, project, reference}}
+name: {memory name}
+description: {one-line description — used to decide relevance in future conversations, so be specific}
+type: {user, feedback, project, reference}
 ---
 
-{{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}}
+{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}
 ```
 
 **Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.
@@ -133,4 +133,3 @@ Terminal.run: grep -rn "<search term>" ${memory_dir} --include="*.md"
 # turn like CLAUDE.md so a changing index never busts the system-prompt cache.
 MEMORY_CONTEXT = """# MEMORY.md
 ${memory_content}"""
-
