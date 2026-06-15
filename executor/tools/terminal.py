@@ -37,7 +37,7 @@ from metagpt.common.prompt.tools import TERMINAL_DESCRIPTION
 class Terminal(BaseTool):
     """Type into a persistent interactive terminal (one per session)."""
 
-    name = "terminal"
+    name = "Terminal"
     aliases = ["terminal.run"]
     max_result_size_chars: ClassVar[int] = 30_000
     description = TERMINAL_DESCRIPTION

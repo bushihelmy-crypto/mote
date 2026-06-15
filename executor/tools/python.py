@@ -35,8 +35,8 @@ from metagpt.common.prompt.tools import PYTHON_DESCRIPTION
 class Python(BaseTool):
     """Execute code in a persistent Python kernel (one per session)."""
 
-    name = "python"
-    aliases = ["python.run"]
+    name = "Jupyter"
+    aliases = ["Python"]
     max_result_size_chars: ClassVar[int] = 30_000
     description = PYTHON_DESCRIPTION
     requires = ("get_cwd",)

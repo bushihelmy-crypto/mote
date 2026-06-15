@@ -945,13 +945,13 @@ def _resolve_shell_tools(tools: list[str]) -> list[str]:
     """Resolve the shell generation for a tool list.
 
     A declared ``"Bash"`` always becomes the persistent PTY-backed
-    ``terminal``. Tools the caller listed explicitly (including ``terminal``)
+    ``Terminal``. Tools the caller listed explicitly (including ``Terminal``)
     are left as-is. Order is preserved and duplicates removed.
     """
     resolved: list[str] = []
     for tool in tools:
         if tool == "Bash":
-            resolved.append("terminal")
+            resolved.append("Terminal")
         else:
             resolved.append(tool)
     seen: set[str] = set()

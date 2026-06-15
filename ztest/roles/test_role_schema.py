@@ -23,9 +23,21 @@ class TestDefaults:
         assert s.max_react_loop == 50
         assert s.max_consecutive_react_limit == 10
 
-    def test_collection_defaults_are_empty(self):
+    def test_collection_defaults(self):
         s = RoleSchema()
-        assert s.tools == []
+        assert s.tools == [
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Bash",
+            "Terminal",
+            "Jupyter",
+            "Agent",
+            "AskUserQuestion",
+            "Sleep",
+        ]
         assert s.mcps == []
         assert s.agents == []
         assert s.skills == []
