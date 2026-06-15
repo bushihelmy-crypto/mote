@@ -33,7 +33,7 @@ def patch_reporter(monkeypatch):
         async def async_report(self, value, name="object"):
             reports.append((value, name))
 
-    monkeypatch.setattr("metagpt.common.utils.report.ThoughtReporter", FakeReporter)
+    monkeypatch.setattr("metagpt.tasks.decorators.ThoughtReporter", FakeReporter)
     return reports
 
 

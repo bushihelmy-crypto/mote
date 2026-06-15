@@ -1,228 +1,145 @@
-# AgentFrame
+# AgentFrame (metagpt)
 
-> 一个重构后的 Agent 框架（内部代号 *AgentFrame*，包名仍为 `metagpt.*`）。核心理念：
-> 把"会思考、会用工具、能多智能体协作"的 Agent 拆成**纯编排的 `Role`** + 一组
-> **惰性初始化的子系统**，分层单向、能力注入、高级层 opt-in。
->
-> 详细设计见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)（系统架构）与
-> [`AGENT.md`](./AGENT.md)（Agent/Role 使用指南）。
+一个面向编码与通用任务的 **Agent 运行框架**（Claude Code / Codex 风格）。核心是一个统一的 `Role`：它在一个 **ReAct（think → act）循环**里调用 LLM，解析模型产出的命令，执行工具，并把结果写回上下文，直到任务结束。
+
+> 本目录（`metagpt/` 包）即整个框架。下文描述的所有路径都相对于本目录。
 
 ---
 
-## 设计要点
+## 能做什么
 
-- **组合优于继承**：`Role` 不再是 Pydantic 模型，而是普通 ABC，只做编排，能力全部委托给子系统。
-- **静态配置 / 运行时状态分离**：`RoleSchema`（部署期静态配置）与 `RoleState`（运行期可序列化快照）严格分离。
-- **能力注入**：工具拿不到 `Role`/`RoleState`/memory，只能经 `Role.tool_capabilities()` 白名单拿到少数窄方法。
-- **协议无关的 ReAct 循环**：think→act 循环不关心 XML 还是 native tool-use，由 `CommandChannel` 策略隔离。
-- **opt-in 高级层**：权限、Hook、LSP、会话持久化、文件快照默认关闭、按需开启，未配置时短路、零开销。
-- **严格单向分层**：`common/` 永不 import 高层；跨层协作走 `common/interface/` 的 `Protocol` + 依赖注入。
+- **交互式 CLI**：`python -m metagpt.cli` 打开一个 REPL，和一个 agent 对话、让它读写文件、执行命令、跑代码。
+- **工具执行**：内置文件读写/编辑、`Bash`（一次性子进程）、`Terminal`（持久 PTY 终端）、`Jupyter`（持久 Python kernel）、`Grep`/`Glob`、子 agent 派生（`Agent`）等，并支持 **MCP**（Model Context Protocol）外接工具。
+- **两种命令协议**：原生工具调用（`native`，OpenAI/Anthropic tool-use）或 XML 文本协议（`xml`）。
+- **多模型路由**：固定模型，或按任务/复杂度智能选择模型；原生支持 OpenAI 兼容协议与 Anthropic Messages API。
+- **上下文管理**：token 预算跟踪 + 廉价的工具结果折叠（microcompact）+ LLM 摘要重建（autocompact）。
+- **会话持久化**：追加式 JSONL rollout 日志，支持 **resume / fork / list**，以及文件改动的内容寻址快照（可 diff / 回滚）。
+- **多 agent 环境**：控制面（control plane）+ 邮箱 + 事件驱动调度 + LRU 驻留（idle agent 落盘、按需复活）+ 定时任务 + 文件监听。
+- **权限系统**：模式（mode）+ 规则（rules）+ 沙箱（sandbox）三轴，deny/ask 不可被 bypass 绕过，命令安全分类器。
+- **生命周期 Hook**：PreToolUse / PostToolUse / UserPromptSubmit / SessionStart / Stop / PreCompact / PostCompact / FileChanged。
+- **可观测性**：loguru 结构化日志（`@log_class` 自动埋点 + trace-id）、Langfuse LLM tracing、成本/token 统计。
 
 ---
 
-## 整体架构
+## 快速开始
 
-```mermaid
-flowchart TB
-    subgraph ENV["environment/ — 多智能体控制平面"]
-        Control["AgentControl<br/>注册表/限流/驻留/调度"]
-        Runtime["AgentRuntime<br/>一次 turn = 一次 Role.run()"]
-        MGX["MGXEnv<br/>人类通道"]
-        Cron["scheduling/ cron"]
-        Watch["watching/ 文件监听"]
-    end
+### 1. 配置 LLM
 
-    subgraph ROLE["roles/ — Role 编排层"]
-        Role["Role（纯编排 ABC）"]
-        Schema["RoleSchema（静态配置）"]
-        State["RoleState（运行时快照）"]
-        Provider["ContextProvider<br/>唯一持有整个 Role"]
-        Session["session/<br/>rollout.jsonl + resume/fork + 文件快照"]
-        Lsp["lsp/（opt-in 诊断）"]
-    end
+最小配置只需要 `llm`。编辑 `config.yaml`（PROJECT 层），或在更高优先级层覆盖：
 
-    subgraph CORE["核心子系统"]
-        Loop["ReActLoop<br/>observe→think→act"]
-        Think["ThinkEngine<br/>LLM 调用 + 去重"]
-        Exec["ToolExecutor<br/>工具分发单一咽喉"]
-        Ctx["ContextManager<br/>消息存储 + 压缩"]
-        Router["LLMRouter<br/>显式/任务/智能 路由 + cost"]
-        Channel["CommandChannel<br/>XML / native 协议策略"]
-        Skill["SkillManager"]
-        BgPool["BackgroundTaskPool"]
-    end
-
-    subgraph COMMON["common/ — 最底层"]
-        Iface["interface/（Protocol）"]
-        Base["base/（抽象基类）"]
-        Hook["hook/（opt-in 生命周期 Hook）"]
-        SchemaPkg["schema / git_state / logs / observability"]
-    end
-
-    Runtime -. duck-typing .-> Role
-    MGX --> Role
-    Role --> Schema
-    Role --> State
-    Role --> Provider
-    Role --> Session
-    Role --> Lsp
-    Role --> Loop
-    Provider --> Loop
-    Loop --> Think
-    Loop --> Exec
-    Loop --> Ctx
-    Loop --> Channel
-    Think --> Router
-    Ctx --> Router
-    Role --> Skill
-    Role --> BgPool
-    Exec --> Hook
-    Exec --> Iface
-    Ctx --> Iface
-    Session --> Iface
-    CORE --> COMMON
-    ROLE --> COMMON
+```yaml
+llm:
+  api_key: "sk-YOUR_API_KEY"
+  api_type: "openai"            # openai | anthropic | fireworks | open_llm | moonshot | deepseek | ...
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
 ```
 
-### 包分层与依赖方向
+> `base_url` 含 `anthropic.com` 或 `api_type: anthropic` 时，自动走原生 Anthropic Messages API。
 
-```mermaid
-flowchart TB
-    L4["environment/<br/>多智能体控制平面 / 运行时"]
-    L3["roles/<br/>Role 编排 + session/ + lsp/"]
-    L2["loop/ think/ executor/ context/ router/<br/>parser/ prompts/ skills/ tasks/"]
-    L1["common/<br/>schema / base / interface / hook / git_state / logs"]
+配置加载优先级（低 → 高，高者覆盖低者）：
 
-    L4 --> L3 --> L2 --> L1
-    L1 -. "Protocol + 依赖注入<br/>（反向协作只走 interface）" .-> L2
+```
+defaults < system < user < project < workdir < profile < env < cli < programmatic < managed
 ```
 
-> 依赖只允许从上往下；反向协作通过 `common/interface/` 的 Protocol（`HookRunner` /
-> `SessionRecorder` / `FileSnapshotStore` / `LspNotifier` / `LLMClient` ...）+
-> 依赖注入完成。例如 `environment/` 永不 import `roles.Role`，而是对 Role 做
-> duck-typing。
+- `project`：本目录 `config.yaml`
+- `user`：`~/.agentframe/config.yaml`（兼容 `~/.metagpt/config2.yaml`）
+- `workdir`：`<cwd>/.agentframe/config.yaml`（**不受信任**，凭据字段会被剥离）
+- `env`：环境变量 `AGENTFRAME_*` / `METAGPT_*`（如 `AGENTFRAME_LLM__BASE_URL=...`，`__` 分隔层级）
+- `cli`：运行时 `-c key=value` 覆盖
+- `managed`：`/etc/agentframe/managed.config.yaml`（管理员策略，覆盖一切）
 
----
+### 2. 启动 REPL
 
-## 一次 `Role.run()` 的执行流
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as 调用方
-    participant R as Role
-    participant H as HookManager（opt-in）
-    participant L as ReActLoop
-    participant P as ContextProvider
-    participant T as ThinkEngine
-    participant E as ToolExecutor
-    participant C as ContextManager
-
-    U->>R: run(with_message)
-    R->>R: bind_trace(session_id) + _ensure_ready()
-    R->>H: fire(SessionStart) 一次
-    R->>H: fire(UserPromptSubmit) 可注入/否决
-    R->>R: lsp.drain_diagnostics() 诊断回流
-    R->>L: loop.run()
-    loop 每轮 react
-        L->>L: _observe() 过滤并写入 memory
-        L->>P: prepare() 组装 ThinkRequest
-        P->>C: prepare_request() 压缩历史 + user_prompt
-        P->>R: resolve_llm() 经 router 选模型
-        L->>T: start() 后台 LLM 调用
-        alt 终止（XML 发 End / native 无 tool_call）
-            L-->>R: 返回最终响应
-        else 执行命令
-            L->>E: run_command(name,args)
-            E->>H: PreToolUse → 权限门 → call → PostToolUse → LSP
-            E-->>L: ToolResult
-        end
-    end
-    R->>R: _record_turn_boundary() 写 rollout
-    R->>H: fire(Stop)
-    R->>U: publish_message(rsp)
+```bash
+python -m metagpt.cli                       # 默认 agent
+python -m metagpt.cli --model claude-sonnet-4-8
+python -m metagpt.cli --tools Read,Write,Edit,Bash,Glob,Grep
+python -m metagpt.cli --cwd /path/to/project --name Coder
 ```
 
----
+REPL 内：
 
-## 快速上手
+- 直接输入 = 一个对话回合（turn）。
+- `Ctrl+C` 一次中断当前回合；在空提示符下连按两次退出。
+- 以 `/` 开头的行是斜杠命令：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/help` | 显示帮助 |
+| `/exit`, `/quit` | 退出 REPL |
+| `/agents` | 列出本会话控制面里的 agent |
+| `/agent <ref>`, `/switch <ref>` | 切换活动 agent（序号 / session-id / 名字） |
+| `/new [name]` | 新建一个 agent 并切换 |
+| `/fork` | 把当前会话 fork 成一个新 agent 并切换 |
+| `/sessions`, `/list` | 列出可恢复的会话（最新优先） |
+| `/resume <ref>` | 恢复一个会话（`/sessions` 序号 或 session-id） |
+
+### 3. 以库的方式使用
 
 ```python
-from metagpt.roles.role import Role
-from metagpt.roles.role_schema import RoleSchema
+from metagpt.roles import Role, RoleSchema, RoleState
 
-role = Role(
-    context=my_context,                 # 注入 Context（含 config / LLM 工厂）
-    name="Coder",
-    role_schema=RoleSchema(
-        profile="Engineer",
-        goal="实现并测试功能",
-        tools=["Bash", "Read", "Write", "Edit", "grep", "glob"],
-        command_protocol="native",
-    ),
-)
-rsp = await role.run("帮我修复 login 的 bug")
-```
-
-多智能体（带人类通道）：
-
-```python
-from metagpt.environment.mgx.mgx_env import MGXEnv
-from metagpt.common.schema import Message
-
-env = MGXEnv(desc="一个软件团队")
-env.add_role(role_a)
-env.add_role(role_b)
-env.publish_message(Message(content="...", send_to={"Coder"}))
-await env.run(k=1)                       # 泵一次调度
-```
-
-开启 opt-in 高级层：
-
-```python
-RoleSchema(
-    tools=["Bash", "Write", "Edit"],
-    permissions=PermissionConfig(mode="acceptEdits", sandbox=SandboxConfig(...)),
-    hooks=HookConfig(events={...}),
-    lsp=LspConfig(enabled=True, servers=[LspServerConfig(name="pyright", ...)]),
-)
-```
-
-会话恢复 / 分叉：
-
-```python
-sessions = Role.list_sessions(cwd="/path/to/project")  # 列出可恢复会话
-role.resume_session()                                   # 灌入历史
-child = role.fork_session()                             # 分叉独立兄弟 Role
+schema = RoleSchema(name="Coder", tools=["Read", "Write", "Edit", "Bash"])
+role = Role(role_schema=schema, state=RoleState())
+reply = await role.run(with_message="帮我在 main.py 里加一个 hello 函数")
 ```
 
 ---
 
-## 目录速览
+## 执行路径速览
 
-| 包 | 职责 |
-|---|---|
-| `roles/` | `Role` 编排 + `RoleSchema`/`RoleState` + `session/`（持久化）+ `lsp/` |
-| `loop/` | `ReActLoop`：observe→think→act 循环 + 协议无关终止 |
-| `think/` | `ThinkEngine`：封装 LLM think 调用、流式、去重 |
-| `executor/` | `ToolExecutor` 分发咽喉 + `BaseTool` + `tools/` + `permission/` + `mcp/` |
-| `context/` | `ContextManager`：消息存储 + microcompact/autocompact 压缩 |
-| `router/` | `LLMRouter` 三路由 + `cost/` 成本统计 |
-| `parser/` | `CommandChannel`：XML vs native tool-use 协议策略 |
-| `prompts/` | `PromptBuilder`：纯函数 prompt 组装（cache 友好分界） |
-| `skills/` | `SkillManager` + skill 注入 |
-| `tasks/` | `BackgroundTaskPool`：慢命令后台执行 + 完成通知 |
-| `environment/` | 多智能体控制平面：runtime/mailbox/scheduler/residency + `scheduling/` + `watching/` |
-| `common/` | `schema` / `base`（抽象基类）/ `interface`（Protocol）/ `hook` / `git_state` / `logs` |
+```
+REPL (cli/repl.py)
+  └─ AgentControl (environment/control.py)          # 控制面：投递输入、触发回合
+       └─ AgentRuntime (environment/runtime.py)      # 每回合包一次 Role.run
+            └─ Role.run (roles/role.py)              # 编排：hook、trace、装配 loop
+                 └─ ReActLoop (loop/react_loop.py)   # observe → think → act 循环
+                      ├─ observe   : 从消息缓冲拉取、过滤、写入 ContextManager
+                      ├─ think     : ContextProvider 组装请求 → Router 选 LLM
+                      │              → ThinkEngine 调用 LLM（流式）
+                      └─ act       : CommandChannel 解析命令 → ToolExecutor 执行
+```
+
+支撑子系统：`context/`（消息存储 + 压缩）、`router/`（模型路由 + LLM 客户端 + 成本）、`session/`（持久化）、`parser/`（命令协议）、`think/`（提示词组装 + LLM 调用）、`executor/`（工具 + 权限 + MCP）。
+
+详见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。给贡献者/agent 的工作约定见 [`AGENTS.md`](./AGENTS.md)。
+
+---
+
+## 目录结构
+
+```
+metagpt/
+├── cli/            交互式 REPL 入口（__main__、repl、commands、render）
+├── common/         叶子基础层：base/ config/ schema/ interface(Protocols)/ hook/
+│                   prompt/ logs/ exception/ const/ utils/ git_state/ observability/
+├── roles/          Role（统一编排类）+ RoleSchema/RoleState + context_provider/ + lsp/ + agents/
+├── loop/           ReActLoop（think→act 循环）
+├── think/          ThinkEngine（调用 LLM）+ PromptBuilder（提示词组装）
+├── context/        ContextManager（消息存储 + 压缩）+ autocompact/microcompact/token_budget
+│                   + turn_context/（per-turn ephemeral 注入：git/token/bg/lsp）
+├── executor/       ToolExecutor + tools/ + permission/ + mcp/ + dependency/
+├── parser/         命令协议 channel：xml_channel / native_channel
+├── router/         LLMRouter + llm/（openai/anthropic 客户端）+ cost/ + ml/ + oauth/ + 路由策略
+├── session/        会话持久化：events/log/replay/listing/fork/snapshot/history
+├── environment/    多 agent：runtime/control/registry/mailbox/scheduler/residency/store
+│                   + scheduling/（cron）+ watching/（文件监听）+ mgx/
+├── skills/         技能定义（SKILL.md）+ 加载/注入
+├── tasks/          后台任务池（BackgroundTaskPool）+ 进度 attachment
+├── memory/         记忆模块（episodic / procedural / semantic）
+└── config.yaml     PROJECT 层配置模板（含中文注释）
+```
 
 ---
 
 ## 测试
 
-测试位于 `metagpt/ztest/<subsystem>/`（**不是** `tests/`），用 pytest：
+测试位于 `metagpt/ztest/<subsystem>/`（用 pytest 运行）：
 
 ```bash
 python -m pytest metagpt/ztest/{roles,loop,executor,think,context,skills,router,tasks,environment} -q
 ```
 
-</content>
+本项目已通过集成测试并成功跑通。
