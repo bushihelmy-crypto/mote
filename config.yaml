@@ -22,9 +22,9 @@
 # LLM —— 主模型（必填）
 # ----------------------------------------------------------------------------
 llm:
-  api_key: sk-2hD6bHZxezKWA3ATuiR2qubQVo50ov2YiyJLJoKTFU0CEke2
+  api_key: ""
   api_type: openai
-  base_url: https://newapi.deepwisdom.ai/v1
+  base_url: ""
   model: "claude-opus-4-6"                        # 模型名 / 部署名
   # api_version: null                    # Azure 等需要时填写
   # pricing_plan: null                   # 成本结算计划
