@@ -3,9 +3,11 @@
 """LLM abstraction layer (formerly metagpt.provider)."""
 
 from metagpt.router.llm.openai_api import OpenAILLM
+from metagpt.router.llm.anthropic_api import AnthropicLLM
 from metagpt.router.llm.base_llm import BaseLLM
 
 __all__ = [
     "OpenAILLM",
+    "AnthropicLLM",
     "BaseLLM",
 ]

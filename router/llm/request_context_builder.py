@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.utils.token_counter import TOKEN_MAX
+from metagpt.router.llm.editor_read_parser import find_editor_read_segments
 
 if TYPE_CHECKING:
     from metagpt.router.llm.base_llm import BaseLLM
@@ -118,8 +119,6 @@ class RequestContextBuilder:
         self, system_msgs: list[dict], user_assistant_msgs: list[dict], keep_token: int
     ) -> list[dict]:
         """Balanced compression: keep all messages, compress editor.read first, then compress large messages."""
-        from metagpt.router.llm.editor_read_parser import find_editor_read_segments
-
         compressed = list(system_msgs)
         system_tokens = self.llm.count_tokens(system_msgs)
         available_tokens = keep_token - system_tokens
@@ -269,8 +268,6 @@ class RequestContextBuilder:
         }
 
     def _compact_text(self, text: str, role: str, target_token_count: int, from_end: bool, balanced: bool = False) -> str:
-        from metagpt.router.llm.editor_read_parser import find_editor_read_segments
-
         if not text:
             return ""
 

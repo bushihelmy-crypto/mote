@@ -15,9 +15,55 @@ vendor-specific exception tuples.
 
 from __future__ import annotations
 
+import pickle
 from typing import Any, ClassVar
 
 from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+
+
+class _SanitizedCause(Exception):
+    """Picklable stand-in for a ``cause`` that cannot survive an unpickle.
+
+    Some third-party exceptions (notably openai's ``APIStatusError``) pickle
+    (``dumps``) fine but fail to ``loads`` because their ``__init__`` demands
+    keyword-only args the pickle machinery never supplies. When a
+    ``MetaGPTError`` carrying such a cause is routed through loguru's
+    ``enqueue=True`` queue (which pickles every record), the consumer side
+    crashes on load. We swap the offending cause for this repr-only placeholder
+    *only during pickling*; the in-process error keeps its real cause.
+    """
+
+    def __init__(self, original_repr: str = "") -> None:
+        self.original_repr = original_repr
+        super().__init__(original_repr)
+
+    def __repr__(self) -> str:
+        return self.original_repr or "_SanitizedCause()"
+
+
+def _is_picklable(obj: Any) -> bool:
+    """True if ``obj`` survives a full pickle round-trip (dumps *and* loads)."""
+    try:
+        pickle.loads(pickle.dumps(obj))
+        return True
+    except Exception:
+        return False
+
+
+def _rebuild_metagpt_error(cls: type, args: tuple, state: dict) -> "MetaGPTError":
+    """Reconstruct a pickled ``MetaGPTError`` without re-running ``__init__``.
+
+    Subclass ``__init__`` signatures vary (e.g. ``LLMError`` wants keyword-only
+    ``status_code``), so we bypass them: build a bare instance, restore ``args``
+    and ``__dict__``, then re-link ``__cause__`` (a C-slot that pickle drops).
+    """
+    obj = cls.__new__(cls)
+    obj.args = args
+    obj.__dict__.update(state)
+    cause = state.get("cause")
+    if cause is not None:
+        obj.__cause__ = cause
+    return obj
 
 
 class MetaGPTError(Exception):
@@ -73,6 +119,21 @@ class MetaGPTError(Exception):
 
     def __str__(self) -> str:
         return self.message or type(self).__name__
+
+    def __reduce__(self):
+        """Make the error picklable across processes (loguru ``enqueue=True``).
+
+        Default exception pickling stores ``__dict__`` verbatim, so a
+        non-loadable ``cause`` (e.g. openai ``APIStatusError``) breaks the
+        consumer-side ``loads``. We copy the state and replace such a cause with
+        a repr-only :class:`_SanitizedCause`. In-process behavior (traceback,
+        ``to_dict``) is untouched — ``__reduce__`` only runs when pickling.
+        """
+        state = dict(self.__dict__)
+        cause = state.get("cause")
+        if cause is not None and not _is_picklable(cause):
+            state["cause"] = _SanitizedCause(repr(cause))
+        return (_rebuild_metagpt_error, (type(self), self.args, state))
 
 
 class RetryableError(MetaGPTError):

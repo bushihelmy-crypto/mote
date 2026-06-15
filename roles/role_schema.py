@@ -78,10 +78,11 @@ class RoleSchema(BaseModel):
     skills: list[str] = []
 
     # --- Permissions ---
-    # Opt-in tool-approval policy. When None (default), tools run with no
-    # approval layer (legacy behavior). Set a PermissionConfig to engage the
-    # PermissionEngine (allow/deny/ask rules + mode).
-    permissions: Optional[PermissionConfig] = None
+    # Tool-approval policy. The default engages the PermissionEngine in
+    # ``default`` mode, so every tool call with no matching allow rule prompts
+    # the user for confirmation. Set ``mode="bypass"`` (or specific allow rules)
+    # to loosen this, or build a custom PermissionConfig for finer control.
+    permissions: Optional[PermissionConfig] = Field(default_factory=PermissionConfig)
 
     # --- Hooks ---
     # Opt-in agent-lifecycle hooks (command handlers). When None (default) and

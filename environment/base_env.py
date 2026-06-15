@@ -31,6 +31,7 @@ from metagpt.common.schema import Message
 from metagpt.common.schema.env import BaseEnvAction, BaseEnvironment, BaseEnvObsParams
 from metagpt.environment.control import AgentControl
 from metagpt.common.exception import AgentLimitReached, AgentNotFound
+from metagpt.environment.mailbox import DeliveryMode
 from metagpt.environment.registry import AgentMetadata
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.environment.store import ResidencyStore
@@ -117,8 +118,6 @@ class AgentEnvironment(BaseEnvironment):
             except AgentLimitReached:
                 # No execution slot right now: queue it so it lands at the next
                 # turn boundary instead of dropping it.
-                from metagpt.environment.mailbox import DeliveryMode
-
                 self._control.send_input(session_id, message, mode=DeliveryMode.QUEUE_ONLY)
             except AgentNotFound:
                 logger.warning(f"AgentEnvironment: recipient {session_id} not found; dropping message")

@@ -452,22 +452,24 @@ class TestGetMemories:
 
 
 # =============================================================================
-# shell_tool resolution (Bash always -> terminal)
+# shell_tool resolution (Bash and Terminal are distinct; dedup only)
 # =============================================================================
 class TestResolveShellTools:
-    def test_terminal_replaces_bash(self):
-        assert _resolve_shell_tools(["Bash"]) == ["Terminal"]
+    def test_bash_kept_as_is(self):
+        assert _resolve_shell_tools(["Bash"]) == ["Bash"]
 
-    def test_non_bash_tools_untouched(self):
+    def test_bash_and_terminal_coexist(self):
+        assert _resolve_shell_tools(["Bash", "Terminal"]) == ["Bash", "Terminal"]
+
+    def test_non_shell_tools_untouched(self):
         assert _resolve_shell_tools(["Read", "Write"]) == ["Read", "Write"]
 
-    def test_explicit_terminal_tool_preserved_and_deduped(self):
-        # Bash + explicitly listed Terminal -> no duplicate Terminal.
-        assert _resolve_shell_tools(["Terminal", "Bash"]) == ["Terminal"]
+    def test_duplicates_removed(self):
+        assert _resolve_shell_tools(["Terminal", "Bash", "Terminal"]) == ["Terminal", "Bash"]
 
     def test_order_preserved(self):
         assert _resolve_shell_tools(["Read", "Bash", "Write"]) == [
             "Read",
-            "Terminal",
+            "Bash",
             "Write",
         ]

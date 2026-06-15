@@ -8,6 +8,8 @@ from metagpt.common.const import TOOL_CALL_ID, TOOL_CALLS
 from metagpt.common.logs import logger
 from metagpt.common.schema import AIMessage, CauseBy, UserMessage
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
+from metagpt.common.prompt.output import NATIVE_COMMAND_GUIDE
+from metagpt.parser.xml_channel import XmlCommandChannel
 
 if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine
@@ -22,6 +24,9 @@ class NativeToolChannel(CommandChannel):
 
     def output_format(self) -> str:
         return ""
+
+    def command_guide(self) -> str:
+        return NATIVE_COMMAND_GUIDE
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return executor.get_native_tool_specs(provider=self._provider)
@@ -70,7 +75,13 @@ class NativeToolChannel(CommandChannel):
         ]
         return json.dumps(calls, sort_keys=True, ensure_ascii=False)
 
-    def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
+    async def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
+        # Join before reading so we observe *this* round's result. The loop calls
+        # is_terminal right after launching the think task; without the join we
+        # would read the previous round's completed result and lag one round
+        # (issuing a wasted extra think and double-recording the final turn).
+        if not think_engine.done:
+            await think_engine.join()
         return think_engine.result.tool_calls == []
 
 
@@ -98,8 +109,6 @@ def make_command_channel(protocol: str, *, provider: str = "openai") -> CommandC
     fall back to XML (the safe, model-agnostic default). ``provider`` is the
     native tool-spec envelope; pass the value from infer_native_tool_provider().
     """
-    from metagpt.parser.xml_channel import XmlCommandChannel
-
     if protocol == "native":
         return NativeToolChannel(provider=provider)
     return XmlCommandChannel()

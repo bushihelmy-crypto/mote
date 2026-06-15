@@ -63,6 +63,11 @@ class AgentRuntime:
         self.agent_path = agent_path
         self.status: AgentStatus = AgentStatus.IDLE
         self.active_turn: bool = False
+        # The exception from the most recent turn that ERRORED (cleared at the
+        # start of each turn). The scheduler swallows turn exceptions to keep
+        # driving, so this is the only place a consumer (e.g. the REPL) can read
+        # back *why* a turn failed and surface it instead of a blank reply.
+        self.last_error: Optional[BaseException] = None
         self.wake_event = asyncio.Event()
         self._lock = asyncio.Lock()
         # The scheduler's driver task for this runtime (set by EventDrivenScheduler).
@@ -100,6 +105,7 @@ class AgentRuntime:
         async with self._lock:
             self.active_turn = True
             self.status = AgentStatus.RUNNING
+            self.last_error = None
             try:
                 if with_message is not None:
                     rsp = await self.role.run(with_message)
@@ -110,8 +116,9 @@ class AgentRuntime:
             except asyncio.CancelledError:
                 self.status = AgentStatus.INTERRUPTED
                 raise
-            except Exception:  # noqa: BLE001 — record + surface failure as status
+            except Exception as exc:  # noqa: BLE001 — record + surface failure as status
                 self.status = AgentStatus.ERRORED
+                self.last_error = exc
                 raise
             finally:
                 self.active_turn = False

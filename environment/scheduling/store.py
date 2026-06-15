@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.logs import log_class
 from metagpt.environment.scheduling.task import CronTask
 
@@ -32,8 +33,6 @@ SCHEDULES_FILENAME = "scheduled_tasks.json"
 
 
 def _default_base_dir() -> Path:
-    from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-
     return Path(DEFAULT_WORKSPACE_ROOT) / SCHEDULES_DIRNAME
 
 

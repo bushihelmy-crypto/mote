@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable, Optional
 
 from metagpt.common.base import BaseLoop, LoopContext
+from metagpt.common.const.message import MESSAGE_ROUTE_TO_ALL
 from metagpt.common.logs import log_class
 from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.common.prompt.output import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
@@ -105,7 +106,11 @@ class ReActLoop(BaseLoop):
         old_messages = [] if not ctx.enable_memory else self._memory.get()
         filtered = [
             n for n in news_raw
-            if (n.cause_by in ctx.watch or ctx.name in n.send_to)
+            if (
+                n.cause_by in ctx.watch
+                or ctx.name in n.send_to
+                or MESSAGE_ROUTE_TO_ALL in n.send_to
+            )
             and n not in old_messages
         ]
 
@@ -249,7 +254,7 @@ class ReActLoop(BaseLoop):
             # returns a plain text reply. On a terminal native turn there are no
             # commands to run, so skip act — instead capture the final text as
             # the response and stop.
-            if self._channel.is_terminal(self._think_engine):
+            if await self._channel.is_terminal(self._think_engine):
                 rsp = await self._finish()
                 break
             # act

@@ -20,14 +20,13 @@ from metagpt.common.config.sources import ConfigSource, discover_source_files
 
 
 def test_metagpt_config_yaml_is_the_top_project_layer():
-    """The user file metagpt/config.yaml must load and sit above legacy config2.yaml."""
+    """The user file metagpt/config.yaml is the sole trusted PROJECT layer."""
     files = discover_source_files()
     project_files = [f for f in files if f.source is ConfigSource.PROJECT]
     names = [f.path.name for f in project_files]
     assert "config.yaml" in names
-    # config.yaml comes after (overrides) the legacy config2.yaml within PROJECT
-    if "config2.yaml" in names:
-        assert names.index("config.yaml") > names.index("config2.yaml")
+    # The legacy config/config2.yaml is no longer wired into PROJECT.
+    assert "config2.yaml" not in names
 
 
 def test_load_config_builds_typed_config():

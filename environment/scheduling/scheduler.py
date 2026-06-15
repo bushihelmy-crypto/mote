@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from typing import Callable, Dict, List, Optional
 
 from metagpt.common.logs import log_class
@@ -46,8 +47,6 @@ from metagpt.environment.scheduling.task import (
 
 
 def _default_clock() -> float:
-    import time
-
     return time.time() * 1000.0
 
 

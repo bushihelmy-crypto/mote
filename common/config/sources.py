@@ -40,7 +40,7 @@ class ConfigSource(IntEnum):
     DEFAULT = 0  # pydantic field defaults (no file)
     SYSTEM = 10  # /etc/agentframe/config.yaml (+ config.d/*.yaml) — managed
     USER = 20  # ~/.agentframe/config.yaml (BC: ~/.metagpt/config2.yaml)
-    PROJECT = 30  # trusted repo/installation config (config/config2.yaml, metagpt/config.yaml)
+    PROJECT = 30  # trusted repo/installation config (metagpt/config.yaml)
     WORKDIR = 35  # <cwd>/.agentframe/config.yaml — UNTRUSTED, credentials stripped
     PROFILE = 40  # ~/.agentframe/<name>.config.yaml — named overlay, trusted
     ENV = 50  # AGENTFRAME_*/METAGPT_* environment variables
@@ -79,11 +79,10 @@ def profile_path(profile: str) -> Path:
 def discover_source_files(cwd: Optional[Path] = None, *, profile: Optional[str] = None) -> List[SourceFile]:
     """Resolve every config file that exists, in ascending precedence order.
 
-    A single source may map to multiple files (e.g. PROJECT = the legacy main
-    ``config/config2.yaml`` plus the user's ``metagpt/config.yaml``); they are
+    A single source may map to multiple files (e.g. USER = the legacy
+    ``~/.metagpt/config2.yaml`` plus ``~/.agentframe/config.yaml``); they are
     listed low->high so a later file overrides an earlier one within the same
-    source band. The user's ``metagpt/config.yaml`` therefore wins over the
-    legacy file but stays in the trusted PROJECT band.
+    source band. The trusted PROJECT band is the user's ``metagpt/config.yaml``.
 
     When ``profile`` is given, ``~/.agentframe/<profile>.config.yaml`` is added
     as a trusted PROFILE layer (above WORKDIR, below ENV) — a named overlay
@@ -104,8 +103,8 @@ def discover_source_files(cwd: Optional[Path] = None, *, profile: Optional[str] 
     for p in _existing([CONFIG_ROOT / LEGACY_CONFIG_FILE_NAME, _USER_CONFIG_DIR / CONFIG_FILE_NAME]):
         files.append(SourceFile(ConfigSource.USER, p))
 
-    # PROJECT (trusted): legacy main config then the user's metagpt/config.yaml.
-    for p in _existing([METAGPT_ROOT / "config" / LEGACY_CONFIG_FILE_NAME, SOURCE_ROOT / CONFIG_FILE_NAME]):
+    # PROJECT (trusted): the user's metagpt/config.yaml.
+    for p in _existing([SOURCE_ROOT / CONFIG_FILE_NAME]):
         files.append(SourceFile(ConfigSource.PROJECT, p))
 
     # WORKDIR (untrusted): <cwd>/.agentframe/config.yaml.

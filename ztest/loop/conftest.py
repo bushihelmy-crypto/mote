@@ -96,7 +96,7 @@ class FakeChannel:
     def record_turn(self, memory, content, executed) -> None:
         self.recorded_turns.append((content, list(executed)))
 
-    def is_terminal(self, think_engine) -> bool:
+    async def is_terminal(self, think_engine) -> bool:
         return self.terminal
 
 

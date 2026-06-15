@@ -14,7 +14,7 @@ import pytest
 
 from metagpt.common.base import CommandChannel
 from metagpt.common.const import IMAGES, PDFS
-from metagpt.common.prompt.output import OUTPUT_SECTION
+from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
@@ -32,6 +32,11 @@ class TestContract:
 
     def test_output_format_is_output_section(self):
         assert XmlCommandChannel().output_format() == OUTPUT_SECTION
+
+    def test_command_guide_is_xml_guide_with_end_marker(self):
+        guide = XmlCommandChannel().command_guide()
+        assert guide == XML_COMMAND_GUIDE
+        assert "<end></end>" in guide
 
     def test_tool_specs_is_none(self):
         # Text channel passes no native specs to the LLM.
@@ -167,10 +172,11 @@ class TestRecordTurnMedia:
 
 
 class TestTerminalDefault:
-    def test_is_terminal_default_false(self):
+    @pytest.mark.asyncio
+    async def test_is_terminal_default_false(self):
         # XML signals "done" via an End command (handled by the loop), so the
         # channel itself never reports a terminal turn.
-        assert XmlCommandChannel().is_terminal(FakeThinkEngine(content="x")) is False
+        assert await XmlCommandChannel().is_terminal(FakeThinkEngine(content="x")) is False
 
     def test_turn_signature_is_response_text(self):
         engine = FakeThinkEngine(content="the response")

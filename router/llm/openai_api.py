@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Optional, Union
 
 from json_repair import repair_json
@@ -17,6 +18,12 @@ from openai import AsyncStream
 from openai._base_client import AsyncHttpxClientWrapper
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+    Function,
+)
 from tenacity import (
     after_log,
     retry,
@@ -186,6 +193,82 @@ class OpenAILLM(BaseLLM):
 
         self._update_costs(usage)
         return full_reply_content
+
+    async def _achat_completion_stream_tool(
+        self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, raise_if_empty: bool = True, **chat_configs
+    ) -> ChatCompletion:
+        """Streaming native tool-use completion: stream text, rebuild the response.
+
+        OpenAI streams the assistant text in ``delta.content`` and the tool calls
+        as ``delta.tool_calls`` fragments keyed by ``index`` (id + name arrive once,
+        the JSON ``arguments`` stream in pieces). We mirror the text to
+        ``log_llm_stream`` for the live console while accumulating the fragments,
+        then reassemble a ``ChatCompletion`` so ``get_choice_text`` /
+        ``get_choice_tool_calls`` parse it exactly like the blocking path.
+        """
+        content_parts: list[str] = []
+        # index -> {"id", "name", "args"}; ``order`` preserves first-seen ordering.
+        tool_state: dict[int, dict] = {}
+        order: list[int] = []
+        finish_reason = None
+        usage = None
+        try:
+            response: AsyncStream[ChatCompletionChunk] = await self.aclient.chat.completions.create(
+                **self._cons_kwargs(messages, timeout=self.get_timeout(timeout), **chat_configs), stream=True
+            )
+            async for chunk in response:
+                if not chunk.choices:
+                    # A usage-only trailer chunk (when stream_options.include_usage is on).
+                    if getattr(chunk, "usage", None):
+                        usage = chunk.usage
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                if delta and delta.content:
+                    log_llm_stream(delta.content)
+                    content_parts.append(delta.content)
+                for tc in (delta.tool_calls or []) if delta else []:
+                    slot = tool_state.get(tc.index)
+                    if slot is None:
+                        slot = {"id": "", "name": "", "args": ""}
+                        tool_state[tc.index] = slot
+                        order.append(tc.index)
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name:
+                            slot["name"] = tc.function.name
+                        if tc.function.arguments:
+                            slot["args"] += tc.function.arguments
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                    if getattr(chunk, "usage", None):
+                        usage = CompletionUsage(**chunk.usage) if isinstance(chunk.usage, dict) else chunk.usage
+                    elif hasattr(choice, "usage") and choice.usage:
+                        usage = CompletionUsage(**choice.usage)
+        except Exception as e:
+            raise classify_llm_error(e) or e
+
+        log_llm_stream("\n")
+        full_text = "".join(content_parts)
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id=tool_state[i]["id"] or f"call_{i}",
+                type="function",
+                function=Function(name=tool_state[i]["name"], arguments=tool_state[i]["args"]),
+            )
+            for i in order
+        ]
+        if raise_if_empty and not full_text and not tool_calls:
+            raise LLMEmptyResponseError("The LLM's response is empty.")
+        if not usage:
+            usage = self._calc_usage(messages, full_text)
+        self._update_costs(usage)
+        message = ChatCompletionMessage(role="assistant", content=full_text or None, tool_calls=tool_calls or None)
+        rsp_choice = Choice(index=0, finish_reason=finish_reason or "stop", message=message)
+        return ChatCompletion(
+            id="stream", choices=[rsp_choice], created=int(time.time()), model=self.model, object="chat.completion"
+        )
 
     def _cons_kwargs(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **extra_kwargs) -> dict:
         kwargs = {

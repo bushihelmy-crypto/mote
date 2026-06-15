@@ -362,10 +362,10 @@ run_command(name, args)
 | `sleep` | `wait_interruptible`，活动时提前唤醒 |
 | `end` | 结束 session |
 
-> 在 executor-build 时把声明的 `"Bash"` 一律映射成持久 `terminal`
-> （`role.py` `_resolve_shell_tools`）。
+> `Bash`（一次性）与 `Terminal`（持久 PTY）是两个独立工具，二者并存；
+> `role.py` `_resolve_shell_tools` 只做去重，不再做映射。
 
-### 权限系统（`executor/permission/`，opt-in）
+### 权限系统（`executor/permission/`）
 
 仅当 `role_schema.permissions` 设了 `PermissionConfig` 才构建 `PermissionEngine`，
 否则 `None`、旧行为。两条正交轴：

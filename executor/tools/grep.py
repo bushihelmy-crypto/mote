@@ -27,6 +27,7 @@ Differences from Claude Code's tool, by design:
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 import re
 import shutil
@@ -409,8 +410,6 @@ class Grep(BaseTool):
     @staticmethod
     def _file_matches_filters(file_path, root, globs, type_exts) -> bool:
         """Apply glob and --type filters to a single file path."""
-        import fnmatch
-
         if type_exts and not file_path.endswith(type_exts):
             return False
         if globs:

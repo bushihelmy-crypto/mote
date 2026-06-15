@@ -7,7 +7,7 @@ from metagpt.common.logs import logger
 from metagpt.common.schema import AIMessage, CauseBy, UserMessage
 from metagpt.common.utils.role_zero_utils import parse_commands2
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
-from metagpt.common.prompt.output import OUTPUT_SECTION
+from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE
 
 if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine
@@ -19,6 +19,9 @@ class XmlCommandChannel(CommandChannel):
 
     def output_format(self) -> str:
         return OUTPUT_SECTION
+
+    def command_guide(self) -> str:
+        return XML_COMMAND_GUIDE
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return None

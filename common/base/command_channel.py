@@ -20,6 +20,16 @@ class CommandChannel(ABC):
     def output_format(self) -> str:
         """System-prompt OUTPUT section text for this protocol ("" if none)."""
 
+    def command_guide(self) -> str:
+        """System-prompt "# Using commands" section text for this protocol.
+
+        Protocol-specific command-usage instructions (the ${command_guide}
+        section). XML supplies the <end></end> / command-tag mechanics; native
+        supplies tool-call mechanics. Default "" => no section, so the static
+        prompt never hard-codes one protocol's mechanics for the other.
+        """
+        return ""
+
     @abstractmethod
     def tool_specs(self, executor) -> Optional[list[dict]]:
         """Native tool specs to pass to the LLM, or None for the text channel."""
@@ -62,8 +72,13 @@ class CommandChannel(ABC):
         """
         return think_engine.result.content or ""
 
-    def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
+    async def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
         """Whether the react loop should stop after this think round.
+
+        Async because a channel may need to await the think task to finish
+        before it can read its result (see NativeToolChannel) -- the loop checks
+        this right after launching the think, so the result must be joined first
+        to avoid reading the *previous* round's output.
 
         Each protocol signals "done" differently:
           - XML: the model emits an ``End`` command, which deactivates the Role;
