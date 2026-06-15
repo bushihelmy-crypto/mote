@@ -23,19 +23,22 @@ def _msg(content="m", *, cause_by="", send_to=None) -> Message:
     return UserMessage(content, **kwargs)
 
 
-def test_observe_no_buffer_returns_zero(make_loop):
+@pytest.mark.asyncio
+async def test_observe_no_buffer_returns_zero(make_loop):
     b = make_loop(msg_buffer=None)
     b.loop._ctx = b.ctx
-    assert b.loop._observe() == 0
+    assert await b.loop._observe() == 0
 
 
-def test_observe_empty_buffer_returns_zero(make_loop):
+@pytest.mark.asyncio
+async def test_observe_empty_buffer_returns_zero(make_loop):
     b = make_loop()
     b.loop._ctx = b.ctx
-    assert b.loop._observe() == 0
+    assert await b.loop._observe() == 0
 
 
-def test_observe_keeps_watched_cause_by(make_loop):
+@pytest.mark.asyncio
+async def test_observe_keeps_watched_cause_by(make_loop):
     # watch set matches the message's cause_by -> kept even if not addressed.
     b = make_loop(watch={CauseBy.RUN_COMMAND.value}, name="Alice")
     b.loop._ctx = b.ctx
@@ -44,45 +47,49 @@ def test_observe_keeps_watched_cause_by(make_loop):
     b.buffer.push(kept)
     b.buffer.push(dropped)
 
-    assert b.loop._observe() == 1
+    assert await b.loop._observe() == 1
     assert b.loop.latest_observed_msg is kept
 
 
-def test_observe_keeps_addressed_to_name(make_loop):
+@pytest.mark.asyncio
+async def test_observe_keeps_addressed_to_name(make_loop):
     # Not watched, but addressed to ctx.name -> kept.
     b = make_loop(watch=set(), name="Alice")
     b.loop._ctx = b.ctx
     addressed = _msg("for-alice", cause_by=CauseBy.ACTION, send_to={"Alice"})
     b.buffer.push(addressed)
 
-    assert b.loop._observe() == 1
+    assert await b.loop._observe() == 1
     assert b.loop.latest_observed_msg is addressed
 
 
-def test_observe_dedup_against_stored_history(make_loop):
+@pytest.mark.asyncio
+async def test_observe_dedup_against_stored_history(make_loop):
     # Same object already in memory -> filtered out (enable_memory=True).
     b = make_loop(watch=set(), name="Alice", enable_memory=True)
     b.loop._ctx = b.ctx
     seen = _msg("dup", send_to={"Alice"})
-    b.memory.add(seen)
+    await b.memory.add(seen)
     b.buffer.push(seen)
 
-    assert b.loop._observe() == 0
+    assert await b.loop._observe() == 0
     assert b.loop.latest_observed_msg is None
 
 
-def test_observe_no_dedup_when_memory_disabled(make_loop):
+@pytest.mark.asyncio
+async def test_observe_no_dedup_when_memory_disabled(make_loop):
     # enable_memory=False -> old_messages is [] so the dup is NOT filtered.
     b = make_loop(watch=set(), name="Alice", enable_memory=False)
     b.loop._ctx = b.ctx
     seen = _msg("dup", send_to={"Alice"})
-    b.memory.add(seen)
+    await b.memory.add(seen)
     b.buffer.push(seen)
 
-    assert b.loop._observe() == 1
+    assert await b.loop._observe() == 1
 
 
-def test_observe_all_commits_every_news(make_loop):
+@pytest.mark.asyncio
+async def test_observe_all_commits_every_news(make_loop):
     # observe_all=True -> add_batch receives ALL popped messages, not just filtered.
     b = make_loop(watch=set(), name="Alice", observe_all=True)
     b.loop._ctx = b.ctx
@@ -91,12 +98,13 @@ def test_observe_all_commits_every_news(make_loop):
     b.buffer.push(kept)
     b.buffer.push(other)
 
-    news = b.loop._observe()
+    news = await b.loop._observe()
     assert news == 1  # return value is the filtered count
     assert b.memory.add_batch_calls[-1] == [kept, other]  # but ALL were committed
 
 
-def test_observe_filtered_only_when_not_observe_all(make_loop):
+@pytest.mark.asyncio
+async def test_observe_filtered_only_when_not_observe_all(make_loop):
     b = make_loop(watch=set(), name="Alice", observe_all=False)
     b.loop._ctx = b.ctx
     kept = _msg("kept", send_to={"Alice"})
@@ -104,26 +112,28 @@ def test_observe_filtered_only_when_not_observe_all(make_loop):
     b.buffer.push(kept)
     b.buffer.push(other)
 
-    assert b.loop._observe() == 1
+    assert await b.loop._observe() == 1
     assert b.memory.add_batch_calls[-1] == [kept]
 
 
-def test_observe_latest_is_none_when_nothing_passes(make_loop):
+@pytest.mark.asyncio
+async def test_observe_latest_is_none_when_nothing_passes(make_loop):
     b = make_loop(watch=set(), name="Alice", observe_all=True)
     b.loop._ctx = b.ctx
     b.buffer.push(_msg("other", send_to={"Bob"}))
 
-    assert b.loop._observe() == 0
+    assert await b.loop._observe() == 0
     assert b.loop.latest_observed_msg is None
 
 
-def test_observe_respects_max_priority(make_loop):
+@pytest.mark.asyncio
+async def test_observe_respects_max_priority(make_loop):
     # A LATER-priority message is invisible when only NEXT is requested.
     b = make_loop(watch=set(), name="Alice")
     b.loop._ctx = b.ctx
     later = _msg("later", send_to={"Alice"})
     b.buffer.push(later, priority=MessagePriority.LATER)
 
-    assert b.loop._observe(max_priority=MessagePriority.NEXT) == 0
+    assert await b.loop._observe(max_priority=MessagePriority.NEXT) == 0
     # Pops once the bar is raised to LATER.
-    assert b.loop._observe(max_priority=MessagePriority.LATER) == 1
+    assert await b.loop._observe(max_priority=MessagePriority.LATER) == 1

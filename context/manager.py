@@ -33,6 +33,12 @@ the other way around.
 from __future__ import annotations
 
 from metagpt.common.schema import AutocompactResult, ContextManagerConfig, MicrocompactResult
+from metagpt.common.events import (
+    CompactionCheckpointEvent,
+    MessageAppendedEvent,
+    PreCompactEvent,
+    PostCompactEvent,
+)
 from metagpt.context import token_budget
 from metagpt.context.autocompact import autocompact
 from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
@@ -69,21 +75,18 @@ class ContextManager:
         llm=None,
         config: ContextManagerConfig | None = None,
         model: str | None = None,
-        recorder=None,
-        hook_manager=None,
+        bus=None,
     ):
         self._context = context if context is not None else LLMCallContext()
         self._llm = llm
         self.config = config or ContextManagerConfig()
         self._model = model
-        # Optional durable-log sink (``common.interface.SessionRecorder``). When
-        # set, appended messages and compaction checkpoints are streamed to the
-        # session rollout. Injected by Role; None in standalone/test use.
-        self._recorder = recorder
-        # Optional hook runner (``common.interface.HookRunner``). When set,
-        # PreCompact / PostCompact fire around an autocompact. Injected by Role;
-        # None => no hook layer (legacy behavior).
-        self._hook_manager = hook_manager
+        # Optional event bus (``common.events.EventBus``). When set, appended
+        # messages emit MessageAppendedEvent and a compaction emits
+        # PreCompact/CompactionCheckpoint/PostCompact events; subscribers persist
+        # to the session rollout and run hooks. Injected by Role; None in
+        # standalone/test use => no events emitted.
+        self._bus = bus
         # Circuit-breaker counter threaded across autocompact attempts.
         self._consecutive_failures = 0
 
@@ -110,18 +113,23 @@ class ContextManager:
             return list(self._context.messages)
         return self._context.messages[-k:]
 
-    def add(self, message: Message) -> None:
-        """Append one message to the stored history (old ``Memory.add``)."""
+    async def add(self, message: Message) -> None:
+        """Append one message to the stored history (old ``Memory.add``).
+
+        Emits ``MessageAppendedEvent`` so the recorder subscriber persists it and
+        any other subscriber (renderer, etc.) sees the same stream. No-op emit
+        when no bus is wired (standalone/test use).
+        """
         if message is None:
             return
         self._context.messages.append(message)
-        if self._recorder is not None:
-            self._recorder.record_message(message)
+        if self._bus is not None:
+            await self._bus.emit(MessageAppendedEvent(message=message))
 
-    def add_batch(self, messages) -> None:
+    async def add_batch(self, messages) -> None:
         """Append several messages, skipping falsy entries (old ``add_batch``)."""
         for m in messages:
-            self.add(m)
+            await self.add(m)
 
     def delete(self, message: Message) -> None:
         """Remove a message if present (old ``Memory.delete``; used on recovery).
@@ -166,11 +174,11 @@ class ContextManager:
         changed = False
         model = self.model
 
-        # PreCompact hook: a chance to veto the whole management pass (stop) or
-        # to supply/override the autocompact custom_instructions (via the hook's
-        # additional_context). Fires only when a hook layer is wired.
-        if self._hook_manager is not None:
-            pre = await self._hook_manager.fire("PreCompact", {"trigger": "auto"})
+        # PreCompact event: a chance to veto the whole management pass (stop) or
+        # to supply/override the autocompact custom_instructions (via the folded
+        # outcome's additional_context). Emits only when a bus is wired.
+        if self._bus is not None:
+            pre = await self._bus.emit(PreCompactEvent(trigger="auto"))
             if pre.stop:
                 return False
             if pre.additional_context:
@@ -206,16 +214,19 @@ class ContextManager:
             # backing context so the rebuilt history is what gets checkpointed.
             self._context.messages[:] = result.messages
             changed = True
-            # Persist the rebuilt history as a replay checkpoint (Codex style):
-            # resume starts from the latest compaction rather than replaying all.
-            if self._recorder is not None:
-                self._recorder.record_compaction(result.messages, result.summary or "")
-            # PostCompact hook: notify that a compaction just happened (carries
-            # the summary). Best-effort; folded outcome is currently advisory.
-            if self._hook_manager is not None:
-                await self._hook_manager.fire(
-                    "PostCompact",
-                    {"trigger": "auto", "compact_summary": result.summary or ""},
+            if self._bus is not None:
+                # CompactionCheckpointEvent: the recorder persists the rebuilt
+                # history as a replay checkpoint (Codex style) so resume starts
+                # from the latest compaction rather than replaying everything.
+                await self._bus.emit(
+                    CompactionCheckpointEvent(
+                        messages=list(result.messages), summary=result.summary or ""
+                    )
+                )
+                # PostCompact event: notify that a compaction just happened
+                # (carries the summary). Best-effort; outcome is advisory.
+                await self._bus.emit(
+                    PostCompactEvent(trigger="auto", summary=result.summary or "")
                 )
 
         return changed

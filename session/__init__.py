@@ -6,8 +6,9 @@ resume/list. Core pieces:
 
 * :mod:`events` — the tagged-union event schema + line (de)serialization.
 * :class:`SessionLog` — append-only JSONL writer/reader keyed by session_id.
-* :class:`SessionRecorder` — the sink injected into ``ContextManager`` (conforms
-  to ``metagpt.common.interface.SessionRecorder``).
+* :class:`RecorderSubscriber` — the event-bus subscriber that streams the
+  agent's lifecycle events to a :class:`SessionLog` (replaces the old
+  ``SessionRecorder`` sink injected into ``ContextManager``).
 """
 
 from metagpt.session.events import (
@@ -27,13 +28,13 @@ from metagpt.session.history import (
 )
 from metagpt.session.listing import SessionInfo, list_sessions
 from metagpt.session.log import SessionLog
-from metagpt.session.recorder import SessionRecorder
 from metagpt.session.replay import ReplayResult, replay
 from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
+from metagpt.session.subscribers import RecorderSubscriber
 
 __all__ = [
     "SessionLog",
-    "SessionRecorder",
+    "RecorderSubscriber",
     "SessionMetaEvent",
     "MessageEvent",
     "CompactedEvent",

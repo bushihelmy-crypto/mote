@@ -47,3 +47,47 @@ def test_nested_oauth_parses_from_dict():
     )
     assert cfg.oauth.client_id == "cid"
     assert cfg.oauth.scopes == ["s1"]
+
+
+# --- brand provider preset (#3) ------------------------------------------
+
+
+def test_provider_preset_resolves_base_url_api_type_and_env_key(monkeypatch):
+    from metagpt.common.config.config.llm_config import LLMType
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-real")
+    cfg = LLMConfig(provider="deepseek")
+    assert cfg.base_url == "https://api.deepseek.com/v1"
+    assert cfg.api_type == LLMType.DEEPSEEK
+    assert cfg.api_key == "sk-deepseek-real"
+
+
+def test_provider_preset_user_values_win(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env")
+    cfg = LLMConfig(provider="deepseek", base_url="https://custom/v1", api_key="sk-mine")
+    assert cfg.base_url == "https://custom/v1"
+    assert cfg.api_key == "sk-mine"
+
+
+def test_provider_anthropic_selects_native_wire():
+    from metagpt.common.config.config.llm_config import LLMType
+
+    cfg = LLMConfig(provider="anthropic", api_key="sk-ant")
+    assert cfg.api_type == LLMType.ANTHROPIC
+
+
+def test_provider_without_env_key_falls_back_to_default(monkeypatch):
+    # No env key set: api_key stays the default placeholder ("sk-"), which the
+    # legacy auth check still accepts, so construction succeeds (back-compat).
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    cfg = LLMConfig(provider="groq")
+    assert cfg.base_url == "https://api.groq.com/openai/v1"
+
+
+def test_no_provider_back_compat_unchanged():
+    from metagpt.common.config.config.llm_config import LLMType
+
+    cfg = LLMConfig(api_key="sk-x")
+    assert cfg.provider is None
+    assert cfg.base_url == "https://api.openai.com/v1"
+    assert cfg.api_type == LLMType.OPENAI

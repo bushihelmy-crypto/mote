@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from metagpt.common.config.config.oauth_config import GrantType, OAuthProviderConfig
 from metagpt.router.oauth.manager import OAuthManager
 from metagpt.router.oauth.models import OAuthToken
@@ -127,3 +129,46 @@ def test_refresh_grant_without_token_errors(tmp_path):
         assert False, "expected OAuthConfigError"
     except OAuthConfigError:
         pass
+
+
+# --- interactive login dispatch (#4) -------------------------------------
+
+
+def test_login_dispatches_device_code_and_persists(tmp_path, monkeypatch):
+    import metagpt.router.oauth.flows as flows_mod
+
+    captured = OAuthToken(access_token="logged-in", refresh_token="r-li", expires_at=time.time() + 3600)
+    monkeypatch.setattr(flows_mod, "run_device_code_flow", lambda config, callbacks=None: captured)
+
+    mgr, store = _manager(tmp_path, FakeClient(), grant_type=GrantType.DEVICE_CODE)
+    tok = mgr.login()
+    assert tok.access_token == "logged-in"
+    # persisted + cached
+    assert store.load().access_token == "logged-in"
+    assert mgr.get_valid_token() == "logged-in"
+
+
+def test_login_dispatches_authorization_code(tmp_path, monkeypatch):
+    import metagpt.router.oauth.flows as flows_mod
+
+    token = OAuthToken(access_token="ac-token", expires_at=time.time() + 3600)
+    monkeypatch.setattr(flows_mod, "run_auth_code_flow", lambda config, callbacks=None: token)
+
+    mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.AUTHORIZATION_CODE)
+    assert mgr.login().access_token == "ac-token"
+
+
+def test_login_rejects_headless_grant(tmp_path):
+    from metagpt.router.oauth.errors import OAuthConfigError
+
+    mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.CLIENT_CREDENTIALS)
+    with pytest.raises(OAuthConfigError):
+        mgr.login()
+
+
+def test_interactive_grant_without_token_says_login_first(tmp_path):
+    from metagpt.router.oauth.errors import OAuthConfigError
+
+    mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.DEVICE_CODE)
+    with pytest.raises(OAuthConfigError):
+        mgr.get_valid_token()

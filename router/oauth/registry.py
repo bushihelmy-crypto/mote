@@ -1,13 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Provider preset registry for OAuth-authenticated, OpenAI-compatible providers.
+"""Provider preset registry for OAuth-authenticated providers.
 
 A *preset* fills in the **public, provider-specific endpoint metadata** (issuer,
-token URL, default scopes, extra headers, default grant) so a user only has to
-supply their own ``client_id`` (+ secret / refresh_token). Presets deliberately
-DO NOT include a ``client_id``: the hardcoded client IDs shipped in Codex /
-Claude Code identify *those* CLIs, and reusing them would impersonate them
-against the provider's OAuth server. Bring your own client.
+token URL, authorize/device endpoints, default scopes, extra headers, default
+grant) so a user only has to supply a ``client_id`` (+ secret / refresh_token).
+
+``client_id`` is an ordinary optional config field (default ``None``): presets
+deliberately DO NOT ship one, because the hardcoded client IDs in Codex / Claude
+Code identify *those* CLIs and reusing them would impersonate them. Out-of-box
+login only happens when someone fills the public PKCE ``client_id`` themselves
+(config/env). The requirement is enforced at flow-time, not config-time.
 
 Values are sourced from the public OAuth endpoints used by Codex
 (``codex-rs/login``) and Claude Code (``src/constants/oauth.ts``,
@@ -27,6 +30,7 @@ PROVIDER_PRESETS: Dict[str, dict] = {
     "openai": {
         "issuer": "https://auth.openai.com",
         "token_url": "https://auth.openai.com/oauth/token",
+        "authorize_url": "https://auth.openai.com/oauth/authorize",
         "grant_type": GrantType.REFRESH_TOKEN.value,
         "scopes": ["openid", "profile", "email", "offline_access"],
         "headers_extra": {},
@@ -35,11 +39,23 @@ PROVIDER_PRESETS: Dict[str, dict] = {
     "anthropic": {
         "issuer": "https://platform.claude.com",
         "token_url": "https://platform.claude.com/v1/oauth/token",
+        "authorize_url": "https://claude.ai/oauth/authorize",
         "grant_type": GrantType.REFRESH_TOKEN.value,
         "scopes": ["user:profile", "user:inference"],
         # Claude's OAuth bearer requires this beta opt-in header.
         "headers_extra": {"anthropic-beta": "oauth-2025-04-20"},
         "token_url_env_override": "METAGPT_OAUTH_ANTHROPIC_TOKEN_URL",
+    },
+    # GitHub Copilot logs in via the OAuth 2.0 device flow (RFC 8628): no
+    # loopback redirect, the user enters a code at a verification URL.
+    "github-copilot": {
+        "issuer": "https://github.com",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "device_authorization_url": "https://github.com/login/device/code",
+        "grant_type": GrantType.DEVICE_CODE.value,
+        "scopes": ["read:user"],
+        "headers_extra": {},
+        "token_url_env_override": "METAGPT_OAUTH_GITHUB_COPILOT_TOKEN_URL",
     },
 }
 

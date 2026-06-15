@@ -19,6 +19,7 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "UserMessage": ("messages", "UserMessage"),
     "SystemMessage": ("messages", "SystemMessage"),
     "AIMessage": ("messages", "AIMessage"),
+    "ToolMessage": ("messages", "ToolMessage"),
     "LLMCallContext": ("messages", "LLMCallContext"),
     # serialization
     "BaseSerialization": ("serialization", "BaseSerialization"),

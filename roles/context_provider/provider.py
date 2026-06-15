@@ -188,6 +188,7 @@ class ContextProvider(BaseContextProvider):
             project_root=self._state.project_root,
             output_format=self._channel.output_format(),
             command_guide=self._channel.command_guide(),
+            command_hint=self._channel.command_hint(),
         )
 
     def _think_subsystems(self) -> ThinkSubsystems:

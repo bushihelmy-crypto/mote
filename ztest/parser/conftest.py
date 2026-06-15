@@ -45,7 +45,7 @@ class FakeMemory:
     def __init__(self, messages: Optional[list[Message]] = None):
         self.messages: list[Message] = list(messages or [])
 
-    def add(self, message: Message) -> None:
+    async def add(self, message: Message) -> None:
         self.messages.append(message)
 
     def get(self, k: int = 0) -> list[Message]:
@@ -97,7 +97,16 @@ async def collect(channel, think_engine, valid_names: set[str]) -> list[dict]:
 
 
 class _LLMConfig:
-    """Tiny object mimicking an LLMConfig for ``infer_native_tool_provider``."""
+    """Tiny object mimicking an LLMConfig for ``infer_native_tool_provider``.
 
-    def __init__(self, model):
+    ``infer_native_tool_provider`` resolves the envelope from the transport
+    (``api_type`` / ``base_url``), so the stub carries both; ``model`` is kept
+    for back-compat but no longer affects the result.
+    """
+
+    def __init__(self, model=None, api_type=None, base_url=""):
+        from metagpt.common.config.config.llm_config import LLMType
+
         self.model = model
+        self.api_type = api_type if api_type is not None else LLMType.OPENAI
+        self.base_url = base_url

@@ -23,11 +23,11 @@ class MessageStore(Protocol):
         """Return the most-recent ``k`` messages (``k<=0`` -> all)."""
         ...
 
-    def add(self, message: "Message") -> None:
-        """Append one message to the stored history."""
+    async def add(self, message: "Message") -> None:
+        """Append one message to the stored history (emits MessageAppendedEvent)."""
         ...
 
-    def add_batch(self, messages: list["Message"]) -> None:
+    async def add_batch(self, messages: list["Message"]) -> None:
         """Append several messages, skipping falsy entries."""
         ...
 

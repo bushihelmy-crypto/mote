@@ -47,6 +47,11 @@ class TestContract:
         assert "# Using commands" in guide
         assert "<end>" not in guide
 
+    def test_command_hint_is_empty(self):
+        # Per-turn user-prompt hint must be empty for native: no <end></end>
+        # instruction, no "ONE and ONLY ONE command block" XML framing.
+        assert NativeToolChannel().command_hint() == ""
+
 
 class TestToolSpecs:
     def test_delegates_to_executor_with_provider(self):
@@ -149,13 +154,14 @@ class TestIterCommands:
 
 
 class TestRecordTurn:
-    def test_records_assistant_then_tool_results(self):
+    @pytest.mark.asyncio
+    async def test_records_assistant_then_tool_results(self):
         memory = FakeMemory()
         executed = [
             executed_command(id="a", name="Read", args={"path": "x"}, output="content-x"),
             executed_command(id="b", name="Glob", args={"pattern": "*.py"}, output="content-y"),
         ]
-        NativeToolChannel().record_turn(memory, "I will read and glob", executed)
+        await NativeToolChannel().record_turn(memory, "I will read and glob", executed)
 
         # 1 assistant + 2 tool-result messages, in order.
         assert len(memory.messages) == 3
@@ -171,92 +177,103 @@ class TestRecordTurn:
         assert second_result.content == "content-y"
         assert second_result.metadata[TOOL_CALL_ID] == "b"
 
-    def test_empty_command_rsp_becomes_empty_string(self):
+    @pytest.mark.asyncio
+    async def test_empty_command_rsp_becomes_empty_string(self):
         memory = FakeMemory()
-        NativeToolChannel().record_turn(memory, "", [executed_command(id="a")])
+        await NativeToolChannel().record_turn(memory, "", [executed_command(id="a")])
         assert memory.messages[0].content == ""
 
-    def test_none_command_rsp_becomes_empty_string(self):
+    @pytest.mark.asyncio
+    async def test_none_command_rsp_becomes_empty_string(self):
         memory = FakeMemory()
-        NativeToolChannel().record_turn(memory, None, [executed_command(id="a")])
+        await NativeToolChannel().record_turn(memory, None, [executed_command(id="a")])
         assert memory.messages[0].content == ""
 
-    def test_executed_without_id_skipped_everywhere(self):
+    @pytest.mark.asyncio
+    async def test_executed_without_id_skipped_everywhere(self):
         # Commands lacking an id can't be paired -> excluded from tool_calls and
         # produce no tool-result message.
         memory = FakeMemory()
         executed = [executed_command(id=None, name="ghost", output="ignored")]
-        NativeToolChannel().record_turn(memory, "text", executed)
+        await NativeToolChannel().record_turn(memory, "text", executed)
         assert len(memory.messages) == 1  # only the assistant message
         assert memory.messages[0].metadata[TOOL_CALLS] == []
 
-    def test_mixed_id_and_no_id(self):
+    @pytest.mark.asyncio
+    async def test_mixed_id_and_no_id(self):
         memory = FakeMemory()
         executed = [
             executed_command(id="a", name="Read", output="r"),
             executed_command(id=None, name="ghost", output="x"),
         ]
-        NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel().record_turn(memory, "t", executed)
         # assistant + one tool-result (for the id'd one only).
         assert len(memory.messages) == 2
         assert [c["id"] for c in memory.messages[0].metadata[TOOL_CALLS]] == ["a"]
         assert memory.messages[1].metadata[TOOL_CALL_ID] == "a"
 
-    def test_no_executed_records_only_assistant(self):
+    @pytest.mark.asyncio
+    async def test_no_executed_records_only_assistant(self):
         memory = FakeMemory()
-        NativeToolChannel().record_turn(memory, "just text", [])
+        await NativeToolChannel().record_turn(memory, "just text", [])
         assert len(memory.messages) == 1
         assert memory.messages[0].metadata[TOOL_CALLS] == []
 
-    def test_args_default_to_empty_dict_in_tool_calls(self):
+    @pytest.mark.asyncio
+    async def test_args_default_to_empty_dict_in_tool_calls(self):
         memory = FakeMemory()
         executed = [{"id": "a", "name": "Read", "output": "r"}]  # no args key
-        NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel().record_turn(memory, "t", executed)
         assert memory.messages[0].metadata[TOOL_CALLS][0]["args"] == {}
 
 
 class TestRecordTurnMedia:
-    def test_appends_media_message_with_images(self):
+    @pytest.mark.asyncio
+    async def test_appends_media_message_with_images(self):
         memory = FakeMemory()
         executed = [executed_command(id="a", output="placeholder", images=["IMGDATA"])]
-        NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel().record_turn(memory, "t", executed)
         # assistant + tool-result + media message.
         assert len(memory.messages) == 3
         media = memory.messages[-1]
         assert media.metadata[IMAGES] == ["IMGDATA"]
         assert PDFS not in media.metadata
 
-    def test_appends_media_message_with_pdfs(self):
+    @pytest.mark.asyncio
+    async def test_appends_media_message_with_pdfs(self):
         memory = FakeMemory()
         executed = [executed_command(id="a", output="placeholder", pdfs=["PDFDATA"])]
-        NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel().record_turn(memory, "t", executed)
         media = memory.messages[-1]
         assert media.metadata[PDFS] == ["PDFDATA"]
         assert IMAGES not in media.metadata
 
-    def test_collects_media_across_commands(self):
+    @pytest.mark.asyncio
+    async def test_collects_media_across_commands(self):
         memory = FakeMemory()
         executed = [
             executed_command(id="a", images=["i1"], pdfs=["p1"]),
             executed_command(id="b", images=["i2"]),
         ]
-        NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel().record_turn(memory, "t", executed)
         media = memory.messages[-1]
         assert media.metadata[IMAGES] == ["i1", "i2"]
         assert media.metadata[PDFS] == ["p1"]
 
-    def test_no_media_means_no_extra_message(self):
+    @pytest.mark.asyncio
+    async def test_no_media_means_no_extra_message(self):
         memory = FakeMemory()
-        NativeToolChannel().record_turn(memory, "t", [executed_command(id="a")])
+        await NativeToolChannel().record_turn(memory, "t", [executed_command(id="a")])
         # assistant + tool-result, no media message.
         assert len(memory.messages) == 2
 
-    def test_media_from_idless_command_still_collected(self):
+    @pytest.mark.asyncio
+    async def test_media_from_idless_command_still_collected(self):
         # Media collection is independent of pairing; an id-less command's media
         # is still gathered (the placeholder text was lost but bytes survive).
         memory = FakeMemory()
         executed = [executed_command(id=None, images=["only"])]
-        NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel().record_turn(memory, "t", executed)
         # assistant (no tool-result since no id) + media.
         assert len(memory.messages) == 2
         assert memory.messages[-1].metadata[IMAGES] == ["only"]

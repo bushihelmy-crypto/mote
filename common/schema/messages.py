@@ -224,6 +224,9 @@ class Message(BaseModel):
     def is_ai_message(self) -> bool:
         return self.role == "assistant"
 
+    def is_tool_message(self) -> bool:
+        return self.role == "tool"
+
 
 class UserMessage(Message):
     """Facilitate support for OpenAI messages"""
@@ -242,11 +245,19 @@ class SystemMessage(Message):
 
 
 class AIMessage(Message):
-    """Facilitate support for OpenAI messages"""
+    """Facilitate support for OpenAI messages.
 
-    def __init__(self, content: str, **kwargs):
+    Pass ``tool_calls=[{"id", "name", "args"}, ...]`` to record the tool calls an
+    assistant turn invoked. They are stored under ``metadata[TOOL_CALLS]`` and
+    surfaced as the provider-native ``tool_calls`` envelope by ``to_dict`` even
+    when ``content`` is empty (a tool-call-only turn).
+    """
+
+    def __init__(self, content: str = "", *, tool_calls: Optional[List[dict]] = None, **kwargs):
         kwargs.pop("role", None)
         super().__init__(content=content, role="assistant", **kwargs)
+        if tool_calls is not None:
+            self.metadata[TOOL_CALLS] = tool_calls
 
     def with_agent(self, name: str):
         self.add_metadata(key=AGENT, value=name)
@@ -255,6 +266,23 @@ class AIMessage(Message):
     @property
     def agent(self) -> str:
         return self.metadata.get(AGENT, "")
+
+
+class ToolMessage(Message):
+    """A tool execution result.
+
+    Maps to the OpenAI ``role="tool"`` message (and the Anthropic ``tool_result``
+    content block) via ``to_dict``. ``tool_call_id`` ties the result back to the
+    assistant ``tool_calls`` entry that requested it. Used by the native tool-use
+    channel; the XML channel keeps feeding tool output back as a ``UserMessage``
+    because that protocol has no tool-call id and the model reads it as plain text.
+    """
+
+    def __init__(self, content: str = "", *, tool_call_id: str, **kwargs):
+        kwargs.pop("role", None)
+        kwargs.setdefault("cause_by", CauseBy.RUN_COMMAND)
+        super().__init__(content=content, role="tool", **kwargs)
+        self.metadata[TOOL_CALL_ID] = tool_call_id
 
 
 class LLMCallContext(BaseModel):

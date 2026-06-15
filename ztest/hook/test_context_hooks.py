@@ -10,13 +10,21 @@ from __future__ import annotations
 
 import pytest
 
+from metagpt.common.events import EventBus
 from metagpt.common.hook.manager import HookManager
+from metagpt.common.hook.subscriber import HookSubscriber
 from metagpt.common.schema import AutocompactResult, MicrocompactResult, UserMessage
 from metagpt.context.manager import ContextManager
 
 
 def _fake_micro(messages, config, *, model, compactable):
     return MicrocompactResult(messages=messages, tokens_freed=0)
+
+
+def _bus_with_hooks(mgr: HookManager) -> EventBus:
+    bus = EventBus()
+    bus.subscribe(HookSubscriber(mgr))
+    return bus
 
 
 @pytest.mark.asyncio
@@ -32,8 +40,8 @@ async def test_precompact_overrides_custom_instructions(monkeypatch):
 
     mgr = HookManager()
     mgr.register("PreCompact", lambda hi: {"additionalContext": "FOCUS ON API"})
-    cm = ContextManager(llm=object(), hook_manager=mgr)
-    cm.add(UserMessage(content="old"))
+    cm = ContextManager(llm=object(), bus=_bus_with_hooks(mgr))
+    await cm.add(UserMessage(content="old"))
 
     await cm.manage_history(custom_instructions="original")
     assert captured["ci"] == "FOCUS ON API"
@@ -52,8 +60,8 @@ async def test_precompact_veto_skips_compaction(monkeypatch):
 
     mgr = HookManager()
     mgr.register("PreCompact", lambda hi: {"continue": False, "stopReason": "not now"})
-    cm = ContextManager(llm=object(), hook_manager=mgr)
-    cm.add(UserMessage(content="old"))
+    cm = ContextManager(llm=object(), bus=_bus_with_hooks(mgr))
+    await cm.add(UserMessage(content="old"))
 
     changed = await cm.manage_history()
     assert changed is False
@@ -72,8 +80,8 @@ async def test_postcompact_fires_after_compaction(monkeypatch):
 
     mgr = HookManager()
     mgr.register("PostCompact", lambda hi: fired.append(hi.payload.get("compact_summary")))
-    cm = ContextManager(llm=object(), hook_manager=mgr)
-    cm.add(UserMessage(content="old"))
+    cm = ContextManager(llm=object(), bus=_bus_with_hooks(mgr))
+    await cm.add(UserMessage(content="old"))
 
     await cm.manage_history()
     assert fired == ["my summary"]

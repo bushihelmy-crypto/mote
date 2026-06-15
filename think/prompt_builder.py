@@ -64,6 +64,7 @@ class ThinkInputs:
     project_root: Any = None
     output_format: Optional[str] = None
     command_guide: Optional[str] = None
+    command_hint: Optional[str] = None
     memory_dir: Any = None
     language: Optional[str] = None
     scratchpad_dir: Any = None
@@ -131,6 +132,12 @@ class ThinkContext:
     # channel supplies the protocol-specific guidance via ThinkInputs.command_guide
     # (XML <end></end> mechanics vs native tool-call mechanics).
     command_guide: str = ""
+
+    # Per-turn command hint injected into the user prompt (CMD_PROMPT's
+    # ${command_hint}). Defaults to "" (none); the command channel supplies the
+    # protocol-specific text via ThinkInputs.command_hint — XML carries the
+    # <end></end> instruction, native supplies "" so it never leaks that marker.
+    command_hint: str = ""
 
     # MEMORY.md content injected into the user prompt (CC injects the index via
     # user context so a changing index never busts the system-prompt cache).
@@ -229,6 +236,7 @@ class PromptBuilder:
         """Map ThinkContext fields to the command template's $placeholders."""
         return dict(
             current_state=f"current directory: {ctx.working_dir}",
+            command_hint=ctx.command_hint,
         )
 
     @staticmethod
@@ -334,6 +342,12 @@ class PromptBuilder:
         # mechanics. None means "caller didn't override" — keep the default "".
         if inputs.command_guide is not None:
             ctx.command_guide = inputs.command_guide
+
+        # Per-turn user-prompt command hint, also from the command channel: XML
+        # supplies the <end></end> instruction, native supplies "". None means
+        # "caller didn't override" — keep the default "".
+        if inputs.command_hint is not None:
+            ctx.command_hint = inputs.command_hint
 
         ctx.state_data = dict(instruction=ctx.instruction)
         return ctx

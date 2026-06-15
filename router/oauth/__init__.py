@@ -18,8 +18,13 @@ from metagpt.router.oauth.errors import (
     OAuthRefreshError,
     classify_refresh_failure,
 )
+from metagpt.router.oauth.flows import (
+    LoginCallbacks,
+    run_auth_code_flow,
+    run_device_code_flow,
+)
 from metagpt.router.oauth.manager import OAuthManager
-from metagpt.router.oauth.models import AuthMode, OAuthToken, TokenClaims
+from metagpt.router.oauth.models import AuthMode, DeviceCodeInfo, OAuthToken, TokenClaims
 from metagpt.router.oauth.registry import PROVIDER_PRESETS, get_preset, list_presets
 
 __all__ = [
@@ -27,6 +32,7 @@ __all__ = [
     "OAuthClient",
     "OAuthToken",
     "TokenClaims",
+    "DeviceCodeInfo",
     "AuthMode",
     "OAuthError",
     "OAuthConfigError",
@@ -36,4 +42,7 @@ __all__ = [
     "PROVIDER_PRESETS",
     "get_preset",
     "list_presets",
+    "LoginCallbacks",
+    "run_auth_code_flow",
+    "run_device_code_flow",
 ]

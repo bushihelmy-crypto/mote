@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import pytest
 
+from metagpt.common.events import EventBus
 from metagpt.common.hook.manager import HookManager
+from metagpt.common.hook.subscriber import HookSubscriber
 from metagpt.common.schema import PermissionConfig
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_executor import ToolExecutor
@@ -37,7 +39,11 @@ class SpyTool(BaseTool):
 
 
 def build(tool: BaseTool, *, hook_manager=None, config=None) -> ToolExecutor:
-    ex = ToolExecutor("sess", tools=None, hook_manager=hook_manager, permission_config=config)
+    bus = None
+    if hook_manager is not None:
+        bus = EventBus()
+        bus.subscribe(HookSubscriber(hook_manager))
+    ex = ToolExecutor("sess", tools=None, bus=bus, permission_config=config)
     tool.bind("sess")
     ex.register_tool_instance(tool, [tool.name, *getattr(tool, "aliases", [])])
     return ex

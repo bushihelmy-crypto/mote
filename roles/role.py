@@ -46,7 +46,7 @@ from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
 from metagpt.common.utils.role_zero_utils import attach_media, detach_media
 
 if TYPE_CHECKING:
-    from metagpt.session import FileSnapshotRecorder, SessionRecorder
+    from metagpt.session import FileSnapshotRecorder, SessionLog
 
 
 @log_class(
@@ -118,7 +118,8 @@ class Role(BaseRole):
         self._context_provider: Optional[ContextProvider] = None
         self._context_manager: Optional[ContextManager] = None
         self._router: Optional[LLMRouter] = None
-        self._session_recorder = None
+        self._session_log = None
+        self._event_bus = None
         self._file_snapshot_recorder = None
         self._hook_manager = None
         self._lsp_service = None
@@ -239,7 +240,7 @@ class Role(BaseRole):
                 tools=all_tools,
                 role=self,
                 permission_config=self.role_schema.permissions,
-                hook_manager=self.hook_manager,
+                bus=self.event_bus,
                 lsp_notifier=self.lsp_service,
             )
         return self._executor
@@ -262,21 +263,23 @@ class Role(BaseRole):
                 self.state.context,
                 llm=self.router.route_for_task(COMPRESSION_TASK),
                 model=getattr(self.config.llm, "model", None),
-                recorder=self.session_recorder,
-                hook_manager=self.hook_manager,
+                bus=self.event_bus,
             )
         return self._context_manager
 
     @property
-    def session_recorder(self) -> "SessionRecorder":
-        """Durable session-log sink (lazy-init), streamed to by ContextManager.
+    def session_log(self) -> "SessionLog":
+        """Durable append-only ``rollout.jsonl`` for this session (lazy-init).
 
-        Builds the append-only ``rollout.jsonl`` for this session and writes the
-        ``session_meta`` first line on first access. ``create`` no-ops when the
-        log already exists, so restart/resume never re-writes metadata.
+        Builds the log and writes the ``session_meta`` first line on first
+        access (``create`` no-ops when the log already exists, so restart/resume
+        never re-writes metadata). Shared by the event bus's
+        :class:`RecorderSubscriber` (which appends message/compaction/turn
+        events) and the :attr:`file_snapshot_recorder` (which interleaves
+        before-image snapshots into the same rollout).
         """
-        if self._session_recorder is None:
-            from metagpt.session import SessionLog, SessionMetaEvent, SessionRecorder
+        if self._session_log is None:
+            from metagpt.session import SessionLog, SessionMetaEvent
 
             log = SessionLog(self.state.session_id)
             log.create(
@@ -290,14 +293,44 @@ class Role(BaseRole):
                     role_class=f"{type(self).__module__}.{type(self).__qualname__}",
                 )
             )
-            self._session_recorder = SessionRecorder(log)
-        return self._session_recorder
+            self._session_log = log
+        return self._session_log
+
+    @property
+    def event_bus(self):
+        """The unified agent event spine (lazy-init), the loop's sole producer.
+
+        One ordered async stream that every cross-cutting concern subscribes to:
+        the :class:`RecorderSubscriber` persists message/compaction/turn events
+        to :attr:`session_log` (always wired — recording is always on), and the
+        :class:`HookSubscriber` translates control events (UserPromptSubmit /
+        Pre|PostToolUse / Pre|PostCompact / SessionStart / Stop) into
+        ``HookManager.fire`` calls (wired only when a hook layer exists, so the
+        no-hooks path keeps zero overhead). The :class:`LogSubscriber` emits one
+        concise log line per semantic event (event-level trace complementing the
+        method-level ``@log_class``). Subscribers run in priority order (hooks
+        early so a veto folds before the recorder persists; the logger last).
+        """
+        if self._event_bus is None:
+            from metagpt.common.events import EventBus, LogSubscriber
+            from metagpt.session.subscribers import RecorderSubscriber
+
+            bus = EventBus()
+            hook_manager = self.hook_manager
+            if hook_manager is not None:
+                from metagpt.common.hook.subscriber import HookSubscriber
+
+                bus.subscribe(HookSubscriber(hook_manager))
+            bus.subscribe(RecorderSubscriber(self.session_log))
+            bus.subscribe(LogSubscriber())
+            self._event_bus = bus
+        return self._event_bus
 
     @property
     def file_snapshot_recorder(self) -> "FileSnapshotRecorder":
         """Before-image file-history sink (lazy-init), shared with the rollout log.
 
-        Reuses the same :class:`SessionLog` as :attr:`session_recorder` so file
+        Reuses the same :class:`SessionLog` as :attr:`session_log` so file
         snapshots interleave with the session's other events; the blob store
         lives alongside ``rollout.jsonl``. ``enabled`` follows the schema flag
         ``record_file_history`` (default True) so snapshotting can be turned off
@@ -314,7 +347,7 @@ class Role(BaseRole):
                 backend = detect_blob_backend(self.state.working_dir or None)
 
             self._file_snapshot_recorder = FileSnapshotRecorder(
-                self.session_recorder.log,
+                self.session_log,
                 enabled=self.role_schema.record_file_history,
                 backend=backend,
             )
@@ -759,13 +792,35 @@ class Role(BaseRole):
         """Observe, and think and act based on the results of the observation"""
         # Bind the session_id as the trace_id so every log line emitted during
         # this run (across the loop, think engine, executor, etc.) is correlated.
-        with bind_trace(self.session_id), maybe_trace(self.session_id, name=f"role.run:{self.name}"):
+        # Bind the event bus to the async context so deep call sites (the LLM
+        # client streaming tokens, a tool capturing a snapshot) can emit onto the
+        # same spine without threading the bus through every signature.
+        from metagpt.common.events import set_bus
+
+        with bind_trace(self.session_id), set_bus(self.event_bus), maybe_trace(
+            self.session_id, name=f"role.run:{self.name}"
+        ):
             await self._ensure_ready()
 
-            # SessionStart hook: fired once per Role across its run() calls.
-            if self.hook_manager is not None and not self._session_started:
+            # SessionStart event: emitted once per Role across its run() calls.
+            # The HookSubscriber fires the SessionStart hook; the recorder's meta
+            # line is already written when the session_log was built.
+            if not self._session_started:
                 self._session_started = True
-                await self.hook_manager.fire("SessionStart", {"source": "startup"})
+                from metagpt.common.events import SessionStartEvent
+
+                await self.event_bus.emit(
+                    SessionStartEvent(
+                        session_id=self.state.session_id,
+                        parent_session_id=self.state.parent_session_id,
+                        working_dir=self.state.working_dir,
+                        original_working_dir=self.state.original_working_dir,
+                        project_root=self.state.project_root,
+                        model=getattr(self.config.llm, "model", None),
+                        role_class=f"{type(self).__module__}.{type(self).__qualname__}",
+                        source="startup",
+                    )
+                )
 
             if with_message:
                 msg = None
@@ -779,17 +834,20 @@ class Role(BaseRole):
                     msg.cause_by = CauseBy.USER_REQUIREMENT
                 msg.send_to.add(self.role_schema.name)
 
-                # UserPromptSubmit hook: may inject extra context (prepended to
-                # the prompt) or veto the turn (stop -> deactivate before loop).
-                if self.hook_manager is not None:
-                    outcome = await self.hook_manager.fire(
-                        "UserPromptSubmit", {"prompt": msg.content}
-                    )
-                    if outcome.additional_context:
-                        injected = "\n".join(outcome.additional_context)
-                        msg.content = f"{injected}\n{msg.content}" if msg.content else injected
-                    if outcome.stop:
-                        self.deactivate()
+                # UserPromptSubmit event: a subscriber (hook) may inject extra
+                # context (prepended to the prompt) or veto the turn (stop ->
+                # deactivate before loop). Emitting always; the folded outcome is
+                # EMPTY when no hook layer is wired.
+                from metagpt.common.events import UserPromptSubmitEvent
+
+                outcome = await self.event_bus.emit(
+                    UserPromptSubmitEvent(prompt=msg.content)
+                )
+                if outcome.additional_context:
+                    injected = "\n".join(outcome.additional_context)
+                    msg.content = f"{injected}\n{msg.content}" if msg.content else injected
+                if outcome.stop:
+                    self.deactivate()
 
                 # LSP diagnostics now flow through the per-turn ephemeral-context
                 # bus (turn_context layer): drained every think() cycle into the
@@ -803,12 +861,12 @@ class Role(BaseRole):
             finally:
                 # Always propagate for recovery (role_raise_decorator reads it).
                 self.state.latest_observed_msg = loop.latest_observed_msg
-                # Mark the turn boundary in the durable log (working_dir may have
-                # moved via `cd`, so capture the live value at turn end).
-                self._record_turn_boundary()
-                # Stop (TurnEnd) hook: fired after the turn boundary is recorded.
-                if self.hook_manager is not None:
-                    await self.hook_manager.fire("Stop", {})
+                # TurnEnd event: the recorder marks the turn boundary in the
+                # durable log (working_dir may have moved via `cd`, so capture
+                # the live value at turn end) and the HookSubscriber fires the
+                # Stop hook. Guarded on the slot so a failure before the bus was
+                # built never triggers lazy construction in teardown.
+                await self._emit_turn_end()
             if rsp is None:
                 return None
 
@@ -894,28 +952,30 @@ class Role(BaseRole):
         forked.resume_session()
         return forked
 
-    def _record_turn_boundary(self) -> None:
-        """Append a ``turn_context`` event delimiting one completed turn.
+    async def _emit_turn_end(self) -> None:
+        """Emit ``TurnEndEvent`` delimiting one completed turn.
 
-        Best-effort: a logging failure must never break a turn. Skipped when the
-        recorder was never built (e.g. the run failed before _ensure_ready).
+        Carries the per-turn runtime snapshot (working_dir may have moved via
+        `cd`; token_state is optional metadata). The recorder subscriber maps it
+        to a ``turn_context`` log record and the hook subscriber fires the Stop
+        hook. Best-effort: skipped when the bus was never built (e.g. the run
+        failed before _ensure_ready) and a failure never breaks the turn.
         """
-        recorder = self._session_recorder
-        if recorder is None or not getattr(recorder, "enabled", False):
+        if self._event_bus is None:
             return
         try:
             from dataclasses import asdict
             from uuid import uuid4
 
-            from metagpt.session import TurnContextEvent
+            from metagpt.common.events import TurnEndEvent
 
             token_state = None
             try:
                 token_state = asdict(self.context_manager.token_state())
             except Exception:  # noqa: BLE001 — token math is optional metadata
                 token_state = None
-            recorder.log.append(
-                TurnContextEvent(
+            await self._event_bus.emit(
+                TurnEndEvent(
                     turn_id=uuid4().hex,
                     working_dir=self.state.working_dir,
                     model=getattr(self.config.llm, "model", None),
@@ -925,7 +985,7 @@ class Role(BaseRole):
         except Exception as exc:  # noqa: BLE001
             from metagpt.common.logs import logger
 
-            logger.warning(f"session: failed to record turn boundary: {exc}")
+            logger.warning(f"session: failed to emit turn end: {exc}")
 
     # =========================================================================
     # Readiness

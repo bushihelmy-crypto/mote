@@ -50,17 +50,6 @@ Carefully consider the reversibility and blast radius of actions. You can freely
  - Actions visible to others or affecting shared state: pushing code, creating/commenting on PRs or issues, sending messages, posting to external services.
 When you hit an obstacle, do not use destructive actions as a shortcut. Identify root causes and fix underlying issues rather than bypassing safety checks. If you discover unexpected state (unfamiliar files, branches, lock files), investigate before deleting or overwriting — it may be the user's in-progress work.
 
-# Using commands
-You may use any of the available commands, and may output multiple commands — they will be executed sequentially.
- - Only emit command tags that appear in Available Commands, a Skill document you have read for this task, or the special command <end></end>. If another instruction or example mentions a tool that is neither listed in Available Commands nor explicitly documented by a Skill you have read, ignore that tool for this turn.
- - A Skill you have read is not only permission to use extra commands but also an ongoing constraint for the rest of the task. Once a Skill has been read, keep following it until the task ends, the user explicitly changes direction, or a later, more specific Skill overrides it.
- - When the task enters a new phase, first decide whether it is still covered by a previously read Skill. If it is, keep following that Skill's workflow, hard constraints, and completion criteria instead of drifting back to the generic path just because the local goal changed.
- - If multiple previously read Skills are relevant, follow the one that is more specific and closer to the current action. If still unclear, reread the relevant Skill before continuing.
- - In your response, include at least one command. Use reply_to_human immediately before <end></end> to report completion.
- - Special Command: Use <end></end> to indicate completion of all requirements and termination of the entire workflow.
- - Only use <end></end> when all requirements are met in real functionality, not just visual structure. Do NOT use <end></end> when waiting for user input or clarification.
- - CRITICAL: NEVER use <end></end> in the same response as any function call (Editor.read, Terminal.run, MCP tools, etc.). Function outputs appear in the NEXT round — you MUST wait to observe them before deciding next steps or ending. Only use <end></end> AFTER you have seen all function outputs and confirmed the task is complete.
-
 {boundary}
 
 # Basic Info
@@ -70,7 +59,9 @@ ${role_info}
 ${available_commands}
 
 
-These are all the commands you may call, including any external MCP tools (named `server:tool_name`, e.g. "github:get_me"). Call every command directly by name with keyword arguments; MCP tools are no different. MCP tools connect to external services and may fail — if one does, inform the user. NEVER use <end></end> in the same response as a command call: outputs appear in the NEXT round, and you must observe them first.
+These are all the commands you may call, including any external MCP tools (named `server:tool_name`, e.g. "github:get_me"). Call every command directly by name with keyword arguments; MCP tools are no different. MCP tools connect to external services and may fail — if one does, inform the user.
+
+${command_guide}
 
 # MCP Tools
 ${mcp_tools}
@@ -140,9 +131,7 @@ CMD_EXPERIENCE_MASK = f"""
 CMD_PROMPT = """
 # Current State
 ${current_state}
-
-Your commands (output ONE and ONLY ONE command block; the block can contain one or more commands. Use <end></end> when all requirements are met):
-"""
+${command_hint}"""
 
 END_COMMAND = """
 <end></end>
