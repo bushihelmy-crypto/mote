@@ -7,7 +7,11 @@ from typing import Awaitable, Callable
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.prompts import ASK_USER_QUESTION_PROMPT
+from metagpt.common.prompt.tools import (
+    ASK_HUMAN_DESCRIPTION,
+    ASK_USER_QUESTION_PROMPT,
+    REPLY_TO_HUMAN_DESCRIPTION,
+)
 from metagpt.common.schema import AskUserQuestionInput, AskUserQuestionItem
 
 
@@ -17,7 +21,7 @@ class AskHuman(BaseTool):
 
     name = "Ask"
     aliases = ["AskHuman"]
-    description = "Use this when you fail the current task or if you are unsure of the situation encountered."
+    description = ASK_HUMAN_DESCRIPTION
     requires = ("ask_human",)
 
     # Injected from Role by bind(): Role.ask_human.
@@ -38,7 +42,7 @@ class ReplyToHuman(BaseTool):
 
     name = "Reply"
     aliases = ["ReplyToHuman"]
-    description = "Reply to human user with the content provided."
+    description = REPLY_TO_HUMAN_DESCRIPTION
     requires = ("reply_to_human",)
 
     # Injected from Role by bind(): Role.reply_to_human.

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from metagpt.common.base import BaseLoop, LoopContext
 from metagpt.common.logs import log_class
 from metagpt.common.observability.langfuse_integration import maybe_span
-from metagpt.loop.prompt import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
+from metagpt.common.prompt.output import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
 from metagpt.common.schema import (
     AIMessage,
     CauseBy,

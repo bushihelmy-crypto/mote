@@ -25,6 +25,7 @@ from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_CONTENT_SIZE_BYTES
+from metagpt.common.prompt.tools import WRITE_DESCRIPTION
 
 
 @register_tool
@@ -35,11 +36,7 @@ class Write(FileMutatingTool):
     aliases: ClassVar[list[str]] = ["Write.run", "write"]
     # Success messages can echo file content; allow a higher cap (CC).
     max_result_size_chars: ClassVar[int] = 100_000
-    description = (
-        "Write a file to the local filesystem. Creates the file and any missing "
-        "parent directories, or overwrites it if it already exists. Prefer "
-        "editing an existing file over rewriting it when only part changes."
-    )
+    description = WRITE_DESCRIPTION
 
     async def call(self, *, file_path: str, content: str = "") -> str:
         """Write content to a file on the local filesystem.

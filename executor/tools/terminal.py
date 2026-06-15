@@ -30,6 +30,7 @@ from metagpt.executor.permission.types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.executor.dependency._terminal import DEFAULT_YIELD_MS, TERMINAL
+from metagpt.common.prompt.tools import TERMINAL_DESCRIPTION
 
 
 @register_tool
@@ -39,13 +40,7 @@ class Terminal(BaseTool):
     name = "terminal"
     aliases = ["terminal.run"]
     max_result_size_chars: ClassVar[int] = 30_000
-    description = (
-        "Type into a persistent interactive terminal kept alive across calls (one "
-        "per session). State (cwd, env, venv) persists; typing a program like "
-        "'python3' puts it in the foreground so later input is fed to it. Set "
-        "interrupt=true to send Ctrl-C, close=true to shut the terminal down. For "
-        "ordinary one-shot commands prefer the Bash tool."
-    )
+    description = TERMINAL_DESCRIPTION
     requires = ("get_cwd",)
     # Arbitrary command execution — the highest-risk tool.
     risk_level = "high"

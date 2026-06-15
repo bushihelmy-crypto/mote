@@ -55,12 +55,7 @@ from metagpt.common.const.tools import (
     MAX_MEDIA_SIZE_BYTES,
     MAX_IMAGE_DIMENSION,
 )
-
-FILE_UNCHANGED_STUB = (
-    "File unchanged since last read. The content from the earlier Read "
-    "tool_result in this conversation is still current — refer to that "
-    "instead of re-reading."
-)
+from metagpt.common.prompt.tools import FILE_UNCHANGED_STUB, READ_DESCRIPTION
 
 # Image extensions rendered as multimodal image content.
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
@@ -164,11 +159,7 @@ class Read(BaseTool):
     aliases: ClassVar[list[str]] = ["Read.run", "read"]
     # Read can return large files; allow a higher cap before persisting (CC).
     max_result_size_chars: ClassVar[int] = 100_000
-    description = (
-        "Read a file from the local filesystem. Text files return contents with "
-        "line numbers (offset/limit select a slice); images and PDFs are shown "
-        "to the model visually; Jupyter notebooks are rendered as text."
-    )
+    description = READ_DESCRIPTION
     # Records each successful read into the Role's shared file-read state so the
     # Write/Edit tools can enforce read-before-overwrite. Optional: when the tool
     # is used unbound (no Role), these stay unset and recording is skipped.

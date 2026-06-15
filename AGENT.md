@@ -45,7 +45,6 @@ class Role:
 | `max_react_loop` | `50` | 单次 run 最大 act 轮数 |
 | `max_consecutive_react_limit` | `10` | 连续 act 上限（触发后询问人类） |
 | `tools` / `mcps` / `agents` / `skills` | `[]` | 声明可用工具 / MCP / 子 agent / 技能 |
-| `shell_tool` | `"terminal"` | 声明的 `"Bash"` 解析成持久 `terminal` 还是一次性 `bash` |
 | `permissions` | `None` | opt-in `PermissionConfig`（审批层） |
 | `hooks` | `None` | opt-in `HookConfig`（生命周期 Hook） |
 | `lsp` | `None` | opt-in `LspConfig`（语言服务器诊断） |
@@ -263,7 +262,7 @@ await env.run(k=1)        # 泵一次调度
 `ThinkRequest`：
 
 1. `_collect()` → `PromptBuilder.collect_context()` 收集身份、工具 schema、MCP、
-   skills、git 状态、memory、环境段等（`prompts/prompt_builder.py`）。
+   skills、git 状态、memory、环境段等（`think/prompt_builder.py`）。
 2. `PromptBuilder.build()` 产出 `(system_prompt, user_prompt)`。
 3. `ContextManager.prepare_request(user_prompt)` 跑压缩后返回
    `managed_history + [user_prompt]`。

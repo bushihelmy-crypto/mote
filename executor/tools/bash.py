@@ -23,6 +23,7 @@ from metagpt.executor.permission.types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.common.utils.common import aexecute
+from metagpt.common.prompt.tools import BASH_DESCRIPTION
 
 # Unique marker so we can split the command's real output from the trailing
 # pwd probe without clashing with normal output.
@@ -37,7 +38,7 @@ class Bash(BaseTool):
     aliases = ["Bash.run", "bash"]
     # Shell output can be verbose; cap below the default (CC).
     max_result_size_chars: ClassVar[int] = 30_000
-    description = "Execute a bash command. State (cwd) persists across calls within a session."
+    description = BASH_DESCRIPTION
     requires = ("get_cwd", "set_cwd")
     # Arbitrary command execution — the highest-risk tool.
     risk_level = "high"

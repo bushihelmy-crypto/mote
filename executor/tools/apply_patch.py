@@ -40,38 +40,7 @@ from metagpt.executor.dependency._apply_patch import (
 from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-
-# The patch grammar spec, embedded in the tool description so the model learns
-# the exact format on both channels.
-_GRAMMAR_SPEC = """\
-Apply a structured patch that can Add, Update, Delete, and Move/rename multiple \
-files in a single call. Pass the whole patch as the single `input` string, in \
-this format:
-
-*** Begin Patch
-*** Add File: path/to/new_file.py
-+line one of the new file
-+line two
-*** Delete File: path/to/remove_me.py
-*** Update File: path/to/edit_me.py
-*** Move to: path/to/renamed.py
-@@ optional context anchor (e.g. a function or class signature)
- a context line that already exists (note the single leading space)
--a line to remove
-+a line to add
-*** End Patch
-
-Rules:
-- The patch MUST start with `*** Begin Patch` and end with `*** End Patch`.
-- Inside an `*** Update File` hunk, every line starts with one of: a single \
-space (unchanged context), `+` (added line), or `-` (removed line). A `@@` line \
-optionally followed by a one-line context anchor begins a new chunk and helps \
-locate the edit. You do NOT use line numbers; provide a few surrounding context \
-lines so the edit can be located unambiguously.
-- `*** Move to:` (Update only) renames the file as it is updated.
-- `*** End of File` marks a chunk as anchored to the end of the file.
-- You must Read a file before Updating, Deleting, or Moving it.
-"""
+from metagpt.common.prompt.tools import APPLY_PATCH_GRAMMAR
 
 
 @register_tool
@@ -82,7 +51,7 @@ class ApplyPatch(FileMutatingTool):
     aliases: ClassVar[list[str]] = ["apply_patch", "ApplyPatch.run", "applyPatch"]
     # Summaries can echo many paths; allow a higher cap like Edit/Write.
     max_result_size_chars: ClassVar[int] = 100_000
-    description = _GRAMMAR_SPEC
+    description = APPLY_PATCH_GRAMMAR
 
     # ------------------------------------------------------------------
     # Permission targets (per-path)

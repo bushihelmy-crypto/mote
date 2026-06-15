@@ -28,6 +28,7 @@ from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KERNELS
+from metagpt.common.prompt.tools import PYTHON_DESCRIPTION
 
 
 @register_tool
@@ -37,13 +38,7 @@ class Python(BaseTool):
     name = "python"
     aliases = ["python.run"]
     max_result_size_chars: ClassVar[int] = 30_000
-    description = (
-        "Execute Python code in a persistent Jupyter kernel kept alive across "
-        "calls (one per session). Variables, imports, and functions persist, so "
-        "you can build up state step by step. Set interrupt=true to send a "
-        "KeyboardInterrupt, restart=true to clear all state, close=true to shut "
-        "the kernel down. For shell commands use the Bash tool."
-    )
+    description = PYTHON_DESCRIPTION
     requires = ("get_cwd",)
     # Arbitrary code execution.
     risk_level = "high"

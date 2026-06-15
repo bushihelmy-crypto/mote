@@ -21,7 +21,7 @@ from metagpt.context import ContextManager
 from metagpt.executor.tool_executor import ToolExecutor
 from metagpt.common.logs import bind_trace, log_class
 from metagpt.common.observability.langfuse_integration import maybe_trace
-from metagpt.prompts.prompt_builder import PromptBuilder
+from metagpt.think.prompt_builder import PromptBuilder
 from metagpt.roles.context_provider import ContextProvider
 from metagpt.loop import BaseLoop, ReActLoop
 from metagpt.router.router import COMPRESSION_TASK, SUMMARY_TASK, LLMRouter, get_router
@@ -122,6 +122,7 @@ class Role(BaseRole):
         self._file_snapshot_recorder = None
         self._hook_manager = None
         self._lsp_service = None
+        self._turn_context_bus = None
         # Programmatic Python hook callbacks, seeded into the HookManager when it
         # is built (register_hook appends here before run()).
         self._hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
@@ -232,7 +233,7 @@ class Role(BaseRole):
     def executor(self) -> ToolExecutor:
         if self._executor is None:
             all_tools = self.role_schema.mcps + self.role_schema.tools
-            all_tools = _resolve_shell_tools(all_tools, self.role_schema.shell_tool)
+            all_tools = _resolve_shell_tools(all_tools)
             self._executor = ToolExecutor(
                 session_id=self.state.session_id,
                 tools=all_tools,
@@ -363,6 +364,42 @@ class Role(BaseRole):
             root = self.state.project_root or self.get_cwd()
             self._lsp_service = LspService(cfg, root)
         return self._lsp_service
+
+    @property
+    def turn_context_bus(self):
+        """The per-turn ephemeral-context bus (lazy-init), always present.
+
+        Assembles the volatile per-cycle feeds that land in the user prompt's
+        ``<system-reminder>`` (never the cacheable system prompt, never stored
+        in history): git working-tree status, token-pressure notes, background
+        task progress, and LSP diagnostics. Each feed is an
+        :class:`~metagpt.common.interface.EphemeralContextSource`; the bus
+        renders them per think() cycle and merges the non-empty blocks.
+
+        Sources that depend only on ``common`` (git) or duck-type a live
+        collaborator (token/LSP) are wired unconditionally — they self-suppress
+        (return ``None``) when there's nothing to report (off-repo, no token
+        pressure, no diagnostics / LSP disabled). The background-task source
+        lives in the ``tasks`` layer (it imports ``tasks.attachment``) and peeks
+        the pool lazily, so it stays inert until a tool actually spawns one.
+        """
+        if self._turn_context_bus is None:
+            from metagpt.context.turn_context import (
+                GitContextSource,
+                LspContextSource,
+                TokenPressureContextSource,
+                TurnContextBus,
+            )
+            from metagpt.tasks import BackgroundTaskContextSource
+
+            sources = [
+                GitContextSource(),
+                TokenPressureContextSource(self.context_manager),
+                BackgroundTaskContextSource(self._peek_bg_pool),
+                LspContextSource(self.lsp_service),
+            ]
+            self._turn_context_bus = TurnContextBus(sources)
+        return self._turn_context_bus
 
     def register_hook(self, event: str, fn, matcher: Optional[str] = None) -> None:
         """Register an in-process Python hook callback (the SDK-style path).
@@ -754,16 +791,10 @@ class Role(BaseRole):
                     if outcome.stop:
                         self.deactivate()
 
-                # LSP diagnostics回流: surface any diagnostics produced by the
-                # previous turn's file edits as per-turn context (prepended,
-                # ephemeral — like memory_context). Drained here so the model
-                # reacts to errors it just introduced. No-op when LSP is off.
-                lsp = self.lsp_service
-                if lsp is not None:
-                    block = lsp.drain_diagnostics()
-                    if block:
-                        msg.content = f"{block}\n{msg.content}" if msg.content else block
-
+                # LSP diagnostics now flow through the per-turn ephemeral-context
+                # bus (turn_context layer): drained every think() cycle into the
+                # user prompt's <system-reminder> (never stored in history),
+                # alongside git status / token pressure / background-task feeds.
                 self.put_message(msg)
 
             loop = self._make_loop()
@@ -910,18 +941,16 @@ class Role(BaseRole):
         await self.executor.init_mcp(self.role_schema.mcps)
 
 
-def _resolve_shell_tools(tools: list[str], shell_tool: str) -> list[str]:
-    """Resolve the shell generation for a tool list (mutually exclusive).
+def _resolve_shell_tools(tools: list[str]) -> list[str]:
+    """Resolve the shell generation for a tool list.
 
-    A declared ``"Bash"`` becomes either the one-shot Bash tool
-    (``shell_tool="bash"``) or the persistent PTY-backed ``terminal``
-    (``shell_tool="terminal"``). Tools the caller listed explicitly (including
-    ``terminal``) are left as-is — explicit wins. Order is preserved and
-    duplicates removed.
+    A declared ``"Bash"`` always becomes the persistent PTY-backed
+    ``terminal``. Tools the caller listed explicitly (including ``terminal``)
+    are left as-is. Order is preserved and duplicates removed.
     """
     resolved: list[str] = []
     for tool in tools:
-        if tool == "Bash" and shell_tool == "terminal":
+        if tool == "Bash":
             resolved.append("terminal")
         else:
             resolved.append(tool)

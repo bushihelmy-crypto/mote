@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import pytz
 
 from metagpt.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
-from metagpt.prompts.role import (
+from metagpt.common.prompt.role import (
     ASK_HUMAN_GUIDANCE_FORMAT,
     SUMMARIZE_PROBLEM_WHEN_DUPLICATE,
 )

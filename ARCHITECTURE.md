@@ -362,8 +362,8 @@ run_command(name, args)
 | `sleep` | `wait_interruptible`，活动时提前唤醒 |
 | `end` | 结束 session |
 
-> `shell_tool: Literal["terminal","bash"]="terminal"`（schema）在 executor-build 时
-> 把声明的 `"Bash"` 映射成 `terminal` 或保留 `Bash`（`role.py:913 _resolve_shell_tools`）。
+> 在 executor-build 时把声明的 `"Bash"` 一律映射成持久 `terminal`
+> （`role.py` `_resolve_shell_tools`）。
 
 ### 权限系统（`executor/permission/`，opt-in）
 

@@ -20,8 +20,7 @@ from string import Template
 from typing import Any, Optional
 
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.git_state import collect_git_state, render_git_section
-from metagpt.prompts.role import (
+from metagpt.common.prompt.role import (
     CONSTRAINT_TEMPLATE,
     FRC_SECTION,
     LANGUAGE_SECTION,
@@ -32,7 +31,7 @@ from metagpt.prompts.role import (
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 )
 
-from metagpt.prompts.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
+from metagpt.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
 from metagpt.common.utils.role_zero_utils import get_time_info
 
 
@@ -83,6 +82,9 @@ class ThinkSubsystems:
     llm: Any
     executor: Any
     skill_manager: Any
+    # The unified per-turn ephemeral-context bus (git/token/bg-tasks/LSP feeds).
+    # None => no ephemeral context this cycle (the Role didn't wire a bus).
+    turn_context_bus: Any = None
 
 
 @dataclass
@@ -179,9 +181,11 @@ class PromptBuilder:
         """
         if inputs.desc:
             return inputs.desc
-        prefix = PREFIX_TEMPLATE.format(profile=inputs.profile, name=inputs.name, goal=inputs.goal)
+        prefix = Template(PREFIX_TEMPLATE).safe_substitute(
+            profile=inputs.profile, name=inputs.name, goal=inputs.goal
+        )
         if inputs.constraints:
-            prefix += CONSTRAINT_TEMPLATE.format(constraints=inputs.constraints)
+            prefix += Template(CONSTRAINT_TEMPLATE).safe_substitute(constraints=inputs.constraints)
         if inputs.env_desc:
             prefix += f"You are in {inputs.env_desc} with roles({inputs.other_role_names})."
         return prefix
@@ -289,19 +293,15 @@ class PromptBuilder:
 
         ctx.tool_info = json.dumps(subsystems.executor.get_tool_schemas())
         ctx.mcp_info = json.dumps(subsystems.executor.get_mcp_tool_schemas())
-        # Git working-tree state is collected per-turn and rendered into the env
-        # section. It lives below the cache boundary (the ${env_section} slot is
-        # after SYSTEM_PROMPT_DYNAMIC_BOUNDARY in the template), so changing git
-        # state never busts the cacheable system-prompt prefix. Auto-detected:
-        # injected whenever cwd is inside a repo, no config switch. Best-effort —
-        # collect_git_state returns None off-repo / on any failure.
-        git_state = await collect_git_state(ctx.working_dir)
-        git_section = render_git_section(git_state) if git_state else ""
+        # The static environment block (cwd / platform / model). Git working-tree
+        # state used to be appended here; it now flows through the per-turn
+        # ephemeral-context bus (the turn_context layer) and lands in the user
+        # prompt's <system-reminder>, so volatile git state never touches this
+        # cacheable section.
         ctx.env_section = PromptBuilder._make_env_section(
             subsystems.llm,
             working_dir=ctx.working_dir,
             project_root=inputs.project_root,
-            git_section=git_section,
         )
         ctx.skills_info = PromptBuilder._make_skills_info(subsystems.skill_manager, config)
 
@@ -311,9 +311,10 @@ class PromptBuilder:
         ctx.scratchpad = PromptBuilder._make_scratchpad(inputs.scratchpad_dir)
         ctx.frc, ctx.summarize_tool_results = PromptBuilder._make_compaction_sections(config)
 
-        # Reserved seam for the proactive-reminder ("secretary") subsystem.
-        # Strategy not decided yet — returns "" so nothing is injected today.
-        ctx.reminders = PromptBuilder._make_reminders()
+        # Per-turn ephemeral context (git / token pressure / background tasks /
+        # LSP diagnostics) gathered by the turn_context bus and injected into the
+        # user prompt as a <system-reminder>. None bus => "" (nothing injected).
+        ctx.reminders = await PromptBuilder._make_reminders(subsystems.turn_context_bus, ctx.working_dir)
 
         # Output-format section comes from the command channel: XML supplies
         # OUTPUT_SECTION, native tool-use supplies "" (API constrains output).
@@ -350,20 +351,20 @@ class PromptBuilder:
             return ""
 
     @staticmethod
-    def _make_reminders() -> str:
-        """Reserved hook for proactive framework reminders (the "secretary").
+    async def _make_reminders(turn_context_bus, cwd: str = "") -> str:
+        """Gather per-turn ephemeral context from the turn_context bus.
 
-        Returns the per-turn reminder text that _build_user_prompt appends to
-        the user prompt, or "" for no reminders. Intentionally a no-op stub: the
-        reminder *strategy* — which situational signals to watch (token pressure
-        via ContextManager.token_state(), idle tools, finished background tasks,
-        changed files, ...) and what to say — is not decided yet.
+        Returns the merged <system-reminder> block that _build_user_prompt
+        appends to the user prompt, or "" when no bus is wired. The bus polls
+        its EphemeralContextSource feeds (git status, token pressure, background
+        tasks, LSP diagnostics, ...) and merges the non-empty blocks.
 
-        When implemented, this is where the secretary subsystem plugs in. Keep
-        the output ephemeral (user context, not the cacheable system prompt, not
-        stored in history), mirroring memory_context.
+        The output is ephemeral by design (user context, not the cacheable
+        system prompt, never stored in history), mirroring memory_context.
         """
-        return ""
+        if turn_context_bus is None:
+            return ""
+        return await turn_context_bus.collect(cwd=cwd or None)
 
     @staticmethod
     def _make_language(language) -> str:
@@ -397,12 +398,12 @@ class PromptBuilder:
 
     @staticmethod
     def _make_domain_info(config) -> str:
-        return MGX_INFO.format(
+        return Template(MGX_INFO).safe_substitute(
             ai_capability_models=", ".join(config.role_zero.ai_capability_models),
         )
 
     @staticmethod
-    def _make_env_section(llm, working_dir: str = "", project_root=None, git_section: str = "") -> str:
+    def _make_env_section(llm, working_dir: str = "", project_root=None) -> str:
         cwd = working_dir or str(DEFAULT_WORKSPACE_ROOT)
         root = str(project_root) if project_root else str(DEFAULT_WORKSPACE_ROOT)
         lines = [
@@ -415,11 +416,8 @@ class PromptBuilder:
             f" - Shell: {os.environ.get('SHELL', '')}",
             f" - OS Version: {platform.platform()}",
             f" - You are powered by the model named {llm.model}.",
+            "",
         ]
-        # Git block (branch / status / recent commits) appended when in a repo.
-        if git_section:
-            lines.append(git_section)
-        lines.append("")
         return "\n".join(lines)
 
     @staticmethod

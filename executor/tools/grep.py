@@ -46,6 +46,7 @@ from metagpt.common.const.tools import (
     MAX_COLUMNS,
     SEARCH_TIMEOUT,
 )
+from metagpt.common.prompt.tools import GREP_DESCRIPTION
 
 # Minimal `rg --type` name -> file extension map for the Python fallback.
 # ripgrep itself knows hundreds of types; this covers the common ones the
@@ -148,15 +149,7 @@ class Grep(BaseTool):
     aliases: ClassVar[list[str]] = ["Grep.run", "grep", "search"]
     # Grep output is usually compact; cap below the default (CC).
     max_result_size_chars: ClassVar[int] = 20_000
-    description = (
-        "A powerful search tool built on ripgrep. Searches file CONTENTS with a "
-        "regular expression. Also searches inside rich documents — PDF (.pdf), "
-        "Word (.docx) and Excel (.xlsx) — by extracting their text first; CSV "
-        "and other plain-text files are searched directly. Filter by glob or "
-        "file type; choose output mode files_with_matches (default), content, or "
-        "count. ALWAYS use this for content search instead of running grep/rg "
-        "through the Bash tool."
-    )
+    description = GREP_DESCRIPTION
 
     async def call(
         self,

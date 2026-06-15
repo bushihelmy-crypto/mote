@@ -7,7 +7,7 @@ from metagpt.common.logs import logger
 from metagpt.common.schema import AIMessage, CauseBy, UserMessage
 from metagpt.common.utils.role_zero_utils import parse_commands2
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
-from metagpt.parser.prompts import OUTPUT_SECTION
+from metagpt.common.prompt.output import OUTPUT_SECTION
 
 if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine

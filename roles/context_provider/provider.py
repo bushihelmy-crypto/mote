@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from metagpt.router.schema import RoutingRequest
 from metagpt.common.base import LoopContext
-from metagpt.prompts.prompt_builder import (
+from metagpt.think.prompt_builder import (
     PromptBuilder,
     ThinkContext,
     ThinkInputs,
@@ -196,6 +196,7 @@ class ContextProvider(BaseContextProvider):
             llm=self._llm,
             executor=self._executor,
             skill_manager=self._skill_manager,
+            turn_context_bus=self._role.turn_context_bus,
         )
 
     def _env_desc(self) -> str:
