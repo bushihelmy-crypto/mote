@@ -60,7 +60,19 @@ class RoleSchema(BaseModel):
     max_consecutive_react_limit: int = 10
 
     # --- Tools / Agent declarations ---
-    tools: list[str] = []
+    tools: list[str] = [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash",
+        "Terminal",
+        "Jupyter",
+        "Agent",
+        "AskUserQuestion",
+        "Sleep",
+    ]
     mcps: list[str] = []
     agents: list[str] = []
     skills: list[str] = []

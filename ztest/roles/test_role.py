@@ -391,7 +391,9 @@ class TestWaitInterruptible:
         r = Role(name="X")
         slept, interrupted = asyncio.run(r.wait_interruptible(0.1))
         assert interrupted is False
-        assert slept >= 0.0
+        # `slept` is wall-clock derived (time.time); only assert it's a float,
+        # not non-negative, since the wall clock can skew backward (e.g. WSL2).
+        assert isinstance(slept, float)
 
     def test_interrupted_by_message(self):
         r = Role(name="X")
@@ -454,18 +456,18 @@ class TestGetMemories:
 # =============================================================================
 class TestResolveShellTools:
     def test_terminal_replaces_bash(self):
-        assert _resolve_shell_tools(["Bash"]) == ["terminal"]
+        assert _resolve_shell_tools(["Bash"]) == ["Terminal"]
 
     def test_non_bash_tools_untouched(self):
         assert _resolve_shell_tools(["Read", "Write"]) == ["Read", "Write"]
 
     def test_explicit_terminal_tool_preserved_and_deduped(self):
-        # Bash + explicitly listed terminal -> no duplicate terminal.
-        assert _resolve_shell_tools(["terminal", "Bash"]) == ["terminal"]
+        # Bash + explicitly listed Terminal -> no duplicate Terminal.
+        assert _resolve_shell_tools(["Terminal", "Bash"]) == ["Terminal"]
 
     def test_order_preserved(self):
         assert _resolve_shell_tools(["Read", "Bash", "Write"]) == [
             "Read",
-            "terminal",
+            "Terminal",
             "Write",
         ]
