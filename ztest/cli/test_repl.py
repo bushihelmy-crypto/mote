@@ -375,6 +375,29 @@ def test_stream_sink_mirrors_and_flags_turn():
     assert out.getvalue() == "tok-1tok-2"
 
 
+def test_stream_subscriber_forwards_bus_deltas():
+    # The REPL mirrors streamed tokens off the role's event bus (no global sink):
+    # subscribing on the bus then emitting a delta drives ``_stream_sink``.
+    from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
+    from metagpt.common.logs import log_llm_stream
+
+    repl, control, role, out = make_repl([])  # no renderer -> plain stdout
+    bus = EventBus()
+    role.event_bus = bus
+    repl._subscribe_stream(role)
+    # log_llm_stream emits LLMStreamDeltaEvent synchronously onto the active bus.
+    with set_bus(bus):
+        log_llm_stream("hello ")
+        log_llm_stream("world")
+    assert repl._streamed_this_turn is True
+    assert out.getvalue() == "hello world"
+    # Teardown unsubscribes; further emits no longer reach the sink.
+    repl._unsubscribe_streams()
+    with set_bus(bus):
+        log_llm_stream("!")
+    assert out.getvalue() == "hello world"
+
+
 def test_streamed_text_not_reprinted_in_plain_mode():
     # When tokens already streamed to plain stdout, the post-turn print must skip
     # the reply to avoid duplicating it verbatim.

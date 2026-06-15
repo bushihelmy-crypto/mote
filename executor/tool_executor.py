@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from metagpt.common.events import PostToolUseEvent, PreToolUseEvent
 from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, ToolResultLimitConfig
 from metagpt.executor import tool_result_limit
 from metagpt.executor.base_executor import BaseToolExecutor
@@ -67,16 +68,18 @@ class ToolExecutor(BaseToolExecutor):
         role=None,
         limit_config: ToolResultLimitConfig | None = None,
         permission_config: PermissionConfig | None = None,
-        hook_manager=None,
+        bus=None,
         lsp_notifier=None,
     ) -> None:
         self._session_id = session_id
         self._mcp: UniversalMCP | None = None
         self._tools: dict[str, Any] = {}  # name -> BaseTool instance (static + dynamic)
-        # Optional hook runner (``common.interface.HookRunner``). When set,
-        # PreToolUse / PostToolUse fire around the tool call. None => no hook
-        # layer (legacy behavior), exactly like the permission engine opt-in.
-        self._hook_manager = hook_manager
+        # Optional event bus (``common.events.EventBus``). When set, PreToolUse /
+        # PostToolUse events are emitted around the tool call; a subscriber (the
+        # hook layer) may deny / mutate / inject context via the folded outcome.
+        # None => no events emitted (standalone/test use), exactly like the
+        # permission engine opt-in.
+        self._bus = bus
         # Optional LSP notifier (``common.interface.LspNotifier``). When set, a
         # successful filesystem-mutating tool call reports the written path so
         # the LSP layer can sync the doc + collect diagnostics. None => no LSP
@@ -182,15 +185,14 @@ class ToolExecutor(BaseToolExecutor):
         args = kwargs or {}
 
         with maybe_span(f"tool:{name}", **(kwargs or {})):
-            # PreToolUse hook: fires before the permission gate. It may rewrite
-            # the args (updated_args) or block the call outright (deny). Hook
-            # deny composes with the permission engine via deny-wins: a hook
-            # block returns immediately; a hook allow never overrides an engine
-            # deny (the engine still runs below).
-            if self._hook_manager is not None:
-                outcome = await self._hook_manager.fire(
-                    "PreToolUse",
-                    {"tool_name": name, "tool_input": args, "tool_use_id": result_id},
+            # PreToolUse event: emitted before the permission gate. A subscriber
+            # (the hook layer) may rewrite the args (updated_args) or block the
+            # call outright (deny). Hook deny composes with the permission engine
+            # via deny-wins: a hook block returns immediately; a hook allow never
+            # overrides an engine deny (the engine still runs below).
+            if self._bus is not None:
+                outcome = await self._bus.emit(
+                    PreToolUseEvent(tool_name=name, tool_input=args, tool_use_id=result_id)
                 )
                 if outcome.updated_args is not None:
                     args = outcome.updated_args
@@ -249,13 +251,18 @@ class ToolExecutor(BaseToolExecutor):
             # ToolResult(success=False)), never by sniffing the output text.
             result = ToolResult.from_tool_return(raw)
 
-            # PostToolUse hook: fires after the tool ran (and was normalized). It
-            # may append extra context to the output or block (mark the result
-            # failed with a reason) for the model to react to.
-            if self._hook_manager is not None:
-                outcome = await self._hook_manager.fire(
-                    "PostToolUse",
-                    {"tool_name": name, "tool_input": args, "tool_response": result.output, "tool_use_id": result_id},
+            # PostToolUse event: emitted after the tool ran (and was normalized).
+            # A subscriber (the hook layer) may append extra context to the
+            # output or block (mark the result failed with a reason) for the
+            # model to react to.
+            if self._bus is not None:
+                outcome = await self._bus.emit(
+                    PostToolUseEvent(
+                        tool_name=name,
+                        tool_input=args,
+                        tool_response=result.output,
+                        tool_use_id=result_id,
+                    )
                 )
                 if outcome.additional_context:
                     extra = "\n".join(outcome.additional_context)

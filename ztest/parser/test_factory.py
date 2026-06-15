@@ -3,7 +3,11 @@
 """Unit tests for the parser factory/inference helpers and package exports.
 
 - ``infer_native_tool_provider`` keys the native tool-spec envelope off the
-  *model name* ("claude" -> anthropic, everything/missing -> openai).
+  *resolved transport* (the wire protocol of the endpoint that issues the
+  request), NOT the model name: ANTHROPIC transport (api_type=anthropic or an
+  anthropic.com base_url) -> "anthropic"; everything else -> "openai". This is
+  what makes a Claude model behind an OpenAI-compatible gateway send the
+  OpenAI-shaped ``tools`` the gateway actually understands.
 - ``make_command_channel`` maps a RoleSchema.command_protocol value to a channel
   ("native" -> NativeToolChannel, anything else -> XmlCommandChannel).
 """
@@ -12,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 import metagpt.parser as parser_pkg
+from metagpt.common.config.config.llm_config import LLMType
 from metagpt.parser import (
     NativeToolChannel,
     XmlCommandChannel,
@@ -23,33 +28,37 @@ from .conftest import _LLMConfig
 
 
 class TestInferNativeToolProvider:
-    @pytest.mark.parametrize(
-        "model",
-        ["claude-opus-4-8", "claude-sonnet-4-6", "anthropic/claude-3", "MyClaude", "CLAUDE-X"],
-    )
-    def test_claude_models_map_to_anthropic(self, model):
-        assert infer_native_tool_provider(_LLMConfig(model)) == "anthropic"
+    def test_explicit_anthropic_api_type_maps_to_anthropic(self):
+        cfg = _LLMConfig("claude-opus-4-6", api_type=LLMType.ANTHROPIC, base_url="https://api.anthropic.com")
+        assert infer_native_tool_provider(cfg) == "anthropic"
+
+    def test_anthropic_base_url_maps_to_anthropic(self):
+        # Auto-detected native transport from the base_url, even with api_type=openai.
+        cfg = _LLMConfig("claude-3", api_type=LLMType.OPENAI, base_url="https://api.anthropic.com/v1")
+        assert infer_native_tool_provider(cfg) == "anthropic"
+
+    def test_claude_via_openai_gateway_maps_to_openai(self):
+        # The regression: a Claude model reached through an OpenAI-compatible
+        # gateway must still emit OpenAI-shaped tools (the gateway translates),
+        # otherwise the malformed ``tools`` are dropped and the model improvises.
+        cfg = _LLMConfig("claude-opus-4-6", api_type=LLMType.OPENAI, base_url="https://newapi.deepwisdom.ai/v1")
+        assert infer_native_tool_provider(cfg) == "openai"
 
     @pytest.mark.parametrize("model", ["gpt-4", "gpt-4o", "o1-mini", "gemini-pro", "deepseek-chat"])
-    def test_non_claude_models_map_to_openai(self, model):
-        assert infer_native_tool_provider(_LLMConfig(model)) == "openai"
+    def test_openai_transport_maps_to_openai(self, model):
+        cfg = _LLMConfig(model, api_type=LLMType.OPENAI, base_url="https://api.openai.com/v1")
+        assert infer_native_tool_provider(cfg) == "openai"
 
-    def test_case_insensitive(self):
-        # Matching is done on the lowercased name.
-        assert infer_native_tool_provider(_LLMConfig("Claude-3-Opus")) == "anthropic"
+    def test_defaults_to_openai(self):
+        # Plain stub (api_type defaults to OPENAI, no anthropic base_url).
+        assert infer_native_tool_provider(_LLMConfig("claude-3-opus")) == "openai"
 
-    def test_none_model_defaults_to_openai(self):
-        assert infer_native_tool_provider(_LLMConfig(None)) == "openai"
-
-    def test_empty_model_defaults_to_openai(self):
-        assert infer_native_tool_provider(_LLMConfig("")) == "openai"
-
-    def test_missing_model_attribute_defaults_to_openai(self):
-        # getattr(..., "model", None) -> None -> openai.
-        class NoModel:
+    def test_malformed_config_defaults_to_openai(self):
+        # resolve_api_type raising on a bad config degrades to the safe default.
+        class NoFields:
             pass
 
-        assert infer_native_tool_provider(NoModel()) == "openai"
+        assert infer_native_tool_provider(NoFields()) == "openai"
 
 
 class TestMakeCommandChannel:

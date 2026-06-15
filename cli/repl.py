@@ -40,8 +40,33 @@ from metagpt.cli.commands import SlashCommands
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.common.logs import suspend_console_log
 from metagpt.common.logs import resume_console_log
-from metagpt.common.logs.stream import _llm_stream_log, set_llm_stream_logfunc
-from metagpt.common.logs.stream import set_llm_stream_logfunc
+
+
+class _StreamRenderSubscriber:
+    """Bus subscriber mirroring streamed LLM tokens to the REPL renderer.
+
+    Stream deltas are emitted synchronously (``emit_event_sync``) from inside the
+    LLM providers' ``async for`` chunk loops, so this subscriber implements the
+    sync ``handle_sync`` delivery path (its async ``handle`` is an observation
+    no-op). One instance is shared across every role's bus — each role owns its
+    own :class:`~metagpt.common.events.EventBus`, so subscribing per role never
+    double-delivers.
+    """
+
+    priority = 50
+
+    def __init__(self, repl: "Repl"):
+        self._repl = repl
+
+    def handle_sync(self, event) -> None:
+        from metagpt.common.events import LLMStreamDeltaEvent
+
+        if isinstance(event, LLMStreamDeltaEvent):
+            self._repl._stream_sink(event.token)
+
+    async def handle(self, event):  # observation-only; never influences the fold
+        return None
+
 
 def _format_turn_error(err: BaseException) -> str:
     """Render a turn's exception into a concise one/two-line message for the REPL.
@@ -120,7 +145,10 @@ class Repl:
         # Optional rich renderer (tool-call panels, colored streaming). When
         # ``None`` the loop keeps its plain-text output path unchanged.
         self._renderer = renderer
-        self._old_stream_sink = None  # restored on teardown
+        # Mirrors streamed LLM tokens off each role's event bus (subscribed per
+        # role in ``adopt_role`` / ``run``, unsubscribed in ``_teardown``).
+        self._stream_sub = _StreamRenderSubscriber(self)
+        self._stream_buses: list = []  # buses we subscribed to, for teardown
         self._console_log_suspended = False  # stderr log sink muted while REPL owns stdout
         # Builds fresh / resumed roles (sharing config + context); injected by
         # ``build_repl``. ``None`` => /new and /resume are unavailable.
@@ -403,6 +431,7 @@ class Repl:
 
         role.state.env = _ConsoleHumanChannel(self._console_ask)
         self._register_renderer_hooks(role)
+        self._subscribe_stream(role)
         runtime = AgentRuntime(role)
         self._control.add_agent(runtime, root=root)
         if switch:
@@ -484,7 +513,7 @@ class Repl:
         except (NotImplementedError, RuntimeError):
             pass  # platform without signal-handler support — degrade gracefully
         self._suspend_console_log()
-        self._wire_stream_sink()
+        self._subscribe_stream(self._role)
         self._register_renderer_hooks(self._role)
         self._control.start()
         try:
@@ -579,34 +608,34 @@ class Repl:
         except Exception:  # noqa: BLE001 — finalizing must never crash the loop
             pass
 
-    def _wire_stream_sink(self) -> None:
-        """Swap the global ``log_llm_stream`` sink to the REPL's counting sink.
+    def _subscribe_stream(self, role: Any) -> None:
+        """Subscribe the REPL's stream renderer to *role*'s event bus.
 
-        Always wired (renderer or not) so the REPL both mirrors streamed tokens
-        live and knows whether a turn streamed. The old sink is saved for restore
-        in :meth:`_teardown`. The sink is a process-global, so this runs once for
-        the whole REPL (acceptable in a single-process REPL) regardless of how
-        many agents are switched.
+        Done per role (not once) so switched-to / forked / freshly-created
+        agents also mirror their streamed tokens live and flip
+        ``_streamed_this_turn``. Each role owns its own bus, so we subscribe the
+        shared subscriber once per bus (tracked in ``_stream_buses`` for
+        teardown). Best-effort — streaming is optional.
         """
-        try:
-
-            self._old_stream_sink = _llm_stream_log
-            set_llm_stream_logfunc(self._stream_sink)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Repl: stream sink swap failed: {exc}")
-
-    def _restore_stream_sink(self) -> None:
-        if self._old_stream_sink is None:
+        bus = getattr(role, "event_bus", None)
+        if bus is None or bus in self._stream_buses:
             return
         try:
+            bus.subscribe(self._stream_sub)
+            self._stream_buses.append(bus)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Repl: stream subscribe failed: {exc}")
 
-            set_llm_stream_logfunc(self._old_stream_sink)
-        except Exception:  # noqa: BLE001
-            pass
-        self._old_stream_sink = None
+    def _unsubscribe_streams(self) -> None:
+        for bus in self._stream_buses:
+            try:
+                bus.unsubscribe(self._stream_sub)
+            except Exception:  # noqa: BLE001
+                pass
+        self._stream_buses = []
 
     async def _teardown(self) -> None:
-        self._restore_stream_sink()
+        self._unsubscribe_streams()
         self._resume_console_log()
         try:
             await self._control.stop()

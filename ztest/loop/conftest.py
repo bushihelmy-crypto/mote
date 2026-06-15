@@ -93,7 +93,7 @@ class FakeChannel:
         for cmd in self.commands:
             yield cmd
 
-    def record_turn(self, memory, content, executed) -> None:
+    async def record_turn(self, memory, content, executed) -> None:
         self.recorded_turns.append((content, list(executed)))
 
     async def is_terminal(self, think_engine) -> bool:
@@ -139,10 +139,10 @@ class FakeMemory:
             return list(self.messages)
         return self.messages[-k:]
 
-    def add(self, message: Message) -> None:
+    async def add(self, message: Message) -> None:
         self.messages.append(message)
 
-    def add_batch(self, messages) -> None:
+    async def add_batch(self, messages) -> None:
         msgs = [m for m in messages if m is not None]
         self.add_batch_calls.append(list(msgs))
         self.messages.extend(msgs)

@@ -136,3 +136,118 @@ def test_missing_access_token_raises(monkeypatch):
 def test_revoke_returns_success(monkeypatch):
     _patch(monkeypatch, FakeResponse(200, {}))
     assert OAuthClient(_cfg(issuer="https://issuer/revoke")).revoke("tok") is True
+
+
+# --- interactive grants (#4) ---------------------------------------------
+
+
+class FakeSequenceClient:
+    """httpx.Client stand-in returning a queue of canned responses in order."""
+
+    requests: list = []
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def post(self, url, data=None, headers=None):
+        FakeSequenceClient.requests.append({"url": url, "data": data or {}})
+        return self._responses.pop(0)
+
+
+def _patch_seq(monkeypatch, responses) -> None:
+    FakeSequenceClient.requests = []
+    monkeypatch.setattr(client_mod.httpx, "Client", FakeSequenceClient(responses))
+    # device polling sleeps between attempts; make it instant.
+    monkeypatch.setattr(client_mod.time, "sleep", lambda *_: None)
+
+
+def test_exchange_code_success(monkeypatch):
+    _patch(monkeypatch, FakeResponse(200, {"access_token": "at-ac", "refresh_token": "r1", "expires_in": 3600}))
+    tok = OAuthClient(_cfg(client_id="cid")).exchange_code("the-code", "verifier", "http://localhost/cb")
+    assert tok.access_token == "at-ac"
+    assert tok.refresh_token == "r1"
+    sent = FakeClient.last_request["data"]
+    assert sent["grant_type"] == "authorization_code"
+    assert sent["code"] == "the-code"
+    assert sent["code_verifier"] == "verifier"
+    assert sent["redirect_uri"] == "http://localhost/cb"
+
+
+def test_exchange_code_requires_client_id(monkeypatch):
+    from metagpt.router.oauth.errors import OAuthConfigError
+
+    with pytest.raises(OAuthConfigError):
+        OAuthClient(_cfg(client_id=None)).exchange_code("c", "v", "http://localhost/cb")
+
+
+def test_request_device_code_success(monkeypatch):
+    _patch(
+        monkeypatch,
+        FakeResponse(
+            200,
+            {
+                "device_code": "dc1",
+                "user_code": "WXYZ-1234",
+                "verification_uri": "https://example/device",
+                "interval": 7,
+                "expires_in": 600,
+            },
+        ),
+    )
+    cfg = _cfg(client_id="cid", device_authorization_url="https://issuer/device")
+    info = OAuthClient(cfg).request_device_code()
+    assert info.device_code == "dc1"
+    assert info.user_code == "WXYZ-1234"
+    assert info.interval == 7
+    assert info.expires_in == 600
+
+
+def test_request_device_code_requires_device_url(monkeypatch):
+    from metagpt.router.oauth.errors import OAuthConfigError
+
+    with pytest.raises(OAuthConfigError):
+        OAuthClient(_cfg(client_id="cid")).request_device_code()
+
+
+def test_poll_device_token_pending_then_success(monkeypatch):
+    _patch_seq(
+        monkeypatch,
+        [
+            FakeResponse(400, {"error": "authorization_pending"}),
+            FakeResponse(400, {"error": "slow_down"}),
+            FakeResponse(200, {"access_token": "dev-at", "expires_in": 3600}),
+        ],
+    )
+    cfg = _cfg(client_id="cid", device_authorization_url="https://issuer/device")
+    tok = OAuthClient(cfg).poll_device_token("dc1", interval=1, expires_in=600)
+    assert tok.access_token == "dev-at"
+    # device_code grant urn used in the poll request
+    assert FakeSequenceClient.requests[-1]["data"]["grant_type"].endswith("device_code")
+
+
+def test_poll_device_token_terminal_error_raises(monkeypatch):
+    from metagpt.router.oauth.errors import OAuthRefreshError
+
+    _patch_seq(monkeypatch, [FakeResponse(400, {"error": "access_denied"})])
+    cfg = _cfg(client_id="cid", device_authorization_url="https://issuer/device")
+    with pytest.raises(OAuthRefreshError):
+        OAuthClient(cfg).poll_device_token("dc1", interval=1, expires_in=600)
+
+
+def test_poll_device_token_expires(monkeypatch):
+    from metagpt.router.oauth.errors import OAuthRefreshError
+
+    _patch_seq(monkeypatch, [])
+    cfg = _cfg(client_id="cid", device_authorization_url="https://issuer/device")
+    # expires_in=0 => deadline already passed on first loop check.
+    with pytest.raises(OAuthRefreshError):
+        OAuthClient(cfg).poll_device_token("dc1", interval=1, expires_in=0)

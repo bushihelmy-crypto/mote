@@ -11,10 +11,31 @@ from aiohttp import ClientSession, UnixConnector
 from pydantic import BaseModel, Field, PrivateAttr
 
 from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
-from metagpt.common.logs import create_llm_stream_queue, get_llm_stream_queue
 
 if typing.TYPE_CHECKING:
     from metagpt.roles.role import Role
+
+
+class _StreamQueueSubscriber:
+    """Bus subscriber that forwards streamed LLM tokens into an ``asyncio.Queue``.
+
+    Registered on the active event bus while a reporter's async streaming context
+    is open; ``None`` is the sentinel the reporter pushes to end the drain task.
+    """
+
+    priority: int = 60
+
+    def __init__(self, queue: asyncio.Queue):
+        self._queue = queue
+
+    def handle_sync(self, event) -> None:
+        from metagpt.common.events import LLMStreamDeltaEvent
+
+        if isinstance(event, LLMStreamDeltaEvent):
+            self._queue.put_nowait(event.token)
+
+    async def handle(self, event):  # observation-only; never influences the fold
+        return None
 
 try:
     import requests_unixsocket as requests
@@ -56,6 +77,9 @@ class ResourceReporter(BaseModel):
     enable_llm_stream: bool = Field(False, description="Indicates whether to connect to an LLM stream for reporting")
     callback_url: str = Field(METAGPT_REPORTER_DEFAULT_URL, description="The URL to which the report should be sent")
     _llm_task: Optional[asyncio.Task] = PrivateAttr(None)
+    _llm_queue: Optional[asyncio.Queue] = PrivateAttr(None)
+    _llm_sub: Optional["_StreamQueueSubscriber"] = PrivateAttr(None)
+    _llm_bus: Any = PrivateAttr(None)
 
     def report(self, value: Any, name: str, extra: Optional[dict] = None):
         """Synchronously report resource observation data.
@@ -161,18 +185,35 @@ class ResourceReporter(BaseModel):
         self.report(None, END_MARKER_NAME)
 
     async def __aenter__(self):
-        """Enter the asynchronous streaming callback context."""
+        """Enter the asynchronous streaming callback context.
+
+        Subscribes a :class:`_StreamQueueSubscriber` to the active event bus so
+        streamed LLM tokens are drained to this reporter. No-ops when no bus is
+        bound (standalone use): nothing to mirror.
+        """
         if self.enable_llm_stream:
-            queue = create_llm_stream_queue()
-            self._llm_task = asyncio.create_task(self._llm_stream_report(queue))
+            from metagpt.common.events import current_bus
+
+            bus = current_bus()
+            if bus is not None:
+                self._llm_queue = asyncio.Queue()
+                self._llm_sub = _StreamQueueSubscriber(self._llm_queue)
+                self._llm_bus = bus
+                bus.subscribe(self._llm_sub)
+                self._llm_task = asyncio.create_task(self._llm_stream_report(self._llm_queue))
         return self
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         """Exit the asynchronous streaming callback context."""
-        if self.enable_llm_stream and exc_type != asyncio.CancelledError:
-            await get_llm_stream_queue().put(None)
+        if self._llm_task is not None and exc_type != asyncio.CancelledError:
+            await self._llm_queue.put(None)
             await self._llm_task
-            self._llm_task = None
+        if self._llm_bus is not None and self._llm_sub is not None:
+            self._llm_bus.unsubscribe(self._llm_sub)
+        self._llm_task = None
+        self._llm_queue = None
+        self._llm_sub = None
+        self._llm_bus = None
         await self.async_report(None, END_MARKER_NAME)
 
     async def _llm_stream_report(self, queue: asyncio.Queue):
@@ -184,8 +225,8 @@ class ResourceReporter(BaseModel):
 
     async def wait_llm_stream_report(self):
         """Wait for the LLM stream report to complete."""
-        queue = get_llm_stream_queue()
-        while self._llm_task:
+        queue = self._llm_queue
+        while self._llm_task and queue is not None:
             if queue.empty():
                 break
             await asyncio.sleep(0.01)

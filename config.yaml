@@ -22,10 +22,10 @@
 # LLM —— 主模型（必填）
 # ----------------------------------------------------------------------------
 llm:
-  api_key: "sk-YOUR_API_KEY"            # 单个 key，或 key 列表（轮换）；配置 oauth 时可留空
-  api_type: "openai"                     # openai | fireworks | open_llm | moonshot | mistral | yi | open_router | deepseek | siliconflow
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4o"                        # 模型名 / 部署名
+  api_key: sk-2hD6bHZxezKWA3ATuiR2qubQVo50ov2YiyJLJoKTFU0CEke2
+  api_type: openai
+  base_url: https://newapi.deepwisdom.ai/v1
+  model: "claude-opus-4-6"                        # 模型名 / 部署名
   # api_version: null                    # Azure 等需要时填写
   # pricing_plan: null                   # 成本结算计划
 

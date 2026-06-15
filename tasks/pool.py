@@ -17,12 +17,15 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
-from typing import Coroutine, Literal, Optional
+from typing import TYPE_CHECKING, Coroutine, Literal, Optional
 from xml.sax.saxutils import escape as _escape_xml
 
 from metagpt.common.logs import log_class
 from metagpt.common.schema import BackgroundTaskNotification, BgStatus, CauseBy, MessagePriority, MessageQueue, TaskType
 from metagpt.common.schema import TaskMeta
+
+if TYPE_CHECKING:
+    from metagpt.tasks.disk_output import TaskOutputStore
 from metagpt.common.const.tasks import (
     MAX_RESULT_LEN as _MAX_RESULT_LEN,
     DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT,
@@ -44,8 +47,14 @@ class BackgroundTaskPool:
         self,
         msg_buffer: MessageQueue,
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
+        output_store: "Optional[TaskOutputStore]" = None,
     ) -> None:
         self._msg_buffer = msg_buffer
+        # Optional disk-output store. When present, graph tasks submitted with
+        # ``progress=True`` get a per-task output sink so node-level
+        # ``report_progress`` events land on disk and surface as
+        # ``<delta-summary>`` blocks via ``TaskAttachmentGenerator``.
+        self._output_store = output_store
         self._tasks: dict[str, asyncio.Task] = {}
         self._meta: dict[str, TaskMeta] = {}  # all tasks (running + completed)
         self._counter = 0
@@ -69,6 +78,7 @@ class BackgroundTaskPool:
         task_type: str = TaskType.COROUTINE,
         task_kind: Optional[str] = None,
         agent_id: Optional[str] = None,
+        progress: bool = False,
     ) -> str:
         """Submit a coroutine for background execution.
 
@@ -80,6 +90,9 @@ class BackgroundTaskPool:
             task_type: Task type classification (shell/coroutine/agent).
             task_kind: Optional sub-type (e.g. "bash", "monitor").
             agent_id: Optional owning agent identifier.
+            progress: When *True* and an ``output_store`` is configured, install
+                a per-task progress sink so ``bggraph`` node events
+                (``report_progress``) are appended to the task's disk output.
 
         Returns a task_id like ``bg_1``, ``bg_2``, etc.
         """
@@ -95,6 +108,14 @@ class BackgroundTaskPool:
             agent_id=agent_id,
         )
         self._meta[task_id] = meta
+
+        # Progress sink (innermost wrapper): set the bggraph progress writer in
+        # the running task's context before the driver coroutine starts, so node
+        # events and the terminal notification land on disk.
+        if progress and self._output_store is not None:
+            self._output_store.init_output(task_id)
+            meta.output_path = self._output_store.get_output_path(task_id)
+            coro = self._with_progress(coro, task_id)
 
         if timeout is not None and timeout > 0:
             coro = self._with_timeout(coro, timeout)
@@ -319,6 +340,27 @@ class BackgroundTaskPool:
     async def _with_timeout(coro: Coroutine, timeout: float):
         """Wrap *coro* so it raises ``asyncio.TimeoutError`` after *timeout* seconds."""
         return await asyncio.wait_for(coro, timeout=timeout)
+
+    async def _with_progress(self, coro: Coroutine, task_id: str):
+        """Run *coro* with the bggraph progress writer bound to this task.
+
+        The writer renders each ``report_progress`` event and appends it to the
+        task's disk output. The contextvar is set inside the running task so it
+        propagates to the driver coroutine and the node tasks it spawns.
+        """
+        from metagpt.tasks.bggraph.report import (
+            make_progress_writer,
+            reset_progress_writer,
+            set_progress_writer,
+        )
+
+        store = self._output_store
+        writer = make_progress_writer(lambda line: store.append(task_id, line))
+        token = set_progress_writer(writer)
+        try:
+            return await coro
+        finally:
+            reset_progress_writer(token)
 
     @staticmethod
     def _build_xml(task_id: str, command_name: str, status: str, summary: str, result: Optional[str] = None) -> str:

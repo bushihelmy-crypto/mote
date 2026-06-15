@@ -66,6 +66,14 @@ Call the available tools to accomplish the user's goal. You may call multiple to
  - To finish, stop calling tools and reply with a normal text message reporting the outcome — the turn ends when you make no tool call. Do not call a tool in the same response as your final reply. Do not emit any end-of-task marker; replying without a tool call is how you end.
 """
 
+# Per-turn user-prompt command hint for the legacy XML text protocol. Supplied
+# by the XML command channel as CMD_PROMPT's ${command_hint} section. Carries the
+# <end></end> mechanic, which is XML-only — native must NOT receive it (the model
+# would echo <end></end> as literal text), so native supplies "" (no hint).
+XML_COMMAND_HINT = """
+Your commands (output ONE and ONLY ONE command block; the block can contain one or more commands. Use <end></end> when all requirements are met):
+"""
+
 SUMMARIZE_STATUS_WHEN_CONSECUTIVE = """
 You received a requirement but take too long to complete it. Please summarize the current progress and explain what you are doing now. Ask the user if they want you to continue. Output in 30 words.
 """

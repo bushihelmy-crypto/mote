@@ -6,7 +6,7 @@
 @File    : llm_config.py
 """
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from pydantic import field_validator, model_validator
 
@@ -50,6 +50,13 @@ class LLMConfig(YamlModel):
     Optional Fields in pydantic: https://docs.pydantic.dev/latest/migration/#required-optional-and-nullable-fields
     """
 
+    # Optional brand preset (e.g. 'deepseek', 'groq', 'anthropic'). When set, the
+    # provider catalog fills base_url + api_type (wire protocol) + an oauth link
+    # and resolves api_key from the brand's env vars — all only when the user
+    # left those fields empty (explicit values always win). Configs without
+    # ``provider`` behave exactly as before.
+    provider: Optional[str] = None
+
     # A single key, or a list of keys to rotate through on auth/billing failures
     # (recovery=ROTATE_CREDENTIAL). The first key is used until one is exhausted.
     api_key: Union[str, List[str]] = "sk-"
@@ -89,6 +96,28 @@ class LLMConfig(YamlModel):
 
     # Compress request messages under token limit
     compress_type: CompressType = CompressType.NO_COMPRESS
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_provider_preset(cls, values: Any) -> Any:
+        """Resolve a brand ``provider`` into base_url/api_type/oauth + env api_key.
+
+        Lazy-imports the catalog (which lives under ``router/``) so there is no
+        module-level ``common -> router`` import cycle (same trick as
+        ``OAuthProviderConfig._apply_provider_preset``). Explicit user values
+        always win; an absent/placeholder ``api_key`` is filled from the brand's
+        env vars when one is set.
+        """
+        if not isinstance(values, dict) or not values.get("provider"):
+            return values
+        from metagpt.router.llm.provider_catalog import apply_provider_preset, get_env_api_key
+
+        values = apply_provider_preset(values)
+        if not cls._api_key_is_valid(values.get("api_key")):
+            env_key = get_env_api_key(values["provider"])
+            if env_key:
+                values["api_key"] = env_key
+        return values
 
     @staticmethod
     def _api_key_is_valid(v: Union[str, List[str]]) -> bool:

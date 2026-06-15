@@ -79,10 +79,12 @@ def test_config_headers_merge_keeps_preset_and_user():
     assert cfg.headers_extra == {"anthropic-beta": "oauth-2025-04-20", "X-Org": "acme"}
 
 
-def test_config_client_id_still_required_with_preset():
-    # Preset never supplies client_id, so it remains required.
-    with pytest.raises(ValidationError):
-        OAuthProviderConfig(provider="openai")
+def test_config_client_id_optional_with_preset():
+    # client_id is now an ordinary optional field (BYO): a preset stays
+    # constructible without one; the requirement is enforced at flow-time.
+    cfg = OAuthProviderConfig(provider="openai")
+    assert cfg.client_id is None
+    assert cfg.token_url == "https://auth.openai.com/oauth/token"
 
 
 def test_config_requires_token_url_without_preset():

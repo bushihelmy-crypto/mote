@@ -14,7 +14,7 @@ import pytest
 
 from metagpt.common.base import CommandChannel
 from metagpt.common.const import IMAGES, PDFS
-from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE
+from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE, XML_COMMAND_HINT
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
@@ -37,6 +37,11 @@ class TestContract:
         guide = XmlCommandChannel().command_guide()
         assert guide == XML_COMMAND_GUIDE
         assert "<end></end>" in guide
+
+    def test_command_hint_is_xml_hint_with_end_marker(self):
+        hint = XmlCommandChannel().command_hint()
+        assert hint == XML_COMMAND_HINT
+        assert "<end></end>" in hint
 
     def test_tool_specs_is_none(self):
         # Text channel passes no native specs to the LLM.
@@ -125,49 +130,55 @@ class TestIterCommands:
 
 
 class TestRecordTurn:
-    def test_records_assistant_and_merged_outputs(self):
+    @pytest.mark.asyncio
+    async def test_records_assistant_and_merged_outputs(self):
         memory = FakeMemory()
         executed = [
             executed_command(name="Read", output="out-1"),
             executed_command(name="Glob", output="out-2"),
         ]
-        XmlCommandChannel().record_turn(memory, "<Read>...</Read>", executed)
+        await XmlCommandChannel().record_turn(memory, "<Read>...</Read>", executed)
         # XML records exactly two messages: assistant text + one merged user msg.
         assert len(memory.messages) == 2
         assert memory.messages[0].content == "<Read>...</Read>"
         assert memory.messages[1].content == "out-1\n\nout-2"
 
-    def test_single_output_not_joined(self):
+    @pytest.mark.asyncio
+    async def test_single_output_not_joined(self):
         memory = FakeMemory()
-        XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="solo")])
+        await XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="solo")])
         assert memory.messages[1].content == "solo"
 
-    def test_no_executed_records_placeholder_user_message(self):
+    @pytest.mark.asyncio
+    async def test_no_executed_records_placeholder_user_message(self):
         memory = FakeMemory()
-        XmlCommandChannel().record_turn(memory, "rsp", [])
+        await XmlCommandChannel().record_turn(memory, "rsp", [])
         assert len(memory.messages) == 2
         assert "No valid commands found" in memory.messages[1].content
 
-    def test_assistant_records_raw_command_rsp(self):
+    @pytest.mark.asyncio
+    async def test_assistant_records_raw_command_rsp(self):
         memory = FakeMemory()
-        XmlCommandChannel().record_turn(memory, "the raw text", [executed_command(output="x")])
+        await XmlCommandChannel().record_turn(memory, "the raw text", [executed_command(output="x")])
         assert memory.messages[0].content == "the raw text"
 
 
 class TestRecordTurnMedia:
-    def test_appends_media_message(self):
+    @pytest.mark.asyncio
+    async def test_appends_media_message(self):
         memory = FakeMemory()
         executed = [executed_command(output="placeholder", images=["IMG"], pdfs=["PDF"])]
-        XmlCommandChannel().record_turn(memory, "rsp", executed)
+        await XmlCommandChannel().record_turn(memory, "rsp", executed)
         # assistant + merged-outputs + media.
         assert len(memory.messages) == 3
         media = memory.messages[-1]
         assert media.metadata[IMAGES] == ["IMG"]
         assert media.metadata[PDFS] == ["PDF"]
 
-    def test_no_media_no_extra_message(self):
+    @pytest.mark.asyncio
+    async def test_no_media_no_extra_message(self):
         memory = FakeMemory()
-        XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="x")])
+        await XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="x")])
         assert len(memory.messages) == 2
 
 

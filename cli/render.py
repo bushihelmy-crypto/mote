@@ -9,14 +9,23 @@ result, and live **Markdown** rendering of streamed think tokens.
 
 ``rich`` is an **optional** enhancement. When it is not importable the module
 degrades gracefully: :func:`build_renderer` returns ``None`` and the REPL keeps
-using its existing plain-text path. Streaming uses a single, **transient**
-:class:`~rich.live.Live` region that re-renders ``Markdown(buffer)`` as tokens
-arrive, cropped to the viewport so it never scrolls (which would duplicate the
-reply). :meth:`ConsoleRenderer.end_stream` — called before any other console
-output (tool panel, final reply, error) and at the turn boundary — erases the
-preview and prints the complete Markdown once into the scrollback. A turn runs
-think -> act -> think in order, never concurrently, so at most one ``Live`` is
-active at a time; the renderer stays testable by injecting
+using its existing plain-text path.
+
+Streaming renders Markdown **incrementally, commit-as-you-go** so it never
+duplicates the reply — not even when the reply is taller than the terminal. As
+tokens arrive, every *finalized* Markdown block (a paragraph / heading / closed
+``` fence — anything before a blank line that is outside an open code fence) is
+printed **permanently** into the scrollback the moment it completes; only the
+trailing, still-growing block stays in a small **transient** :class:`~rich.live.Live`
+region. That live region is cropped to just below the viewport, so it can never
+fill the screen and force a scroll — which is what defeats the cursor-up erase
+and leaves a stale copy behind. Because committed blocks are plain appends
+(never erased) and the live tail is always erasable, the final reply appears
+exactly once regardless of length. :meth:`ConsoleRenderer.end_stream` — called
+before any other console output (tool panel, final reply, error) and at the turn
+boundary — stops the live tail and commits whatever block is still pending. A
+turn runs think -> act -> think in order, never concurrently, so at most one
+``Live`` is active at a time; the renderer stays testable by injecting
 ``Console(file=StringIO())`` and calling ``end_stream``.
 """
 
@@ -125,11 +134,12 @@ class ConsoleRenderer:
         # A caller may inject ``Console(file=StringIO(), force_terminal=True)``
         # to capture output for tests; default targets the real terminal.
         self._console = console if console is not None else Console()
-        # Live Markdown streaming state. ``_live`` is the active Live region (or
-        # None between segments); ``_stream_buffer`` accumulates the current
-        # segment's tokens so each refresh re-renders the whole Markdown so far.
+        # Live Markdown streaming state. ``_live`` is the active Live region for
+        # the trailing, not-yet-finalized block (or None when idle). ``_pending``
+        # holds that block's text: finalized blocks are committed to scrollback
+        # as they complete, leaving only the growing tail here.
         self._live: Optional["Live"] = None
-        self._stream_buffer = ""
+        self._pending = ""
 
     # ------------------------------------------------------------------
     # Basic output (REPL reuses these in place of its plain-text helpers)
@@ -176,27 +186,57 @@ class ConsoleRenderer:
     # ------------------------------------------------------------------
     # Token streaming (live, incremental Markdown rendering)
     # ------------------------------------------------------------------
-    def stream(self, token: Any) -> None:
-        """Append a streamed token and live-render the segment so far as Markdown.
+    @staticmethod
+    def _split_committable(text: str) -> tuple[str, str]:
+        """Split *text* into a ``(finalized, pending)`` pair at the last safe block boundary.
 
-        Lazily opens a :class:`~rich.live.Live` region on the first token of a
-        segment, then re-renders ``Markdown(buffer)`` on each token. The region
-        is finalized by :meth:`end_stream` (called before any other output and
-        at the turn boundary).
-
-        The preview is **cropped** to the viewport (``vertical_overflow="crop"``)
-        and **transient**: a re-render must never draw more lines than fit on
-        screen, otherwise the terminal scrolls and ``Live`` can no longer move
-        the cursor above the top of the screen to erase the prior frame — which
-        repaints the whole reply below the old one and duplicates it. The full,
-        un-cropped reply is rendered once by :meth:`end_stream` after the
-        transient preview is erased.
+        A boundary is a blank line that lies **outside** an open ``` code fence;
+        everything up to (and including) the block before it is finalized — it
+        cannot change as more tokens arrive — and is safe to commit permanently.
+        The trailing, still-growing block is returned as ``pending``. Fence state
+        is tracked so a blank line inside ``` ... ``` is never a boundary, and an
+        unclosed fence keeps the whole tail pending. The last element of the
+        split is the partial current line (no trailing newline yet), so it is
+        never treated as a boundary itself.
         """
-        text = token if isinstance(token, str) else str(token)
-        self._stream_buffer += text
+        lines = text.split("\n")
+        fence = False
+        last_boundary: Optional[int] = None
+        for k in range(len(lines) - 1):
+            line = lines[k]
+            if line.strip().startswith("```"):
+                fence = not fence
+                continue
+            if line == "" and not fence:
+                last_boundary = k
+        if last_boundary is None:
+            return "", text
+        return "\n".join(lines[:last_boundary]), "\n".join(lines[last_boundary + 1:])
+
+    def _tail(self, text: str) -> str:
+        """Crop *text* to the last few lines so the live region never fills the screen.
+
+        Keeping the live tail strictly shorter than the viewport guarantees it
+        can never scroll, so its transient erase always succeeds. The earlier
+        lines of an in-progress block are not lost: the whole block is committed
+        in full once it finalizes (or at :meth:`end_stream`).
+        """
+        try:
+            height = self._console.size.height or 24
+        except Exception:  # noqa: BLE001 — size probing must never break a turn
+            height = 24
+        cap = max(1, height - 2)
+        lines = text.split("\n")
+        return "\n".join(lines[-cap:])
+
+    def _show_tail(self) -> None:
+        """Create or update the live region to show the pending block's tail."""
+        if not self._pending.strip():
+            return
+        tail = Markdown(self._tail(self._pending))
         if self._live is None:
             self._live = Live(
-                Markdown(self._stream_buffer),
+                tail,
                 console=self._console,
                 refresh_per_second=12,
                 vertical_overflow="crop",
@@ -204,26 +244,51 @@ class ConsoleRenderer:
             )
             self._live.start()
         else:
-            self._live.update(Markdown(self._stream_buffer))
+            self._live.update(tail)
+
+    def stream(self, token: Any) -> None:
+        """Append a streamed token, committing finalized Markdown blocks as they complete.
+
+        Finalized blocks (everything before the last blank-line boundary outside
+        an open code fence) are printed permanently into the scrollback the
+        moment they complete; only the trailing, still-growing block stays in a
+        small transient :class:`~rich.live.Live` region (see the module docstring
+        for why this never duplicates the reply). The pending tail is finalized
+        by :meth:`end_stream` (called before any other output and at the turn
+        boundary).
+        """
+        text = token if isinstance(token, str) else str(token)
+        self._pending += text
+        finalized, remainder = self._split_committable(self._pending)
+        if finalized.strip():
+            # Shrink the live region to the new (smaller) tail first, then print
+            # the finalized block above it. While a Live is running rich routes
+            # console prints above the live region, so the committed block lands
+            # permanently in the scrollback without disturbing the tail.
+            self._pending = remainder
+            if self._live is not None:
+                self._live.update(Markdown(self._tail(remainder)))
+            self._console.print(Markdown(finalized))
+        self._show_tail()
 
     def end_stream(self) -> None:
-        """Finalize the active live stream (if any), printing the full reply.
+        """Finalize streaming: stop the live tail and commit the pending block.
 
-        Stops the transient preview (erasing its on-screen region), then renders
-        the complete accumulated Markdown once into the scrollback so long
-        replies survive in full without the per-frame duplication that a tall,
-        re-rendered Live region produces. Idempotent and cheap when no stream is
-        active. Resets the buffer so the next segment starts fresh.
+        Stops the transient live region (erasing its small on-screen tail — which
+        is always erasable because it never filled the screen), then renders the
+        remaining pending block once into the scrollback. Idempotent and cheap
+        when no stream is active. Resets state so the next segment starts fresh.
         """
-        if self._live is None:
+        if self._live is None and not self._pending:
             return
         live, self._live = self._live, None
-        buffer, self._stream_buffer = self._stream_buffer, ""
+        pending, self._pending = self._pending, ""
         try:
-            live.stop()  # transient -> erases the in-progress preview region
+            if live is not None:
+                live.stop()  # transient -> erases the (small, erasable) tail
         finally:
-            if buffer.strip():
-                self._console.print(Markdown(buffer))
+            if pending.strip():
+                self._console.print(Markdown(pending))
 
     # ------------------------------------------------------------------
     # Hook entry point

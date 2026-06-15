@@ -20,10 +20,18 @@ from metagpt.common.utils.yaml_model import YamlModel
 
 
 class GrantType(str, Enum):
-    """OAuth2 grant types supported in P1 (headless only)."""
+    """OAuth2 grant types.
+
+    ``CLIENT_CREDENTIALS`` / ``REFRESH_TOKEN`` are headless (no user
+    interaction). ``AUTHORIZATION_CODE`` (PKCE, loopback redirect) and
+    ``DEVICE_CODE`` (RFC 8628) are interactive login flows that mint the first
+    token; subsequent refreshes use the stored ``refresh_token``.
+    """
 
     CLIENT_CREDENTIALS = "client_credentials"
     REFRESH_TOKEN = "refresh_token"
+    AUTHORIZATION_CODE = "authorization_code"
+    DEVICE_CODE = "device_code"
 
 
 class StoreBackend(str, Enum):
@@ -35,17 +43,18 @@ class StoreBackend(str, Enum):
 
 
 class OAuthProviderConfig(YamlModel):
-    """Declarative OAuth settings for a single OpenAI-compatible provider.
+    """Declarative OAuth settings for a single provider.
 
-    All token-endpoint interaction is headless in P1: a token is either minted
-    via the ``client_credentials`` grant or refreshed from a configured/stored
-    ``refresh_token``. No interactive browser/login flow (deferred to P2).
+    Supports both headless grants (``client_credentials`` / ``refresh_token``)
+    and interactive login flows (``authorization_code`` with PKCE, ``device_code``
+    per RFC 8628). Interactive flows mint the first token via
+    ``OAuthManager.login``; subsequent calls refresh from the stored token.
     """
 
     # Optional provider preset: when set, public endpoint metadata (issuer,
-    # token_url, scopes, grant_type, headers_extra) is filled from the registry
-    # in ``metagpt.router.oauth.registry``. Explicit fields always win. The
-    # ``client_id`` is never preset — bring your own.
+    # token_url, authorize_url, device_authorization_url, scopes, grant_type,
+    # headers_extra) is filled from the registry in
+    # ``metagpt.router.oauth.registry``. Explicit fields always win.
     provider: Optional[str] = Field(default=None, description="Provider preset name, e.g. 'openai' | 'anthropic'.")
 
     # Endpoints / identity
@@ -53,13 +62,27 @@ class OAuthProviderConfig(YamlModel):
     token_url: Optional[str] = Field(
         default=None, description="OAuth2 token endpoint used for mint/refresh (or supplied via provider preset)."
     )
-    client_id: str = Field(description="OAuth client identifier.")
+    authorize_url: Optional[str] = Field(
+        default=None, description="Authorization endpoint for the interactive authorization_code flow."
+    )
+    device_authorization_url: Optional[str] = Field(
+        default=None, description="Device authorization endpoint for the device_code flow (RFC 8628)."
+    )
+    redirect_uri: str = Field(
+        default="http://localhost:53692/callback",
+        description="Loopback redirect URI for the authorization_code flow.",
+    )
+    # ``client_id`` is an ordinary optional field defaulting to None (bring your
+    # own). Out-of-box login for a vendor only happens when someone fills the
+    # public PKCE client_id (config/env). The requirement is enforced at
+    # flow-time, not config-time, so presets stay constructible without it.
+    client_id: Optional[str] = Field(default=None, description="OAuth client identifier (BYO; None by default).")
     client_secret: Optional[str] = Field(default=None, description="OAuth client secret (confidential clients).")
 
     # Grant inputs
     grant_type: GrantType = Field(
         default=GrantType.CLIENT_CREDENTIALS,
-        description="Headless grant used to obtain the first token.",
+        description="Grant used to obtain the first token (headless or interactive).",
     )
     refresh_token: Optional[str] = Field(
         default=None, description="Pre-provisioned refresh token (used when grant_type=refresh_token)."

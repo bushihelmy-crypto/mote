@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Coroutine, Optional
+from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 from metagpt.common.schema.messages import UserMessage
 
@@ -59,11 +59,21 @@ class BgTaskResult:
         poll: If not *None*, a coroutine that will be submitted to
             ``BackgroundTaskPool`` for background polling.
         command_name: Human-readable label used in the completion notification.
+        initial_params: Original kwargs the task was created with (restart support).
+        factory: Rebuild factory — a ``BgGraph`` compiled executor, or the
+            original tool function, used by ``resume_tasks`` to restart from scratch.
+        graph_ref: ``BgGraph`` reference; only set for pipeline tasks, used for
+            per-node resume / skip.
     """
 
     result: Any = None
     poll: Optional[Coroutine] = field(default=None, repr=False)
     command_name: str = ""
+
+    # --- restart / resume support (only populated by BgGraph pipelines) ---
+    initial_params: Optional[dict] = field(default=None, repr=False)
+    factory: Optional[Callable[..., Awaitable["BgTaskResult"]]] = field(default=None, repr=False)
+    graph_ref: Optional[Any] = field(default=None, repr=False)
 
 
 @dataclass

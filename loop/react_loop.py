@@ -89,7 +89,7 @@ class ReActLoop(BaseLoop):
     # Observe — pull from buffer, filter, commit to memory store
     # ------------------------------------------------------------------
 
-    def _observe(self, max_priority: int = MessagePriority.LATER) -> int:
+    async def _observe(self, max_priority: int = MessagePriority.LATER) -> int:
         """Pop messages from the buffer, filter, commit to memory.
 
         Returns the count of new messages that passed the filter (the "news").
@@ -116,9 +116,9 @@ class ReActLoop(BaseLoop):
 
         # Commit to memory store.
         if ctx.observe_all:
-            self._memory.add_batch(news_raw)
+            await self._memory.add_batch(news_raw)
         else:
-            self._memory.add_batch(filtered)
+            await self._memory.add_batch(filtered)
 
         self.latest_observed_msg = filtered[-1] if filtered else None
 
@@ -190,7 +190,7 @@ class ReActLoop(BaseLoop):
 
             # The channel writes this turn into memory in its protocol's shape
             # (XML: text + merged outputs; native: tool_calls + per-call tool results).
-            self._channel.record_turn(self._memory, self._think_engine.result.content, executed)
+            await self._channel.record_turn(self._memory, self._think_engine.result.content, executed)
 
             await self._think_engine.join()
 
@@ -209,7 +209,7 @@ class ReActLoop(BaseLoop):
         so there is nothing to execute and the loop stops.
         """
         content = self._think_engine.result.content or ""
-        self._channel.record_turn(self._memory, content, [])
+        await self._channel.record_turn(self._memory, content, [])
         await self._think_engine.join()
         return AIMessage(
             content=content,
@@ -224,7 +224,7 @@ class ReActLoop(BaseLoop):
         self._ctx = self._context_provider.loop_context()
 
         # Initial gate: if no messages observed, nothing to do.
-        if not self._observe():
+        if not await self._observe():
             return None
 
         self._set_active(True)
@@ -233,7 +233,7 @@ class ReActLoop(BaseLoop):
         self._consecutive = 0
         rsp = AIMessage(content="No actions taken yet", cause_by=CauseBy.ACTION)
         while actions_taken < self._ctx.max_react_loop:
-            if self._observe(max_priority=MessagePriority.NEXT):
+            if await self._observe(max_priority=MessagePriority.NEXT):
                 self._consecutive = 0
                 self._set_active(True)
             # think
@@ -244,7 +244,7 @@ class ReActLoop(BaseLoop):
                     while bg_pool.has_pending():
                         await bg_pool.wait_any()
                         break
-                    self._observe(max_priority=MessagePriority.LATER)
+                    await self._observe(max_priority=MessagePriority.LATER)
                     self._set_active(True)
                     continue
                 break
@@ -281,7 +281,7 @@ class ReActLoop(BaseLoop):
                 llm = await self._context_provider.resolve_llm(context)
                 question = await llm.aask(context)
                 result = await self._executor.run_command("ask_human", {"question": question})
-                self._memory.add(
+                await self._memory.add(
                     UserMessage(content="User's extra instruction: " + result.output, cause_by=CauseBy.RUN_COMMAND)
                 )
                 self._consecutive = 0

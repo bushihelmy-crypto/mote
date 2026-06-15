@@ -17,8 +17,11 @@ from metagpt.common.const import CONFIG_ROOT
 from metagpt.common.logs import log_class
 from metagpt.router.oauth.client import OAuthClient
 from metagpt.router.oauth.errors import OAuthConfigError, OAuthRefreshError
+from metagpt.router.oauth.flows import LoginCallbacks
 from metagpt.router.oauth.models import OAuthToken
 from metagpt.router.oauth.storage import CredentialStore, get_store
+
+_INTERACTIVE_GRANTS = (GrantType.AUTHORIZATION_CODE, GrantType.DEVICE_CODE)
 
 _LOCK_DIR = CONFIG_ROOT / "oauth"
 
@@ -72,6 +75,31 @@ class OAuthManager:
         except OAuthRefreshError:
             return None
 
+    def login(self, callbacks: Optional[LoginCallbacks] = None) -> OAuthToken:
+        """Run the interactive login flow for this provider and persist the token.
+
+        Dispatches by ``grant_type``: ``authorization_code`` (PKCE + loopback)
+        or ``device_code`` (RFC 8628). Raises :class:`OAuthConfigError` for a
+        headless grant type (which has no interactive login).
+        """
+        grant = self.config.grant_type
+        if grant == GrantType.AUTHORIZATION_CODE:
+            from metagpt.router.oauth.flows import run_auth_code_flow
+
+            token = run_auth_code_flow(self.config, callbacks)
+        elif grant == GrantType.DEVICE_CODE:
+            from metagpt.router.oauth.flows import run_device_code_flow
+
+            token = run_device_code_flow(self.config, callbacks)
+        else:
+            raise OAuthConfigError(
+                f"login() requires an interactive grant_type; {grant.value!r} is headless"
+            )
+
+        self._store.save(token)
+        self._cached = token
+        return token
+
     # --- internals ---------------------------------------------------------
 
     def _refresh_locked(self, *, buffer: Optional[int], force: bool = False) -> OAuthToken:
@@ -104,5 +132,10 @@ class OAuthManager:
         if self.config.grant_type == GrantType.REFRESH_TOKEN:
             raise OAuthConfigError(
                 "grant_type=refresh_token but no refresh_token is configured or stored"
+            )
+        if self.config.grant_type in _INTERACTIVE_GRANTS:
+            raise OAuthConfigError(
+                f"grant_type={self.config.grant_type.value!r} has no stored token; "
+                "run an interactive login first (OAuthManager.login)"
             )
         return self._client.client_credentials()

@@ -27,6 +27,17 @@ from metagpt.tasks.attachment import (
     format_attachment_xml,
 )
 from metagpt.tasks.turn_context_source import BackgroundTaskContextSource
+from metagpt.tasks.bggraph import (
+    END,
+    START,
+    BatchFailureError,
+    BgGraph,
+    GraphRecursionError,
+    GraphState,
+    NodeStatus,
+    RouterError,
+    Stage,
+)
 
 __all__ = [
     "BgTaskResult",
@@ -47,4 +58,13 @@ __all__ = [
     "GenerateResult",
     "format_attachment_xml",
     "BackgroundTaskContextSource",
+    "BgGraph",
+    "GraphState",
+    "Stage",
+    "NodeStatus",
+    "START",
+    "END",
+    "RouterError",
+    "GraphRecursionError",
+    "BatchFailureError",
 ]

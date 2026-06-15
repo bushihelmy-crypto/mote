@@ -17,12 +17,15 @@ from metagpt.common.config.config.oauth_config import GrantType, OAuthProviderCo
 from metagpt.common.logs import log_class
 from metagpt.router.oauth.errors import (
     OAuthConfigError,
+    OAuthRefreshError,
     classify_refresh_failure,
 )
 from metagpt.router.oauth.jwt_utils import JWTDecodeError, parse_claims
-from metagpt.router.oauth.models import OAuthToken
+from metagpt.router.oauth.models import DeviceCodeInfo, OAuthToken
 
 _DEFAULT_TIMEOUT = 30.0
+_DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+_DEVICE_FLOW_DEFAULT_EXPIRY = 900  # seconds; fallback when server omits expires_in
 
 
 @log_class(level="DEBUG")
@@ -68,6 +71,81 @@ class OAuthClient:
             token.refresh_token = refresh_token
         return token
 
+    def exchange_code(self, code: str, code_verifier: str, redirect_uri: str) -> OAuthToken:
+        """Exchange an authorization ``code`` for a token (RFC 6749 §4.1.3 + PKCE)."""
+        if not code:
+            raise OAuthConfigError("exchange_code() requires a non-empty authorization code")
+        self._require_client_id()
+        data = {
+            "grant_type": GrantType.AUTHORIZATION_CODE.value,
+            "code": code,
+            "client_id": self.config.client_id,
+            "code_verifier": code_verifier,
+            "redirect_uri": redirect_uri,
+        }
+        if self.config.client_secret:
+            data["client_secret"] = self.config.client_secret
+        return self._token_request(data)
+
+    def request_device_code(self) -> DeviceCodeInfo:
+        """Start the device flow: request a device + user code (RFC 8628 §3.1)."""
+        self._require_client_id()
+        url = self.config.device_authorization_url
+        if not url:
+            raise OAuthConfigError("device_code flow requires a 'device_authorization_url'")
+        data = {"client_id": self.config.client_id}
+        if self.config.scopes:
+            data["scope"] = " ".join(self.config.scopes)
+        with httpx.Client(timeout=self._timeout) as client:
+            resp = client.post(url, data=data, headers={"Accept": "application/json"})
+        if not resp.is_success:
+            error_code, description = self._parse_error(resp)
+            raise classify_refresh_failure(
+                status_code=resp.status_code, error_code=error_code, description=description
+            )
+        return self._parse_device_code(resp)
+
+    def poll_device_token(
+        self, device_code: str, *, interval: int = 5, expires_in: Optional[int] = None
+    ) -> OAuthToken:
+        """Poll the token endpoint until the user authorizes (RFC 8628 §3.4).
+
+        Handles ``authorization_pending`` (keep waiting) and ``slow_down``
+        (back off by 5s). Raises :class:`OAuthRefreshError` on expiry or a
+        terminal error code.
+        """
+        self._require_client_id()
+        window = expires_in if expires_in is not None else _DEVICE_FLOW_DEFAULT_EXPIRY
+        deadline = time.time() + window
+        delay = max(1, int(interval or 5))
+        token_url = self.config.resolved_token_url()
+        while True:
+            if time.time() >= deadline:
+                raise OAuthRefreshError(
+                    "device authorization expired before approval",
+                    error_code="expired_token",
+                    recoverable=False,
+                )
+            time.sleep(delay)
+            data = {
+                "grant_type": _DEVICE_CODE_GRANT,
+                "device_code": device_code,
+                "client_id": self.config.client_id,
+            }
+            with httpx.Client(timeout=self._timeout) as client:
+                resp = client.post(token_url, data=data, headers={"Accept": "application/json"})
+            if resp.is_success:
+                return self._parse_token(resp)
+            error_code, description = self._parse_error(resp)
+            if error_code == "authorization_pending":
+                continue
+            if error_code == "slow_down":
+                delay += 5
+                continue
+            raise classify_refresh_failure(
+                status_code=resp.status_code, error_code=error_code, description=description
+            )
+
     def revoke(self, token: str, *, token_type_hint: Optional[str] = None) -> bool:
         """Best-effort RFC 7009 token revocation. Returns True on 2xx."""
         revoke_url = self.config.issuer
@@ -84,6 +162,40 @@ class OAuthClient:
         return resp.is_success
 
     # --- internals ---------------------------------------------------------
+
+    def _require_client_id(self) -> None:
+        """Enforce the flow-time ``client_id`` requirement (None by default).
+
+        Login flows can't proceed without a client identifier; presets ship
+        without one so a vendor's CLI isn't impersonated. Surface a clear error
+        telling the user to bring their own.
+        """
+        if not self.config.client_id:
+            raise OAuthConfigError(
+                "this OAuth flow requires a 'client_id'; set it in config or via env (bring your own)"
+            )
+
+    @staticmethod
+    def _parse_device_code(resp: "httpx.Response") -> DeviceCodeInfo:
+        body = resp.json()
+        device_code = body.get("device_code")
+        user_code = body.get("user_code")
+        verification_uri = body.get("verification_uri") or body.get("verification_url")
+        if not (device_code and user_code and verification_uri):
+            raise classify_refresh_failure(
+                status_code=resp.status_code,
+                error_code="invalid_response",
+                description="device authorization response missing required fields",
+            )
+        interval = body.get("interval")
+        return DeviceCodeInfo(
+            device_code=device_code,
+            user_code=user_code,
+            verification_uri=verification_uri,
+            verification_uri_complete=body.get("verification_uri_complete"),
+            interval=int(interval) if isinstance(interval, (int, float)) else 5,
+            expires_in=body.get("expires_in"),
+        )
 
     def _token_request(self, data: dict) -> OAuthToken:
         url = self.config.resolved_token_url()

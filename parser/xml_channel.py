@@ -7,7 +7,7 @@ from metagpt.common.logs import logger
 from metagpt.common.schema import AIMessage, CauseBy, UserMessage
 from metagpt.common.utils.role_zero_utils import parse_commands2
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
-from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE
+from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE, XML_COMMAND_HINT
 
 if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine
@@ -22,6 +22,9 @@ class XmlCommandChannel(CommandChannel):
 
     def command_guide(self) -> str:
         return XML_COMMAND_GUIDE
+
+    def command_hint(self) -> str:
+        return XML_COMMAND_HINT
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return None
@@ -45,12 +48,12 @@ class XmlCommandChannel(CommandChannel):
         for cmd in command_list or []:
             yield {"id": None, **cmd, "status": "running", "error_msg": ""}
 
-    def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
+    async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
         outputs = "\n\n".join(e["output"] for e in executed) if executed else (
             "No valid commands found for execution, pay attention to the output format."
         )
-        memory.add(AIMessage(content=command_rsp))
-        memory.add(UserMessage(content=outputs, cause_by=CauseBy.RUN_COMMAND))
+        await memory.add(AIMessage(content=command_rsp))
+        await memory.add(UserMessage(content=outputs, cause_by=CauseBy.RUN_COMMAND))
         media = _media_message(*_collect_media(executed))
         if media is not None:
-            memory.add(media)
+            await memory.add(media)

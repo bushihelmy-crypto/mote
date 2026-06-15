@@ -15,12 +15,29 @@ import asyncio
 import pytest
 
 from metagpt.common.config.config.llm_config import LLMConfig, LLMType
+from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
 from metagpt.router.cost import CostTracker
 from metagpt.router.llm.anthropic_api import AnthropicLLM
 from metagpt.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
 
 
 # -- fakes ------------------------------------------------------------------
+class _StreamCapture:
+    """Bus subscriber that collects streamed LLM tokens (sync delivery)."""
+
+    priority = 50
+
+    def __init__(self):
+        self.tokens: list[str] = []
+
+    def handle_sync(self, event) -> None:
+        if isinstance(event, LLMStreamDeltaEvent):
+            self.tokens.append(event.token)
+
+    async def handle(self, event):
+        return None
+
+
 class _Block:
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -332,8 +349,6 @@ class TestCompletion:
 
     def test_stream_tool_streams_text_and_returns_message(self):
         """The native tool stream mirrors text live and returns the assembled Message."""
-        from metagpt.common.logs.stream import set_llm_stream_logfunc
-
         llm = _make_llm()
         final = _Resp(
             [
@@ -345,16 +360,14 @@ class TestCompletion:
         fake = _FakeMessages(stream_texts=["let me ", "read it"], final=final)
         llm.aclient = _FakeClient(fake)
 
-        streamed: list[str] = []
-        old = __import__("metagpt.common.logs.stream", fromlist=["_llm_stream_log"])._llm_stream_log
-        set_llm_stream_logfunc(streamed.append)
-        try:
+        bus = EventBus()
+        cap = _StreamCapture()
+        bus.subscribe(cap)
+        with set_bus(bus):
             rsp = run(llm._achat_completion_stream_tool([{"role": "user", "content": "hi"}], raise_if_empty=False))
-        finally:
-            set_llm_stream_logfunc(old)
 
-        # Text deltas mirrored to the sink as they arrived.
-        assert "".join(streamed).startswith("let me read it")
+        # Text deltas mirrored to the bus as they arrived.
+        assert "".join(cap.tokens).startswith("let me read it")
         # Returned object normalizes exactly like the blocking path.
         assert llm.get_choice_text(rsp) == "let me read it"
         calls = llm.get_choice_tool_calls(rsp)

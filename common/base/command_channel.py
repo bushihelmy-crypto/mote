@@ -30,6 +30,18 @@ class CommandChannel(ABC):
         """
         return ""
 
+    def command_hint(self) -> str:
+        """Per-turn user-prompt command hint for this protocol ("" if none).
+
+        Supplied as CMD_PROMPT's ${command_hint} section (the user prompt sent
+        each turn). XML carries the "ONE and ONLY ONE command block ... <end></end>"
+        instruction; native supplies "" so the model is never told to emit
+        <end></end> (which it would otherwise echo as literal text). Mirrors
+        command_guide(), but for the per-turn user prompt rather than the system
+        prompt.
+        """
+        return ""
+
     @abstractmethod
     def tool_specs(self, executor) -> Optional[list[dict]]:
         """Native tool specs to pass to the LLM, or None for the text channel."""
@@ -49,7 +61,7 @@ class CommandChannel(ABC):
         yield  # pragma: no cover — makes this an async generator for typing
 
     @abstractmethod
-    def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
+    async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
         """Record one think->act round into memory in this protocol's shape.
 
         Args:

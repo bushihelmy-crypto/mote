@@ -14,7 +14,7 @@ import asyncio
 from types import SimpleNamespace
 
 from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.logs.stream import set_llm_stream_logfunc
+from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
 from metagpt.router.cost import CostTracker
 from metagpt.router.llm.openai_api import OpenAILLM
 
@@ -74,18 +74,30 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def _capture_stream(fn):
-    """Run *fn* while capturing tokens pushed to the global stream sink."""
-    streamed: list[str] = []
-    import metagpt.common.logs.stream as stream_mod
+class _StreamCapture:
+    """Bus subscriber that collects streamed LLM tokens (sync delivery)."""
 
-    old = stream_mod._llm_stream_log
-    set_llm_stream_logfunc(streamed.append)
-    try:
+    priority = 50
+
+    def __init__(self):
+        self.tokens: list[str] = []
+
+    def handle_sync(self, event) -> None:
+        if isinstance(event, LLMStreamDeltaEvent):
+            self.tokens.append(event.token)
+
+    async def handle(self, event):
+        return None
+
+
+def _capture_stream(fn):
+    """Run *fn* while capturing tokens emitted onto a bound event bus."""
+    bus = EventBus()
+    cap = _StreamCapture()
+    bus.subscribe(cap)
+    with set_bus(bus):
         result = fn()
-    finally:
-        set_llm_stream_logfunc(old)
-    return result, "".join(streamed)
+    return result, "".join(cap.tokens)
 
 
 # -- tests ------------------------------------------------------------------

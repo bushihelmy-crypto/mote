@@ -36,37 +36,42 @@ MICRO_CFG = ContextManagerConfig(
 # ---------------------------------------------------------------------------
 
 
-def test_add_and_count_and_get_all():
+@pytest.mark.asyncio
+async def test_add_and_count_and_get_all():
     cm = ContextManager(model="gpt-4")
-    cm.add(text_msg("a"))
-    cm.add(text_msg("b"))
+    await cm.add(text_msg("a"))
+    await cm.add(text_msg("b"))
     assert cm.count() == 2
     assert [m.content for m in cm.get()] == ["a", "b"]
 
 
-def test_add_skips_none():
+@pytest.mark.asyncio
+async def test_add_skips_none():
     cm = ContextManager(model="gpt-4")
-    cm.add(None)
+    await cm.add(None)
     assert cm.count() == 0
 
 
-def test_add_batch_skips_falsy():
+@pytest.mark.asyncio
+async def test_add_batch_skips_falsy():
     cm = ContextManager(model="gpt-4")
-    cm.add_batch([text_msg("a"), None, text_msg("b")])
+    await cm.add_batch([text_msg("a"), None, text_msg("b")])
     assert cm.count() == 2
 
 
-def test_get_k_returns_tail():
+@pytest.mark.asyncio
+async def test_get_k_returns_tail():
     cm = ContextManager(model="gpt-4")
-    cm.add_batch([text_msg(str(i)) for i in range(5)])
+    await cm.add_batch([text_msg(str(i)) for i in range(5)])
     assert [m.content for m in cm.get(2)] == ["3", "4"]
     assert [m.content for m in cm.get(0)] == ["0", "1", "2", "3", "4"]
 
 
-def test_delete_present_and_absent():
+@pytest.mark.asyncio
+async def test_delete_present_and_absent():
     cm = ContextManager(model="gpt-4")
     m = text_msg("a")
-    cm.add(m)
+    await cm.add(m)
     cm.delete(m)
     assert cm.count() == 0
     # deleting again (absent) is a safe no-op
@@ -74,17 +79,19 @@ def test_delete_present_and_absent():
     assert cm.count() == 0
 
 
-def test_clear():
+@pytest.mark.asyncio
+async def test_clear():
     cm = ContextManager(model="gpt-4")
-    cm.add_batch([text_msg("a"), text_msg("b")])
+    await cm.add_batch([text_msg("a"), text_msg("b")])
     cm.clear()
     assert cm.count() == 0
 
 
-def test_messages_backs_injected_context():
+@pytest.mark.asyncio
+async def test_messages_backs_injected_context():
     ctx = LLMCallContext()
     cm = ContextManager(ctx, model="gpt-4")
-    cm.add(text_msg("a"))
+    await cm.add(text_msg("a"))
     # the store mutates the shared context (so it gets checkpointed)
     assert ctx.messages is cm.messages
     assert [m.content for m in ctx.messages] == ["a"]
@@ -96,9 +103,10 @@ def test_model_property_fallback():
     assert ContextManager(llm=FakeLLM(model="from-llm")).model == "from-llm"
 
 
-def test_token_state_returns_snapshot():
+@pytest.mark.asyncio
+async def test_token_state_returns_snapshot():
     cm = ContextManager(model="gpt-4")
-    cm.add(text_msg("hello world"))
+    await cm.add(text_msg("hello world"))
     state = cm.token_state()
     assert state.model == "gpt-4"
     assert state.token_count > 0
@@ -120,7 +128,7 @@ async def test_manage_history_microcompact_only():
     # No llm → only the cheap pass runs. 4 Read pairs over trigger=2 fold.
     ctx = LLMCallContext()
     cm = ContextManager(ctx, config=MICRO_CFG, model="gpt-4")
-    cm.add_batch(make_pairs(4))
+    await cm.add_batch(make_pairs(4))
     changed = await cm.manage_history()
     assert changed is True
     cleared = [m for m in ctx.messages if m.content == "[Old tool result content cleared]"]
@@ -130,7 +138,7 @@ async def test_manage_history_microcompact_only():
 @pytest.mark.asyncio
 async def test_manage_history_no_trigger_returns_false():
     cm = ContextManager(config=MICRO_CFG, model="gpt-4")
-    cm.add_batch(make_pairs(2))  # below microcompact trigger, no autocompact llm
+    await cm.add_batch(make_pairs(2))  # below microcompact trigger, no autocompact llm
     assert await cm.manage_history() is False
 
 
@@ -144,7 +152,7 @@ async def test_manage_history_runs_autocompact(force_autocompact_threshold):
     )
     llm = FakeLLM(summary="<summary>compacted</summary>")
     cm = ContextManager(ctx, llm=llm, config=cfg, model="m")
-    cm.add_batch([text_msg(f"turn {i} content here") for i in range(6)])
+    await cm.add_batch([text_msg(f"turn {i} content here") for i in range(6)])
     changed = await cm.manage_history()
     assert changed is True
     # history replaced by [summary] + tail, swapped into the backing context
@@ -162,7 +170,7 @@ async def test_manage_history_threads_failure_counter(force_autocompact_threshol
     )
     llm = FakeLLM(raise_exc=RuntimeError("nope"))
     cm = ContextManager(llm=llm, config=cfg, model="m")
-    cm.add_batch([text_msg(f"turn {i}") for i in range(6)])
+    await cm.add_batch([text_msg(f"turn {i}") for i in range(6)])
     await cm.manage_history()
     assert cm._consecutive_failures == 1
     await cm.manage_history()
@@ -177,7 +185,7 @@ async def test_manage_history_threads_failure_counter(force_autocompact_threshol
 @pytest.mark.asyncio
 async def test_prepare_request_appends_prompt_without_storing():
     cm = ContextManager(config=MICRO_CFG, model="gpt-4")
-    cm.add(text_msg("history"))
+    await cm.add(text_msg("history"))
     req = await cm.prepare_request("the new prompt")
     assert [m.content for m in req] == ["history", "the new prompt"]
     assert isinstance(req[-1], UserMessage)
@@ -188,7 +196,7 @@ async def test_prepare_request_appends_prompt_without_storing():
 @pytest.mark.asyncio
 async def test_prepare_request_accepts_message_object():
     cm = ContextManager(config=MICRO_CFG, model="gpt-4")
-    cm.add(text_msg("history"))
+    await cm.add(text_msg("history"))
     prompt_msg = UserMessage(content="prebuilt")
     req = await cm.prepare_request(prompt_msg)
     assert req[-1] is prompt_msg
@@ -197,7 +205,7 @@ async def test_prepare_request_accepts_message_object():
 @pytest.mark.asyncio
 async def test_prepare_request_none_prompt_returns_history_copy():
     cm = ContextManager(config=MICRO_CFG, model="gpt-4")
-    cm.add(text_msg("history"))
+    await cm.add(text_msg("history"))
     req = await cm.prepare_request(None)
     assert [m.content for m in req] == ["history"]
     # a fresh list — mutating it does not touch the store
@@ -209,7 +217,7 @@ async def test_prepare_request_none_prompt_returns_history_copy():
 async def test_prepare_request_manage_false_skips_compaction():
     ctx = LLMCallContext()
     cm = ContextManager(ctx, config=MICRO_CFG, model="gpt-4")
-    cm.add_batch(make_pairs(4))  # would fold if management ran
+    await cm.add_batch(make_pairs(4))  # would fold if management ran
     req = await cm.prepare_request("prompt", manage=False)
     assert all(m.content != "[Old tool result content cleared]" for m in ctx.messages)
     assert req[-1].content == "prompt"

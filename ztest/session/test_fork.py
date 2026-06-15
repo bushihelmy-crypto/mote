@@ -101,15 +101,16 @@ def test_fork_listing_surfaces_parent(tmp_path):
     assert infos["parent"].parent_session_id is None
 
 
-def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypatch):
     from metagpt.roles import Role
     from metagpt.router.llm.context import Context
 
     monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
 
     parent = Role(name="P", context=Context())
-    parent.context_manager.add(UserMessage(content="one"))
-    parent.context_manager.add(UserMessage(content="two"))
+    await parent.context_manager.add(UserMessage(content="one"))
+    await parent.context_manager.add(UserMessage(content="two"))
 
     child = parent.fork_session()
     assert child.state.parent_session_id == parent.session_id

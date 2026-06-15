@@ -26,6 +26,21 @@ class TokenClaims(BaseModel):
     raw: Dict = Field(default_factory=dict)
 
 
+class DeviceCodeInfo(BaseModel):
+    """Device authorization response (RFC 8628 §3.2).
+
+    Surfaced to the user (``user_code`` + ``verification_uri``) so they can
+    authorize the login from a browser while the client polls the token endpoint.
+    """
+
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: Optional[str] = None
+    interval: int = 5
+    expires_in: Optional[int] = None
+
+
 class OAuthToken(BaseModel):
     """A bearer access token plus refresh material and expiry metadata."""
 

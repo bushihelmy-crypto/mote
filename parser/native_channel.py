@@ -4,9 +4,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
-from metagpt.common.const import TOOL_CALL_ID, TOOL_CALLS
 from metagpt.common.logs import logger
-from metagpt.common.schema import AIMessage, CauseBy, UserMessage
+from metagpt.common.schema import AIMessage, ToolMessage
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
 from metagpt.common.prompt.output import NATIVE_COMMAND_GUIDE
 from metagpt.parser.xml_channel import XmlCommandChannel
@@ -27,6 +26,11 @@ class NativeToolChannel(CommandChannel):
 
     def command_guide(self) -> str:
         return NATIVE_COMMAND_GUIDE
+
+    def command_hint(self) -> str:
+        # No per-turn hint: tools are structured API calls and NATIVE_COMMAND_GUIDE
+        # already covers the mechanics. Crucially, no <end></end> instruction here.
+        return ""
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return executor.get_native_tool_specs(provider=self._provider)
@@ -49,24 +53,20 @@ class NativeToolChannel(CommandChannel):
                 "error_msg": "",
             }
 
-    def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
+    async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
         tool_calls = [
             {"id": e["id"], "name": e["name"], "args": e.get("args") or {}}
             for e in executed
             if e.get("id")
         ]
-        assistant = AIMessage(content=command_rsp or "")
-        assistant.metadata[TOOL_CALLS] = tool_calls
-        memory.add(assistant)
+        await memory.add(AIMessage(content=command_rsp or "", tool_calls=tool_calls))
         for e in executed:
             if not e.get("id"):
                 continue
-            result = UserMessage(content=e["output"], cause_by=CauseBy.RUN_COMMAND)
-            result.metadata[TOOL_CALL_ID] = e["id"]
-            memory.add(result)
+            await memory.add(ToolMessage(content=e["output"], tool_call_id=e["id"]))
         media = _media_message(*_collect_media(executed))
         if media is not None:
-            memory.add(media)
+            await memory.add(media)
 
     def turn_signature(self, think_engine: "BaseThinkEngine") -> str:
         calls = [
@@ -86,19 +86,31 @@ class NativeToolChannel(CommandChannel):
 
 
 def infer_native_tool_provider(llm_config) -> str:
-    """Infer the native tool-spec envelope from the LLM model name.
+    """Infer the native tool-spec envelope from the resolved transport.
 
-    The envelope must match what the model expects, so we key on the model name
-    rather than api_type: in this fork every provider is served by the
-    OpenAI-compatible client (openai_api.py -> chat.completions.create), so
-    api_type is always "openai" and carries no signal -- but a Claude model
-    reached via that client still speaks the Anthropic tool shape. A model name
-    containing "claude" -> "anthropic"; everything else (and a missing name) ->
-    "openai", the safe default for this fork's transport.
+    The envelope must match the WIRE PROTOCOL of the endpoint that issues the
+    request — not the underlying model. The OpenAI-compatible client
+    (openai_api.py -> chat.completions.create) requires OpenAI-shaped tools
+    ({"type":"function","function":{...}}); only the native Anthropic Messages
+    client (anthropic_api.py) takes the Anthropic shape
+    ({"name","description","input_schema"}).
+
+    So we key on ``resolve_api_type`` (the same logic that selects the client):
+    ANTHROPIC transport (api_type=anthropic or an anthropic.com base_url) ->
+    "anthropic"; everything else -> "openai". Keying on the model name is wrong:
+    a Claude model reached via an OpenAI-compatible gateway still POSTs an
+    OpenAI-shaped body that the gateway translates server-side, so emitting the
+    Anthropic shape there yields a ``tools`` field the gateway silently drops —
+    the model then receives no tools and falls back to inventing text commands.
     """
-    model = (getattr(llm_config, "model", None) or "").lower()
-    if "claude" in model:
-        return "anthropic"
+    from metagpt.common.config.config.llm_config import LLMType
+    from metagpt.router.llm.llm_provider_registry import resolve_api_type
+
+    try:
+        if resolve_api_type(llm_config) == LLMType.ANTHROPIC:
+            return "anthropic"
+    except Exception:
+        pass
     return "openai"
 
 
