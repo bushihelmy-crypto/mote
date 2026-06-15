@@ -63,11 +63,17 @@ class FakeRole:
 
 
 class FakeControl:
-    """Records control-plane interactions; one turn => one non-quiescent poll."""
+    """Records control-plane interactions; one turn => one non-quiescent poll.
 
-    def __init__(self, role, *, reply="hi there"):
+    When ``error`` is set, a turn appends *no* assistant reply and the runtime
+    reports that error via ``get_runtime(...).last_error`` — simulating an
+    ERRORED turn so the REPL surfaces it instead of a blank reply.
+    """
+
+    def __init__(self, role, *, reply="hi there", error=None):
         self._role = role
         self._reply = reply
+        self._error = error
         self._busy = False
         self.started = False
         self.stopped = False
@@ -82,8 +88,9 @@ class FakeControl:
 
     def send_input(self, agent_id, message):
         self.inputs.append((agent_id, message))
-        # Simulate the turn completing: append an assistant reply now.
-        self._role.state.context.messages.append(FakeReply(self._reply))
+        if self._error is None:
+            # Simulate the turn completing: append an assistant reply now.
+            self._role.state.context.messages.append(FakeReply(self._reply))
         self._busy = True
 
     def quiescent(self):
@@ -92,15 +99,18 @@ class FakeControl:
             return False
         return True
 
+    def get_runtime(self, agent_id):
+        return types.SimpleNamespace(last_error=self._error)
+
     async def interrupt(self, agent_id):
         self.interrupts.append(agent_id)
         self._busy = False
         return None
 
 
-def make_repl(lines, *, reply="hi there", out=None):
+def make_repl(lines, *, reply="hi there", out=None, error=None):
     role = FakeRole()
-    control = FakeControl(role, reply=reply)
+    control = FakeControl(role, reply=reply, error=error)
     out = out if out is not None else io.StringIO()
     repl = Repl(
         control,
@@ -128,6 +138,47 @@ def test_multiple_lines_trigger_one_send_each():
     assert text.count("hi there") == 2
     assert control.started is True
     assert control.stopped is True
+
+
+def test_errored_turn_surfaces_error_plain():
+    # A turn that ends in ERRORED leaves no assistant reply; the REPL must show
+    # the failure (here a typed LLM error with a status code) not a blank prompt.
+    from metagpt.common.exception.llm import LLMServerError
+
+    err = LLMServerError("invalid csrf token", status_code=500)
+    repl, control, role, out = make_repl(["你好"], error=err)
+    asyncio.run(repl.run())
+
+    text = out.getvalue()
+    assert "[error]" in text
+    assert "LLMServerError" in text
+    assert "HTTP 500" in text
+    assert "invalid csrf token" in text
+
+
+def test_errored_turn_routes_to_renderer():
+    from metagpt.common.exception.llm import LLMServerError
+
+    err = LLMServerError("boom", status_code=500)
+    repl, control, role, out = make_repl(["go"], error=err)
+    fake = FakeRenderer()
+    repl._renderer = fake
+    asyncio.run(repl.run())
+
+    assert len(fake.errors) == 1
+    assert "LLMServerError" in fake.errors[0]
+    # No assistant reply on an errored turn.
+    assert fake.assistants == []
+
+
+def test_successful_turn_shows_no_error():
+    repl, control, role, out = make_repl(["hi"])  # error=None
+    fake = FakeRenderer()
+    repl._renderer = fake
+    asyncio.run(repl.run())
+
+    assert fake.errors == []
+    assert fake.assistants == ["hi there"]
 
 
 def test_eof_exits():
@@ -267,6 +318,11 @@ class FakeRenderer:
         self.notices = []
         self.prompts = []
         self.assistants = []
+        self.errors = []
+        self.end_streams = 0
+
+    def end_stream(self):
+        self.end_streams += 1
 
     def write(self, text):
         self.writes.append(text)
@@ -279,6 +335,9 @@ class FakeRenderer:
 
     def assistant(self, text):
         self.assistants.append(text)
+
+    def error(self, text):
+        self.errors.append(text)
 
 
 def test_renderer_routes_write_notice_prompt_assistant():
@@ -306,6 +365,61 @@ def test_no_renderer_keeps_plain_text_path():
     repl._notice("heads up")
     assert "plain" in out.getvalue()
     assert "heads up" in out.getvalue()
+
+
+def test_stream_sink_mirrors_and_flags_turn():
+    repl, control, role, out = make_repl([])  # no renderer -> plain stdout
+    repl._stream_sink("tok-1")
+    repl._stream_sink("tok-2")
+    assert repl._streamed_this_turn is True
+    assert out.getvalue() == "tok-1tok-2"
+
+
+def test_streamed_text_not_reprinted_in_plain_mode():
+    # When tokens already streamed to plain stdout, the post-turn print must skip
+    # the reply to avoid duplicating it verbatim.
+    repl, control, role, out = make_repl([])
+    repl._streamed_this_turn = True
+    role.state.context.messages.append(FakeReply("the answer"))
+    repl._print_new_assistant_messages(0)
+    assert "the answer" not in out.getvalue()
+
+
+def test_streamed_text_not_rerendered_with_renderer():
+    # With a renderer the live Markdown region already rendered the final reply
+    # while streaming, so the post-turn print must NOT render it again.
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    repl._streamed_this_turn = True
+    role.state.context.messages.append(FakeReply("the answer"))
+    repl._print_new_assistant_messages(0)
+    assert fake.assistants == []
+
+
+def test_non_streamed_reply_rendered_with_renderer():
+    # A non-streaming provider lands the reply only in context, so it is rendered
+    # by the post-turn print (the live region never opened).
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    role.state.context.messages.append(FakeReply("the answer"))
+    repl._print_new_assistant_messages(0)
+    assert fake.assistants == ["the answer"]
+
+
+def test_finish_stream_finalizes_renderer_region():
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    repl._finish_stream()
+    assert fake.end_streams == 1
+
+
+def test_finish_stream_noop_without_renderer():
+    # Plain-text mode has no live region; finishing must be a harmless no-op.
+    repl, control, role, out = make_repl([])
+    repl._finish_stream()  # must not raise
 
 
 class _Status:

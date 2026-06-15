@@ -19,7 +19,7 @@ from metagpt.executor.dependency._apply_patch.parser import (
     hunk_path,
 )
 from metagpt.executor.dependency._apply_patch.seek import seek_sequence
-
+from metagpt.executor.dependency._apply_patch.parser import ApplyPatchError
 # A scheduled edit: (start index, number of old lines to drop, new lines).
 _Replacement = Tuple[int, int, List[str]]
 
@@ -33,7 +33,6 @@ def _compute_replacements(
     context anchor or old lines cannot be found.
     """
     # Imported here to avoid a parser<->applier import cycle at module load.
-    from metagpt.executor.dependency._apply_patch.parser import ApplyPatchError
 
     replacements: List[_Replacement] = []
     line_index = 0

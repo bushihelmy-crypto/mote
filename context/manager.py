@@ -37,7 +37,7 @@ from metagpt.context import token_budget
 from metagpt.context.autocompact import autocompact
 from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
 from metagpt.common.logs import log_class
-from metagpt.common.schema import LLMCallContext, Message
+from metagpt.common.schema import LLMCallContext, Message, UserMessage
 
 
 @log_class(
@@ -248,7 +248,6 @@ class ContextManager:
 
         req: list[Message] = list(self._context.messages)
         if user_prompt is not None:
-            from metagpt.common.schema import UserMessage
             req.append(
                 user_prompt if isinstance(user_prompt, Message) else UserMessage(content=user_prompt)
             )

@@ -138,19 +138,23 @@ def is_retryable(exc: BaseException | None) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
 
-    # Vendor fallback for un-migrated / third-party OpenAI-SDK exceptions:
-    # transport (APIConnectionError/APITimeoutError), throttling (RateLimitError)
-    # and server-side 5xx (InternalServerError) are all transient.
-    try:
-        from openai import (
-            APIConnectionError,
-            APITimeoutError,
-            InternalServerError,
-            RateLimitError,
+    # Vendor fallback for un-migrated / third-party SDK exceptions: transport
+    # (APIConnectionError/APITimeoutError), throttling (RateLimitError) and
+    # server-side 5xx (InternalServerError) are all transient. The OpenAI and
+    # Anthropic SDKs expose the same class names with matching semantics.
+    for mod_name in ("openai", "anthropic"):
+        try:
+            mod = __import__(mod_name)
+        except Exception:  # SDK not installed / import failure
+            continue
+        transient = tuple(
+            getattr(mod, n)
+            for n in ("APIConnectionError", "APITimeoutError", "RateLimitError", "InternalServerError")
+            if hasattr(mod, n)
         )
-    except Exception:  # openai not installed / import failure
-        return False
-    return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError))
+        if transient and isinstance(exc, transient):
+            return True
+    return False
 
 
 def classify_llm_error(exc: BaseException | None) -> MetaGPTError | None:
@@ -172,18 +176,28 @@ def classify_llm_error(exc: BaseException | None) -> MetaGPTError | None:
     if isinstance(exc, ConnectionError):
         return LLMConnectionError(str(exc), cause=exc)
 
-    try:
-        import openai
-    except Exception:  # openai not installed / import failure
-        return None
+    # Recognize both the OpenAI and Anthropic SDK error hierarchies. Both expose
+    # the same class names (APIError/APITimeoutError/APIConnectionError) with a
+    # ``status_code`` attribute, so a single status-driven mapping serves both.
+    for mod_name in ("openai", "anthropic"):
+        try:
+            mod = __import__(mod_name)
+        except Exception:  # SDK not installed / import failure
+            continue
+        api_timeout = getattr(mod, "APITimeoutError", None)
+        api_connection = getattr(mod, "APIConnectionError", None)
+        api_error = getattr(mod, "APIError", None)
+        if api_timeout is not None and isinstance(exc, api_timeout):
+            return LLMTimeoutError(str(exc), cause=exc)
+        if api_connection is not None and isinstance(exc, api_connection):
+            return LLMConnectionError(str(exc), cause=exc)
+        if api_error is not None and isinstance(exc, api_error):
+            return _classify_api_status_error(exc)
+    return None
 
-    if isinstance(exc, openai.APITimeoutError):
-        return LLMTimeoutError(str(exc), cause=exc)
-    if isinstance(exc, openai.APIConnectionError):
-        return LLMConnectionError(str(exc), cause=exc)
-    if not isinstance(exc, openai.APIError):
-        return None
 
+def _classify_api_status_error(exc: BaseException) -> MetaGPTError | None:
+    """Map an OpenAI/Anthropic ``APIError`` (with a ``status_code``) to a typed LLMError."""
     status = getattr(exc, "status_code", None)
     message = str(getattr(exc, "message", "") or exc)
     code = str(getattr(exc, "code", "") or "")

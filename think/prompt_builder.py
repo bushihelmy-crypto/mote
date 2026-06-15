@@ -63,6 +63,7 @@ class ThinkInputs:
     working_dir: str = ""
     project_root: Any = None
     output_format: Optional[str] = None
+    command_guide: Optional[str] = None
     memory_dir: Any = None
     language: Optional[str] = None
     scratchpad_dir: Any = None
@@ -125,6 +126,11 @@ class ThinkContext:
     # section); the command channel supplies OUTPUT_SECTION for the XML protocol
     # via ThinkInputs.output_format.
     output_format: str = ""
+
+    # "# Using commands" section. Defaults to "" (no section); the command
+    # channel supplies the protocol-specific guidance via ThinkInputs.command_guide
+    # (XML <end></end> mechanics vs native tool-call mechanics).
+    command_guide: str = ""
 
     # MEMORY.md content injected into the user prompt (CC injects the index via
     # user context so a changing index never busts the system-prompt cache).
@@ -215,6 +221,7 @@ class PromptBuilder:
             frc=ctx.frc,
             summarize_tool_results=ctx.summarize_tool_results,
             output_format=ctx.output_format,
+            command_guide=ctx.command_guide,
         )
 
     @staticmethod
@@ -321,6 +328,12 @@ class PromptBuilder:
         # None means "caller didn't override" — keep the ThinkContext default.
         if inputs.output_format is not None:
             ctx.output_format = inputs.output_format
+
+        # "# Using commands" guidance, also from the command channel: XML supplies
+        # the <end></end> / command-tag mechanics, native supplies tool-call
+        # mechanics. None means "caller didn't override" — keep the default "".
+        if inputs.command_guide is not None:
+            ctx.command_guide = inputs.command_guide
 
         ctx.state_data = dict(instruction=ctx.instruction)
         return ctx

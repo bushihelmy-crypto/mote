@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 from typing import Callable, Optional
 
+from metagpt.common.utils.report import ThoughtReporter
 from metagpt.tasks.pool import BackgroundTaskPool
 
 
@@ -41,8 +42,6 @@ def require_bg_complete(
                         task_names.append(meta.command_name)
                 tasks_desc = ", ".join(task_names) if task_names else f"{pending} task(s)"
                 # Push waiting status to frontend
-                from metagpt.common.utils.report import ThoughtReporter
-
                 reporter = ThoughtReporter()
                 await reporter.async_report(
                     {

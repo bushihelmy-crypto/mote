@@ -40,6 +40,13 @@ class TestContract:
         # Native channel injects no OUTPUT prompt section.
         assert NativeToolChannel().output_format() == ""
 
+    def test_command_guide_has_no_end_marker(self):
+        # Native mode ends a turn by making no tool call, so the guidance must
+        # never teach the XML <end></end> marker (the model would leak it).
+        guide = NativeToolChannel().command_guide()
+        assert "# Using commands" in guide
+        assert "<end>" not in guide
+
 
 class TestToolSpecs:
     def test_delegates_to_executor_with_provider(self):
@@ -288,14 +295,46 @@ class TestTurnSignature:
 
 
 class TestIsTerminal:
-    def test_terminal_when_empty_calls(self):
+    @pytest.mark.asyncio
+    async def test_terminal_when_empty_calls(self):
         # Native "done": the model replied with no tool calls.
-        assert NativeToolChannel().is_terminal(FakeThinkEngine(tool_calls=[])) is True
+        assert await NativeToolChannel().is_terminal(FakeThinkEngine(tool_calls=[])) is True
 
-    def test_not_terminal_with_calls(self):
+    @pytest.mark.asyncio
+    async def test_not_terminal_with_calls(self):
         engine = FakeThinkEngine(tool_calls=[native_call("1", "Read")])
-        assert NativeToolChannel().is_terminal(engine) is False
+        assert await NativeToolChannel().is_terminal(engine) is False
 
-    def test_none_calls_not_terminal(self):
+    @pytest.mark.asyncio
+    async def test_none_calls_not_terminal(self):
         # tool_calls is None (XML-style) -> not the native terminal condition.
-        assert NativeToolChannel().is_terminal(FakeThinkEngine(tool_calls=None)) is False
+        assert await NativeToolChannel().is_terminal(FakeThinkEngine(tool_calls=None)) is False
+
+    @pytest.mark.asyncio
+    async def test_joins_before_reading_pending_result(self):
+        # When the think task is still running, is_terminal must join first so it
+        # reads *this* round's result rather than a stale one.
+        engine = FakeThinkEngine(tool_calls=[], done=False)
+        assert await NativeToolChannel().is_terminal(engine) is True
+        assert engine.join_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_done_engine_is_not_joined(self):
+        # Already-finished round: no wasted join, just read the result.
+        engine = FakeThinkEngine(tool_calls=[], done=True)
+        assert await NativeToolChannel().is_terminal(engine) is True
+        assert engine.join_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_pending_with_calls_joins_then_not_terminal(self):
+        # Still running + has calls -> join first, then report non-terminal.
+        engine = FakeThinkEngine(tool_calls=[native_call("1", "Read")], done=False)
+        assert await NativeToolChannel().is_terminal(engine) is False
+        assert engine.join_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_pending_none_calls_joins_then_not_terminal(self):
+        # None tool_calls (XML-style) while pending -> join, still not terminal.
+        engine = FakeThinkEngine(tool_calls=None, done=False)
+        assert await NativeToolChannel().is_terminal(engine) is False
+        assert engine.join_calls == 1

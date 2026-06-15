@@ -27,7 +27,9 @@ from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
 from metagpt.common.exception import RecoveryAction, is_retryable
 from metagpt.common.logs import logger
+from metagpt.common.schema import Message
 from metagpt.router.llm.constant import MULTI_MODAL_MODELS
+from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
 from metagpt.router.llm.recovery import RecoveryRunner
 from metagpt.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
 from metagpt.router.llm.request_context_builder import RequestContextBuilder
@@ -130,8 +132,6 @@ class BaseLLM(ABC):
 
     def format_msg(self, messages: Union[str, "Message", list[dict], list["Message"], list[str]]) -> list[dict]:
         """convert messages to list[dict]."""
-        from metagpt.common.schema import Message
-
         if not isinstance(messages, list):
             messages = [messages]
 
@@ -245,21 +245,24 @@ class BaseLLM(ABC):
         tools: Optional[list[dict]] = None,
         tool_choice: Optional[Union[str, dict]] = None,
         timeout=USE_CONFIG_TIMEOUT,
+        stream: bool = True,
     ) -> "LLMResponse":
         """Native tool-use counterpart to aask: returns text + structured tool calls.
 
         Unlike aask (which returns a plain str the XML protocol parses), this
         passes ``tools`` (provider-native specs) to the API and normalizes the
         completion into an LLMResponse carrying both the assistant text and any
-        structured tool calls. Non-streaming: native tool calls are only well
-        formed once the completion is complete.
+        structured tool calls. When ``stream`` is set (the default, mirroring
+        aask) the assistant text is streamed token-by-token via ``log_llm_stream``
+        while the structured tool calls are accumulated, then the completed
+        response is normalized — so the live console sees output as it arrives.
 
         Args:
             tools: Provider-native tool specs (see ToolExecutor.get_native_tool_specs).
             tool_choice: Provider tool_choice directive ("auto"/"required"/dict).
+            stream: Stream assistant text live (default True). Providers without a
+                streaming tool path transparently fall back to a blocking call.
         """
-        from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
-
         message = self._build_messages(msg, system_msgs, format_msgs, images, pdfs)
         compressed_message = self.compress_messages(message, compress_type=self.config.compress_type)
 
@@ -273,7 +276,10 @@ class BaseLLM(ABC):
         extra["raise_if_empty"] = False
 
         async def _send(llm: "BaseLLM", messages: list[dict]) -> "LLMResponse":
-            rsp = await llm._achat_completion(messages, timeout=self.get_timeout(timeout), **extra)
+            if stream:
+                rsp = await llm._achat_completion_stream_tool(messages, timeout=self.get_timeout(timeout), **extra)
+            else:
+                rsp = await llm._achat_completion(messages, timeout=self.get_timeout(timeout), **extra)
             content = llm.get_choice_text(rsp) or ""
             raw_calls = llm.get_choice_tool_calls(rsp)
             tool_calls = [
@@ -396,6 +402,18 @@ class BaseLLM(ABC):
     @abstractmethod
     async def _achat_completion_stream(self, messages: list[dict], timeout: int = USE_CONFIG_TIMEOUT) -> str:
         """_achat_completion_stream implemented by inherited class"""
+
+    async def _achat_completion_stream_tool(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **chat_configs):
+        """Streaming counterpart to ``_achat_completion`` for the native tool channel.
+
+        Streams the assistant text via ``log_llm_stream`` while accumulating any
+        structured tool calls, then returns the *same* provider response object
+        ``_achat_completion`` would — so ``get_choice_text`` / ``get_choice_tool_calls``
+        normalize it unchanged. The default implementation has no streaming tool
+        path and falls back to the blocking call; providers that can stream tool
+        calls override it.
+        """
+        return await self._achat_completion(messages, timeout=self.get_timeout(timeout), **chat_configs)
 
     @retry(
         stop=stop_after_attempt(3),

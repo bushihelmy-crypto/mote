@@ -23,6 +23,7 @@ Reconstruction is forgiving: a message payload that fails to load is skipped
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -80,8 +81,6 @@ def replay(log: SessionLog) -> ReplayResult:
 
 
 def _dumps(payload: Dict) -> str:
-    import json
-
     return json.dumps(payload)
 
 

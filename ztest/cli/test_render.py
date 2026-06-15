@@ -114,17 +114,48 @@ def test_post_tool_empty_output_success():
 
 
 # ---------------------------------------------------------------------------
-# stream
+# stream (live Markdown)
 # ---------------------------------------------------------------------------
-def test_stream_emits_token_verbatim():
+def test_stream_renders_accumulated_text():
     r, out = _make_renderer()
     r.stream("hello")
     r.stream(" world")
+    r.end_stream()  # finalize the Live region so the last frame flushes
     text = out.getvalue()
     assert "hello" in text
     assert "world" in text
-    # No newline injected between increments.
+    # Rendered as one Markdown paragraph, not split across the two increments.
     assert "hello\n world" not in text
+
+
+def test_stream_renders_markdown_formatting():
+    r, out = _make_renderer()
+    for tok in ("# Title", "\n\nsome ", "**bold**", " text"):
+        r.stream(tok)
+    r.end_stream()
+    text = out.getvalue()
+    assert "Title" in text
+    assert "bold" in text
+
+
+def test_end_stream_is_idempotent_and_noop_when_idle():
+    r, out = _make_renderer()
+    r.end_stream()  # no active stream -> harmless
+    r.stream("hi")
+    r.end_stream()
+    r.end_stream()  # second call is a no-op
+    assert "hi" in out.getvalue()
+
+
+def test_other_output_finalizes_active_stream():
+    # Any non-stream output (here a tool panel) must close the live region first.
+    r, out = _make_renderer()
+    r.stream("thinking")
+    r._pre_tool({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+    assert r._live is None  # stream finalized by _pre_tool
+    text = out.getvalue()
+    assert "thinking" in text
+    assert "Bash" in text
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from metagpt.executor.mcp.client.base import MCPBaseClient
 from metagpt.executor.mcp.mcp_registry import MCP_REGISTRY
 from metagpt.common.logs import logger
 from metagpt.common.utils.async_helper import run_coroutine_sync
-
+from metagpt.common.config.meta_config import Config
 
 class MCPClientManager:
     """MCP client manager responsible for managing the lifecycle of all MCP clients and tool registration"""
@@ -41,7 +41,6 @@ class MCPClientManager:
 
     async def register_tools(self, server_configs: Optional[list[MCPServerConfig]] = None):
         """Register all tools from MCP servers"""
-        from metagpt.common.config.meta_config import Config
 
         if self._tools_registered:
             return

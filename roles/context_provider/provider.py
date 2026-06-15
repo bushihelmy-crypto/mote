@@ -187,6 +187,7 @@ class ContextProvider(BaseContextProvider):
             working_dir=self._get_cwd(),
             project_root=self._state.project_root,
             output_format=self._channel.output_format(),
+            command_guide=self._channel.command_guide(),
         )
 
     def _think_subsystems(self) -> ThinkSubsystems:

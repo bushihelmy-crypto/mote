@@ -18,7 +18,13 @@ from metagpt.common.utils.yaml_model import YamlModel
 
 
 class LLMType(Enum):
-    """LLM types - all use OpenAI-compatible API"""
+    """LLM types.
+
+    All values except ``ANTHROPIC`` use the OpenAI-compatible client
+    (``openai_api.py`` with a provider-specific ``base_url``). ``ANTHROPIC``
+    selects the native Anthropic Messages API client (``anthropic_api.py``);
+    it is also auto-detected when ``base_url`` points at ``anthropic.com``.
+    """
 
     OPENAI = "openai"
     # OpenAI-compatible providers (use openai_api.py with different base_url)
@@ -30,6 +36,8 @@ class LLMType(Enum):
     OPEN_ROUTER = "open_router"
     DEEPSEEK = "deepseek"
     SILICONFLOW = "siliconflow"
+    # Native Anthropic Messages API (anthropic_api.py, direct /v1/messages).
+    ANTHROPIC = "anthropic"
 
     def __missing__(self, key):
         return self.OPENAI

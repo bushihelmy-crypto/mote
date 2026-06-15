@@ -30,6 +30,7 @@ from metagpt.common.logs import log_class
 from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.common.schema import BgTaskResult
+from metagpt.executor.mcp_adapter import MCPToolAdapter
 from metagpt.executor.tool_spec_adapter import to_native_tool_specs
 
 # ---------------------------------------------------------------------------
@@ -313,7 +314,6 @@ class ToolExecutor(BaseToolExecutor):
 
     def _is_mcp_tool(self, tool) -> bool:
         """Return True if the tool is a runtime-discovered MCP adapter."""
-        from metagpt.executor.mcp_adapter import MCPToolAdapter
         return isinstance(tool, MCPToolAdapter)
 
     def get_tool_schemas(self) -> dict[str, dict]:

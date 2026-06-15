@@ -942,21 +942,14 @@ class Role(BaseRole):
 
 
 def _resolve_shell_tools(tools: list[str]) -> list[str]:
-    """Resolve the shell generation for a tool list.
+    """Normalize a tool list, preserving order and removing duplicates.
 
-    A declared ``"Bash"`` always becomes the persistent PTY-backed
-    ``Terminal``. Tools the caller listed explicitly (including ``Terminal``)
-    are left as-is. Order is preserved and duplicates removed.
+    ``Bash`` (one-shot, jam-proof) and ``Terminal`` (persistent PTY) are
+    distinct tools and are both kept as declared.
     """
-    resolved: list[str] = []
-    for tool in tools:
-        if tool == "Bash":
-            resolved.append("Terminal")
-        else:
-            resolved.append(tool)
     seen: set[str] = set()
     deduped: list[str] = []
-    for tool in resolved:
+    for tool in tools:
         if tool not in seen:
             seen.add(tool)
             deduped.append(tool)

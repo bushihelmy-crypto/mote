@@ -38,6 +38,25 @@ class _DeactExecutor(FakeExecutor):
         return r
 
 
+class _SeqTerminalChannel(FakeChannel):
+    """Channel whose ``is_terminal`` walks a scripted sequence.
+
+    Models a native run that acts a few rounds and then finishes: each entry of
+    ``terminal_seq`` answers one ``is_terminal`` check; once exhausted it reports
+    terminal (True) so a runaway loop still stops. ``is_terminal_calls`` counts
+    how many times the loop consulted it.
+    """
+
+    def __init__(self, terminal_seq, **kw):
+        super().__init__(**kw)
+        self._seq = list(terminal_seq)
+        self.is_terminal_calls = 0
+
+    async def is_terminal(self, think_engine) -> bool:
+        self.is_terminal_calls += 1
+        return self._seq.pop(0) if self._seq else True
+
+
 class _SeqAskExecutor(FakeExecutor):
     """ask_human returns a scripted sequence of replies (then repeats the last)."""
 
@@ -140,6 +159,55 @@ async def test_run_waits_on_pending_background_tasks(make_loop):
 
     assert bg.wait_any_calls >= 1
     assert bg.pending == 0  # drained
+
+
+async def test_run_acts_several_rounds_then_finishes(make_loop):
+    # Native flow: the channel reports non-terminal for two rounds (so act runs
+    # twice) and terminal on the third, so the loop finishes on that turn. The
+    # is_terminal check is consulted once per think round, *before* act.
+    engine = FakeThinkEngine(content="final text")
+    channel = _SeqTerminalChannel(
+        commands=[{"id": "t1", "command_name": "Read", "args": {}}],
+        terminal_seq=[False, False, True],
+    )
+    executor = FakeExecutor(results={"Read": FakeResult(output="data")})
+    b = make_loop(
+        think_engine=engine,
+        channel=channel,
+        executor=executor,
+        max_react_loop=9,
+        max_consecutive_react_limit=99,
+    )
+    _news(b)
+
+    rsp = await b.loop.run()
+
+    # Two acts ran (one Read each), then the terminal round finished.
+    assert [c["name"] for c in executor.calls] == ["Read", "Read"]
+    assert channel.is_terminal_calls == 3
+    # Recorded turns: two act turns (with the command) + one finish turn (empty).
+    assert len(channel.recorded_turns) == 3
+    assert channel.recorded_turns[-1] == ("final text", [])
+    # The finish path surfaces the assistant's plain text as the response.
+    assert rsp.content == "final text"
+    assert rsp.cause_by == CauseBy.RUN_COMMAND.value
+
+
+async def test_run_terminal_checked_before_act_each_round(make_loop):
+    # A terminal verdict on the very first round skips act entirely, even though
+    # the channel has commands queued — the loop checks is_terminal first.
+    channel = _SeqTerminalChannel(
+        commands=[{"id": "t1", "command_name": "Read", "args": {}}],
+        terminal_seq=[True],
+    )
+    executor = FakeExecutor()
+    b = make_loop(channel=channel, executor=executor, max_react_loop=9)
+    _news(b)
+
+    await b.loop.run()
+
+    assert executor.calls == []
+    assert channel.is_terminal_calls == 1
 
 
 async def test_run_consecutive_limit_asks_human(make_loop):

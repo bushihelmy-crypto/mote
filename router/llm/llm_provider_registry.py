@@ -45,9 +45,26 @@ def register_provider(keys):
     return decorator
 
 
+def resolve_api_type(config: LLMConfig) -> LLMType:
+    """Resolve the effective provider key, applying native-Anthropic auto-detection.
+
+    An explicit ``api_type: anthropic`` always selects the native Messages API
+    client. Otherwise a ``base_url`` pointing at ``anthropic.com`` is treated as
+    the native endpoint too — so a Claude model reached via an OpenAI-compatible
+    gateway (a non-Anthropic ``base_url``) keeps using the OpenAI client, while a
+    direct ``https://api.anthropic.com`` config gets the native client without
+    needing to set ``api_type`` by hand.
+    """
+    if config.api_type == LLMType.ANTHROPIC:
+        return LLMType.ANTHROPIC
+    if "anthropic.com" in (config.base_url or "").lower():
+        return LLMType.ANTHROPIC
+    return config.api_type
+
+
 def create_llm_instance(config: LLMConfig) -> BaseLLM:
     """get the default llm provider"""
-    return LLM_REGISTRY.get_provider(config.api_type)(config)
+    return LLM_REGISTRY.get_provider(resolve_api_type(config))(config)
 
 
 # Registry instance

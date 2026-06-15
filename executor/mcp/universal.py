@@ -8,7 +8,7 @@ from metagpt.common.config.meta_config import Config
 from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 from metagpt.common.exception import ToolNotFoundError
 from metagpt.common.logs import logger
-
+from metagpt.executor.mcp_adapter import MCPToolAdapter
 
 class MCPInitState(str, Enum):
     UNCONFIGURED = "unconfigured"
@@ -122,7 +122,6 @@ class UniversalMCP:
         Args:
             executor: ToolExecutor instance to register tools on.
         """
-        from metagpt.executor.mcp_adapter import MCPToolAdapter
 
         for tool_name, tool_info in self.tool_registry.items():
             schema = {

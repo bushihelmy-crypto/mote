@@ -27,6 +27,35 @@ from typing import Any, Callable, Optional
 
 from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
+from metagpt.cli.render import build_renderer
+from metagpt.common.config.meta_config import Config
+from metagpt.common.git_state import find_git_root
+from metagpt.environment.control import AgentControl
+from metagpt.environment.runtime import AgentRuntime
+from metagpt.roles import Role
+from metagpt.roles.role_schema import RoleSchema
+from metagpt.roles.role_state import RoleState
+from metagpt.router.llm.context import Context
+from metagpt.cli.commands import SlashCommands
+from metagpt.environment.runtime import AgentRuntime
+from metagpt.common.logs import suspend_console_log
+from metagpt.common.logs import resume_console_log
+from metagpt.common.logs.stream import _llm_stream_log, set_llm_stream_logfunc
+from metagpt.common.logs.stream import set_llm_stream_logfunc
+
+def _format_turn_error(err: BaseException) -> str:
+    """Render a turn's exception into a concise one/two-line message for the REPL.
+
+    Typed :class:`MetaGPTError` subclasses (e.g. ``LLMServerError``) carry a clean
+    ``message`` plus an optional upstream ``status_code``; anything else falls
+    back to ``Type: str(err)``.
+    """
+    cls = type(err).__name__
+    detail = str(err).strip() or repr(err)
+    status = getattr(err, "status_code", None)
+    if status is not None:
+        return f"{cls} (HTTP {status}): {detail}"
+    return f"{cls}: {detail}"
 
 
 class _ConsoleHumanChannel:
@@ -39,8 +68,18 @@ class _ConsoleHumanChannel:
     Role might call on its env are inert no-ops.
     """
 
+    # The provider reads ``env.desc`` / ``env.role_names()`` / ``env.roles`` when
+    # building the role prefix + team info. The single-agent REPL has no
+    # multi-role environment, so all three are inert: an empty desc/roles
+    # short-circuits the "other roles" and "team info" prefixes entirely.
+    desc: str = ""
+    roles: dict = {}
+
     def __init__(self, ask: Callable[[str], "Any"]):
         self._ask = ask  # async (question: str) -> str
+
+    def role_names(self) -> list:
+        return []
 
     async def ask_human(self, question: str, sent_from: Any = None) -> str:
         return await self._ask(question)
@@ -86,13 +125,16 @@ class Repl:
         # Builds fresh / resumed roles (sharing config + context); injected by
         # ``build_repl``. ``None`` => /new and /resume are unavailable.
         self._role_factory = role_factory
-        from metagpt.cli.commands import SlashCommands
+
 
         self._commands = SlashCommands(self)
         self._last_sessions: list = []  # cached for index-based /resume
 
         self._running_turn = False
         self._should_exit = False
+        # Set whenever LLM tokens streamed live to the console during the current
+        # turn (see ``_stream_sink``); used to avoid reprinting the same text.
+        self._streamed_this_turn = False
         self._reader: Any = None
         self._read_task: Optional[asyncio.Task] = None
         self._last_sigint_ts: Optional[float] = None
@@ -126,6 +168,16 @@ class Repl:
             except Exception:  # noqa: BLE001
                 pass
         self._write(text)
+
+    def _error(self, text: str) -> None:
+        """A failed turn surfaced to the user (renderer panel or plain text)."""
+        if self._renderer is not None:
+            try:
+                self._renderer.error(text)
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        self._write(f"\n[error] {text}\n")
 
     def _reprompt(self) -> None:
         if self._renderer is not None:
@@ -231,6 +283,7 @@ class Repl:
     async def _run_turn(self, text: str) -> None:
         before = len(self._role.state.context.messages)
         self._running_turn = True
+        self._streamed_this_turn = False  # reset; the stream sink flips it if tokens arrive
         self._current_input = text  # staged for restore if this turn is interrupted
         self._last_sigint_ts = None  # entering a turn clears the double-press timer
         try:
@@ -241,15 +294,31 @@ class Repl:
         finally:
             self._running_turn = False
             self._current_input = None
+        # Close any live streaming region opened during the turn (renderer mode).
+        # Must happen before the print/error path: when the reply streamed we
+        # skip reprinting it, so nothing else would finalize the Live region.
+        self._finish_stream()
+        # A turn that ended in ERRORED leaves no assistant reply, so the user
+        # would otherwise see nothing. Surface the failure (e.g. protocol
+        # mismatch, LLM 5xx) instead of a blank prompt.
+        runtime = self._control.get_runtime(self._agent_id)
+        err = getattr(runtime, "last_error", None) if runtime is not None else None
+        if err is not None:
+            self._error(_format_turn_error(err))
         self._print_new_assistant_messages(before)
 
     def _print_new_assistant_messages(self, before: int) -> None:
         """Print assistant replies appended since *before*.
 
-        For the non-streaming ``native`` protocol the final text only lands in
-        the context here; streaming protocols already echoed tokens live via the
-        ``log_llm_stream`` sink, so this may lightly duplicate — accepted in v1.
+        When the reply already streamed live we skip reprinting it: in plain mode
+        the tokens went straight to stdout, and in renderer mode the live Markdown
+        region already rendered the final reply (see ConsoleRenderer.stream /
+        end_stream). Reprinting either way would duplicate the text. For a
+        non-streaming provider the text only lands in the context here, so it is
+        always printed.
         """
+        if self._streamed_this_turn:
+            return
         messages = self._role.state.context.messages
         for msg in messages[before:]:
             if getattr(msg, "role", None) != "assistant":
@@ -331,7 +400,6 @@ class Repl:
 
     def adopt_role(self, role: Any, *, switch: bool = True, root: bool = False) -> str:
         """Wrap *role* into a runtime, add it to the plane, wire console + hooks."""
-        from metagpt.environment.runtime import AgentRuntime
 
         role.state.env = _ConsoleHumanChannel(self._console_ask)
         self._register_renderer_hooks(role)
@@ -459,7 +527,6 @@ class Repl:
         :meth:`_teardown`. Best-effort.
         """
         try:
-            from metagpt.common.logs import suspend_console_log
 
             self._console_log_suspended = suspend_console_log()
         except Exception as exc:  # noqa: BLE001
@@ -469,27 +536,62 @@ class Repl:
         if not self._console_log_suspended:
             return
         try:
-            from metagpt.common.logs import resume_console_log
-
             resume_console_log()
         except Exception:  # noqa: BLE001
             pass
         self._console_log_suspended = False
 
-    def _wire_stream_sink(self) -> None:
-        """Swap the global ``log_llm_stream`` sink to color streamed tokens.
+    def _stream_sink(self, token: Any) -> None:
+        """Global ``log_llm_stream`` sink: mirror tokens live + flag the turn.
 
-        The old sink is saved for restore in :meth:`_teardown`. The sink is a
-        process-global, so this runs once for the whole REPL (acceptable in a
-        single-process REPL) regardless of how many agents are switched.
+        Routes streamed LLM tokens to the renderer (dim preview) or plain stdout,
+        and flips ``_streamed_this_turn`` so the post-turn print can avoid
+        duplicating text that already streamed.
+        """
+        self._streamed_this_turn = True
+        text = token if isinstance(token, str) else str(token)
+        if self._renderer is not None:
+            try:
+                self._renderer.stream(text)
+                return
+            except Exception:  # noqa: BLE001 — fall back to plain stdout
+                pass
+        try:
+            self._out.write(text)
+            self._out.flush()
+        except Exception:  # noqa: BLE001 — never let console I/O crash the loop
+            pass
+
+    def _finish_stream(self) -> None:
+        """Finalize the renderer's live stream region (best-effort, no-op if none).
+
+        Plain-text mode has no Live region, so this is only meaningful with a
+        renderer; ``getattr`` tolerates renderers (or test doubles) that predate
+        ``end_stream``.
         """
         if self._renderer is None:
             return
+        end = getattr(self._renderer, "end_stream", None)
+        if end is None:
+            return
         try:
-            from metagpt.common.logs.stream import _llm_stream_log, set_llm_stream_logfunc
+            end()
+        except Exception:  # noqa: BLE001 — finalizing must never crash the loop
+            pass
+
+    def _wire_stream_sink(self) -> None:
+        """Swap the global ``log_llm_stream`` sink to the REPL's counting sink.
+
+        Always wired (renderer or not) so the REPL both mirrors streamed tokens
+        live and knows whether a turn streamed. The old sink is saved for restore
+        in :meth:`_teardown`. The sink is a process-global, so this runs once for
+        the whole REPL (acceptable in a single-process REPL) regardless of how
+        many agents are switched.
+        """
+        try:
 
             self._old_stream_sink = _llm_stream_log
-            set_llm_stream_logfunc(self._renderer.stream)
+            set_llm_stream_logfunc(self._stream_sink)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Repl: stream sink swap failed: {exc}")
 
@@ -497,7 +599,6 @@ class Repl:
         if self._old_stream_sink is None:
             return
         try:
-            from metagpt.common.logs.stream import set_llm_stream_logfunc
 
             set_llm_stream_logfunc(self._old_stream_sink)
         except Exception:  # noqa: BLE001
@@ -526,15 +627,7 @@ def build_repl(
     name: str = "Assistant",
 ) -> Repl:
     """Assemble Config -> Context -> Role -> AgentRuntime -> AgentControl -> Repl."""
-    from metagpt.cli.render import build_renderer
-    from metagpt.common.config.meta_config import Config
-    from metagpt.common.git_state import find_git_root
-    from metagpt.environment.control import AgentControl
-    from metagpt.environment.runtime import AgentRuntime
-    from metagpt.roles import Role
-    from metagpt.roles.role_schema import RoleSchema
-    from metagpt.roles.role_state import RoleState
-    from metagpt.router.llm.context import Context
+
 
     config = Config.default(**({"llm__model": model} if model else {}))
     context = Context(config=config)
