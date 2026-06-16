@@ -25,15 +25,15 @@ from tenacity import (
 from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
-from metagpt.common.exception import RecoveryAction, is_retryable
+from metagpt.common.exception import RecoveryAction, RecoveryRunner, is_retryable
 from metagpt.common.logs import logger
 from metagpt.common.schema import Message
 from metagpt.router.llm.constant import MULTI_MODAL_MODELS
 from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
-from metagpt.router.llm.recovery import RecoveryRunner
+from metagpt.router.llm.recovery import build_llm_strategies
 from metagpt.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
 from metagpt.router.llm.request_context_builder import RequestContextBuilder
-from metagpt.common.utils.common import log_and_reraise, pdfs_within_limits
+from metagpt.common.utils.common import log_and_reraise, pdfs_within_limits, sniff_image_media_type
 from metagpt.common.utils.token_counter import count_message_tokens
 from metagpt.router.cost import CostTracker, Costs, TokenUsage
 
@@ -101,7 +101,13 @@ class BaseLLM(ABC):
         content = [{"type": "text", "text": msg}]
         # images
         for image in images or []:
-            url = image if isinstance(image, str) and image.startswith("http") else f"data:image/jpeg;base64,{image}"
+            if isinstance(image, str) and image.startswith("http"):
+                url = image
+            else:
+                # Declared media type is often wrong (e.g. a PNG read as jpeg);
+                # Bedrock/Anthropic reject mismatches, so sniff from the bytes.
+                media_type = sniff_image_media_type(image) or "image/jpeg"
+                url = f"data:{media_type};base64,{image}"
             content.append({"type": "image_url", "image_url": {"url": url}})
         # pdfs (Anthropic-compatible document input)
         is_anthropic_pdf_supported = "claude" in self.model.lower()
@@ -315,49 +321,56 @@ class BaseLLM(ABC):
         supplier), so with the default single-key, single-model config this is
         behaviourally equivalent to calling ``send(self, messages)`` directly.
         """
-        state = {"messages": compressed_message}
-        runner: Optional[RecoveryRunner] = None
+        # Shared request state the strategy closures mutate across recovery attempts:
+        # ``messages`` (re-compressed / repaired) and ``llm`` (swapped on FALLBACK).
+        state: dict[str, Any] = {"messages": compressed_message, "llm": self}
 
         def _active() -> "BaseLLM":
-            return (runner.fallback_llm if runner else None) or self
+            return state["llm"]
 
-        async def _compress(messages: list[dict]) -> list[dict]:
+        async def _compress() -> bool:
             state["messages"] = self.compress_messages(
-                messages, compress_type=CompressType.POST_CUT_BY_TOKEN
+                state["messages"], compress_type=CompressType.POST_CUT_BY_TOKEN
             )
-            return state["messages"]
+            return True
 
         def _rotate() -> bool:
             return _active().rotate_credential()
 
-        def _wrap_transformer(transform):
-            # Mirror ``_compress``: persist the repaired messages into ``state`` so the
-            # next ``_call`` issues the request with the transformed payload.
-            async def _wrapped(messages, exc):
-                repaired = await transform(messages, exc)
-                if repaired is None:
-                    return None
-                state["messages"] = repaired
-                return repaired
+        def _on_fallback(provider: "BaseLLM") -> None:
+            state["llm"] = provider
 
-            return _wrapped
+        def _wrap_transformer(transform):
+            # Adapt an ``(messages, exc) -> messages | None`` transformer into a
+            # recovery strategy ``(exc) -> bool``: persist the repaired messages into
+            # ``state`` so the next ``_call`` issues the transformed payload.
+            async def _strategy(exc) -> bool:
+                repaired = await transform(state["messages"], exc)
+                if repaired is None:
+                    return False
+                state["messages"] = repaired
+                return True
+
+            return _strategy
 
         transformers = {
             action: _wrap_transformer(transform)
             for action, transform in (self._message_transformers or {}).items()
         }
 
-        runner = RecoveryRunner(
-            compressor=_compress,
-            credential_rotator=_rotate,
-            fallback_supplier=self._fallback_supplier,
-            message_transformers=transformers or None,
+        strategies = build_llm_strategies(
+            compress=_compress,
+            rotate=_rotate,
+            fallback=self._fallback_supplier,
+            on_fallback=_on_fallback,
+            transformers=transformers or None,
         )
+        runner = RecoveryRunner(strategies)
 
         async def _call():
             return await send(_active(), state["messages"])
 
-        return await runner.run(_call, messages=state["messages"])
+        return await runner.run(_call)
 
     def _extract_assistant_rsp(self, context):
         return "\n".join([i["content"] for i in context if i["role"] == "assistant"])

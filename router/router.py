@@ -222,25 +222,11 @@ class LLMRouter:
 
 
 # --------------------------------------------------------------- module-level
-_default_router: Optional[LLMRouter] = None
-
-
-def get_router(context: Optional["Context"] = None) -> LLMRouter:
-    """Lazily build (and cache) a module-level default router.
-
-    Passing an explicit ``context`` always builds a fresh router for it.
-    """
-    global _default_router
-    if context is not None:
-        return LLMRouter(context)
-    if _default_router is None:
-        _default_router = LLMRouter()
-    return _default_router
-
-
 def LLM(llm_config: Optional[LLMConfig] = None, context: Optional["Context"] = None) -> BaseLLM:
     """Drop-in replacement for the old factory ``LLM``.
 
     Behavior is identical: default llm when no config, else build from config.
+    A router is a cheap, context-scoped object, so build one per call (its own
+    instance cache lives for the returned LLM's resolution); no module state.
     """
-    return get_router(context).route(llm_config=llm_config)
+    return LLMRouter(context).route(llm_config=llm_config)

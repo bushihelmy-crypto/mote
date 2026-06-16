@@ -16,8 +16,8 @@ import asyncio
 import pytest
 
 from metagpt.common.const.tasks import MAX_RESULT_LEN
-from metagpt.common.schema import BackgroundTaskNotification, BgStatus, MessagePriority, TaskType
-from metagpt.tasks import BackgroundTaskPool
+from metagpt.executor.tasks import BackgroundTaskPool, BackgroundTaskNotification, BgStatus, TaskType
+from metagpt.common.schema import MessagePriority
 
 from .conftest import boom, echo, forever, gated, started_gated, wait_started
 
@@ -295,3 +295,48 @@ class TestTaskTypeDefault:
         tid = pool.submit(forever(), "c", timeout=None)
         assert pool.get_task_info(tid).task_type == TaskType.COROUTINE
         await _drain(pool)
+
+
+class TestProgressBusVisibility:
+    """Pin down the contextvar visibility: a progress event reported inside a
+    submitted task is mirrored onto the bus bound when the task was created."""
+
+    @pytest.mark.asyncio
+    async def test_report_progress_reaches_bus_subscriber(self, msg_buffer, tmp_path):
+        from metagpt.common.events import EventBus, TaskProgressEvent, set_bus
+        from metagpt.executor.tasks import TaskOutputStore
+        from metagpt.executor.tasks.bggraph.report import report_progress
+
+        class _Recorder:
+            priority = 50
+
+            def __init__(self):
+                self.events = []
+
+            def handle_sync(self, event):
+                if isinstance(event, TaskProgressEvent):
+                    self.events.append(event)
+
+            async def handle(self, event):
+                return None
+
+        bus = EventBus()
+        rec = _Recorder()
+        bus.subscribe(rec)
+
+        pool = BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(base_dir=tmp_path))
+
+        async def reporter():
+            report_progress("split", "running", "hello")
+            return "ok"
+
+        # ``submit`` -> ``create_task`` snapshots the active-bus contextvar, so
+        # the progress emit inside the task lands on this bus.
+        with set_bus(bus):
+            tid = pool.submit(reporter(), "rep", progress=True)
+            await pool.wait_all()
+
+        assert tid == "bg_1"
+        assert len(rec.events) == 1
+        e = rec.events[0]
+        assert (e.task_id, e.stage, e.status, e.detail) == ("bg_1", "split", "running", "hello")

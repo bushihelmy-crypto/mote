@@ -15,7 +15,7 @@ from typing import Optional
 
 from metagpt.common.schema import PermissionConfig
 from metagpt.executor.permission.rule_matcher import parse_rule, rule_matches
-from metagpt.executor.permission.types import PermissionBehavior, PermissionRule
+from metagpt.common.schema.permission_types import PermissionBehavior, PermissionRule
 
 
 class RuleStore:

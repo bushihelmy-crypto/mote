@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.git_state import collect_git_state, render_git_section
+from metagpt.common.utils.git_state import collect_git_state, render_git_section
 
 
 class GitContextSource:

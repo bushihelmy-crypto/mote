@@ -12,8 +12,7 @@ from __future__ import annotations
 import asyncio
 
 from metagpt.common.interface import EphemeralContextSource
-from metagpt.common.schema import BgStatus, TaskMeta
-from metagpt.tasks import BackgroundTaskContextSource
+from metagpt.executor.tasks import BgStatus, TaskMeta, BackgroundTaskContextSource
 
 
 def run(coro):

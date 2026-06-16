@@ -1,11 +1,11 @@
 """Hook types — pure data, dependency-free (like ``permission/types.py``).
 
 Kept free of any executor/roles/context import so it sits at the very bottom of
-the layering and can be imported from anywhere without a cycle. In particular it
-must NOT import ``executor.permission`` — instead the ``HookBehavior`` Literal is
-**redeclared** here (the same trick ``common/schema/permission_config.py`` uses
-to redeclare ``PermissionMode``). The executor seam (``ToolExecutor.run_command``)
-is the single place that folds a neutral :class:`HookOutcome` back into a real
+the layering and can be imported from anywhere without a cycle. ``HookBehavior``
+aliases the canonical ``PermissionBehavior`` from ``common/schema`` (also a
+pure-data, executor-free module) so the allow/deny/ask Literal has a single
+source of truth. The executor seam (``ToolExecutor.run_command``) is the single
+place that folds a neutral :class:`HookOutcome` back into a real
 ``PermissionDecision``.
 
 Two synthesized references:
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Iterable, Literal, Optional
+
+from metagpt.common.schema.permission_types import PermissionBehavior
 
 # ---------------------------------------------------------------------------
 # Enumerations (Literals — no runtime enum machinery)
@@ -38,9 +40,9 @@ HookEvent = Literal[
     "FileChanged",
 ]
 
-# Re-declared here (NOT imported from executor.permission.types) so this module
-# stays at the bottom layer. Kept in sync with ``PermissionBehavior``.
-HookBehavior = Literal["allow", "deny", "ask"]
+# Alias the canonical allow/deny/ask Literal (single source of truth in
+# ``common/schema/permission_types``) — same values, no duplicated declaration.
+HookBehavior = PermissionBehavior
 
 
 # ---------------------------------------------------------------------------

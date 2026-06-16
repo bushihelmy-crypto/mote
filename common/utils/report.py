@@ -47,6 +47,18 @@ from contextvars import ContextVar
 CURRENT_ROLE: ContextVar["Role"] = ContextVar("role")
 
 
+def _current_role_name() -> Optional[str]:
+    """Resolve the reporting role's name from the producer-side contextvar.
+
+    Read at emit time (the contextvar is only reliable on the producer side, not
+    inside an async subscriber). Falls back to the ``METAGPT_ROLE`` env var.
+    """
+    role = CURRENT_ROLE.get(None)
+    if role:
+        return role.name
+    return os.environ.get("METAGPT_ROLE")
+
+
 class BlockType(str, Enum):
     """Enumeration for different types of blocks."""
 
@@ -127,33 +139,32 @@ class ResourceReporter(BaseModel):
         cls._async_report = fn
 
     def _report(self, value: Any, name: str, extra: Optional[dict] = None):
-        if not self.callback_url:
-            return
+        from metagpt.common.events import ResourceReportEvent, emit_event_sync
 
-        data = self._format_data(value, name, extra)
-        resp = requests.post(self.callback_url, json=data)
-        resp.raise_for_status()
-        return resp.text
+        emit_event_sync(
+            ResourceReportEvent(
+                block=self.block.value,
+                name_=name,
+                value=value,
+                extra=extra,
+                uuid=str(self.uuid),
+                role=_current_role_name(),
+            )
+        )
 
     async def _async_report(self, value: Any, name: str, extra: Optional[dict] = None):
-        if not self.callback_url:
-            return
+        from metagpt.common.events import ResourceReportEvent, emit_event
 
-        data = self._format_data(value, name, extra)
-        url = self.callback_url
-        _result = urlparse(url)
-        session_kwargs = {}
-        if _result.scheme.endswith("+unix"):
-            parsed_list = list(_result)
-            parsed_list[0] = parsed_list[0][:-5]
-            parsed_list[1] = "fake.org"
-            url = urlunparse(parsed_list)
-            session_kwargs["connector"] = UnixConnector(path=unquote(_result.netloc))
-
-        async with ClientSession(**session_kwargs) as client:
-            async with client.post(url, json=data) as resp:
-                resp.raise_for_status()
-                return await resp.text()
+        await emit_event(
+            ResourceReportEvent(
+                block=self.block.value,
+                name_=name,
+                value=value,
+                extra=extra,
+                uuid=str(self.uuid),
+                role=_current_role_name(),
+            )
+        )
 
     def _format_data(self, value, name, extra):
         data = self.model_dump(mode="json", exclude=("callback_url", "llm_stream"))
@@ -260,3 +271,80 @@ class ArtifactsReporter(ObjectReporter):
     """Reporter for object resources to Artifacts Block."""
 
     block: Literal[BlockType.ARTIFACTS] = BlockType.ARTIFACTS
+
+
+def _build_report_payload(event) -> dict:
+    """Reconstruct the legacy ``_format_data`` HTTP payload from an event.
+
+    Keeps the wire contract identical to the old direct POST: the value is
+    normalized (BaseModel → ``model_dump``, Path → str), a ``"path"`` report
+    is absolutized, and block/uuid/role/extra are carried through.
+    """
+    value = event.value
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    elif isinstance(value, Path):
+        value = str(value)
+    if event.name_ == "path":
+        value = os.path.abspath(value)
+    data = {
+        "block": event.block,
+        "uuid": event.uuid,
+        "value": value,
+        "name": event.name_,
+        "role": event.role,
+    }
+    if event.extra:
+        data["extra"] = event.extra
+    return data
+
+
+class ReporterSubscriber:
+    """Bus subscriber that POSTs :class:`ResourceReportEvent`\\s to a UI endpoint.
+
+    Replaces :class:`ResourceReporter`'s old direct HTTP POST. The reporter now
+    only emits the observation event; this subscriber reconstructs the payload
+    and pushes it (sync events via :meth:`handle_sync`, async via :meth:`handle`,
+    so a single emit never POSTs twice). The POST is best-effort fire-and-forget:
+    a failed push is swallowed (UI mirroring must never break a turn, and bus
+    subscribers are isolated). Standalone use with no bus simply never POSTs.
+    """
+
+    priority: int = 70
+
+    def __init__(self, callback_url: str):
+        self.callback_url = callback_url
+
+    def handle_sync(self, event) -> None:
+        from metagpt.common.events import ResourceReportEvent
+
+        if not isinstance(event, ResourceReportEvent) or not self.callback_url:
+            return
+        try:
+            requests.post(self.callback_url, json=_build_report_payload(event))
+        except Exception:  # noqa: BLE001 — UI push is fire-and-forget
+            pass
+
+    async def handle(self, event):
+        from metagpt.common.events import ResourceReportEvent
+
+        if not isinstance(event, ResourceReportEvent) or not self.callback_url:
+            return None
+        try:
+            data = _build_report_payload(event)
+            url = self.callback_url
+            _result = urlparse(url)
+            session_kwargs = {}
+            if _result.scheme.endswith("+unix"):
+                parsed_list = list(_result)
+                parsed_list[0] = parsed_list[0][:-5]
+                parsed_list[1] = "fake.org"
+                url = urlunparse(parsed_list)
+                session_kwargs["connector"] = UnixConnector(path=unquote(_result.netloc))
+
+            async with ClientSession(**session_kwargs) as client:
+                async with client.post(url, json=data) as resp:
+                    await resp.text()
+        except Exception:  # noqa: BLE001 — UI push is fire-and-forget
+            pass
+        return None

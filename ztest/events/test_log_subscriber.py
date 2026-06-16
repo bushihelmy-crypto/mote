@@ -10,7 +10,10 @@ from metagpt.common.events import (
     LLMStreamDeltaEvent,
     LogSubscriber,
     PreToolUseEvent,
+    RecoveryEvent,
+    ResourceReportEvent,
     SessionStartEvent,
+    TaskProgressEvent,
     emit_event,
     emit_event_sync,
     set_bus,
@@ -91,3 +94,50 @@ def test_clip_truncates_and_collapses_whitespace():
     long = "x" * 200
     out = _clip(long, limit=10)
     assert len(out) == 10 and out.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# Unified-path events: recovery / resource_report / task_progress
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["recovered", "give_up"])
+async def test_recovery_event_logged_at_info(monkeypatch, phase):
+    info, debug, _ = _capture(monkeypatch)
+    await LogSubscriber().handle(
+        RecoveryEvent(phase=phase, action="rotate_credential", attempt=1, error_type="LLMError", error="429")
+    )
+    assert debug == []
+    assert len(info) == 1 and "recovery" in info[0] and phase in info[0] and "rotate_credential" in info[0]
+
+
+@pytest.mark.asyncio
+async def test_resource_report_event_logged_at_debug(monkeypatch):
+    info, debug, _ = _capture(monkeypatch)
+    await LogSubscriber().handle(ResourceReportEvent(block="Terminal", name_="content", role="dev"))
+    assert info == []
+    assert len(debug) == 1 and "resource_report" in debug[0] and "Terminal" in debug[0]
+
+
+def test_task_progress_logged_via_handle_sync(monkeypatch):
+    info, debug, _ = _capture(monkeypatch)
+    LogSubscriber().handle_sync(TaskProgressEvent(task_id="bg_1", stage="split", status="running", detail="d"))
+    assert info == []
+    assert len(debug) == 1 and "task_progress" in debug[0] and "bg_1" in debug[0]
+
+
+def test_handle_sync_ignores_non_task_progress(monkeypatch):
+    info, debug, _ = _capture(monkeypatch)
+    LogSubscriber().handle_sync(LLMStreamDeltaEvent(token="tok"))
+    LogSubscriber().handle_sync(ResourceReportEvent(block="Terminal", name_="content"))
+    assert info == [] and debug == []
+
+
+@pytest.mark.asyncio
+async def test_async_handle_ignores_task_progress(monkeypatch):
+    # TaskProgress rides the sync fan-out; the async path must not double-log it.
+    info, debug, _ = _capture(monkeypatch)
+    out = await LogSubscriber().handle(TaskProgressEvent(task_id="bg_1", stage="s", status="running"))
+    assert out is None
+    assert info == [] and debug == []

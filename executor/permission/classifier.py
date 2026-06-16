@@ -33,7 +33,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Optional
 
-from metagpt.executor.permission.types import RiskLevel
+from metagpt.common.schema.permission_types import RiskLevel
 
 # ---------------------------------------------------------------------------
 # Assessment result

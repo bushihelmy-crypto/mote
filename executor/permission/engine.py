@@ -42,7 +42,7 @@ from metagpt.executor.permission.prompts import (
 )
 from metagpt.executor.permission.rule_store import RuleStore
 from metagpt.executor.permission.sandbox import SandboxGuard
-from metagpt.executor.permission.types import (
+from metagpt.common.schema.permission_types import (
     PermissionDecision,
     PermissionMode,
     PermissionRule,

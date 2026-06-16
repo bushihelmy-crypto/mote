@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.tasks.bggraph import END, START, BgGraph
+from metagpt.executor.tasks.bggraph import END, START, BgGraph
 
 from .conftest import S, sync_node
 

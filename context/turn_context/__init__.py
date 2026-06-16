@@ -14,15 +14,15 @@ by ``Role``.
 from metagpt.context.turn_context.bus import TurnContextBus
 from metagpt.context.turn_context.format import wrap_system_reminder
 from metagpt.context.turn_context.sources import (
+    CompactionNoticeContextSource,
     GitContextSource,
-    LspContextSource,
     TokenPressureContextSource,
 )
 
 __all__ = [
     "TurnContextBus",
     "wrap_system_reminder",
+    "CompactionNoticeContextSource",
     "GitContextSource",
-    "LspContextSource",
     "TokenPressureContextSource",
 ]

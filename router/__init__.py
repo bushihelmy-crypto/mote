@@ -25,7 +25,7 @@ from metagpt.router.ml import (
     load_runtime_config,
 )
 from metagpt.router.ml.predictor import ROUTE_CLASSES
-from metagpt.router.router import LLM, LLMRouter, get_router
+from metagpt.router.router import LLM, LLMRouter
 from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
 from metagpt.router.squilla import (
     RoutingHistoryStore,
@@ -44,7 +44,6 @@ from metagpt.router.strategy import (
 __all__ = [
     "LLM",
     "LLMRouter",
-    "get_router",
     "RoutingRequest",
     "RoutingDecision",
     "ModelCard",

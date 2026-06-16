@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.interface import EphemeralContextSource
+from metagpt.common.events import PostCompactEvent, TurnEndEvent
+from metagpt.common.interface import EphemeralContextSource, EventSubscriber
 from metagpt.context.turn_context import (
+    CompactionNoticeContextSource,
     GitContextSource,
-    LspContextSource,
     TokenPressureContextSource,
 )
 
@@ -24,8 +25,12 @@ def run(coro):
 class TestProtocolConformance:
     def test_sources_are_ephemeral_context_sources(self):
         assert isinstance(GitContextSource(), EphemeralContextSource)
-        assert isinstance(LspContextSource(None), EphemeralContextSource)
         assert isinstance(TokenPressureContextSource(None), EphemeralContextSource)
+        assert isinstance(CompactionNoticeContextSource(), EphemeralContextSource)
+
+    def test_compaction_notice_is_also_event_subscriber(self):
+        # Dual-role: it consumes the bus event AND renders the turn-context block.
+        assert isinstance(CompactionNoticeContextSource(), EventSubscriber)
 
 
 # --------------------------------------------------------------------------
@@ -107,28 +112,46 @@ class TestTokenPressureContextSource:
         assert s.name == "token" and s.priority == 20
 
 
+# Note: the LSP feed is the dual-role `DiagnosticsBuffer` (it is both the bus
+# subscriber and the EphemeralContextSource), so its render path is covered in
+# ztest/lsp/test_service_integration.py rather than here.
+
+
 # --------------------------------------------------------------------------
-# LSP
+# Compaction notice
 # --------------------------------------------------------------------------
-class _FakeLsp:
-    def __init__(self, block):
-        self._block = block
-
-    def drain_diagnostics(self):
-        return self._block
-
-
-class TestLspContextSource:
-    def test_none_service_returns_none(self):
-        assert run(LspContextSource(None).render()) is None
-
-    def test_empty_drain_returns_none(self):
-        assert run(LspContextSource(_FakeLsp("")).render()) is None
-
-    def test_block_returned(self):
-        out = run(LspContextSource(_FakeLsp("<lsp_diagnostics>...")).render())
-        assert out == "<lsp_diagnostics>..."
-
+class TestCompactionNoticeContextSource:
     def test_priority_and_name(self):
-        s = LspContextSource(None)
-        assert s.name == "lsp" and s.priority == 40
+        s = CompactionNoticeContextSource()
+        assert s.name == "compaction" and s.priority == 25
+
+    def test_silent_before_any_compaction(self):
+        assert run(CompactionNoticeContextSource().render()) is None
+
+    def test_renders_once_after_post_compact_then_disarms(self):
+        s = CompactionNoticeContextSource()
+        run(s.handle(PostCompactEvent(trigger="auto", summary="prev work")))
+        out = run(s.render())
+        assert out is not None
+        assert "History compacted" in out
+        # One-shot: the next cycle is silent again.
+        assert run(s.render()) is None
+
+    def test_multiple_compactions_collapse_to_one_notice(self):
+        s = CompactionNoticeContextSource()
+        run(s.handle(PostCompactEvent()))
+        run(s.handle(PostCompactEvent()))
+        assert run(s.render()) is not None
+        assert run(s.render()) is None
+
+    def test_ignores_unrelated_events(self):
+        s = CompactionNoticeContextSource()
+        run(s.handle(TurnEndEvent()))
+        assert run(s.render()) is None
+
+    def test_summary_not_echoed_in_notice(self):
+        # The summary already lives in history; the notice only flags the event.
+        s = CompactionNoticeContextSource()
+        run(s.handle(PostCompactEvent(summary="SECRET-SUMMARY-TEXT")))
+        out = run(s.render())
+        assert "SECRET-SUMMARY-TEXT" not in out

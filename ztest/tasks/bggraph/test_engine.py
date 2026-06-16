@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for the bggraph frontier scheduler (:mod:`metagpt.tasks.bggraph.engine`).
+"""Unit tests for the bggraph frontier scheduler (:mod:`metagpt.executor.bggraph.engine`).
 
 Covers linear chains, parallel fan-out, waiting-edge AND-joins (fast + slow
 source), conditional routing, cycles bounded by ``recursion_limit``, independent
@@ -15,17 +15,17 @@ import asyncio
 
 import pytest
 
-from metagpt.common.schema import BgTaskResult
-from metagpt.tasks.bggraph import (
+from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.executor.tasks.bggraph import (
     END,
     START,
-    BatchFailureError,
+    GraphBatchFailureError,
     BgGraph,
     GraphRecursionError,
 )
-from metagpt.tasks.bggraph.types import _LLM_ROUTE_SENTINEL
+from metagpt.executor.tasks.bggraph.types import LlmPauseResult, _LLM_ROUTE_SENTINEL
 
-from .conftest import S, boom_node, flaky_node, gated_node, sync_node
+from .conftest import S, boom_node, flaky_node, gated_node, non_retryable_flaky_node, sync_node
 
 pytestmark = pytest.mark.asyncio
 
@@ -140,7 +140,7 @@ class TestFailure:
         g.add_node("a", boom_node(ValueError("nope")))
         g.add_edge(START, "a")
         g.add_edge("a", END)
-        with pytest.raises(BatchFailureError) as ei:
+        with pytest.raises(GraphBatchFailureError) as ei:
             await _run(g, x=0)
         assert [n for n, _ in ei.value.failures] == ["a"]
 
@@ -154,38 +154,124 @@ class TestFailure:
         g.add_edge("a", "bad")
         g.add_edge("a", "good")
         g.add_edge("good", END)
-        with pytest.raises(BatchFailureError) as ei:
+        with pytest.raises(GraphBatchFailureError) as ei:
             await _run(g, x=0)
         assert [n for n, _ in ei.value.failures] == ["bad"]
 
 
+@pytest.fixture
+def fast_retry(monkeypatch):
+    """Zero the framework backoff base so retry tests don't sleep for real."""
+    import metagpt.executor.tasks.bggraph.engine as eng
+
+    monkeypatch.setattr(eng, "_RETRY_WAIT", 0.0)
+    return eng
+
+
 class TestAutoRetries:
-    async def test_retry_then_succeed(self):
+    """Retry budget is owned by the engine (``_AUTO_RETRIES``), not the node."""
+
+    async def test_retry_then_succeed(self, fast_retry):
         counter: list = []
         g = BgGraph("retry", state_schema=S)
-        g.add_node("a", flaky_node(2, "ok", counter), auto_retries=3, retry_wait=0.0)
+        # Fails twice (within the framework's 3-retry budget), then succeeds.
+        g.add_node("a", flaky_node(2, "ok", counter))
         g.add_edge(START, "a")
         g.add_edge("a", END)
         assert await _run(g, x=0) == "ok"
         assert len(counter) == 3  # 2 failures + 1 success
 
-    async def test_retry_exhausted_fails(self):
+    async def test_retry_exhausted_fails(self, fast_retry):
         counter: list = []
         g = BgGraph("retryfail", state_schema=S)
-        g.add_node("a", flaky_node(5, "never", counter), auto_retries=2, retry_wait=0.0)
+        # Always fails → exhausts the framework budget (_AUTO_RETRIES).
+        g.add_node("a", flaky_node(99, "never", counter))
         g.add_edge(START, "a")
         g.add_edge("a", END)
-        with pytest.raises(BatchFailureError) as ei:
+        with pytest.raises(GraphBatchFailureError) as ei:
             await _run(g, x=0)
         name, exc = ei.value.failures[0]
         assert name == "a"
-        assert getattr(exc, "_auto_retries_attempted", None) == 2
-        assert getattr(exc, "_auto_retries_limit", None) == 2
-        assert len(counter) == 3  # initial + 2 retries
+        # Recorded retry counts reflect the framework budget.
+        assert getattr(exc, "_auto_retries_attempted", None) == fast_retry._AUTO_RETRIES
+        assert getattr(exc, "_auto_retries_limit", None) == fast_retry._AUTO_RETRIES
+        assert len(counter) == fast_retry._AUTO_RETRIES + 1  # initial + budget retries
+
+    async def test_non_retryable_error_fails_immediately(self, fast_retry):
+        """A non-retryable error (ValueError) is never retried, regardless of budget."""
+        counter: list = []
+        g = BgGraph("noretry", state_schema=S)
+        g.add_node("a", non_retryable_flaky_node(5, "never", counter))
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        with pytest.raises(GraphBatchFailureError) as ei:
+            await _run(g, x=0)
+        name, exc = ei.value.failures[0]
+        assert name == "a"
+        assert isinstance(exc, ValueError)
+        # Only 1 attempt — no retries for non-retryable errors.
+        assert len(counter) == 1
+        assert getattr(exc, "_auto_retries_attempted", None) == 0
+        assert getattr(exc, "_auto_retries_limit", None) == fast_retry._AUTO_RETRIES
+
+
+class TestRetryBackoff:
+    """Engine-owned exponential backoff with full jitter, capped at the ceiling."""
+
+    async def test_exponential_ceiling_grows(self, monkeypatch):
+        import metagpt.executor.tasks.bggraph.engine as eng
+
+        # Pin the base and jitter to its upper bound to assert the exponential ceiling.
+        monkeypatch.setattr(eng, "_RETRY_WAIT", 1.0)
+        monkeypatch.setattr(eng.random, "uniform", lambda lo, hi: hi)
+        assert eng._retry_delay(1) == 1.0  # 1 * 2**0
+        assert eng._retry_delay(2) == 2.0  # 1 * 2**1
+        assert eng._retry_delay(3) == 4.0  # 1 * 2**2
+
+    async def test_capped_at_max(self, monkeypatch):
+        import metagpt.executor.tasks.bggraph.engine as eng
+
+        monkeypatch.setattr(eng, "_RETRY_WAIT", 5.0)
+        monkeypatch.setattr(eng.random, "uniform", lambda lo, hi: hi)
+        # A huge attempt count is clamped to the 60s ceiling.
+        assert eng._retry_delay(20) == eng._MAX_BACKOFF_WAIT
+
+    async def test_jitter_within_bounds(self, monkeypatch):
+        import metagpt.executor.tasks.bggraph.engine as eng
+
+        monkeypatch.setattr(eng, "_RETRY_WAIT", 2.0)
+        # With real jitter every sample stays within [0, capped_ceiling].
+        for attempt in range(1, 6):
+            ceiling = min(2.0 * (2 ** (attempt - 1)), eng._MAX_BACKOFF_WAIT)
+            for _ in range(20):
+                d = eng._retry_delay(attempt)
+                assert 0.0 <= d <= ceiling
+
+    async def test_backoff_delays_recorded_during_run(self, monkeypatch):
+        # Capture the actual sleeps a node incurs across its retries.
+        import metagpt.executor.tasks.bggraph.engine as eng
+
+        slept: list = []
+
+        async def fake_sleep(d):
+            slept.append(d)
+
+        monkeypatch.setattr(eng, "_RETRY_WAIT", 1.0)
+        monkeypatch.setattr(eng.asyncio, "sleep", fake_sleep)
+        monkeypatch.setattr(eng.random, "uniform", lambda lo, hi: hi)
+
+        counter: list = []
+        g = BgGraph("backoff", state_schema=S)
+        g.add_node("a", flaky_node(3, "ok", counter))
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        assert await _run(g, x=0) == "ok"
+        # 3 failures + 1 success → 3 retries → 3 sleeps, exponentially growing.
+        assert slept == [1.0, 2.0, 4.0]
 
 
 class TestLlmPause:
-    async def test_pause_returns_sentinel(self):
+    async def test_pause_returns_llm_pause_result(self):
         g = BgGraph("llm", state_schema=S)
         g.add_node("a", sync_node(lambda s: "a-done"))
         g.add_node("nextstep", sync_node(lambda s: "next"))
@@ -194,4 +280,12 @@ class TestLlmPause:
         g.add_edge("nextstep", END)
         res = await g.compile()(x=0)
         out = await res.poll
-        assert out is _LLM_ROUTE_SENTINEL
+        # isinstance check works with the backward-compat alias
+        assert isinstance(out, _LLM_ROUTE_SENTINEL)
+        assert isinstance(out, LlmPauseResult)
+        # Carries pause state
+        assert "a" in out.completed
+        assert out.state is not None
+        assert getattr(out.state, "a") == "a-done"
+        assert out.edge.from_node == "a"
+        assert "go" in out.edge.mapping

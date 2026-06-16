@@ -14,7 +14,7 @@ retry predicate's historical behavior.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from metagpt.common.exception.base import NonRetryableError, RetryableError
 from metagpt.common.exception.codes import ErrorCode
@@ -55,6 +55,25 @@ class NonRetryableToolError(ToolError, ValueError):
     """
 
     default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_NON_RETRYABLE
+
+
+class ApplyPatchError(ToolError):
+    """A patch could not be parsed (or, from the applier, could not be applied).
+
+    Carries the optional 1-based ``line_no`` where parsing failed so the
+    ``apply_patch`` tool can surface codex-style explicit diagnostics.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_APPLY_PATCH
+
+    def __init__(self, message: str = "", line_no: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.line_no = line_no
+
+    def __str__(self) -> str:
+        if self.line_no is not None:
+            return f"invalid hunk at line {self.line_no}, {self.message}"
+        return self.message
 
 
 class RetryableToolError(RetryableError, ToolError):

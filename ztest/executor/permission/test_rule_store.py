@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from metagpt.common.schema import PermissionConfig
 from metagpt.executor.permission.rule_store import RuleStore
-from metagpt.executor.permission.types import PermissionRule
+from metagpt.common.schema.permission_types import PermissionRule
 
 
 def make_store() -> RuleStore:

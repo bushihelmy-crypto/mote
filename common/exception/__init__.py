@@ -21,11 +21,17 @@ from metagpt.common.exception.base import (
     RetryableError,
 )
 from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+from metagpt.common.exception.recovery import (
+    Call,
+    RecoveryRunner,
+    RecoveryStrategy,
+)
 from metagpt.common.exception.config import (
     ConfigError,
     ConfigValidationError,
     EnvKeyNotFoundError,
     MissingAPIKeyError,
+    UnknownConfigKeysError,
 )
 from metagpt.common.exception.environment import (
     AgentControlError,
@@ -33,6 +39,12 @@ from metagpt.common.exception.environment import (
     AgentNotFound,
     AgentNotKnown,
     AgentPathExists,
+)
+from metagpt.common.exception.graph import (
+    GraphBatchFailureError,
+    GraphError,
+    GraphRecursionError,
+    GraphRouterError,
 )
 from metagpt.common.exception.llm import (
     ContextWindowExceededError,
@@ -53,6 +65,13 @@ from metagpt.common.exception.llm import (
     LLMServerError,
     LLMTimeoutError,
 )
+from metagpt.common.exception.oauth import (
+    JWTDecodeError,
+    OAuthConfigError,
+    OAuthError,
+    OAuthHTTPError,
+    OAuthRefreshError,
+)
 from metagpt.common.exception.resource import (
     BudgetExceededError,
     NoMoneyException,
@@ -61,9 +80,11 @@ from metagpt.common.exception.resource import (
 from metagpt.common.exception.router import (
     ModelNotFoundError,
     ProviderNotFoundError,
+    RouterControlValidationError,
     RouterError,
 )
 from metagpt.common.exception.tool import (
+    ApplyPatchError,
     NonRetryableToolError,
     RetryableToolError,
     ToolError,
@@ -108,6 +129,10 @@ __all__ = [
     "NonRetryableError",
     "ErrorCode",
     "RecoveryAction",
+    # recovery / failover skeleton
+    "RecoveryRunner",
+    "RecoveryStrategy",
+    "Call",
     # llm tier
     "LLMError",
     "LLMConnectionError",
@@ -130,15 +155,29 @@ __all__ = [
     "RouterError",
     "ModelNotFoundError",
     "ProviderNotFoundError",
+    "RouterControlValidationError",
     # tool tier
     "ToolError",
     "ToolValidationError",
     "ToolNotFoundError",
     "NonRetryableToolError",
     "RetryableToolError",
+    "ApplyPatchError",
+    # graph execution tier
+    "GraphError",
+    "GraphRouterError",
+    "GraphRecursionError",
+    "GraphBatchFailureError",
+    # oauth / credential tier
+    "OAuthError",
+    "OAuthConfigError",
+    "OAuthHTTPError",
+    "OAuthRefreshError",
+    "JWTDecodeError",
     # config tier
     "ConfigError",
     "ConfigValidationError",
+    "UnknownConfigKeysError",
     "MissingAPIKeyError",
     "EnvKeyNotFoundError",
     # agent tier

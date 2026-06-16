@@ -26,12 +26,12 @@ The clock is injectable (``clock() -> epoch ms``) so tests drive time directly.
 
 from __future__ import annotations
 
-import asyncio
 import math
 import time
 from typing import Callable, Dict, List, Optional
 
 from metagpt.common.logs import log_class
+from metagpt.common.scheduling import PeriodicLoop
 from metagpt.environment.scheduling.cron import (
     _next_cron_run_ms,
     jittered_next_cron_run_ms,
@@ -88,7 +88,6 @@ class CronScheduler:
         self._lock = lock
         self._jitter_config = jitter_config
         self._clock = clock or _default_clock
-        self._check_interval = check_interval
 
         # Per-task next-fire times (epoch ms; ``math.inf`` == "never").
         self._next_fire_at: Dict[str, float] = {}
@@ -98,30 +97,21 @@ class CronScheduler:
         self._durable: List[CronTask] = []
         self._last_mtime: Optional[float] = None
         self._is_owner = False
-        self._stopped = True
-        self._loop_task: Optional[asyncio.Task] = None
+        self._runner = PeriodicLoop(check_interval, self._check, name="cron-scheduler")
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Acquire the lock (if any), run missed compensation, and start the loop."""
-        self._stopped = False
         self._is_owner = self._lock.acquire() if self._lock is not None else True
         self._reload_durable(force=True)
         self._run_missed()
-        self._loop_task = asyncio.create_task(self._loop())
+        self._runner.start()
 
     async def stop(self) -> None:
         """Cancel the loop and release the lock."""
-        self._stopped = True
-        if self._loop_task is not None:
-            self._loop_task.cancel()
-            try:
-                await self._loop_task
-            except asyncio.CancelledError:
-                pass
-            self._loop_task = None
+        await self._runner.stop()
         if self._lock is not None and self._is_owner:
             self._is_owner = False
             self._lock.release()
@@ -133,17 +123,6 @@ class CronScheduler:
             if value < soonest:
                 soonest = value
         return None if soonest == math.inf else int(soonest)
-
-    # ------------------------------------------------------------------
-    # Loop
-    # ------------------------------------------------------------------
-    async def _loop(self) -> None:
-        while not self._stopped:
-            try:
-                self._check()
-            except Exception:  # noqa: BLE001 — best-effort tick; keep scheduling
-                pass
-            await asyncio.sleep(self._check_interval)
 
     def _get_cfg(self) -> CronJitterConfig:
         return self._jitter_config() if self._jitter_config is not None else DEFAULT_CRON_JITTER_CONFIG

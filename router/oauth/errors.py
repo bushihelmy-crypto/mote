@@ -10,45 +10,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-
-class OAuthError(Exception):
-    """Base for all OAuth failures."""
-
-
-class OAuthConfigError(OAuthError):
-    """The OAuth provider config is missing/invalid for the requested operation."""
-
-
-class OAuthHTTPError(OAuthError):
-    """Token endpoint returned a non-2xx response not otherwise classified."""
-
-    def __init__(self, message: str, status_code: Optional[int] = None, error_code: Optional[str] = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.error_code = error_code
-
-
-class OAuthRefreshError(OAuthError):
-    """Refreshing (or minting) a token failed.
-
-    ``error_code`` carries the provider's OAuth2 ``error`` field when present.
-    ``recoverable`` is True for transient failures (retry/re-mint may help) and
-    False when the grant is permanently broken (interactive re-auth required).
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: Optional[str] = None,
-        recoverable: bool = False,
-        status_code: Optional[int] = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.recoverable = recoverable
-        self.status_code = status_code
-
+# Exception types are unified under the global exception package; re-exported
+# here so existing ``from metagpt.router.oauth.errors import OAuthError`` call
+# sites keep working. Only the refresh-failure classification (OAuth-domain
+# logic) lives in this module.
+from metagpt.common.exception import (  # noqa: F401
+    OAuthConfigError,
+    OAuthError,
+    OAuthHTTPError,
+    OAuthRefreshError,
+)
 
 # OAuth2 error codes that mean the refresh token is permanently unusable.
 _UNRECOVERABLE_ERROR_CODES = {

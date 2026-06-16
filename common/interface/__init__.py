@@ -25,7 +25,6 @@ from metagpt.common.interface.event_subscriber import EventSubscriber
 from metagpt.common.interface.file_snapshot import FileSnapshotStore
 from metagpt.common.interface.hook_runner import HookRunner
 from metagpt.common.interface.llm_client import LLMClient
-from metagpt.common.interface.lsp_notifier import LspNotifier
 from metagpt.common.interface.message_activity import MessageActivity
 from metagpt.common.interface.message_store import MessageStore
 from metagpt.common.interface.request_assembler import RequestAssembler
@@ -39,7 +38,6 @@ __all__ = [
     "MessageActivity",
     "HookRunner",
     "FileSnapshotStore",
-    "LspNotifier",
     "EphemeralContextSource",
     "EventSubscriber",
 ]

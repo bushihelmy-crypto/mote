@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.git_state.collector`` — read-only git snapshot.
+"""Tests for ``metagpt.common.utils.git_state.collector`` — read-only git snapshot.
 
 Covers: non-repo / empty cwd -> None; branch read filesystem-first from
 .git/HEAD; detached HEAD; staged / unstaged / untracked counting; recent-commit
@@ -14,8 +14,8 @@ import subprocess
 
 import pytest
 
-from metagpt.common.git_state import collector
-from metagpt.common.git_state.collector import (
+from metagpt.common.utils.git_state import collector
+from metagpt.common.utils.git_state.collector import (
     GitState,
     _parse_status,
     _read_branch,

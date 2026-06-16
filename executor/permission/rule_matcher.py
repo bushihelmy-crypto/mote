@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from fnmatch import fnmatch
 
-from metagpt.executor.permission.types import PermissionBehavior, PermissionRule, RuleSource
+from metagpt.common.schema.permission_types import PermissionBehavior, PermissionRule, RuleSource
 
 # Sentinel separating an MCP server from its tool name, e.g. ``mcp__github__search``.
 _MCP_PREFIX = "mcp__"

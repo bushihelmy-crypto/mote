@@ -18,12 +18,12 @@ directly without starting the loop.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from fnmatch import fnmatch
 from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
 from metagpt.common.logs import log_class
+from metagpt.common.scheduling import PeriodicLoop
 from metagpt.environment.watching.events import (
     CREATED,
     DELETED,
@@ -58,53 +58,60 @@ class FileWatcher:
         self._roots = [os.path.abspath(r) for r in roots]
         self._on_change = on_change
         self._ignore = list(ignore or [])
-        self._check_interval = check_interval
+        self._runner = PeriodicLoop(check_interval, self.poll, name="file-watcher")
 
         # Last-seen signature per absolute path (the diff baseline).
         self._state: Dict[str, _Sig] = {}
+        # Paths the agent itself just wrote, mapped to the on-disk signature at
+        # write time (``None`` = the write deleted the file). The next poll
+        # suppresses a detected change for such a path when its fresh signature
+        # still matches, so our own edits aren't echoed back as external
+        # changes. See :meth:`note_self_write` / :meth:`_suppress_self_writes`.
+        self._self_writes: Dict[str, Optional[_Sig]] = {}
         self._primed = False
-        self._stopped = True
-        self._loop_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Establish the baseline (no events) and start the polling loop."""
-        self._stopped = False
         self.prime()
-        self._loop_task = asyncio.create_task(self._loop())
+        self._runner.start()
 
     async def stop(self) -> None:
         """Cancel the polling loop."""
-        self._stopped = True
-        if self._loop_task is not None:
-            self._loop_task.cancel()
-            try:
-                await self._loop_task
-            except asyncio.CancelledError:
-                pass
-            self._loop_task = None
+        await self._runner.stop()
 
     def is_running(self) -> bool:
-        return not self._stopped
+        return self._runner.is_running()
 
     def prime(self) -> None:
         """Snapshot the current tree as the baseline without emitting changes."""
         self._state = self._snapshot()
         self._primed = True
 
+    def note_self_write(self, path: str) -> None:
+        """Record that *the agent itself* just wrote ``path``.
+
+        Captures the current on-disk signature (or ``None`` when the path no
+        longer exists, i.e. the write was a delete). The next :meth:`poll`
+        suppresses a change for this path when the freshly observed signature
+        still matches what we recorded here — so the watcher never echoes our
+        own edit back as an external change. If the file diverges again before
+        the next poll (an external change layered on top of ours), the
+        signatures won't match and the change *is* reported. Cheap and
+        best-effort: a failed stat just records ``None``.
+        """
+        abspath = os.path.abspath(path)
+        try:
+            st = os.stat(abspath)
+            self._self_writes[abspath] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            self._self_writes[abspath] = None
+
     # ------------------------------------------------------------------
     # Loop
     # ------------------------------------------------------------------
-    async def _loop(self) -> None:
-        while not self._stopped:
-            try:
-                await self.poll()
-            except Exception:  # noqa: BLE001 — best-effort tick; keep watching
-                pass
-            await asyncio.sleep(self._check_interval)
-
     async def poll(self) -> List[FileChangeEvent]:
         """Take a fresh snapshot, diff it against the baseline, fire changes.
 
@@ -117,9 +124,32 @@ class FileWatcher:
         events = self._diff(self._state, current)
         self._state = current
         self._primed = True
+        if self._self_writes:
+            events = self._suppress_self_writes(events, current)
         for event in events:
             await self._on_change(event)
         return events
+
+    def _suppress_self_writes(
+        self, events: List[FileChangeEvent], current: Dict[str, _Sig]
+    ) -> List[FileChangeEvent]:
+        """Drop events for paths the agent just wrote (matching signatures).
+
+        Compares against the fresh snapshot ``current`` rather than the event's
+        (lossy float) mtime, and consumes (pops) each note so a later genuine
+        change to the same path is reported normally.
+        """
+        kept: List[FileChangeEvent] = []
+        for event in events:
+            if event.path not in self._self_writes:
+                kept.append(event)
+                continue
+            noted = self._self_writes.pop(event.path)
+            # current.get(path) is None when the path is absent (deleted), which
+            # also matches a recorded delete (noted is None).
+            if current.get(event.path) != noted:
+                kept.append(event)  # diverged since our write -> a real change
+        return kept
 
     # ------------------------------------------------------------------
     # Snapshot / diff (pure, sync — testable in isolation)

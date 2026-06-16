@@ -6,12 +6,12 @@ from __future__ import annotations
 import pytest
 
 from metagpt.common.config.diagnostics import (
-    ConfigValidationError,
     format_report,
     unknown_key_paths,
 )
 from metagpt.common.config.loader import load_config
 from metagpt.common.config.meta_config import Config
+from metagpt.common.exception import UnknownConfigKeysError
 
 
 def test_unknown_key_paths_flags_top_level_and_nested():
@@ -40,7 +40,7 @@ def test_unknown_subtree_not_descended():
 
 
 def test_strict_load_raises_on_unknown_key():
-    with pytest.raises(ConfigValidationError) as exc:
+    with pytest.raises(UnknownConfigKeysError) as exc:
         load_config(programmatic={"llm": {"model": "x"}, "nope_not_a_field": 1}, strict=True)
     assert "nope_not_a_field" in str(exc.value)
     assert "nope_not_a_field" in exc.value.unknown_paths

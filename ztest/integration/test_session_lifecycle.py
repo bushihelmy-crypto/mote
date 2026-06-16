@@ -167,7 +167,7 @@ async def test_fork_child_runs_independently(make_role, tmp_path):
 
     c_file = os.path.join(str(tmp_path), "c.txt")
     llm = ScriptedLLM([[("Write", {"file_path": c_file, "content": "c"})], "child done"])
-    child._router = ScriptedRouter(llm)
+    child._components._router = ScriptedRouter(llm)
     child.scripted_llm = llm  # type: ignore[attr-defined]
 
     await child.run(with_message="child task")

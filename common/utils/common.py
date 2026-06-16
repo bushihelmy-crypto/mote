@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import binascii
 import contextlib
 import functools
 import importlib
@@ -412,6 +413,31 @@ def extract_and_encode_pdfs(content: str) -> list[str]:
             with open(path, "rb") as f:
                 pdfs.append(base64.b64encode(f.read()).decode("utf-8"))
     return pdfs
+
+
+def sniff_image_media_type(b64_data: str) -> Optional[str]:
+    """Detect an image's media type from its leading bytes (magic numbers).
+
+    Providers like Bedrock/Anthropic reject a base64 image whose declared media
+    type disagrees with the actual bytes (e.g. a PNG labelled as JPEG). Sniffing
+    the real type lets callers send the correct ``media_type``.
+
+    Returns ``None`` when the data can't be decoded or the format isn't
+    recognised, leaving the declared media type untouched.
+    """
+    try:
+        header = base64.b64decode(b64_data[:64], validate=False)
+    except (binascii.Error, ValueError):
+        return None
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
+        return "image/gif"
+    if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def pdfs_within_limits(

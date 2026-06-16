@@ -16,8 +16,6 @@ back into the agnostic ``get_choice_text`` / ``get_choice_tool_calls`` contract.
 """
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 from typing import Any, Optional, Union
 
@@ -37,7 +35,7 @@ from metagpt.common.exception import (
     is_retryable,
 )
 from metagpt.common.logs import log_llm_stream, logger
-from metagpt.common.utils.common import log_and_reraise
+from metagpt.common.utils.common import log_and_reraise, sniff_image_media_type
 from metagpt.common.utils.token_counter import count_message_tokens, count_string_tokens
 from metagpt.router.cost import CostTracker
 from metagpt.router.llm.base_llm import BaseLLM
@@ -257,7 +255,7 @@ class AnthropicLLM(BaseLLM):
             # The declared media type is often wrong (e.g. a PNG labelled as
             # JPEG); Anthropic rejects mismatches, so sniff the real type from
             # the decoded bytes and prefer it when recognised.
-            sniffed = AnthropicLLM._sniff_image_media_type(data)
+            sniffed = sniff_image_media_type(data)
             if sniffed:
                 media_type = sniffed
             return {
@@ -265,27 +263,6 @@ class AnthropicLLM(BaseLLM):
                 "source": {"type": "base64", "media_type": media_type, "data": data},
             }
         return {"type": "image", "source": {"type": "url", "url": url}}
-
-    @staticmethod
-    def _sniff_image_media_type(b64_data: str) -> Optional[str]:
-        """Detect an image's media type from its leading bytes (magic numbers).
-
-        Returns ``None`` when the data can't be decoded or the format isn't
-        recognised, leaving the declared media type untouched.
-        """
-        try:
-            header = base64.b64decode(b64_data[:64], validate=False)
-        except (binascii.Error, ValueError):
-            return None
-        if header.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "image/png"
-        if header.startswith(b"\xff\xd8\xff"):
-            return "image/jpeg"
-        if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
-            return "image/gif"
-        if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
-            return "image/webp"
-        return None
 
     # -- tool spec / tool_choice conversion ---------------------------------
     @staticmethod

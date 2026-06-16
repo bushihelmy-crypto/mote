@@ -29,7 +29,7 @@ from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
 from metagpt.cli.render import build_renderer
 from metagpt.common.config.meta_config import Config
-from metagpt.common.git_state import find_git_root
+from metagpt.common.utils.git_state import find_git_root
 from metagpt.environment.control import AgentControl
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.roles import Role
@@ -641,11 +641,10 @@ class Repl:
             await self._control.stop()
         except Exception as exc:  # noqa: BLE001 — best-effort shutdown
             logger.warning(f"Repl: control.stop() failed: {exc}")
-        if getattr(self._role, "_executor", None) is not None:
-            try:
-                await self._role.executor.cleanup()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"Repl: executor.cleanup() failed: {exc}")
+        try:
+            await self._role.cleanup()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Repl: role.cleanup() failed: {exc}")
 
 
 def build_repl(

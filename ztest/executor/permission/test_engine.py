@@ -17,7 +17,7 @@ from metagpt.common.schema import PermissionConfig, SandboxConfig
 from metagpt.executor.permission.engine import PermissionEngine
 from metagpt.executor.permission.rule_store import RuleStore
 from metagpt.executor.permission.sandbox import SandboxGuard
-from metagpt.executor.permission.types import PermissionDecision
+from metagpt.common.schema.permission_types import PermissionDecision
 
 pytestmark = pytest.mark.asyncio
 

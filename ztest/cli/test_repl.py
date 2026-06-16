@@ -61,6 +61,12 @@ class FakeRole:
         self.session_id = "sess-1"
         self._executor = None
 
+    async def cleanup(self):
+        # Mirrors Role.cleanup: tears down session-scoped subsystems, delegating
+        # to the executor (the watcher guard short-circuits when never built).
+        if self._executor is not None:
+            await self._executor.cleanup()
+
 
 class FakeControl:
     """Records control-plane interactions; one turn => one non-quiescent poll.

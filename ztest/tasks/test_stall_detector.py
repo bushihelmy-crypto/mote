@@ -16,9 +16,9 @@ import asyncio
 
 import pytest
 
-from metagpt.common.schema import BgStatus, MessageQueue, TaskMeta
-from metagpt.tasks import StallDetector
-from metagpt.tasks.stall_detector import _matches_interactive_prompt
+from metagpt.common.schema import MessageQueue
+from metagpt.executor.tasks import BgStatus, TaskMeta, StallDetector
+from metagpt.executor.tasks.stall_detector import _matches_interactive_prompt
 
 
 class FakePool:

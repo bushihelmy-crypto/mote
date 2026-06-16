@@ -15,9 +15,8 @@ import time
 
 import pytest
 
-from metagpt.common.schema import BgStatus, TaskMeta
-from metagpt.tasks import TaskAttachment, TaskAttachmentGenerator, format_attachment_xml
-from metagpt.tasks.attachment import _fmt_elapsed
+from metagpt.executor.tasks import BgStatus, TaskMeta, TaskAttachment, TaskAttachmentGenerator, format_attachment_xml
+from metagpt.executor.tasks.attachment import _fmt_elapsed
 
 
 class FakePool:

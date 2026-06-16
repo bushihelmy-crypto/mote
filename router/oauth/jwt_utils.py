@@ -12,12 +12,8 @@ import base64
 import json
 from typing import Dict
 
-from metagpt.router.oauth.errors import OAuthError
+from metagpt.common.exception import JWTDecodeError  # noqa: F401
 from metagpt.router.oauth.models import TokenClaims
-
-
-class JWTDecodeError(OAuthError):
-    """The token was not a well-formed JWT / payload could not be decoded."""
 
 
 def _b64url_decode(segment: str) -> bytes:

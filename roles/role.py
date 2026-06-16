@@ -24,23 +24,20 @@ from metagpt.common.observability.langfuse_integration import maybe_trace
 from metagpt.think.prompt_builder import PromptBuilder
 from metagpt.roles.context_provider import ContextProvider
 from metagpt.loop import BaseLoop, ReActLoop
-from metagpt.router.router import COMPRESSION_TASK, SUMMARY_TASK, LLMRouter, get_router
+from metagpt.router.router import SUMMARY_TASK, LLMRouter
+from metagpt.roles.role_components import RoleComponents, _resolve_shell_tools  # noqa: F401
 from metagpt.roles.role_schema import RoleSchema
-from metagpt.roles.role_state import RoleState
+from metagpt.roles.role_state import RoleState, RoleStateController
 from metagpt.common.schema import (
     AIMessage,
     CauseBy,
     Message,
     UserMessage,
 )
-from metagpt.skills.skill_manager import SkillManager
-from metagpt.parser import (
-    CommandChannel,
-    infer_native_tool_provider,
-    make_command_channel,
-)
+from metagpt.context.skills.skill_manager import SkillManager
+from metagpt.parser import CommandChannel
 from metagpt.think.think_engine import ThinkEngine
-from metagpt.tasks import BackgroundTaskPool
+from metagpt.executor.tasks import BackgroundTaskPool
 from metagpt.common.utils.common import any_to_str, role_raise_decorator
 from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
 from metagpt.common.utils.role_zero_utils import attach_media, detach_media
@@ -104,29 +101,19 @@ class Role(BaseRole):
 
         # Runtime state
         self.state = state if state is not None else RoleState()
+        # Behaviour over the (pure-DTO) state lives in a controller; the Role's
+        # state methods below are thin delegators onto it (the capability surface).
+        self._state_ctl = RoleStateController(self.state)
 
         # External dependencies (injected)
         self._context = context
         self._config = config
 
-        # Lazy-init component slots
-        self._think_engine: Optional[ThinkEngine] = None
-        self._executor: Optional[ToolExecutor] = None
-        self._skill_mgr: Optional[SkillManager] = None
-        self._bg_pool: Optional[BackgroundTaskPool] = None
-        self._command_channel: Optional[CommandChannel] = None
-        self._context_provider: Optional[ContextProvider] = None
-        self._context_manager: Optional[ContextManager] = None
-        self._router: Optional[LLMRouter] = None
-        self._session_log = None
-        self._event_bus = None
-        self._file_snapshot_recorder = None
-        self._hook_manager = None
-        self._lsp_service = None
-        self._turn_context_bus = None
-        # Programmatic Python hook callbacks, seeded into the HookManager when it
-        # is built (register_hook appends here before run()).
-        self._hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
+        # Lazy assembly + ownership of all subsystems (router, executor, context
+        # manager, event bus, session log, hook/LSP/file-watch services, the
+        # per-turn context bus, …). The Role keeps a thin property surface that
+        # delegates onto this holder; the wiring logic lives there.
+        self._components = RoleComponents(self)
         # Guards firing SessionStart exactly once across this Role's run() calls.
         self._session_started = False
 
@@ -170,18 +157,16 @@ class Role(BaseRole):
         self.role_schema.name = value
 
     @property
-    def router(self) -> LLMRouter:
-        """The LLM router bound to this Role's context (lazy-init, cached).
-
-        The Role no longer holds a single LLM. It holds the router and passes it
-        down; whoever needs an LLM resolves one through the router on demand (the
-        react loop, via the ContextProvider, triggers it per request). Built once
-        over ``self.context`` so its model registry + instance cache (and the
-        FALLBACK-recovery supplier wired onto each provider) stay consistent.
+    def components(self) -> RoleComponents:
+        """The Role's subsystem holder (lazy assembly + ownership). See
+        :class:`RoleComponents`. The component properties below delegate here.
         """
-        if self._router is None:
-            self._router = get_router(self.context)
-        return self._router
+        return self._components
+
+    @property
+    def router(self) -> LLMRouter:
+        """The LLM router bound to this Role's context (delegates to components)."""
+        return self._components.router
 
     @property
     def config(self):
@@ -207,282 +192,85 @@ class Role(BaseRole):
     # Component properties (lazy-init)
     # =========================================================================
 
+    # Each property below is a thin delegator onto :class:`RoleComponents`,
+    # which owns the slots + lazy construction. External callers and tests keep
+    # using ``role.<component>``; the wiring lives in role_components.py.
+
     @property
     def skill_manager(self) -> SkillManager:
-        if self._skill_mgr is None:
-            self._skill_mgr = SkillManager(skills=self.role_schema.skills)
-        return self._skill_mgr
+        return self._components.skill_manager
 
     @property
     def bg_pool(self) -> BackgroundTaskPool:
-        if self._bg_pool is None:
-            self._bg_pool = BackgroundTaskPool(msg_buffer=self.state.msg_buffer)
-        return self._bg_pool
+        return self._components.bg_pool
 
     def _peek_bg_pool(self) -> Optional[BackgroundTaskPool]:
-        """Return the background pool only if a tool already created it.
-
-        Never lazily constructs one (unlike the ``bg_pool`` property): the loop
-        and ``wait_interruptible`` only ever inspect pending state / await
-        completion, so materializing a pool just to peek would be wasteful. A
-        named accessor instead of reading the ``_bg_pool`` slot directly so the
-        "peek, don't create" intent is explicit at every call site.
-        """
-        return self._bg_pool
+        """Return the background pool only if a tool already created it (no build)."""
+        return self._components.peek_bg_pool()
 
     @property
     def executor(self) -> ToolExecutor:
-        if self._executor is None:
-            all_tools = self.role_schema.mcps + self.role_schema.tools
-            all_tools = _resolve_shell_tools(all_tools)
-            self._executor = ToolExecutor(
-                session_id=self.state.session_id,
-                tools=all_tools,
-                role=self,
-                permission_config=self.role_schema.permissions,
-                bus=self.event_bus,
-                lsp_notifier=self.lsp_service,
-            )
-        return self._executor
+        return self._components.executor
 
     @property
     def context_manager(self) -> ContextManager:
-        """The stored-conversation store + compaction orchestrator (lazy-init).
-
-        Replaces the old ``Memory`` object: it owns the conversation history,
-        backed by ``RoleState.context`` so the history is checkpointed, and
-        exposes the get/add/add_batch/delete API the loop/channel/think-engine
-        depend on. It also orchestrates microcompact + autocompact when the
-        history nears the context window. Its autocompact summarization runs on
-        the dedicated compression model, obtained via the router's "compression"
-        task (configured to claude-sonnet-4-8); the token budget still tracks the
-        configured main model's context window.
-        """
-        if self._context_manager is None:
-            self._context_manager = ContextManager(
-                self.state.context,
-                llm=self.router.route_for_task(COMPRESSION_TASK),
-                model=getattr(self.config.llm, "model", None),
-                bus=self.event_bus,
-            )
-        return self._context_manager
+        return self._components.context_manager
 
     @property
     def session_log(self) -> "SessionLog":
-        """Durable append-only ``rollout.jsonl`` for this session (lazy-init).
-
-        Builds the log and writes the ``session_meta`` first line on first
-        access (``create`` no-ops when the log already exists, so restart/resume
-        never re-writes metadata). Shared by the event bus's
-        :class:`RecorderSubscriber` (which appends message/compaction/turn
-        events) and the :attr:`file_snapshot_recorder` (which interleaves
-        before-image snapshots into the same rollout).
-        """
-        if self._session_log is None:
-            from metagpt.session import SessionLog, SessionMetaEvent
-
-            log = SessionLog(self.state.session_id)
-            log.create(
-                SessionMetaEvent(
-                    session_id=self.state.session_id,
-                    parent_session_id=self.state.parent_session_id,
-                    working_dir=self.state.working_dir,
-                    original_working_dir=self.state.original_working_dir,
-                    project_root=self.state.project_root,
-                    model=getattr(self.config.llm, "model", None),
-                    role_class=f"{type(self).__module__}.{type(self).__qualname__}",
-                )
-            )
-            self._session_log = log
-        return self._session_log
+        return self._components.session_log
 
     @property
     def event_bus(self):
-        """The unified agent event spine (lazy-init), the loop's sole producer.
-
-        One ordered async stream that every cross-cutting concern subscribes to:
-        the :class:`RecorderSubscriber` persists message/compaction/turn events
-        to :attr:`session_log` (always wired — recording is always on), and the
-        :class:`HookSubscriber` translates control events (UserPromptSubmit /
-        Pre|PostToolUse / Pre|PostCompact / SessionStart / Stop) into
-        ``HookManager.fire`` calls (wired only when a hook layer exists, so the
-        no-hooks path keeps zero overhead). The :class:`LogSubscriber` emits one
-        concise log line per semantic event (event-level trace complementing the
-        method-level ``@log_class``). Subscribers run in priority order (hooks
-        early so a veto folds before the recorder persists; the logger last).
-        """
-        if self._event_bus is None:
-            from metagpt.common.events import EventBus, LogSubscriber
-            from metagpt.session.subscribers import RecorderSubscriber
-
-            bus = EventBus()
-            hook_manager = self.hook_manager
-            if hook_manager is not None:
-                from metagpt.common.hook.subscriber import HookSubscriber
-
-                bus.subscribe(HookSubscriber(hook_manager))
-            bus.subscribe(RecorderSubscriber(self.session_log))
-            bus.subscribe(LogSubscriber())
-            self._event_bus = bus
-        return self._event_bus
+        return self._components.event_bus
 
     @property
     def file_snapshot_recorder(self) -> "FileSnapshotRecorder":
-        """Before-image file-history sink (lazy-init), shared with the rollout log.
-
-        Reuses the same :class:`SessionLog` as :attr:`session_log` so file
-        snapshots interleave with the session's other events; the blob store
-        lives alongside ``rollout.jsonl``. ``enabled`` follows the schema flag
-        ``record_file_history`` (default True) so snapshotting can be turned off
-        per role. ``snapshot_backend`` selects the store: ``"auto"`` (default)
-        picks the git object db when the working dir is inside a code repo, else
-        the plain blob store.
-        """
-        if self._file_snapshot_recorder is None:
-            from metagpt.session import FileSnapshotRecorder
-            from metagpt.session.snapshot import detect_blob_backend
-
-            backend = self.role_schema.snapshot_backend
-            if backend == "auto":
-                backend = detect_blob_backend(self.state.working_dir or None)
-
-            self._file_snapshot_recorder = FileSnapshotRecorder(
-                self.session_log,
-                enabled=self.role_schema.record_file_history,
-                backend=backend,
-            )
-        return self._file_snapshot_recorder
+        return self._components.file_snapshot_recorder
 
     @property
     def hook_manager(self):
-        """Opt-in agent-lifecycle hook runner (lazy-init), or ``None``.
-
-        Built only when a ``HookConfig`` is declared on the schema OR a Python
-        callback was registered via :meth:`register_hook`. When neither exists it
-        stays ``None`` so every call site short-circuits with zero overhead —
-        the same opt-in model as the permission engine. The cwd accessor is
-        passed so the hook input tracks ``cd``; the session_id ties hooks to the
-        durable log.
-        """
-        if self._hook_manager is None:
-            if self.role_schema.hooks is None and not self._hook_callbacks:
-                return None
-            from metagpt.common.hook import HookManager
-
-            self._hook_manager = HookManager(
-                self.role_schema.hooks,
-                session_id=self.state.session_id,
-                get_cwd=self.get_cwd,
-            )
-            for event, fn, matcher in self._hook_callbacks:
-                self._hook_manager.register(event, fn, matcher)
-        return self._hook_manager
+        return self._components.hook_manager
 
     @property
     def lsp_service(self):
-        """Opt-in language-server diagnostics service (lazy-init), or ``None``.
+        return self._components.lsp_service
 
-        Built only when an ``LspConfig`` with ``enabled=True`` and at least one
-        server is declared on the schema; otherwise stays ``None`` so the
-        executor's after-edit seam short-circuits with zero overhead (same
-        opt-in model as the hook/permission layers). Rooted at the project root
-        so language servers resolve imports against the right workspace.
-        """
-        if self._lsp_service is None:
-            cfg = self.role_schema.lsp
-            if cfg is None or not cfg.enabled or not cfg.servers:
-                return None
-            from metagpt.roles.lsp import LspService
+    @property
+    def diagnostics_buffer(self):
+        return self._components.diagnostics_buffer
 
-            root = self.state.project_root or self.get_cwd()
-            self._lsp_service = LspService(cfg, root)
-        return self._lsp_service
+    @property
+    def compaction_notice(self):
+        return self._components.compaction_notice
+
+    @property
+    def file_watch_service(self):
+        return self._components.file_watch_service
 
     @property
     def turn_context_bus(self):
-        """The per-turn ephemeral-context bus (lazy-init), always present.
-
-        Assembles the volatile per-cycle feeds that land in the user prompt's
-        ``<system-reminder>`` (never the cacheable system prompt, never stored
-        in history): git working-tree status, token-pressure notes, background
-        task progress, and LSP diagnostics. Each feed is an
-        :class:`~metagpt.common.interface.EphemeralContextSource`; the bus
-        renders them per think() cycle and merges the non-empty blocks.
-
-        Sources that depend only on ``common`` (git) or duck-type a live
-        collaborator (token/LSP) are wired unconditionally — they self-suppress
-        (return ``None``) when there's nothing to report (off-repo, no token
-        pressure, no diagnostics / LSP disabled). The background-task source
-        lives in the ``tasks`` layer (it imports ``tasks.attachment``) and peeks
-        the pool lazily, so it stays inert until a tool actually spawns one.
-        """
-        if self._turn_context_bus is None:
-            from metagpt.context.turn_context import (
-                GitContextSource,
-                LspContextSource,
-                TokenPressureContextSource,
-                TurnContextBus,
-            )
-            from metagpt.tasks import BackgroundTaskContextSource
-
-            sources = [
-                GitContextSource(),
-                TokenPressureContextSource(self.context_manager),
-                BackgroundTaskContextSource(self._peek_bg_pool),
-                LspContextSource(self.lsp_service),
-            ]
-            self._turn_context_bus = TurnContextBus(sources)
-        return self._turn_context_bus
+        return self._components.turn_context_bus
 
     def register_hook(self, event: str, fn, matcher: Optional[str] = None) -> None:
-        """Register an in-process Python hook callback (the SDK-style path).
+        """Register an in-process Python hook callback (delegates to components).
 
         Engages the hook layer even with no ``HookConfig`` declared. Register
         before ``run()`` so the executor / context manager pick up the manager.
         """
-        if self._hook_manager is not None:
-            self._hook_manager.register(event, fn, matcher)
-        else:
-            self._hook_callbacks.append((event, fn, matcher))
+        self._components.register_hook(event, fn, matcher)
 
     @property
     def think_engine(self) -> ThinkEngine:
-        if self._think_engine is None:
-            self._think_engine = ThinkEngine(
-                memory=self.context_manager, config=self.config,
-            )
-        return self._think_engine
+        return self._components.think_engine
 
     @property
     def command_channel(self) -> CommandChannel:
-        """The protocol strategy (XML vs native tool-use) for this Role.
-
-        Built once from RoleSchema.command_protocol; owns how commands are
-        prompted, called, and parsed so the react loop stays protocol-agnostic.
-        The native tool-spec envelope is inferred from the LLM config (it must
-        match the client that issues the request), not set on the schema.
-        """
-        if self._command_channel is None:
-            self._command_channel = make_command_channel(
-                self.role_schema.command_protocol,
-                provider=infer_native_tool_provider(self.config.llm),
-            )
-        return self._command_channel
+        return self._components.command_channel
 
     @property
     def context_provider(self) -> ContextProvider:
-        """The per-flow parameter packer for this Role (lazy-init).
-
-        Holds the Role and reads it to pack what each react flow needs: the
-        think request (prepare()) and the static observe + loop-control bundle
-        (loop_context()). The react loop only sees the narrow
-        BaseContextProvider face, never the Role, so role behavior stays in the
-        Role. The provider only reads the Role; it never writes RoleState and
-        never lazy-inits components (ownership stays here on the Role).
-        """
-        if self._context_provider is None:
-            self._context_provider = ContextProvider(self)
-        return self._context_provider
+        return self._components.context_provider
 
     # =========================================================================
     # Framework properties
@@ -499,7 +287,7 @@ class Role(BaseRole):
     @property
     def is_idle(self) -> bool:
         """A role is idle when its message buffer is empty."""
-        return self.state.msg_buffer.empty()
+        return self._state_ctl.is_idle
 
     def set_env(self, env):
         """Set the environment this role belongs to and register addresses."""
@@ -535,32 +323,27 @@ class Role(BaseRole):
     def get_cwd(self) -> str:
         """Current working directory, aligned with Claude Code's getCwd().
 
-        Returns the live cwd (state.working_dir), falling back to the startup
-        directory. Wrapped in try/except so it never returns an empty string.
+        Capability surface for tools; the cwd fallback logic lives on the
+        :class:`RoleStateController` (state ownership stays out of tools).
         """
-        try:
-            return self.state.working_dir or self.state.original_working_dir
-        except Exception:
-            return self.state.original_working_dir
+        return self._state_ctl.get_cwd()
 
     def set_cwd(self, path: str) -> None:
         """Persist the live working directory, aligned with Claude Code's setCwd().
 
-        Cwd ownership lives in the Role (on RoleState), not in tools. Tools that
-        run shell commands call this to record a `cd`, so they never need access
-        to RoleState (and therefore never touch memory).
+        Tools that run shell commands call this to record a `cd`, so they never
+        need access to RoleState. Delegates to the state controller.
         """
-        self.state.working_dir = path
+        self._state_ctl.set_cwd(path)
 
     def record_file_read(self, path: str, mtime_ns: int) -> None:
         """Record that a file was read, aligned with Claude Code's readFileState.
 
-        Ownership of the shared file-read state lives in the Role (on RoleState),
-        not in tools. The Read tool calls this after a successful read so that
-        the Write/Edit tools can later enforce read-before-overwrite and detect
-        external modifications — without ever touching RoleState directly.
+        The Read tool calls this after a successful read so the Write/Edit tools
+        can later enforce read-before-overwrite and detect external
+        modifications — without ever touching RoleState directly.
         """
-        self.state._file_read_state[path] = mtime_ns
+        self._state_ctl.record_file_read(path, mtime_ns)
 
     def get_file_read_mtime(self, path: str) -> Optional[int]:
         """Return the mtime_ns recorded when `path` was last read, else None.
@@ -569,7 +352,7 @@ class Role(BaseRole):
         returned value against the file's current mtime to decide whether the
         model has seen the latest content before overwriting it.
         """
-        return self.state._file_read_state.get(path)
+        return self._state_ctl.get_file_read_mtime(path)
 
     def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
         """Capture a before-image of a file a tool is about to overwrite.
@@ -613,11 +396,11 @@ class Role(BaseRole):
 
     def deactivate(self) -> None:
         """Stop the react loop after the current step."""
-        self.state._active = False
+        self._state_ctl.deactivate()
 
     def _is_active(self) -> bool:
         """Read the shared active signal (consumed by the loop's think step)."""
-        return self.state._active
+        return self._state_ctl.is_active()
 
     def _set_active(self, value: bool) -> None:
         """Write the shared active signal (used by the loop each iteration).
@@ -626,7 +409,7 @@ class Role(BaseRole):
         as a tool→loop kill switch: the End tool and ask_human's "stop" call
         deactivate(), which must still break a loop that is mid-run.
         """
-        self.state._active = value
+        self._state_ctl.set_active(value)
 
     async def ask_human(self, question: str) -> str:
         """Ask the human user a question and return their response.
@@ -710,7 +493,7 @@ class Role(BaseRole):
 
     async def end_session(self) -> str:
         """End the current session and produce a summary if configured."""
-        self.state._active = False
+        self._state_ctl.deactivate()
 
         memory = self.context_manager
         messages = memory.get(self.role_schema.memory_k)
@@ -763,9 +546,7 @@ class Role(BaseRole):
 
     def put_message(self, message):
         """Place the message into the Role object's private message buffer."""
-        if not message:
-            return
-        self.state.msg_buffer.push(message)
+        self._state_ctl.put_message(message)
 
     def _make_loop(self) -> BaseLoop:
         """Build the react-loop strategy for one run(), injecting components.
@@ -822,6 +603,13 @@ class Role(BaseRole):
                     )
                 )
 
+                # Start the external-file watcher once per session (opt-in; the
+                # property returns None when disabled / no hook layer). It runs a
+                # background polling loop and is stopped in cleanup().
+                watcher = self.file_watch_service
+                if watcher is not None and not watcher.watcher.is_running():
+                    watcher.start()
+
             if with_message:
                 msg = None
                 if isinstance(with_message, str):
@@ -872,7 +660,7 @@ class Role(BaseRole):
 
             # Post-loop finalization (was Role.react): clear the active signal
             # and tag the response with this Role's display name.
-            self.state._active = False
+            self._state_ctl.deactivate()
             if isinstance(rsp, AIMessage):
                 rsp.with_agent(self.role_schema.display_name)
             self.publish_message(rsp)
@@ -961,7 +749,8 @@ class Role(BaseRole):
         hook. Best-effort: skipped when the bus was never built (e.g. the run
         failed before _ensure_ready) and a failure never breaks the turn.
         """
-        if self._event_bus is None:
+        bus = self._components.peek_event_bus()
+        if bus is None:
             return
         try:
             from dataclasses import asdict
@@ -974,7 +763,7 @@ class Role(BaseRole):
                 token_state = asdict(self.context_manager.token_state())
             except Exception:  # noqa: BLE001 — token math is optional metadata
                 token_state = None
-            await self._event_bus.emit(
+            await bus.emit(
                 TurnEndEvent(
                     turn_id=uuid4().hex,
                     working_dir=self.state.working_dir,
@@ -986,6 +775,34 @@ class Role(BaseRole):
             from metagpt.common.logs import logger
 
             logger.warning(f"session: failed to emit turn end: {exc}")
+
+    async def cleanup(self) -> None:
+        """Tear down session-scoped subsystems (best-effort, idempotent).
+
+        Stops the file-watch polling loop (and detaches it from the event bus),
+        shuts the LSP language servers down, then delegates to
+        :meth:`ToolExecutor.cleanup` (which closes the terminal/kernel). Safe to
+        call when those subsystems were never built — each guard short-circuits.
+        """
+        file_watch_service = self._components.peek_file_watch_service()
+        if file_watch_service is not None:
+            try:
+                await file_watch_service.stop()
+            except Exception as exc:  # noqa: BLE001 — best-effort shutdown
+                from metagpt.common.logs import logger
+
+                logger.warning(f"Role: file_watch_service.stop() failed: {exc}")
+        lsp_service = self._components.peek_lsp_service()
+        if lsp_service is not None:
+            try:
+                await lsp_service.shutdown()
+            except Exception as exc:  # noqa: BLE001 — best-effort shutdown
+                from metagpt.common.logs import logger
+
+                logger.warning(f"Role: lsp_service.shutdown() failed: {exc}")
+        executor = self._components.peek_executor()
+        if executor is not None:
+            await executor.cleanup()
 
     # =========================================================================
     # Readiness
@@ -999,20 +816,5 @@ class Role(BaseRole):
 
         self.skill_manager.ensure_ready()
         await self.executor.init_mcp(self.role_schema.mcps)
-
-
-def _resolve_shell_tools(tools: list[str]) -> list[str]:
-    """Normalize a tool list, preserving order and removing duplicates.
-
-    ``Bash`` (one-shot, jam-proof) and ``Terminal`` (persistent PTY) are
-    distinct tools and are both kept as declared.
-    """
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for tool in tools:
-        if tool not in seen:
-            seen.add(tool)
-            deduped.append(tool)
-    return deduped
 
 

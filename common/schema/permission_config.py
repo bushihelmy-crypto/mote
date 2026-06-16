@@ -11,13 +11,12 @@ a Role explicitly opts in by setting a ``PermissionConfig``.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
-
-# Re-declared here (not imported from executor.permission.types) so this schema
-# stays free of any executor dependency. Kept in sync with that module.
 from typing import Literal, Optional
 
-PermissionMode = Literal["default", "acceptEdits", "plan", "bypass", "dontAsk"]
+from pydantic import BaseModel, Field
+
+# Single source of truth for the approval-mode Literal (pure-data, no executor dep).
+from metagpt.common.schema.permission_types import PermissionMode
 
 # Sandbox axis — ORTHOGONAL to the approval mode above. The mode decides whether
 # to ask the user; the sandbox decides the filesystem/network boundary a tool

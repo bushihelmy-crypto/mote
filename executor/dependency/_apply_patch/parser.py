@@ -35,6 +35,10 @@ from dataclasses import dataclass, field
 from string import Template
 from typing import List, Optional, Union
 
+# ``ApplyPatchError`` lives in the unified exception package; re-exported here so
+# existing ``from ...parser import ApplyPatchError`` call sites keep working.
+from metagpt.common.exception import ApplyPatchError
+
 # --- Markers (byte-for-byte the codex constants) ---
 BEGIN_PATCH_MARKER = "*** Begin Patch"
 END_PATCH_MARKER = "*** End Patch"
@@ -55,24 +59,6 @@ _UNEXPECTED_UPDATE_LINE = (
     "Unexpected line found in update hunk: '${line}'. Every line should start "
     "with ' ' (context line), '+' (added line), or '-' (removed line)"
 )
-
-
-class ApplyPatchError(Exception):
-    """A patch could not be parsed (or, from the applier, could not be applied).
-
-    Carries the optional 1-based ``line_no`` where parsing failed so the tool can
-    surface codex-style explicit diagnostics.
-    """
-
-    def __init__(self, message: str, line_no: Optional[int] = None) -> None:
-        super().__init__(message)
-        self.message = message
-        self.line_no = line_no
-
-    def __str__(self) -> str:  # pragma: no cover - trivial
-        if self.line_no is not None:
-            return f"invalid hunk at line {self.line_no}, {self.message}"
-        return self.message
 
 
 # ---------------------------------------------------------------------------

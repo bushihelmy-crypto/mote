@@ -47,6 +47,11 @@ POST_TOOL_USE = "post_tool_use"
 PRE_COMPACT = "pre_compact"
 POST_COMPACT = "post_compact"
 FILE_CHANGED = "file_changed"
+FILE_MUTATED = "file_mutated"
+DIAGNOSTICS = "diagnostics"
+RECOVERY = "recovery"
+TASK_PROGRESS = "task_progress"
+RESOURCE_REPORT = "resource_report"
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +177,107 @@ class FileChangedEvent:
     is_control: ClassVar[bool] = True  # routed to the FileChanged hook
 
 
+@dataclass
+class FileMutatedEvent:
+    """A tool just successfully wrote/created/deleted a file on disk.
+
+    Emitted by the :class:`ToolExecutor` right after a filesystem-mutating tool
+    (Write/Edit/NotebookEdit/...) succeeds, carrying the resolved path. Purely
+    an observation: subscribers react (the file-watcher records it as a
+    *self-write* so its next poll doesn't echo our own edit back as an external
+    change; future consumers could track changed files / auto-stage). Distinct
+    from :class:`FileChangedEvent`, which the watcher emits for *external*
+    changes it detects by polling.
+    """
+
+    path: str = ""
+    tool: str = ""
+    operation: str = "update"  # create / update / delete (best-effort)
+
+    name: ClassVar[str] = FILE_MUTATED
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class DiagnosticsEvent:
+    """Language-server diagnostics changed after a file sync.
+
+    Emitted by the :class:`LspService` once a synced edit yields a *changed*
+    diagnostic set, carrying a pre-rendered context ``block`` and the affected
+    ``paths``. Purely an observation: the diagnostics buffer accumulates the
+    block for next-turn context injection; future subscribers (a status line,
+    an error counter, an auto-fix agent) can react to the same signal without
+    the producer naming them. The output counterpart of
+    :class:`FileMutatedEvent` (the input that triggers the sync).
+    """
+
+    block: str = ""
+    paths: List[str] = field(default_factory=list)
+
+    name: ClassVar[str] = DIAGNOSTICS
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class RecoveryEvent:
+    """A retry/recovery loop attempt resolved (recovered or gave up).
+
+    Emitted by the generic :class:`RecoveryRunner` so any frontend/logger can
+    observe the retry/rotate/fallback/compress decisions that otherwise stay
+    invisible inside the loop. Purely an observation — the runner's own control
+    flow (the eventual re-raise / retry) is the real source of truth; this just
+    mirrors *what the loop decided*.
+    """
+
+    phase: str = "recovered"  # recovered | give_up
+    action: str = ""  # RecoveryAction.value (retry / rotate_credential / ...)
+    attempt: int = 0
+    error_type: str = ""
+    error: str = ""
+
+    name: ClassVar[str] = RECOVERY
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class TaskProgressEvent:
+    """A background task reported a progress line (already rendered).
+
+    Emitted by the bggraph progress writer alongside the disk append (the
+    :class:`TaskAttachmentGenerator` disk output stays the source of truth);
+    this lets subscribers mirror live progress without polling the store.
+    """
+
+    task_id: str = ""
+    stage: str = ""
+    status: str = ""
+    detail: str = ""  # rendered, no trailing newline
+
+    name: ClassVar[str] = TASK_PROGRESS
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class ResourceReportEvent:
+    """A non-streaming resource observation a reporter pushed to the UI.
+
+    Emitted by :class:`ResourceReporter` in place of its old direct HTTP POST;
+    the :class:`ReporterSubscriber` (when wired) reconstructs the payload and
+    POSTs it. ``name_`` is suffixed to avoid clashing with the ``name`` ClassVar
+    discriminator every event carries.
+    """
+
+    block: str = ""
+    name_: str = ""
+    value: Any = None
+    extra: Optional[dict] = None
+    uuid: str = ""
+    role: Optional[str] = None
+
+    name: ClassVar[str] = RESOURCE_REPORT
+    is_control: ClassVar[bool] = False
+
+
 # ---------------------------------------------------------------------------
 # Control events (subscribers may return a non-empty outcome -> folded)
 # ---------------------------------------------------------------------------
@@ -254,6 +360,11 @@ __all__ = [
     "PRE_COMPACT",
     "POST_COMPACT",
     "FILE_CHANGED",
+    "FILE_MUTATED",
+    "DIAGNOSTICS",
+    "RECOVERY",
+    "TASK_PROGRESS",
+    "RESOURCE_REPORT",
     # observation events
     "SessionStartEvent",
     "SessionEndEvent",
@@ -265,6 +376,11 @@ __all__ = [
     "CompactionCheckpointEvent",
     "FileSnapshotEvent",
     "FileChangedEvent",
+    "FileMutatedEvent",
+    "DiagnosticsEvent",
+    "RecoveryEvent",
+    "TaskProgressEvent",
+    "ResourceReportEvent",
     # control events
     "UserPromptSubmitEvent",
     "PreToolUseEvent",

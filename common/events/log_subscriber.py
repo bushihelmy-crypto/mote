@@ -24,6 +24,7 @@ from typing import Optional
 
 from metagpt.common.events.types import (
     CompactionCheckpointEvent,
+    DiagnosticsEvent,
     FileChangedEvent,
     FileSnapshotEvent,
     MessageAppendedEvent,
@@ -31,8 +32,11 @@ from metagpt.common.events.types import (
     PostToolUseEvent,
     PreCompactEvent,
     PreToolUseEvent,
+    RecoveryEvent,
+    ResourceReportEvent,
     SessionEndEvent,
     SessionStartEvent,
+    TaskProgressEvent,
     TurnEndEvent,
     TurnStartEvent,
     UserPromptSubmitEvent,
@@ -57,11 +61,28 @@ class LogSubscriber:
     priority: int = 90
 
     async def handle(self, event) -> Optional[HookOutcome]:
+        # TaskProgress arrives via the sync fan-out (handle_sync); ignore it here
+        # so live progress isn't logged twice should it ever reach the async path.
+        if isinstance(event, TaskProgressEvent):
+            return None
         try:
             self._log(event)
         except Exception as exc:  # noqa: BLE001 — logging must never break a turn
             logger.warning(f"LogSubscriber: failed to log {getattr(event, 'name', '?')}: {exc}")
         return None
+
+    def handle_sync(self, event) -> None:
+        # Narrowly opt into the sync fan-out only for low-frequency background
+        # task progress (per-token stream deltas are deliberately *not* logged).
+        if not isinstance(event, TaskProgressEvent):
+            return
+        try:
+            logger.debug(
+                f"event task_progress task={event.task_id} stage={event.stage} "
+                f"status={event.status} '{_clip(event.detail)}'"
+            )
+        except Exception as exc:  # noqa: BLE001 — logging must never break a turn
+            logger.warning(f"LogSubscriber: failed to log task_progress: {exc}")
 
     @staticmethod
     def _log(event) -> None:
@@ -104,6 +125,17 @@ class LogSubscriber:
             )
         elif isinstance(event, FileChangedEvent):
             logger.debug(f"event file_changed type={event.change_type} path={event.path}")
+        elif isinstance(event, DiagnosticsEvent):
+            logger.debug(f"event diagnostics files={len(event.paths)} chars={len(event.block)}")
+        elif isinstance(event, RecoveryEvent):
+            logger.info(
+                f"event recovery phase={event.phase} action={event.action} "
+                f"attempt={event.attempt} error={event.error_type}: '{_clip(event.error)}'"
+            )
+        elif isinstance(event, ResourceReportEvent):
+            logger.debug(
+                f"event resource_report block={event.block} name={event.name_} role={event.role or '?'}"
+            )
         else:
             logger.debug(f"event {getattr(event, 'name', '?')}")
 

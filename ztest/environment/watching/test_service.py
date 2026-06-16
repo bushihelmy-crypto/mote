@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
+from metagpt.common.events import EventBus, FileMutatedEvent
 from metagpt.common.hook.manager import HookManager
 from metagpt.common.hook.types import HookInput, HookOutcome
 from metagpt.environment.watching.events import CREATED, MODIFIED
@@ -120,3 +121,44 @@ def test_service_lifecycle(tmp_path):
         assert svc.watcher.is_running() is False
 
     asyncio.run(scenario())
+
+
+def test_subscribes_to_bus_and_suppresses_self_write(tmp_path):
+    """A FileMutatedEvent on the bus is recorded as a self-write and suppressed."""
+    runner = FakeHookRunner()
+    bus = EventBus()
+    svc = FileWatchService(runner, [str(tmp_path)], bus=bus)
+    assert svc in bus.subscribers  # subscribed itself on construction
+
+    target = tmp_path / "f.txt"
+    target.write_text("v1")
+    svc.watcher.prime()
+
+    async def scenario():
+        # Simulate a tool writing the file then the bus emitting the event.
+        target.write_text("v2-by-agent")
+        await bus.emit(FileMutatedEvent(path=str(target), tool="Write"))
+        return await svc.watcher.poll()
+
+    events = asyncio.run(scenario())
+    assert events == []  # our own write was suppressed
+    assert runner.calls == []  # no FileChanged hook fired
+
+
+def test_stop_unsubscribes_from_bus(tmp_path):
+    runner = FakeHookRunner()
+    bus = EventBus()
+    svc = FileWatchService(runner, [str(tmp_path)], bus=bus)
+    assert svc in bus.subscribers
+    asyncio.run(svc.stop())
+    assert svc not in bus.subscribers
+
+
+def test_no_bus_still_works(tmp_path):
+    """Without a bus the service behaves exactly as before (no subscription)."""
+    runner = FakeHookRunner()
+    svc = FileWatchService(runner, [str(tmp_path)])
+    svc.watcher.prime()
+    (tmp_path / "new.txt").write_text("hi")
+    asyncio.run(svc.watcher.poll())
+    assert len(runner.calls) == 1

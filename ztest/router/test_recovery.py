@@ -1,205 +1,147 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.llm.recovery (RecoveryRunner failover loop)."""
+"""Tests for metagpt.router.llm.recovery (build_llm_strategies registry builder).
+
+The recovery *loop* now lives in the leaf layer (``common.exception.RecoveryRunner``)
+and is tested in ``ztest/exception/test_recovery.py``. This module covers the
+LLM-specific **strategy registry** assembled by :func:`build_llm_strategies`: that
+each injected capability maps to the right ``RecoveryAction`` with the right
+``async (exc) -> bool`` behaviour, and that omitted capabilities are absent.
+"""
 from __future__ import annotations
 
 import pytest
 
-from metagpt.common.exception import (
-    ContextWindowExceededError,
-    LLMAuthenticationError,
-    LLMConnectionError,
-    LLMContentPolicyError,
-    LLMInvalidRequestStateError,
-    MetaGPTError,
-    RecoveryAction,
-)
-from metagpt.router.llm.recovery import RecoveryRunner
+from metagpt.common.exception import MetaGPTError, RecoveryAction
+from metagpt.router.llm.recovery import build_llm_strategies
+
+pytestmark = pytest.mark.asyncio
 
 
-def _make_call(results):
-    """Build a coroutine factory that yields/raises ``results`` in order."""
-    seq = iter(results)
-
-    async def call():
-        item = next(seq)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    return call
+_EXC = MetaGPTError("boom")
 
 
-class TestNoErrorPath:
-    @pytest.mark.asyncio
-    async def test_returns_immediately(self):
-        runner = RecoveryRunner()
-        result = await runner.run(_make_call(["ok"]))
-        assert result == "ok"
+class TestRegistryShape:
+    async def test_empty_when_no_capabilities(self):
+        assert build_llm_strategies() == {}
 
-
-class TestRetryAndAbort:
-    @pytest.mark.asyncio
-    async def test_retry_action_reraises(self):
-        # LLMConnectionError.recovery == RETRY → owned by tenacity below → re-raise.
-        runner = RecoveryRunner()
-        with pytest.raises(LLMConnectionError):
-            await runner.run(_make_call([LLMConnectionError("net")]))
-
-    @pytest.mark.asyncio
-    async def test_abort_action_reraises(self):
-        # plain MetaGPTError.recovery == ABORT → re-raise.
-        runner = RecoveryRunner()
-        with pytest.raises(MetaGPTError):
-            await runner.run(_make_call([MetaGPTError("nope")]))
-
-    @pytest.mark.asyncio
-    async def test_non_metagpt_error_propagates(self):
-        runner = RecoveryRunner()
-        with pytest.raises(ValueError):
-            await runner.run(_make_call([ValueError("raw")]))
-
-
-class TestMissingCallbacks:
-    @pytest.mark.asyncio
-    async def test_compress_without_compressor_reraises(self):
-        runner = RecoveryRunner()  # no compressor
-        with pytest.raises(ContextWindowExceededError):
-            await runner.run(_make_call([ContextWindowExceededError("too big")]))
-
-    @pytest.mark.asyncio
-    async def test_rotate_without_rotator_reraises(self):
-        runner = RecoveryRunner()
-        with pytest.raises(LLMAuthenticationError):
-            await runner.run(_make_call([LLMAuthenticationError("401")]))
-
-    @pytest.mark.asyncio
-    async def test_fallback_without_supplier_reraises(self):
-        runner = RecoveryRunner()
-        with pytest.raises(LLMContentPolicyError):
-            await runner.run(_make_call([LLMContentPolicyError("policy")]))
-
-
-class TestCompressRecovery:
-    @pytest.mark.asyncio
-    async def test_compress_then_succeed(self):
-        calls = {"n": 0}
-        compressed = {"n": 0}
-
-        async def compressor(messages):
-            compressed["n"] += 1
-            return [{"role": "user", "content": "smaller"}]
-
-        async def call():
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise ContextWindowExceededError("too big")
-            return "recovered"
-
-        runner = RecoveryRunner(compressor=compressor)
-        result = await runner.run(call, messages=[{"role": "user", "content": "big"}])
-        assert result == "recovered"
-        assert compressed["n"] == 1
-
-
-class TestRotateRecovery:
-    @pytest.mark.asyncio
-    async def test_rotate_then_succeed(self):
-        calls = {"n": 0}
-
-        def rotator():
+    async def test_omits_none_capabilities(self):
+        async def compress():
             return True
 
-        async def call():
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise LLMAuthenticationError("401")
-            return "rotated-ok"
+        registry = build_llm_strategies(compress=compress)
+        assert set(registry) == {RecoveryAction.COMPRESS}
+        assert RecoveryAction.ROTATE_CREDENTIAL not in registry
+        assert RecoveryAction.FALLBACK not in registry
 
-        runner = RecoveryRunner(credential_rotator=rotator)
-        assert await runner.run(call) == "rotated-ok"
+    async def test_all_capabilities_present(self):
+        async def compress():
+            return True
 
-    @pytest.mark.asyncio
-    async def test_rotator_returns_false_reraises(self):
-        runner = RecoveryRunner(credential_rotator=lambda: False)
-        with pytest.raises(LLMAuthenticationError):
-            await runner.run(_make_call([LLMAuthenticationError("401")]))
+        async def transform(exc):
+            return True
+
+        registry = build_llm_strategies(
+            compress=compress,
+            rotate=lambda: True,
+            fallback=lambda: object(),
+            transformers={RecoveryAction.SHRINK_IMAGE: transform},
+        )
+        assert set(registry) == {
+            RecoveryAction.COMPRESS,
+            RecoveryAction.ROTATE_CREDENTIAL,
+            RecoveryAction.FALLBACK,
+            RecoveryAction.SHRINK_IMAGE,
+        }
 
 
-class TestFallbackRecovery:
-    @pytest.mark.asyncio
-    async def test_fallback_sets_fallback_llm(self):
-        sentinel = object()
+class TestCompressStrategy:
+    async def test_delegates_to_compressor(self):
         calls = {"n": 0}
 
-        def supplier():
-            return sentinel
-
-        async def call():
+        async def compress():
             calls["n"] += 1
-            if calls["n"] == 1:
-                raise LLMContentPolicyError("policy")
-            return "fellback"
+            return True
 
-        runner = RecoveryRunner(fallback_supplier=supplier)
-        assert await runner.run(call) == "fellback"
-        assert runner.fallback_llm is sentinel
+        registry = build_llm_strategies(compress=compress)
+        assert await registry[RecoveryAction.COMPRESS](_EXC) is True
+        assert calls["n"] == 1
 
-    @pytest.mark.asyncio
-    async def test_exhausted_supplier_reraises(self):
-        runner = RecoveryRunner(fallback_supplier=lambda: None)
-        with pytest.raises(LLMContentPolicyError):
-            await runner.run(_make_call([LLMContentPolicyError("policy")]))
+    async def test_propagates_false(self):
+        async def compress():
+            return False
+
+        registry = build_llm_strategies(compress=compress)
+        assert await registry[RecoveryAction.COMPRESS](_EXC) is False
 
 
-class TestTransformerRecovery:
-    @pytest.mark.asyncio
-    async def test_transformer_repairs_then_succeed(self):
-        calls = {"n": 0}
+class TestRotateStrategy:
+    async def test_returns_true_on_rotate(self):
+        registry = build_llm_strategies(rotate=lambda: True)
+        assert await registry[RecoveryAction.ROTATE_CREDENTIAL](_EXC) is True
 
-        async def transformer(messages, exc):
-            return [{"role": "user", "content": "repaired"}]
+    async def test_returns_false_when_no_credential(self):
+        registry = build_llm_strategies(rotate=lambda: False)
+        assert await registry[RecoveryAction.ROTATE_CREDENTIAL](_EXC) is False
 
-        async def call():
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise LLMInvalidRequestStateError("bad state")
-            return "repaired-ok"
 
-        runner = RecoveryRunner(
-            message_transformers={RecoveryAction.STRIP_REQUEST_STATE: transformer}
+class TestFallbackStrategy:
+    async def test_notifies_sink_on_success(self):
+        provider = object()
+        seen = {}
+
+        def on_fallback(p):
+            seen["provider"] = p
+
+        registry = build_llm_strategies(
+            fallback=lambda: provider, on_fallback=on_fallback
         )
-        assert await runner.run(call, messages=[{"role": "user", "content": "x"}]) == "repaired-ok"
+        assert await registry[RecoveryAction.FALLBACK](_EXC) is True
+        assert seen["provider"] is provider
 
-    @pytest.mark.asyncio
-    async def test_transformer_none_reraises(self):
-        async def transformer(messages, exc):
-            return None
+    async def test_returns_false_when_no_provider(self):
+        called = {"n": 0}
 
-        runner = RecoveryRunner(
-            message_transformers={RecoveryAction.STRIP_REQUEST_STATE: transformer}
+        def on_fallback(p):
+            called["n"] += 1
+
+        registry = build_llm_strategies(fallback=lambda: None, on_fallback=on_fallback)
+        assert await registry[RecoveryAction.FALLBACK](_EXC) is False
+        assert called["n"] == 0  # sink not invoked when no provider
+
+    async def test_works_without_sink(self):
+        registry = build_llm_strategies(fallback=lambda: object())
+        assert await registry[RecoveryAction.FALLBACK](_EXC) is True
+
+
+class TestTransformers:
+    async def test_passed_through_verbatim(self):
+        seen = {}
+
+        async def transform(exc):
+            seen["exc"] = exc
+            return True
+
+        registry = build_llm_strategies(
+            transformers={RecoveryAction.STRIP_REQUEST_STATE: transform}
         )
-        with pytest.raises(LLMInvalidRequestStateError):
-            await runner.run(_make_call([LLMInvalidRequestStateError("bad")]))
+        strategy = registry[RecoveryAction.STRIP_REQUEST_STATE]
+        assert strategy is transform  # verbatim, no wrapping
+        assert await strategy(_EXC) is True
+        assert seen["exc"] is _EXC
 
-    @pytest.mark.asyncio
-    async def test_missing_transformer_reraises(self):
-        runner = RecoveryRunner(message_transformers={})
-        with pytest.raises(LLMInvalidRequestStateError):
-            await runner.run(_make_call([LLMInvalidRequestStateError("bad")]))
+    async def test_multiple_transformers(self):
+        async def a(exc):
+            return True
 
+        async def b(exc):
+            return False
 
-class TestBudget:
-    @pytest.mark.asyncio
-    async def test_exhausts_max_recoveries(self):
-        # always raises a COMPRESS error; compressor always "succeeds" but the
-        # call never recovers → after max_recoveries the runner re-raises.
-        async def compressor(messages):
-            return messages
-
-        runner = RecoveryRunner(compressor=compressor, max_recoveries=2)
-        with pytest.raises(ContextWindowExceededError):
-            await runner.run(
-                _make_call([ContextWindowExceededError("x")] * 10),
-                messages=[{"role": "user", "content": "x"}],
-            )
+        registry = build_llm_strategies(
+            transformers={
+                RecoveryAction.SHRINK_IMAGE: a,
+                RecoveryAction.DOWNGRADE_TOOL_CONTENT: b,
+            }
+        )
+        assert await registry[RecoveryAction.SHRINK_IMAGE](_EXC) is True
+        assert await registry[RecoveryAction.DOWNGRADE_TOOL_CONTENT](_EXC) is False

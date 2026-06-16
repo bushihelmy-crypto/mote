@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
-from metagpt.executor.permission.types import PermissionDecision
+from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.tool_convert import function_docstring_to_schema
 from metagpt.executor.tool_spec_adapter import build_json_schema
 
@@ -73,7 +73,7 @@ class BaseTool(ABC):
 
     # --- Permission metadata (consumed by the PermissionEngine) ---
     # Coarse risk label a tool self-declares (advisory in phase 1). See
-    # metagpt.executor.permission.types.RiskLevel.
+    # metagpt.common.schema.permission_types.RiskLevel.
     risk_level: ClassVar[str] = "low"
     # Whether this tool mutates the filesystem. Drives the ``acceptEdits``
     # permission mode (auto-approve edits). Set True on file-writing tools.

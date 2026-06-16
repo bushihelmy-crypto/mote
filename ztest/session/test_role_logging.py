@@ -56,10 +56,10 @@ async def test_emit_turn_end_appends_turn_context(role_in_tmp):
 
 @pytest.mark.asyncio
 async def test_emit_turn_end_noop_without_bus(role_in_tmp):
-    # Never touched event_bus -> _event_bus is None -> safe no-op.
-    assert role_in_tmp._event_bus is None
+    # Never touched event_bus -> the slot is None -> safe no-op.
+    assert role_in_tmp._components._event_bus is None
     await role_in_tmp._emit_turn_end()  # must not raise
-    assert role_in_tmp._event_bus is None
+    assert role_in_tmp._components._event_bus is None
 
 
 def test_resume_session_missing_log_returns_false(tmp_path, monkeypatch):

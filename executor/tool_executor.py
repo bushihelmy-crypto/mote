@@ -16,10 +16,12 @@ Design:
 """
 from __future__ import annotations
 
+import inspect
 import uuid
-from typing import Any
+from typing import Any, Callable, Mapping
 
-from metagpt.common.events import PostToolUseEvent, PreToolUseEvent
+from metagpt.common.events import FileMutatedEvent, PostToolUseEvent, PreToolUseEvent
+from metagpt.common.exception import RecoveryAction, RecoveryRunner, RecoveryStrategy, ToolValidationError
 from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, ToolResultLimitConfig
 from metagpt.executor import tool_result_limit
 from metagpt.executor.base_executor import BaseToolExecutor
@@ -30,9 +32,60 @@ from metagpt.executor.tool_registry import registry as tool_registry
 from metagpt.common.logs import log_class
 from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.executor.mcp.universal import UniversalMCP
-from metagpt.common.schema import BgTaskResult
+from metagpt.executor.tasks.types import BgTaskResult
 from metagpt.executor.mcp_adapter import MCPToolAdapter
 from metagpt.executor.tool_spec_adapter import to_native_tool_specs
+
+# Signature params that are framework plumbing, never LLM-facing arguments.
+# (``*args``/``**kwargs`` are detected by parameter *kind*, not by name.)
+_NON_ARG_PARAMS = frozenset({"self", "cls"})
+
+
+def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any]) -> None:
+    """Pre-flight LLM-supplied args against a tool's ``call()`` signature.
+
+    Raises :class:`ToolValidationError` when a required parameter is missing or
+    an unexpected one is supplied, so a malformed call surfaces as a structured
+    tool-result failure with a clear "which argument" message instead of an
+    opaque ``TypeError`` from ``tool.call(**args)``.
+
+    Skipped entirely when ``call()`` accepts ``**kwargs`` (dynamic / MCP tools,
+    whose parameters are not statically known) — this is the natural gate that
+    limits validation to tools with a statically-declared signature.
+
+    Type checking is intentionally NOT performed: the legacy XML command
+    protocol delivers every argument as a string (e.g. ``timeout="300"``), so
+    enforcing declared types would reject valid XML-channel calls; the native
+    tool-use channel's API already validates inputs against the JSON schema.
+    """
+    try:
+        sig = inspect.signature(call_fn)
+    except (TypeError, ValueError):
+        return  # un-introspectable — let tool.call surface any error itself
+
+    known: set[str] = set()
+    required: set[str] = set()
+    for name, param in sig.parameters.items():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return  # dynamic params (**kwargs) — cannot statically validate
+        if param.kind is inspect.Parameter.VAR_POSITIONAL or name in _NON_ARG_PARAMS:
+            continue
+        known.add(name)
+        if param.default is inspect.Parameter.empty:
+            required.add(name)
+
+    missing = sorted(required - args.keys())
+    unexpected = sorted(set(args) - known)
+    if not missing and not unexpected:
+        return
+
+    parts: list[str] = []
+    if missing:
+        parts.append(f"missing required argument(s): {', '.join(missing)}")
+    if unexpected:
+        parts.append(f"unexpected argument(s): {', '.join(unexpected)}")
+    raise ToolValidationError(f"{tool_name}: {'; '.join(parts)}")
+
 
 # ---------------------------------------------------------------------------
 # ToolExecutor — dispatch engine
@@ -69,7 +122,7 @@ class ToolExecutor(BaseToolExecutor):
         limit_config: ToolResultLimitConfig | None = None,
         permission_config: PermissionConfig | None = None,
         bus=None,
-        lsp_notifier=None,
+        recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
     ) -> None:
         self._session_id = session_id
         self._mcp: UniversalMCP | None = None
@@ -80,11 +133,15 @@ class ToolExecutor(BaseToolExecutor):
         # None => no events emitted (standalone/test use), exactly like the
         # permission engine opt-in.
         self._bus = bus
-        # Optional LSP notifier (``common.interface.LspNotifier``). When set, a
-        # successful filesystem-mutating tool call reports the written path so
-        # the LSP layer can sync the doc + collect diagnostics. None => no LSP
-        # layer (legacy behavior), same opt-in model as the hook layer.
-        self._lsp_notifier = lsp_notifier
+        # Tool-level failover skeleton. The same domain-agnostic loop the LLM
+        # layer uses (read ``exc.recovery`` → dispatch an injected strategy →
+        # retry). The registry is EMPTY by default, so the runner is
+        # behaviourally identical to an un-wrapped ``tool.call()``: a typed
+        # ``ToolError`` (ABORT) or ``RetryableToolError`` (RETRY) is re-raised
+        # straight back to the try/except in run_command. Future tool-level
+        # recovery strategies (e.g. COMPRESS an oversized tool result) plug in
+        # here via ``recovery_strategies`` with no further wiring.
+        self._recovery_runner = RecoveryRunner(recovery_strategies or {})
         # Tool-result size limiting knobs (per-tool cap + disk persistence). A
         # default config reproduces CC's out-of-the-box behavior.
         self._limit_config = limit_config or ToolResultLimitConfig()
@@ -230,8 +287,20 @@ class ToolExecutor(BaseToolExecutor):
                 if decision.updated_args is not None:
                     args = decision.updated_args
 
+            async def _call():
+                # Validate inside the recovery loop so a strategy that repairs
+                # args is re-checked on retry. A bad-args ToolValidationError is
+                # non-retryable (recovery=ABORT): the runner re-raises on the
+                # first attempt and the except-ToolError arm below turns it into
+                # a failed ToolResult — no extra branch needed here.
+                _validate_call_args(tool.call, name, args)
+                return await tool.call(**args)
+
             try:
-                raw = await tool.call(**args)
+                # Run under the recovery loop. With an empty registry this is a
+                # plain ``await tool.call(**args)`` — typed errors re-raise and
+                # are handled by the except arms below exactly as before.
+                raw = await self._recovery_runner.run(_call)
             except ToolError as e:
                 # Expected, recoverable failure the tool signalled deliberately.
                 # Not logged as an error: it is normal control flow (bad args,
@@ -272,15 +341,16 @@ class ToolExecutor(BaseToolExecutor):
                     result.success = False
                     result.output = f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
 
-            # LSP after-edit notify: a successful filesystem-mutating tool reports
-            # its written path so the LSP layer can sync the document + collect
-            # diagnostics (surfaced into context at the next turn). Best-effort
-            # and gated on opt-in (no notifier => skipped).
-            if self._lsp_notifier is not None and result.success and getattr(tool, "mutates_filesystem", False):
+            # After-edit notification: a successful filesystem-mutating tool
+            # emits a FileMutatedEvent carrying the written path, so any
+            # subscriber can react — the LSP service syncs the doc + collects
+            # diagnostics, the file-watcher suppresses echoing our own edit back
+            # as an external change. Observation only; best-effort.
+            if result.success and getattr(tool, "mutates_filesystem", False) and self._bus is not None:
                 path = tool.permission_target(args)
                 if path:
                     try:
-                        await self._lsp_notifier.file_saved(path)
+                        await self._bus.emit(FileMutatedEvent(path=path, tool=name))
                     except Exception:  # noqa: BLE001 — never break the tool call
                         pass
 
@@ -440,11 +510,4 @@ class ToolExecutor(BaseToolExecutor):
 
         if self._mcp is not None:
             await self._mcp.cleanup_clients()
-
-        # Tear down any language servers the LSP layer launched this session.
-        if self._lsp_notifier is not None:
-            try:
-                await self._lsp_notifier.shutdown()
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                pass
             self._mcp = None

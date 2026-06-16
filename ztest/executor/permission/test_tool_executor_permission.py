@@ -15,7 +15,7 @@ import pytest
 
 from metagpt.common.schema import PermissionConfig
 from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.permission.types import PermissionDecision
+from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.tool_executor import ToolExecutor
 
 pytestmark = pytest.mark.asyncio

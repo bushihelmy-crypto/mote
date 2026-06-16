@@ -33,7 +33,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.git_state import find_git_root
+from metagpt.common.utils.git_state import find_git_root
 from metagpt.common.logs import log_class, logger
 from metagpt.session.events import FileSnapshotEvent
 from metagpt.session.log import SessionLog
@@ -162,7 +162,7 @@ def detect_blob_backend(working_dir: Optional[str] = None) -> str:
     everything else (non-code tasks, no git, errors) uses the plain ``blob``
     backend. Best-effort — any failure falls back to ``"blob"``.
 
-    The "are we in a repo?" probe reuses :func:`metagpt.common.git_state.find_git_root`
+    The "are we in a repo?" probe reuses :func:`metagpt.common.utils.git_state.find_git_root`
     (filesystem-first, no subprocess, handles ``.git`` file pointers). The
     ``git`` binary must still be present because :class:`GitBlobStore` shells out
     to it for every put/get.

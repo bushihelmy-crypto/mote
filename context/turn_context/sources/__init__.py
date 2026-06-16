@@ -5,10 +5,16 @@ Sources needing a higher layer (e.g. background-task progress, which imports
 Protocol; they are injected by ``Role`` rather than re-exported here.
 """
 
+from metagpt.context.turn_context.sources.compaction import (
+    CompactionNoticeContextSource,
+)
 from metagpt.context.turn_context.sources.git import GitContextSource
-from metagpt.context.turn_context.sources.lsp import LspContextSource
 from metagpt.context.turn_context.sources.token_pressure import (
     TokenPressureContextSource,
 )
 
-__all__ = ["GitContextSource", "LspContextSource", "TokenPressureContextSource"]
+__all__ = [
+    "CompactionNoticeContextSource",
+    "GitContextSource",
+    "TokenPressureContextSource",
+]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures / helpers for the ``metagpt.tasks.bggraph`` test suite.
+"""Shared fixtures / helpers for the ``metagpt.executor.bggraph`` test suite.
 
 Nodes are built with the :func:`sync_node` / :func:`gated_node` factories so a
 test can declare a graph in a couple of lines.  Everything is offline and
@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
-from metagpt.tasks.bggraph import GraphState, Stage
+from metagpt.executor.tasks.bggraph import GraphState, Stage
 
 
 class S(GraphState):
@@ -63,13 +63,33 @@ def flaky_node(fail_times: int, value, counter: list):
     """Build a node that raises ``fail_times`` then returns *value*.
 
     ``counter`` accumulates one entry per attempt.
+    Uses ``ConnectionError`` which is retryable by ``is_retryable``.
     """
 
     async def node(state):
         async def submit():
             counter.append(1)
             if len(counter) <= fail_times:
-                raise ValueError(f"flaky {len(counter)}")
+                raise ConnectionError(f"flaky {len(counter)}")
+            return value
+
+        return Stage(submit=submit())
+
+    return node
+
+
+def non_retryable_flaky_node(fail_times: int, value, counter: list):
+    """Build a node that raises a non-retryable error ``fail_times`` then returns *value*.
+
+    ``counter`` accumulates one entry per attempt.
+    Uses ``ValueError`` which is NOT retryable by ``is_retryable``.
+    """
+
+    async def node(state):
+        async def submit():
+            counter.append(1)
+            if len(counter) <= fail_times:
+                raise ValueError(f"non-retryable flaky {len(counter)}")
             return value
 
         return Stage(submit=submit())

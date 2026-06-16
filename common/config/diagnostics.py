@@ -8,8 +8,8 @@ compatibility but hides typos and stale keys. This module provides:
 
 - :func:`unknown_key_paths` — walk a merged dict against the model schema and
   report dotted paths that no field accepts (recursing into nested models).
-- strict mode — :class:`ConfigValidationError`, raised by the loader when asked
-  to validate strictly (``load_config(..., strict=True)``).
+- strict mode — :class:`~metagpt.common.exception.UnknownConfigKeysError`, raised
+  by the loader when asked to validate strictly (``load_config(..., strict=True)``).
 - :func:`format_report` / ``python -m metagpt.common.config.diagnostics`` — a
   human-readable dump of the layer stack, per-value provenance, and unknown
   keys (secrets redacted), answering "where did this value come from?".
@@ -23,18 +23,10 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 from metagpt.common.config.layers import CREDENTIAL_DENYLIST
+from metagpt.common.exception import UnknownConfigKeysError
 
 # Substrings that mark a leaf as secret for the redacted dump.
 _SECRET_HINTS = ("key", "secret", "token", "password", "jwt")
-
-
-class ConfigValidationError(ValueError):
-    """Raised in strict mode when the merged config carries unknown keys."""
-
-    def __init__(self, unknown_paths: List[str]):
-        self.unknown_paths = list(unknown_paths)
-        joined = ", ".join(self.unknown_paths)
-        super().__init__(f"Unknown config keys (strict mode): {joined}")
 
 
 def _model_of(annotation: Any) -> Optional[type]:
@@ -157,7 +149,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         merged = build_layer_stack(cwd, profile=args.profile).effective()
         unknown = unknown_key_paths(merged, Config)
         if unknown:
-            print("\n" + str(ConfigValidationError(unknown)))
+            print("\n" + str(UnknownConfigKeysError(unknown)))
             return 1
     return 0
 

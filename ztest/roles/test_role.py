@@ -5,6 +5,7 @@ capabilities, messaging, and the async human/sleep helpers)."""
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -57,7 +58,7 @@ class TestConstruction:
         r = Role(name="X")
         for slot in ("_think_engine", "_executor", "_skill_mgr", "_bg_pool",
                      "_command_channel", "_context_provider", "_context_manager", "_router"):
-            assert getattr(r, slot) is None
+            assert getattr(r._components, slot) is None
 
     def test_hash_is_identity(self):
         r = Role(name="X")
@@ -164,28 +165,180 @@ class TestProperties:
     def test_router_lazy_cached(self, role):
         first = role.router
         assert role.router is first  # cached
-        assert role._router is first
+        assert role._components._router is first
 
 
 class TestTurnContextBus:
     def test_slot_starts_none(self):
-        assert Role(name="X")._turn_context_bus is None
+        assert Role(name="X")._components._turn_context_bus is None
 
     def test_lazy_built_and_cached(self, role):
         bus = role.turn_context_bus
         assert bus is not None
         assert role.turn_context_bus is bus  # cached
-        assert role._turn_context_bus is bus
+        assert role._components._turn_context_bus is bus
 
-    def test_wires_all_four_sources(self, role):
+    def test_wires_unconditional_sources(self, role):
+        # No LSP config on the default fixture => the LSP feed is absent (the
+        # DiagnosticsBuffer is the source, wired only when LSP is configured).
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
-        assert names == {"git", "token", "background_tasks", "lsp"}
+        assert names == {"git", "token", "compaction", "background_tasks"}
+
+    def test_lsp_source_present_when_configured(self):
+        from metagpt.common.schema import LspConfig, LspServerConfig
+        from metagpt.router.llm.context import Context
+
+        cfg = LspConfig(
+            enabled=True,
+            servers=[LspServerConfig(name="x", command=["x"], extensions=[".py"])],
+        )
+        r = Role(name="X", role_schema=RoleSchema(name="X", lsp=cfg), context=Context())
+        bus = r.turn_context_bus
+        names = {getattr(s, "name", "") for s in bus._sources}
+        assert "lsp" in names
+        # The wired LSP source is the buffer itself (dual-role).
+        assert r.diagnostics_buffer in bus._sources
 
     def test_sources_sorted_by_priority(self, role):
         bus = role.turn_context_bus
         priorities = [getattr(s, "priority", 0) for s in bus._sources]
         assert priorities == sorted(priorities)
+
+
+# =============================================================================
+# Compaction-notice feed (dual-role: bus subscriber + turn_context source)
+# =============================================================================
+class TestCompactionNotice:
+    def test_slot_starts_none(self):
+        assert Role(name="X")._components._compaction_notice is None
+
+    def test_lazy_built_and_cached(self, role):
+        notice = role.compaction_notice
+        assert notice is not None
+        assert role.compaction_notice is notice  # cached
+
+    def test_subscribed_to_event_bus(self, role):
+        assert role.compaction_notice in role.event_bus.subscribers
+
+    def test_same_instance_in_both_buses(self, role):
+        # The object subscribed to the event bus (input edge) must be the same
+        # object rendered by the turn-context bus (output edge), else the armed
+        # flag set by handle() would never be seen by render().
+        notice = role.compaction_notice
+        assert notice in role.event_bus.subscribers
+        assert notice in role.turn_context_bus._sources
+
+
+# =============================================================================
+# File-watch service wiring (opt-in, bus subscriber, cleanup)
+# =============================================================================
+class TestFileWatchService:
+    def test_slot_starts_none(self):
+        assert Role(name="X")._components._file_watch_service is None
+
+    def test_none_without_config(self, role):
+        # No file_watch config => watcher disabled.
+        assert role.file_watch_service is None
+
+    def test_none_when_enabled_but_no_hook_layer(self, role):
+        from metagpt.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True)
+        # No hook layer (no HookConfig, no registered callback) => nothing would
+        # consume FileChanged events, so the watcher stays off.
+        assert role.file_watch_service is None
+
+    def test_built_when_enabled_with_hook_layer(self, role):
+        from metagpt.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True)
+        role.register_hook("FileChanged", lambda hook_input: None)
+        svc = role.file_watch_service
+        assert svc is not None
+        assert role.file_watch_service is svc  # cached
+        # The service subscribed itself to the role's event bus.
+        assert svc in role.event_bus.subscribers
+
+    def test_cleanup_stops_and_unsubscribes(self, role):
+        from metagpt.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True)
+        role.register_hook("FileChanged", lambda hook_input: None)
+
+        async def scenario():
+            svc = role.file_watch_service
+            svc.start()
+            assert svc.watcher.is_running() is True
+            await role.cleanup()
+            return svc
+
+        svc = asyncio.run(scenario())
+        assert svc.watcher.is_running() is False
+        assert svc not in role.event_bus.subscribers
+
+    def test_cleanup_safe_when_watcher_never_built(self, role):
+        # Nothing to stop — cleanup short-circuits without error.
+        asyncio.run(role.cleanup())
+        assert role._components._file_watch_service is None
+
+
+class TestFileWatchHotReload:
+    """The reload_skills / reload_config flags auto-wire FileChanged handlers."""
+
+    def test_reload_skills_engages_hook_and_watches_skill_dir(self, role):
+        from metagpt.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
+        # No manual hook registered: the auto-registered skill handler is what
+        # engages the hook layer, so the service builds.
+        svc = role.file_watch_service
+        assert svc is not None
+        skill_root = role._components.skill_manager.source_dirs()[0]
+        assert os.path.abspath(skill_root) in svc.watcher._roots
+
+    def test_skill_filechanged_fires_reload(self, role, monkeypatch):
+        from metagpt.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
+        _ = role.file_watch_service  # builds + registers the handler
+        calls = {"n": 0}
+
+        def fake_reload():
+            calls["n"] += 1
+            return True
+
+        monkeypatch.setattr(role._components.skill_manager, "reload", fake_reload)
+
+        async def scenario():
+            await role.hook_manager.fire(
+                "FileChanged", {"path": "/proj/skills/demo/SKILL.md", "change_type": "modified"}
+            )
+            # A non-SKILL.md path must not trigger a skill reload (matcher gate).
+            await role.hook_manager.fire(
+                "FileChanged", {"path": "/proj/main.py", "change_type": "modified"}
+            )
+
+        asyncio.run(scenario())
+        assert calls["n"] == 1
+
+    def test_reload_config_engages_hook_and_swaps_config(self, role, monkeypatch):
+        from metagpt.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_config=True)
+        svc = role.file_watch_service
+        assert svc is not None  # config handler alone engaged the hook layer
+
+        sentinel = object()
+        monkeypatch.setattr("metagpt.common.config.loader.load_config", lambda *a, **k: sentinel)
+
+        async def scenario():
+            await role.hook_manager.fire(
+                "FileChanged", {"path": "/proj/metagpt/config.yaml", "change_type": "modified"}
+            )
+
+        asyncio.run(scenario())
+        assert role.config is sentinel
 
 
 # =============================================================================
@@ -416,8 +569,8 @@ class TestEndSession:
     def test_no_summary_returns_empty(self):
         r = Role(name="X")
         r.role_schema.use_summary = False
-        r._context_manager = FakeContextManager()
-        r._think_engine = FakeThinkEngine()
+        r._components._context_manager = FakeContextManager()
+        r._components._think_engine = FakeThinkEngine()
         r._set_active(True)
         out = asyncio.run(r.end_session())
         assert out == ""
@@ -427,15 +580,15 @@ class TestEndSession:
     def test_summary_uses_summary_task_llm(self):
         r = Role(name="X")
         r.role_schema.use_summary = True
-        r._context_manager = FakeContextManager()
-        r._think_engine = FakeThinkEngine(_FakeThinkResult(content="found bug", is_empty=False))
+        r._components._context_manager = FakeContextManager()
+        r._components._think_engine = FakeThinkEngine(_FakeThinkResult(content="found bug", is_empty=False))
         fake_llm = FakeLLM(reply="THE SUMMARY")
-        r._router = FakeRouter(llm=fake_llm)
+        r._components._router = FakeRouter(llm=fake_llm)
         out = asyncio.run(r.end_session())
         assert out == "THE SUMMARY"
         assert r.state.last_end_output == "THE SUMMARY"
         # summary peripherally routed via the dedicated SUMMARY task
-        assert "summary" in r._router.task_calls
+        assert "summary" in r._components._router.task_calls
         assert fake_llm.aask_calls  # the summary llm was actually asked
 
 
@@ -446,7 +599,7 @@ class TestGetMemories:
     def test_delegates_to_context_manager(self):
         r = Role(name="X")
         msgs = [Message(content="a"), Message(content="b")]
-        r._context_manager = FakeContextManager(msgs)
+        r._components._context_manager = FakeContextManager(msgs)
         assert r.get_memories() == msgs
         assert r.get_memories(k=1) == msgs[-1:]
 

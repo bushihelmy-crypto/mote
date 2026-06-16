@@ -9,7 +9,7 @@ so config validators can raise typed errors and still surface as a single
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, List
 
 from metagpt.common.exception.base import MetaGPTError
 from metagpt.common.exception.codes import ErrorCode
@@ -33,6 +33,22 @@ class MissingAPIKeyError(ConfigValidationError):
     """A required API key was not configured."""
 
     default_code: ClassVar[ErrorCode] = ErrorCode.CONFIG_MISSING_API_KEY
+
+
+class UnknownConfigKeysError(ConfigValidationError):
+    """Strict mode: the merged config carries keys no field accepts.
+
+    Subclasses :class:`ConfigValidationError` so existing
+    ``except ConfigValidationError`` handlers still catch it; carries the list of
+    offending dotted ``unknown_paths`` for diagnostics.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.CONFIG_UNKNOWN_KEYS
+
+    def __init__(self, unknown_paths: List[str]) -> None:
+        self.unknown_paths = list(unknown_paths)
+        joined = ", ".join(self.unknown_paths)
+        super().__init__(f"Unknown config keys (strict mode): {joined}")
 
 
 class EnvKeyNotFoundError(ConfigError):

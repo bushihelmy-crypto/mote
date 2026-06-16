@@ -148,6 +148,75 @@ def test_multiple_changes_in_one_poll(tmp_path):
     assert by_type == {CREATED, MODIFIED, DELETED}
 
 
+def test_self_write_suppressed(tmp_path):
+    """A file noted as a self-write is not reported on the next poll."""
+    target = tmp_path / "f.txt"
+    target.write_text("v1")
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    # Simulate the agent's own tool writing the file, then noting it.
+    target.write_text("v2-by-agent")
+    w.note_self_write(str(target))
+    assert asyncio.run(w.poll()) == []
+
+
+def test_self_write_note_consumed_after_one_poll(tmp_path):
+    """The note is one-shot: a later genuine change is reported normally."""
+    target = tmp_path / "f.txt"
+    target.write_text("v1")
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    target.write_text("v2-by-agent")
+    w.note_self_write(str(target))
+    assert asyncio.run(w.poll()) == []
+    # A subsequent external change must surface (note was consumed). Use a
+    # different-length payload so detection doesn't hinge on mtime resolution
+    # (coarse on some filesystems, e.g. WSL2) when two writes share a size.
+    target.write_text("v3-external-change")
+    events = asyncio.run(w.poll())
+    assert [e.change_type for e in events] == [MODIFIED]
+
+
+def test_external_change_after_self_write_not_suppressed(tmp_path):
+    """If the file diverges past our recorded signature, it's still reported."""
+    target = tmp_path / "f.txt"
+    target.write_text("v1")
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    target.write_text("v2-by-agent")
+    w.note_self_write(str(target))
+    # External actor changes it again before the poll -> signatures differ.
+    target.write_text("v3-external-bigger")
+    events = asyncio.run(w.poll())
+    assert [e.change_type for e in events] == [MODIFIED]
+
+
+def test_self_write_delete_suppressed(tmp_path):
+    """A self-write that deletes the file is recorded and suppressed."""
+    target = tmp_path / "f.txt"
+    target.write_text("bye")
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    os.remove(target)
+    w.note_self_write(str(target))
+    assert asyncio.run(w.poll()) == []
+
+
+def test_self_write_does_not_suppress_other_files(tmp_path):
+    """Noting one path leaves changes to sibling files untouched."""
+    mine = tmp_path / "mine.txt"
+    other = tmp_path / "other.txt"
+    mine.write_text("a")
+    other.write_text("b")
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    mine.write_text("a-changed")
+    w.note_self_write(str(mine))
+    other.write_text("b-changed")
+    events = asyncio.run(w.poll())
+    assert [e.path for e in events] == [str(other)]
+
+
 def test_is_running_reflects_lifecycle(tmp_path):
     w, _ = _watcher(tmp_path)
     assert w.is_running() is False

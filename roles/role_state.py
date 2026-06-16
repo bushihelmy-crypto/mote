@@ -63,3 +63,67 @@ class RoleState(SerializationMixin):
     # read-before-overwrite and to detect files changed since the last read.
     # Runtime-only (not part of the serialized checkpoint).
     _file_read_state: dict[str, int] = PrivateAttr(default_factory=dict)
+
+
+class RoleStateController:
+    """Behaviour over a :class:`RoleState` — keeps the DTO pure.
+
+    ``RoleState`` is a plain serializable snapshot (a transport DTO): it carries
+    fields only, no logic. This controller owns the small invariants that guard
+    those fields (cwd fallback, falsy-message guard, the active-signal toggle,
+    the file-read map). The Role exposes thin delegators onto these methods as
+    its capability surface for tools and the framework, so tools never touch the
+    raw state and the state stays free of behaviour.
+
+    Holds the state by reference; the reference is stable for a Role's lifetime
+    (``RoleState`` is mutated in place, never reassigned).
+    """
+
+    def __init__(self, state: "RoleState"):
+        self._state = state
+
+    @property
+    def state(self) -> "RoleState":
+        return self._state
+
+    def get_cwd(self) -> str:
+        """Live working directory, falling back to the startup dir; never empty."""
+        try:
+            return self._state.working_dir or self._state.original_working_dir
+        except Exception:
+            return self._state.original_working_dir
+
+    def set_cwd(self, path: str) -> None:
+        """Persist the live working directory (follows `cd`)."""
+        self._state.working_dir = path
+
+    def record_file_read(self, path: str, mtime_ns: int) -> None:
+        """Record the mtime_ns observed when `path` was last read."""
+        self._state._file_read_state[path] = mtime_ns
+
+    def get_file_read_mtime(self, path: str) -> Optional[int]:
+        """Return the mtime_ns recorded when `path` was last read, else None."""
+        return self._state._file_read_state.get(path)
+
+    def is_active(self) -> bool:
+        """Read the react-loop active signal."""
+        return self._state._active
+
+    def set_active(self, value: bool) -> None:
+        """Write the react-loop active signal."""
+        self._state._active = value
+
+    def deactivate(self) -> None:
+        """Clear the active signal so the react loop stops after the current step."""
+        self._state._active = False
+
+    def put_message(self, message) -> None:
+        """Push a message into the private buffer (falsy messages are ignored)."""
+        if not message:
+            return
+        self._state.msg_buffer.push(message)
+
+    @property
+    def is_idle(self) -> bool:
+        """A role is idle when its message buffer is empty."""
+        return self._state.msg_buffer.empty()

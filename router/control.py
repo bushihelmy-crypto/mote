@@ -15,15 +15,12 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from metagpt.common.exception import RouterControlValidationError  # noqa: F401
 from metagpt.router.schema import ModelCard
 
 # Zero turns means no turn-count cap; the hold expires on idle TTL only.
 DEFAULT_HOLD_TURNS = 0
 DEFAULT_HOLD_TTL_SECONDS = 600.0
-
-
-class RouterControlValidationError(ValueError):
-    """Raised when a control target id is not among the registered models."""
 
 
 @dataclass(frozen=True)

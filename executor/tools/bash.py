@@ -19,7 +19,7 @@ from typing import Callable, ClassVar
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.permission.classifier import classify_command
-from metagpt.executor.permission.types import PermissionDecision
+from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.common.utils.common import aexecute

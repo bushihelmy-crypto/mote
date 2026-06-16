@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from metagpt.tasks import bg_tool, is_bg_tool, require_bg_complete
+from metagpt.executor.tasks import bg_tool, is_bg_tool, require_bg_complete
 
 from .conftest import gated, wait_started
 
@@ -33,7 +33,7 @@ def patch_reporter(monkeypatch):
         async def async_report(self, value, name="object"):
             reports.append((value, name))
 
-    monkeypatch.setattr("metagpt.tasks.decorators.ThoughtReporter", FakeReporter)
+    monkeypatch.setattr("metagpt.executor.tasks.decorators.ThoughtReporter", FakeReporter)
     return reports
 
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.git_state.render`` — GitState -> env lines."""
+"""Tests for ``metagpt.common.utils.git_state.render`` — GitState -> env lines."""
 from __future__ import annotations
 
-from metagpt.common.git_state.collector import GitState
-from metagpt.common.git_state.render import render_git_section
+from metagpt.common.utils.git_state.collector import GitState
+from metagpt.common.utils.git_state.render import render_git_section
 
 
 def test_render_none_is_empty():

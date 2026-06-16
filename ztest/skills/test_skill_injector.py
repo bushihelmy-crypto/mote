@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.skills.skill_injector.SkillInjector."""
+"""Tests for metagpt.context.skills.skill_injector.SkillInjector."""
 from __future__ import annotations
 
-from metagpt.skills.skill_injector import SkillInjector
-from metagpt.skills.skill_pool import SkillPool
+from metagpt.context.skills.skill_injector import SkillInjector
+from metagpt.context.skills.skill_pool import SkillPool
 
 from .conftest import make_skill_def, write_skill
 

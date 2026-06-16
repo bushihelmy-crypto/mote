@@ -25,7 +25,8 @@ from typing import Any
 
 import pytest
 
-from metagpt.common.schema import BgTaskResult, ToolResultLimitConfig
+from metagpt.common.schema import ToolResultLimitConfig
+from metagpt.executor.tasks.types import BgTaskResult
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_executor import ToolExecutor
 from metagpt.executor.tool_registry import ToolRegistry, registry as global_registry
@@ -177,6 +178,7 @@ def make_executor(
     session_id: str = "sess",
     role: FakeRole | None = None,
     limit_config: ToolResultLimitConfig | None = None,
+    recovery_strategies: dict | None = None,
 ) -> ToolExecutor:
     """Build a ToolExecutor with no registry lookup and inject bound instances.
 
@@ -184,7 +186,12 @@ def make_executor(
     names (primary + aliases), mirroring what the constructor does for static
     tools — but without touching the global registry.
     """
-    ex = ToolExecutor(session_id, tools=None, limit_config=limit_config)
+    ex = ToolExecutor(
+        session_id,
+        tools=None,
+        limit_config=limit_config,
+        recovery_strategies=recovery_strategies,
+    )
     for tool in tools:
         tool.bind(session_id, role=role)
         names = [tool.name, *getattr(tool, "aliases", [])]

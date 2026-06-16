@@ -13,8 +13,7 @@ import asyncio
 
 import pytest
 
-from metagpt.common.schema import BgStatus, BgTaskResult
-from metagpt.tasks import auto_background
+from metagpt.executor.tasks import BgStatus, BgTaskResult, auto_background
 
 from .conftest import boom, echo, gated, wait_started
 

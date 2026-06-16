@@ -3,7 +3,8 @@
 Public surface:
   * :class:`PermissionEngine` — the runtime decision pipeline.
   * :class:`RuleStore` — parsed rules + behavior resolution.
-  * Core data types from :mod:`.types` (re-exported for convenience).
+  * Core data types from :mod:`metagpt.common.schema.permission_types`
+    (re-exported here for convenience).
 
 No module in this package imports tools or the executor, so it can be imported
 from ``base_tool``/``tool_executor`` without circular dependencies.
@@ -13,7 +14,7 @@ from __future__ import annotations
 from metagpt.executor.permission.classifier import SafetyAssessment, classify_command
 from metagpt.executor.permission.engine import PermissionEngine
 from metagpt.executor.permission.rule_store import RuleStore
-from metagpt.executor.permission.types import (
+from metagpt.common.schema.permission_types import (
     DecisionReason,
     GrantScope,
     PermissionBehavior,

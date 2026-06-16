@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import BackgroundTaskNotification, BgStatus, MessageQueue
-from metagpt.tasks import BackgroundTaskPool, TaskOutputStore
-from metagpt.tasks.bggraph import END, START, BgGraph
+from metagpt.common.schema import MessageQueue
+from metagpt.executor.tasks import BackgroundTaskPool, TaskOutputStore, BackgroundTaskNotification, BgStatus
+from metagpt.executor.tasks.bggraph import END, START, BgGraph
+from metagpt.executor.tasks.bggraph.types import LlmPauseResult
 
 from .conftest import S, sync_node
 
@@ -97,7 +98,7 @@ class TestPoolIntegration:
         assert "tts" in tail
         assert "render" in tail
         assert "merge" in tail
-        assert "completed" in tail
+        assert "success" in tail
 
     async def test_failure_notifies_failed(self, pool, store, msg_buffer):
         g = BgGraph("boomgraph", state_schema=S)
@@ -136,3 +137,92 @@ class TestPoolIntegration:
         # No output was initialised for this task.
         with pytest.raises(KeyError):
             await store.get_tail(tid)
+
+
+def _llm_pause_graph() -> BgGraph:
+    """Graph that pauses on an LLM edge after node 'a'."""
+    g = BgGraph("llmpause", state_schema=S)
+    g.add_node("a", sync_node(lambda s: "a-done"))
+    g.add_node("nextstep", sync_node(lambda s: "next-done"))
+    g.add_edge(START, "a")
+    g.add_llm_edges("a", "Pick route", {"go": "nextstep", "stop": END})
+    g.add_edge("nextstep", END)
+    return g
+
+
+class TestPoolPauseAndResubmit:
+    """Pool correctly identifies LlmPauseResult and supports resubmit."""
+
+    async def test_pause_sets_waiting_for_route(self, pool, store, msg_buffer):
+        """When graph pauses on an LLM edge, pool marks WAITING_FOR_ROUTE."""
+        g = _llm_pause_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll,
+            res.command_name,
+            timeout=None,
+            progress=True,
+            graph_ref=res.graph_ref,
+            initial_params=res.initial_params,
+            factory=res.factory,
+        )
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.WAITING_FOR_ROUTE
+        assert meta.state_snapshot is not None
+        assert "a" in meta.completed_nodes
+        assert meta.graph_ref is not None
+
+        # Notification is still pushed (to wake agent).
+        msgs = await _drain_msgs(msg_buffer)
+        notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
+        assert len(notes) == 1
+        assert notes[0].status == BgStatus.WAITING_FOR_ROUTE
+        assert "paused" in notes[0].content
+
+    async def test_resubmit_resumes_to_success(self, pool, store, msg_buffer):
+        """resubmit() with a fresh coro runs to completion under same task_id."""
+        g = _llm_pause_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll,
+            res.command_name,
+            timeout=None,
+            progress=True,
+            graph_ref=res.graph_ref,
+            initial_params=res.initial_params,
+            factory=res.factory,
+        )
+        await pool.wait_all()
+
+        # Drain pause notification.
+        await _drain_msgs(msg_buffer)
+
+        # Simulate resume: run a simple coro that returns a value.
+        async def resumed():
+            return "resumed-result"
+
+        returned_id = pool.resubmit(tid, resumed(), progress=False)
+        assert returned_id == tid
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.SUCCESS
+        assert meta.retry_count == 1
+
+        # Completion notification pushed.
+        msgs = await _drain_msgs(msg_buffer)
+        notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
+        assert len(notes) == 1
+        assert notes[0].status == BgStatus.SUCCESS
+
+    async def test_resubmit_unknown_id_raises(self, pool, store, msg_buffer):
+        """resubmit() with an unknown task_id raises ValueError."""
+        async def noop():
+            return None
+
+        coro = noop()
+        with pytest.raises(ValueError, match="Unknown task_id"):
+            pool.resubmit("bg_999", coro)
+        coro.close()  # suppress "never awaited" warning

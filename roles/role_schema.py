@@ -10,7 +10,7 @@ from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.schema import HookConfig, LspConfig, PermissionConfig
+from metagpt.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
 from metagpt.common.prompt.role import (
     CMD_PROMPT,
     ROLE_INSTRUCTION,
@@ -97,6 +97,14 @@ class RoleSchema(BaseModel):
     # language servers lazily on relevant file edits and surface diagnostics
     # back into context at the next turn boundary.
     lsp: Optional[LspConfig] = None
+
+    # --- File watching ---
+    # Opt-in external-file-change watcher. When None (default), no watcher runs.
+    # Set a FileWatchConfig (enabled=True) to poll the project root and fire
+    # FileChanged hooks on external changes; the agent's own tool-driven writes
+    # are suppressed (via FileMutatedEvent on the event bus) so they don't echo
+    # back. Requires a hook layer to consume the FileChanged events.
+    file_watch: Optional[FileWatchConfig] = None
 
     # --- File history ---
     # When True (default), file-mutating tools (Write/Edit/NotebookEdit) record a

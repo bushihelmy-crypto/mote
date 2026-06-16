@@ -41,13 +41,6 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "QueuedMessage": ("queue", "QueuedMessage"),
     "MessageQueue": ("queue", "MessageQueue"),
     "LongTermMemoryItem": ("queue", "LongTermMemoryItem"),
-    # tasks
-    "BgStatus": ("tasks", "BgStatus"),
-    "TaskType": ("tasks", "TaskType"),
-    "BackgroundTaskNotification": ("tasks", "BackgroundTaskNotification"),
-    "is_bg_notification": ("tasks", "is_bg_notification"),
-    "BgTaskResult": ("tasks", "BgTaskResult"),
-    "TaskMeta": ("tasks", "TaskMeta"),
     # askuser
     "ASK_USER_QUESTION_CHIP_WIDTH": ("askuser", "ASK_USER_QUESTION_CHIP_WIDTH"),
     "AskUserQuestionOption": ("askuser", "AskUserQuestionOption"),
@@ -70,6 +63,15 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # permission_config
     "PermissionConfig": ("permission_config", "PermissionConfig"),
     "SandboxConfig": ("permission_config", "SandboxConfig"),
+    # permission_types
+    "PermissionMode": ("permission_types", "PermissionMode"),
+    "PermissionBehavior": ("permission_types", "PermissionBehavior"),
+    "GrantScope": ("permission_types", "GrantScope"),
+    "RuleSource": ("permission_types", "RuleSource"),
+    "RiskLevel": ("permission_types", "RiskLevel"),
+    "DecisionReason": ("permission_types", "DecisionReason"),
+    "PermissionDecision": ("permission_types", "PermissionDecision"),
+    "PermissionRule": ("permission_types", "PermissionRule"),
     # hook_config
     "HookConfig": ("hook_config", "HookConfig"),
     "HookCommandHandler": ("hook_config", "HookCommandHandler"),
@@ -77,6 +79,10 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # lsp_config
     "LspConfig": ("lsp_config", "LspConfig"),
     "LspServerConfig": ("lsp_config", "LspServerConfig"),
+    # file_watch_config
+    "FileWatchConfig": ("file_watch_config", "FileWatchConfig"),
+    # node_status
+    "BgStatus": ("node_status", "BgStatus"),
     # think
     "ThinkResult": ("think", "ThinkResult"),
 }

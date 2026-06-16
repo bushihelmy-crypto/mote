@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.skills.skill_pool.SkillPool."""
+"""Tests for metagpt.context.skills.skill_pool.SkillPool."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from metagpt.skills.skill_pool import SkillPool
+from metagpt.context.skills.skill_pool import SkillPool
 
 from .conftest import write_skill
 
@@ -156,4 +156,4 @@ class TestGetters:
 def test_default_builtin_dir_is_package_dir():
     # No arg -> uses the packaged skills directory.
     pool = SkillPool()
-    assert pool._builtin_dir == Path(__file__).parents[2] / "skills" / "yamls"
+    assert pool._builtin_dir == Path(__file__).parents[2] / "context" / "skills" / "yamls"

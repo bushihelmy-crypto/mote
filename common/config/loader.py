@@ -114,11 +114,12 @@ def _build_config(stack: ConfigLayerStack, strict: bool) -> "Config":
     # Fill llm.api_key from api_key_helper when no static/env key is present.
     resolve_api_key(merged)
     if strict:
-        from metagpt.common.config.diagnostics import ConfigValidationError, unknown_key_paths
+        from metagpt.common.config.diagnostics import unknown_key_paths
+        from metagpt.common.exception import UnknownConfigKeysError
 
         unknown = unknown_key_paths(merged, Config)
         if unknown:
-            raise ConfigValidationError(unknown)
+            raise UnknownConfigKeysError(unknown)
     return Config(**merged)
 
 
