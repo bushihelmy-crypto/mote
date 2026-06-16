@@ -22,9 +22,9 @@
 # LLM —— 主模型（必填）
 # ----------------------------------------------------------------------------
 llm:
-  api_key: 
+  api_key: ""
   api_type: openai
-  base_url: 
+  base_url: ""
   model: "claude-opus-4-6"                        # 模型名 / 部署名
   # api_version: null                    # Azure 等需要时填写
   # pricing_plan: null                   # 成本结算计划
