@@ -181,9 +181,11 @@ class TestTurnContextBus:
     def test_wires_unconditional_sources(self, role):
         # No LSP config on the default fixture => the LSP feed is absent (the
         # DiagnosticsBuffer is the source, wired only when LSP is configured).
+        # Background-task progress is NOT a turn-context source: it is delivered
+        # via msg_buffer notifications, so no <task-attachment> feed here.
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
-        assert names == {"git", "token", "compaction", "background_tasks"}
+        assert names == {"git", "token", "compaction"}
 
     def test_lsp_source_present_when_configured(self):
         from metagpt.common.schema import LspConfig, LspServerConfig
@@ -204,6 +206,31 @@ class TestTurnContextBus:
         bus = role.turn_context_bus
         priorities = [getattr(s, "priority", 0) for s in bus._sources]
         assert priorities == sorted(priorities)
+
+
+# =============================================================================
+# Task-completion wake wiring (bg-task completion -> new turn)
+# =============================================================================
+class TestTaskCompletionWake:
+    def test_wake_set_before_pool_built_is_applied(self, role):
+        # The scheduler/REPL wires the wake at AgentRuntime construction, which
+        # happens before the background pool is lazily built. The callback must
+        # survive that ordering and land on the pool the builder creates.
+        marker = object()
+        role.set_task_completion_wake(marker)
+        assert role._components._bg_pool is None  # not built yet
+        pool = role._components.bg_pool  # builds the pool
+        assert pool is not None
+        assert pool._wake is marker
+
+    def test_wake_set_after_pool_built_is_applied(self, role):
+        pool = role._components.bg_pool  # build the pool first
+        marker = object()
+        role.set_task_completion_wake(marker)
+        assert pool._wake is marker
+
+    def test_pending_wake_slot_starts_none(self):
+        assert Role(name="X")._components._pending_task_completion_wake is None
 
 
 # =============================================================================
@@ -411,7 +438,7 @@ class TestCapabilities:
         assert set(caps) == {
             "get_cwd", "set_cwd", "deactivate", "ask_human", "request_approval",
             "reply_to_human", "end_session", "record_file_read", "get_file_read_mtime",
-            "record_file_snapshot", "wait_interruptible",
+            "record_file_snapshot", "wait_interruptible", "get_bg_pool",
         }
 
     def test_capability_values_are_bound_methods(self):

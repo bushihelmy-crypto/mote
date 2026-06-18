@@ -20,27 +20,27 @@ from collections import defaultdict
 from typing import Any, Optional
 
 from metagpt.common.exception import RecoveryAction, RecoveryRunner
-from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
+from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
 from metagpt.executor.tasks.bggraph.notify import (
     _MSG_RESUMING,
     _MSG_SKIPPING,
     push_llm_route_notification,
-    push_node_failure_notification,
+    push_node_notification,
     push_started_notification,
     push_terminal_notification,
 )
 from metagpt.executor.tasks.bggraph.notify import (
-    _MSG_COMPLETED_WITH_RETRY,
-    _MSG_FAILED,
-    _MSG_FAILED_WITH_RETRY,
     _MSG_RETRYING,
 )
 from metagpt.executor.tasks.bggraph.report import report_progress
 from metagpt.executor.tasks.bggraph.types import (
     END,
     GraphBatchFailureError,
+    GraphParamTypeError,
     GraphRecursionError,
     GraphRouterError,
+    GraphRunState,
     LlmPauseResult,
     BgStatus,
     Stage,
@@ -81,6 +81,42 @@ def _retry_delay(attempt: int) -> float:
 # Node execution
 # ---------------------------------------------------------------------------
 
+_MISSING = object()
+
+
+def _validate_node_params_runtime(graph: Any, node_name: str, state: Any) -> None:
+    """Check that state values match declared param types before node execution.
+
+    Uses pydantic ``TypeAdapter(strict=True)`` for deep validation (generics,
+    Union, nested models). Raises :class:`GraphParamTypeError` on mismatch —
+    a wiring bug, not transient.
+    """
+    from pydantic import TypeAdapter, ValidationError
+
+    node_def = graph._nodes[node_name]
+    for param_name, param_info in node_def.params.items():
+        expected_type = param_info.get("type")
+        if expected_type is None:
+            continue
+        source = param_info["from"]
+        if not source:
+            continue
+        # Resolve the attribute name on state
+        if source.startswith("$input."):
+            field = source[len("$input."):]
+        else:
+            field = source.split(".")[0]
+        value = getattr(state, field, _MISSING)
+        if value is _MISSING or value is None:
+            continue  # missing/None — ref check already caught at compile time
+        try:
+            TypeAdapter(expected_type).validate_python(value, strict=True)
+        except ValidationError:
+            raise GraphParamTypeError(
+                node=node_name, param=param_name,
+                expected=expected_type, got=type(value),
+            )
+
 
 async def _run_poll(stage: Stage, submit_result: Any) -> Any:
     poll_coro = stage.poll(submit_result)
@@ -89,7 +125,9 @@ async def _run_poll(stage: Stage, submit_result: Any) -> Any:
     return await poll_coro
 
 
-async def _run_one_node(node_name: str, state: Any, graph: Any, completed: set) -> None:
+async def _run_one_node(
+    node_name: str, state: Any, graph: Any, completed: set, run_state: Any = None
+) -> None:
     """Execute one node: fn -> submit -> poll (if any) -> auto-retry -> store result.
 
     Retries run under the shared :class:`RecoveryRunner` using the framework's
@@ -101,9 +139,15 @@ async def _run_one_node(node_name: str, state: Any, graph: Any, completed: set) 
     ``ValueError``) is classified ABORT and fails fast. The retry budget is not
     node-configurable — the engine owns it so semantics stay uniform — but the
     number of retries consumed is recorded on the exception for reporting.
+
+    ``run_state`` (when provided) receives the authoritative per-node record
+    (status / attempts / failure reason) used by resume; ``node_def.status`` is
+    still written for in-run notification rendering.
     """
     node_def = graph._nodes[node_name]
     node_def.status = BgStatus.RUNNING
+    if run_state is not None:
+        run_state.mark_running(node_name)
     report_progress(node_name, BgStatus.RUNNING, node_def.description or None)
 
     attempts = 0
@@ -111,11 +155,15 @@ async def _run_one_node(node_name: str, state: Any, graph: Any, completed: set) 
     async def _execute() -> Any:
         nonlocal attempts
         attempts += 1
-        stage = await node_def.fn(state)
-        submit_result = await stage.submit
-        if stage.poll is not None:
-            return await _run_poll(stage, submit_result)
-        return submit_result
+        _validate_node_params_runtime(graph, node_name, state)
+        try:
+            stage = await node_def.fn(state)
+            submit_result = await stage.submit
+            if stage.poll is not None:
+                return await _run_poll(stage, submit_result)
+            return submit_result
+        except (asyncio.TimeoutError, TimeoutError, ConnectionError) as e:
+            raise GraphNodeTimeoutError(str(e), cause=e) from e
 
     async def _retry(exc: BaseException) -> bool:
         # Reached only when the runner classifies ``exc`` as RETRY. ``attempts``
@@ -139,35 +187,34 @@ async def _run_one_node(node_name: str, state: Any, graph: Any, completed: set) 
         result = await runner.run(_execute)
     except asyncio.CancelledError:
         node_def.status = BgStatus.CANCELLED
+        if run_state is not None:
+            run_state.mark_cancelled(node_name)
         report_progress(node_name, BgStatus.CANCELLED)
         raise
+    except GraphNodeTimeoutError as e:
+        # Retry budget exhausted on a timeout — wrap as terminal.
+        attempt = attempts - 1
+        exhausted = GraphNodeRetryExhaustedError(node_name, attempts, e.__cause__ or e)
+        exhausted._auto_retries_attempted = attempt
+        exhausted._auto_retries_limit = _AUTO_RETRIES
+        node_def.status = BgStatus.FAILED
+        if run_state is not None:
+            run_state.mark_failed(node_name, exhausted)
+        raise exhausted from e
     except Exception as e:  # noqa: BLE001 — node failures are reported, not swallowed
         attempt = attempts - 1  # retries consumed before giving up
-        detail = (
-            _MSG_FAILED_WITH_RETRY.format(
-                error_type=type(e).__name__,
-                error=e,
-                attempt=attempt,
-                auto_retries=_AUTO_RETRIES,
-            )
-            if attempt > 0
-            else _MSG_FAILED.format(error_type=type(e).__name__, error=e)
-        )
-        report_progress(node_name, BgStatus.FAILED, detail)
-        node_def.status = BgStatus.FAILED
         e._auto_retries_attempted = attempt
         e._auto_retries_limit = _AUTO_RETRIES
+        node_def.status = BgStatus.FAILED
+        if run_state is not None:
+            run_state.mark_failed(node_name, e)
         raise
 
     setattr(state, node_name, result)
     completed.add(node_name)
     node_def.status = BgStatus.SUCCESS
-    attempt = attempts - 1  # retries consumed before succeeding
-    if attempt > 0:
-        detail = _MSG_COMPLETED_WITH_RETRY.format(result=result, auto_retries=attempt)
-    else:
-        detail = result
-    report_progress(node_name, BgStatus.SUCCESS, detail)
+    if run_state is not None:
+        run_state.mark_success(node_name)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +302,7 @@ async def _run_driver(
     trigger_count: Optional[dict] = None,
     initial_params: Optional[dict] = None,
     push_start: bool = True,
+    run_state: Any = None,
 ) -> Any:
     """Run the frontier scheduler to terminal / pause.
 
@@ -264,9 +312,14 @@ async def _run_driver(
             seeded into the frontier without re-executing them (resume_skip).
         completed: pre-seeded completed set (resume).
         trigger_count: pre-seeded AND-join arrivals (resume).
+        run_state: authoritative per-node records; created for this graph if
+            ``None``. Carried out on the pause result / failure exception so the
+            pool can snapshot it onto ``TaskMeta`` for resume.
     """
     completed = completed if completed is not None else set()
     trigger_count = trigger_count if trigger_count is not None else defaultdict(set)
+    if run_state is None:
+        run_state = GraphRunState.for_graph(graph)
 
     running: dict[asyncio.Task, str] = {}
     scheduled: set[str] = set()
@@ -291,7 +344,7 @@ async def _run_driver(
                 f"after {activations} node activations"
             )
         scheduled.add(node)
-        t = asyncio.create_task(_run_one_node(node, state, graph, completed))
+        t = asyncio.create_task(_run_one_node(node, state, graph, completed, run_state))
         running[t] = node
 
     pause_edge = None
@@ -312,15 +365,24 @@ async def _run_driver(
                 exc = t.exception()
                 if exc is not None:
                     all_errors.append((n, exc))
-                    push_node_failure_notification(
+                    push_node_notification(
                         n,
-                        exc,
+                        BgStatus.FAILED,
                         state,
                         graph,
                         completed=completed,
                         running_names=list(running.values()),
+                        exc=exc,
                     )
                     continue
+                push_node_notification(
+                    n,
+                    BgStatus.SUCCESS,
+                    state,
+                    graph,
+                    completed=completed,
+                    running_names=list(running.values()),
+                )
                 try:
                     succs = successors(n, graph, state, completed, trigger_count)
                 except _LlmPauseSignal as sig:
@@ -331,12 +393,18 @@ async def _run_driver(
     except _LlmPauseSignal:
         await _cancel_running(running)
         push_llm_route_notification(pause_edge, state, graph)
-        return LlmPauseResult(state=state, completed=completed, edge=pause_edge)
+        return LlmPauseResult(
+            state=state, completed=completed, edge=pause_edge, run_state=run_state
+        )
     except (GraphRecursionError, GraphRouterError) as e:
         await _cancel_running(running)
         fatal = e
 
     if fatal is not None:
+        # Carry the snapshot out on the exception so the pool captures it for
+        # resume even when the GraphMeta handoff did not thread run_state in.
+        fatal.run_state = run_state
+        fatal.graph_state = state
         push_terminal_notification(
             graph, state, BgStatus.FAILED, error=fatal, initial_params=initial_params
         )
@@ -344,6 +412,8 @@ async def _run_driver(
 
     if all_errors:
         error = GraphBatchFailureError(all_errors)
+        error.run_state = run_state
+        error.graph_state = state
         push_terminal_notification(
             graph, state, BgStatus.FAILED, error=error, initial_params=initial_params
         )
@@ -368,19 +438,27 @@ def _build_executor(graph: Any):
         state = graph.state_schema(**initial_state)
         entry = graph._get_entry_node()
         initial_params = dict(initial_state)
-        return BgTaskResult(
-            poll=_run_driver(
+        # One run_state, shared between the driver coroutine and the GraphMeta
+        # handoff so the pool snapshots the very object the driver mutates.
+        run_state = GraphRunState.for_graph(graph)
+        return BgTaskResult.background(
+            poll_factory=lambda: _run_driver(
                 graph,
                 state,
                 execute_nodes=[entry],
                 completed=set(),
                 trigger_count=defaultdict(set),
                 initial_params=initial_params,
+                run_state=run_state,
             ),
             command_name=graph.command_name,
-            graph_ref=graph,
-            initial_params=initial_params,
-            factory=executor,
+            graph_meta=GraphMeta(
+                graph_ref=graph,
+                initial_params=initial_params,
+                factory=executor,
+                run_state=run_state,
+                state=state,
+            ),
         )
 
     return executor
@@ -391,67 +469,80 @@ def _build_executor(graph: Any):
 # ---------------------------------------------------------------------------
 
 
-def resume(graph: Any, state: Any, from_nodes: list[str]) -> BgTaskResult:
+def _ensure_run_state(graph: Any, state: Any, run_state: Any) -> Any:
+    """Return an authoritative run state, inferring one for legacy snapshots.
+
+    A live task always carries its run_state on the snapshot; only tasks whose
+    snapshot predates run-state recording fall back to value-inference.
+    """
+    if run_state is not None:
+        return run_state
+    return GraphRunState.infer_from_state(graph, state)
+
+
+def resume(graph: Any, state: Any, from_nodes: list[str], run_state: Any = None) -> BgTaskResult:
     """Resume execution by re-running *from_nodes*.
 
-    Completed = nodes with a result that are not being re-run. The graph then
-    transitions forward from *from_nodes*; AND-joins are prefilled so a merge
-    that already had one source satisfied does not stall.
+    Completed nodes come from the authoritative ``run_state`` (status SUCCESS /
+    SKIPPED), not from value-inference. The graph then transitions forward from
+    *from_nodes*; AND-joins are prefilled so a merge that already had one source
+    satisfied does not stall. Re-run nodes are ``reset`` (PENDING) while keeping
+    their accumulated attempt count.
     """
-    completed: set[str] = {
-        name
-        for name in graph._nodes
-        if getattr(state, name, None) is not None and name not in from_nodes
-    }
+    run_state = _ensure_run_state(graph, state, run_state)
+    completed: set[str] = run_state.completed_names() - set(from_nodes)
     for node_name in from_nodes:
         setattr(state, node_name, None)
         graph._nodes[node_name].status = BgStatus.PENDING
+        run_state.reset(node_name)
 
     trigger_count: dict = defaultdict(set)
     _prefill_trigger_count(graph, completed, trigger_count)
 
-    return BgTaskResult(
+    return BgTaskResult.hybrid(
         result=_MSG_RESUMING.format(from_node=", ".join(from_nodes)),
-        poll=_run_driver(
+        poll_factory=lambda: _run_driver(
             graph,
             state,
             execute_nodes=list(from_nodes),
             completed=completed,
             trigger_count=trigger_count,
             push_start=False,
+            run_state=run_state,
         ),
         command_name=graph.command_name,
-        graph_ref=graph,
+        graph_meta=GraphMeta(graph_ref=graph, run_state=run_state, state=state),
     )
 
 
-def _apply_skip(graph: Any, state: Any, skip_nodes: list[str]) -> None:
+def _apply_skip(graph: Any, state: Any, skip_nodes: list[str], run_state: Any = None) -> None:
     for sn in skip_nodes:
         node_def = graph._nodes[sn]
         existing = getattr(state, sn, None)
         if existing is None:
             setattr(state, sn, {})
         node_def.status = BgStatus.SKIPPED
+        if run_state is not None:
+            run_state.mark_skipped(sn)
         suffix = " with partial results" if existing is not None else ""
         report_progress(
             sn, BgStatus.SKIPPED, _MSG_SKIPPING.format(skip_nodes=sn, suffix=suffix)
         )
 
 
-def resume_skip(graph: Any, state: Any, skip_nodes: list[str]) -> BgTaskResult:
+def resume_skip(
+    graph: Any, state: Any, skip_nodes: list[str], run_state: Any = None
+) -> BgTaskResult:
     """Skip *skip_nodes* (keeping partial results) and continue downstream."""
-    _apply_skip(graph, state, skip_nodes)
-    completed: set[str] = {
-        name
-        for name in graph._nodes
-        if getattr(state, name, None) is not None or name in skip_nodes
-    }
+    run_state = _ensure_run_state(graph, state, run_state)
+    _apply_skip(graph, state, skip_nodes, run_state)
+    completed: set[str] = run_state.completed_names() | set(skip_nodes)
     trigger_count: dict = defaultdict(set)
     _prefill_trigger_count(graph, completed, trigger_count)
 
-    return BgTaskResult(
+    return BgTaskResult.hybrid(
         result=_MSG_SKIPPING.format(skip_nodes=", ".join(skip_nodes), suffix=""),
-        poll=_run_driver(
+        poll_factory=lambda: _run_driver(
             graph,
             state,
             execute_nodes=[],
@@ -459,35 +550,33 @@ def resume_skip(graph: Any, state: Any, skip_nodes: list[str]) -> BgTaskResult:
             completed=completed,
             trigger_count=trigger_count,
             push_start=False,
+            run_state=run_state,
         ),
         command_name=graph.command_name,
-        graph_ref=graph,
+        graph_meta=GraphMeta(graph_ref=graph, run_state=run_state, state=state),
     )
 
 
 def resume_skip_and_from(
-    graph: Any, state: Any, skip_nodes: list[str], from_nodes: list[str]
+    graph: Any, state: Any, skip_nodes: list[str], from_nodes: list[str], run_state: Any = None
 ) -> BgTaskResult:
     """Skip *skip_nodes* then re-run *from_nodes*, continuing downstream."""
-    _apply_skip(graph, state, skip_nodes)
-    completed: set[str] = {
-        name
-        for name in graph._nodes
-        if (getattr(state, name, None) is not None or name in skip_nodes)
-        and name not in from_nodes
-    }
+    run_state = _ensure_run_state(graph, state, run_state)
+    _apply_skip(graph, state, skip_nodes, run_state)
+    completed: set[str] = (run_state.completed_names() | set(skip_nodes)) - set(from_nodes)
     for node_name in from_nodes:
         setattr(state, node_name, None)
         graph._nodes[node_name].status = BgStatus.PENDING
+        run_state.reset(node_name)
 
     trigger_count: dict = defaultdict(set)
     _prefill_trigger_count(graph, completed, trigger_count)
 
     skip_desc = ", ".join(skip_nodes)
     from_desc = ", ".join(from_nodes)
-    return BgTaskResult(
+    return BgTaskResult.hybrid(
         result=f"Skipping [{skip_desc}], resuming from [{from_desc}]",
-        poll=_run_driver(
+        poll_factory=lambda: _run_driver(
             graph,
             state,
             execute_nodes=list(from_nodes),
@@ -495,7 +584,8 @@ def resume_skip_and_from(
             completed=completed,
             trigger_count=trigger_count,
             push_start=False,
+            run_state=run_state,
         ),
         command_name=graph.command_name,
-        graph_ref=graph,
+        graph_meta=GraphMeta(graph_ref=graph, run_state=run_state, state=state),
     )

@@ -14,12 +14,9 @@ Names are re-exported here so callers can do ``from metagpt.common.prompt
 import SYSTEM_PROMPT`` or import the submodule directly.
 """
 from metagpt.common.prompt.role import (
-    ASK_HUMAN_COMMAND,
-    ASK_HUMAN_GUIDANCE_FORMAT,
     CMD_EXPERIENCE_MASK,
     CMD_PROMPT,
     CONSTRAINT_TEMPLATE,
-    END_COMMAND,
     FRC_SECTION,
     JSON_REPAIR_PROMPT,
     LANGUAGE_SECTION,
@@ -51,19 +48,15 @@ from metagpt.common.prompt.output import (
 from metagpt.common.prompt.agent import (
     AGENT_SECTION_TEMPLATE,
     AGENT_TASK_PROMPT,
-    SUBAGENT_EXAMPLE,
     SUBAGENT_SECTION_TEMPLATE,
     SUBAGENT_TASK_PROMPT,
 )
 
 __all__ = [
     # role
-    "ASK_HUMAN_COMMAND",
-    "ASK_HUMAN_GUIDANCE_FORMAT",
     "CMD_EXPERIENCE_MASK",
     "CMD_PROMPT",
     "CONSTRAINT_TEMPLATE",
-    "END_COMMAND",
     "FRC_SECTION",
     "JSON_REPAIR_PROMPT",
     "LANGUAGE_SECTION",
@@ -91,7 +84,6 @@ __all__ = [
     # agent
     "AGENT_SECTION_TEMPLATE",
     "AGENT_TASK_PROMPT",
-    "SUBAGENT_EXAMPLE",
     "SUBAGENT_SECTION_TEMPLATE",
     "SUBAGENT_TASK_PROMPT",
 ]

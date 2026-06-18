@@ -52,6 +52,22 @@ class TestContract:
         # instruction, no "ONE and ONLY ONE command block" XML framing.
         assert NativeToolChannel().command_hint() == ""
 
+    def test_lower_renders_ctl_finish_without_end_marker(self):
+        # The CTL_FINISH symbol must lower to a plain-English turn-end, never the
+        # XML <end></end> marker, so symbolized prose can't leak it to native.
+        from metagpt.common.prompt.refs import CTL_FINISH
+
+        out = NativeToolChannel().lower(f"Only {CTL_FINISH} when done.")
+        assert "<end>" not in out
+        assert "tool" in out.lower()
+
+    def test_lower_renders_capability_symbols_as_plain_text(self):
+        from metagpt.common.prompt.refs import CAP_READ
+
+        out = NativeToolChannel().lower(f"Use {CAP_READ} first.")
+        assert "Editor.read" not in out
+        assert "read tool" in out
+
 
 class TestToolSpecs:
     def test_delegates_to_executor_with_provider(self):

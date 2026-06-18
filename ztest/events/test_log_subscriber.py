@@ -89,11 +89,11 @@ async def test_subscribed_on_bus_logs_via_emit(monkeypatch):
     assert any("session_start" in line for line in info)
 
 
-def test_clip_truncates_and_collapses_whitespace():
+def test_clip_collapses_whitespace():
     assert _clip("a  b\n c") == "a b c"
+    # No truncation: long text is returned intact (only whitespace collapsed).
     long = "x" * 200
-    out = _clip(long, limit=10)
-    assert len(out) == 10 and out.endswith("…")
+    assert _clip(long) == long
 
 
 # ---------------------------------------------------------------------------

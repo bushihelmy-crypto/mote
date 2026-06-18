@@ -8,7 +8,6 @@ import pytz
 
 from metagpt.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
 from metagpt.common.prompt.role import (
-    ASK_HUMAN_GUIDANCE_FORMAT,
     SUMMARIZE_PROBLEM_WHEN_DUPLICATE,
 )
 from metagpt.common.schema import Message, UserMessage
@@ -43,6 +42,36 @@ def detach_media(memory: list[Message]) -> list[Message]:
     return memory
 
 
+def _ask_user_question_args(problem: str) -> dict:
+    """Build valid AskUserQuestion args from a free-text guidance problem.
+
+    The duplicate-detection guard asks the human for help by synthesizing a
+    tool call. It must target a tool the Role actually has registered:
+    ``AskUserQuestion`` (the ask_human/Ask tool is not in the default toolset),
+    otherwise the call is filtered out as an unknown command and the loop spins
+    without ever executing or terminating.
+
+    ``problem`` is the LLM's short summary of what it is stuck on. It is the
+    ``question`` itself — do NOT wrap it in a multi-line guidance template, which
+    would bloat the question text and get echoed back verbatim as the result key.
+    The user can pick one of the options OR type their own guidance
+    (AskUserQuestion treats any non-numeric reply as free text), so no extra
+    "type your own" hint is needed here.
+    """
+    return {
+        "questions": [
+            {
+                "question": problem,
+                "header": "Guidance?",
+                "options": [
+                    {"label": "Continue", "description": "Proceed as planned."},
+                    {"label": "Adjust", "description": "Provide different instructions."},
+                ],
+            }
+        ]
+    }
+
+
 async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str], llm, check_window: int = 10) -> str:
     past_rsp = rsp_hist[-check_window:]
     if command_rsp in past_rsp and '"command_name": "end"' not in command_rsp:
@@ -57,13 +86,15 @@ async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str
 
         #  Hard rule to ask human for help
         if past_rsp.count(command_rsp) >= 3:
-            context = llm.format_msg(req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)])
+            context = req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)]
             problem = await llm.aask(context)
-            # Build a fresh command rather than mutating the shared ASK_HUMAN_COMMAND
-            # template in place (that leaked the question across calls and polluted
-            # any consumer of the constant). Mirrors check_duplicate_calls below.
-            question = ASK_HUMAN_GUIDANCE_FORMAT.format(problem=problem).strip()
-            command = [{"command_name": "ask_human", "args": {"question": question}}]
+            # Build a fresh command rather than mutating a shared template in
+            # place (that leaked the question across calls and polluted any
+            # consumer of the constant). Mirrors check_duplicate_calls below.
+            # Pass the bare problem summary as the question — not a multi-line
+            # guidance wrapper, which would be echoed back as a bloated result
+            # key.
+            command = [{"command_name": "AskUserQuestion", "args": _ask_user_question_args(problem)}]
             ask_human_command = "```json\n" + json.dumps(command, indent=4, ensure_ascii=False) + "\n```"
             return ask_human_command
     return command_rsp
@@ -112,10 +143,9 @@ async def check_duplicate_calls(
     signature = call_signature(command_calls)
     past = sig_hist[-check_window:]
     if past.count(signature) >= 3:
-        context = llm.format_msg(req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)])
+        context = req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)]
         problem = await llm.aask(context)
-        question = ASK_HUMAN_GUIDANCE_FORMAT.format(problem=problem).strip()
-        return [{"id": None, "command_name": "ask_human", "args": {"question": question}}]
+        return [{"id": None, "command_name": "AskUserQuestion", "args": _ask_user_question_args(problem)}]
     return None
 
 

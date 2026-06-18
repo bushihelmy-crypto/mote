@@ -6,14 +6,16 @@ is the frontier-scheduler driver coroutine.  See :mod:`engine` for execution.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Optional, Union
+import inspect
+from typing import Any, Awaitable, Callable, Optional, Union
 
+from metagpt.common.utils.docstring import first_line
+from metagpt.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
 from metagpt.executor.tasks.types import BgTaskResult
 from metagpt.executor.tasks.bggraph.types import (
     END,
     START,
     GraphState,
-    BgStatus,
     _ConditionalEdge,
     _Edge,
     _LlmEdge,
@@ -22,8 +24,43 @@ from metagpt.executor.tasks.bggraph.types import (
 )
 
 
-def _docstring_first_line(fn: Callable) -> str:
-    return (fn.__doc__ or "").strip().split("\n")[0]
+# ---------------------------------------------------------------------------
+# Type-compatibility check for compile-time param validation
+# ---------------------------------------------------------------------------
+
+
+def _types_compatible(source_type: type, target_type: type) -> bool:
+    """Check whether *source_type* is assignable to *target_type* (lightweight).
+
+    Handles:
+    - ``Any`` → always compatible
+    - ``Optional[T]`` (Union[T, None]) → unwraps and checks T against target
+    - Concrete types → ``issubclass``
+
+    Does NOT perform full variance analysis or generic parameter checks.
+    """
+    import typing
+
+    origin = getattr(source_type, "__origin__", None)
+
+    # typing.Any is compatible with anything
+    if source_type is typing.Any or target_type is typing.Any:
+        return True
+
+    # Unwrap Optional[T] → check T against target
+    if origin is typing.Union:
+        args = [a for a in typing.get_args(source_type) if a is not type(None)]
+        if not args:
+            return target_type is type(None)
+        # All non-None arms must be compatible
+        return all(_types_compatible(a, target_type) for a in args)
+
+    # Concrete types — issubclass (guard against non-class types)
+    try:
+        return issubclass(source_type, target_type)
+    except TypeError:
+        # source_type isn't a proper class (e.g. a generic alias) — skip
+        return True
 
 
 class BgGraph:
@@ -74,15 +111,39 @@ class BgGraph:
     def add_node(
         self,
         name: str,
-        fn: Callable,
+        fn: Union[Callable, BaseNode, type],
         params: Optional[dict[str, dict]] = None,
     ) -> None:
-        """Imperatively register a node."""
+        """Imperatively register a node.
+
+        Accepts:
+          - A plain async function ``(state) -> Stage``
+          - A ``BaseNode`` subclass (instantiated automatically)
+          - A ``BaseNode`` instance
+
+        If ``params`` is None, auto-extracts from the function's ``Params:``
+        docstring section (same convention as BaseTool's ``Args:`` for schema).
+        """
+        # Resolve BaseNode class → instance → bound method.
+        if isinstance(fn, type) and issubclass(fn, BaseNode):
+            instance = fn()
+            actual_fn = instance.call
+            desc = fn.get_description()
+            auto_params = fn.get_params() if params is None else params
+        elif isinstance(fn, BaseNode):
+            actual_fn = fn.call
+            desc = type(fn).get_description()
+            auto_params = type(fn).get_params() if params is None else params
+        else:
+            actual_fn = fn
+            desc = first_line(fn)
+            auto_params = _parse_params_from_docstring(fn) if params is None else params
+
         self._nodes[name] = _NodeDef(
             name=name,
-            fn=fn,
-            description=_docstring_first_line(fn),
-            params=params or {},
+            fn=actual_fn,
+            description=desc,
+            params=auto_params,
         )
 
     # --- edge registration ---
@@ -131,26 +192,75 @@ class BgGraph:
 
     # --- resume (delegates to engine) ---
 
-    def resume(self, state: GraphState, from_nodes: list[str]) -> BgTaskResult:
+    def resume(
+        self, state: GraphState, from_nodes: list[str], run_state: Any = None
+    ) -> BgTaskResult:
         from metagpt.executor.tasks.bggraph.engine import resume as _resume
 
-        return _resume(self, state, from_nodes)
+        return _resume(self, state, from_nodes, run_state)
 
-    def resume_skip(self, state: GraphState, skip_nodes: list[str]) -> BgTaskResult:
+    def resume_skip(
+        self, state: GraphState, skip_nodes: list[str], run_state: Any = None
+    ) -> BgTaskResult:
         from metagpt.executor.tasks.bggraph.engine import resume_skip as _resume_skip
 
-        return _resume_skip(self, state, skip_nodes)
+        return _resume_skip(self, state, skip_nodes, run_state)
 
     def resume_skip_and_from(
-        self, state: GraphState, skip_nodes: list[str], from_nodes: list[str]
+        self,
+        state: GraphState,
+        skip_nodes: list[str],
+        from_nodes: list[str],
+        run_state: Any = None,
     ) -> BgTaskResult:
         from metagpt.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
 
-        return _rsaf(self, state, skip_nodes, from_nodes)
+        return _rsaf(self, state, skip_nodes, from_nodes, run_state)
 
     @property
     def stage_summary(self) -> str:
         return self._build_stage_summary()
+
+    # --- schema introspection ---
+
+    def get_input_schema(self) -> dict:
+        """JSON Schema for the graph's initial inputs (from ``state_schema``).
+
+        Equivalent to ``state_schema.model_json_schema()`` — a pydantic freebie.
+        """
+        return self.state_schema.model_json_schema()
+
+    def get_node_schemas(self) -> dict[str, dict]:
+        """Per-node JSON Schemas: ``{node_name: schema_dict}``.
+
+        Each schema is derived from the node's declared params (type + description).
+        Nodes without typed params get an empty-properties schema.
+        """
+        from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
+
+        result: dict[str, dict] = {}
+        for name, node_def in self._nodes.items():
+            properties: dict[str, dict] = {}
+            required: list[str] = []
+            for pname, pinfo in node_def.params.items():
+                ptype = pinfo.get("type")
+                if ptype is not None:
+                    prop = annotation_to_json_schema(ptype)
+                else:
+                    prop = {"type": "string"}
+                desc = pinfo.get("desc")
+                if desc:
+                    prop["description"] = desc
+                source = pinfo.get("from")
+                if source:
+                    prop["x-source"] = source
+                properties[pname] = prop
+                required.append(pname)
+            schema: dict = {"type": "object", "properties": properties}
+            if required:
+                schema["required"] = required
+            result[name] = schema
+        return result
 
     # --- validation ---
 
@@ -208,6 +318,18 @@ class BgGraph:
                             f"Node '{name}' param '{param_name}' references "
                             f"unknown input field: {field_name}"
                         )
+                    # Type compatibility check for $input fields
+                    expected_type = param_info.get("type")
+                    if expected_type is not None:
+                        field_info = self.state_schema.model_fields[field_name]
+                        if field_info.annotation is not None:
+                            source_type = field_info.annotation
+                            if not _types_compatible(source_type, expected_type):
+                                raise ValueError(
+                                    f"Node '{name}' param '{param_name}': "
+                                    f"input field '{field_name}' is {source_type}, "
+                                    f"expected {expected_type}"
+                                )
                 else:
                     ref_node = source.split(".")[0]
                     if ref_node not in self._nodes and ref_node != name:

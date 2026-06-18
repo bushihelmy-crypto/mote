@@ -43,6 +43,19 @@ class TestContract:
         assert hint == XML_COMMAND_HINT
         assert "<end></end>" in hint
 
+    def test_lower_renders_ctl_finish_as_end_marker(self):
+        # Under XML, the CTL_FINISH symbol materializes the <end></end> mechanic.
+        from metagpt.common.prompt.refs import CTL_FINISH
+
+        out = XmlCommandChannel().lower(f"Only {CTL_FINISH} when done.")
+        assert "<end></end>" in out
+
+    def test_lower_renders_capability_symbols_as_dotted_names(self):
+        from metagpt.common.prompt.refs import CAP_READ
+
+        out = XmlCommandChannel().lower(f"Use {CAP_READ} first.")
+        assert "Editor.read" in out
+
     def test_tool_specs_is_none(self):
         # Text channel passes no native specs to the LLM.
         assert XmlCommandChannel().tool_specs(object()) is None

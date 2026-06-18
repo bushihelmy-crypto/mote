@@ -11,6 +11,7 @@ from metagpt.common.config.config.exp_pool_config import ExperiencePoolConfig
 from metagpt.common.config.config.langfuse_config import LangfuseConfig
 from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.config.config.mcp_config import MCPConfig
+from metagpt.common.config.config.multimodal_config import MultimodalConfig
 from metagpt.common.config.config.role_zero_config import RoleZeroConfig
 from metagpt.common.config.config.sentry_config import SentryConfig
 from metagpt.common.utils.yaml_model import YamlModel
@@ -62,6 +63,9 @@ class Config(YamlModel):
 
     # Langfuse LLM observability
     langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
+
+    # Multimodal services (image/audio/music/video generation)
+    multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
 
     @model_validator(mode="after")
     def apply_task_llm_defaults(self):

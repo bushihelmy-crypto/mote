@@ -11,7 +11,10 @@ from __future__ import annotations
 from metagpt.executor.tasks.types import (
     BackgroundTaskNotification,
     BgStatus,
+    BgTaskMode,
     BgTaskResult,
+    GraphMeta,
+    PollFactory,
     TaskMeta,
     TaskType,
     is_bg_notification,
@@ -54,6 +57,9 @@ from metagpt.executor.tasks.bggraph import (
 
 __all__ = [
     "BgTaskResult",
+    "BgTaskMode",
+    "GraphMeta",
+    "PollFactory",
     "TaskMeta",
     "TaskType",
     "BackgroundTaskNotification",

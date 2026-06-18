@@ -26,6 +26,7 @@ from metagpt.common.exception.recovery import (
     RecoveryRunner,
     RecoveryStrategy,
 )
+from metagpt.common.exception.report import ErrorReport, render_error_block
 from metagpt.common.exception.config import (
     ConfigError,
     ConfigValidationError,
@@ -43,6 +44,9 @@ from metagpt.common.exception.environment import (
 from metagpt.common.exception.graph import (
     GraphBatchFailureError,
     GraphError,
+    GraphNodeRetryExhaustedError,
+    GraphNodeTimeoutError,
+    GraphParamTypeError,
     GraphRecursionError,
     GraphRouterError,
 )
@@ -89,7 +93,13 @@ from metagpt.common.exception.tool import (
     RetryableToolError,
     ToolError,
     ToolNotFoundError,
+    ToolPermissionDeniedError,
     ToolValidationError,
+)
+from metagpt.common.exception.task import (
+    BackgroundTaskCancelledError,
+    BackgroundTaskError,
+    BackgroundTaskTimeoutError,
 )
 
 # NOTE: ``handlers`` is imported LAST on purpose. It pulls in
@@ -133,6 +143,9 @@ __all__ = [
     "RecoveryRunner",
     "RecoveryStrategy",
     "Call",
+    # error presentation contract
+    "ErrorReport",
+    "render_error_block",
     # llm tier
     "LLMError",
     "LLMConnectionError",
@@ -160,6 +173,7 @@ __all__ = [
     "ToolError",
     "ToolValidationError",
     "ToolNotFoundError",
+    "ToolPermissionDeniedError",
     "NonRetryableToolError",
     "RetryableToolError",
     "ApplyPatchError",
@@ -168,6 +182,13 @@ __all__ = [
     "GraphRouterError",
     "GraphRecursionError",
     "GraphBatchFailureError",
+    "GraphNodeTimeoutError",
+    "GraphNodeRetryExhaustedError",
+    "GraphParamTypeError",
+    # background-task tier
+    "BackgroundTaskError",
+    "BackgroundTaskTimeoutError",
+    "BackgroundTaskCancelledError",
     # oauth / credential tier
     "OAuthError",
     "OAuthConfigError",

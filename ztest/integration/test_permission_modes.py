@@ -45,7 +45,7 @@ async def test_mode_auto_allows_mutating_tool(make_role, tmp_path, mode):
 
     assert os.path.exists(target)
     contents = [m.content for m in role.context_manager.get()]
-    assert not any("PERMISSION DENIED" in c for c in contents)
+    assert not any('code="TOOL_PERMISSION_DENIED"' in c for c in contents)
 
 
 @pytest.mark.parametrize("mode", ["plan", "dontAsk"])
@@ -63,7 +63,7 @@ async def test_mode_blocks_mutating_tool(make_role, tmp_path, mode):
     # plan = read-only preview; dontAsk = fail-closed on the default ask.
     assert not os.path.exists(target)
     contents = [m.content for m in role.context_manager.get()]
-    assert any("PERMISSION DENIED" in c for c in contents)
+    assert any('code="TOOL_PERMISSION_DENIED"' in c for c in contents)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ async def test_deny_rule_is_bypass_immune(make_role, tmp_path):
 
     assert not os.path.exists(target)
     contents = [m.content for m in role.context_manager.get()]
-    assert any("PERMISSION DENIED" in c for c in contents)
+    assert any('code="TOOL_PERMISSION_DENIED"' in c for c in contents)
 
 
 async def test_allow_rule_overrides_dont_ask(make_role, tmp_path):

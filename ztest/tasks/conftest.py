@@ -76,4 +76,9 @@ def msg_buffer() -> MessageQueue:
 
 @pytest.fixture
 def pool(msg_buffer) -> BackgroundTaskPool:
+    """A pool that pushes completion notifications straight into the buffer.
+
+    The pool delivers directly to ``msg_buffer`` (no event-bus round-trip), so
+    completions land in the buffer just as they do in production.
+    """
     return BackgroundTaskPool(msg_buffer)

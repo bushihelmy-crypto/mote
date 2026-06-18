@@ -21,7 +21,16 @@ import uuid
 from typing import Any, Callable, Mapping
 
 from metagpt.common.events import FileMutatedEvent, PostToolUseEvent, PreToolUseEvent
-from metagpt.common.exception import RecoveryAction, RecoveryRunner, RecoveryStrategy, ToolValidationError
+from metagpt.common.exception import (
+    ErrorReport,
+    RecoveryAction,
+    RecoveryRunner,
+    RecoveryStrategy,
+    ToolNotFoundError,
+    ToolPermissionDeniedError,
+    ToolValidationError,
+    render_error_block,
+)
 from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, ToolResultLimitConfig
 from metagpt.executor import tool_result_limit
 from metagpt.executor.base_executor import BaseToolExecutor
@@ -32,7 +41,7 @@ from metagpt.executor.tool_registry import registry as tool_registry
 from metagpt.common.logs import log_class
 from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.executor.mcp.universal import UniversalMCP
-from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
 from metagpt.executor.mcp_adapter import MCPToolAdapter
 from metagpt.executor.tool_spec_adapter import to_native_tool_specs
 
@@ -87,6 +96,21 @@ def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any])
     raise ToolValidationError(f"{tool_name}: {'; '.join(parts)}")
 
 
+def _failed_result(exc: Exception) -> "ToolResult":
+    """Normalize a pre-flight failure into a failed ``ToolResult``.
+
+    The pre-flight gates (unknown tool, hook / permission-engine deny) reject a
+    call *before* it reaches the recovery loop's try/except, so they would
+    otherwise emit ad-hoc ``"Error: …"`` / ``"[PERMISSION DENIED] …"`` strings
+    instead of the uniform ``<error>`` block every post-dispatch failure uses.
+    Routing them through :class:`ErrorReport` here gives every tool failure —
+    pre-flight or in-flight — one shape (rendered block + machine-readable
+    ``error`` report on the result).
+    """
+    report = ErrorReport.from_exception(exc)
+    return ToolResult(output=render_error_block(report), success=False, error=report)
+
+
 # ---------------------------------------------------------------------------
 # ToolExecutor — dispatch engine
 # ---------------------------------------------------------------------------
@@ -123,10 +147,12 @@ class ToolExecutor(BaseToolExecutor):
         permission_config: PermissionConfig | None = None,
         bus=None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
+        get_bg_pool: Callable[[], Any] | None = None,
     ) -> None:
         self._session_id = session_id
         self._mcp: UniversalMCP | None = None
         self._tools: dict[str, Any] = {}  # name -> BaseTool instance (static + dynamic)
+        self._get_bg_pool = get_bg_pool
         # Optional event bus (``common.events.EventBus``). When set, PreToolUse /
         # PostToolUse events are emitted around the tool call; a subscriber (the
         # hook layer) may deny / mutate / inject context via the folded outcome.
@@ -237,7 +263,9 @@ class ToolExecutor(BaseToolExecutor):
         tool = self._get_tool(name)
         if tool is None:
             available = list(self._tools.keys())
-            return ToolResult(output=f"Error: unknown tool '{name}'. Available: {available}", success=False)
+            return _failed_result(
+                ToolNotFoundError(f"unknown tool '{name}'. Available: {available}")
+            )
 
         args = kwargs or {}
 
@@ -255,7 +283,7 @@ class ToolExecutor(BaseToolExecutor):
                     args = outcome.updated_args
                 if outcome.behavior == "deny" or outcome.stop:
                     reason = outcome.system_message or outcome.stop_reason or "blocked by PreToolUse hook"
-                    return ToolResult(output=f"[PERMISSION DENIED] {reason}", success=False)
+                    return _failed_result(ToolPermissionDeniedError(reason))
 
             # Permission gate: when enabled, evaluate the call before executing. A
             # denied call never reaches tool.call(); an approver may also narrow the
@@ -283,7 +311,7 @@ class ToolExecutor(BaseToolExecutor):
                         mutates_fs=mutates_fs,
                     )
                 if decision.behavior == "deny":
-                    return ToolResult(output=f"[PERMISSION DENIED] {decision.message}", success=False)
+                    return _failed_result(ToolPermissionDeniedError(decision.message))
                 if decision.updated_args is not None:
                     args = decision.updated_args
 
@@ -304,14 +332,43 @@ class ToolExecutor(BaseToolExecutor):
             except ToolError as e:
                 # Expected, recoverable failure the tool signalled deliberately.
                 # Not logged as an error: it is normal control flow (bad args,
-                # missing file, etc.), surfaced to the model as a failed tool result.
-                return ToolResult(output=str(e), success=False)
+                # missing file, etc.), surfaced to the model as a failed tool
+                # result. Normalized through the shared error contract so the
+                # model sees a uniform <error> block carrying the code/recovery
+                # hint, and downstream consumers (hooks/telemetry) get structure.
+                report = ErrorReport.from_exception(e)
+                return ToolResult(output=render_error_block(report), success=False, error=report)
             except Exception as e:
-                return ToolResult(output=f"Error executing '{name}': {e}", success=False)
+                # Unexpected failure: normalized the same way (degrades to an
+                # UNKNOWN-code report) so every tool failure has one shape.
+                report = ErrorReport.from_exception(e)
+                return ToolResult(output=render_error_block(report), success=False, error=report)
 
-            # BgTaskResult: pass through for Role to handle
+            # BgTaskResult: dispatch based on explicit mode.
             if isinstance(raw, BgTaskResult):
-                output = str(raw.result) if raw.result else ""
+                # Submit poll to background pool if present
+                task_id = None
+                if raw.poll_factory is not None and self._get_bg_pool is not None:
+                    pool = self._get_bg_pool()
+                    if pool is not None:
+                        task_id = pool.submit(
+                            raw.poll_factory,
+                            command_name=raw.command_name or name,
+                            graph_meta=raw.graph_meta,
+                            progress=True,
+                        )
+
+                if raw.mode == BgTaskMode.FOREGROUND:
+                    output = str(raw.result) if raw.result is not None else ""
+                elif raw.mode == BgTaskMode.BACKGROUND:
+                    task_ref = f" (task_id: {task_id})" if task_id is not None else ""
+                    output = (
+                        f"Background task '{raw.command_name or name}' submitted{task_ref}. "
+                        "Running asynchronously — you will be notified when it completes."
+                    )
+                else:
+                    # HYBRID — immediate result + bg continues
+                    output = str(raw.result)
                 return ToolResult(output=output, success=True, data=raw)
 
             # Normalize the raw return into a ToolResult. A returned ToolResult is

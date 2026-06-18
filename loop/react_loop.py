@@ -89,7 +89,7 @@ class ReActLoop(BaseLoop):
     # Observe — pull from buffer, filter, commit to memory store
     # ------------------------------------------------------------------
 
-    async def _observe(self, max_priority: int = MessagePriority.LATER) -> int:
+    async def _observe(self, max_priority: int = MessagePriority.NEXT) -> int:
         """Pop messages from the buffer, filter, commit to memory.
 
         Returns the count of new messages that passed the filter (the "news").
@@ -244,7 +244,7 @@ class ReActLoop(BaseLoop):
                     while bg_pool.has_pending():
                         await bg_pool.wait_any()
                         break
-                    await self._observe(max_priority=MessagePriority.LATER)
+                    await self._observe(max_priority=MessagePriority.NEXT)
                     self._set_active(True)
                     continue
                 break
@@ -263,13 +263,24 @@ class ReActLoop(BaseLoop):
             self._consecutive += 1
 
             # post-check
-            can_ask = "ask_human" in self._ctx.tools
+            can_ask = "AskUserQuestion" in self._ctx.tools
             if self._ctx.max_react_loop >= 10 and actions_taken >= self._ctx.max_react_loop:
                 if not can_ask:
                     break
                 result = await self._executor.run_command(
-                    "ask_human",
-                    {"question": "I have reached my max action rounds, do you want me to continue? Yes or no"},
+                    "AskUserQuestion",
+                    {
+                        "questions": [
+                            {
+                                "question": "I have reached my max action rounds, do you want me to continue?",
+                                "header": "Continue?",
+                                "options": [
+                                    {"label": "Yes", "description": "Continue working on the task."},
+                                    {"label": "No", "description": "Stop here."},
+                                ],
+                            }
+                        ]
+                    },
                 )
                 if "yes" in result.output.lower():
                     actions_taken = 0
@@ -280,7 +291,21 @@ class ReActLoop(BaseLoop):
                 context = memory + [UserMessage(content=SUMMARIZE_STATUS_WHEN_CONSECUTIVE)]
                 llm = await self._context_provider.resolve_llm(context)
                 question = await llm.aask(context)
-                result = await self._executor.run_command("ask_human", {"question": question})
+                result = await self._executor.run_command(
+                    "AskUserQuestion",
+                    {
+                        "questions": [
+                            {
+                                "question": question,
+                                "header": "Guidance?",
+                                "options": [
+                                    {"label": "Continue", "description": "Proceed as planned."},
+                                    {"label": "Adjust", "description": "Provide different instructions."},
+                                ],
+                            }
+                        ]
+                    },
+                )
                 await self._memory.add(
                     UserMessage(content="User's extra instruction: " + result.output, cause_by=CauseBy.RUN_COMMAND)
                 )

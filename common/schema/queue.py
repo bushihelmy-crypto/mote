@@ -40,7 +40,7 @@ class MessageQueue(BaseModel):
     _items: list[QueuedMessage] = PrivateAttr(default_factory=list)
     _new_msg_event: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
 
-    def pop(self, max_priority: int = MessagePriority.LATER) -> Message | None:
+    def pop(self, max_priority: int = MessagePriority.NEXT) -> Message | None:
         """Pop the highest-priority message whose priority <= *max_priority*."""
         if not self._items:
             return None
@@ -55,7 +55,7 @@ class MessageQueue(BaseModel):
             return None
         return self._items.pop(best_idx).message
 
-    def pop_all(self, max_priority: int = MessagePriority.LATER) -> List[Message]:
+    def pop_all(self, max_priority: int = MessagePriority.NEXT) -> List[Message]:
         """Pop messages with ``priority <= max_priority``, ordered by
         priority then insertion order."""
         keep, drain = [], []

@@ -208,6 +208,10 @@ class Role(BaseRole):
         """Return the background pool only if a tool already created it (no build)."""
         return self._components.peek_bg_pool()
 
+    def set_task_completion_wake(self, wake) -> None:
+        """Wire a wake callback so bg-task completions trigger a new turn."""
+        self._components.set_task_completion_wake(wake)
+
     @property
     def executor(self) -> ToolExecutor:
         return self._components.executor
@@ -385,6 +389,7 @@ class Role(BaseRole):
             "set_cwd": self.set_cwd,
             "deactivate": self.deactivate,
             "ask_human": self.ask_human,
+            "get_bg_pool": lambda: self.bg_pool,
             "request_approval": self.request_approval,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,

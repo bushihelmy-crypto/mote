@@ -1,16 +1,17 @@
 """Centralized Langfuse integration — code-noninvasive, default-off.
 
 All langfuse imports are lazy (inside functions) so the framework runs without
-langfuse installed when tracing is disabled. The public surface is three thin
-helpers used at the integration points:
+langfuse installed when tracing is disabled. The public surface is thin helpers
+used at the integration points:
 
-- ``make_async_openai(**kwargs)``: drop-in client factory. Enabled -> the
-  langfuse-instrumented ``langfuse.openai.AsyncOpenAI``; otherwise the native
-  ``openai.AsyncOpenAI``.
 - ``maybe_trace(session_id, name, **attrs)``: contextmanager creating a root
   span for one role run with session propagation; ``nullcontext`` when disabled.
 - ``maybe_span(name, **attrs)``: contextmanager for a child span (think/act/
   tool); ``nullcontext`` when disabled or ``trace_steps`` is off.
+- ``maybe_generation(model, messages, **attrs)``: contextmanager for a single
+  LLM generation (the proper Langfuse observation type for model calls).
+  Records model, input messages, and — on exit — output and usage. Used by
+  ``BaseLLM`` as a unified instrumentation hook for all providers.
 
 Activation is idempotent via ``init_langfuse``, called once from Config's
 model_validator so env/client are ready before any LLM client is built.
@@ -77,21 +78,6 @@ def steps_enabled() -> bool:
     return _ENABLED and _STEPS_ENABLED
 
 
-def make_async_openai(**kwargs):
-    """Return an AsyncOpenAI client; instrumented when Langfuse is enabled."""
-    if _ENABLED:
-        try:
-            from langfuse.openai import AsyncOpenAI
-
-            return AsyncOpenAI(**kwargs)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Langfuse openai drop-in unavailable ({e!r}); using native AsyncOpenAI.")
-
-    from openai import AsyncOpenAI
-
-    return AsyncOpenAI(**kwargs)
-
-
 @contextmanager
 def maybe_trace(session_id: str, name: str, **attrs):
     """Root span for a single role run, with session propagation.
@@ -140,3 +126,41 @@ def maybe_span(name: str, **attrs):
             except Exception:  # noqa: BLE001
                 pass
         yield
+
+
+@contextmanager
+def maybe_generation(model: str, input_messages: list | None = None, **attrs):
+    """LLM generation observation — the unified instrumentation hook for BaseLLM.
+
+    Creates a Langfuse ``generation`` observation (the correct type for model
+    calls, recording model name, input, output, and usage). The yielded object
+    exposes a ``.update()`` method that the caller uses to report output and
+    usage after the completion returns. When tracing is disabled the yielded
+    object is a no-op stub.
+
+    Usage in BaseLLM::
+
+        with maybe_generation(self.model, messages) as gen:
+            rsp = await self._achat_completion(messages, ...)
+            gen.update(output=..., usage=...)
+    """
+
+    class _NoOp:
+        """Stub yielded when tracing is disabled — all methods are silent no-ops."""
+
+        def update(self, **_kwargs):
+            pass
+
+    if not _ENABLED:
+        yield _NoOp()
+        return
+
+    from langfuse import get_client
+
+    client = get_client()
+    with client.start_as_current_observation(as_type="generation", name=f"llm:{model}") as gen:
+        try:
+            gen.update(model=model, input=input_messages, metadata=attrs or None)
+        except Exception:  # noqa: BLE001
+            pass
+        yield gen

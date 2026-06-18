@@ -22,12 +22,30 @@ class TaskType(str, Enum):
 
 
 class BackgroundTaskNotification(UserMessage):
-    """Structured notification for background task completion."""
+    """Structured notification for background task completion.
+
+    ``error`` carries the JSON-native :meth:`ErrorReport.as_dict` form on a
+    failed task (``None`` otherwise), completing the structured-field set
+    (``task_id`` / ``status`` / ``result`` / ``error``). It is stored as a plain
+    dict (not the ``ErrorReport`` dataclass) so the notification serializes
+    cleanly into the session rollout JSONL; the rendered ``<error>`` block also
+    appears inside ``content`` for the model.
+
+    ``task_terminal`` marks the *one* whole-task outcome (success / failed /
+    timeout / cancelled / waiting-for-route) as opposed to a mid-flight node
+    event. The pool's ``deliver`` choke point uses it to guarantee exactly one
+    terminal reaches the agent per task: whichever producer (the in-graph
+    progress writer or the out-of-band ``_on_done`` callback) delivers first
+    wins, and the other's duplicate is dropped. This lets both producers call
+    ``deliver`` freely without coordinating through a shared flag.
+    """
 
     task_id: str = ""
     command_name: str = ""
     status: str = ""
     result: Optional[str] = None
+    error: Optional[dict] = None
+    task_terminal: bool = False
 
 
 def is_bg_notification(msg) -> bool:
@@ -36,7 +54,45 @@ def is_bg_notification(msg) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# BgTaskResult / TaskMeta (from tasks/result.py)
+# BgTaskMode / GraphMeta / PollFactory
+# ---------------------------------------------------------------------------
+
+
+class BgTaskMode(str, Enum):
+    """Explicit mode declaration for BgTaskResult."""
+
+    FOREGROUND = "foreground"  # result only, no bg work
+    BACKGROUND = "background"  # poll only, no immediate result
+    HYBRID = "hybrid"  # result + background poll
+
+
+#: A callable that returns a coroutine — instantiation is deferred to the
+#: pool's ``submit()`` call site so there's no dangling coroutine to GC-warn.
+PollFactory = Callable[[], Coroutine]
+
+
+@dataclass
+class GraphMeta:
+    """Graph restart/resume metadata — only populated by BgGraph pipelines.
+
+    Tool authors never touch this; only the BgGraph engine sets it.
+    """
+
+    graph_ref: Any = None
+    initial_params: Optional[dict] = None
+    factory: Optional[Callable[..., Awaitable["BgTaskResult"]]] = None
+    # Authoritative per-node execution records (GraphRunState). The driver
+    # mutates this same object as it runs; the pool snapshots it onto TaskMeta
+    # so resume reads true node status instead of inferring it from state values.
+    run_state: Any = None
+    # Live graph state the driver mutates in place. Carried here (like run_state)
+    # so the pool can snapshot it onto TaskMeta even on a timeout — where the
+    # bare asyncio.TimeoutError, raised outside the driver, carries no state.
+    state: Any = None
+
+
+# ---------------------------------------------------------------------------
+# BgTaskResult
 # ---------------------------------------------------------------------------
 
 
@@ -44,26 +100,56 @@ def is_bg_notification(msg) -> bool:
 class BgTaskResult:
     """Return type for background-capable tool functions.
 
-    Attributes:
-        result: Immediate value returned to the LLM (e.g. initial status).
-        poll: If not *None*, a coroutine that will be submitted to
-            ``BackgroundTaskPool`` for background polling.
-        command_name: Human-readable label used in the completion notification.
-        initial_params: Original kwargs the task was created with (restart support).
-        factory: Rebuild factory — a ``BgGraph`` compiled executor, or the
-            original tool function, used by ``resume_tasks`` to restart from scratch.
-        graph_ref: ``BgGraph`` reference; only set for pipeline tasks, used for
-            per-node resume / skip.
+    Use the named constructors (:meth:`foreground`, :meth:`background`,
+    :meth:`hybrid`) — they make the mode explicit and type-safe.
     """
 
+    mode: BgTaskMode = BgTaskMode.FOREGROUND
     result: Any = None
-    poll: Optional[Coroutine] = field(default=None, repr=False)
+    poll_factory: Optional[PollFactory] = field(default=None, repr=False)
     command_name: str = ""
+    graph_meta: Optional[GraphMeta] = field(default=None, repr=False)
 
-    # --- restart / resume support (only populated by BgGraph pipelines) ---
-    initial_params: Optional[dict] = field(default=None, repr=False)
-    factory: Optional[Callable[..., Awaitable["BgTaskResult"]]] = field(default=None, repr=False)
-    graph_ref: Optional[Any] = field(default=None, repr=False)
+    # --- Named constructors ---------------------------------------------------
+
+    @classmethod
+    def foreground(cls, result: Any, *, command_name: str = "") -> "BgTaskResult":
+        """Create a foreground-only result (no background work)."""
+        return cls(mode=BgTaskMode.FOREGROUND, result=result, command_name=command_name)
+
+    @classmethod
+    def background(
+        cls,
+        poll_factory: PollFactory,
+        *,
+        command_name: str,
+        graph_meta: Optional[GraphMeta] = None,
+    ) -> "BgTaskResult":
+        """Create a background-only result (poll submitted, no immediate value)."""
+        return cls(
+            mode=BgTaskMode.BACKGROUND,
+            poll_factory=poll_factory,
+            command_name=command_name,
+            graph_meta=graph_meta,
+        )
+
+    @classmethod
+    def hybrid(
+        cls,
+        result: Any,
+        poll_factory: PollFactory,
+        *,
+        command_name: str,
+        graph_meta: Optional[GraphMeta] = None,
+    ) -> "BgTaskResult":
+        """Create a hybrid result (immediate value AND background poll)."""
+        return cls(
+            mode=BgTaskMode.HYBRID,
+            result=result,
+            poll_factory=poll_factory,
+            command_name=command_name,
+            graph_meta=graph_meta,
+        )
 
 
 @dataclass
@@ -81,6 +167,7 @@ class TaskMeta:
     start_time: float = field(default_factory=time.time)  # updated when semaphore acquired
     end_time: Optional[float] = None
     result: Optional[str] = None
+    error: Optional[dict] = None  # ErrorReport.as_dict form on a FAILED task
     notified: bool = False  # True after _on_done pushes BackgroundTaskNotification
     output_path: Optional[str] = None  # disk path for task output (set by TaskOutputStore)
     task_type: str = TaskType.COROUTINE  # default coroutine, backward compatible
@@ -89,10 +176,11 @@ class TaskMeta:
     _output_capped: bool = False  # True when killed by disk output cap
 
     # --- graph resume support ---
-    graph_ref: Optional[Any] = field(default=None, repr=False)
-    initial_params: Optional[dict] = field(default=None, repr=False)
-    factory: Optional[Callable] = field(default=None, repr=False)
+    graph_meta: Optional[GraphMeta] = field(default=None, repr=False)
     state_snapshot: Optional[Any] = field(default=None, repr=False)
     completed_nodes: set = field(default_factory=set)
+    # Authoritative per-node execution records (GraphRunState), captured on pause
+    # AND on failure. The truth source for resume; queried by GetNodeState.
+    run_state: Optional[Any] = field(default=None, repr=False)
     retry_count: int = 0
     max_restarts: int = 3

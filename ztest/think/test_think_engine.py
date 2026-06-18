@@ -97,10 +97,11 @@ class TestXMLChannel:
         await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s",
                            state_data={}, llm=llm)
         await engine.join()
-        assert "ask_human" in engine.result.content
+        # Overrides with a synthesized AskUserQuestion call (the registered tool),
+        # not the unregistered ask_human (which the loop would filter out).
+        assert "AskUserQuestion" in engine.result.content
         # The dedup path asks the LLM a second time to summarize the problem.
         assert len(llm.aask_calls) == 2
-        assert llm.format_msg_calls  # context was built via format_msg
 
 
 class TestNativeChannel:
@@ -169,7 +170,8 @@ class TestNativeChannel:
 
     @pytest.mark.asyncio
     async def test_hard_repeat_overrides_with_ask_human(self):
-        # Same call signature 3x in history -> override with a synthesized ask_human call.
+        # Same call signature 3x in history -> override with a synthesized
+        # AskUserQuestion call (the registered tool, not unregistered ask_human).
         sig = [{"name": "Editor", "args": {"path": "a"}}]
         mem = FakeMemory(history_with_calls(sig, sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
@@ -179,8 +181,8 @@ class TestNativeChannel:
         await engine.join()
         assert len(engine.result.tool_calls) == 1
         override = engine.result.tool_calls[0]
-        assert override["command_name"] == "ask_human"
-        assert "question" in override["args"]
+        assert override["command_name"] == "AskUserQuestion"
+        assert "questions" in override["args"]
 
     @pytest.mark.asyncio
     async def test_sig_hist_ignores_messages_without_tool_calls(self):

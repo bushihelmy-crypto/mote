@@ -16,15 +16,22 @@ from __future__ import annotations
 
 import asyncio
 import time
-import traceback
-from typing import TYPE_CHECKING, Coroutine, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional
 from xml.sax.saxutils import escape as _escape_xml
 
 from metagpt.common.logs import log_class
-from metagpt.common.schema import CauseBy, MessagePriority, MessageQueue
-from metagpt.executor.tasks.types import BackgroundTaskNotification, BgStatus, TaskMeta, TaskType
+from metagpt.common.schema import CauseBy, MessagePriority
+from metagpt.executor.tasks.types import (
+    BackgroundTaskNotification,
+    BgStatus,
+    GraphMeta,
+    PollFactory,
+    TaskMeta,
+    TaskType,
+)
 
 if TYPE_CHECKING:
+    from metagpt.common.interface import MessageSink
     from metagpt.executor.tasks.disk_output import TaskOutputStore
 from metagpt.common.const.tasks import (
     MAX_RESULT_LEN as _MAX_RESULT_LEN,
@@ -45,11 +52,20 @@ class BackgroundTaskPool:
 
     def __init__(
         self,
-        msg_buffer: MessageQueue,
+        msg_buffer: "MessageSink",
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
         output_store: "Optional[TaskOutputStore]" = None,
+        wake: Optional[Callable[[], None]] = None,
     ) -> None:
         self._msg_buffer = msg_buffer
+        # Runtime wake callback. ``msg_buffer.push`` wakes mid-turn waiters
+        # (its built-in new-message signal), but the scheduler driver parks
+        # *between* turns on a separate ``wake_event``; pushing alone won't
+        # restart it. So a completion both pushes the notification (delivery)
+        # and calls ``wake`` (restart a parked driver). Optional / late-bound
+        # via :meth:`set_wake` because the runtime wiring may arrive after the
+        # pool is constructed.
+        self._wake = wake
         # Optional disk-output store. When present, graph tasks submitted with
         # ``progress=True`` get a per-task output sink so node-level
         # ``report_progress`` events land on disk and surface as
@@ -72,22 +88,22 @@ class BackgroundTaskPool:
 
     def submit(
         self,
-        coro: Coroutine,
+        poll_factory: "PollFactory",
         command_name: str,
         timeout: Optional[float] = _DEFAULT_TASK_TIMEOUT,
         task_type: str = TaskType.COROUTINE,
         task_kind: Optional[str] = None,
         agent_id: Optional[str] = None,
         progress: bool = False,
-        graph_ref=None,
-        initial_params: Optional[dict] = None,
-        factory=None,
+        graph_meta: "Optional[GraphMeta]" = None,
         max_restarts: int = 3,
     ) -> str:
-        """Submit a coroutine for background execution.
+        """Submit a poll factory for background execution.
 
         Args:
-            coro: The coroutine to run.
+            poll_factory: A :data:`PollFactory` callable that returns a
+                coroutine. The factory is invoked immediately to produce the
+                coroutine that will be scheduled as an asyncio.Task.
             command_name: Human-readable name for logging/notifications.
             timeout: Per-task timeout in seconds. ``None`` disables the
                 timeout. Defaults to 600s (10 min).
@@ -97,13 +113,12 @@ class BackgroundTaskPool:
             progress: When *True* and an ``output_store`` is configured, install
                 a per-task progress sink so ``bggraph`` node events
                 (``report_progress``) are appended to the task's disk output.
-            graph_ref: Optional BgGraph reference for per-node resume/skip.
-            initial_params: Original kwargs the task was created with (restart).
-            factory: Rebuild factory for restarting from scratch.
+            graph_meta: Optional :class:`GraphMeta` bundle for graph resume.
             max_restarts: Maximum number of allowed restarts for this task.
 
         Returns a task_id like ``bg_1``, ``bg_2``, etc.
         """
+        coro = poll_factory()
         self._counter += 1
         task_id = f"bg_{self._counter}"
 
@@ -115,9 +130,11 @@ class BackgroundTaskPool:
             task_kind=task_kind,
             agent_id=agent_id,
         )
-        meta.graph_ref = graph_ref
-        meta.initial_params = initial_params
-        meta.factory = factory
+        meta.graph_meta = graph_meta
+        if graph_meta is not None and graph_meta.run_state is not None:
+            # Snapshot the authoritative run_state the driver mutates, so resume
+            # and GetNodeState read true node status (not value-inference).
+            meta.run_state = graph_meta.run_state
         meta.max_restarts = max_restarts
         self._meta[task_id] = meta
 
@@ -138,6 +155,14 @@ class BackgroundTaskPool:
         self._tasks[task_id] = task
         task.add_done_callback(lambda t: self._on_done(task_id, command_name, t))
         return task_id
+
+    def set_wake(self, wake: Optional[Callable[[], None]]) -> None:
+        """Bind (or rebind) the runtime wake callback.
+
+        Late-bindable because the runtime/scheduler wiring may be installed
+        after this pool is constructed.
+        """
+        self._wake = wake
 
     def has_pending(self) -> bool:
         """Return *True* if there are still running tasks."""
@@ -222,6 +247,16 @@ class BackgroundTaskPool:
         """
         return self._meta.get(task_id)
 
+    def get_run_state(self, task_id: str) -> Optional[Any]:
+        """Return the authoritative :class:`GraphRunState` for a graph task.
+
+        The truth source for per-node status / attempts / failure reason, read by
+        :class:`GetNodeState` and resume. ``None`` if the task is unknown or is
+        not a graph task (no run_state recorded).
+        """
+        meta = self._meta.get(task_id)
+        return meta.run_state if meta is not None else None
+
     def list_tasks(self) -> list[TaskMeta]:
         """Return metadata for all tracked tasks (running + recently completed)."""
         return list(self._meta.values())
@@ -271,22 +306,26 @@ class BackgroundTaskPool:
     def resubmit(
         self,
         task_id: str,
-        coro: Coroutine,
+        poll_factory: "PollFactory",
         *,
         timeout: Optional[float] = None,
         progress: bool = True,
+        graph_meta: "Optional[GraphMeta]" = None,
     ) -> str:
-        """Re-submit a coroutine under an existing task_id (for resume/retry).
+        """Re-submit a poll factory under an existing task_id (for resume/retry).
 
         Resets the task's status to RUNNING and attaches a fresh asyncio.Task.
-        The existing ``TaskMeta`` (graph_ref, initial_params, etc.) is preserved.
+        The existing ``TaskMeta`` (graph_meta, etc.) is preserved.
 
         Args:
             task_id: An existing task_id previously returned by :meth:`submit`.
-            coro: The new coroutine to run (e.g. a resumed graph driver).
+            poll_factory: A :data:`PollFactory` callable that returns a coroutine.
             timeout: Optional per-task timeout in seconds.
             progress: When *True* and an output_store is configured, wrap the
                 coro with a progress sink (appends to the existing output file).
+            graph_meta: Optional fresh :class:`GraphMeta` from a resume builder.
+                When provided it replaces the stored one and re-snapshots its
+                ``run_state`` so the new driver mutates the meta's tracked object.
 
         Returns:
             The same *task_id* for convenience.
@@ -298,12 +337,24 @@ class BackgroundTaskPool:
         if meta is None:
             raise ValueError(f"Unknown task_id: {task_id}")
 
+        if meta.retry_count >= meta.max_restarts:
+            raise ValueError(
+                f"Task {task_id} reached restart limit ({meta.retry_count}/{meta.max_restarts})"
+            )
+
+        if graph_meta is not None:
+            meta.graph_meta = graph_meta
+            if graph_meta.run_state is not None:
+                meta.run_state = graph_meta.run_state
+
         meta.status = BgStatus.RUNNING
         meta.start_time = time.time()
         meta.end_time = None
         meta.result = None
         meta.notified = False
         meta.retry_count += 1
+
+        coro = poll_factory()
 
         if progress and self._output_store is not None:
             # Output already initialized from original submit; just wrap progress.
@@ -416,7 +467,14 @@ class BackgroundTaskPool:
         )
 
         store = self._output_store
-        writer = make_progress_writer(lambda line: store.append(task_id, line), task_id=task_id)
+        meta = self._meta.get(task_id)
+        command_name = meta.command_name if meta is not None else ""
+        writer = make_progress_writer(
+            lambda line: store.append(task_id, line),
+            task_id=task_id,
+            command_name=command_name,
+            deliver=self.deliver,
+        )
         token = set_progress_writer(writer)
         try:
             return await coro
@@ -438,33 +496,133 @@ class BackgroundTaskPool:
         lines.append("</task-notification>")
         return "\n".join(lines)
 
+    def _wake_runtime(self) -> None:
+        """Restart a scheduler driver parked between turns (best-effort).
+
+        ``msg_buffer.push`` already wakes any *mid-turn* waiter via its
+        new-message signal; this additionally restarts a driver parked on the
+        runtime's separate ``wake_event``. A wake failure must never break the
+        completion path.
+        """
+        if self._wake is None:
+            return
+        try:
+            self._wake()
+        except Exception:  # noqa: BLE001 — best-effort wake
+            pass
+
+    def deliver(self, notification: BackgroundTaskNotification) -> None:
+        """Single delivery choke point for a background-task notification.
+
+        Pushes *notification* into the agent's inbox at ``NEXT`` priority (so
+        the react loop observes it next turn) and wakes a parked scheduler
+        driver. Owned by the pool because it holds both the ``msg_buffer``
+        reference and the ``wake`` callback — the producers that emit
+        notifications (``_on_done`` for the one whole-task terminal, the bggraph
+        progress writer for node-level / START events, and the stall detector)
+        all route through here, so push+wake lives in exactly one place.
+
+        Stateless: there is no longer a one-terminal-per-task guard because there
+        is exactly one terminal producer. ``_on_done`` fires once per task and is
+        the *sole* emitter of a ``task_terminal`` notification (the in-graph
+        writer no longer delivers terminals — it only records the rich DAG
+        snapshot to disk and pushes non-terminal node/START events). So no two
+        producers can race the same task's terminal. Best-effort: a delivery or
+        wake failure must never break the pipeline.
+        """
+        try:
+            self._msg_buffer.push(notification, priority=MessagePriority.NEXT)
+        except Exception:  # noqa: BLE001 — delivery must never break the pipeline
+            return
+        self._wake_runtime()
+
     def _on_done(self, task_id: str, command_name: str, task: asyncio.Task) -> None:
-        """Synchronous callback invoked by the event loop when a task finishes."""
+        """Synchronous callback invoked by the event loop when a task finishes.
+
+        Pushes the structured completion notification directly into the
+        agent's msg_buffer (NEXT priority) and wakes the runtime so a parked
+        scheduler driver starts a new react turn. No event-bus round-trip:
+        completion is a pure observation with a single consumer, so it goes
+        straight to the queue the react loop observes.
+        """
+        from metagpt.common.exception import (
+            BackgroundTaskCancelledError,
+            BackgroundTaskTimeoutError,
+            ErrorReport,
+            render_error_block,
+        )
         from metagpt.executor.tasks.bggraph.types import LlmPauseResult
 
         status: str
         result: Optional[str] = None
         summary: str
+        error_dict: Optional[dict] = None
 
         if task.cancelled():
             status = BgStatus.CANCELLED
             meta = self._meta.get(task_id)
             if meta is not None and meta._output_capped:
-                result = f"Background command killed: output exceeded {_OUTPUT_CAP_DISPLAY} disk cap."
                 summary = f"{command_name} was killed because its output exceeded the disk size limit."
+                cancel_msg = (
+                    f"Background command killed: output exceeded {_OUTPUT_CAP_DISPLAY} disk cap."
+                )
             else:
                 summary = f"{command_name} was cancelled."
+                cancel_msg = summary
+            # Synthesize a typed error so a cancellation surfaces the same
+            # structured <error> block as every other terminal outcome.
+            report = ErrorReport.from_exception(BackgroundTaskCancelledError(cancel_msg))
+            error_dict = report.as_dict()
+            result = render_error_block(report)[:_MAX_RESULT_LEN]
         else:
             exc = task.exception()
             if exc is not None:
                 if isinstance(exc, asyncio.TimeoutError):
                     status = BgStatus.TIMEOUT
                     summary = f"{command_name} timed out after exceeding the time limit."
+                    # Route timeout through the shared contract too (it was a
+                    # bypass before — error_dict stayed None), so the model gets
+                    # the uniform block + machine-readable report.
+                    report = ErrorReport.from_exception(BackgroundTaskTimeoutError(summary))
+                    error_dict = report.as_dict()
+                    result = render_error_block(report)[:_MAX_RESULT_LEN]
+                    # Snapshot graph state on timeout so the task can be resumed
+                    # from where it stalled. Unlike a driver-raised failure, the
+                    # bare asyncio.TimeoutError is raised by wait_for *outside*
+                    # the driver and carries no state — so read the live objects
+                    # the driver mutates off graph_meta (run_state is already
+                    # tracked from submit; state_snapshot is the missing piece
+                    # that otherwise forces resume into a full restart).
+                    meta = self._meta.get(task_id)
+                    if meta is not None and meta.graph_meta is not None:
+                        gm = meta.graph_meta
+                        if gm.run_state is not None:
+                            meta.run_state = gm.run_state
+                            meta.completed_nodes = gm.run_state.completed_names()
+                        if gm.state is not None:
+                            meta.state_snapshot = gm.state
                 else:
                     status = BgStatus.FAILED
-                    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-                    result = tb[:_MAX_RESULT_LEN]
+                    # Normalize through the shared error contract instead of
+                    # dumping a raw traceback: the model gets a uniform <error>
+                    # block (code/recovery/structured detail), and the machine-
+                    # readable report rides along on the notification's `error`.
+                    report = ErrorReport.from_exception(exc)
+                    error_dict = report.as_dict()
+                    result = render_error_block(report)[:_MAX_RESULT_LEN]
                     summary = f"{command_name} failed."
+                    # Snapshot state on failure (not only on LLM pause) so the
+                    # graph can be resumed from where it broke. The driver
+                    # attaches these to the exception before raising.
+                    meta = self._meta.get(task_id)
+                    if meta is not None:
+                        run_state = getattr(exc, "run_state", None)
+                        if run_state is not None:
+                            meta.run_state = run_state
+                            meta.completed_nodes = run_state.completed_names()
+                        graph_state = getattr(exc, "graph_state", None)
+                        if graph_state is not None:
+                            meta.state_snapshot = graph_state
             else:
                 raw = task.result()
                 if isinstance(raw, LlmPauseResult):
@@ -475,6 +633,8 @@ class BackgroundTaskPool:
                     if meta is not None:
                         meta.state_snapshot = raw.state
                         meta.completed_nodes = raw.completed
+                        if raw.run_state is not None:
+                            meta.run_state = raw.run_state
                 else:
                     status = BgStatus.SUCCESS
                     result_str = str(raw) if raw is not None else "(no output)"
@@ -489,11 +649,13 @@ class BackgroundTaskPool:
             meta.status = status
             meta.end_time = time.time()
             meta.result = result
+            meta.error = error_dict
             meta.notified = True
 
         body = self._build_xml(task_id, command_name, status, summary, result=result)
 
-        # Push structured notification into the agent's message buffer.
+        # Build the structured notification. This is always a whole-task
+        # terminal (``_on_done`` fires exactly once, when the task ends).
         notification = BackgroundTaskNotification(
             content=body,
             cause_by=CauseBy.RUN_COMMAND,
@@ -501,8 +663,17 @@ class BackgroundTaskPool:
             command_name=command_name,
             status=status,
             result=result,
+            error=error_dict,
+            task_terminal=True,
         )
-        self._msg_buffer.push(notification, priority=MessagePriority.NEXT)
+
+        # Deliver via the single choke point. ``_on_done`` is the sole producer
+        # of a task's whole-task terminal (the in-graph writer only records the
+        # rich DAG snapshot to disk and pushes non-terminal node/START events),
+        # so this terminal always gets through — including the interruption case
+        # (timeout / external cancel) where the coroutine never reached its own
+        # terminal code. The agent sees exactly one terminal, no dedup needed.
+        self.deliver(notification)
 
         # Resolve every registered one-shot completion future (fan-out
         # broadcast). Iterate a snapshot so a re-entrant completion is safe;

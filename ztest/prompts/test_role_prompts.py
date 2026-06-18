@@ -111,9 +111,6 @@ class TestMiscConstants:
     def test_recommend_prompt_mentions_tag(self):
         assert "<recommendations>" in R.SUMMARY_WITH_RECOMMEND_PROMPT
 
-    def test_ask_human_command_shape(self):
-        assert R.ASK_HUMAN_COMMAND == [{"command_name": "ask_human", "args": {"question": ""}}]
-
     def test_summarize_duplicate_has_language_field(self):
         out = R.SUMMARIZE_PROBLEM_WHEN_DUPLICATE.format(language="Chinese")
         assert "Chinese" in out
@@ -121,9 +118,6 @@ class TestMiscConstants:
     def test_json_repair_prompt_fields(self):
         out = R.JSON_REPAIR_PROMPT.format(json_data="{}", json_decode_error="boom")
         assert "boom" in out
-
-    def test_end_command_contains_end_tag(self):
-        assert "<end></end>" in R.END_COMMAND
 
     def test_cmd_prompt_has_current_state(self):
         assert "${current_state}" in R.CMD_PROMPT

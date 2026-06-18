@@ -9,9 +9,9 @@ the model-routing :class:`~metagpt.common.exception.router.RouterError`.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from metagpt.common.exception.base import MetaGPTError, NonRetryableError
+from metagpt.common.exception.base import MetaGPTError, NonRetryableError, RetryableError
 from metagpt.common.exception.codes import ErrorCode
 
 
@@ -40,3 +40,64 @@ class GraphBatchFailureError(GraphError):
         self.failures = failures
         names = ", ".join(n for n, _ in failures)
         super().__init__(f"Nodes failed: {names}")
+
+    def detail(self) -> dict[str, Any]:
+        """Expose each failed node as a nested :class:`ErrorReport` dict.
+
+        Per-node failures are normalized through the same contract, so the
+        renderer surfaces every node's code + message uniformly (not just the
+        joined names in the top-level message).
+        """
+        from metagpt.common.exception.report import ErrorReport
+
+        return {
+            "failures": [
+                {"node": node, **ErrorReport.from_exception(exc).as_dict()}
+                for node, exc in self.failures
+            ]
+        }
+
+
+class GraphNodeTimeoutError(GraphError, RetryableError):
+    """Node-level HTTP/network timeout — framework auto-retries, opaque to LLM/user."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.GRAPH_NODE_TIMEOUT
+
+
+class GraphNodeRetryExhaustedError(GraphError, NonRetryableError):
+    """Node retry budget exhausted — all auto-retries failed."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.GRAPH_NODE_RETRY_EXHAUSTED
+
+    def __init__(self, node_name: str, attempts: int, cause: BaseException):
+        self.node_name = node_name
+        self.attempts = attempts
+        super().__init__(
+            f"Node '{node_name}' failed after {attempts} attempts: {cause}",
+            cause=cause,
+        )
+
+    def detail(self) -> dict[str, Any]:
+        return {"node": self.node_name, "attempts": self.attempts}
+
+
+class GraphParamTypeError(GraphError, NonRetryableError):
+    """Node param type mismatch — wiring error, not transient."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.GRAPH_PARAM_TYPE_ERROR
+
+    def __init__(self, node: str, param: str, expected: type, got: type, **kw):
+        msg = f"Node '{node}' param '{param}': expected {expected.__name__}, got {got.__name__}"
+        super().__init__(msg, **kw)
+        self.node = node
+        self.param = param
+        self.expected = expected
+        self.got = got
+
+    def detail(self) -> dict[str, Any]:
+        return {
+            "node": self.node,
+            "param": self.param,
+            "expected": self.expected.__name__,
+            "got": self.got.__name__,
+        }

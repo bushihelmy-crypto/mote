@@ -14,7 +14,7 @@ import asyncio
 import re
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.schema import CauseBy, MessagePriority
+from metagpt.common.schema import CauseBy
 from metagpt.common.scheduling import PeriodicLoop
 from metagpt.executor.tasks.types import BackgroundTaskNotification, BgStatus
 from metagpt.common.const.tasks import (
@@ -24,7 +24,6 @@ from metagpt.common.const.tasks import (
 )
 
 if TYPE_CHECKING:
-    from metagpt.common.schema import MessageQueue
     from metagpt.executor.tasks.pool import BackgroundTaskPool
     from metagpt.executor.tasks.disk_output import TaskOutputStore
 
@@ -61,26 +60,28 @@ class StallDetector:
 
     Usage::
 
-        detector = StallDetector(pool, store, msg_buffer)
+        detector = StallDetector(pool, store)
         detector.start_watching(task_id)
         # ... later ...
         detector.stop_watching(task_id)
         # or on shutdown:
         detector.stop_all()
+
+    Warnings are delivered through ``pool.deliver`` — the single push+wake
+    choke point — so a stall detected *between* turns also wakes a parked
+    scheduler driver, not just a mid-turn waiter.
     """
 
     def __init__(
         self,
         pool: "BackgroundTaskPool",
         store: "TaskOutputStore",
-        msg_buffer: "MessageQueue",
         stall_check_interval: float = STALL_CHECK_INTERVAL,
         stall_threshold: float = STALL_THRESHOLD,
         stall_tail_bytes: int = STALL_TAIL_BYTES,
     ) -> None:
         self._pool = pool
         self._store = store
-        self._msg_buffer = msg_buffer
         self._stall_check_interval = stall_check_interval
         self._stall_threshold = stall_threshold
         self._stall_tail_bytes = stall_tail_bytes
@@ -166,7 +167,7 @@ class StallDetector:
                     status="stall_warning",
                     result=tail_text[-200:],
                 )
-                self._msg_buffer.push(notification, priority=MessagePriority.NEXT)
+                self._pool.deliver(notification)
                 state["notified"] = True
 
         return _tick

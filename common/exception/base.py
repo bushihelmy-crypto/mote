@@ -105,6 +105,17 @@ class MetaGPTError(Exception):
             return self.default_recovery
         return RecoveryAction.RETRY if self.retryable else RecoveryAction.ABORT
 
+    def detail(self) -> dict[str, Any]:
+        """Structured, presentation-safe payload beyond the human message.
+
+        Overridable hook so a concrete error exposes its own structured fields
+        (e.g. a graph router/param/batch error surfaces the offending node,
+        param types, or per-node failures) uniformly through ``to_dict`` and
+        :class:`~metagpt.common.exception.report.ErrorReport`. The default is the
+        ``context`` mapping, so plain errors need no override.
+        """
+        return dict(self.context)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-friendly dict for logging / API responses."""
         return {
@@ -114,6 +125,7 @@ class MetaGPTError(Exception):
             "retryable": self.retryable,
             "recovery": self.recovery.value,
             "cause": repr(self.cause) if self.cause is not None else None,
+            "detail": self.detail(),
             "context": self.context,
         }
 

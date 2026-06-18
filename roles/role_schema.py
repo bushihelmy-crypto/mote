@@ -72,6 +72,10 @@ class RoleSchema(BaseModel):
         "Agent",
         "AskUserQuestion",
         "Sleep",
+        "ResumeTasks",
+        "CancelTasks",
+        "GetNodeState",
+        "MediaPipeline"
     ]
     mcps: list[str] = []
     agents: list[str] = []
@@ -83,7 +87,7 @@ class RoleSchema(BaseModel):
     # the user for confirmation. Set ``mode="bypass"`` (or specific allow rules)
     # to loosen this, or build a custom PermissionConfig for finer control.
     permissions: Optional[PermissionConfig] = Field(default_factory=PermissionConfig)
-
+    language : str = "中文"
     # --- Hooks ---
     # Opt-in agent-lifecycle hooks (command handlers). When None (default) and
     # no callbacks are registered programmatically, no hook layer is engaged

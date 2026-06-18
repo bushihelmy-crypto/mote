@@ -119,9 +119,9 @@ async def test_act_passes_think_content_to_record_turn(make_loop):
 
 async def test_act_iter_commands_gets_valid_names(make_loop):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
-    b = make_loop(channel=channel, tools=["Read", "Glob", "ask_human"])
+    b = make_loop(channel=channel, tools=["Read", "Glob", "AskUserQuestion"])
     b.loop._ctx = b.ctx
 
     await b.loop._step_act()
 
-    assert channel.iter_calls[0] == {"Read", "Glob", "ask_human"}
+    assert channel.iter_calls[0] == {"Read", "Glob", "AskUserQuestion"}

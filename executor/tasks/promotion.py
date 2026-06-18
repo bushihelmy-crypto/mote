@@ -62,7 +62,7 @@ async def auto_background(
 
     # Still running — promote to background.
     task_id = pool.adopt(task, command_name=command_name)
-    return BgTaskResult(
+    return BgTaskResult.foreground(
         result=(
             f"Task exceeded {foreground_timeout}s foreground limit, "
             f"moved to background as {task_id} ({command_name}). "

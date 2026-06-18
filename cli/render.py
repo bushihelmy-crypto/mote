@@ -291,20 +291,54 @@ class ConsoleRenderer:
                 self._console.print(Markdown(pending))
 
     # ------------------------------------------------------------------
-    # Hook entry point
+    # Public event-driven entry points (called by the bus subscriber)
     # ------------------------------------------------------------------
-    def on_hook(self, hook_input: Any) -> None:
-        """Single hook callback: dispatch by event name. Read-only -> returns None."""
-        event = getattr(hook_input, "hook_event_name", None)
-        payload = getattr(hook_input, "payload", None) or {}
+    def pre_tool(self, event: Any) -> None:
+        """Render a tool-call panel from a PreToolUseEvent."""
         try:
-            if event == "PreToolUse":
-                self._pre_tool(payload)
-            elif event == "PostToolUse":
-                self._post_tool(payload)
-        except Exception:  # noqa: BLE001 — visualization must never break a turn
+            self._pre_tool({"tool_name": event.tool_name, "tool_input": event.tool_input})
+        except Exception:  # noqa: BLE001
             pass
-        return None
+
+    def post_tool(self, event: Any) -> None:
+        """Render a tool-result line from a PostToolUseEvent."""
+        try:
+            self._post_tool({
+                "tool_name": event.tool_name,
+                "tool_input": event.tool_input,
+                "tool_response": event.tool_response,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    def task_progress(self, event: Any) -> None:
+        """Render a bggraph node status change.
+
+        Symbols/colors:
+          running   → ▶ (cyan)
+          success   → ✓ (green)
+          failed    → ✗ (red)
+          cancelled/timeout/skipped → ⊘ (yellow)
+        """
+        self.end_stream()
+        status = getattr(event, "status", "")
+        stage = getattr(event, "stage", "?")
+        detail = getattr(event, "detail", "")
+
+        if status == "running":
+            symbol, style = "▶", "cyan"
+        elif status == "success":
+            symbol, style = "✓", "green"
+        elif status == "failed":
+            symbol, style = "✗", "red"
+        else:
+            # cancelled, timeout, skipped, or anything else
+            symbol, style = "⊘", "yellow"
+
+        line = f"  {symbol} {stage} {status}"
+        if detail and status == "failed":
+            line += f": {detail}"
+        self._console.print(Text(line, style=style))
 
     # ------------------------------------------------------------------
     # Tool-call rendering

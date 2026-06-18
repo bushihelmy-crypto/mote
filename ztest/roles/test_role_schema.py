@@ -37,6 +37,10 @@ class TestDefaults:
             "Agent",
             "AskUserQuestion",
             "Sleep",
+            "ResumeTasks",
+            "CancelTasks",
+            "GetNodeState",
+            "MediaPipeline",
         ]
         assert s.mcps == []
         assert s.agents == []

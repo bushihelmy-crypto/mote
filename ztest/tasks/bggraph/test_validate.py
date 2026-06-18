@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import END, START, BgGraph
+from metagpt.executor.tasks.bggraph import END, START, BgGraph, GraphState
 
 from .conftest import S, sync_node
 
@@ -138,3 +138,106 @@ class TestParamValidation:
         g.add_edge("a", END)
         with pytest.raises(ValueError, match="unknown node"):
             g.compile()
+
+
+class TestParamTypeValidation:
+    """Compile-time type compatibility checks for $input params."""
+
+    def test_type_mismatch_input_field(self):
+        """state.x is int, param declares str → ValueError."""
+        g = BgGraph("g", state_schema=S)
+        g.add_node(
+            "a",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "$input.x", "desc": "d", "type": str}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        with pytest.raises(ValueError, match="expected.*str"):
+            g.compile()
+
+    def test_type_compatible_passes(self):
+        """state.x is int, param declares int → OK."""
+        g = BgGraph("g", state_schema=S)
+        g.add_node(
+            "a",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "$input.x", "desc": "d", "type": int}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        g.compile()  # no raise
+
+    def test_no_type_skips_check(self):
+        """param without type → no type check, compiles fine even if field is int."""
+        g = BgGraph("g", state_schema=S)
+        g.add_node(
+            "a",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "$input.x", "desc": "d"}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        g.compile()  # no raise — type key absent
+
+    def test_no_type_none_skips_check(self):
+        """param with type=None → no type check."""
+        g = BgGraph("g", state_schema=S)
+        g.add_node(
+            "a",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "$input.x", "desc": "d", "type": None}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        g.compile()  # no raise
+
+    def test_optional_unwrap(self):
+        """Optional[int] field is compatible with int param type."""
+        from typing import Optional
+
+        class OptState(GraphState):
+            x: Optional[int] = None
+
+        g = BgGraph("g", state_schema=OptState)
+        g.add_node(
+            "a",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "$input.x", "desc": "d", "type": int}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        g.compile()  # no raise — Optional[int] is compatible with int
+
+    def test_subclass_compatible(self):
+        """bool subclasses int → param type int, field bool → OK."""
+
+        class BoolState(GraphState):
+            flag: bool = False
+
+        g = BgGraph("g", state_schema=BoolState)
+        g.add_node(
+            "a",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "$input.flag", "desc": "d", "type": int}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+        g.compile()  # no raise — bool is subclass of int
+
+    def test_node_ref_type_skipped(self):
+        """Params referencing another node's output skip type check at compile time."""
+        g = BgGraph("g", state_schema=S)
+        g.add_node(
+            "a",
+            sync_node(lambda s: "hello"),
+        )
+        g.add_node(
+            "b",
+            sync_node(lambda s: 1),
+            params={"p": {"from": "a.output", "desc": "d", "type": int}},
+        )
+        g.add_edge(START, "a")
+        g.add_edge("a", "b")
+        g.add_edge("b", END)
+        g.compile()  # no raise — node refs are runtime-only

@@ -181,6 +181,7 @@ class ContextProvider(BaseContextProvider):
             desc=schema.desc,
             example=schema.example,
             instruction=schema.instruction,
+            language=schema.language,
             env_desc=self._env_desc(),
             other_role_names=self._other_role_names(),
             team_info=self._team_info(),
@@ -199,6 +200,7 @@ class ContextProvider(BaseContextProvider):
             executor=self._executor,
             skill_manager=self._skill_manager,
             turn_context_bus=self._role.turn_context_bus,
+            command_channel=self._channel,
         )
 
     def _env_desc(self) -> str:

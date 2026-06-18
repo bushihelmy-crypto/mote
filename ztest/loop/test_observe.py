@@ -128,12 +128,12 @@ async def test_observe_latest_is_none_when_nothing_passes(make_loop):
 
 @pytest.mark.asyncio
 async def test_observe_respects_max_priority(make_loop):
-    # A LATER-priority message is invisible when only NEXT is requested.
+    # A NEXT-priority message is invisible when only NOW is requested.
     b = make_loop(watch=set(), name="Alice")
     b.loop._ctx = b.ctx
     later = _msg("later", send_to={"Alice"})
-    b.buffer.push(later, priority=MessagePriority.LATER)
+    b.buffer.push(later, priority=MessagePriority.NEXT)
 
-    assert await b.loop._observe(max_priority=MessagePriority.NEXT) == 0
-    # Pops once the bar is raised to LATER.
-    assert await b.loop._observe(max_priority=MessagePriority.LATER) == 1
+    assert await b.loop._observe(max_priority=MessagePriority.NOW) == 0
+    # Pops once the bar is raised to NEXT.
+    assert await b.loop._observe(max_priority=MessagePriority.NEXT) == 1

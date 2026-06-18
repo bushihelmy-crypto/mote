@@ -64,6 +64,11 @@ class RoleComponents:
         self._compaction_notice = None
         self._file_watch_service = None
         self._turn_context_bus = None
+        # Wake callback for bg-task completions, set by the scheduler/REPL via
+        # ``set_task_completion_wake``. Stored here because that call can land
+        # before the background pool is built; the builder passes it to the pool
+        # on creation, and ``set_task_completion_wake`` rebinds a live pool.
+        self._pending_task_completion_wake: "Optional[Callable]" = None
         # Programmatic Python hook callbacks, seeded into the HookManager when it
         # is built (register_hook appends here before run()).
         self._hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
@@ -99,7 +104,25 @@ class RoleComponents:
     @property
     def bg_pool(self) -> BackgroundTaskPool:
         if self._bg_pool is None:
-            self._bg_pool = BackgroundTaskPool(msg_buffer=self._role.state.msg_buffer)
+            from metagpt.executor.tasks import TaskOutputStore
+
+            # A disk-output store is required for ``submit(progress=True)`` to
+            # install a per-task progress sink: without it, bggraph node-level
+            # ``report_progress`` events (START / per-node SUCCESS|FAILED /
+            # terminal) are silently dropped, so the only notification the agent
+            # ever sees is the whole-task completion push from ``_on_done`` —
+            # meaning a long-running graph never wakes a Sleep mid-flight on
+            # node completions.
+            output_store = TaskOutputStore()
+            pool = BackgroundTaskPool(
+                msg_buffer=self._role.state.msg_buffer,
+                output_store=output_store,
+                wake=self._pending_task_completion_wake,
+            )
+            # Wire the disk-cap kill switch so an output that blows the size cap
+            # cancels its task (mirrors Claude Code's #killedForSize).
+            output_store.set_on_cap(pool.cancel_for_cap)
+            self._bg_pool = pool
         return self._bg_pool
 
     @property
@@ -113,6 +136,7 @@ class RoleComponents:
                 role=self._role,
                 permission_config=self._role.role_schema.permissions,
                 bus=self.event_bus,
+                get_bg_pool=lambda: self.bg_pool,
             )
         return self._executor
 
@@ -434,11 +458,15 @@ class RoleComponents:
         Sources that depend only on ``common`` (git) or duck-type a live
         collaborator (token) are wired unconditionally — they self-suppress
         (return ``None``) when there's nothing to report (off-repo, no token
-        pressure). The background-task source lives in the ``tasks`` layer (it
-        imports ``tasks.attachment``) and peeks the pool lazily, so it stays
-        inert until a tool actually spawns one. The LSP feed is the
-        :class:`DiagnosticsBuffer` itself (a dual-role bus-subscriber + context
-        source), wired only when an LSP layer is configured.
+        pressure). The LSP feed is the :class:`DiagnosticsBuffer` itself (a
+        dual-role bus-subscriber + context source), wired only when an LSP layer
+        is configured.
+
+        Background-task progress is deliberately NOT a turn-context source: the
+        progress writer / pool already push structured notifications directly
+        into ``msg_buffer`` (graph start/end, per-node success/route/failure),
+        so an additional ``<task-attachment>`` feed every cycle would
+        double-report the same progress.
         """
         if self._turn_context_bus is None:
             from metagpt.context.turn_context import (
@@ -446,7 +474,6 @@ class RoleComponents:
                 TokenPressureContextSource,
                 TurnContextBus,
             )
-            from metagpt.executor.tasks import BackgroundTaskContextSource
 
             sources = [
                 GitContextSource(),
@@ -454,7 +481,6 @@ class RoleComponents:
                 # Reactive post-compaction notice (same instance subscribes to
                 # the event bus to arm itself off PostCompactEvent).
                 self.compaction_notice,
-                BackgroundTaskContextSource(self.peek_bg_pool),
             ]
             # LSP diagnostics: the buffer is itself the turn-context source
             # (dual-role — it's also the bus subscriber fed by the LspService),
@@ -535,6 +561,19 @@ class RoleComponents:
     def peek_file_watch_service(self):
         """The file-watch service if already built, else ``None``."""
         return self._file_watch_service
+
+    def set_task_completion_wake(self, wake: "Optional[Callable]") -> None:
+        """Wire a wake callback onto the background task pool.
+
+        Called by the scheduler/REPL after adopting the role so that background
+        task completions trigger a new turn instead of waiting for user input.
+        The pool is built lazily and may not exist yet, so the callback is also
+        stashed in ``_pending_task_completion_wake`` for the builder to pass on
+        creation.
+        """
+        self._pending_task_completion_wake = wake
+        if self._bg_pool is not None:
+            self._bg_pool.set_wake(wake)
 
     # =========================================================================
     # Hook registration

@@ -26,10 +26,6 @@ def _make_renderer(width: int = 100):
     return ConsoleRenderer(console), out
 
 
-def _hook_input(event: str, payload: dict):
-    return types.SimpleNamespace(hook_event_name=event, payload=payload)
-
-
 # ---------------------------------------------------------------------------
 # _pre_tool
 # ---------------------------------------------------------------------------
@@ -159,28 +155,6 @@ def test_other_output_finalizes_active_stream():
 
 
 # ---------------------------------------------------------------------------
-# on_hook dispatch
-# ---------------------------------------------------------------------------
-def test_on_hook_dispatches_pre_tool():
-    r, out = _make_renderer()
-    result = r.on_hook(_hook_input("PreToolUse", {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}))
-    assert result is None
-    assert "Bash" in out.getvalue()
-
-
-def test_on_hook_dispatches_post_tool():
-    r, out = _make_renderer()
-    r.on_hook(_hook_input("PostToolUse", {"tool_name": "Bash", "tool_response": "ok"}))
-    assert "✓" in out.getvalue()
-
-
-def test_on_hook_ignores_unknown_event():
-    r, out = _make_renderer()
-    r.on_hook(_hook_input("SessionStart", {"source": "startup"}))
-    assert out.getvalue() == ""
-
-
-# ---------------------------------------------------------------------------
 # build_renderer
 # ---------------------------------------------------------------------------
 def test_build_renderer_returns_instance_when_rich_available():
@@ -212,3 +186,65 @@ def test_notice_and_prompt_emit_text():
     text = out.getvalue()
     assert "Press Ctrl-C again" in text
     assert ">" in text
+
+
+# ---------------------------------------------------------------------------
+# task_progress
+# ---------------------------------------------------------------------------
+def test_task_progress_running():
+    r, out = _make_renderer()
+    event = types.SimpleNamespace(stage="fetch_data", status="running", detail="")
+    r.task_progress(event)
+    text = out.getvalue()
+    assert "▶" in text
+    assert "fetch_data" in text
+    assert "running" in text
+
+
+def test_task_progress_success():
+    r, out = _make_renderer()
+    event = types.SimpleNamespace(stage="fetch_data", status="success", detail="")
+    r.task_progress(event)
+    text = out.getvalue()
+    assert "✓" in text
+    assert "fetch_data" in text
+
+
+def test_task_progress_failed_with_detail():
+    r, out = _make_renderer()
+    event = types.SimpleNamespace(stage="parse_result", status="failed", detail="ValueError — invalid JSON")
+    r.task_progress(event)
+    text = out.getvalue()
+    assert "✗" in text
+    assert "parse_result" in text
+    assert "ValueError" in text
+
+
+def test_task_progress_cancelled():
+    r, out = _make_renderer()
+    event = types.SimpleNamespace(stage="cleanup", status="cancelled", detail="")
+    r.task_progress(event)
+    text = out.getvalue()
+    assert "⊘" in text
+    assert "cleanup" in text
+
+
+# ---------------------------------------------------------------------------
+# pre_tool / post_tool (event-driven public methods)
+# ---------------------------------------------------------------------------
+def test_pre_tool_event_method():
+    r, out = _make_renderer()
+    event = types.SimpleNamespace(tool_name="Bash", tool_input={"command": "echo hi"})
+    r.pre_tool(event)
+    text = out.getvalue()
+    assert "Bash" in text
+    assert "echo" in text
+
+
+def test_post_tool_event_method():
+    r, out = _make_renderer()
+    event = types.SimpleNamespace(tool_name="Bash", tool_input={}, tool_response="ok")
+    r.post_tool(event)
+    text = out.getvalue()
+    assert "✓" in text
+    assert "ok" in text

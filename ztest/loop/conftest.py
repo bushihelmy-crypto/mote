@@ -227,7 +227,7 @@ def make_loop_context(**overrides) -> LoopContext:
         memory_k=10,
         name="Alice",
         display_name="Alice(Tester)",
-        tools=["Read", "ask_human"],
+        tools=["Read", "AskUserQuestion"],
         msg_buffer=MessageQueue(),
         watch=set(),
         enable_memory=True,

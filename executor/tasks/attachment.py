@@ -50,6 +50,10 @@ class TaskAttachment:
     command_name: str
     description: str  # e.g. "generate videos is running (elapsed: 45.2s)"
     delta_summary: str | None  # incremental output summary, None = no new output
+    # Structured failure record (ErrorReport.as_dict form) for a FAILED task,
+    # carried from the pool's TaskMeta. None when the task did not fail or
+    # carries no structured error.
+    error: dict | None = None
 
 
 @dataclass
@@ -184,6 +188,7 @@ class TaskAttachmentGenerator:
                             f"(elapsed: {_fmt_elapsed(elapsed)})"
                         ),
                         delta_summary=delta_summary,
+                        error=meta.error,
                     )
                 )
                 self._notified.add(tid)
@@ -211,5 +216,12 @@ def format_attachment_xml(att: TaskAttachment) -> str:
     ]
     if att.delta_summary is not None:
         lines.append(f"<delta-summary>{_escape_xml(att.delta_summary)}</delta-summary>")
+    if att.error is not None:
+        # Reuse the single shared error renderer so a failed task's attachment
+        # carries the same <error> block (code/recovery/detail) as its
+        # notification.
+        from metagpt.common.exception import ErrorReport, render_error_block
+
+        lines.append(render_error_block(ErrorReport.from_dict(att.error)))
     lines.append("</task-attachment>")
     return "\n".join(lines)

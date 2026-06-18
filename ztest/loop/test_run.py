@@ -5,7 +5,7 @@
 Covers: the no-news short-circuit, the ``set_active(True)`` gate, the terminal
 (native plain-text) finish path, a single act-then-stop, the deactivate→break
 path (End tool), the background-pool wait branch, and the two post-checks
-(max_react_loop cap + consecutive-react limit, each with/without ask_human).
+(max_react_loop cap + consecutive-react limit, each with/without AskUserQuestion).
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ class _SeqTerminalChannel(FakeChannel):
 
 
 class _SeqAskExecutor(FakeExecutor):
-    """ask_human returns a scripted sequence of replies (then repeats the last)."""
+    """AskUserQuestion returns a scripted sequence of replies (then repeats the last)."""
 
     def __init__(self, ask_replies, **kw):
         super().__init__(**kw)
@@ -66,7 +66,7 @@ class _SeqAskExecutor(FakeExecutor):
         self.ask_outputs: list[str] = []
 
     async def run_command(self, name, args, result_id=None):
-        if name == "ask_human":
+        if name == "AskUserQuestion":
             self.calls.append({"name": name, "args": args, "result_id": result_id})
             reply = self._ask_replies.pop(0) if self._ask_replies else self.ask_outputs[-1]
             self.ask_outputs.append(reply)
@@ -212,14 +212,14 @@ async def test_run_terminal_checked_before_act_each_round(make_loop):
 
 async def test_run_consecutive_limit_asks_human(make_loop):
     # No new observations between acts -> consecutive climbs to the limit and,
-    # since ask_human is available, the loop asks the user (via the routed LLM)
-    # and records the extra instruction, resetting the consecutive counter.
+    # since AskUserQuestion is available, the loop asks the user (via the routed
+    # LLM) and records the extra instruction, resetting the consecutive counter.
     channel = FakeChannel(commands=[])  # empty-command acts keep it simple
     executor = _SeqAskExecutor(["keep going"])
     b = make_loop(
         channel=channel,
         executor=executor,
-        tools=["Read", "ask_human"],
+        tools=["Read", "AskUserQuestion"],
         max_react_loop=5,
         max_consecutive_react_limit=2,
     )
@@ -227,23 +227,23 @@ async def test_run_consecutive_limit_asks_human(make_loop):
 
     await b.loop.run()
 
-    ask_calls = [c for c in executor.calls if c["name"] == "ask_human"]
+    ask_calls = [c for c in executor.calls if c["name"] == "AskUserQuestion"]
     assert len(ask_calls) >= 1
-    # The routed LLM produced the question handed to ask_human.
+    # The routed LLM produced the question handed to AskUserQuestion.
     assert b.provider.llm.aask_calls
-    assert ask_calls[0]["args"]["question"] == b.provider.llm.reply
+    assert ask_calls[0]["args"]["questions"][0]["question"] == b.provider.llm.reply
     # The user's reply was committed back into memory.
     assert any("User's extra instruction:" in m.content for m in b.memory.messages)
 
 
 async def test_run_consecutive_limit_breaks_without_ask_human(make_loop):
-    # Same climb, but no ask_human capability -> the loop simply breaks.
+    # Same climb, but no AskUserQuestion capability -> the loop simply breaks.
     channel = FakeChannel(commands=[])
     executor = FakeExecutor()
     b = make_loop(
         channel=channel,
         executor=executor,
-        tools=["Read"],  # no ask_human
+        tools=["Read"],  # no AskUserQuestion
         max_react_loop=9,
         max_consecutive_react_limit=2,
     )
@@ -251,20 +251,20 @@ async def test_run_consecutive_limit_breaks_without_ask_human(make_loop):
 
     await b.loop.run()
 
-    assert [c for c in executor.calls if c["name"] == "ask_human"] == []
+    assert [c for c in executor.calls if c["name"] == "AskUserQuestion"] == []
     # Broke after exactly two acts (consecutive hit the limit).
     assert len(channel.recorded_turns) == 2
 
 
 async def test_run_max_loop_reached_yes_resets(make_loop):
-    # max_react_loop>=10 arms the cap check. ask_human says "yes" once (reset to
-    # 0, continue) then "no" (fall through, while-condition exits).
+    # max_react_loop>=10 arms the cap check. AskUserQuestion says "yes" once
+    # (reset to 0, continue) then "no" (fall through, while-condition exits).
     channel = FakeChannel(commands=[])
     executor = _SeqAskExecutor(["yes", "no"])
     b = make_loop(
         channel=channel,
         executor=executor,
-        tools=["Read", "ask_human"],
+        tools=["Read", "AskUserQuestion"],
         max_react_loop=10,
         max_consecutive_react_limit=10_000,  # keep the consecutive branch silent
     )
@@ -272,7 +272,7 @@ async def test_run_max_loop_reached_yes_resets(make_loop):
 
     rsp = await b.loop.run()
 
-    asks = [c for c in executor.calls if c["name"] == "ask_human"]
+    asks = [c for c in executor.calls if c["name"] == "AskUserQuestion"]
     assert len(asks) == 2
     assert executor.ask_outputs == ["yes", "no"]
     assert rsp is not None
@@ -284,7 +284,7 @@ async def test_run_max_loop_reached_breaks_without_ask_human(make_loop):
     b = make_loop(
         channel=channel,
         executor=executor,
-        tools=["Read"],  # no ask_human
+        tools=["Read"],  # no AskUserQuestion
         max_react_loop=10,
         max_consecutive_react_limit=10_000,
     )
@@ -292,6 +292,6 @@ async def test_run_max_loop_reached_breaks_without_ask_human(make_loop):
 
     await b.loop.run()
 
-    assert [c for c in executor.calls if c["name"] == "ask_human"] == []
+    assert [c for c in executor.calls if c["name"] == "AskUserQuestion"] == []
     # Ran exactly up to the cap, then broke.
     assert len(channel.recorded_turns) == 10

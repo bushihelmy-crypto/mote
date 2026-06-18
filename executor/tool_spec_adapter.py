@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import inspect
+import types
 import typing
 from typing import Any, Callable, Union
 
@@ -45,9 +46,11 @@ def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
     ``Optional[X]`` is ``Union[X, None]``. For a multi-arm Union we keep the
     first non-None arm (best-effort; native schema does not need exhaustive
     union typing). Returns (X, True) when None was a member.
+
+    Also handles PEP 604 ``X | Y`` unions (``types.UnionType``, Python 3.10+).
     """
     origin = typing.get_origin(annotation)
-    if origin is Union:
+    if origin is Union or isinstance(annotation, types.UnionType):
         arms = [a for a in typing.get_args(annotation) if a is not type(None)]
         is_optional = len(arms) != len(typing.get_args(annotation))
         inner = arms[0] if arms else str
@@ -90,44 +93,19 @@ def _json_type(annotation: Any) -> dict:
     return {"type": "string"}
 
 
+# Public alias — used by bggraph.base_node for node-level JSON Schema generation.
+annotation_to_json_schema = _json_type
+
+
 def _parse_arg_descriptions(docstring: str | None) -> dict[str, str]:
     """Extract per-parameter descriptions from a Google-style ``Args:`` block.
 
-    Returns {param_name: description}. Best-effort: any line shaped like
-    ``name (type): desc`` or ``name: desc`` inside the Args section is captured;
-    continuation lines are appended to the previous parameter. Missing or
-    malformed docstrings yield an empty mapping (native schema allows no
-    description).
+    Returns {param_name: description}. Delegates to the shared
+    ``parse_section`` utility for the actual parsing.
     """
-    if not docstring:
-        return {}
-    lines = inspect.cleandoc(docstring).splitlines()
+    from metagpt.common.utils.docstring import parse_section
 
-    # Find the Args: section and collect until the next top-level section.
-    section_headers = ("Returns:", "Raises:", "Yields:", "Examples:", "Example:", "Note:", "Notes:")
-    in_args = False
-    out: dict[str, str] = {}
-    current: str | None = None
-    for raw in lines:
-        line = raw.strip()
-        if line == "Args:":
-            in_args = True
-            continue
-        if not in_args:
-            continue
-        if line in section_headers:
-            break
-        if not line:
-            continue
-        # "name (type): desc"  or  "name: desc"
-        head, sep, tail = line.partition(":")
-        if sep and head and " " not in head.split("(")[0].strip():
-            name = head.split("(")[0].strip()
-            out[name] = tail.strip()
-            current = name
-        elif current is not None:
-            out[current] = (out[current] + " " + line).strip()
-    return out
+    return dict(parse_section(docstring, "Args"))
 
 
 def build_json_schema(call_fn: Callable) -> dict:

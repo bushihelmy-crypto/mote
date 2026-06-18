@@ -7,7 +7,7 @@ source), conditional routing, cycles bounded by ``recursion_limit``, independent
 parallel failure, auto-retries, and the LLM-route pause sentinel.
 
 ``report_progress`` is a no-op outside a progress context, so the driver coroutine
-(``BgTaskResult.poll``) can be awaited directly without a pool / disk sink.
+(``BgTaskResult.poll_factory()``) can be awaited directly without a pool / disk sink.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.asyncio
 async def _run(graph: BgGraph, **inputs):
     res = await graph.compile()(**inputs)
     assert isinstance(res, BgTaskResult)
-    return await res.poll
+    return await res.poll_factory()
 
 
 class TestLinear:
@@ -87,7 +87,7 @@ class TestFanOut:
         g.add_edge("merge", END)
 
         res = await g.compile()(x=0)
-        task = asyncio.ensure_future(res.poll)
+        task = asyncio.ensure_future(res.poll_factory())
         # Let the fast source settle; merge must NOT have fired yet.
         await asyncio.sleep(0.02)
         assert not task.done()
@@ -279,7 +279,7 @@ class TestLlmPause:
         g.add_llm_edges("a", "Pick next", {"go": "nextstep", "stop": END})
         g.add_edge("nextstep", END)
         res = await g.compile()(x=0)
-        out = await res.poll
+        out = await res.poll_factory()
         # isinstance check works with the backward-compat alias
         assert isinstance(out, _LLM_ROUTE_SENTINEL)
         assert isinstance(out, LlmPauseResult)

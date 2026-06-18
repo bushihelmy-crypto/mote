@@ -32,6 +32,7 @@ from metagpt.common.prompt.role import (
 )
 
 from metagpt.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
+from metagpt.common.prompt.refs import assert_no_symbols
 from metagpt.common.utils.role_zero_utils import get_time_info
 
 
@@ -87,6 +88,11 @@ class ThinkSubsystems:
     # The unified per-turn ephemeral-context bus (git/token/bg-tasks/LSP feeds).
     # None => no ephemeral context this cycle (the Role didn't wire a bus).
     turn_context_bus: Any = None
+    # The active CommandChannel. PromptBuilder calls its ``lower(text)`` at the
+    # end of assembly to substitute protocol symbols (``⟦...⟧``) with this
+    # protocol's surface syntax — the single place protocol mechanics enter the
+    # prompt. None => identity (no lowering), for callers/tests without a channel.
+    command_channel: Any = None
 
 
 @dataclass
@@ -122,6 +128,7 @@ class ThinkContext:
     scratchpad: str = ""
     frc: str = ""
     summarize_tool_results: str = ""
+    pipeline_section: str = ""
 
     # Output command-block format (parser contract). Defaults to "" (no format
     # section); the command channel supplies OUTPUT_SECTION for the XML protocol
@@ -157,6 +164,12 @@ class ThinkContext:
     # State data passed to exp_cache
     state_data: dict = field(default_factory=dict)
 
+    # The active channel's symbol-lowering callable (``channel.lower``). Applied
+    # to the fully-assembled system+user prompt at the end of ``build`` so the
+    # protocol's surface syntax for each ``⟦symbol⟧`` is the LAST thing inserted.
+    # None => identity (no channel wired; used by callers/tests without one).
+    lower: Any = None
+
 
 class PromptBuilder:
     """Stateless prompt assembler.
@@ -170,6 +183,18 @@ class PromptBuilder:
         """Assemble system_prompt and user_prompt from metagpt.context."""
         system_prompt = PromptBuilder._build_system_prompt(system_tpl, ctx)
         user_prompt = PromptBuilder._build_user_prompt(cmd_tpl, ctx)
+        # Final step: lower protocol symbols (``⟦...⟧``) to the active channel's
+        # surface syntax. Done LAST, over the fully-assembled prompts, so a symbol
+        # is rendered identically no matter which section it came from — and a
+        # native render can never carry an XML mechanic that the prose never held.
+        # assert_no_symbols then guarantees nothing leaks: any unlowered symbol
+        # (typo / missing vocabulary entry) raises here at build time instead of
+        # reaching the model. No channel wired => skip (identity).
+        if ctx.lower is not None:
+            system_prompt = ctx.lower(system_prompt)
+            user_prompt = ctx.lower(user_prompt)
+            assert_no_symbols(system_prompt, where="system_prompt")
+            assert_no_symbols(user_prompt, where="user_prompt")
         return system_prompt, user_prompt
 
     @staticmethod
@@ -227,6 +252,7 @@ class PromptBuilder:
             scratchpad=ctx.scratchpad,
             frc=ctx.frc,
             summarize_tool_results=ctx.summarize_tool_results,
+            pipeline_section=ctx.pipeline_section,
             output_format=ctx.output_format,
             command_guide=ctx.command_guide,
         )
@@ -325,6 +351,7 @@ class PromptBuilder:
         ctx.language = PromptBuilder._make_language(inputs.language)
         ctx.scratchpad = PromptBuilder._make_scratchpad(inputs.scratchpad_dir)
         ctx.frc, ctx.summarize_tool_results = PromptBuilder._make_compaction_sections(config)
+        ctx.pipeline_section = PromptBuilder._make_pipeline_section(subsystems.executor)
 
         # Per-turn ephemeral context (git / token pressure / background tasks /
         # LSP diagnostics) gathered by the turn_context bus and injected into the
@@ -350,6 +377,12 @@ class PromptBuilder:
             ctx.command_hint = inputs.command_hint
 
         ctx.state_data = dict(instruction=ctx.instruction)
+
+        # Capture the active channel's symbol-lowering callable so build() can
+        # apply it as the final assembly step (protocol surface syntax goes in
+        # last). None channel => no lowering (identity).
+        channel = subsystems.command_channel
+        ctx.lower = channel.lower if channel is not None else None
         return ctx
 
     @staticmethod
@@ -422,6 +455,19 @@ class PromptBuilder:
         keep_recent = getattr(rz, "protected_recent_messages", 8)
         frc = Template(FRC_SECTION).safe_substitute(keep_recent=str(keep_recent))
         return frc, SUMMARIZE_TOOL_RESULTS_SECTION
+
+    @staticmethod
+    def _make_pipeline_section(executor) -> str:
+        """Include DAG pipeline guidance when resume_tasks/cancel_tasks are registered."""
+        schemas = executor.get_tool_schemas()
+        if isinstance(schemas, dict):
+            names = set(schemas.keys())
+        else:
+            names = {s.get("name", "") for s in schemas} if schemas else set()
+        if not {"resume_tasks", "cancel_tasks"} & names:
+            return ""
+        from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
+        return BACKGROUND_PIPELINE_SECTION
 
     @staticmethod
     def _make_domain_info(config) -> str:

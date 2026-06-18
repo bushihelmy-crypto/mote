@@ -17,7 +17,7 @@ from metagpt.executor.tasks.bggraph.notify import (
     _render_status_nodes,
     _resolve_param_source,
     push_llm_route_notification,
-    push_node_failure_notification,
+    push_node_notification,
     push_started_notification,
     push_terminal_notification,
 )
@@ -169,13 +169,14 @@ class TestPushNodeFailure:
         g = _build_graph()
         state = g.state_schema(x=1)
         exc = ValueError("render crashed")
-        push_node_failure_notification(
+        push_node_notification(
             "render",
-            exc,
+            BgStatus.FAILED,
             state,
             g,
             completed={"split"},
             running_names=["merge"],
+            exc=exc,
         )
         detail = collector.events[-1][2]
         assert "node_failed" in detail
@@ -192,18 +193,19 @@ class TestPushNodeFailure:
         g._nodes["split"].status = BgStatus.SUCCESS
         g._nodes["tts"].status = BgStatus.SKIPPED
         g._nodes["merge"].status = BgStatus.PENDING
-        push_node_failure_notification(
+        push_node_notification(
             "render",
-            ValueError("render crashed"),
+            BgStatus.FAILED,
             state,
             g,
             completed={"split"},
             running_names=[],
+            exc=ValueError("render crashed"),
         )
         detail = collector.events[-1][2]
         # Each section header is present, and nodes land in the right bucket.
         for header in (
-            "failed node:",
+            "node fail:",
             "waiting_for_route nodes:",
             "running nodes:",
             "completed nodes:",
@@ -220,21 +222,50 @@ class TestPushNodeFailure:
         assert "tts" in skipped_seg and "tts" not in completed_seg
         assert "merge" in pending_seg
 
+    def test_node_status_blocks_drop_description(self, collector):
+        # Identity-only sections (success subject, completed/running/skipped/
+        # pending) and the failed block are now bare name (+ error for failed):
+        # no ``description:`` line anywhere in a node notification.
+        g = _build_graph()
+        state = g.state_schema(x=1)
+        setattr(state, "split", {"parts": 3})
+        g._nodes["split"].status = BgStatus.SUCCESS
+        g._nodes["tts"].status = BgStatus.SKIPPED
+        g._nodes["merge"].status = BgStatus.PENDING
+        push_node_notification(
+            "render", BgStatus.FAILED, state, g,
+            completed={"split"}, running_names=[], exc=ValueError("render crashed"),
+        )
+        detail = collector.events[-1][2]
+        assert "description:" not in detail
+        assert "render crashed" in detail  # failed block still carries the error
+
+    def test_node_success_subject_is_bare_name(self, collector):
+        g = _build_graph()
+        state = g.state_schema(x=1)
+        push_node_notification(
+            "tts", BgStatus.SUCCESS, state, g,
+            completed={"tts"}, running_names=[],
+        )
+        detail = collector.events[-1][2]
+        assert "- tts" in detail
+        assert "description:" not in detail
+
     def test_node_failure_action_hint_running(self, collector):
         g = _build_graph()
         state = g.state_schema(x=1)
-        push_node_failure_notification(
-            "render", ValueError("x"), state, g,
-            completed=set(), running_names=["merge"],
+        push_node_notification(
+            "render", BgStatus.FAILED, state, g,
+            completed=set(), running_names=["merge"], exc=ValueError("x"),
         )
         assert "仍有节点可运行" in collector.events[-1][2]
 
     def test_node_failure_action_hint_stalled(self, collector):
         g = _build_graph()
         state = g.state_schema(x=1)
-        push_node_failure_notification(
-            "render", ValueError("x"), state, g,
-            completed=set(), running_names=[],
+        push_node_notification(
+            "render", BgStatus.FAILED, state, g,
+            completed=set(), running_names=[], exc=ValueError("x"),
         )
         assert "无节点可运行，请立即做出决策或向用户询问" in collector.events[-1][2]
 

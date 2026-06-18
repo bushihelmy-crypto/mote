@@ -8,6 +8,7 @@ from metagpt.common.logs import logger
 from metagpt.common.schema import AIMessage, ToolMessage
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
 from metagpt.common.prompt.output import NATIVE_COMMAND_GUIDE
+from metagpt.common.prompt.refs import Sym
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 if TYPE_CHECKING:
@@ -20,6 +21,20 @@ class NativeToolChannel(CommandChannel):
 
     def __init__(self, provider: str = "openai") -> None:
         self._provider = provider
+
+    def vocabulary(self) -> dict:
+        # Surfaces for the provider-native tool-use protocol: a turn ends by
+        # replying with plain text and no tool call (NO <end></end>); tools are
+        # structured API calls, so "command block" mechanics become tool-call
+        # mechanics and capability names become plain English.
+        return {
+            Sym.CTL_FINISH: "stop calling tools and reply with a plain text message",
+            Sym.CTL_ONE_BLOCK: "make your tool calls for this turn",
+            Sym.CTL_SEPARATE_STEPS: "in separate tool calls",
+            Sym.CAP_READ: "the read tool",
+            Sym.CAP_WRITE: "the write tool",
+            Sym.CAP_REPLY: "a plain text reply",
+        }
 
     def output_format(self) -> str:
         return ""

@@ -16,7 +16,7 @@ DEFAULT_MAX_READ_BYTES: int = 8 * 1024 * 1024  # 8 MB
 # Task pool (pool.py)
 # ---------------------------------------------------------------------------
 MAX_RESULT_LEN = 2000
-DEFAULT_TASK_TIMEOUT = 600.0  # 10 minutes per task (per-task execution bound)
+DEFAULT_TASK_TIMEOUT = 1800.0  # 30 minutes per task (per-task execution bound)
 DEFAULT_MAX_CONCURRENCY = 10
 # Safety bound for wait_for_completion so a bare call on an idle/empty pool
 # returns instead of blocking forever. Distinct from DEFAULT_TASK_TIMEOUT (a

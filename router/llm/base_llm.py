@@ -27,6 +27,7 @@ from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
 from metagpt.common.exception import RecoveryAction, RecoveryRunner, is_retryable
 from metagpt.common.logs import logger
+from metagpt.common.observability.langfuse_integration import maybe_generation
 from metagpt.common.schema import Message
 from metagpt.router.llm.constant import MULTI_MODAL_MODELS
 from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
@@ -146,7 +147,7 @@ class BaseLLM(ABC):
             if isinstance(msg, str):
                 processed_messages.append({"role": "user", "content": msg})
             elif isinstance(msg, dict):
-                assert set(msg.keys()) == set(["role", "content"])
+                assert "role" in msg and "content" in msg, f"dict message must have 'role' and 'content', got keys: {list(msg.keys())}"
                 processed_messages.append(msg)
             elif isinstance(msg, Message):
                 images = msg.metadata.get(IMAGES)
@@ -368,7 +369,29 @@ class BaseLLM(ABC):
         runner = RecoveryRunner(strategies)
 
         async def _call():
-            return await send(_active(), state["messages"])
+            llm = _active()
+            msgs = state["messages"]
+            with maybe_generation(llm.model or "unknown", msgs) as gen:
+                result = await send(llm, msgs)
+                # Best-effort: record output and usage on the generation span.
+                try:
+                    output = None
+                    usage_dict = None
+                    if isinstance(result, LLMResponse):
+                        output = result.content or None
+                    elif isinstance(result, str):
+                        output = result
+                    if llm.cost_manager and llm.cost_manager.last_usage:
+                        u = llm.cost_manager.last_usage
+                        usage_dict = {
+                            "input": u.input_tokens,
+                            "output": u.output_tokens,
+                            "total": u.total_tokens,
+                        }
+                    gen.update(output=output, usage=usage_dict)
+                except Exception:  # noqa: BLE001
+                    pass
+                return result
 
         return await runner.run(_call)
 

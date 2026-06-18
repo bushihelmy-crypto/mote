@@ -8,6 +8,7 @@ from metagpt.common.schema import AIMessage, CauseBy, UserMessage
 from metagpt.common.utils.role_zero_utils import parse_commands2
 from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
 from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE, XML_COMMAND_HINT
+from metagpt.common.prompt.refs import Sym
 
 if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine
@@ -16,6 +17,18 @@ if TYPE_CHECKING:
 
 class XmlCommandChannel(CommandChannel):
     """Legacy text protocol: XML command blocks parsed out of the response text."""
+
+    def vocabulary(self) -> dict:
+        # Surfaces for the XML text protocol: <end></end> as the task terminator,
+        # one command block per turn, dotted ClassName.method command names.
+        return {
+            Sym.CTL_FINISH: "emit <end></end>",
+            Sym.CTL_ONE_BLOCK: "output ONE and ONLY ONE command block",
+            Sym.CTL_SEPARATE_STEPS: "in separate command blocks",
+            Sym.CAP_READ: "Editor.read",
+            Sym.CAP_WRITE: "Editor.write",
+            Sym.CAP_REPLY: "reply_to_human",
+        }
 
     def output_format(self) -> str:
         return OUTPUT_SECTION

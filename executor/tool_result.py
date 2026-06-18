@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from metagpt.common.const.tools import ERROR_PREFIX  # noqa: F401 (re-export for backward compat)
 
 # ToolError now lives in the global exception system; re-exported here so the
 # hundreds of ``from metagpt.executor.tool_result import ToolError`` /
 # ``raise ToolError(...)`` call sites are unchanged and auto-upgraded to typed.
-from metagpt.common.exception import ToolError  # noqa: F401 (re-export for backward compat)
+from metagpt.common.exception import ErrorReport, ToolError  # noqa: F401 (re-export for backward compat)
 
 
 @dataclass
@@ -26,6 +26,11 @@ class ToolResult:
         images: Base64-encoded images to surface to the model as a supplemental
             multimodal message. Each entry is a base64 string (no data: prefix).
         pdfs: Base64-encoded PDF documents, surfaced the same way as images.
+        error: Structured failure record on a non-success result. Set by the
+            executor from the raised exception (``ErrorReport.from_exception``);
+            ``output`` is the rendered ``<error>`` block of this same report.
+            ``None`` on success or for legacy ``ToolResult(success=False)``
+            results that only carry an ``output`` string.
     """
 
     output: str
@@ -33,6 +38,7 @@ class ToolResult:
     data: Any = field(default=None, repr=False)
     images: list[str] = field(default_factory=list)
     pdfs: list[str] = field(default_factory=list)
+    error: Optional[ErrorReport] = None
 
     @classmethod
     def from_tool_return(cls, raw: Any) -> "ToolResult":

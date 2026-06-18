@@ -32,8 +32,8 @@ async def _drain(pool):
 class TestSubmitAndIds:
     @pytest.mark.asyncio
     async def test_submit_returns_incrementing_ids(self, pool):
-        a = pool.submit(forever(), "a", timeout=None)
-        b = pool.submit(forever(), "b", timeout=None)
+        a = pool.submit(lambda: forever(), "a", timeout=None)
+        b = pool.submit(lambda: forever(), "b", timeout=None)
         assert a == "bg_1"
         assert b == "bg_2"
         assert pool.has_pending() is True
@@ -43,7 +43,7 @@ class TestSubmitAndIds:
 
     @pytest.mark.asyncio
     async def test_meta_recorded_on_submit(self, pool):
-        tid = pool.submit(forever(), "do-thing", timeout=None, task_kind="bash", agent_id="A1")
+        tid = pool.submit(lambda: forever(), "do-thing", timeout=None, task_kind="bash", agent_id="A1")
         meta = pool.get_task_info(tid)
         assert meta is not None
         assert meta.command_name == "do-thing"
@@ -60,7 +60,7 @@ class TestSubmitAndIds:
 class TestCompletionPaths:
     @pytest.mark.asyncio
     async def test_success(self, pool, msg_buffer):
-        tid = pool.submit(echo("hello"), "echo")
+        tid = pool.submit(lambda: echo("hello"), "echo")
         await pool.wait_all()
         meta = pool.get_task_info(tid)
         assert meta.status == BgStatus.SUCCESS
@@ -72,42 +72,81 @@ class TestCompletionPaths:
 
     @pytest.mark.asyncio
     async def test_none_result_becomes_placeholder(self, pool):
-        tid = pool.submit(echo(None), "noop")
+        tid = pool.submit(lambda: echo(None), "noop")
         await pool.wait_all()
         assert pool.get_task_info(tid).result == "(no output)"
 
     @pytest.mark.asyncio
     async def test_result_truncated(self, pool):
         big = "x" * (MAX_RESULT_LEN + 500)
-        tid = pool.submit(echo(big), "big")
+        tid = pool.submit(lambda: echo(big), "big")
         await pool.wait_all()
         result = pool.get_task_info(tid).result
         assert result.endswith("...(truncated)")
         assert len(result) == MAX_RESULT_LEN + len("...(truncated)")
 
     @pytest.mark.asyncio
-    async def test_failure_records_traceback(self, pool):
-        tid = pool.submit(boom(ValueError("kaboom")), "fail")
+    async def test_failure_records_error_report(self, pool):
+        tid = pool.submit(lambda: boom(ValueError("kaboom")), "fail")
         await pool.wait_all()
         meta = pool.get_task_info(tid)
         assert meta.status == BgStatus.FAILED
-        assert "ValueError" in meta.result
+        # Result is the uniform <error> block; the typed report is on meta.error.
+        assert meta.result.startswith("<error ")
         assert "kaboom" in meta.result
+        assert meta.error is not None
+        assert meta.error["error"] == "ValueError"
+        assert meta.error["code"] == "UNKNOWN"
+        assert meta.error["message"] == "kaboom"
 
     @pytest.mark.asyncio
     async def test_timeout(self, pool):
-        tid = pool.submit(forever(), "hang", timeout=0.02)
+        tid = pool.submit(lambda: forever(), "hang", timeout=0.02)
         await pool.wait_all()
         assert pool.get_task_info(tid).status == BgStatus.TIMEOUT
 
     @pytest.mark.asyncio
+    async def test_timeout_carries_structured_error(self, pool):
+        # Timeout now routes through the shared ErrorReport contract: the
+        # uniform <error> block lands in the result and the machine-readable
+        # report rides on meta.error (it was a bypass before — error was None).
+        tid = pool.submit(lambda: forever(), "hang", timeout=0.02)
+        await pool.wait_all()
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.TIMEOUT
+        assert meta.result.startswith("<error ")
+        assert 'code="BG_TASK_TIMEOUT"' in meta.result
+        assert meta.error is not None
+        assert meta.error["code"] == "BG_TASK_TIMEOUT"
+        # Timeout is retryable.
+        assert 'retryable="true"' in meta.result
+
+    @pytest.mark.asyncio
     async def test_cancel_running_task(self, pool):
         started, release = asyncio.Event(), asyncio.Event()
-        tid = pool.submit(started_gated(started, release), "g", timeout=None)
+        tid = pool.submit(lambda: started_gated(started, release), "g", timeout=None)
         await wait_started(started)
         assert pool.cancel(tid) is True
         await pool.wait_all()
         assert pool.get_task_info(tid).status == BgStatus.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_cancel_carries_structured_error(self, pool):
+        # Cancellation also routes through the shared contract: a uniform
+        # <error> block + machine-readable report on meta.error (abort/non-
+        # retryable), no longer a bare summary string.
+        started, release = asyncio.Event(), asyncio.Event()
+        tid = pool.submit(lambda: started_gated(started, release), "g", timeout=None)
+        await wait_started(started)
+        assert pool.cancel(tid) is True
+        await pool.wait_all()
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.CANCELLED
+        assert meta.result.startswith("<error ")
+        assert 'code="BG_TASK_CANCELLED"' in meta.result
+        assert meta.error is not None
+        assert meta.error["code"] == "BG_TASK_CANCELLED"
+        assert 'retryable="false"' in meta.result
 
     def test_cancel_unknown_returns_false(self, pool):
         assert pool.cancel("nope") is False
@@ -116,7 +155,7 @@ class TestCompletionPaths:
 class TestNotification:
     @pytest.mark.asyncio
     async def test_success_notification_pushed(self, pool, msg_buffer):
-        tid = pool.submit(echo("R"), "cmd")
+        tid = pool.submit(lambda: echo("R"), "cmd")
         await pool.wait_all()
         msgs = msg_buffer.pop_all()
         assert len(msgs) == 1
@@ -130,11 +169,136 @@ class TestNotification:
 
     @pytest.mark.asyncio
     async def test_notification_priority_is_next(self, pool, msg_buffer):
-        pool.submit(echo("R"), "cmd")
+        pool.submit(lambda: echo("R"), "cmd")
         await pool.wait_all()
         # NOW-priority pop should not surface a NEXT notification.
         assert msg_buffer.pop(max_priority=MessagePriority.NOW) is None
         assert msg_buffer.pop(max_priority=MessagePriority.NEXT) is not None
+
+
+class TestProgressTaskTermination:
+    """A progress task whose driver is interrupted (timeout / external cancel)
+    never reports a terminal from inside the graph, so ``_on_done`` must still
+    deliver one — the agent must always learn the task ended.
+
+    Regression: the old ``_progress_active`` flag suppressed ``_on_done`` for
+    *all* progress tasks, silently dropping the terminal on these paths.
+    """
+
+    def _progress_pool(self, msg_buffer, tmp_path):
+        from metagpt.executor.tasks.disk_output import TaskOutputStore
+
+        return BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_progress_task_timeout_still_delivers_terminal(self, msg_buffer, tmp_path):
+        pool = self._progress_pool(msg_buffer, tmp_path)
+        # forever() never calls report_progress, so the in-graph writer never
+        # delivers a terminal; the timeout must produce one via _on_done.
+        tid = pool.submit(lambda: forever(), "hang", timeout=0.02, progress=True)
+        await pool.wait_all()
+        msgs = [m for m in msg_buffer.pop_all() if isinstance(m, BackgroundTaskNotification)]
+        terminals = [m for m in msgs if m.task_terminal]
+        assert len(terminals) == 1
+        assert terminals[0].task_id == tid
+        assert terminals[0].status == BgStatus.TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_progress_task_cancel_still_delivers_terminal(self, msg_buffer, tmp_path):
+        pool = self._progress_pool(msg_buffer, tmp_path)
+        started, release = asyncio.Event(), asyncio.Event()
+        tid = pool.submit(
+            lambda: started_gated(started, release), "g", timeout=None, progress=True
+        )
+        await wait_started(started)
+        assert pool.cancel(tid) is True
+        await pool.wait_all()
+        terminals = [
+            m
+            for m in msg_buffer.pop_all()
+            if isinstance(m, BackgroundTaskNotification) and m.task_terminal
+        ]
+        assert len(terminals) == 1
+        assert terminals[0].status == BgStatus.CANCELLED
+
+
+class TestDeliver:
+    """The single push+wake choke point all notification producers route through."""
+
+    def test_deliver_pushes_next_and_wakes(self, msg_buffer):
+        wakes = []
+        pool = BackgroundTaskPool(msg_buffer, wake=lambda: wakes.append(1))
+        notif = BackgroundTaskNotification(content="hi", task_id="bg_1", status=BgStatus.SUCCESS)
+        pool.deliver(notif)
+        # Pushed at NEXT priority and the runtime was woken.
+        assert msg_buffer.pop(max_priority=MessagePriority.NOW) is None
+        assert msg_buffer.pop(max_priority=MessagePriority.NEXT) is notif
+        assert wakes == [1]
+
+    def test_deliver_without_wake_still_pushes(self, msg_buffer):
+        pool = BackgroundTaskPool(msg_buffer)  # no wake bound
+        notif = BackgroundTaskNotification(content="hi", task_id="bg_1", status=BgStatus.FAILED)
+        pool.deliver(notif)  # must not raise
+        assert msg_buffer.pop_all() == [notif]
+
+    def test_deliver_swallows_push_failure(self):
+        class _BadSink:
+            def push(self, *a, **k):
+                raise RuntimeError("queue is gone")
+
+        wakes = []
+        pool = BackgroundTaskPool(_BadSink(), wake=lambda: wakes.append(1))
+        # A delivery failure must never break the pipeline — and must not wake.
+        pool.deliver(BackgroundTaskNotification(content="x"))
+        assert wakes == []
+
+    def test_deliver_is_stateless_no_terminal_dedup(self, msg_buffer):
+        # deliver no longer dedups terminals: there is exactly one terminal
+        # producer (_on_done), so two terminals for the same task can only occur
+        # in tests. Both are pushed — deliver carries no per-task state.
+        pool = BackgroundTaskPool(msg_buffer)
+        first = BackgroundTaskNotification(
+            content="t1", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True
+        )
+        second = BackgroundTaskNotification(
+            content="t2", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True
+        )
+        pool.deliver(first)
+        pool.deliver(second)
+        assert msg_buffer.pop_all() == [first, second]
+
+    def test_deliver_does_not_dedup_node_events(self, msg_buffer):
+        # Non-terminal (node-level) events with the same task_id are never
+        # deduped — a node fail then a graph success must both land.
+        pool = BackgroundTaskPool(msg_buffer)
+        node_a = BackgroundTaskNotification(content="node-a", task_id="bg_1", status=BgStatus.FAILED)
+        node_b = BackgroundTaskNotification(content="node-b", task_id="bg_1", status=BgStatus.SUCCESS)
+        pool.deliver(node_a)
+        pool.deliver(node_b)
+        assert msg_buffer.pop_all() == [node_a, node_b]
+
+    def test_deliver_swallows_push_failure_and_recovers(self):
+        # A swallowed push failure must not break delivery: a later push for the
+        # same task still gets through (deliver is stateless, so a failed push
+        # leaves no residue that would suppress a subsequent one).
+        class _FlakySink:
+            def __init__(self):
+                self.calls = 0
+                self.pushed = []
+
+            def push(self, msg, priority=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("transient")
+                self.pushed.append(msg)
+
+        sink = _FlakySink()
+        pool = BackgroundTaskPool(sink)
+        a = BackgroundTaskNotification(content="a", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
+        b = BackgroundTaskNotification(content="b", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
+        pool.deliver(a)  # push raises → swallowed
+        pool.deliver(b)  # retry succeeds
+        assert sink.pushed == [b]
 
 
 class TestBuildXml:
@@ -157,7 +321,7 @@ class TestWaiters:
     @pytest.mark.asyncio
     async def test_wait_all_blocks_until_done(self, pool):
         ev = asyncio.Event()
-        pool.submit(gated(ev, "v"), "g", timeout=None)
+        pool.submit(lambda: gated(ev, "v"), "g", timeout=None)
         waiter = asyncio.create_task(pool.wait_all())
         await asyncio.sleep(0)
         assert not waiter.done()
@@ -168,7 +332,7 @@ class TestWaiters:
     @pytest.mark.asyncio
     async def test_wait_for_completion_true(self, pool):
         ev = asyncio.Event()
-        pool.submit(gated(ev, "v"), "g", timeout=None)
+        pool.submit(lambda: gated(ev, "v"), "g", timeout=None)
         waiter = asyncio.create_task(pool.wait_for_completion(timeout=2))
         await asyncio.sleep(0)  # let the waiter register before completion
         ev.set()
@@ -182,7 +346,7 @@ class TestWaiters:
     @pytest.mark.asyncio
     async def test_wait_any_task_done(self, pool):
         ev = asyncio.Event()
-        pool.submit(gated(ev, "v"), "g", timeout=None)
+        pool.submit(lambda: gated(ev, "v"), "g", timeout=None)
         waiter = asyncio.create_task(pool.wait_any(timeout=1))
         await asyncio.sleep(0)
         ev.set()
@@ -208,8 +372,8 @@ class TestConcurrency:
         pool = BackgroundTaskPool(msg_buffer, max_concurrency=1)
         started_a, release_a = asyncio.Event(), asyncio.Event()
         started_b, release_b = asyncio.Event(), asyncio.Event()
-        a = pool.submit(started_gated(started_a, release_a), "a", timeout=None)
-        b = pool.submit(started_gated(started_b, release_b), "b", timeout=None)
+        a = pool.submit(lambda: started_gated(started_a, release_a), "a", timeout=None)
+        b = pool.submit(lambda: started_gated(started_b, release_b), "b", timeout=None)
 
         await wait_started(started_a)
         # A holds the only slot; B is still queued (PENDING).
@@ -245,7 +409,7 @@ class TestCapCancel:
     @pytest.mark.asyncio
     async def test_cancel_for_cap_marks_and_reports(self, pool):
         started, release = asyncio.Event(), asyncio.Event()
-        tid = pool.submit(started_gated(started, release), "huge", timeout=None)
+        tid = pool.submit(lambda: started_gated(started, release), "huge", timeout=None)
         await wait_started(started)
         assert pool.cancel_for_cap(tid) is True
         assert pool.get_task_info(tid)._output_capped is True
@@ -262,9 +426,9 @@ class TestAgentScoping:
     @pytest.mark.asyncio
     async def test_list_and_cancel_for_agent(self, pool):
         ev = asyncio.Event()
-        pool.submit(gated(ev), "a1", timeout=None, agent_id="A")
-        pool.submit(gated(ev), "a2", timeout=None, agent_id="A")
-        pool.submit(gated(ev), "b1", timeout=None, agent_id="B")
+        pool.submit(lambda: gated(ev), "a1", timeout=None, agent_id="A")
+        pool.submit(lambda: gated(ev), "a2", timeout=None, agent_id="A")
+        pool.submit(lambda: gated(ev), "b1", timeout=None, agent_id="B")
         # Let all three acquire the semaphore and start awaiting the gate.
         for _ in range(50):
             if all(pool.get_task_info(t).status == BgStatus.RUNNING for t in ("bg_1", "bg_2", "bg_3")):
@@ -283,8 +447,8 @@ class TestAgentScoping:
 
     @pytest.mark.asyncio
     async def test_list_tasks_returns_all(self, pool):
-        pool.submit(echo(), "a")
-        pool.submit(echo(), "b")
+        pool.submit(lambda: echo(), "a")
+        pool.submit(lambda: echo(), "b")
         await pool.wait_all()
         assert {m.task_id for m in pool.list_tasks()} == {"bg_1", "bg_2"}
 
@@ -292,7 +456,7 @@ class TestAgentScoping:
 class TestTaskTypeDefault:
     @pytest.mark.asyncio
     async def test_default_task_type_is_coroutine(self, pool):
-        tid = pool.submit(forever(), "c", timeout=None)
+        tid = pool.submit(lambda: forever(), "c", timeout=None)
         assert pool.get_task_info(tid).task_type == TaskType.COROUTINE
         await _drain(pool)
 
@@ -333,7 +497,7 @@ class TestProgressBusVisibility:
         # ``submit`` -> ``create_task`` snapshots the active-bus contextvar, so
         # the progress emit inside the task lands on this bus.
         with set_bus(bus):
-            tid = pool.submit(reporter(), "rep", progress=True)
+            tid = pool.submit(lambda: reporter(), "rep", progress=True)
             await pool.wait_all()
 
         assert tid == "bg_1"

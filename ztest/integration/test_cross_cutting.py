@@ -198,7 +198,7 @@ async def test_permission_deny_blocks_tool(make_role, tmp_path):
     assert not os.path.exists(target)
     # The denied tool-result is recorded in history.
     contents = [m.content for m in role.context_manager.get()]
-    assert any("PERMISSION DENIED" in c for c in contents)
+    assert any('code="TOOL_PERMISSION_DENIED"' in c for c in contents)
 
 
 async def test_permission_allow_lets_tool_run(make_role, tmp_path):

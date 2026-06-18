@@ -92,6 +92,6 @@ class TestDeniedNeverWrites:
         patch = _wrap("*** Add File: ok.py\n+x\n*** Add File: secret.py\n+y")
         res = await ex.run_command("ApplyPatch", {"input": patch})
         assert res.success is False
-        assert "PERMISSION DENIED" in res.output
+        assert 'code="TOOL_PERMISSION_DENIED"' in res.output
         assert not os.path.exists(os.path.abspath("ok.py"))
         assert not os.path.exists(secret)

@@ -326,6 +326,9 @@ class FakeRenderer:
         self.assistants = []
         self.errors = []
         self.end_streams = 0
+        self.pre_tools = []
+        self.post_tools = []
+        self.task_progresses = []
 
     def end_stream(self):
         self.end_streams += 1
@@ -344,6 +347,15 @@ class FakeRenderer:
 
     def error(self, text):
         self.errors.append(text)
+
+    def pre_tool(self, event):
+        self.pre_tools.append((event.tool_name, event.tool_input))
+
+    def post_tool(self, event):
+        self.post_tools.append((event.tool_name, event.tool_response))
+
+    def task_progress(self, event):
+        self.task_progresses.append((event.stage, event.status))
 
 
 def test_renderer_routes_write_notice_prompt_assistant():
@@ -390,7 +402,7 @@ def test_stream_subscriber_forwards_bus_deltas():
     repl, control, role, out = make_repl([])  # no renderer -> plain stdout
     bus = EventBus()
     role.event_bus = bus
-    repl._subscribe_stream(role)
+    repl._subscribe_render(role)
     # log_llm_stream emits LLMStreamDeltaEvent synchronously onto the active bus.
     with set_bus(bus):
         log_llm_stream("hello ")
@@ -398,7 +410,7 @@ def test_stream_subscriber_forwards_bus_deltas():
     assert repl._streamed_this_turn is True
     assert out.getvalue() == "hello world"
     # Teardown unsubscribes; further emits no longer reach the sink.
-    repl._unsubscribe_streams()
+    repl._unsubscribe_render()
     with set_bus(bus):
         log_llm_stream("!")
     assert out.getvalue() == "hello world"
@@ -449,6 +461,146 @@ def test_finish_stream_noop_without_renderer():
     # Plain-text mode has no live region; finishing must be a harmless no-op.
     repl, control, role, out = make_repl([])
     repl._finish_stream()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Idle background-task-triggered replies
+# ---------------------------------------------------------------------------
+def test_drain_idle_replies_prints_new_reply():
+    # A background-task turn ran while idle: a new assistant message appeared
+    # beyond the baseline, so the drain prints it and re-prompts.
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    repl._idle_baseline = 0
+    role.state.context.messages.append(FakeReply("bg task done"))
+    repl._drain_idle_replies()
+    assert fake.assistants == ["bg task done"]
+    assert repl._prompt in fake.prompts
+    assert repl._idle_baseline == 1
+
+
+def test_drain_idle_replies_noop_when_no_new_messages():
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    repl._idle_baseline = 0
+    repl._drain_idle_replies()  # nothing appended
+    assert fake.assistants == []
+    assert fake.prompts == []
+
+
+def test_drain_idle_replies_skips_streamed_reply():
+    # When the idle turn streamed live, the reply already hit the console; the
+    # drain must not reprint it (just advance baseline + reprompt).
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    repl._idle_baseline = 0
+    repl._streamed_this_turn = True
+    role.state.context.messages.append(FakeReply("already streamed"))
+    repl._drain_idle_replies()
+    assert fake.assistants == []  # not reprinted
+    assert repl._idle_baseline == 1
+    assert repl._streamed_this_turn is False
+
+
+def test_drain_idle_replies_noop_during_turn():
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    repl._idle_baseline = 0
+    repl._running_turn = True
+    role.state.context.messages.append(FakeReply("mid-turn"))
+    repl._drain_idle_replies()
+    assert fake.assistants == []  # deferred to the post-turn print path
+
+
+def test_idle_reply_printed_while_awaiting_stdin():
+    # End-to-end: stdin stays pending; a bg-triggered reply lands during the wait
+    # and the idle poll prints it before stdin eventually resolves (EOF).
+    class SlowReader:
+        async def readline(self):
+            await asyncio.sleep(0.25)
+            return b""  # EOF ends the wait after the idle drain has fired
+
+    role = FakeRole()
+    control = FakeControl(role)
+    out = io.StringIO()
+    repl = Repl(
+        control,
+        role.session_id,
+        role,
+        out=out,
+        get_input_reader=lambda: SlowReader(),
+    )
+    repl._idle_poll_interval = 0.05
+
+    async def scenario():
+        await repl._setup_stdin()
+        repl._reprompt()
+        repl._idle_baseline = len(role.state.context.messages)
+        repl._read_task = asyncio.ensure_future(repl._reader.readline())
+        # Simulate a background task pushing a reply while parked at the prompt.
+        await asyncio.sleep(0.1)
+        role.state.context.messages.append(FakeReply("bg reply while idle"))
+        return await repl._read_line_or_idle_reply()
+
+    asyncio.run(scenario())
+    assert "bg reply while idle" in out.getvalue()
+
+
+def test_console_ask_while_idle_receives_typed_line():
+    # Regression: a background-task-triggered AskUserQuestion parks _console_ask
+    # while the main loop is already blocked on a pending readline. The single
+    # typed line must reach the question (not be stolen by the main loop as new
+    # turn input). Models the exact race that silently dropped the user's answer.
+    class QueueReader:
+        """Deliver lines pushed onto an asyncio.Queue; block until one arrives."""
+
+        def __init__(self):
+            self.queue: asyncio.Queue = asyncio.Queue()
+
+        async def readline(self):
+            return await self.queue.get()
+
+    role = FakeRole()
+    control = FakeControl(role)
+    out = io.StringIO()
+    reader = QueueReader()
+    repl = Repl(
+        control,
+        role.session_id,
+        role,
+        out=out,
+        get_input_reader=lambda: reader,
+    )
+    repl._idle_poll_interval = 0.02
+
+    async def scenario():
+        await repl._setup_stdin()
+        repl._reprompt()
+        repl._idle_baseline = len(role.state.context.messages)
+        # Main loop parks on a pending stdin read (the idle wait).
+        repl._read_task = asyncio.ensure_future(repl._reader.readline())
+        loop_wait = asyncio.ensure_future(repl._read_line_or_idle_reply())
+        await asyncio.sleep(0.05)  # let the loop settle into the poll
+        # A background-task turn now asks the user a question.
+        ask = asyncio.ensure_future(repl._console_ask("Pick one:"))
+        await asyncio.sleep(0.05)  # let _console_ask park its waiter
+        # The user types one line (汉字) in answer to the question.
+        await reader.queue.put("你好世界\n".encode())
+        answer = await asyncio.wait_for(ask, timeout=1.0)
+        # Feed EOF so the loop's own read resolves and it can return cleanly.
+        await reader.queue.put(b"")
+        loop_result = await asyncio.wait_for(loop_wait, timeout=1.0)
+        return answer, loop_result
+
+    answer, loop_result = asyncio.run(scenario())
+    # The question got the typed line; the loop did NOT steal it.
+    assert answer == "你好世界"
+    assert loop_result == b""  # loop saw only the trailing EOF
+    assert "Pick one:" in out.getvalue()
 
 
 class _Status:
@@ -643,3 +795,76 @@ def test_teardown_stops_control_and_cleans_executor():
     asyncio.run(repl._teardown())
     assert control.stopped is True
     assert cleaned["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Bus-driven tool-call rendering (replaces hook-based approach)
+# ---------------------------------------------------------------------------
+def test_pre_tool_event_renders_via_bus():
+    """PreToolUseEvent on the bus triggers the renderer's pre_tool method."""
+    from metagpt.common.events import EventBus, PreToolUseEvent
+
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    bus = EventBus()
+    role.event_bus = bus
+    repl._subscribe_render(role)
+
+    async def scenario():
+        await bus.emit(PreToolUseEvent(tool_name="Bash", tool_input={"command": "ls"}))
+
+    asyncio.run(scenario())
+    assert fake.pre_tools == [("Bash", {"command": "ls"})]
+
+
+def test_post_tool_event_renders_via_bus():
+    """PostToolUseEvent on the bus triggers the renderer's post_tool method."""
+    from metagpt.common.events import EventBus, PostToolUseEvent
+
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    bus = EventBus()
+    role.event_bus = bus
+    repl._subscribe_render(role)
+
+    async def scenario():
+        await bus.emit(PostToolUseEvent(tool_name="Bash", tool_input={}, tool_response="ok"))
+
+    asyncio.run(scenario())
+    assert fake.post_tools == [("Bash", "ok")]
+
+
+def test_task_progress_event_renders_via_bus():
+    """TaskProgressEvent on the bus triggers the renderer's task_progress method."""
+    from metagpt.common.events import EventBus, TaskProgressEvent
+
+    repl, control, role, out = make_repl([])
+    fake = FakeRenderer()
+    repl._renderer = fake
+    bus = EventBus()
+    role.event_bus = bus
+    repl._subscribe_render(role)
+    # TaskProgressEvent is sync-emitted
+    bus.emit_sync(TaskProgressEvent(task_id="t1", stage="fetch_data", status="running", detail=""))
+    assert fake.task_progresses == [("fetch_data", "running")]
+
+
+def test_tool_events_noop_without_renderer():
+    """Without a renderer, bus tool events are silently swallowed."""
+    from metagpt.common.events import EventBus, PreToolUseEvent, PostToolUseEvent
+
+    repl, control, role, out = make_repl([])
+    # No renderer set — default None
+    bus = EventBus()
+    role.event_bus = bus
+    repl._subscribe_render(role)
+
+    async def scenario():
+        await bus.emit(PreToolUseEvent(tool_name="Read", tool_input={"file_path": "/x"}))
+        await bus.emit(PostToolUseEvent(tool_name="Read", tool_input={}, tool_response="content"))
+
+    asyncio.run(scenario())
+    # Should not crash; nothing written to out (no renderer to route to).
+    assert out.getvalue() == ""

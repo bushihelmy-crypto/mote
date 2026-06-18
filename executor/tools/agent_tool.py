@@ -44,11 +44,17 @@ class Agent(BaseTool):
 
         # Agent type defines everything itself — we only pass parent session_id
         agent = agent_cls(parent_session_id=self.session_id)
-        msg = UserMessage(content=Template(AGENT_TASK_PROMPT).safe_substitute(
+        task_brief = Template(AGENT_TASK_PROMPT).safe_substitute(
             parent_name=self.session_id,
             context=context or "(no additional context)",
             task=prompt,
-        ))
+        )
+        # The task brief carries protocol symbols (⟦...⟧); lower them through the
+        # child agent's own channel so it receives its protocol's surface syntax
+        # (e.g. native agents never see <end></end>). build-time assert in the
+        # lowerer fails loudly on any unlowered symbol rather than leaking it.
+        task_brief = agent.command_channel.lower(task_brief)
+        msg = UserMessage(content=task_brief)
         await agent.run(with_message=msg)
         report = agent.state.last_end_output.strip()
         if not report:

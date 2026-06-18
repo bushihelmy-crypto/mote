@@ -84,7 +84,7 @@ class TestRequireBgComplete:
             await release.wait()
             return "bg-done"
 
-        pool.submit(bg(started, release), "background-job", timeout=None)
+        pool.submit(lambda: bg(started, release), "background-job", timeout=None)
         await wait_started(started)
 
         order = []

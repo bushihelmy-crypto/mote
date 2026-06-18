@@ -64,7 +64,7 @@ async def test_pre_tool_use_deny_blocks():
     res = await ex.run_command("Spy", {"cmd": "ls"})
     assert res.success is False
     assert tool.ran is False
-    assert "PERMISSION DENIED" in res.output
+    assert 'code="TOOL_PERMISSION_DENIED"' in res.output
     assert "no bash" in res.output
 
 

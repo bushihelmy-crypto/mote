@@ -44,13 +44,8 @@ from metagpt.common.events.types import (
 from metagpt.common.hook.types import HookOutcome
 from metagpt.common.logs import logger
 
-#: Truncate any free-text preview to keep log lines bounded.
-_PREVIEW = 80
-
-
-def _clip(text: str, limit: int = _PREVIEW) -> str:
-    text = " ".join(str(text).split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+def _clip(text: str) -> str:
+    return " ".join(str(text).split())
 
 
 class LogSubscriber:
@@ -130,7 +125,7 @@ class LogSubscriber:
         elif isinstance(event, RecoveryEvent):
             logger.info(
                 f"event recovery phase={event.phase} action={event.action} "
-                f"attempt={event.attempt} error={event.error_type}: '{_clip(event.error)}'"
+                f"attempt={event.attempt} error={event.error_type}: '{event.error}'"
             )
         elif isinstance(event, ResourceReportEvent):
             logger.debug(

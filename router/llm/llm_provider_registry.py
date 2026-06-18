@@ -46,7 +46,7 @@ def register_provider(keys):
 
 
 def resolve_api_type(config: LLMConfig) -> LLMType:
-    """Resolve the effective provider key, applying native-Anthropic auto-detection.
+    """Resolve the effective provider key, applying provider auto-detection.
 
     An explicit ``api_type: anthropic`` always selects the native Messages API
     client. Otherwise a ``base_url`` pointing at ``anthropic.com`` is treated as
@@ -54,11 +54,23 @@ def resolve_api_type(config: LLMConfig) -> LLMType:
     gateway (a non-Anthropic ``base_url``) keeps using the OpenAI client, while a
     direct ``https://api.anthropic.com`` config gets the native client without
     needing to set ``api_type`` by hand.
+
+    DeepSeek models are auto-detected by model name (``deepseek`` substring) so
+    the DeepSeek provider — which salvages tool calls the model occasionally
+    leaks as DSML text — is selected even when reached via a shared
+    OpenAI-compatible gateway (``api_type: openai``). The salvage only fires when
+    structured ``tool_calls`` are empty AND the content holds a DSML block, so
+    routing a non-DeepSeek model here by mistake is harmless. An explicit
+    ``api_type: deepseek`` selects it directly.
     """
     if config.api_type == LLMType.ANTHROPIC:
         return LLMType.ANTHROPIC
     if "anthropic.com" in (config.base_url or "").lower():
         return LLMType.ANTHROPIC
+    if config.api_type == LLMType.DEEPSEEK:
+        return LLMType.DEEPSEEK
+    if "deepseek" in (config.model or "").lower():
+        return LLMType.DEEPSEEK
     return config.api_type
 
 

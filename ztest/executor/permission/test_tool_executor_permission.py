@@ -88,7 +88,8 @@ class TestDenyRule:
         res = await ex.run_command("Spy", {"cmd": "ls"})
         assert res.success is False
         assert tool.ran is False
-        assert "PERMISSION DENIED" in res.output
+        assert 'code="TOOL_PERMISSION_DENIED"' in res.output
+        assert res.error is not None and res.error.code == "TOOL_PERMISSION_DENIED"
 
 
 class TestAllowRule:

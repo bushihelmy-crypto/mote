@@ -42,14 +42,24 @@ from metagpt.common.logs import suspend_console_log
 from metagpt.common.logs import resume_console_log
 
 
-class _StreamRenderSubscriber:
-    """Bus subscriber mirroring streamed LLM tokens to the REPL renderer.
+class _RenderSubscriber:
+    """Unified bus subscriber handling all rendering events for the REPL.
 
-    Stream deltas are emitted synchronously (``emit_event_sync``) from inside the
-    LLM providers' ``async for`` chunk loops, so this subscriber implements the
-    sync ``handle_sync`` delivery path (its async ``handle`` is an observation
-    no-op). One instance is shared across every role's bus — each role owns its
-    own :class:`~metagpt.common.events.EventBus`, so subscribing per role never
+    Consolidates what used to be two separate mechanisms:
+      1. ``_StreamRenderSubscriber`` — for streamed LLM tokens (sync path)
+      2. Hook callbacks via ``register_hook("PreToolUse"/"PostToolUse")`` — for
+         tool-call panels
+
+    Plus a new concern:
+      3. ``TaskProgressEvent`` — bggraph node progress display
+
+    Stream deltas and task progress are emitted synchronously
+    (``emit_event_sync``) and delivered via ``handle_sync``. Tool-use events are
+    control events dispatched via the async ``handle`` path (they carry
+    outcomes), though this subscriber is read-only (returns ``None``).
+
+    One instance is shared across every role's bus — each role owns its own
+    :class:`~metagpt.common.events.EventBus`, so subscribing per role never
     double-delivers.
     """
 
@@ -59,12 +69,20 @@ class _StreamRenderSubscriber:
         self._repl = repl
 
     def handle_sync(self, event) -> None:
-        from metagpt.common.events import LLMStreamDeltaEvent
+        from metagpt.common.events import LLMStreamDeltaEvent, TaskProgressEvent
 
         if isinstance(event, LLMStreamDeltaEvent):
             self._repl._stream_sink(event.token)
+        elif isinstance(event, TaskProgressEvent):
+            self._repl._on_task_progress(event)
 
-    async def handle(self, event):  # observation-only; never influences the fold
+    async def handle(self, event):
+        from metagpt.common.events import PreToolUseEvent, PostToolUseEvent
+
+        if isinstance(event, PreToolUseEvent):
+            self._repl._on_pre_tool(event)
+        elif isinstance(event, PostToolUseEvent):
+            self._repl._on_post_tool(event)
         return None
 
 
@@ -145,10 +163,11 @@ class Repl:
         # Optional rich renderer (tool-call panels, colored streaming). When
         # ``None`` the loop keeps its plain-text output path unchanged.
         self._renderer = renderer
-        # Mirrors streamed LLM tokens off each role's event bus (subscribed per
-        # role in ``adopt_role`` / ``run``, unsubscribed in ``_teardown``).
-        self._stream_sub = _StreamRenderSubscriber(self)
-        self._stream_buses: list = []  # buses we subscribed to, for teardown
+        # Unified bus subscriber: handles stream deltas, tool-call panels, and
+        # task progress. Subscribed per role in ``adopt_role`` / ``run``,
+        # unsubscribed in ``_teardown``.
+        self._render_sub = _RenderSubscriber(self)
+        self._render_buses: list = []  # buses we subscribed to, for teardown
         self._console_log_suspended = False  # stderr log sink muted while REPL owns stdout
         # Builds fresh / resumed roles (sharing config + context); injected by
         # ``build_repl``. ``None`` => /new and /resume are unavailable.
@@ -165,7 +184,19 @@ class Repl:
         self._streamed_this_turn = False
         self._reader: Any = None
         self._read_task: Optional[asyncio.Task] = None
+        # When a background-task-triggered AskUserQuestion runs while the main
+        # loop is parked on a pending stdin read, the question's answer must be
+        # routed to the waiting tool instead of being consumed as new turn
+        # input. ``_console_ask`` parks this future; ``_read_line_or_idle_reply``
+        # fulfills it with the next line (single stdin reader — see _console_ask).
+        self._ask_waiter: Optional[asyncio.Future] = None
         self._last_sigint_ts: Optional[float] = None
+        # Baseline message count captured when the loop parks at the prompt, used
+        # to detect replies produced by background-task-triggered turns that run
+        # while the REPL is idle (see ``_drain_idle_replies``). The interval also
+        # bounds how often the idle poll wakes to check for them.
+        self._idle_baseline = 0
+        self._idle_poll_interval = 0.1
         # The input that triggered the in-flight turn (so an interrupt can
         # restore it) and the value staged for restore at the next prompt.
         self._current_input: Optional[str] = None
@@ -267,9 +298,16 @@ class Repl:
                 f"  {restored}\n"
             )
         self._reprompt()
+        # Capture the baseline so a background-task-triggered turn that runs while
+        # we're parked here can be detected and its reply printed (see
+        # ``_drain_idle_replies``), instead of staying invisible until the user
+        # types the next line. Reset the stream flag so tokens streamed by such a
+        # turn flip it, letting the drain avoid reprinting an already-shown reply.
+        self._idle_baseline = len(self._role.state.context.messages)
+        self._streamed_this_turn = False
         self._read_task = asyncio.ensure_future(self._reader.readline())
         try:
-            data = await self._read_task
+            data = await self._read_line_or_idle_reply()
         except asyncio.CancelledError:
             return None  # idle exit (double Ctrl+C)
         finally:
@@ -284,21 +322,99 @@ class Repl:
             return restored  # bare Enter resends the interrupted prompt
         return line
 
+    async def _read_line_or_idle_reply(self) -> Any:
+        """Await stdin while polling for background-task-triggered replies.
+
+        The persistent driver may run a fresh turn (woken by a completed
+        background task) while the loop is parked at the prompt. Such a turn's
+        reply lands in ``role.state.context.messages`` but would never be printed
+        until the next manual input. We poll alongside the stdin read and flush
+        those replies as they appear, re-prompting afterwards so the prompt stays
+        at the bottom. Returns the raw stdin data once the user submits a line.
+
+        This is the SOLE reader of ``self._reader`` while the loop is parked. If
+        a background-task turn parks ``_console_ask`` (an AskUserQuestion needing
+        a typed answer) during the wait, the next line is routed to that waiter
+        rather than returned as new turn input — otherwise two concurrent
+        ``readline()`` calls would race for the same line and the question's
+        answer could be silently stolen by the main loop.
+        """
+        while True:
+            done, _ = await asyncio.wait(
+                {self._read_task}, timeout=self._idle_poll_interval
+            )
+            if self._read_task in done:
+                data = self._read_task.result()
+                waiter = self._ask_waiter
+                if waiter is not None and not waiter.done():
+                    # An AskUserQuestion is parked: hand it this line and keep
+                    # reading for the loop's own next input.
+                    waiter.set_result(data)
+                    self._ask_waiter = None
+                    self._read_task = asyncio.ensure_future(self._reader.readline())
+                    continue
+                return data
+            # stdin still pending — surface any reply produced while idle.
+            self._drain_idle_replies()
+
+    def _drain_idle_replies(self) -> None:
+        """Print assistant replies appended since the prompt was last shown.
+
+        Only fires when not mid-turn and new messages exist beyond the idle
+        baseline (a background-task-triggered turn). Advances the baseline and
+        re-prompts so subsequent idle replies are printed exactly once.
+        """
+        if self._running_turn:
+            return
+        messages = self._role.state.context.messages
+        if len(messages) <= self._idle_baseline:
+            return
+        self._finish_stream()
+        # When the idle turn streamed its reply live, the tokens already reached
+        # the console (plain stdout or the renderer's Live region), so reprinting
+        # from context would duplicate it — just advance the baseline + reprompt.
+        if self._streamed_this_turn:
+            self._streamed_this_turn = False
+            self._idle_baseline = len(messages)
+            self._reprompt()
+            return
+        printed = self._print_assistant_since(self._idle_baseline)
+        self._idle_baseline = len(messages)
+        if printed:
+            self._reprompt()
+
     # ------------------------------------------------------------------
     # Console ask channel (AskUserQuestion -> stdin)
     # ------------------------------------------------------------------
     async def _console_ask(self, question: str) -> str:
-        """Print a question mid-turn and read one answer line from stdin.
+        """Print a question and read one answer line from stdin.
 
-        Invoked from inside a running turn (the ``AskUserQuestion`` tool). The
-        main loop's ``_read_line`` is not pending during a turn, so this is the
-        sole reader of ``self._reader``.
+        Invoked from inside a running turn by the ``AskUserQuestion`` tool. Two
+        cases, both of which keep a SINGLE reader on ``self._reader``:
+
+        * Foreground turn: the main loop is blocked in ``_run_turn`` with no
+          pending stdin read, so this method owns the reader and reads directly.
+        * Background-task turn while idle: the main loop is parked in
+          ``_read_line_or_idle_reply`` with a pending ``readline()``. Starting a
+          second ``readline()`` here would race that one for the same line and
+          the answer could be stolen as new turn input. Instead we park
+          ``_ask_waiter``; the main loop routes the next line to it.
         """
         self._write(f"\n{question}\n")
         self._reprompt()
         if self._reader is None:
             return ""
-        data = await self._reader.readline()
+        if self._read_task is not None and not self._read_task.done():
+            # Main loop is already reading stdin — route the answer through it.
+            waiter: asyncio.Future = asyncio.get_event_loop().create_future()
+            self._ask_waiter = waiter
+            try:
+                data = await waiter
+            finally:
+                if self._ask_waiter is waiter:
+                    self._ask_waiter = None
+        else:
+            data = await self._reader.readline()
         if not data:
             return ""
         if isinstance(data, bytes):
@@ -347,19 +463,32 @@ class Repl:
         """
         if self._streamed_this_turn:
             return
+        self._print_assistant_since(before)
+
+    def _print_assistant_since(self, before: int) -> bool:
+        """Print assistant replies appended since *before*; return True if any.
+
+        Unconditional printer (no streaming guard) shared by the post-turn print
+        and the idle-reply drain. Routes through the renderer when present, else
+        plain stdout.
+        """
+        printed = False
         messages = self._role.state.context.messages
         for msg in messages[before:]:
             if getattr(msg, "role", None) != "assistant":
                 continue
             content = getattr(msg, "content", "") or ""
-            if content.strip():
-                if self._renderer is not None:
-                    try:
-                        self._renderer.assistant(content)
-                        continue
-                    except Exception:  # noqa: BLE001 — fall back to plain text
-                        pass
-                self._write(f"\n{content}\n")
+            if not content.strip():
+                continue
+            printed = True
+            if self._renderer is not None:
+                try:
+                    self._renderer.assistant(content)
+                    continue
+                except Exception:  # noqa: BLE001 — fall back to plain text
+                    pass
+            self._write(f"\n{content}\n")
+        return printed
 
     # ------------------------------------------------------------------
     # Multi-agent: membership / switching (driven by slash commands)
@@ -427,11 +556,10 @@ class Repl:
         return self._role_factory(name=name, session_id=session_id)
 
     def adopt_role(self, role: Any, *, switch: bool = True, root: bool = False) -> str:
-        """Wrap *role* into a runtime, add it to the plane, wire console + hooks."""
+        """Wrap *role* into a runtime, add it to the plane, wire console + bus."""
 
         role.state.env = _ConsoleHumanChannel(self._console_ask)
-        self._register_renderer_hooks(role)
-        self._subscribe_stream(role)
+        self._subscribe_render(role)
         runtime = AgentRuntime(role)
         self._control.add_agent(runtime, root=root)
         if switch:
@@ -513,8 +641,7 @@ class Repl:
         except (NotImplementedError, RuntimeError):
             pass  # platform without signal-handler support — degrade gracefully
         self._suspend_console_log()
-        self._subscribe_stream(self._role)
-        self._register_renderer_hooks(self._role)
+        self._subscribe_render(self._role)
         self._control.start()
         try:
             while not self._should_exit:
@@ -534,20 +661,61 @@ class Repl:
                 pass
             await self._teardown()
 
-    def _register_renderer_hooks(self, role: Any) -> None:
-        """Register the renderer's tool-call hooks on *role* (best-effort).
+    def _subscribe_render(self, role: Any) -> None:
+        """Subscribe the REPL's unified render subscriber to *role*'s event bus.
 
         Done per role (not once) so switched-to / forked / freshly-created
-        agents also visualize their tool calls. ``register_hook`` caches the
-        callbacks until the role's lazy ``hook_manager`` is built at run time.
+        agents also mirror their streamed tokens, tool-call panels, and task
+        progress live. Each role owns its own bus, so we subscribe the shared
+        subscriber once per bus (tracked in ``_render_buses`` for teardown).
+        Best-effort — rendering is optional.
         """
-        if self._renderer is None or not hasattr(role, "register_hook"):
+        bus = getattr(role, "event_bus", None)
+        if bus is None or bus in self._render_buses:
             return
         try:
-            role.register_hook("PreToolUse", self._renderer.on_hook)
-            role.register_hook("PostToolUse", self._renderer.on_hook)
-        except Exception as exc:  # noqa: BLE001 — visualization is optional
-            logger.warning(f"Repl: register_hook failed: {exc}")
+            bus.subscribe(self._render_sub)
+            self._render_buses.append(bus)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Repl: render subscribe failed: {exc}")
+
+    def _unsubscribe_render(self) -> None:
+        for bus in self._render_buses:
+            try:
+                bus.unsubscribe(self._render_sub)
+            except Exception:  # noqa: BLE001
+                pass
+        self._render_buses = []
+
+    # ------------------------------------------------------------------
+    # Bus event handlers (called by _RenderSubscriber)
+    # ------------------------------------------------------------------
+    def _on_pre_tool(self, event: Any) -> None:
+        """Render a tool-call panel from a PreToolUseEvent."""
+        if self._renderer is None:
+            return
+        try:
+            self._renderer.pre_tool(event)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_post_tool(self, event: Any) -> None:
+        """Render a tool-result line from a PostToolUseEvent."""
+        if self._renderer is None:
+            return
+        try:
+            self._renderer.post_tool(event)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_task_progress(self, event: Any) -> None:
+        """Render a bggraph node progress line from a TaskProgressEvent."""
+        if self._renderer is None:
+            return
+        try:
+            self._renderer.task_progress(event)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _suspend_console_log(self) -> None:
         """Mute the loguru stderr sink so log lines don't interleave with the REPL.
@@ -608,34 +776,8 @@ class Repl:
         except Exception:  # noqa: BLE001 — finalizing must never crash the loop
             pass
 
-    def _subscribe_stream(self, role: Any) -> None:
-        """Subscribe the REPL's stream renderer to *role*'s event bus.
-
-        Done per role (not once) so switched-to / forked / freshly-created
-        agents also mirror their streamed tokens live and flip
-        ``_streamed_this_turn``. Each role owns its own bus, so we subscribe the
-        shared subscriber once per bus (tracked in ``_stream_buses`` for
-        teardown). Best-effort — streaming is optional.
-        """
-        bus = getattr(role, "event_bus", None)
-        if bus is None or bus in self._stream_buses:
-            return
-        try:
-            bus.subscribe(self._stream_sub)
-            self._stream_buses.append(bus)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Repl: stream subscribe failed: {exc}")
-
-    def _unsubscribe_streams(self) -> None:
-        for bus in self._stream_buses:
-            try:
-                bus.unsubscribe(self._stream_sub)
-            except Exception:  # noqa: BLE001
-                pass
-        self._stream_buses = []
-
     async def _teardown(self) -> None:
-        self._unsubscribe_streams()
+        self._unsubscribe_render()
         self._resume_console_log()
         try:
             await self._control.stop()

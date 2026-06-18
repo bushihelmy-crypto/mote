@@ -92,7 +92,7 @@ class BgTool(BaseTool):
     name = "Bg"
 
     async def call(self, *, label: str = "task") -> BgTaskResult:
-        return BgTaskResult(result="started", command_name=label)
+        return BgTaskResult.foreground("started", command_name=label)
 
 
 class MediaTool(BaseTool):

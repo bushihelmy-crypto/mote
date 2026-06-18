@@ -47,6 +47,19 @@ class ToolNotFoundError(ToolError):
     default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_NOT_FOUND
 
 
+class ToolPermissionDeniedError(ToolError):
+    """A tool call was blocked before execution by the permission gate.
+
+    Covers both the PreToolUse hook ``deny`` and the permission engine ``deny``
+    — a pre-flight rejection that never reaches ``tool.call()``. Routed through
+    the shared error contract so a denial surfaces as the same uniform
+    ``<error>`` block (carrying ``code=TOOL_PERMISSION_DENIED``) as any other
+    tool failure, instead of an ad-hoc ``[PERMISSION DENIED] …`` string.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_PERMISSION_DENIED
+
+
 class NonRetryableToolError(ToolError, ValueError):
     """A tool error that should never be retried.
 

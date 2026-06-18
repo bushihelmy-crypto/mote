@@ -82,6 +82,34 @@ class TestFormatXml:
         assert "<delta-summary>" not in xml
         assert "<status>pending</status>" in xml
 
+    def test_error_renders_uniform_error_block(self):
+        from metagpt.common.exception import ErrorReport
+
+        report = ErrorReport.from_exception(RuntimeError("kaboom"))
+        att = TaskAttachment(
+            task_id="bg_1",
+            status=BgStatus.FAILED,
+            command_name="cmd",
+            description="failed",
+            delta_summary=None,
+            error=report.as_dict(),
+        )
+        xml = format_attachment_xml(att)
+        # Same <error> envelope every executor surface uses.
+        assert '<error code="UNKNOWN"' in xml
+        assert "kaboom" in xml
+        assert "</error>" in xml
+
+    def test_no_error_omits_error_block(self):
+        att = TaskAttachment(
+            task_id="bg_1",
+            status=BgStatus.SUCCESS,
+            command_name="cmd",
+            description="done",
+            delta_summary=None,
+        )
+        assert "<error" not in format_attachment_xml(att)
+
 
 class TestGeneratePending:
     @pytest.mark.asyncio
@@ -144,6 +172,25 @@ class TestGenerateTerminal:
         r2 = await gen.generate()
         assert r2.attachments == []
         assert r2.evicted_task_ids == ["bg_1"]
+
+    @pytest.mark.asyncio
+    async def test_failed_terminal_threads_error_report(self):
+        from metagpt.common.exception import ErrorReport
+
+        report = ErrorReport.from_exception(RuntimeError("kaboom"))
+        meta = TaskMeta(
+            task_id="bg_1",
+            command_name="job",
+            status=BgStatus.FAILED,
+            end_time=time.time(),
+            notified=False,
+            error=report.as_dict(),
+        )
+        gen = TaskAttachmentGenerator(FakePool([meta]))
+        r = await gen.generate()
+        att = r.attachments[0]
+        assert att.error == report.as_dict()
+        assert '<error code="UNKNOWN"' in format_attachment_xml(att)
 
     @pytest.mark.asyncio
     async def test_pool_notified_terminal_is_skipped_then_evicted(self):

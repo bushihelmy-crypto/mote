@@ -26,6 +26,7 @@ from metagpt.common.interface.file_snapshot import FileSnapshotStore
 from metagpt.common.interface.hook_runner import HookRunner
 from metagpt.common.interface.llm_client import LLMClient
 from metagpt.common.interface.message_activity import MessageActivity
+from metagpt.common.interface.message_sink import MessageSink
 from metagpt.common.interface.message_store import MessageStore
 from metagpt.common.interface.request_assembler import RequestAssembler
 from metagpt.common.interface.turn_context import EphemeralContextSource
@@ -36,6 +37,7 @@ __all__ = [
     "LLMClient",
     "BackgroundPool",
     "MessageActivity",
+    "MessageSink",
     "HookRunner",
     "FileSnapshotStore",
     "EphemeralContextSource",

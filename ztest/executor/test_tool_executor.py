@@ -58,6 +58,10 @@ class TestRunCommandDispatch:
         assert "unknown tool" in result.output
         # Available tools are listed for the model.
         assert "Echo" in result.output
+        # Routed through the shared error contract: a uniform <error> block and
+        # a machine-readable report on the result (no longer a bare string).
+        assert 'code="TOOL_NOT_FOUND"' in result.output
+        assert result.error is not None and result.error.code == "TOOL_NOT_FOUND"
 
 
 class TestRunCommandErrors:
@@ -65,14 +69,23 @@ class TestRunCommandErrors:
         ex = make_executor(FailTool())
         result = await ex.run_command("Fail", {"message": "missing file"})
         assert result.success is False
-        assert result.output == "missing file"
+        # Rendered as the uniform <error> block; the typed report is carried too.
+        assert result.output.startswith("<error ")
+        assert "missing file" in result.output
+        assert result.error is not None
+        assert result.error.error == "ToolError"
+        assert result.error.message == "missing file"
 
     async def test_generic_exception_becomes_failure_result(self):
         ex = make_executor(BoomTool())
         result = await ex.run_command("Boom", {})
         assert result.success is False
-        assert "Boom" in result.output
+        assert result.output.startswith("<error ")
+        # Un-typed exception degrades to an UNKNOWN report but is still surfaced.
         assert "kaboom" in result.output
+        assert result.error is not None
+        assert result.error.error == "RuntimeError"
+        assert result.error.code == "UNKNOWN"
 
 
 class TestRunCommandArgValidation:

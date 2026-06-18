@@ -73,6 +73,11 @@ class AgentRuntime:
         # The scheduler's driver task for this runtime (set by EventDrivenScheduler).
         self.task: Optional[asyncio.Task] = None
         self._stopped = False
+        # Wire task-completion wake: when a background task finishes its
+        # notification gets pushed to msg_buffer, and this wake ensures the
+        # scheduler starts a new turn to process it.
+        if hasattr(role, "set_task_completion_wake"):
+            role.set_task_completion_wake(self.wake)
 
     # ------------------------------------------------------------------
     # Identity / duck-typed Role views

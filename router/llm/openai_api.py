@@ -14,7 +14,7 @@ import time
 from typing import Optional, Union
 
 from json_repair import repair_json
-from openai import AsyncStream
+from openai import AsyncOpenAI, AsyncStream
 from openai._base_client import AsyncHttpxClientWrapper
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -41,7 +41,6 @@ from metagpt.common.exception import (
 )
 from metagpt.common.const import USE_CONFIG_TIMEOUT
 from metagpt.common.logs import log_llm_stream, logger
-from metagpt.common.observability.langfuse_integration import make_async_openai
 from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
 from metagpt.router.llm.llm_provider_registry import register_provider
@@ -64,7 +63,6 @@ from metagpt.common.utils.token_counter import (
         LLMType.MISTRAL,
         LLMType.YI,
         LLMType.OPEN_ROUTER,
-        LLMType.DEEPSEEK,
         LLMType.SILICONFLOW,
     ]
 )
@@ -90,7 +88,7 @@ class OpenAILLM(BaseLLM):
         # manager (proactive-refresh) instead of the static api_key list.
         self._oauth = self._build_oauth_manager()
         kwargs = self._make_client_kwargs()
-        self.aclient = make_async_openai(**kwargs)
+        self.aclient = AsyncOpenAI(**kwargs)
 
     def _build_oauth_manager(self):
         """Construct an OAuthManager when ``config.oauth`` is set, else None."""
@@ -133,12 +131,12 @@ class OpenAILLM(BaseLLM):
             token = self._oauth.force_refresh()
             if token is None:
                 return False
-            self.aclient = make_async_openai(**self._make_client_kwargs())
+            self.aclient = AsyncOpenAI(**self._make_client_kwargs())
             return True
         if self._api_key_index + 1 >= len(self._api_keys):
             return False
         self._api_key_index += 1
-        self.aclient = make_async_openai(**self._make_client_kwargs())
+        self.aclient = AsyncOpenAI(**self._make_client_kwargs())
         return True
 
     def _get_proxy_params(self) -> dict:

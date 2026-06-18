@@ -1,4 +1,4 @@
-"""Tool execution config and constants — consolidated from executor/tool_result_limit.py.
+"""Tool execution config and constants — consolidated from metagpt.executor/tool_result_limit.py.
 
 The enforcement logic stays in ``metagpt.executor.tool_result_limit``; only the
 pure-data config model and constants live here so any layer can reference them

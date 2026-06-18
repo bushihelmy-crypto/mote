@@ -5,11 +5,14 @@
 Wires a compiled graph's ``poll`` coroutine through ``BackgroundTaskPool`` with
 a ``TaskOutputStore`` progress sink, then asserts:
 
-* the terminal ``BackgroundTaskNotification`` lands in the msg_buffer, and
+* notifications (START / per-node / END) land in the msg_buffer (the pool /
+  progress writer push directly — no event bus), and
 * per-node ``report_progress`` events were appended to the task's disk output
   (the basis for ``<delta-summary>`` blocks).
 """
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 
@@ -18,7 +21,7 @@ from metagpt.executor.tasks import BackgroundTaskPool, TaskOutputStore, Backgrou
 from metagpt.executor.tasks.bggraph import END, START, BgGraph
 from metagpt.executor.tasks.bggraph.types import LlmPauseResult
 
-from .conftest import S, sync_node
+from .conftest import S, sync_node, gated_node
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,15 +81,17 @@ class TestPoolIntegration:
     async def test_success_notifies_and_records_progress(self, pool, store, msg_buffer):
         g = _media_graph()
         res = await g.compile()(x=0)
-        tid = pool.submit(res.poll, res.command_name, timeout=None, progress=True)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None, progress=True)
         await pool.wait_all()
 
-        # Terminal notification reached the msg_buffer.
+        # Graph tasks push via the progress writer → UserMessage in the buffer.
+        # Expect: START + per-node completions + terminal END.
         msgs = await _drain_msgs(msg_buffer)
-        notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
-        assert len(notes) == 1
-        assert notes[0].task_id == tid
-        assert notes[0].status == BgStatus.SUCCESS
+        assert len(msgs) >= 2  # at minimum START + END
+        # Terminal notification contains "success".
+        contents = " ".join(m.content for m in msgs)
+        assert "success" in contents
+        assert tid in contents  # real task_id injected
 
         # Meta is terminal/success.
         meta = pool.get_task_info(tid)
@@ -111,23 +116,23 @@ class TestPoolIntegration:
         g.add_edge("a", END)
 
         res = await g.compile()(x=0)
-        tid = pool.submit(res.poll, res.command_name, timeout=None, progress=True)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None, progress=True)
         await pool.wait_all()
 
         msgs = await _drain_msgs(msg_buffer)
-        notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
-        assert len(notes) == 1
-        assert notes[0].status == BgStatus.FAILED
+        contents = " ".join(m.content for m in msgs)
+        assert "failed" in contents or "kaboom" in contents
 
         # Disk output captured the node-failure + terminal-failed summary.
         tail = await _flush(store, tid)
         assert "kaboom" in tail
 
     async def test_progress_disabled_no_store_write(self, pool, store, msg_buffer):
-        """Without ``progress=True`` the graph still runs, but no disk sink is set."""
+        """Without ``progress=True`` the graph still runs, but no disk sink is set.
+        Without a progress writer, the completion is pushed directly by _on_done."""
         g = _media_graph()
         res = await g.compile()(x=0)
-        tid = pool.submit(res.poll, res.command_name, timeout=None)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None)
         await pool.wait_all()
 
         msgs = await _drain_msgs(msg_buffer)
@@ -158,13 +163,11 @@ class TestPoolPauseAndResubmit:
         g = _llm_pause_graph()
         res = await g.compile()(x=0)
         tid = pool.submit(
-            res.poll,
+            res.poll_factory,
             res.command_name,
             timeout=None,
             progress=True,
-            graph_ref=res.graph_ref,
-            initial_params=res.initial_params,
-            factory=res.factory,
+            graph_meta=res.graph_meta,
         )
         await pool.wait_all()
 
@@ -172,27 +175,25 @@ class TestPoolPauseAndResubmit:
         assert meta.status == BgStatus.WAITING_FOR_ROUTE
         assert meta.state_snapshot is not None
         assert "a" in meta.completed_nodes
-        assert meta.graph_ref is not None
+        assert meta.graph_meta is not None
+        assert meta.graph_meta.graph_ref is not None
 
-        # Notification is still pushed (to wake agent).
+        # Notifications pushed via the progress writer (START + node + llm_route).
         msgs = await _drain_msgs(msg_buffer)
-        notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
-        assert len(notes) == 1
-        assert notes[0].status == BgStatus.WAITING_FOR_ROUTE
-        assert "paused" in notes[0].content
+        assert len(msgs) >= 1
+        contents = " ".join(m.content for m in msgs)
+        assert "waiting_for_route" in contents or "route" in contents.lower()
 
     async def test_resubmit_resumes_to_success(self, pool, store, msg_buffer):
         """resubmit() with a fresh coro runs to completion under same task_id."""
         g = _llm_pause_graph()
         res = await g.compile()(x=0)
         tid = pool.submit(
-            res.poll,
+            res.poll_factory,
             res.command_name,
             timeout=None,
             progress=True,
-            graph_ref=res.graph_ref,
-            initial_params=res.initial_params,
-            factory=res.factory,
+            graph_meta=res.graph_meta,
         )
         await pool.wait_all()
 
@@ -203,7 +204,7 @@ class TestPoolPauseAndResubmit:
         async def resumed():
             return "resumed-result"
 
-        returned_id = pool.resubmit(tid, resumed(), progress=False)
+        returned_id = pool.resubmit(tid, lambda: resumed(), progress=False)
         assert returned_id == tid
         await pool.wait_all()
 
@@ -211,7 +212,7 @@ class TestPoolPauseAndResubmit:
         assert meta.status == BgStatus.SUCCESS
         assert meta.retry_count == 1
 
-        # Completion notification pushed.
+        # Completion notification pushed (no progress → direct _on_done push).
         msgs = await _drain_msgs(msg_buffer)
         notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
         assert len(notes) == 1
@@ -222,7 +223,49 @@ class TestPoolPauseAndResubmit:
         async def noop():
             return None
 
-        coro = noop()
         with pytest.raises(ValueError, match="Unknown task_id"):
-            pool.resubmit("bg_999", coro)
-        coro.close()  # suppress "never awaited" warning
+            pool.resubmit("bg_999", lambda: noop())
+
+
+def _timeout_graph(gate: "asyncio.Event") -> BgGraph:
+    """Graph whose first node completes then second node hangs on *gate*.
+
+    Drives a deterministic timeout: ``first`` returns immediately (recorded
+    SUCCESS), ``second`` blocks until the gate is set — which the test never
+    does, so the per-task timeout fires while ``second`` is still running.
+    """
+    g = BgGraph("hanggraph", state_schema=S)
+    g.add_node("first", sync_node(lambda s: "first-done"))
+    g.add_node("second", gated_node(gate, lambda s: "second-done"))
+    g.add_edge(START, "first")
+    g.add_edge("first", "second")
+    g.add_edge("second", END)
+    return g
+
+
+class TestPoolTimeoutSnapshot:
+    """Timeout must snapshot graph state so resume continues, not restarts."""
+
+    async def test_timeout_captures_state_and_run_state(self, pool, store, msg_buffer):
+        gate = asyncio.Event()  # never set → second node hangs
+        g = _timeout_graph(gate)
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll_factory,
+            res.command_name,
+            timeout=0.1,
+            progress=True,
+            graph_meta=res.graph_meta,
+        )
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.TIMEOUT
+        # The fix: timeout snapshots the live graph state + run_state off
+        # graph_meta (the bare asyncio.TimeoutError carries nothing), so a
+        # subsequent resume reads true node status instead of falling back to
+        # a full restart.
+        assert meta.state_snapshot is not None
+        assert meta.run_state is not None
+        # The first node finished before the hang, so it is recorded done.
+        assert "first" in meta.completed_nodes

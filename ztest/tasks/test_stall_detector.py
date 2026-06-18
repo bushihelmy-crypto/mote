@@ -16,17 +16,22 @@ import asyncio
 
 import pytest
 
-from metagpt.common.schema import MessageQueue
 from metagpt.executor.tasks import BgStatus, TaskMeta, StallDetector
 from metagpt.executor.tasks.stall_detector import _matches_interactive_prompt
 
 
 class FakePool:
+    """Captures notifications handed to the pool's ``deliver`` choke point."""
+
     def __init__(self, meta):
         self._meta = meta
+        self.delivered = []
 
     def get_task_info(self, task_id):
         return self._meta
+
+    def deliver(self, notification):
+        self.delivered.append(notification)
 
 
 class FakeStore:
@@ -43,11 +48,10 @@ class FakeStore:
         return self._tail[-max_bytes:]
 
 
-def make_detector(pool, store, buf):
+def make_detector(pool, store):
     return StallDetector(
         pool,
         store,
-        buf,
         stall_check_interval=0.005,
         stall_threshold=0.01,
         stall_tail_bytes=64,
@@ -91,7 +95,7 @@ class TestWatcherBookkeeping:
     @pytest.mark.asyncio
     async def test_start_is_idempotent(self):
         meta = TaskMeta(task_id="bg_1", command_name="cmd", status=BgStatus.RUNNING)
-        detector = make_detector(FakePool(meta), FakeStore(0, b""), MessageQueue())
+        detector = make_detector(FakePool(meta), FakeStore(0, b""))
         detector.start_watching("bg_1")
         first = detector._watchers["bg_1"]
         detector.start_watching("bg_1")  # no-op
@@ -101,7 +105,7 @@ class TestWatcherBookkeeping:
     @pytest.mark.asyncio
     async def test_stop_watching_and_stop_all(self):
         meta = TaskMeta(task_id="bg_1", command_name="cmd", status=BgStatus.RUNNING)
-        detector = make_detector(FakePool(meta), FakeStore(0, b""), MessageQueue())
+        detector = make_detector(FakePool(meta), FakeStore(0, b""))
         detector.start_watching("bg_1")
         detector.start_watching("bg_2")
         detector.stop_watching("bg_1")
@@ -115,35 +119,34 @@ class TestWatcherBookkeeping:
 class TestMonitor:
     @pytest.mark.asyncio
     async def test_interactive_prompt_pushes_warning(self):
-        buf = MessageQueue()
         meta = TaskMeta(task_id="bg_1", command_name="installer", status=BgStatus.RUNNING)
-        detector = make_detector(FakePool(meta), FakeStore(50, b"Overwrite? (y/n)"), buf)
+        pool = FakePool(meta)
+        detector = make_detector(pool, FakeStore(50, b"Overwrite? (y/n)"))
         detector.start_watching("bg_1")
-        assert await _wait_for(lambda: not buf.empty())
+        assert await _wait_for(lambda: bool(pool.delivered))
         detector.stop_all()
-        msgs = buf.pop_all()
-        warnings = [m for m in msgs if getattr(m, "status", "") == "stall_warning"]
+        warnings = [m for m in pool.delivered if getattr(m, "status", "") == "stall_warning"]
         assert warnings
         assert warnings[0].task_id == "bg_1"
         assert "stall_warning" in warnings[0].content
 
     @pytest.mark.asyncio
     async def test_benign_tail_no_warning(self):
-        buf = MessageQueue()
         meta = TaskMeta(task_id="bg_1", command_name="build", status=BgStatus.RUNNING)
-        detector = make_detector(FakePool(meta), FakeStore(50, b"compiling..."), buf)
+        pool = FakePool(meta)
+        detector = make_detector(pool, FakeStore(50, b"compiling..."))
         detector.start_watching("bg_1")
         # Give the monitor several cycles past the stall threshold.
         await asyncio.sleep(0.08)
         detector.stop_all()
-        assert buf.empty()
+        assert pool.delivered == []
 
     @pytest.mark.asyncio
     async def test_terminal_status_exits_watcher(self):
-        buf = MessageQueue()
         meta = TaskMeta(task_id="bg_1", command_name="done-job", status=BgStatus.SUCCESS)
-        detector = make_detector(FakePool(meta), FakeStore(50, b"Overwrite?"), buf)
+        pool = FakePool(meta)
+        detector = make_detector(pool, FakeStore(50, b"Overwrite?"))
         detector.start_watching("bg_1")
         # Watcher should observe the terminal status and remove itself.
         assert await _wait_for(lambda: "bg_1" not in detector._watchers)
-        assert buf.empty()
+        assert pool.delivered == []

@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
 from metagpt.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS
+from metagpt.common.prompt.refs import lower as _lower_symbols
+from metagpt.common.prompt.refs import normalize_vocabulary
 from metagpt.common.schema import CauseBy, UserMessage
 
 if TYPE_CHECKING:
@@ -15,6 +17,31 @@ if TYPE_CHECKING:
 
 class CommandChannel(ABC):
     """Protocol-specific prompt/call/parse strategy for the react loop."""
+
+    def vocabulary(self) -> dict:
+        """Map each prompt symbol (``Sym``/value) to this protocol's surface text.
+
+        Shared prompt prose names protocol mechanics only via ``⟦...⟧`` symbols
+        (see ``common.prompt.refs``); this vocabulary is how THIS channel renders
+        them. ``lower()`` substitutes through it at the end of prompt assembly,
+        so e.g. ``CTL_FINISH`` becomes "emit <end></end>" under XML and "stop
+        calling tools and reply with plain text" under native — the native render
+        therefore never contains ``<end></end>``.
+
+        Default is empty: a channel with no protocol mechanics in prose needs no
+        vocabulary. The invariant test asserts every symbol used in registered
+        prose has a surface in every channel's vocabulary.
+        """
+        return {}
+
+    def lower(self, text: str) -> str:
+        """Substitute every ``⟦symbol⟧`` in ``text`` with this protocol's surface.
+
+        Raises ``UnknownSymbolError`` on any symbol missing from ``vocabulary()``
+        — a build-time failure so an unregistered/typo'd symbol never leaks to
+        the model verbatim. Returns ``text`` unchanged when it holds no symbols.
+        """
+        return _lower_symbols(text, normalize_vocabulary(self.vocabulary()))
 
     @abstractmethod
     def output_format(self) -> str:
