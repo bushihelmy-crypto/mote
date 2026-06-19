@@ -96,6 +96,11 @@ class NodeRecord:
     started_at: Optional[float] = None
     ended_at: Optional[float] = None
     last_route_key: Optional[str] = None  # last LLM/conditional route taken
+    # Auto-retries consumed / allowed on the *last* failure (engine policy), used
+    # by the notification renderer. Lives here rather than monkey-patched onto the
+    # failure exception so the run record is the single source of truth.
+    retries_attempted: int = 0
+    retries_limit: int = 0
 
 
 @dataclass
@@ -153,11 +158,20 @@ class GraphRunState:
         if route_key is not None:
             rec.last_route_key = route_key
 
-    def mark_failed(self, name: str, error: Any) -> None:
+    def mark_failed(
+        self,
+        name: str,
+        error: Any,
+        *,
+        retries_attempted: int = 0,
+        retries_limit: int = 0,
+    ) -> None:
         rec = self.get(name)
         rec.status = BgStatus.FAILED
         rec.ended_at = time.time()
         rec.last_error = str(error) if error is not None else None
+        rec.retries_attempted = retries_attempted
+        rec.retries_limit = retries_limit
 
     def mark_cancelled(self, name: str) -> None:
         rec = self.get(name)
@@ -220,11 +234,18 @@ class GraphState(BaseModel):
 
 @dataclass
 class _NodeDef:
+    """Static node definition — intentionally stateless.
+
+    A compiled graph is shared across concurrent / resumed runs, so per-run
+    execution state (status / attempts / timing) lives on the per-run
+    :class:`GraphRunState`, never here. (Aligned with langgraph's stateless
+    ``PregelNode``.)
+    """
+
     name: str
     fn: Callable[[GraphState], Awaitable[Stage]]
     description: str = ""
     params: dict[str, dict] = field(default_factory=dict)
-    status: BgStatus = BgStatus.PENDING
 
 
 @dataclass

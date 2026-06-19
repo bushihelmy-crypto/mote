@@ -192,9 +192,11 @@ class TestAutoRetries:
             await _run(g, x=0)
         name, exc = ei.value.failures[0]
         assert name == "a"
-        # Recorded retry counts reflect the framework budget.
-        assert getattr(exc, "_auto_retries_attempted", None) == fast_retry._AUTO_RETRIES
-        assert getattr(exc, "_auto_retries_limit", None) == fast_retry._AUTO_RETRIES
+        # Recorded retry counts reflect the framework budget — read from the
+        # authoritative run-state record, not a monkey-patched exception attr.
+        rec = ei.value.run_state.records["a"]
+        assert rec.retries_attempted == fast_retry._AUTO_RETRIES
+        assert rec.retries_limit == fast_retry._AUTO_RETRIES
         assert len(counter) == fast_retry._AUTO_RETRIES + 1  # initial + budget retries
 
     async def test_non_retryable_error_fails_immediately(self, fast_retry):
@@ -211,8 +213,9 @@ class TestAutoRetries:
         assert isinstance(exc, ValueError)
         # Only 1 attempt — no retries for non-retryable errors.
         assert len(counter) == 1
-        assert getattr(exc, "_auto_retries_attempted", None) == 0
-        assert getattr(exc, "_auto_retries_limit", None) == fast_retry._AUTO_RETRIES
+        rec = ei.value.run_state.records["a"]
+        assert rec.retries_attempted == 0
+        assert rec.retries_limit == fast_retry._AUTO_RETRIES
 
 
 class TestRetryBackoff:

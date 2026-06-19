@@ -24,6 +24,17 @@ from metagpt.executor.tasks.bggraph.types import (
 )
 
 
+# Node results are written onto the state via ``setattr(state, node_name, result)``.
+# A node whose name shadows a pydantic ``BaseModel`` attribute (``model_dump``, the
+# deprecated v1 ``dict`` / ``json`` / ``copy`` / ``schema`` …, or any dunder) would
+# silently lose its result: the class attribute wins on ``getattr`` while the value
+# lands unreachable in ``__pydantic_extra__``. These names are forbidden at compile
+# time. Sharing a name with a *declared* field is explicitly allowed — that is the
+# typed output-placeholder pattern (e.g. a ``storyboard`` node writing to a declared
+# ``storyboard`` field).
+_RESERVED_STATE_ATTRS = frozenset(dir(GraphState))
+
+
 # ---------------------------------------------------------------------------
 # Type-compatibility check for compile-time param validation
 # ---------------------------------------------------------------------------
@@ -265,6 +276,16 @@ class BgGraph:
     # --- validation ---
 
     def _validate(self) -> None:
+        # Node names must not shadow reserved state attributes — see
+        # ``_RESERVED_STATE_ATTRS``. (Overlap with a declared field is fine.)
+        for name in self._nodes:
+            if name in _RESERVED_STATE_ATTRS:
+                raise ValueError(
+                    f"Node name '{name}' collides with a reserved state attribute "
+                    f"(pydantic BaseModel); its result would be unreachable. "
+                    f"Choose a different node name."
+                )
+
         all_names = set(self._nodes.keys()) | {START, END}
 
         for edge in self._edges:

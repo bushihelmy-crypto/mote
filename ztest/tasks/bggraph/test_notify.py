@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from metagpt.executor.tasks.bggraph import END, START, GraphBatchFailureError, BgGraph, BgStatus
+from metagpt.executor.tasks.bggraph.types import GraphRunState
 from metagpt.executor.tasks.bggraph.notify import (
     _render_completed_nodes,
     _render_status_nodes,
@@ -66,6 +67,18 @@ def _build_graph() -> BgGraph:
     g.add_edge(["tts", "render"], "merge")
     g.add_edge("merge", END)
     return g
+
+
+def _run_state(g: BgGraph, **statuses: BgStatus) -> GraphRunState:
+    """Build a run state for *g* with the given per-node statuses applied.
+
+    Node execution status now lives on the per-run :class:`GraphRunState` (not
+    the shared graph definition), so notification tests set status here.
+    """
+    rs = GraphRunState.for_graph(g)
+    for name, status in statuses.items():
+        rs.get(name).status = status
+    return rs
 
 
 class TestReportProgressContract:
@@ -190,9 +203,13 @@ class TestPushNodeFailure:
         g = _build_graph()
         state = g.state_schema(x=1)
         setattr(state, "split", {"parts": 3})
-        g._nodes["split"].status = BgStatus.SUCCESS
-        g._nodes["tts"].status = BgStatus.SKIPPED
-        g._nodes["merge"].status = BgStatus.PENDING
+        rs = _run_state(
+            g,
+            split=BgStatus.SUCCESS,
+            tts=BgStatus.SKIPPED,
+            merge=BgStatus.PENDING,
+            render=BgStatus.FAILED,
+        )
         push_node_notification(
             "render",
             BgStatus.FAILED,
@@ -200,6 +217,7 @@ class TestPushNodeFailure:
             g,
             completed={"split"},
             running_names=[],
+            run_state=rs,
             exc=ValueError("render crashed"),
         )
         detail = collector.events[-1][2]
@@ -258,7 +276,7 @@ class TestPushNodeFailure:
             "render", BgStatus.FAILED, state, g,
             completed=set(), running_names=["merge"], exc=ValueError("x"),
         )
-        assert "仍有节点可运行" in collector.events[-1][2]
+        assert "Other nodes are still running" in collector.events[-1][2]
 
     def test_node_failure_action_hint_stalled(self, collector):
         g = _build_graph()
@@ -267,7 +285,7 @@ class TestPushNodeFailure:
             "render", BgStatus.FAILED, state, g,
             completed=set(), running_names=[], exc=ValueError("x"),
         )
-        assert "无节点可运行，请立即做出决策或向用户询问" in collector.events[-1][2]
+        assert "No runnable nodes remain" in collector.events[-1][2]
 
 
 class TestPushLlmRoute:
@@ -309,8 +327,8 @@ class TestHelpers:
         state = g.state_schema(x=0)
         # Only 'split' has completed and has a result.
         setattr(state, "split", {"parts": 3})
-        g._nodes["split"].status = BgStatus.SUCCESS
-        text = _render_completed_nodes(g, state, {"split", "tts"})
+        rs = _run_state(g, split=BgStatus.SUCCESS)
+        text = _render_completed_nodes(g, state, rs, {"split", "tts"})
         assert "split" in text
         assert "tts" not in text  # tts has no result / not completed
 
@@ -318,9 +336,9 @@ class TestHelpers:
         g = _build_graph()
         state = g.state_schema(x=0)
         setattr(state, "split", {"parts": 3})
-        g._nodes["split"].status = BgStatus.SKIPPED
+        rs = _run_state(g, split=BgStatus.SKIPPED)
         # SKIPPED no longer surfaces in the completed section.
-        assert "split" not in _render_completed_nodes(g, state, {"split"})
+        assert "split" not in _render_completed_nodes(g, state, rs, {"split"})
 
     def test_render_completed_excludes_waiting_for_route(self):
         g = BgGraph("llm", state_schema=S)
@@ -331,14 +349,13 @@ class TestHelpers:
         g.add_edge("go", END)
         state = g.state_schema(x=1)
         setattr(state, "a", "a-done")
-        g._nodes["a"].status = BgStatus.SUCCESS
+        rs = _run_state(g, a=BgStatus.SUCCESS)
         # 'a' is parked on an LLM route → reported as waiting, not completed.
-        assert "a" not in _render_completed_nodes(g, state, {"a"})
+        assert "a" not in _render_completed_nodes(g, state, rs, {"a"})
 
     def test_render_status_nodes(self):
         g = _build_graph()
-        g._nodes["tts"].status = BgStatus.SKIPPED
-        g._nodes["merge"].status = BgStatus.PENDING
-        assert "tts" in _render_status_nodes(g, BgStatus.SKIPPED)
-        assert "merge" in _render_status_nodes(g, BgStatus.PENDING)
-        assert _render_status_nodes(g, BgStatus.TIMEOUT) == "  (none)"
+        rs = _run_state(g, tts=BgStatus.SKIPPED, merge=BgStatus.PENDING)
+        assert "tts" in _render_status_nodes(g, rs, BgStatus.SKIPPED)
+        assert "merge" in _render_status_nodes(g, rs, BgStatus.PENDING)
+        assert _render_status_nodes(g, rs, BgStatus.TIMEOUT) == "  (none)"

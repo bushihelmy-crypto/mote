@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import random
 from collections import defaultdict
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from metagpt.common.exception import RecoveryAction, RecoveryRunner
 from metagpt.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
@@ -41,10 +41,14 @@ from metagpt.executor.tasks.bggraph.types import (
     GraphRecursionError,
     GraphRouterError,
     GraphRunState,
+    GraphState,
     LlmPauseResult,
     BgStatus,
     Stage,
 )
+
+if TYPE_CHECKING:
+    from metagpt.executor.tasks.bggraph.graph import BgGraph
 
 
 class _LlmPauseSignal(Exception):
@@ -84,7 +88,7 @@ def _retry_delay(attempt: int) -> float:
 _MISSING = object()
 
 
-def _validate_node_params_runtime(graph: Any, node_name: str, state: Any) -> None:
+def _validate_node_params_runtime(graph: "BgGraph", node_name: str, state: GraphState) -> None:
     """Check that state values match declared param types before node execution.
 
     Uses pydantic ``TypeAdapter(strict=True)`` for deep validation (generics,
@@ -126,7 +130,11 @@ async def _run_poll(stage: Stage, submit_result: Any) -> Any:
 
 
 async def _run_one_node(
-    node_name: str, state: Any, graph: Any, completed: set, run_state: Any = None
+    node_name: str,
+    state: GraphState,
+    graph: "BgGraph",
+    completed: set,
+    run_state: Optional[GraphRunState] = None,
 ) -> None:
     """Execute one node: fn -> submit -> poll (if any) -> auto-retry -> store result.
 
@@ -138,14 +146,14 @@ async def _run_one_node(
     RetryableError) consume the retry budget; a permanent error (e.g.
     ``ValueError``) is classified ABORT and fails fast. The retry budget is not
     node-configurable — the engine owns it so semantics stay uniform — but the
-    number of retries consumed is recorded on the exception for reporting.
+    number of retries consumed is recorded on the run record for reporting.
 
     ``run_state`` (when provided) receives the authoritative per-node record
-    (status / attempts / failure reason) used by resume; ``node_def.status`` is
-    still written for in-run notification rendering.
+    (status / attempts / failure reason / retries) — the single source the
+    notification renderer and resume both read. The shared graph definition is
+    never mutated, so a compiled graph stays safe to reuse across concurrent runs.
     """
     node_def = graph._nodes[node_name]
-    node_def.status = BgStatus.RUNNING
     if run_state is not None:
         run_state.mark_running(node_name)
     report_progress(node_name, BgStatus.RUNNING, node_def.description or None)
@@ -186,7 +194,6 @@ async def _run_one_node(
     try:
         result = await runner.run(_execute)
     except asyncio.CancelledError:
-        node_def.status = BgStatus.CANCELLED
         if run_state is not None:
             run_state.mark_cancelled(node_name)
         report_progress(node_name, BgStatus.CANCELLED)
@@ -195,24 +202,21 @@ async def _run_one_node(
         # Retry budget exhausted on a timeout — wrap as terminal.
         attempt = attempts - 1
         exhausted = GraphNodeRetryExhaustedError(node_name, attempts, e.__cause__ or e)
-        exhausted._auto_retries_attempted = attempt
-        exhausted._auto_retries_limit = _AUTO_RETRIES
-        node_def.status = BgStatus.FAILED
         if run_state is not None:
-            run_state.mark_failed(node_name, exhausted)
+            run_state.mark_failed(
+                node_name, exhausted, retries_attempted=attempt, retries_limit=_AUTO_RETRIES
+            )
         raise exhausted from e
     except Exception as e:  # noqa: BLE001 — node failures are reported, not swallowed
         attempt = attempts - 1  # retries consumed before giving up
-        e._auto_retries_attempted = attempt
-        e._auto_retries_limit = _AUTO_RETRIES
-        node_def.status = BgStatus.FAILED
         if run_state is not None:
-            run_state.mark_failed(node_name, e)
+            run_state.mark_failed(
+                node_name, e, retries_attempted=attempt, retries_limit=_AUTO_RETRIES
+            )
         raise
 
     setattr(state, node_name, result)
     completed.add(node_name)
-    node_def.status = BgStatus.SUCCESS
     if run_state is not None:
         run_state.mark_success(node_name)
 
@@ -222,7 +226,9 @@ async def _run_one_node(
 # ---------------------------------------------------------------------------
 
 
-def successors(node: str, graph: Any, state: Any, completed: set, trigger_count: dict) -> list[str]:
+def successors(
+    node: str, graph: "BgGraph", state: GraphState, completed: set, trigger_count: dict
+) -> list[str]:
     """Compute the next hops after *node* completes.
 
     Raises :class:`_LlmPauseSignal` for an LLM edge and :class:`GraphRouterError`
@@ -264,7 +270,7 @@ def successors(node: str, graph: Any, state: Any, completed: set, trigger_count:
     return out
 
 
-def _collect_finish_result(graph: Any, state: Any) -> Any:
+def _collect_finish_result(graph: "BgGraph", state: GraphState) -> Any:
     finish_nodes = graph._get_finish_nodes()
     if len(finish_nodes) == 1:
         return getattr(state, finish_nodes[0])
@@ -279,7 +285,7 @@ async def _cancel_running(running: dict) -> None:
     running.clear()
 
 
-def _prefill_trigger_count(graph: Any, completed: set, trigger_count: dict) -> None:
+def _prefill_trigger_count(graph: "BgGraph", completed: set, trigger_count: dict) -> None:
     """Seed waiting-edge arrivals from already-completed sources (resume)."""
     for we in graph._waiting_edges:
         for s in we.sources:
@@ -293,8 +299,8 @@ def _prefill_trigger_count(graph: Any, completed: set, trigger_count: dict) -> N
 
 
 async def _run_driver(
-    graph: Any,
-    state: Any,
+    graph: "BgGraph",
+    state: GraphState,
     *,
     execute_nodes: list[str],
     precompleted: tuple[str, ...] = (),
@@ -302,7 +308,7 @@ async def _run_driver(
     trigger_count: Optional[dict] = None,
     initial_params: Optional[dict] = None,
     push_start: bool = True,
-    run_state: Any = None,
+    run_state: Optional[GraphRunState] = None,
 ) -> Any:
     """Run the frontier scheduler to terminal / pause.
 
@@ -372,6 +378,7 @@ async def _run_driver(
                         graph,
                         completed=completed,
                         running_names=list(running.values()),
+                        run_state=run_state,
                         exc=exc,
                     )
                     continue
@@ -382,6 +389,7 @@ async def _run_driver(
                     graph,
                     completed=completed,
                     running_names=list(running.values()),
+                    run_state=run_state,
                 )
                 try:
                     succs = successors(n, graph, state, completed, trigger_count)
@@ -406,7 +414,8 @@ async def _run_driver(
         fatal.run_state = run_state
         fatal.graph_state = state
         push_terminal_notification(
-            graph, state, BgStatus.FAILED, error=fatal, initial_params=initial_params
+            graph, state, BgStatus.FAILED, error=fatal, initial_params=initial_params,
+            run_state=run_state,
         )
         raise fatal
 
@@ -415,13 +424,15 @@ async def _run_driver(
         error.run_state = run_state
         error.graph_state = state
         push_terminal_notification(
-            graph, state, BgStatus.FAILED, error=error, initial_params=initial_params
+            graph, state, BgStatus.FAILED, error=error, initial_params=initial_params,
+            run_state=run_state,
         )
         raise error
 
     result = _collect_finish_result(graph, state)
     push_terminal_notification(
-        graph, state, BgStatus.SUCCESS, result=result, initial_params=initial_params
+        graph, state, BgStatus.SUCCESS, result=result, initial_params=initial_params,
+        run_state=run_state,
     )
     return result
 
@@ -431,7 +442,7 @@ async def _run_driver(
 # ---------------------------------------------------------------------------
 
 
-def _build_executor(graph: Any):
+def _build_executor(graph: "BgGraph"):
     """Return an async ``executor(**initial_state) -> BgTaskResult``."""
 
     async def executor(**initial_state) -> BgTaskResult:
@@ -469,7 +480,9 @@ def _build_executor(graph: Any):
 # ---------------------------------------------------------------------------
 
 
-def _ensure_run_state(graph: Any, state: Any, run_state: Any) -> Any:
+def _ensure_run_state(
+    graph: "BgGraph", state: GraphState, run_state: Optional[GraphRunState]
+) -> GraphRunState:
     """Return an authoritative run state, inferring one for legacy snapshots.
 
     A live task always carries its run_state on the snapshot; only tasks whose
@@ -480,7 +493,12 @@ def _ensure_run_state(graph: Any, state: Any, run_state: Any) -> Any:
     return GraphRunState.infer_from_state(graph, state)
 
 
-def resume(graph: Any, state: Any, from_nodes: list[str], run_state: Any = None) -> BgTaskResult:
+def resume(
+    graph: "BgGraph",
+    state: GraphState,
+    from_nodes: list[str],
+    run_state: Optional[GraphRunState] = None,
+) -> BgTaskResult:
     """Resume execution by re-running *from_nodes*.
 
     Completed nodes come from the authoritative ``run_state`` (status SUCCESS /
@@ -493,7 +511,6 @@ def resume(graph: Any, state: Any, from_nodes: list[str], run_state: Any = None)
     completed: set[str] = run_state.completed_names() - set(from_nodes)
     for node_name in from_nodes:
         setattr(state, node_name, None)
-        graph._nodes[node_name].status = BgStatus.PENDING
         run_state.reset(node_name)
 
     trigger_count: dict = defaultdict(set)
@@ -515,13 +532,16 @@ def resume(graph: Any, state: Any, from_nodes: list[str], run_state: Any = None)
     )
 
 
-def _apply_skip(graph: Any, state: Any, skip_nodes: list[str], run_state: Any = None) -> None:
+def _apply_skip(
+    graph: "BgGraph",
+    state: GraphState,
+    skip_nodes: list[str],
+    run_state: Optional[GraphRunState] = None,
+) -> None:
     for sn in skip_nodes:
-        node_def = graph._nodes[sn]
         existing = getattr(state, sn, None)
         if existing is None:
             setattr(state, sn, {})
-        node_def.status = BgStatus.SKIPPED
         if run_state is not None:
             run_state.mark_skipped(sn)
         suffix = " with partial results" if existing is not None else ""
@@ -531,7 +551,10 @@ def _apply_skip(graph: Any, state: Any, skip_nodes: list[str], run_state: Any = 
 
 
 def resume_skip(
-    graph: Any, state: Any, skip_nodes: list[str], run_state: Any = None
+    graph: "BgGraph",
+    state: GraphState,
+    skip_nodes: list[str],
+    run_state: Optional[GraphRunState] = None,
 ) -> BgTaskResult:
     """Skip *skip_nodes* (keeping partial results) and continue downstream."""
     run_state = _ensure_run_state(graph, state, run_state)
@@ -558,7 +581,11 @@ def resume_skip(
 
 
 def resume_skip_and_from(
-    graph: Any, state: Any, skip_nodes: list[str], from_nodes: list[str], run_state: Any = None
+    graph: "BgGraph",
+    state: GraphState,
+    skip_nodes: list[str],
+    from_nodes: list[str],
+    run_state: Optional[GraphRunState] = None,
 ) -> BgTaskResult:
     """Skip *skip_nodes* then re-run *from_nodes*, continuing downstream."""
     run_state = _ensure_run_state(graph, state, run_state)
@@ -566,7 +593,6 @@ def resume_skip_and_from(
     completed: set[str] = (run_state.completed_names() | set(skip_nodes)) - set(from_nodes)
     for node_name in from_nodes:
         setattr(state, node_name, None)
-        graph._nodes[node_name].status = BgStatus.PENDING
         run_state.reset(node_name)
 
     trigger_count: dict = defaultdict(set)

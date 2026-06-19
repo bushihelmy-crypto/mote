@@ -16,7 +16,16 @@ from metagpt.common.exception.codes import ErrorCode
 
 
 class GraphError(MetaGPTError):
-    """Base for background-graph execution failures."""
+    """Base for background-graph execution failures.
+
+    ``run_state`` / ``graph_state`` are declared here (default ``None``) so the
+    driver can attach the run snapshot onto a terminal exception without
+    monkey-patching arbitrary attributes onto the instance — the pool reads them
+    back to capture the snapshot for resume.
+    """
+
+    run_state: Any = None
+    graph_state: Any = None
 
 
 class GraphRouterError(GraphError, NonRetryableError):

@@ -29,6 +29,7 @@ import asyncio
 
 from metagpt.common.schema import MessagePriority, MessageQueue
 from metagpt.executor.tasks.bggraph import END, START, BgGraph, BgStatus
+from metagpt.executor.tasks.bggraph.types import GraphRunState
 from metagpt.executor.tasks.bggraph.engine import _run_driver, _run_one_node
 from metagpt.executor.tasks.bggraph.report import (
     make_progress_writer,
@@ -167,9 +168,12 @@ def test_cancelled_node_pushes_cancelled_not_success():
         gate = asyncio.Event()  # never released → node stays running until cancelled
         g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4"))
         state = g.state_schema(x=1)
+        run_state = GraphRunState.for_graph(g)
         token = set_progress_writer(h.writer())
         try:
-            node_task = asyncio.create_task(_run_one_node("image", state, g, set()))
+            node_task = asyncio.create_task(
+                _run_one_node("image", state, g, set(), run_state)
+            )
             for _ in range(200):
                 await asyncio.sleep(0.01)
                 if any("[image] running" in line for line in h.disk):
@@ -181,9 +185,9 @@ def test_cancelled_node_pushes_cancelled_not_success():
                 pass
         finally:
             reset_progress_writer(token)
-        return g, state
+        return g, state, run_state
 
-    g, state = asyncio.run(_run())
+    g, state, run_state = asyncio.run(_run())
 
     contents = h.buffer_contents()
     blob = "\n".join(contents)
@@ -192,6 +196,6 @@ def test_cancelled_node_pushes_cancelled_not_success():
     # ...but it is never reported as a success/completion.
     assert "success" not in blob
     assert "node_completed" not in blob
-    # Node status reflects the cancel; it never produced a result.
-    assert g._nodes["image"].status == BgStatus.CANCELLED
+    # Run-state status reflects the cancel; it never produced a result.
+    assert run_state.get("image").status == BgStatus.CANCELLED
     assert getattr(state, "image", None) is None
