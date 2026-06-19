@@ -111,6 +111,121 @@ class TestCyclesAllowed:
         g.compile()  # cycles are intentionally allowed
 
 
+class TestWaitingEdgeNormalization:
+    """Static channels into an AND-join target are *merged*, not rejected.
+
+    A waiting-edge fires its target exactly once, after all sources arrive. If a
+    plain single edge or a second waiting-edge also targets it, the only fire-once
+    reading is "wait for the union of all sources" — so ``_normalize_waiting_edges``
+    folds them into one AND-join. A *dynamic* route (conditional / LLM) into the
+    join target can't be folded and is still rejected.
+    """
+
+    def _join_for(self, g, target):
+        joins = [we for we in g._waiting_edges if we.to_node == target]
+        assert len(joins) == 1, f"expected one merged join for {target}, got {joins}"
+        return joins[0]
+
+    def test_single_edge_folded_into_join(self):
+        # merge ← a (single) AND merge ← [b, c] (join) → merge ← [b, c, a].
+        g = BgGraph("g", state_schema=S)
+        _node(g, "a")
+        _node(g, "b")
+        _node(g, "c")
+        _node(g, "merge")
+        g.add_edge(START, "a")
+        g.add_edge("a", "b")
+        g.add_edge("a", "c")
+        g.add_edge("a", "merge")  # folded into the join
+        g.add_edge(["b", "c"], "merge")
+        g.add_edge("merge", END)
+        g.compile()  # no raise
+        join = self._join_for(g, "merge")
+        assert set(join.sources) == {"a", "b", "c"}
+        # The absorbed single edge a→merge is gone.
+        assert not any(
+            e.from_node == "a" and e.to_node == "merge" for e in g._edges
+        )
+
+    def test_two_waiting_edges_merged(self):
+        g = BgGraph("g", state_schema=S)
+        _node(g, "a")
+        _node(g, "b")
+        _node(g, "c")
+        _node(g, "merge")
+        g.add_edge(START, "a")
+        g.add_edge("a", "b")
+        g.add_edge("a", "c")
+        g.add_edge(["a", "b"], "merge")
+        g.add_edge(["b", "c"], "merge")  # union → [a, b, c]
+        g.add_edge("merge", END)
+        g.compile()  # no raise
+        join = self._join_for(g, "merge")
+        assert set(join.sources) == {"a", "b", "c"}
+
+    def test_conditional_route_into_join_still_rejected(self):
+        # A sometimes-firing route can't join an all-must-arrive merge.
+        g = BgGraph("g", state_schema=S)
+        _node(g, "a")
+        _node(g, "b")
+        _node(g, "c")
+        _node(g, "merge")
+        g.add_edge(START, "a")
+        g.add_edge("a", "b")
+        g.add_conditional_edges("a", lambda s: "k", {"k": "c"})
+        g.add_conditional_edges("c", lambda s: "k", {"k": "merge"})  # dynamic
+        g.add_edge(["b", "c"], "merge")
+        g.add_edge("merge", END)
+        with pytest.raises(ValueError, match="dynamic route target"):
+            g.compile()
+
+    def test_clean_waiting_edge_unchanged(self):
+        # merge has exactly one trigger channel → kept verbatim.
+        g = BgGraph("g", state_schema=S)
+        _node(g, "a")
+        _node(g, "b")
+        _node(g, "c")
+        _node(g, "merge")
+        g.add_edge(START, "a")
+        g.add_edge("a", "b")
+        g.add_edge("a", "c")
+        g.add_edge(["b", "c"], "merge")
+        g.add_edge("merge", END)
+        g.compile()  # no raise
+        join = self._join_for(g, "merge")
+        assert set(join.sources) == {"b", "c"}
+
+    def test_cycle_through_join_to_sources_compiles(self):
+        # Looping back to the join's *sources* (not the target) is legal: the
+        # join re-collects them each lap. (Mirrors test_engine's re-wait test.)
+        g = BgGraph("g", state_schema=S)
+        _node(g, "a")
+        _node(g, "fast")
+        _node(g, "slow")
+        _node(g, "merge")
+        g.add_edge(START, "a")
+        g.add_edge("a", "fast")
+        g.add_edge("a", "slow")
+        g.add_edge(["fast", "slow"], "merge")
+        g.add_conditional_edges("merge", lambda s: "loop", {"loop": "a", "done": END})
+        g.compile()  # no raise — loop targets 'a', not the join target 'merge'
+
+    def test_join_to_end_left_untouched(self):
+        # END is special — many nodes legitimately finish there; not merged.
+        g = BgGraph("g", state_schema=S)
+        _node(g, "a")
+        _node(g, "b")
+        _node(g, "c")
+        g.add_edge(START, "a")
+        g.add_edge("a", "b")
+        g.add_edge("a", "c")
+        g.add_edge("a", END)
+        g.add_edge(["b", "c"], END)
+        g.compile()  # no raise — END is exempt
+        # The single edge a→END survives (not folded into the END join).
+        assert any(e.from_node == "a" and e.to_node == END for e in g._edges)
+
+
 class TestParamValidation:
     def test_unknown_input_field(self):
         g = BgGraph("g", state_schema=S)

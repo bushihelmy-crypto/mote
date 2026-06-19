@@ -90,6 +90,22 @@ class BgGraph:
         max_restarts: int = 3,
         recursion_limit: int = 100,
     ):
+        """Build an empty graph.
+
+        Args:
+            recursion_limit: Safety bound on runaway cycles, counted as the
+                **total number of node activations** across the whole run — not
+                super-steps. This differs from LangGraph, whose ``recursion_limit``
+                counts *super-steps* (BSP waves), so a wide parallel fan-out of N
+                nodes is one super-step there but N activations here. The
+                forward-frontier scheduler has no super-step concept (nodes are
+                spawned and reaped individually as they finish), so activations
+                is the only natural unit. Practical consequence for anyone porting
+                a graph from LangGraph: a graph with broad fan-out or many short
+                parallel branches reaches this limit far sooner than the same
+                ``recursion_limit`` would in LangGraph — size it by expected total
+                node runs, not by cycle depth.
+        """
         self.command_name = command_name
         self.state_schema = state_schema
         self.max_restarts = max_restarts
@@ -195,6 +211,7 @@ class BgGraph:
 
     def compile(self) -> Callable[..., Awaitable[BgTaskResult]]:
         """Validate and compile to an async ``executor(**kwargs) -> BgTaskResult``."""
+        self._normalize_waiting_edges()
         self._validate()
         self._validate_params()
         from metagpt.executor.tasks.bggraph.engine import _build_executor
@@ -273,6 +290,55 @@ class BgGraph:
             result[name] = schema
         return result
 
+    # --- normalization ---
+
+    def _normalize_waiting_edges(self) -> None:
+        """Fold redundant *static* trigger channels into their AND-join target.
+
+        A waiting-edge target must fire exactly once, after *all* its sources
+        arrive. If the same target is also reachable by a plain single edge, or
+        by more than one waiting-edge, those are independent static channels that
+        would each fire it again (a structural double-fire). The only fire-once
+        reading is "wait for the union of all sources", so we merge them into a
+        single waiting-edge over that union and drop the now-absorbed single
+        edges. Idempotent — safe to call once per compile.
+
+        Dynamic routes (conditional / LLM) into a join target cannot be folded
+        (a sometimes-firing route has no place in an all-must-arrive join); those
+        are left for ``_validate`` to reject. ``START``/``END`` are never folded.
+        """
+        # Group every waiting-edge by target, collecting the union of sources.
+        if not any(we.to_node != END for we in self._waiting_edges):
+            return
+        merged: dict[str, list[str]] = {}  # target → ordered unique sources
+        for we in self._waiting_edges:
+            target = we.to_node
+            if target == END:
+                continue
+            bucket = merged.setdefault(target, [])
+            for s in we.sources:
+                if s not in bucket:
+                    bucket.append(s)
+
+        # Absorb plain single edges that point at a join target (skip START).
+        surviving_single: list[_Edge] = []
+        for e in self._edges:
+            if e.to_node in merged and e.from_node != START:
+                if e.from_node not in merged[e.to_node]:
+                    merged[e.to_node].append(e.from_node)
+                continue  # folded into the join — drop the single edge
+            surviving_single.append(e)
+        self._edges = surviving_single
+
+        # Rebuild waiting-edges: one merged AND-join per target. Preserve any
+        # waiting-edge to END untouched (END is exempt — many nodes finish there).
+        rebuilt: list[_WaitingEdge] = [
+            we for we in self._waiting_edges if we.to_node == END
+        ]
+        for target, sources in merged.items():
+            rebuilt.append(_WaitingEdge(sources=tuple(sources), to_node=target))
+        self._waiting_edges = rebuilt
+
     # --- validation ---
 
     def _validate(self) -> None:
@@ -324,6 +390,36 @@ class BgGraph:
         )
         if not has_end:
             raise ValueError("Graph must have at least one edge to END")
+
+        # A waiting-edge (AND-join) target fires exactly once, when all of its
+        # sources arrive. ``_normalize_waiting_edges`` (run before validation in
+        # ``compile``) already folded any *static* single/waiting channels into
+        # that join, so the only remaining conflict here is a *dynamic* route
+        # (conditional / LLM) into a join target. A sometimes-firing route has no
+        # place in an all-must-arrive join — it cannot be merged — so it is the
+        # one case still rejected.
+        for we in self._waiting_edges:
+            target = we.to_node
+            if target == END:
+                continue
+            dynamic_sources: list[str] = []
+            for ce in self._conditional_edges:
+                if target in ce.mapping.values():
+                    dynamic_sources.append(f"router({ce.from_node})")
+            for le in self._llm_edges:
+                if target in le.mapping.values():
+                    dynamic_sources.append(f"llm({le.from_node})")
+            if dynamic_sources:
+                join = "+".join(we.sources)
+                raise ValueError(
+                    f"Node '{target}' is an AND-join target (waiting-edge "
+                    f"[{join}]) but is also a dynamic route target from "
+                    f"{dynamic_sources}. A conditional/LLM route fires "
+                    f"conditionally and cannot be folded into an all-sources "
+                    f"join, so it would fire the target a second time. Route "
+                    f"the dynamic edge to a distinct node, or to one of the "
+                    f"join's sources."
+                )
 
         # NOTE: cycles are intentionally allowed (langgraph model). They are
         # bounded at runtime by ``recursion_limit``; no compile-time check.

@@ -227,12 +227,21 @@ async def _run_one_node(
 
 
 def successors(
-    node: str, graph: "BgGraph", state: GraphState, completed: set, trigger_count: dict
+    node: str,
+    graph: "BgGraph",
+    state: GraphState,
+    completed: set,
+    trigger_count: dict,
+    run_state: Optional[GraphRunState] = None,
 ) -> list[str]:
     """Compute the next hops after *node* completes.
 
     Raises :class:`_LlmPauseSignal` for an LLM edge and :class:`GraphRouterError`
     for a failing / unknown conditional router.
+
+    When *run_state* is provided, the conditional router's chosen key is recorded
+    on the node's record (``last_route_key``) for observability — the route taken
+    is otherwise lost once the target node is appended to the frontier.
     """
     # 1. LLM edge takes precedence → pause the whole graph.
     for le in graph._llm_edges:
@@ -253,6 +262,8 @@ def successors(
             raise GraphRouterError(
                 f"Router on '{node}' returned '{key}', not in mapping {list(ce.mapping.keys())}"
             )
+        if run_state is not None:
+            run_state.get(node).last_route_key = key
         out.append(ce.mapping[key])
 
     # 3. Single static edges — fire immediately.
@@ -261,11 +272,17 @@ def successors(
             out.append(e.to_node)
 
     # 4. Waiting-edges — AND-join, fire only once all sources have arrived.
+    #    The arrival set is per-activation: once every source has arrived and
+    #    the join fires, reset it so a later cycle must re-collect all sources
+    #    afresh (mirrors LangGraph's NamedBarrierValue.consume). Without the
+    #    reset the set stays full and an AND-join inside a cycle silently
+    #    degrades to an OR-join on the second and later laps.
     for we in graph._waiting_edges:
         if node in we.sources:
             trigger_count[we.to_node].add(node)
             if set(we.sources).issubset(trigger_count[we.to_node]):
                 out.append(we.to_node)
+                trigger_count[we.to_node].clear()
 
     return out
 
@@ -358,7 +375,7 @@ async def _run_driver(
 
     try:
         for n in precompleted:
-            for s in successors(n, graph, state, completed, trigger_count):
+            for s in successors(n, graph, state, completed, trigger_count, run_state):
                 spawn(s)
         for n in execute_nodes:
             spawn(n)
@@ -392,7 +409,7 @@ async def _run_driver(
                     run_state=run_state,
                 )
                 try:
-                    succs = successors(n, graph, state, completed, trigger_count)
+                    succs = successors(n, graph, state, completed, trigger_count, run_state)
                 except _LlmPauseSignal as sig:
                     pause_edge = sig.edge
                     raise

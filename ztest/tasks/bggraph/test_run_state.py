@@ -192,3 +192,63 @@ class TestRunStateRecording:
         assert rs2.records["b"].status == BgStatus.SUCCESS
         # attempts kept climbing (not reset to 0 on resume).
         assert rs2.records["b"].attempts == attempts_before + 1
+
+
+# ---------------------------------------------------------------------------
+# Conditional route-key recording (observability)
+# ---------------------------------------------------------------------------
+
+
+def _branch_graph(threshold: int):
+    """a → router(big|small) → big|small → END. Router keys on s.a vs threshold."""
+    g = BgGraph("branch", state_schema=SimpleState, recursion_limit=10)
+    g.add_node("a", sync_node(lambda s: s.x))
+    g.add_node("big", sync_node(lambda s: "BIG"))
+    g.add_node("small", sync_node(lambda s: "SMALL"))
+    g.add_edge(START, "a")
+    g.add_conditional_edges(
+        "a",
+        lambda s, t=threshold: "big" if s.a > t else "small",
+        {"big": "big", "small": "small"},
+    )
+    g.add_edge("big", END)
+    g.add_edge("small", END)
+    return g
+
+
+class TestRouteKeyRecording:
+    async def test_conditional_route_key_recorded(self, pool):
+        # x=20 > 10 → router picks 'big'.
+        g = _branch_graph(threshold=10)
+        executor = g.compile()
+        res = await executor(x=20)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
+                          graph_meta=res.graph_meta)
+        await pool.wait_all()
+
+        rs = pool.get_run_state(tid)
+        assert rs.records["a"].last_route_key == "big"
+
+    async def test_conditional_route_key_other_branch(self, pool):
+        # x=3 <= 10 → router picks 'small'.
+        g = _branch_graph(threshold=10)
+        executor = g.compile()
+        res = await executor(x=3)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
+                          graph_meta=res.graph_meta)
+        await pool.wait_all()
+
+        rs = pool.get_run_state(tid)
+        assert rs.records["a"].last_route_key == "small"
+
+    async def test_non_routed_node_has_no_route_key(self, pool):
+        g = _branch_graph(threshold=10)
+        executor = g.compile()
+        res = await executor(x=20)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
+                          graph_meta=res.graph_meta)
+        await pool.wait_all()
+
+        rs = pool.get_run_state(tid)
+        # 'big' executed but routes only via a plain edge → no route key.
+        assert rs.records["big"].last_route_key is None
