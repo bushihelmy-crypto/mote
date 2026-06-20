@@ -65,6 +65,18 @@ class EventBus:
         Observation callers ignore the return; control callers read it
         (veto/mutate/stop). One subscriber raising is logged and skipped so the
         stream never breaks.
+
+        INVARIANT — **inline dispatch**: subscribers are ``await``ed directly in
+        the emitter's own task; never scheduled onto a new task (no
+        ``create_task`` / ``ensure_future``). This keeps the caller's contextvar
+        scope live inside ``handle``, which two things rely on: (a) control-event
+        veto/fold semantics — a hook must fold its outcome *before* the emitter
+        proceeds (e.g. a denied tool call folds before the recorder persists it);
+        and (b) active-bus contextvar resolution at emit sites — deep call sites
+        ``emit`` onto the bus bound in the caller's scope. (Tracing no longer
+        depends on this: spans/generations thread their parents *explicitly* by
+        ID, not via any backend's ambient context.) Guarded by
+        ``test_bus.py::test_emit_runs_subscribers_in_callers_contextvar_scope``.
         """
         outcomes: List[HookOutcome] = []
         for sub in self._subs:

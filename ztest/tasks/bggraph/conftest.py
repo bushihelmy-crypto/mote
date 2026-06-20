@@ -20,25 +20,40 @@ class S(GraphState):
     x: int = 0
 
 
-def sync_node(fn: Callable[[GraphState], object]):
-    """Build a node whose result is ``fn(state)`` (no poll phase)."""
+def _wrap(field, result):
+    """Wrap a node's raw result as a ``{field: result}`` update dict.
+
+    With the field/channel state model a node returns a dict of field updates.
+    Passing ``field=<node name>`` keeps ``state.<node>`` readable as before
+    (via ``extra="allow"``), so existing routers / downstream reads still work.
+    When ``field`` is ``None`` the raw result is returned unchanged (callers that
+    already return a dict, or nodes that never execute).
+    """
+    return {field: result} if field is not None else result
+
+
+def sync_node(fn: Callable[[GraphState], object], *, field: str | None = None):
+    """Build a node whose result is ``fn(state)`` (no poll phase).
+
+    If *field* is given, the result is wrapped as ``{field: fn(state)}``.
+    """
 
     async def node(state):
         async def submit():
-            return fn(state)
+            return _wrap(field, fn(state))
 
         return Stage(submit=submit())
 
     return node
 
 
-def gated_node(event: asyncio.Event, fn: Callable[[GraphState], object]):
+def gated_node(event: asyncio.Event, fn: Callable[[GraphState], object], *, field: str | None = None):
     """Build a node that blocks on *event* before returning ``fn(state)``."""
 
     async def node(state):
         async def submit():
             await event.wait()
-            return fn(state)
+            return _wrap(field, fn(state))
 
         return Stage(submit=submit())
 
@@ -59,7 +74,7 @@ def boom_node(exc: BaseException, *, attempts_holder: list | None = None):
     return node
 
 
-def flaky_node(fail_times: int, value, counter: list):
+def flaky_node(fail_times: int, value, counter: list, *, field: str | None = None):
     """Build a node that raises ``fail_times`` then returns *value*.
 
     ``counter`` accumulates one entry per attempt.
@@ -71,14 +86,14 @@ def flaky_node(fail_times: int, value, counter: list):
             counter.append(1)
             if len(counter) <= fail_times:
                 raise ConnectionError(f"flaky {len(counter)}")
-            return value
+            return _wrap(field, value)
 
         return Stage(submit=submit())
 
     return node
 
 
-def non_retryable_flaky_node(fail_times: int, value, counter: list):
+def non_retryable_flaky_node(fail_times: int, value, counter: list, *, field: str | None = None):
     """Build a node that raises a non-retryable error ``fail_times`` then returns *value*.
 
     ``counter`` accumulates one entry per attempt.
@@ -90,7 +105,7 @@ def non_retryable_flaky_node(fail_times: int, value, counter: list):
             counter.append(1)
             if len(counter) <= fail_times:
                 raise ValueError(f"non-retryable flaky {len(counter)}")
-            return value
+            return _wrap(field, value)
 
         return Stage(submit=submit())
 

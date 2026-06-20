@@ -59,12 +59,11 @@ class FakeThinkEngine:
         self.start_calls: list[dict] = []
         self.join_calls = 0
 
-    async def start(self, req, system_prompt, state_data, tool_specs=None, *, llm):
+    async def start(self, req, system_prompt, tool_specs=None, *, llm):
         self.start_calls.append(
             {
                 "req": req,
                 "system_prompt": system_prompt,
-                "state_data": state_data,
                 "tool_specs": tool_specs,
                 "llm": llm,
             }
@@ -98,6 +97,11 @@ class FakeChannel:
 
     async def is_terminal(self, think_engine) -> bool:
         return self.terminal
+
+    def react_result(self, outputs: str) -> str:
+        # Mirror the base default (plain outputs); the loop's content is then
+        # assertable against the joined command outputs / no-commands notice.
+        return outputs
 
 
 @dataclass
@@ -170,7 +174,7 @@ class FakeContextProvider:
     def __init__(self, ctx: LoopContext, *, think_request: Optional[ThinkRequest] = None, llm: Optional[FakeLLM] = None):
         self._ctx = ctx
         self._think_request = think_request or ThinkRequest(
-            req=[UserMessage("hi")], system_prompt="sys", state_data={"k": "v"}, tool_specs=["spec"]
+            req=[UserMessage("hi")], system_prompt="sys", tool_specs=["spec"]
         )
         self.llm = llm or FakeLLM()
         self.prepare_calls = 0

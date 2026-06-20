@@ -66,12 +66,12 @@ class ContextProvider(BaseContextProvider):
         return self._role.config
 
     @property
-    def _llm(self):
-        # Used only for the prompt's "powered by model X" line — a representative
-        # handle resolved as the fixed configured model. The actual per-request
-        # think LLM is resolved by ``resolve_llm`` below.
-        role = self._role
-        return role.router.route(llm_config=role.config.llm)
+    def _model_name(self) -> str:
+        # The configured model name, shown in the prompt's "powered by model X"
+        # line — display-only metadata. The actual per-request think LLM (which
+        # may be router-selected) is resolved by ``resolve_llm`` below, so a live
+        # LLM handle is resolved in exactly one place.
+        return getattr(self._role.config.llm, "model", "") or ""
 
     async def resolve_llm(self, messages=None):
         """Resolve the think LLM via the router (the conduit for flag + llmconfig).
@@ -154,7 +154,6 @@ class ContextProvider(BaseContextProvider):
         return ThinkRequest(
             req=req,
             system_prompt=system_prompt,
-            state_data=ctx.state_data,
             tool_specs=tool_specs,
         )
 
@@ -187,16 +186,13 @@ class ContextProvider(BaseContextProvider):
             team_info=self._team_info(),
             working_dir=self._get_cwd(),
             project_root=self._state.project_root,
-            output_format=self._channel.output_format(),
-            command_guide=self._channel.command_guide(),
-            command_hint=self._channel.command_hint(),
         )
 
     def _think_subsystems(self) -> ThinkSubsystems:
         """The live collaborators handed to PromptBuilder for one think()."""
         return ThinkSubsystems(
             config=self._config,
-            llm=self._llm,
+            model_name=self._model_name,
             executor=self._executor,
             skill_manager=self._skill_manager,
             turn_context_bus=self._role.turn_context_bus,

@@ -55,7 +55,14 @@ class Agent(BaseTool):
         # lowerer fails loudly on any unlowered symbol rather than leaking it.
         task_brief = agent.command_channel.lower(task_brief)
         msg = UserMessage(content=task_brief)
-        await agent.run(with_message=msg)
+        # Always tear the child down: it may have spun up its own terminal/kernel
+        # PTY, LSP servers, or file-watch loop — session-scoped OS resources that
+        # leak if the child is dropped without cleanup() (the child has its own
+        # session_id, so this never touches the parent's resources).
+        try:
+            await agent.run(with_message=msg)
+        finally:
+            await agent.cleanup()
         report = agent.state.last_end_output.strip()
         if not report:
             report = "Agent finished without a final summary."

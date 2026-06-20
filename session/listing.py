@@ -16,15 +16,20 @@ scale and is intentionally not built here (the rollout stays the truth source).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from metagpt.common.logs import log_call
-from metagpt.session.events import MESSAGE, META_UPDATE, SESSION_META, parse_line
-from metagpt.session.log import ROLLOUT_FILENAME, SESSIONS_DIRNAME
+from metagpt.session.events import (
+    MessageEvent,
+    MetaUpdateEvent,
+    SessionMetaEvent,
+    parse_event,
+    parse_line,
+)
+from metagpt.session.log import ROLLOUT_FILENAME, _default_base_dir
 
 #: How many leading lines to scan for the meta + first message preview.
 _HEAD_LINES = 16
@@ -57,28 +62,20 @@ class SessionInfo:
         return datetime.fromtimestamp(self.modified_ts).isoformat()
 
 
-def _default_base_dir() -> Path:
-    from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-
-    return Path(DEFAULT_WORKSPACE_ROOT) / SESSIONS_DIRNAME
-
-
-def _read_head(path: Path) -> tuple[Optional[dict], Optional[str]]:
-    """Return (session_meta payload, first-message preview) from the head."""
-    meta: Optional[dict] = None
+def _read_head(path: Path) -> tuple[Optional[SessionMetaEvent], Optional[str]]:
+    """Return (session_meta event, first-message preview) from the head."""
+    meta: Optional[SessionMetaEvent] = None
     preview: Optional[str] = None
     with open(path, "r", encoding="utf-8") as f:
         for _ in range(_HEAD_LINES):
             line = f.readline()
             if not line:
                 break
-            record = parse_line(line)
-            if record is None:
-                continue
-            if record["type"] == SESSION_META and meta is None:
-                meta = record.get("payload") or {}
-            elif record["type"] == MESSAGE and preview is None:
-                content = (record.get("payload") or {}).get("content")
+            event = parse_event(parse_line(line) or {})
+            if isinstance(event, SessionMetaEvent) and meta is None:
+                meta = event
+            elif isinstance(event, MessageEvent) and preview is None and event.message is not None:
+                content = event.message.content
                 if isinstance(content, str):
                     preview = content[:_PREVIEW_MAX]
             if meta is not None and preview is not None:
@@ -102,14 +99,13 @@ def _read_tail_meta(path: Path, size: int) -> tuple[Optional[str], Optional[str]
     last_prompt: Optional[str] = None
     # Walk newest-first so the first hit wins (last-write-wins semantics).
     for line in reversed(lines):
-        record = parse_line(line)
-        if record is None or record["type"] != META_UPDATE:
+        event = parse_event(parse_line(line) or {})
+        if not isinstance(event, MetaUpdateEvent):
             continue
-        payload = record.get("payload") or {}
-        if title is None and payload.get("title"):
-            title = payload["title"]
-        if last_prompt is None and payload.get("last_prompt"):
-            last_prompt = payload["last_prompt"]
+        if title is None and event.title:
+            title = event.title
+        if last_prompt is None and event.last_prompt:
+            last_prompt = event.last_prompt
         if title is not None and last_prompt is not None:
             break
     return title, last_prompt
@@ -125,18 +121,17 @@ def _read_lite(rollout: Path, session_id: str) -> Optional[SessionInfo]:
         title, last_prompt = _read_tail_meta(rollout, stat.st_size)
     except OSError:
         return None
-    meta = meta or {}
     return SessionInfo(
-        session_id=meta.get("session_id") or session_id,
+        session_id=(meta.session_id if meta else None) or session_id,
         path=str(rollout),
         modified_ts=stat.st_mtime,
         size=stat.st_size,
-        created_at=meta.get("created_at"),
-        working_dir=meta.get("working_dir"),
-        project_root=meta.get("project_root"),
-        model=meta.get("model"),
-        role_class=meta.get("role_class"),
-        parent_session_id=meta.get("parent_session_id"),
+        created_at=meta.created_at if meta else None,
+        working_dir=meta.working_dir if meta else None,
+        project_root=meta.project_root if meta else None,
+        model=meta.model if meta else None,
+        role_class=meta.role_class if meta else None,
+        parent_session_id=meta.parent_session_id if meta else None,
         title=title,
         last_prompt=last_prompt,
         preview=preview,

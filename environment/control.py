@@ -29,6 +29,7 @@ import asyncio
 import weakref
 from typing import Callable, Dict, Optional
 
+from metagpt.common.events import AgentLifecycleEvent, EventBus, LogSubscriber
 from metagpt.common.logs import logger
 from metagpt.common.schema import Message, UserMessage
 from metagpt.environment.agent_path import AgentPath
@@ -38,7 +39,7 @@ from metagpt.environment.mailbox import DeliveryMode, InterAgentCommunication
 from metagpt.environment.registry import AgentMetadata, AgentRegistry
 from metagpt.environment.residency import Residency
 from metagpt.environment.runtime import AgentRuntime, AgentStatus, is_final
-from metagpt.environment.scheduler import EventDrivenScheduler
+from metagpt.environment.turn_scheduler import EventDrivenScheduler
 from metagpt.environment.store import ResidencyStore
 
 
@@ -55,7 +56,7 @@ class AgentControl:
         *,
         session_id: Optional[str] = None,
         store: Optional[ResidencyStore] = None,
-        max_threads: Optional[int] = None,
+        max_agents: Optional[int] = None,
         residency_capacity: Optional[int] = None,
         role_loader: Optional[Callable[[dict], object]] = None,
         watch_interval: float = 0.01,
@@ -64,14 +65,20 @@ class AgentControl:
         self._runtimes: Dict[str, AgentRuntime] = {}
         self._registry = AgentRegistry()
         self._limiter = AgentExecutionLimiter()
-        if max_threads is not None:
-            self._limiter.initialize(max_threads)
+        if max_agents is not None:
+            self._limiter.initialize(max_agents)
+        # Runtime-level spine: the orchestration layer runs outside any per-turn
+        # (per-Role) bus, so it owns this one. A LogSubscriber turns the
+        # agent-lifecycle milestones emitted below into central log lines.
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(LogSubscriber())
         self._store = store if store is not None else ResidencyStore()
         self._scheduler = EventDrivenScheduler(limiter=self._limiter)
         self._residency = Residency(
             self._runtimes.get,
             store=self._store,
             remove_runtime=self._remove_runtime,
+            event_bus=self._event_bus,
         )
         self._residency_capacity = residency_capacity
         self._role_loader = role_loader
@@ -101,6 +108,11 @@ class AgentControl:
     def store(self) -> ResidencyStore:
         return self._store
 
+    @property
+    def event_bus(self) -> EventBus:
+        """The runtime-level bus carrying cross-agent lifecycle milestones."""
+        return self._event_bus
+
     def runtimes(self) -> Dict[str, AgentRuntime]:
         return dict(self._runtimes)
 
@@ -122,17 +134,25 @@ class AgentControl:
         self._runtimes[session_id] = runtime
         self._scheduler.add_runtime(runtime)
         if root:
-            self._registry.register_root_thread(session_id)
+            self.register_session_root(session_id)
         elif metadata is not None:
             metadata.agent_id = session_id
-            self._registry._register_spawned_thread(metadata)
+            self._registry._register_spawned_agent(metadata)
         self._residency.touch(session_id)
+        self._event_bus.emit_sync(
+            AgentLifecycleEvent(session_id=session_id, phase="added", detail=type(runtime.role).__name__)
+        )
         return runtime
 
-    def register_session_root(self, current_thread_id: str, current_parent_thread_id: Optional[str] = None) -> None:
-        """Index the root thread iff it has no parent (codex ``register_session_root``)."""
-        if current_parent_thread_id is None:
-            self._registry.register_root_thread(current_thread_id)
+    def register_session_root(self, current_agent_id: str, current_parent_agent_id: Optional[str] = None) -> None:
+        """Index the root agent iff it has no parent (codex ``register_session_root``).
+
+        The single entry point for root-agent indexing: ``add_agent(root=True)``
+        routes through here too, so both share the underlying
+        ``register_root_agent`` call.
+        """
+        if current_parent_agent_id is None:
+            self._registry.register_root_agent(current_agent_id)
 
     def _remove_runtime(self, session_id: str) -> None:
         """Drop a runtime from the live map + scheduler (residency eviction)."""
@@ -239,6 +259,9 @@ class AgentControl:
             self._scheduler.ensure_driver(runtime)
         elif not is_final(runtime.status):
             runtime.status = AgentStatus.INTERRUPTED
+        self._event_bus.emit_sync(
+            AgentLifecycleEvent(session_id=agent_id, phase="interrupted", detail=runtime.status.value)
+        )
         return runtime.status
 
     # ------------------------------------------------------------------
@@ -258,6 +281,7 @@ class AgentControl:
         self._scheduler.add_runtime(restored)
         self._residency.touch(agent_id)
         self._store.forget(agent_id)
+        self._event_bus.emit_sync(AgentLifecycleEvent(session_id=agent_id, phase="rehydrated"))
         return restored
 
     # ------------------------------------------------------------------

@@ -18,11 +18,11 @@ time so the scheduler can detect external edits and hot-reload.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
+from metagpt.common.disk import atomic_write
 from metagpt.common.logs import log_class
 from metagpt.environment.scheduling.task import CronTask
 
@@ -102,13 +102,14 @@ class CronTaskStore:
         durable = [t for t in tasks if t.durable]
         body = {"tasks": [t.to_dict() for t in durable]}
         self._dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(self._path.name + f".tmp.{os.getpid()}")
         text = json.dumps(body, indent=2, ensure_ascii=False) + "\n"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, self._path)
+        # Synchronous atomic write via the consolidated L0 primitive (same
+        # tmp+fsync+replace as before). This store runs inside the scheduler's
+        # async tick and relies on synchronous read-after-write (``load`` and
+        # ``mtime`` are read right after ``save``), so the write must complete
+        # before returning — it is intentionally NOT routed through the
+        # DiskWriter's deferred queue.
+        atomic_write(self._path, text.encode("utf-8"))
 
     # ------------------------------------------------------------------
     # Mutation API

@@ -57,6 +57,10 @@ class CapRole:
         self._cwd = cwd or os.getcwd()
         # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
         self.read_state: dict[str, int] = {}
+        # Per-Role live sessions for stateful tools (terminal/kernel), keyed by
+        # tool name. Mirrors RoleState._tool_sessions — owned by this fake Role,
+        # so each test's tools are isolated (no process-global leakage).
+        self.tool_sessions: dict[str, Any] = {}
         # Before-image snapshot calls: (full_path, tool) recorded for assertions.
         self.snapshots: list[tuple[str, str]] = []
         # Scriptable human/session behaviour.
@@ -85,6 +89,16 @@ class CapRole:
     def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
         self.snapshots.append((full_path, tool))
 
+    # --- stateful-tool sessions (Terminal/Python live state on RoleState) ---
+    def get_tool_session(self, key: str) -> Any:
+        return self.tool_sessions.get(key)
+
+    def set_tool_session(self, key: str, value: Any) -> None:
+        if value is None:
+            self.tool_sessions.pop(key, None)
+        else:
+            self.tool_sessions[key] = value
+
     # --- human / session ---
     async def ask_human(self, question: str) -> str:
         self.ask_questions.append(question)
@@ -111,6 +125,8 @@ class CapRole:
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
             "record_file_snapshot": self.record_file_snapshot,
+            "get_tool_session": self.get_tool_session,
+            "set_tool_session": self.set_tool_session,
             "ask_human": self.ask_human,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,

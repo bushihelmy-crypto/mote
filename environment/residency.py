@@ -26,8 +26,10 @@ import threading
 from collections import deque
 from typing import Awaitable, Callable, Optional
 
+from metagpt.common.events import AgentLifecycleEvent, EventBus
 from metagpt.common.logs import logger
 from metagpt.common.exception import AgentLimitReached
+from metagpt.environment._scope import ScopedExitMixin
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.environment.store import ResidencyStore
 
@@ -44,10 +46,12 @@ class Residency:
         *,
         store: Optional[ResidencyStore] = None,
         remove_runtime: Optional[RuntimeRemover] = None,
+        event_bus: Optional[EventBus] = None,
     ):
         self._lookup = runtime_lookup
         self._store = store if store is not None else ResidencyStore()
         self._remove = remove_runtime
+        self._event_bus = event_bus
         self._lock = threading.Lock()
         # LRU order: front == oldest (evict first), back == most-recently-used.
         self._residents: "deque[str]" = deque()
@@ -105,6 +109,10 @@ class Residency:
                 self.touch(candidate)
                 continue
             await self._call_remove(candidate)
+            if self._event_bus is not None:
+                self._event_bus.emit_sync(
+                    AgentLifecycleEvent(session_id=candidate, phase="evicted")
+                )
             return True
         return False
 
@@ -174,7 +182,7 @@ class Residency:
         return self._pending_slots
 
 
-class ResidencySlot:
+class ResidencySlot(ScopedExitMixin):
     """A reserved residency slot; commit it to a session or let it roll back.
 
     Mirrors rust's RAII ``V2ResidencySlot``: an uncommitted slot releases its
@@ -198,19 +206,8 @@ class ResidencySlot:
             self._residency._release_pending_slot()
             self._active = False
 
-    def __enter__(self) -> "ResidencySlot":
-        return self
-
-    def __exit__(self, *exc) -> bool:
+    def _scope_exit(self) -> None:
         self.rollback()
-        return False
-
-    async def __aenter__(self) -> "ResidencySlot":
-        return self
-
-    async def __aexit__(self, *exc) -> bool:
-        self.rollback()
-        return False
 
 
 __all__ = ["Residency", "ResidencySlot"]

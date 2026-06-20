@@ -39,6 +39,9 @@ TURN_END = "turn_end"
 MESSAGE_APPENDED = "message_appended"
 LLM_STREAM_DELTA = "llm_stream_delta"
 LLM_STREAM_END = "llm_stream_end"
+LLM_REQUEST = "llm_request"
+LLM_RESPONSE = "llm_response"
+LLM_ERROR = "llm_error"
 COMPACTION_CHECKPOINT = "compaction_checkpoint"
 FILE_SNAPSHOT = "file_snapshot"
 USER_PROMPT_SUBMIT = "user_prompt_submit"
@@ -52,6 +55,9 @@ DIAGNOSTICS = "diagnostics"
 RECOVERY = "recovery"
 TASK_PROGRESS = "task_progress"
 RESOURCE_REPORT = "resource_report"
+AGENT_LIFECYCLE = "agent_lifecycle"
+SPAN_START = "span_start"
+SPAN_END = "span_end"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +140,76 @@ class LLMStreamEndEvent:
     """The current LLM stream finished (turn boundary for the renderer)."""
 
     name: ClassVar[str] = LLM_STREAM_END
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class LLMRequestEvent:
+    """A single LLM completion request is about to be issued.
+
+    Emitted at the one LLM-call chokepoint (``BaseLLM._run_with_recovery``) right
+    before the provider is hit, carrying enough to open an external trace
+    (model/provider/input). One is emitted per recovery attempt, so retries /
+    credential rotations / fallbacks each get their own request → response|error
+    pair correlated by ``request_id``.
+    """
+
+    request_id: str = ""
+    model: str = ""
+    provider: str = ""  # api_type, e.g. "openai" / "anthropic"
+    messages: List[Any] = field(default_factory=list)  # input wire messages
+    stream: bool = False
+    # Explicit trace linkage (carried in the event, not via ambient context):
+    # the span this generation nests under + the run's trace_id. Stamped at the
+    # emit site (``BaseLLM._call``) from the framework-native trace context.
+    parent_span_id: Optional[str] = None
+    trace_id: str = ""
+
+    name: ClassVar[str] = LLM_REQUEST
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class LLMResponseEvent:
+    """A single LLM completion returned — its output, usage, cost and latency.
+
+    The response half of :class:`LLMRequestEvent` (paired by ``request_id``).
+    ``usage`` is a :meth:`~metagpt.router.cost.usage.TokenUsage.to_dict` mapping
+    and ``cost_usd`` the per-call USD cost (from the cost tracker), so a
+    subscriber can persist per-request token/cost or mirror it to an external
+    observability backend without re-counting.
+    """
+
+    request_id: str = ""
+    model: str = ""
+    content: str = ""
+    tool_calls: List[dict] = field(default_factory=list)  # [{id,name,arguments}]
+    usage: Optional[dict] = None
+    cost_usd: float = 0.0
+    latency_ms: float = 0.0
+    trace_id: str = ""  # correlation symmetry with the request
+
+    name: ClassVar[str] = LLM_RESPONSE
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class LLMErrorEvent:
+    """An LLM completion attempt raised (paired with a prior LLMRequestEvent).
+
+    Lets a subscriber mark the matching external trace as errored and record the
+    latency-to-failure. The recovery loop's own control flow (retry / rotate /
+    re-raise) stays the source of truth; this only mirrors *that it failed*.
+    """
+
+    request_id: str = ""
+    model: str = ""
+    error_type: str = ""
+    error: str = ""
+    latency_ms: float = 0.0
+    trace_id: str = ""  # correlation symmetry with the request
+
+    name: ClassVar[str] = LLM_ERROR
     is_control: ClassVar[bool] = False
 
 
@@ -278,6 +354,58 @@ class ResourceReportEvent:
     is_control: ClassVar[bool] = False
 
 
+@dataclass
+class AgentLifecycleEvent:
+    """An agent crossed a residency/control-plane boundary.
+
+    The orchestration layer (control / residency) runs *outside* any per-turn
+    bus, so it owns a runtime-level bus and emits these milestones onto it:
+    ``added`` / ``rehydrated`` / ``evicted`` / ``interrupted``.
+    """
+
+    session_id: str = ""
+    phase: str = ""
+    detail: str = ""
+
+    name: ClassVar[str] = AGENT_LIFECYCLE
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class SpanStartEvent:
+    """A trace span opened (framework-native instrumentation primitive).
+
+    Carries explicit trace structure — ``span_id`` / ``parent_span_id`` /
+    ``trace_id`` — so the trace tree is rebuilt downstream from these IDs, not
+    from any backend's ambient context. Emitted by the ``span`` contextmanager
+    (:mod:`~metagpt.common.events.trace`). The instance field is ``label`` (the
+    human name) — ``name`` is the reserved discriminator ClassVar.
+    """
+
+    span_id: str = ""
+    parent_span_id: Optional[str] = None
+    trace_id: str = ""
+    label: str = ""
+    attributes: dict = field(default_factory=dict)
+
+    name: ClassVar[str] = SPAN_START
+    is_control: ClassVar[bool] = False
+
+
+@dataclass
+class SpanEndEvent:
+    """A trace span closed (paired with :class:`SpanStartEvent` by ``span_id``)."""
+
+    span_id: str = ""
+    trace_id: str = ""
+    status: str = "ok"  # ok | error
+    error: str = ""
+    attributes: dict = field(default_factory=dict)
+
+    name: ClassVar[str] = SPAN_END
+    is_control: ClassVar[bool] = False
+
+
 # ---------------------------------------------------------------------------
 # Control events (subscribers may return a non-empty outcome -> folded)
 # ---------------------------------------------------------------------------
@@ -352,6 +480,9 @@ __all__ = [
     "MESSAGE_APPENDED",
     "LLM_STREAM_DELTA",
     "LLM_STREAM_END",
+    "LLM_REQUEST",
+    "LLM_RESPONSE",
+    "LLM_ERROR",
     "COMPACTION_CHECKPOINT",
     "FILE_SNAPSHOT",
     "USER_PROMPT_SUBMIT",
@@ -365,6 +496,9 @@ __all__ = [
     "RECOVERY",
     "TASK_PROGRESS",
     "RESOURCE_REPORT",
+    "AGENT_LIFECYCLE",
+    "SPAN_START",
+    "SPAN_END",
     # observation events
     "SessionStartEvent",
     "SessionEndEvent",
@@ -373,6 +507,9 @@ __all__ = [
     "MessageAppendedEvent",
     "LLMStreamDeltaEvent",
     "LLMStreamEndEvent",
+    "LLMRequestEvent",
+    "LLMResponseEvent",
+    "LLMErrorEvent",
     "CompactionCheckpointEvent",
     "FileSnapshotEvent",
     "FileChangedEvent",
@@ -381,6 +518,9 @@ __all__ = [
     "RecoveryEvent",
     "TaskProgressEvent",
     "ResourceReportEvent",
+    "AgentLifecycleEvent",
+    "SpanStartEvent",
+    "SpanEndEvent",
     # control events
     "UserPromptSubmitEvent",
     "PreToolUseEvent",

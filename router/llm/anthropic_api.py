@@ -38,12 +38,13 @@ from metagpt.common.logs import log_llm_stream, logger
 from metagpt.common.utils.common import log_and_reraise, sniff_image_media_type
 from metagpt.common.utils.token_counter import count_message_tokens, count_string_tokens
 from metagpt.router.cost import CostTracker
-from metagpt.router.llm.base_llm import BaseLLM
+from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
+from metagpt.router.llm.credentials import CredentialRotationMixin
 from metagpt.router.llm.llm_provider_registry import register_provider
 
 
 @register_provider([LLMType.ANTHROPIC])
-class AnthropicLLM(BaseLLM):
+class AnthropicLLM(CredentialRotationMixin, BaseLLM):
     """Provider for Anthropic's native Messages API (Claude models)."""
 
     def __init__(self, config: LLMConfig):
@@ -57,25 +58,12 @@ class AnthropicLLM(BaseLLM):
         self.model = self.config.model  # used in _cons_kwargs / cost
         self.max_completion_token = self.config.max_token
         self.pricing_plan = self.config.pricing_plan or self.model
-        # Normalize api_key into a rotatable list; index points at the active key.
-        keys = self.config.api_key
-        self._api_keys: list[str] = list(keys) if isinstance(keys, list) else [keys]
-        self._api_key_index: int = 0
-        self._oauth = self._build_oauth_manager()
-        self.aclient = self._make_client()
+        # Normalize credentials (api_key list / OAuth) via the shared mixin, then
+        # build the client from the active one.
+        self._init_credentials()
+        self.aclient = self._rebuild_client()
 
-    def _build_oauth_manager(self):
-        """Construct an OAuthManager when ``config.oauth`` is set, else None."""
-        if not getattr(self.config, "oauth", None):
-            return None
-        from metagpt.router.oauth import OAuthManager
-
-        return OAuthManager(self.config.oauth)
-
-    def _current_api_key(self) -> str:
-        return self._api_keys[self._api_key_index]
-
-    def _make_client(self):
+    def _rebuild_client(self):
         from anthropic import AsyncAnthropic
 
         kwargs: dict[str, Any] = {}
@@ -103,24 +91,6 @@ class AnthropicLLM(BaseLLM):
             logger.warning("httpx unavailable; ignoring proxy for AnthropicLLM.")
             return None
         return httpx.AsyncClient(proxy=self.config.proxy)
-
-    def rotate_credential(self) -> bool:
-        """Advance to the next configured API key (or refresh OAuth) and rebuild.
-
-        Consumed by the recovery loop on ROTATE_CREDENTIAL. Returns False when no
-        further credential remains.
-        """
-        if self._oauth is not None:
-            token = self._oauth.force_refresh()
-            if token is None:
-                return False
-            self.aclient = self._make_client()
-            return True
-        if self._api_key_index + 1 >= len(self._api_keys):
-            return False
-        self._api_key_index += 1
-        self.aclient = self._make_client()
-        return True
 
     # -- message conversion (OpenAI wire shape -> Anthropic) ----------------
     def _convert_messages(self, messages: list[dict]) -> tuple[str, list[dict]]:
@@ -403,7 +373,7 @@ class AnthropicLLM(BaseLLM):
 
     @retry(
         wait=wait_random_exponential(min=1, max=60),
-        stop=stop_after_attempt(6),
+        stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         after=after_log(logger, logger.level("WARNING").name),
         retry=retry_if_exception(is_retryable),
         retry_error_callback=log_and_reraise,

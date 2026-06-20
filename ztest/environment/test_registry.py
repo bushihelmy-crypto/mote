@@ -11,9 +11,9 @@ from metagpt.environment.exceptions import AgentLimitReached
 from metagpt.environment.registry import (
     AgentMetadata,
     AgentRegistry,
-    exceeds_thread_spawn_depth_limit,
+    exceeds_agent_spawn_depth_limit,
     format_agent_nickname,
-    next_thread_spawn_depth,
+    next_agent_spawn_depth,
 )
 
 
@@ -33,11 +33,11 @@ def test_format_agent_nickname_adds_ordinals_after_reset():
     assert format_agent_nickname("Plato", 20) == "Plato the 21st"
 
 
-def test_thread_spawn_depth_increments_and_enforces_limit():
-    child_depth = next_thread_spawn_depth(1)
+def test_agent_spawn_depth_increments_and_enforces_limit():
+    child_depth = next_agent_spawn_depth(1)
     assert child_depth == 2
-    assert exceeds_thread_spawn_depth_limit(child_depth, 1)
-    assert not exceeds_thread_spawn_depth_limit(1, 1)
+    assert exceeds_agent_spawn_depth_limit(child_depth, 1)
+    assert not exceeds_agent_spawn_depth_limit(1, 1)
 
 
 def test_reservation_drop_releases_slot():
@@ -56,10 +56,10 @@ def test_commit_holds_slot_until_release():
 
     with pytest.raises(AgentLimitReached) as exc:
         registry.reserve_spawn_slot(1)
-    assert exc.value.max_threads == 1
+    assert exc.value.max_agents == 1
 
-    registry.release_spawned_thread(thread_id)
-    registry.reserve_spawn_slot(1).rollback()  # slot released after thread removal
+    registry.release_spawned_agent(thread_id)
+    registry.reserve_spawn_slot(1).rollback()  # slot released after agent removal
 
 
 def test_release_ignores_unknown_thread_id():
@@ -68,12 +68,12 @@ def test_release_ignores_unknown_thread_id():
     thread_id = new_id()
     reservation.commit(agent_metadata(thread_id))
 
-    registry.release_spawned_thread(new_id())  # unknown
+    registry.release_spawned_agent(new_id())  # unknown
 
     with pytest.raises(AgentLimitReached):
         registry.reserve_spawn_slot(1)
 
-    registry.release_spawned_thread(thread_id)
+    registry.release_spawned_agent(thread_id)
     registry.reserve_spawn_slot(1).rollback()
 
 
@@ -83,18 +83,18 @@ def test_release_is_idempotent_for_registered_threads():
     first_id = new_id()
     reservation.commit(agent_metadata(first_id))
 
-    registry.release_spawned_thread(first_id)
+    registry.release_spawned_agent(first_id)
 
     reservation = registry.reserve_spawn_slot(1)
     second_id = new_id()
     reservation.commit(agent_metadata(second_id))
 
-    registry.release_spawned_thread(first_id)  # second release of first is a no-op
+    registry.release_spawned_agent(first_id)  # second release of first is a no-op
 
     with pytest.raises(AgentLimitReached):
         registry.reserve_spawn_slot(1)
 
-    registry.release_spawned_thread(second_id)
+    registry.release_spawned_agent(second_id)
     registry.reserve_spawn_slot(1).rollback()
 
 
@@ -131,14 +131,14 @@ def test_repeated_resets_advance_the_ordinal_suffix():
         tid = new_id()
         reservation.commit(agent_metadata(tid))
         assert name == expected
-        registry.release_spawned_thread(tid)
+        registry.release_spawned_agent(tid)
     assert registry._nickname_reset_count == 2
 
 
-def test_register_root_thread_indexes_root_path():
+def test_register_root_agent_indexes_root_path():
     registry = AgentRegistry()
     root_id = new_id()
-    registry.register_root_thread(root_id)
+    registry.register_root_agent(root_id)
     assert registry.agent_id_for_path(AgentPath.root()) == root_id
 
 
@@ -162,13 +162,13 @@ def test_committed_agent_path_is_indexed_until_release():
     )
     assert registry.agent_id_for_path(AgentPath.from_string("/root/researcher")) == thread_id
 
-    registry.release_spawned_thread(thread_id)
+    registry.release_spawned_agent(thread_id)
     assert registry.agent_id_for_path(AgentPath.from_string("/root/researcher")) is None
 
 
 def test_live_agents_excludes_root():
     registry = AgentRegistry()
-    registry.register_root_thread(new_id())
+    registry.register_root_agent(new_id())
     res = registry.reserve_spawn_slot(None)
     wid = new_id()
     res.commit(AgentMetadata(agent_id=wid, agent_path=AgentPath.from_string("/root/worker")))

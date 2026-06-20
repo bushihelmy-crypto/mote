@@ -17,19 +17,23 @@ close. Use the one-shot :class:`Bash` tool for ordinary "run and get the result"
 commands; use this when you need persistent shell state or to drive a program
 interactively.
 
-Live state lives in the shared :data:`TERMINAL` engine, keyed by the Role session.
+The live :class:`TerminalSession` is owned by the Role: it is stored on the
+Role's ``RoleState`` (via the ``get_tool_session`` / ``set_tool_session``
+capabilities) rather than a process-global singleton, so each Role's terminal is
+isolated and torn down with it.
 """
 from __future__ import annotations
 
 import os
-from typing import Callable, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Optional
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.permission.classifier import classify_command
+from metagpt.executor.permission.command_parse import segment_strings
 from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.dependency._terminal import DEFAULT_YIELD_MS, TERMINAL
+from metagpt.executor.dependency._terminal import DEFAULT_YIELD_MS, TerminalSession
 from metagpt.common.prompt.tools import TERMINAL_DESCRIPTION
 
 
@@ -41,17 +45,51 @@ class Terminal(BaseTool):
     aliases = ["terminal.run"]
     max_result_size_chars: ClassVar[int] = 30_000
     description = TERMINAL_DESCRIPTION
-    requires = ("get_cwd",)
+    requires = ("get_cwd", "get_tool_session", "set_tool_session")
     # Arbitrary command execution — the highest-risk tool.
     risk_level = "high"
+    # Holds a live PTY shell on RoleState between calls.
+    stateful = True
 
-    # Injected from Role by bind() — only the cwd accessor (seeds the shell's
-    # initial directory on first use).
+    # Injected from Role by bind(): the cwd accessor (seeds the shell's initial
+    # directory on first use) + the per-Role tool-session store (where the live
+    # TerminalSession is kept, so it persists across calls and is owned by the
+    # Role rather than a process-global singleton).
     get_cwd: Callable[[], str]
+    get_tool_session: Callable[[str], Any]
+    set_tool_session: Callable[[str, Any], None]
+
+    async def _ensure_session(self) -> TerminalSession:
+        """Return this Role's live terminal, starting a fresh one if needed.
+
+        The session is stored on RoleState keyed by the tool name; a previously
+        stored shell that has since exited is dropped and replaced.
+        """
+        session = self.get_tool_session(self.name)
+        if session is not None and not session.closed:
+            return session
+        if session is not None:
+            session.shutdown()  # previous shell exited — start fresh
+        cwd = self.get_cwd()
+        base_cwd = cwd if cwd and os.path.isdir(cwd) else None
+        session = TerminalSession(session_key=self.session_id, cwd=base_cwd)
+        await session.start()
+        self.set_tool_session(self.name, session)
+        return session
 
     def permission_target(self, args: dict) -> str:
         """The typed input — matched against ``terminal(pattern)`` rules."""
         return args.get("input") or ""
+
+    def permission_segments(self, args: dict) -> "list[str] | None":
+        """Split typed input on shell operators for per-segment rule matching.
+
+        Interrupt/close/empty polls carry no command, so they defer (``None``).
+        """
+        if args.get("interrupt") or args.get("close"):
+            return None
+        command = args.get("input") or ""
+        return segment_strings(command) or None
 
     def check_permissions(self, args: dict) -> "PermissionDecision | None":
         """Classify the input (same Codex-style pre-check as :class:`Bash`).
@@ -101,28 +139,38 @@ class Terminal(BaseTool):
                 output so far and the terminal stays busy with a foreground program.
         """
         if close:
-            existed = TERMINAL.close(self.session_id)
-            return "[terminal closed]" if existed else "[no terminal to close]"
+            session = self.get_tool_session(self.name)
+            if session is None:
+                return "[no terminal to close]"
+            session.shutdown()
+            self.set_tool_session(self.name, None)
+            return "[terminal closed]"
 
         try:
             if interrupt:
-                result = await TERMINAL.interrupt(self.session_id, yield_time_ms)
+                session = self.get_tool_session(self.name)
+                if session is None or session.closed:
+                    raise ToolError("Error: no live terminal to interrupt.")
+                result = await session.interrupt(yield_time_ms)
             else:
-                cwd = self.get_cwd()
-                base_cwd = cwd if cwd and os.path.isdir(cwd) else None
-                result = await TERMINAL.interact(
-                    self.session_id, base_cwd, input, yield_time_ms
-                )
+                session = await self._ensure_session()
+                result = await session.feed(input, yield_time_ms)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
             raise ToolError(f"Error driving terminal: {e}")
 
+        if result[3]:  # the shell itself exited — drop the stored session
+            session.shutdown()
+            self.set_tool_session(self.name, None)
         return _format_output(*result)
 
     def cleanup_session(self, session_id: str) -> None:
-        """Tear down this session's terminal."""
-        TERMINAL.cleanup_session(session_id)
+        """Tear down this Role's terminal (idempotent)."""
+        session = self.get_tool_session(self.name)
+        if session is not None:
+            session.shutdown()
+            self.set_tool_session(self.name, None)
 
 
 def _format_output(

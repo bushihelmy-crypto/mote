@@ -133,6 +133,106 @@ class TestAskResolution:
         assert "no interactive channel" in d.message
 
 
+class TestSegments:
+    async def test_compound_deny_catches_dangerous_half(self):
+        # A deny rule on the destructive segment blocks the whole command, even
+        # though the leading segment is harmless.
+        eng = engine(deny=["Bash(rm -rf*)"])
+        d = await eng.check(
+            "Bash", target="ls && rm -rf /", segments=["ls", "rm -rf /"]
+        )
+        assert d.behavior == "deny"
+
+    async def test_compound_all_allow(self):
+        eng = engine(allow=["Bash(git*)"])
+        d = await eng.check(
+            "Bash",
+            target="git status && git log",
+            segments=["git status", "git log"],
+        )
+        assert d.behavior == "allow"
+
+    async def test_compound_partial_allow_defers_to_ask(self):
+        # One segment allowed, the other unmatched -> defers to ask; no channel
+        # => deny.
+        eng = engine(allow=["Bash(git*)"], reply=None)
+        d = await eng.check(
+            "Bash", target="git status && ls", segments=["git status", "ls"]
+        )
+        assert d.behavior == "deny"
+
+    async def test_ask_segment_prompts(self):
+        eng = engine(ask=["Bash(deploy*)"], allow=["Bash(git*)"], reply="yes")
+        d = await eng.check(
+            "Bash",
+            target="git status && deploy prod",
+            segments=["git status", "deploy prod"],
+        )
+        assert d.behavior == "allow"
+
+
+class TestStickyPrefix:
+    async def test_always_remembers_prefix_for_single_segment(self):
+        eng = engine(reply="always")
+        d1 = await eng.check(
+            "Bash", target="git commit -m foo", segments=["git commit -m foo"]
+        )
+        assert d1.behavior == "allow"
+        # A variation of the same command rides the prefix rule without asking.
+        eng._ask_human = None
+        d2 = await eng.check(
+            "Bash", target="git commit -m bar", segments=["git commit -m bar"]
+        )
+        assert d2.behavior == "allow"
+
+    async def test_prefix_does_not_overgrant_other_subcommand(self):
+        eng = engine(reply="always")
+        d1 = await eng.check(
+            "Bash", target="git commit -m foo", segments=["git commit -m foo"]
+        )
+        assert d1.behavior == "allow"
+        # A different git subcommand is NOT covered by "git commit:*" — still asks
+        # (no channel => deny).
+        eng._ask_human = None
+        d2 = await eng.check(
+            "Bash", target="git push origin main", segments=["git push origin main"]
+        )
+        assert d2.behavior == "deny"
+
+    async def test_compound_command_uses_exact_rule_not_prefix(self):
+        # A multi-segment command falls back to an exact-target rule; an exact
+        # variation does not re-match.
+        eng = engine(reply="always")
+        d1 = await eng.check(
+            "Bash",
+            target="git status && git log",
+            segments=["git status", "git log"],
+        )
+        assert d1.behavior == "allow"
+        eng._ask_human = None
+        d2 = await eng.check(
+            "Bash",
+            target="git status && git diff",
+            segments=["git status", "git diff"],
+        )
+        assert d2.behavior == "deny"
+
+    async def test_prompt_shows_suggested_prefix_rule(self):
+        seen = {}
+
+        async def ask_human(prompt: str) -> str:
+            seen["prompt"] = prompt
+            return "no"
+
+        cfg = PermissionConfig(mode="default")
+        store = RuleStore.from_config(cfg)
+        eng = PermissionEngine(mode="default", store=store, ask_human=ask_human)
+        await eng.check(
+            "Bash", target="git commit -m foo", segments=["git commit -m foo"]
+        )
+        assert "Bash(git commit:*)" in seen["prompt"]
+
+
 class TestSandbox:
     async def test_write_inside_sandbox_allowed(self, tmp_path):
         cwd = str(tmp_path)

@@ -74,7 +74,7 @@ def test_publish_message_routes_to_mailbox():
     assert env.publish_message(msg) is True
     # delivered turn-atomically into bob's mailbox (not yet drained)
     runtime = env.control.get_runtime(role.session_id)
-    assert runtime.mailbox.has_pending()
+    assert not runtime.mailbox.empty()
 
 
 @pytest.mark.asyncio
@@ -119,7 +119,7 @@ def test_set_addresses_updates_routing():
     env.set_addresses(role, {"dave", "captain"})
     env.publish_message(UserMessage(content="aye", send_to={"captain"}))
     runtime = env.control.get_runtime(role.session_id)
-    assert runtime.mailbox.has_pending()
+    assert not runtime.mailbox.empty()
 
 
 @pytest.mark.asyncio
@@ -131,9 +131,3 @@ async def test_quiescent_after_drain():
     assert not env.quiescent()
     await env.run(10)
     assert env.quiescent()
-
-
-def test_observe_returns_role_names():
-    env = AgentEnvironment()
-    env.add_role(FakeRole("a"))
-    assert env.observe() == ["a"]

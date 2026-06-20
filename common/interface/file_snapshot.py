@@ -10,8 +10,9 @@ concrete ``FileSnapshotRecorder`` / blob store live in ``session`` and are
 *injected* into the tools as a Role capability (``record_file_snapshot``); the
 tools only depend on this structural face, so no upward import is introduced.
 
-This mirrors :class:`metagpt.common.interface.SessionRecorder`: a leaf module
-that only needs ``typing``, importable from anywhere without risking a cycle.
+Like the other ``common.interface`` Protocols (e.g.
+:class:`~metagpt.common.interface.LspNotifier`), this is a leaf module that only
+needs ``typing``, importable from anywhere without risking a cycle.
 """
 
 from __future__ import annotations

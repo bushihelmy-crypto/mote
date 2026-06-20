@@ -40,6 +40,7 @@ from metagpt.executor.permission.prompts import (
     build_escalation_prompt,
     parse_approval_response,
 )
+from metagpt.executor.permission.rule_matcher import suggest_command_rule
 from metagpt.executor.permission.rule_store import RuleStore
 from metagpt.executor.permission.sandbox import SandboxGuard
 from metagpt.common.schema.permission_types import (
@@ -76,6 +77,7 @@ class PermissionEngine:
         target: str = "",
         tool_check: Optional[PermissionDecision] = None,
         mutates_fs: bool = False,
+        segments: Optional[list[str]] = None,
     ) -> PermissionDecision:
         """Resolve a single tool call to a terminal ``allow``/``deny`` decision.
 
@@ -92,8 +94,12 @@ class PermissionEngine:
                 ``check_permissions`` (``allow``/``deny``/``ask``), or ``None``.
             mutates_fs: Whether the tool mutates the filesystem (drives the
                 ``acceptEdits`` shortcut and the sandbox write check).
+            segments: For shell-command tools, the command split into its
+                independent segments (``a && b | c``). When supplied, rule
+                resolution is folded strictest-wins across segments, and a
+                single-segment command remembers an approval as a *prefix* rule.
         """
-        decision = await self._decide(tool_name, target, tool_check, mutates_fs)
+        decision = await self._decide(tool_name, target, tool_check, mutates_fs, segments)
 
         # Sandbox gate (axis B). Only narrows allows, and never re-questions a
         # write the user just approved this turn (reason "user").
@@ -273,8 +279,9 @@ class PermissionEngine:
         target: str,
         tool_check: Optional[PermissionDecision],
         mutates_fs: bool,
+        segments: Optional[list[str]] = None,
     ) -> PermissionDecision:
-        rule_behavior = self._store.resolve(tool_name, target)
+        rule_behavior = self._resolve_rules(tool_name, target, segments)
 
         # 1-2. Bypass-immune denials.
         if rule_behavior == "deny":
@@ -287,11 +294,11 @@ class PermissionEngine:
         # 3-4. Bypass-immune asks.
         if rule_behavior == "ask":
             return await self._resolve_ask(
-                tool_name, target, "rule", "an ask rule requires confirmation"
+                tool_name, target, "rule", "an ask rule requires confirmation", segments
             )
         if tool_check is not None and tool_check.behavior == "ask":
             return await self._resolve_ask(
-                tool_name, target, "tool_check", tool_check.message or "the tool requires confirmation"
+                tool_name, target, "tool_check", tool_check.message or "the tool requires confirmation", segments
             )
 
         # 5. Bypass mode: allow everything that wasn't deny/ask above.
@@ -325,7 +332,17 @@ class PermissionEngine:
             )
 
         # 11. default: ask the user.
-        return await self._resolve_ask(tool_name, target, "default", "this action needs your approval")
+        return await self._resolve_ask(
+            tool_name, target, "default", "this action needs your approval", segments
+        )
+
+    def _resolve_rules(
+        self, tool_name: str, target: str, segments: Optional[list[str]]
+    ) -> Optional[str]:
+        """Rule behavior for a call: per-segment fold for commands, else single."""
+        if segments is not None:
+            return self._store.resolve_segments(tool_name, segments)
+        return self._store.resolve(tool_name, target)
 
     # ------------------------------------------------------------------
     # Axis B — sandbox boundary
@@ -367,13 +384,19 @@ class PermissionEngine:
     # ------------------------------------------------------------------
 
     async def _resolve_ask(
-        self, tool_name: str, target: str, reason_type: str, reason: str
+        self,
+        tool_name: str,
+        target: str,
+        reason_type: str,
+        reason: str,
+        segments: Optional[list[str]] = None,
     ) -> PermissionDecision:
         """Prompt the user and turn their reply into allow/deny.
 
         Fail-closed: with no interactive channel, an ask becomes a deny. When the
-        user picks "always", a session-scoped allow rule is remembered so the
-        same call is not re-prompted.
+        user picks "always", the rule named in the prompt is remembered for the
+        session — a *prefix* rule for a single-segment command (so variations
+        stop prompting), otherwise an exact-target rule.
         """
         if self._ask_human is None:
             return PermissionDecision.deny(
@@ -382,7 +405,8 @@ class PermissionEngine:
                 message=f"'{tool_name}' needs approval but no interactive channel is available.",
             )
 
-        prompt = build_approval_prompt(tool_name, target, reason)
+        rule, spec = self._suggested_allow_rule(tool_name, target, segments)
+        prompt = build_approval_prompt(tool_name, target, reason, suggestion=spec)
         reply = await self._ask_human(prompt)
         choice = parse_approval_response(reply)
 
@@ -391,9 +415,27 @@ class PermissionEngine:
                 "user", "user denied", message=f"The user denied running '{tool_name}'."
             )
         if choice == "allow_session":
-            # Remember an exact-target rule so subsequent identical calls pass.
-            pattern = target if target else None
-            self._store.add_session_rule(
-                PermissionRule(tool_name=tool_name, pattern=pattern, behavior="allow", source="session")
-            )
+            # Remember exactly the rule shown in the prompt — no surprise grant.
+            self._store.add_session_rule(rule)
         return PermissionDecision.allow("user", f"user approved ({choice})")
+
+    def _suggested_allow_rule(
+        self, tool_name: str, target: str, segments: Optional[list[str]]
+    ) -> tuple[PermissionRule, str]:
+        """The allow rule an "always" grant should add, plus its display spec.
+
+        Single-segment shell commands get a prefix rule (``Bash(git commit:*)``)
+        so the model can re-run variations without re-prompting. Compound
+        commands and non-command tools fall back to an exact-target rule to
+        avoid over-granting.
+        """
+        if segments is not None and len(segments) == 1:
+            rule = suggest_command_rule(tool_name, segments[0])
+            if rule is not None:
+                return rule, f"{rule.tool_name}({rule.pattern})"
+        pattern = target or None
+        rule = PermissionRule(
+            tool_name=tool_name, pattern=pattern, behavior="allow", source="session"
+        )
+        spec = f"{tool_name}({pattern})" if pattern else tool_name
+        return rule, spec

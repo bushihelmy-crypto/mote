@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from metagpt.environment.agent_path import AgentPath
+from metagpt.environment._scope import ScopedExitMixin
 from metagpt.common.exception import AgentLimitReached, AgentNotKnown, AgentPathExists
 
 
@@ -49,12 +50,12 @@ def format_agent_nickname(name: str, nickname_reset_count: int) -> str:
     return f"{name} the {value}{suffix}"
 
 
-def next_thread_spawn_depth(depth: int) -> int:
+def next_agent_spawn_depth(depth: int) -> int:
     """The depth of a child spawned from a parent at *depth*."""
     return depth + 1
 
 
-def exceeds_thread_spawn_depth_limit(depth: int, max_depth: int) -> bool:
+def exceeds_agent_spawn_depth_limit(depth: int, max_depth: int) -> bool:
     return depth > max_depth
 
 
@@ -64,40 +65,44 @@ class AgentRegistry:
     def __init__(self):
         self._lock = threading.Lock()
         self._agent_tree: dict[str, AgentMetadata] = {}
+        # Secondary index: agent_id -> the same AgentMetadata object held in
+        # ``_agent_tree`` (which is keyed by path). Lets id-based lookups skip a
+        # linear scan of the tree.
+        self._by_agent_id: dict[str, AgentMetadata] = {}
         self._used_agent_nicknames: set[str] = set()
         self._nickname_reset_count: int = 0
         self._total_count: int = 0
 
+    @staticmethod
+    def _tree_key(metadata: AgentMetadata) -> str:
+        """The ``_agent_tree`` key for *metadata* (path str, or ``agent:<id>``)."""
+        if metadata.agent_path is not None:
+            return metadata.agent_path.as_str()
+        return f"agent:{metadata.agent_id}"
+
     # ------------------------------------------------------------------
     # Spawn slot reservation
     # ------------------------------------------------------------------
-    def reserve_spawn_slot(self, max_threads: Optional[int] = None) -> "SpawnReservation":
-        """Reserve a slot, enforcing *max_threads* when given.
+    def reserve_spawn_slot(self, max_agents: Optional[int] = None) -> "SpawnReservation":
+        """Reserve a slot, enforcing *max_agents* when given.
 
         ``total_count`` is always incremented (so the matching rollback /
-        ``release_spawned_thread`` always decrements). Raises
+        ``release_spawned_agent`` always decrements). Raises
         :class:`AgentLimitReached` when the cap would be exceeded.
         """
         with self._lock:
-            if max_threads is not None:
-                if self._total_count >= max_threads:
-                    raise AgentLimitReached(max_threads)
-                self._total_count += 1
-            else:
-                self._total_count += 1
+            if max_agents is not None and self._total_count >= max_agents:
+                raise AgentLimitReached(max_agents)
+            self._total_count += 1
         return SpawnReservation(self)
 
-    def release_spawned_thread(self, thread_id: str) -> None:
+    def release_spawned_agent(self, agent_id: str) -> None:
         """Remove a committed agent and decrement the count (non-root only)."""
         with self._lock:
-            removed_key = None
-            for key, metadata in self._agent_tree.items():
-                if metadata.agent_id == thread_id:
-                    removed_key = key
-                    break
-            if removed_key is None:
+            metadata = self._by_agent_id.pop(agent_id, None)
+            if metadata is None:
                 return
-            metadata = self._agent_tree.pop(removed_key)
+            self._agent_tree.pop(self._tree_key(metadata), None)
             is_root = metadata.agent_path is not None and metadata.agent_path.is_root()
             if not is_root:
                 self._total_count = max(0, self._total_count - 1)
@@ -105,24 +110,22 @@ class AgentRegistry:
     # ------------------------------------------------------------------
     # Root / lookup
     # ------------------------------------------------------------------
-    def register_root_thread(self, thread_id: str) -> None:
+    def register_root_agent(self, agent_id: str) -> None:
         with self._lock:
-            self._agent_tree.setdefault(
-                AgentPath.ROOT,
-                AgentMetadata(agent_id=thread_id, agent_path=AgentPath.root()),
-            )
+            if AgentPath.ROOT in self._agent_tree:
+                return
+            metadata = AgentMetadata(agent_id=agent_id, agent_path=AgentPath.root())
+            self._agent_tree[AgentPath.ROOT] = metadata
+            self._by_agent_id[agent_id] = metadata
 
     def agent_id_for_path(self, agent_path: AgentPath) -> Optional[str]:
         with self._lock:
             metadata = self._agent_tree.get(agent_path.as_str())
             return metadata.agent_id if metadata else None
 
-    def agent_metadata_for_thread(self, thread_id: str) -> Optional[AgentMetadata]:
+    def agent_metadata_for_id(self, agent_id: str) -> Optional[AgentMetadata]:
         with self._lock:
-            for metadata in self._agent_tree.values():
-                if metadata.agent_id == thread_id:
-                    return metadata
-            return None
+            return self._by_agent_id.get(agent_id)
 
     def agent_metadata_for_nickname(self, nickname: str) -> Optional[AgentMetadata]:
         with self._lock:
@@ -140,19 +143,17 @@ class AgentRegistry:
                 and not (metadata.agent_path is not None and metadata.agent_path.is_root())
             ]
 
-    def update_last_task_message(self, thread_id: str, last_task_message: str) -> None:
+    def update_last_task_message(self, agent_id: str, last_task_message: str) -> None:
         with self._lock:
-            for metadata in self._agent_tree.values():
-                if metadata.agent_id == thread_id:
-                    metadata.last_task_message = last_task_message
-                    return
+            metadata = self._by_agent_id.get(agent_id)
+            if metadata is not None:
+                metadata.last_task_message = last_task_message
 
-    def clear_last_task_message(self, thread_id: str) -> None:
+    def clear_last_task_message(self, agent_id: str) -> None:
         with self._lock:
-            for metadata in self._agent_tree.values():
-                if metadata.agent_id == thread_id:
-                    metadata.last_task_message = None
-                    return
+            metadata = self._by_agent_id.get(agent_id)
+            if metadata is not None:
+                metadata.last_task_message = None
 
     # ------------------------------------------------------------------
     # Internal helpers used by SpawnReservation
@@ -161,17 +162,14 @@ class AgentRegistry:
         with self._lock:
             self._total_count = max(0, self._total_count - 1)
 
-    def _register_spawned_thread(self, agent_metadata: AgentMetadata) -> None:
+    def _register_spawned_agent(self, agent_metadata: AgentMetadata) -> None:
         if agent_metadata.agent_id is None:
             return
         with self._lock:
-            if agent_metadata.agent_path is not None:
-                key = agent_metadata.agent_path.as_str()
-            else:
-                key = f"thread:{agent_metadata.agent_id}"
             if agent_metadata.agent_nickname:
                 self._used_agent_nicknames.add(agent_metadata.agent_nickname)
-            self._agent_tree[key] = agent_metadata
+            self._agent_tree[self._tree_key(agent_metadata)] = agent_metadata
+            self._by_agent_id[agent_metadata.agent_id] = agent_metadata
 
     def _reserve_agent_nickname(self, names: list[str], preferred: Optional[str]) -> Optional[str]:
         with self._lock:
@@ -208,7 +206,7 @@ class AgentRegistry:
                 del self._agent_tree[agent_path.as_str()]
 
 
-class SpawnReservation:
+class SpawnReservation(ScopedExitMixin):
     """A pending spawn slot. Commit to register the agent, else roll back.
 
     Supports explicit :meth:`commit` and the context-manager protocol (sync and
@@ -235,7 +233,7 @@ class SpawnReservation:
 
     def commit(self, agent_metadata: AgentMetadata) -> None:
         self._reserved_path = None
-        self._registry._register_spawned_thread(agent_metadata)
+        self._registry._register_spawned_agent(agent_metadata)
         self._active = False
 
     def rollback(self) -> None:
@@ -247,20 +245,8 @@ class SpawnReservation:
         self._registry._decrement_total()
         self._active = False
 
-    # context-manager protocol
-    def __enter__(self) -> "SpawnReservation":
-        return self
-
-    def __exit__(self, *exc) -> bool:
+    def _scope_exit(self) -> None:
         self.rollback()
-        return False
-
-    async def __aenter__(self) -> "SpawnReservation":
-        return self
-
-    async def __aexit__(self, *exc) -> bool:
-        self.rollback()
-        return False
 
 
 __all__ = [
@@ -268,6 +254,6 @@ __all__ = [
     "AgentRegistry",
     "SpawnReservation",
     "format_agent_nickname",
-    "next_thread_spawn_depth",
-    "exceeds_thread_spawn_depth_limit",
+    "next_agent_spawn_depth",
+    "exceeds_agent_spawn_depth_limit",
 ]

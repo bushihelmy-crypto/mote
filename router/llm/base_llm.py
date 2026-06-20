@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import json
+import time
 from abc import ABC, abstractmethod
-from typing import Callable, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, Union
+from uuid import uuid4
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -25,11 +27,17 @@ from tenacity import (
 from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
+from metagpt.common.events import (
+    LLMErrorEvent,
+    LLMRequestEvent,
+    LLMResponseEvent,
+    current_span_id,
+    emit_event,
+)
 from metagpt.common.exception import RecoveryAction, RecoveryRunner, is_retryable
-from metagpt.common.logs import logger
-from metagpt.common.observability.langfuse_integration import maybe_generation
+from metagpt.common.logs import current_trace_id, logger
+from metagpt.common.const.llm import MULTI_MODAL_MODELS
 from metagpt.common.schema import Message
-from metagpt.router.llm.constant import MULTI_MODAL_MODELS
 from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
 from metagpt.router.llm.recovery import build_llm_strategies
 from metagpt.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
@@ -37,6 +45,11 @@ from metagpt.router.llm.request_context_builder import RequestContextBuilder
 from metagpt.common.utils.common import log_and_reraise, pdfs_within_limits, sniff_image_media_type
 from metagpt.common.utils.token_counter import count_message_tokens
 from metagpt.router.cost import CostTracker, Costs, TokenUsage
+
+# Tenacity retry budget for a single LLM call (the transient-error RETRY tier).
+# Shared by the base ``acompletion_text`` and provider overrides so the retry
+# count isn't silently different depending on which provider you land on.
+LLM_RETRY_ATTEMPTS = 6
 
 
 class BaseLLM(ABC):
@@ -134,6 +147,10 @@ class BaseLLM(ABC):
     def _system_msg(self, msg: str) -> dict[str, str]:
         return {"role": "system", "content": msg}
 
+    def system_role(self) -> str:
+        """The role name used for system messages (public accessor for collaborators)."""
+        return self._system_msg("")["role"]
+
     def support_image_input(self) -> bool:
         return any([m in self.model for m in MULTI_MODAL_MODELS])
 
@@ -188,7 +205,7 @@ class BaseLLM(ABC):
 
     def get_costs(self) -> Costs:
         if not self.cost_manager:
-            return Costs(0, 0, 0, 0)
+            return Costs.zero()
         return self.cost_manager.get_costs()
 
     @property
@@ -371,29 +388,90 @@ class BaseLLM(ABC):
         async def _call():
             llm = _active()
             msgs = state["messages"]
-            with maybe_generation(llm.model or "unknown", msgs) as gen:
+            # Open the LLM-call observation on the shared event spine. One
+            # request → response|error pair per recovery attempt (so retries /
+            # rotations / fallbacks each trace independently), correlated by
+            # ``request_id``. ``emit_event`` is a no-op when no bus is bound
+            # (standalone client use / tests), so this stays zero-cost there.
+            request_id = uuid4().hex
+            model = llm.model or "unknown"
+            await emit_event(
+                LLMRequestEvent(
+                    request_id=request_id,
+                    model=model,
+                    provider=self._provider_label(llm),
+                    messages=msgs,
+                    parent_span_id=current_span_id(),
+                    trace_id=current_trace_id() or "",
+                )
+            )
+            started = time.monotonic()
+            try:
                 result = await send(llm, msgs)
-                # Best-effort: record output and usage on the generation span.
-                try:
-                    output = None
-                    usage_dict = None
-                    if isinstance(result, LLMResponse):
-                        output = result.content or None
-                    elif isinstance(result, str):
-                        output = result
-                    if llm.cost_manager and llm.cost_manager.last_usage:
-                        u = llm.cost_manager.last_usage
-                        usage_dict = {
-                            "input": u.input_tokens,
-                            "output": u.output_tokens,
-                            "total": u.total_tokens,
-                        }
-                    gen.update(output=output, usage=usage_dict)
-                except Exception:  # noqa: BLE001
-                    pass
-                return result
+            except Exception as exc:  # noqa: BLE001 — mirror the failure, then re-raise
+                await emit_event(
+                    LLMErrorEvent(
+                        request_id=request_id,
+                        model=model,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                        latency_ms=(time.monotonic() - started) * 1000.0,
+                    )
+                )
+                raise
+            await emit_event(
+                self._build_response_event(
+                    request_id, llm, result, (time.monotonic() - started) * 1000.0
+                )
+            )
+            return result
 
         return await runner.run(_call)
+
+    @staticmethod
+    def _provider_label(llm: "BaseLLM") -> str:
+        """Best-effort wire-protocol label (``api_type`` value) for tracing."""
+        try:
+            api_type = getattr(llm.config, "api_type", "")
+            return str(getattr(api_type, "value", api_type) or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _build_response_event(
+        request_id: str, llm: "BaseLLM", result, latency_ms: float
+    ) -> LLMResponseEvent:
+        """Build an :class:`LLMResponseEvent` from a completed call.
+
+        Pulls this call's token usage + USD cost off the cost tracker (set by
+        the provider's ``_update_costs``) so a subscriber can persist or mirror
+        per-request token/cost. Tolerant of both the text (``str``) and native
+        tool-use (:class:`LLMResponse`) result shapes.
+        """
+        content = ""
+        tool_calls: list = []
+        if isinstance(result, LLMResponse):
+            content = result.content or ""
+            tool_calls = [
+                {"id": c.id, "name": c.name, "arguments": c.arguments} for c in result.tool_calls
+            ]
+        elif isinstance(result, str):
+            content = result
+        usage = None
+        cost = 0.0
+        cm = llm.cost_manager
+        if cm is not None and cm.last_usage is not None and not cm.last_usage.is_zero():
+            usage = cm.last_usage.to_dict()
+            cost = getattr(cm, "last_cost", 0.0)
+        return LLMResponseEvent(
+            request_id=request_id,
+            model=llm.model or "unknown",
+            content=content,
+            tool_calls=tool_calls,
+            usage=usage,
+            cost_usd=cost,
+            latency_ms=latency_ms,
+        )
 
     def _extract_assistant_rsp(self, context):
         return "\n".join([i["content"] for i in context if i["role"] == "assistant"])
@@ -418,10 +496,10 @@ class BaseLLM(ABC):
         """_achat_completion implemented by inherited class.
 
         ``**kwargs`` carries provider chat params (e.g. ``tools``/``tool_choice``
-        for native tool-use) straight through to the request. Every Claude model
-        in this fork is reached via the OpenAI-compatible client (a ``base_url``
-        on OpenAILLM), so there is no separate Anthropic-SDK impl to update: the
-        native specs ride this passthrough into _cons_kwargs.
+        for native tool-use) straight through to the request. Each provider
+        subclass (``OpenAILLM`` via the OpenAI-compatible client, ``AnthropicLLM``
+        via the native Anthropic SDK) implements this and forwards the native
+        specs into its own request builder.
         """
 
     @abstractmethod
@@ -452,7 +530,7 @@ class BaseLLM(ABC):
         return await self._achat_completion(messages, timeout=self.get_timeout(timeout), **chat_configs)
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         wait=wait_random_exponential(min=1, max=60),
         after=after_log(logger, logger.level("WARNING").name),
         retry=retry_if_exception(is_retryable),
@@ -469,7 +547,7 @@ class BaseLLM(ABC):
 
     def get_choice_text(self, rsp: dict) -> str:
         """Required to provide the first text of choice"""
-        return rsp.get("choices")[0]["message"]["content"]
+        return rsp.get("choices")[0]["message"]["content"] or ""
 
     def get_choice_delta_text(self, rsp: dict) -> str:
         """Required to provide the first text of stream choice"""
@@ -515,31 +593,16 @@ class BaseLLM(ABC):
         """
         return json.loads(self.get_choice_function(rsp)["arguments"], strict=False)
 
-    def get_choice_tool_calls(self, rsp: dict) -> list[dict]:
+    def get_choice_tool_calls(self, rsp) -> list[dict]:
         """Normalize all tool calls in a completion to a provider-agnostic list.
 
-        Returns a list of ``{"id", "name", "arguments"}`` where ``arguments`` is
-        an already-parsed dict. The default reads the OpenAI chat-completions
-        shape (``choices[0].message.tool_calls[*].function``); providers with a
-        different wire format (Anthropic content blocks) override this.
-
-        Returns [] when the response carries no tool calls (e.g. plain text),
-        so the native channel can fall back to text handling.
+        Concrete providers return a list of ``{"id", "name", "arguments"}`` (with
+        ``arguments`` an already-parsed dict) by parsing their own wire shape —
+        OpenAI chat-completion objects, Anthropic content blocks, etc. The base
+        has no wire format of its own, so it returns [] (no tool calls), letting
+        the native channel fall back to text handling. Providers MUST override.
         """
-        try:
-            tool_calls = rsp.get("choices")[0]["message"].get("tool_calls") or []
-        except (AttributeError, IndexError, TypeError, KeyError):
-            return []
-        out: list[dict] = []
-        for call in tool_calls:
-            fn = call.get("function") or {}
-            raw_args = fn.get("arguments")
-            try:
-                args = json.loads(raw_args, strict=False) if isinstance(raw_args, str) else (raw_args or {})
-            except json.JSONDecodeError:
-                args = {}
-            out.append({"id": call.get("id", ""), "name": fn.get("name", ""), "arguments": args})
-        return out
+        return []
 
     def messages_to_prompt(self, messages: list[dict]):
         """[{"role": "user", "content": msg}] to user: <msg> etc."""

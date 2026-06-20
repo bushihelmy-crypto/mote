@@ -29,7 +29,7 @@ class Doubler(BaseNode):
 
     async def call(self, state: GraphState) -> Stage:
         async def submit():
-            return state.x * 2  # type: ignore[attr-defined]
+            return {"doubler": state.x * 2}  # type: ignore[attr-defined]
 
         return Stage(submit=submit())
 
@@ -123,7 +123,7 @@ async def test_base_node_class_in_graph():
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
 
-    assert await _run(g, x=5) == 10
+    assert (await _run(g, x=5))["doubler"] == 10
 
 
 async def test_base_node_instance_in_graph():
@@ -133,7 +133,7 @@ async def test_base_node_instance_in_graph():
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
 
-    assert await _run(g, x=3) == 6
+    assert (await _run(g, x=3))["doubler"] == 6
 
 
 async def test_plain_function_backward_compat():
@@ -147,7 +147,7 @@ async def test_plain_function_backward_compat():
         """
 
         async def submit():
-            return state.x * 3
+            return {"triple": state.x * 3}
 
         return Stage(submit=submit())
 
@@ -156,7 +156,7 @@ async def test_plain_function_backward_compat():
     g.add_edge(START, "triple")
     g.add_edge("triple", END)
 
-    assert await _run(g, x=4) == 12
+    assert (await _run(g, x=4))["triple"] == 12
 
 
 def test_stage_summary_uses_base_node_description():
@@ -343,7 +343,7 @@ class TypedNode(BaseNode):
         """
 
         async def submit():
-            return state.x * 2  # type: ignore[attr-defined]
+            return {"typed": state.x * 2}  # type: ignore[attr-defined]
 
         return Stage(submit=submit())
 
@@ -403,7 +403,7 @@ async def test_runtime_type_ok_passes():
     res = await g.compile()(x=5)
     assert isinstance(res, BgTaskResult)
     result = await res.poll_factory()
-    assert result == 10
+    assert result["typed"] == 10
 
 
 async def test_runtime_none_value_skipped():

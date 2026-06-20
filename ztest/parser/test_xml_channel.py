@@ -30,18 +30,46 @@ class TestContract:
     def test_is_command_channel(self):
         assert isinstance(XmlCommandChannel(), CommandChannel)
 
-    def test_output_format_is_output_section(self):
-        assert XmlCommandChannel().output_format() == OUTPUT_SECTION
+    def test_prompt_vars_output_format_is_output_section(self):
+        assert XmlCommandChannel().prompt_vars()["output_format"] == OUTPUT_SECTION
 
-    def test_command_guide_is_xml_guide_with_end_marker(self):
-        guide = XmlCommandChannel().command_guide()
+    def test_prompt_vars_command_guide_is_xml_guide_with_end_marker(self):
+        guide = XmlCommandChannel().prompt_vars()["command_guide"]
         assert guide == XML_COMMAND_GUIDE
         assert "<end></end>" in guide
 
-    def test_command_hint_is_xml_hint_with_end_marker(self):
-        hint = XmlCommandChannel().command_hint()
+    def test_prompt_vars_command_hint_is_xml_hint_with_end_marker(self):
+        hint = XmlCommandChannel().prompt_vars()["command_hint"]
         assert hint == XML_COMMAND_HINT
         assert "<end></end>" in hint
+
+    def test_prompt_vars_covers_required_keys(self):
+        from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
+
+        assert set(XmlCommandChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
+
+    def test_react_result_carries_orchestration_phrasing(self):
+        # XML overrides react_result with the <end></end>-era "mark finished"
+        # contract, embedding the joined outputs.
+        result = XmlCommandChannel().react_result("OUT")
+        assert "please mark my task as finished" in result
+        assert "OUT" in result
+
+
+class TestJoinCommandOutputs:
+    def test_joins_executed_outputs_with_blank_lines(self):
+        from metagpt.common.base.command_channel import join_command_outputs
+
+        executed = [{"output": "a"}, {"output": "b"}]
+        assert join_command_outputs(executed) == "a\n\nb"
+
+    def test_empty_yields_no_commands_notice(self):
+        from metagpt.common.base.command_channel import (
+            NO_VALID_COMMANDS,
+            join_command_outputs,
+        )
+
+        assert join_command_outputs([]) == NO_VALID_COMMANDS
 
     def test_lower_renders_ctl_finish_as_end_marker(self):
         # Under XML, the CTL_FINISH symbol materializes the <end></end> mechanic.

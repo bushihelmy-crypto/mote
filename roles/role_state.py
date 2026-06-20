@@ -64,6 +64,17 @@ class RoleState(SerializationMixin):
     # Runtime-only (not part of the serialized checkpoint).
     _file_read_state: dict[str, int] = PrivateAttr(default_factory=dict)
 
+    # Live, per-Role session state for stateful tools (a persistent terminal
+    # shell, a Python kernel, ...), keyed by tool name -> the tool's live
+    # session object. The Role owns this store instead of each stateful tool
+    # reaching a process-global singleton, so sessions are isolated per Role
+    # and torn down with it. Runtime-only: live OS handles (PTY/kernel
+    # subprocesses, fds, channels) cannot cross a checkpoint, so they are
+    # excluded from serialization and rebuilt lazily on next use; the
+    # serializable identity they key off (session_id, working_dir) lives in the
+    # fields above and rides the checkpoint as usual.
+    _tool_sessions: dict[str, Any] = PrivateAttr(default_factory=dict)
+
 
 class RoleStateController:
     """Behaviour over a :class:`RoleState` — keeps the DTO pure.
@@ -104,6 +115,17 @@ class RoleStateController:
     def get_file_read_mtime(self, path: str) -> Optional[int]:
         """Return the mtime_ns recorded when `path` was last read, else None."""
         return self._state._file_read_state.get(path)
+
+    def get_tool_session(self, key: str) -> Any:
+        """Return a stateful tool's live session (keyed by tool name), else None."""
+        return self._state._tool_sessions.get(key)
+
+    def set_tool_session(self, key: str, value: Any) -> None:
+        """Store a stateful tool's live session; a None value clears the slot."""
+        if value is None:
+            self._state._tool_sessions.pop(key, None)
+        else:
+            self._state._tool_sessions[key] = value
 
     def is_active(self) -> bool:
         """Read the react-loop active signal."""

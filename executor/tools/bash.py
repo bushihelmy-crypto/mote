@@ -19,6 +19,7 @@ from typing import Callable, ClassVar
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.permission.classifier import classify_command
+from metagpt.executor.permission.command_parse import segment_strings
 from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
@@ -51,6 +52,11 @@ class Bash(BaseTool):
     def permission_target(self, args: dict) -> str:
         """The command string — matched against ``Bash(pattern)`` rules."""
         return args.get("command") or ""
+
+    def permission_segments(self, args: dict) -> "list[str] | None":
+        """Split the command on shell operators for per-segment rule matching."""
+        command = args.get("command") or ""
+        return segment_strings(command) or None
 
     def check_permissions(self, args: dict) -> "PermissionDecision | None":
         """Classify the command and short-circuit the obvious cases.

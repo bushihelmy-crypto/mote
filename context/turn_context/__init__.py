@@ -16,6 +16,7 @@ from metagpt.context.turn_context.format import wrap_system_reminder
 from metagpt.context.turn_context.sources import (
     CompactionNoticeContextSource,
     GitContextSource,
+    SkillActivationContextSource,
     TokenPressureContextSource,
 )
 
@@ -24,5 +25,6 @@ __all__ = [
     "wrap_system_reminder",
     "CompactionNoticeContextSource",
     "GitContextSource",
+    "SkillActivationContextSource",
     "TokenPressureContextSource",
 ]

@@ -43,7 +43,7 @@ class ThinkEngine(BaseThinkEngine):
         self.result: ThinkResult = ThinkResult()
         self._task: Optional[asyncio.Task] = None
 
-    async def start(self, req, system_prompt, state_data, tool_specs=None, *, llm: "LLMClient"):
+    async def start(self, req, system_prompt, tool_specs=None, *, llm: "LLMClient"):
         """Launch the background think task.
 
         Receives already-built prompts plus the ``llm`` the loop resolved (via
@@ -53,27 +53,23 @@ class ThinkEngine(BaseThinkEngine):
         """
         self.llm = llm
         self._task = asyncio.create_task(
-            self._run(req, system_prompt, state_data, tool_specs)
+            self._run(req, system_prompt, tool_specs)
         )
 
-    async def _run(self, req, system_prompt, state_data, tool_specs=None):
+    async def _run(self, req, system_prompt, tool_specs=None):
         """Background: LLM call + dedup. Produces a fresh ThinkResult."""
         content = ""
         tool_calls: Optional[list[dict]] = None
         async with ThoughtReporter(enable_llm_stream=True) as reporter:
             await reporter.async_report({"type": "react"})
             if tool_specs:
-                rsp = await self._cached_aask_tool(
-                    req=req, system_msgs=[system_prompt], tool_specs=tool_specs, state_data=state_data
-                )
+                rsp = await self.llm.aask_tool(req, system_msgs=[system_prompt], tools=tool_specs)
                 content = rsp.content or ""
                 tool_calls = [
                     {"id": c.id, "command_name": c.name, "args": c.arguments} for c in rsp.tool_calls
                 ]
             else:
-                content = await self._cached_aask(
-                    req=req, system_msgs=[system_prompt], state_data=state_data
-                )
+                content = await self.llm.aask(req, system_msgs=[system_prompt])
         # Duplicate detection differs by protocol. XML compares raw response text;
         # native compares a structured-call signature (the text may be empty or
         # repeat while the calls differ), and on a hard repeat overrides the calls
@@ -97,12 +93,6 @@ class ThinkEngine(BaseThinkEngine):
             if override is not None:
                 tool_calls = override
         self.result = ThinkResult(content=content, tool_calls=tool_calls)
-
-    async def _cached_aask(self, *, req, system_msgs, **kwargs):
-        return await self.llm.aask(req, system_msgs=system_msgs)
-
-    async def _cached_aask_tool(self, *, req, system_msgs, tool_specs, **kwargs):
-        return await self.llm.aask_tool(req, system_msgs=system_msgs, tools=tool_specs)
 
     async def join(self):
         """Await the current think task and clean up."""

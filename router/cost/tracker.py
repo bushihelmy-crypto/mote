@@ -36,6 +36,11 @@ class Costs(NamedTuple):
     total_cost: float
     total_budget: float
 
+    @classmethod
+    def zero(cls) -> "Costs":
+        """An all-zero ``Costs`` for the no-cost-manager / empty case."""
+        return cls(total_prompt_tokens=0, total_completion_tokens=0, total_cost=0.0, total_budget=0.0)
+
 
 # Codex reserves a baseline (prompts + tools + room to compact) so the window
 # reads ~100% right after the first prompt rather than already-partially-full.
@@ -72,6 +77,7 @@ class CostTracker:
     total_cost: float = 0.0
     last_usage: TokenUsage = field(default_factory=TokenUsage)
     last_model: Optional[str] = None
+    last_cost: float = 0.0  # USD cost of the most recent recorded call
     has_unknown_model_cost: bool = False
 
     # ------------------------------------------------------------------ record
@@ -100,8 +106,9 @@ class CostTracker:
         self.total_cost += cost
         self.last_usage = usage
         self.last_model = model
+        self.last_cost = cost
 
-        logger.info(
+        logger.debug(
             f"Total running cost: ${self.total_cost:.4f} | Max budget: ${self.max_budget:.3f} | "
             f"Current cost: ${cost:.4f}, input={usage.input_tokens} "
             f"(cached {usage.cached_input_tokens}), output={usage.output_tokens}"

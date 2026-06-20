@@ -16,9 +16,11 @@ Output is collected off the kernel's iopub channel: ``stream`` (stdout/stderr),
 ``error`` (the traceback, ANSI-stripped) are concatenated; the ``status: idle``
 message marks the end of an execution.
 
-A module-level singleton :data:`KERNELS` holds the live kernels, keyed by the
-owning Role's ``session_id`` (there is no model-facing kernel id — one implicit
-kernel per session, like the ``terminal`` tool).
+The live :class:`KernelSession` is owned by the Role: the ``Python`` tool stores
+it on the Role's ``RoleState`` (one implicit kernel per session, like the
+``terminal`` tool — there is no model-facing kernel id) rather than in a
+process-global registry, so kernels are isolated per Role and torn down with it.
+This module owns only the engine; the per-Role lifecycle lives in the tool.
 """
 from __future__ import annotations
 
@@ -43,8 +45,6 @@ _INTERRUPT_GRACE_S = 5.0
 _READY_TIMEOUT_S = 30.0
 # Output cap: keep a head 50% + tail 50%, drop the middle.
 OUTPUT_MAX_CHARS = 1024 * 1024
-# Hard cap on concurrent kernels across the manager.
-MAX_KERNELS = 64
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -221,66 +221,3 @@ class KernelSession:
                 except (ProcessLookupError, OSError):
                     pass
             self._km = None
-
-
-class KernelManager:
-    """Holds one :class:`KernelSession` per Role ``session_id``."""
-
-    def __init__(self) -> None:
-        self._sessions: dict[str, KernelSession] = {}
-
-    def has(self, session_key: str) -> bool:
-        return session_key in self._sessions
-
-    async def _ensure(self, session_key: str, cwd: Optional[str]) -> KernelSession:
-        session = self._sessions.get(session_key)
-        if session is not None and not session.closed:
-            return session
-        if session is not None:
-            session.kill()
-            self._sessions.pop(session_key, None)
-        if len(self._sessions) >= MAX_KERNELS:
-            raise ToolError(f"Error: too many live kernels (max {MAX_KERNELS}).")
-        session = KernelSession(session_key=session_key, cwd=cwd)
-        await session.start()
-        self._sessions[session_key] = session
-        return session
-
-    async def execute(
-        self, session_key: str, cwd: Optional[str], code: str, timeout: float
-    ) -> tuple[str, bool]:
-        """Run *code* in the session's kernel (creating it on first use)."""
-        session = await self._ensure(session_key, cwd)
-        return await session.execute(code, timeout)
-
-    async def interrupt(self, session_key: str) -> str:
-        session = self._sessions.get(session_key)
-        if session is None or session.closed:
-            raise ToolError("Error: no live kernel to interrupt.")
-        return await session.interrupt()
-
-    async def restart(self, session_key: str, cwd: Optional[str]) -> None:
-        """Restart the session's kernel (creating one if none is live)."""
-        session = self._sessions.get(session_key)
-        if session is None or session.closed:
-            await self._ensure(session_key, cwd)
-            return
-        await session.restart()
-
-    async def close(self, session_key: str) -> bool:
-        """Shut the session's kernel down. Returns True if one existed."""
-        session = self._sessions.pop(session_key, None)
-        if session is None:
-            return False
-        await session.shutdown()
-        return True
-
-    def cleanup_session(self, session_key: str) -> None:
-        """Synchronously kill + remove the session's kernel (idempotent)."""
-        session = self._sessions.pop(session_key, None)
-        if session is not None:
-            session.kill()
-
-
-# Module-level singleton shared by the python tool.
-KERNELS = KernelManager()

@@ -19,6 +19,20 @@ class SkillsConfig(YamlModel):
 
     enabled: bool = Field(default=False, description="P0 Skills master switch.")
     max_tokens: int = Field(default=2000, description="Token limit for alwaysApply + index injection.")
+    # Layered source directories (precedence-as-data: bundled < user < project
+    # < extra). The user/project toggles add the conventional ``~/.agent/skills``
+    # and ``<cwd>/.agent/skills`` locations; ``extra_dirs`` appends arbitrary
+    # highest-priority directories. Same-name skills in a higher layer override
+    # lower ones.
+    include_user_dir: bool = Field(
+        default=True, description="Scan ~/.agent/skills for user-level skills."
+    )
+    include_project_dir: bool = Field(
+        default=True, description="Scan <cwd>/.agent/skills for project-level skills."
+    )
+    extra_dirs: list[str] = Field(
+        default_factory=list, description="Additional (highest-priority) skill source directories."
+    )
 
 
 class RoleZeroConfig(YamlModel):

@@ -101,6 +101,40 @@ class TestLoadSkillFromDir:
         assert s.metadata["version"] == 2
         assert s.source_path.name == "SKILL.md"
 
+    def test_parses_extended_frontmatter(self, builtin_dir):
+        write_skill(
+            builtin_dir,
+            "rich2",
+            description="Rich2",
+            extra_meta={
+                "when-to-use": "when doing X",
+                "context": "fork",
+                "allowed-tools": ["Read", "Glob"],
+                "model": "claude-opus-4-6",
+                "effort": "high",
+                "argument-hint": "<arg>",
+                "disable_model_invocation": True,
+                "paths": ["**/*.md"],
+            },
+        )
+        pool = SkillPool(builtin_dir=builtin_dir)
+        pool.load_by_names(["rich2"])
+        s = pool.get_all()[0]
+        assert s.when_to_use == "when doing X"
+        assert s.context == "fork"
+        assert s.allowed_tools == ["Read", "Glob"]
+        assert s.model == "claude-opus-4-6"
+        assert s.effort == "high"
+        assert s.argument_hint == "<arg>"
+        assert s.disable_model_invocation is True
+        assert s.paths == ["**/*.md"]
+
+    def test_invalid_context_falls_back_inline(self, builtin_dir):
+        write_skill(builtin_dir, "ctx", description="d", extra_meta={"context": "weird"})
+        pool = SkillPool(builtin_dir=builtin_dir)
+        pool.load_by_names(["ctx"])
+        assert pool.get_all()[0].context == "inline"
+
     def test_name_falls_back_to_dir_when_meta_missing(self, builtin_dir):
         raw = "---\ndescription: No name in meta\n---\n\nBody."
         write_skill(builtin_dir, "ignored", dir_name="fallback-dir", raw=raw)
@@ -156,4 +190,69 @@ class TestGetters:
 def test_default_builtin_dir_is_package_dir():
     # No arg -> uses the packaged skills directory.
     pool = SkillPool()
-    assert pool._builtin_dir == Path(__file__).parents[2] / "context" / "skills" / "yamls"
+    assert pool.builtin_dir == Path(__file__).parents[2] / "context" / "skills" / "yamls"
+    assert pool.source_dirs == [Path(__file__).parents[2] / "context" / "skills" / "yamls"]
+
+
+class TestLoadAll:
+    def test_loads_everything_discovered(self, builtin_dir):
+        write_skill(builtin_dir, "alpha")
+        write_skill(builtin_dir, "beta")
+        pool = SkillPool(builtin_dir=builtin_dir)
+        pool.load_all()
+        assert {s.name for s in pool.get_all()} == {"alpha", "beta"}
+
+    def test_get_returns_skill_or_none(self, builtin_dir):
+        write_skill(builtin_dir, "alpha")
+        pool = SkillPool(builtin_dir=builtin_dir)
+        pool.load_all()
+        assert pool.get("alpha").name == "alpha"
+        assert pool.get("missing") is None
+
+
+class TestLayeredSources:
+    def test_higher_layer_overrides_same_name(self, tmp_path):
+        low = tmp_path / "low"
+        high = tmp_path / "high"
+        low.mkdir()
+        high.mkdir()
+        write_skill(low, "dup", description="LOW")
+        write_skill(high, "dup", description="HIGH")
+        pool = SkillPool(source_dirs=[low, high])  # high overrides low
+        pool.load_all()
+        assert pool.get_skill_count() == 1
+        assert pool.get("dup").description == "HIGH"
+
+    def test_union_of_distinct_skills(self, tmp_path):
+        low = tmp_path / "low"
+        high = tmp_path / "high"
+        low.mkdir()
+        high.mkdir()
+        write_skill(low, "alpha")
+        write_skill(high, "beta")
+        pool = SkillPool(source_dirs=[low, high])
+        pool.load_all()
+        assert {s.name for s in pool.get_all()} == {"alpha", "beta"}
+
+    def test_missing_dir_is_skipped(self, tmp_path):
+        present = tmp_path / "present"
+        present.mkdir()
+        write_skill(present, "alpha")
+        pool = SkillPool(source_dirs=[tmp_path / "nope", present])
+        pool.load_all()
+        assert {s.name for s in pool.get_all()} == {"alpha"}
+
+    def test_same_dir_listed_twice_deduped(self, builtin_dir):
+        write_skill(builtin_dir, "alpha")
+        pool = SkillPool(source_dirs=[builtin_dir, builtin_dir])
+        pool.load_all()
+        assert pool.get_skill_count() == 1
+
+    def test_source_dirs_exposes_all_layers(self, tmp_path):
+        low = tmp_path / "low"
+        high = tmp_path / "high"
+        low.mkdir()
+        high.mkdir()
+        pool = SkillPool(source_dirs=[low, high])
+        assert pool.source_dirs == [low, high]
+        assert pool.builtin_dir == low

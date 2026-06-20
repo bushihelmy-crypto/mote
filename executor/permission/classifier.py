@@ -29,10 +29,9 @@ and live turn context, and would create a false sense of security if faked. The
 from __future__ import annotations
 
 import re
-import shlex
 from dataclasses import dataclass
-from typing import Optional
 
+from metagpt.executor.permission.command_parse import parse_segments
 from metagpt.common.schema.permission_types import RiskLevel
 
 # ---------------------------------------------------------------------------
@@ -120,12 +119,6 @@ _FIND_UNSAFE_FLAGS: frozenset[str] = frozenset(
     {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls"}
 )
 
-# Shell operators that separate independent commands in one line.
-_SEPARATORS: frozenset[str] = frozenset({"&&", "||", ";", "|", "|&", "&"})
-
-# Shells we will peek inside for a ``-c``/``-lc`` script argument.
-_SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
-
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -152,7 +145,7 @@ def classify_command(command: str) -> SafetyAssessment:
         return SafetyAssessment(False, "medium", "uses command substitution")
 
     # 4. Split into independent segments; every one must be a known read.
-    segments = _split_segments(text)
+    segments = parse_segments(text)
     if segments is None:
         return SafetyAssessment(False, "medium", "could not parse command")
     for argv in segments:
@@ -179,57 +172,6 @@ def _has_write_redirect(text: str) -> bool:
     # Any '>' that is not part of '2>&1'-style fd duplication still writes a
     # stream somewhere we cannot vouch for, so treat all '>' as a write.
     return ">" in text
-
-
-def _split_segments(text: str) -> Optional[list[list[str]]]:
-    """Tokenise and split into per-command argv lists on shell separators.
-
-    Returns ``None`` when the line cannot be tokenised (unbalanced quotes, …).
-    Recurses into a ``<shell> -c "<script>"`` wrapper so wrapped commands are
-    judged on their real contents.
-    """
-    try:
-        tokens = shlex.split(text, comments=False, posix=True)
-    except ValueError:
-        return None
-    if not tokens:
-        return []
-
-    segments: list[list[str]] = []
-    current: list[str] = []
-    for tok in tokens:
-        if tok in _SEPARATORS:
-            if current:
-                segments.append(current)
-                current = []
-            continue
-        current.append(tok)
-    if current:
-        segments.append(current)
-
-    # Expand any shell -c "<script>" wrapper into the inner segments.
-    expanded: list[list[str]] = []
-    for argv in segments:
-        inner = _unwrap_shell_c(argv)
-        if inner is None:
-            expanded.append(argv)
-        else:
-            sub = _split_segments(inner)
-            if sub is None:
-                return None
-            expanded.extend(sub)
-    return expanded
-
-
-def _unwrap_shell_c(argv: list[str]) -> Optional[str]:
-    """If ``argv`` is ``<shell> [-flags] -c <script>``, return the script string."""
-    if not argv or _basename(argv[0]) not in _SHELLS:
-        return None
-    for i, tok in enumerate(argv[1:], start=1):
-        # -c, -lc, -ic etc. — any flag bundle ending in 'c'.
-        if tok.startswith("-") and tok.endswith("c") and i + 1 < len(argv):
-            return argv[i + 1]
-    return None
 
 
 def _segment_is_safe(argv: list[str]) -> bool:

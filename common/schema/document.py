@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from metagpt.common.schema.serialization import BaseSerialization
 from metagpt.common.const import SERDESER_PATH
-from metagpt.common.logs import logger
 from metagpt.common.utils.common import aread, read_json_file, write_json_file
 from metagpt.common.utils.exceptions import handle_exception
 from metagpt.common.utils.serialize import (
@@ -46,7 +45,6 @@ class SerializationMixin(BaseSerialization):
         file_path = file_path or self.get_serialization_path()
         serialized_data = self.model_dump()
         write_json_file(file_path, serialized_data, use_fallback=True)
-        logger.debug(f"{self.__class__.__qualname__} serialization successful. File saved at: {file_path}")
         return file_path
 
     @classmethod
@@ -56,7 +54,6 @@ class SerializationMixin(BaseSerialization):
         file_path = file_path or cls.get_serialization_path()
         data: dict = read_json_file(file_path)
         model = cls(**data)
-        logger.debug(f"{cls.__qualname__} deserialization successful. Instance created from file: {file_path}")
         return model
 
     @classmethod

@@ -1,30 +1,65 @@
-"""Skill pool: loads and manages builtin Skills."""
+"""Skill pool: loads and manages Skills from layered source directories."""
 
 from pathlib import Path
 from typing import Optional
 
+from metagpt.common.logs import logger
 from metagpt.common.utils.markdown_meta_parser import MarkdownMetaParser
 from metagpt.context.skills.skill_definition import SkillDefinition
 
-# Default skills directory relative to this package
+# Default skills directory relative to this package (the lowest-priority,
+# bundled layer).
 _BUILTIN_DIR = Path(__file__).parent / "yamls"
 
 
 class SkillPool:
-    """Load and manage builtin Skills from the filesystem."""
+    """Load and manage Skills from one or more layered source directories.
 
-    def __init__(self, builtin_dir: Optional[Path] = None):
+    Source directories are scanned in *precedence* order (lowest first): a
+    later directory overrides an earlier one for the same skill name, mirroring
+    the config-center's precedence-as-data layering
+    (``bundled < user < project``). Physical directories are de-duplicated by
+    realpath so the same dir listed twice is scanned once.
+    """
+
+    def __init__(
+        self,
+        builtin_dir: Optional[Path] = None,
+        *,
+        source_dirs: Optional[list[Path]] = None,
+    ):
         self._skills: dict[str, SkillDefinition] = {}
-        self._builtin_dir: Path = builtin_dir or _BUILTIN_DIR
         self._parser = MarkdownMetaParser()
+        # ``source_dirs`` (lowest-priority first) is the canonical input; the
+        # legacy ``builtin_dir`` kwarg is kept for back-compat (single layer).
+        if source_dirs is not None:
+            self._source_dirs: list[Path] = list(source_dirs)
+        elif builtin_dir is not None:
+            self._source_dirs = [builtin_dir]
+        else:
+            self._source_dirs = [_BUILTIN_DIR]
 
     @property
     def builtin_dir(self) -> Path:
-        """The directory scanned for ``SKILL.md`` files (the hot-reload root)."""
-        return self._builtin_dir
+        """The lowest-priority (first) source directory.
+
+        Retained for back-compat; prefer :attr:`source_dirs`.
+        """
+        return self._source_dirs[0]
+
+    @property
+    def source_dirs(self) -> list[Path]:
+        """All source directories scanned, lowest-priority first."""
+        return list(self._source_dirs)
+
+    def load_all(self):
+        """Load every skill discovered across all source directories."""
+        self._skills.clear()
+        for skill_dir in self._scan_available().values():
+            self._load_skill_from_dir(skill_dir)
 
     def load_by_names(self, names: list[str]):
-        """Load specific skills by name from the builtin directory.
+        """Load specific skills by name from the source directories.
 
         Args:
             names: List of skill names to load.
@@ -38,18 +73,30 @@ class SkillPool:
             self._load_skill_from_dir(skill_dir)
 
     def _scan_available(self) -> dict[str, Path]:
-        """Map each skill directory name to its path for every SKILL.md under builtin/.
+        """Map each skill directory name to its path across all source dirs.
 
-        Skills nested under an underscore-prefixed directory are skipped.
+        Directories are scanned lowest-priority first, so a higher-priority
+        layer's skill of the same name overwrites the entry. Skills nested
+        under an underscore-prefixed directory are skipped. Physical source
+        directories are de-duplicated by realpath.
         """
         available: dict[str, Path] = {}
-        if not self._builtin_dir.is_dir():
-            return available
-        for skill_md in sorted(self._builtin_dir.rglob("SKILL.md")):
-            parent_parts = skill_md.relative_to(self._builtin_dir).parts[:-1]
-            if any(part.startswith("_") for part in parent_parts):
+        seen_roots: set[str] = set()
+        for root in self._source_dirs:
+            if not root.is_dir():
                 continue
-            available[skill_md.parent.name] = skill_md.parent
+            try:
+                key = str(root.resolve())
+            except OSError:
+                key = str(root)
+            if key in seen_roots:
+                continue
+            seen_roots.add(key)
+            for skill_md in sorted(root.rglob("SKILL.md")):
+                parent_parts = skill_md.relative_to(root).parts[:-1]
+                if any(part.startswith("_") for part in parent_parts):
+                    continue
+                available[skill_md.parent.name] = skill_md.parent
         return available
 
     def _load_skill_from_dir(self, skill_dir: Path):
@@ -69,14 +116,30 @@ class SkillPool:
                 instructions=doc.content,
                 source_path=skill_md,
                 metadata=meta,
+                # claude-code-aligned frontmatter (accepts both hyphenated and
+                # snake_case keys; all optional with safe defaults).
+                when_to_use=meta.get("when_to_use", meta.get("when-to-use", "")),
+                context=meta.get("context", "inline"),
+                allowed_tools=meta.get("allowed_tools", meta.get("allowed-tools", [])),
+                model=meta.get("model", ""),
+                effort=meta.get("effort", ""),
+                argument_hint=meta.get("argument_hint", meta.get("argument-hint", "")),
+                disable_model_invocation=meta.get("disable_model_invocation", False),
+                paths=meta.get("paths", []),
             )
-        except Exception as e:
+        except Exception as exc:  # noqa: BLE001 — a malformed skill is skipped, not fatal
+            logger.warning(f"Skipping malformed skill at {skill_md}: {exc}")
             return
 
         if not skill.is_valid():
+            logger.debug(f"Skipping skill at {skill_md}: invalid name/description")
             return
 
         self._skills[skill.name] = skill
+
+    def get(self, name: str) -> Optional[SkillDefinition]:
+        """Return a loaded skill by name, or ``None`` if not loaded."""
+        return self._skills.get(name)
 
     def get_all(self) -> list[SkillDefinition]:
         """Return all loaded Skills."""

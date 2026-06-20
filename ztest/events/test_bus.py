@@ -197,6 +197,41 @@ async def test_emit_event_routes_to_bound_bus():
     assert log == [("bound", "llm_stream_delta")]
 
 
+# ---------------------------------------------------------------------------
+# Inline-dispatch invariant
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emit_runs_subscribers_in_callers_contextvar_scope():
+    """emit must dispatch inline (same task), so a contextvar the caller sets is
+    visible inside ``handle``. This locks the invariant that ambient-context
+    subscribers (e.g. LangfuseSubscriber nesting a generation under the current
+    langfuse span) depend on. Moving dispatch onto ``create_task`` would run
+    ``handle`` in a fresh context and break this — and this test with it.
+    """
+    import contextvars
+
+    marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default="unset")
+    seen: list = []
+
+    class ContextProbe:
+        priority = 10
+
+        async def handle(self, event):
+            seen.append(marker.get())
+            return None
+
+    bus = EventBus()
+    bus.subscribe(ContextProbe())
+    token = marker.set("in-callers-context")
+    try:
+        await bus.emit(LLMStreamDeltaEvent(token="x"))
+    finally:
+        marker.reset(token)
+    assert seen == ["in-callers-context"]
+
+
 def test_emit_event_sync_no_op_without_bus():
     emit_event_sync(LLMStreamDeltaEvent(token="x"))  # must not raise
 

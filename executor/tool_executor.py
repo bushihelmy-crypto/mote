@@ -20,7 +20,7 @@ import inspect
 import uuid
 from typing import Any, Callable, Mapping
 
-from metagpt.common.events import FileMutatedEvent, PostToolUseEvent, PreToolUseEvent
+from metagpt.common.events import FileMutatedEvent, PostToolUseEvent, PreToolUseEvent, span
 from metagpt.common.exception import (
     ErrorReport,
     RecoveryAction,
@@ -39,7 +39,6 @@ from metagpt.executor.permission.sandbox import SandboxGuard
 from metagpt.executor.tool_result import ToolError, ToolResult
 from metagpt.executor.tool_registry import registry as tool_registry
 from metagpt.common.logs import log_class
-from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
 from metagpt.executor.mcp_adapter import MCPToolAdapter
@@ -269,7 +268,7 @@ class ToolExecutor(BaseToolExecutor):
 
         args = kwargs or {}
 
-        with maybe_span(f"tool:{name}", **(kwargs or {})):
+        async with span(f"tool:{name}", attributes=args):
             # PreToolUse event: emitted before the permission gate. A subscriber
             # (the hook layer) may rewrite the args (updated_args) or block the
             # call outright (deny). Hook deny composes with the permission engine
@@ -304,11 +303,16 @@ class ToolExecutor(BaseToolExecutor):
                         mutates_fs=mutates_fs,
                     )
                 else:
+                    # Shell-command tools split into segments so rules are folded
+                    # per segment (deny catches the dangerous half of a compound
+                    # command) and an "always" grant is remembered as a prefix.
+                    segments = tool.permission_segments(args)
                     decision = await self._permission_engine.check(
                         name,
                         target=targets[0] if targets else "",
                         tool_check=tool_check,
                         mutates_fs=mutates_fs,
+                        segments=segments,
                     )
                 if decision.behavior == "deny":
                     return _failed_result(ToolPermissionDeniedError(decision.message))

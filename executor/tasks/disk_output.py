@@ -22,7 +22,7 @@ from metagpt.common.const.tasks import (
     MAX_TASK_OUTPUT_BYTES_DISPLAY,
     DEFAULT_MAX_READ_BYTES,
 )
-from metagpt.common.utils import disk_io
+from metagpt.common.disk import disk_io
 
 # Sentinel object to signal drain loop shutdown (never confused with real data).
 _SENTINEL = object()

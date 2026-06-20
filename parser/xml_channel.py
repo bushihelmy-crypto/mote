@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING, AsyncGenerator, Optional
 from metagpt.common.logs import logger
 from metagpt.common.schema import AIMessage, CauseBy, UserMessage
 from metagpt.common.utils.role_zero_utils import parse_commands2
-from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
+from metagpt.common.base.command_channel import (
+    CommandChannel,
+    _collect_media,
+    _media_message,
+    join_command_outputs,
+)
 from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE, XML_COMMAND_HINT
 from metagpt.common.prompt.refs import Sym
 
@@ -30,14 +35,15 @@ class XmlCommandChannel(CommandChannel):
             Sym.CAP_REPLY: "reply_to_human",
         }
 
-    def output_format(self) -> str:
-        return OUTPUT_SECTION
-
-    def command_guide(self) -> str:
-        return XML_COMMAND_GUIDE
-
-    def command_hint(self) -> str:
-        return XML_COMMAND_HINT
+    def prompt_vars(self) -> dict[str, str]:
+        # XML supplies all three protocol sections: the OUTPUT format block, the
+        # <end></end> / command-tag "# Using commands" guidance, and the per-turn
+        # "ONE and ONLY ONE command block ... <end></end>" user-prompt hint.
+        return {
+            "output_format": OUTPUT_SECTION,
+            "command_guide": XML_COMMAND_GUIDE,
+            "command_hint": XML_COMMAND_HINT,
+        }
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return None
@@ -61,10 +67,13 @@ class XmlCommandChannel(CommandChannel):
         for cmd in command_list or []:
             yield {"id": None, **cmd, "status": "running", "error_msg": ""}
 
+    def react_result(self, outputs: str) -> str:
+        # XML's <end></end>-era contract: ask the orchestrator to mark the task
+        # finished. The shared base default (plain outputs) is what native uses.
+        return f"I have finished the task, please mark my task as finished. Outputs: {outputs}"
+
     async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
-        outputs = "\n\n".join(e["output"] for e in executed) if executed else (
-            "No valid commands found for execution, pay attention to the output format."
-        )
+        outputs = join_command_outputs(executed)
         await memory.add(AIMessage(content=command_rsp))
         await memory.add(UserMessage(content=outputs, cause_by=CauseBy.RUN_COMMAND))
         media = _media_message(*_collect_media(executed))

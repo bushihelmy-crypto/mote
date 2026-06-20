@@ -10,8 +10,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 from typing import TYPE_CHECKING, Any, Optional, Set
 
 from metagpt.common.base import BaseRole
@@ -19,28 +17,31 @@ from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
 from metagpt.common.exception import RoleContextNotSetError
 from metagpt.context import ContextManager
 from metagpt.executor.tool_executor import ToolExecutor
+from metagpt.common.events import (
+    SessionStartEvent,
+    TurnEndEvent,
+    UserPromptSubmitEvent,
+    set_bus,
+    span,
+)
 from metagpt.common.logs import bind_trace, log_class
-from metagpt.common.observability.langfuse_integration import maybe_trace
-from metagpt.think.prompt_builder import PromptBuilder
 from metagpt.roles.context_provider import ContextProvider
 from metagpt.loop import BaseLoop, ReActLoop
-from metagpt.router.router import SUMMARY_TASK, LLMRouter
-from metagpt.roles.role_components import RoleComponents, _resolve_shell_tools  # noqa: F401
+from metagpt.router.router import LLMRouter
+from metagpt.roles.capabilities import RoleCapabilities
+from metagpt.roles.role_components import RoleComponents
 from metagpt.roles.role_schema import RoleSchema
 from metagpt.roles.role_state import RoleState, RoleStateController
 from metagpt.common.schema import (
     AIMessage,
     CauseBy,
     Message,
-    UserMessage,
 )
 from metagpt.context.skills.skill_manager import SkillManager
 from metagpt.parser import CommandChannel
 from metagpt.think.think_engine import ThinkEngine
 from metagpt.executor.tasks import BackgroundTaskPool
 from metagpt.common.utils.common import any_to_str, role_raise_decorator
-from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
-from metagpt.common.utils.role_zero_utils import attach_media, detach_media
 
 if TYPE_CHECKING:
     from metagpt.session import FileSnapshotRecorder, SessionLog
@@ -104,6 +105,10 @@ class Role(BaseRole):
         # Behaviour over the (pure-DTO) state lives in a controller; the Role's
         # state methods below are thin delegators onto it (the capability surface).
         self._state_ctl = RoleStateController(self.state)
+        # Subsystem-backed tool capabilities (human I/O, sleep, end-of-session
+        # summary, skill forks, the task/skill pools) live in a holder for the
+        # same reason; the Role's capability methods below delegate onto it.
+        self._capabilities = RoleCapabilities(self)
 
         # External dependencies (injected)
         self._context = context
@@ -358,6 +363,26 @@ class Role(BaseRole):
         """
         return self._state_ctl.get_file_read_mtime(path)
 
+    def get_tool_session(self, key: str) -> Any:
+        """Return a stateful tool's live per-Role session (keyed by tool name).
+
+        Stateful tools (terminal shell, Python kernel) store their live session
+        on RoleState through this capability + :meth:`set_tool_session` instead
+        of a process-global singleton, so the session is owned by this Role,
+        isolated per session, and torn down with it. Returns None when no
+        session is live yet (the tool creates one on first use).
+        """
+        return self._state_ctl.get_tool_session(key)
+
+    def set_tool_session(self, key: str, value: Any) -> None:
+        """Store/clear a stateful tool's live session (a None value clears it).
+
+        Counterpart to :meth:`get_tool_session`. The terminal/kernel tools call
+        this to register a newly started session and to drop it on close /
+        teardown, without ever touching RoleState directly.
+        """
+        self._state_ctl.set_tool_session(key, value)
+
     def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
         """Capture a before-image of a file a tool is about to overwrite.
 
@@ -369,6 +394,23 @@ class Role(BaseRole):
         Best-effort — never raises into the tool.
         """
         self.file_snapshot_recorder.snapshot(full_path, tool=tool)
+
+    def get_skill_pool(self):
+        """Return the live SkillPool, or None when skills are disabled.
+
+        Capability surface for the ``Skill`` bridge tool; delegates to
+        :class:`RoleCapabilities`.
+        """
+        return self._capabilities.get_skill_pool()
+
+    async def run_skill_fork(self, **kwargs) -> str:
+        """Run a ``context: fork`` skill inside a fresh, isolated child Role.
+
+        Capability surface for the ``Skill`` bridge tool; delegates to
+        :class:`RoleCapabilities` (which owns the child lifecycle, including
+        cleanup).
+        """
+        return await self._capabilities.run_skill_fork(**kwargs)
 
     # =========================================================================
     # Narrow capabilities exposed to tools (injected via BaseTool.requires).
@@ -389,14 +431,18 @@ class Role(BaseRole):
             "set_cwd": self.set_cwd,
             "deactivate": self.deactivate,
             "ask_human": self.ask_human,
-            "get_bg_pool": lambda: self.bg_pool,
+            "get_bg_pool": self.get_bg_pool,
             "request_approval": self.request_approval,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
             "record_file_snapshot": self.record_file_snapshot,
+            "get_tool_session": self.get_tool_session,
+            "set_tool_session": self.set_tool_session,
             "wait_interruptible": self.wait_interruptible,
+            "get_skill_pool": self.get_skill_pool,
+            "run_skill_fork": self.run_skill_fork,
         }
 
     def deactivate(self) -> None:
@@ -416,117 +462,49 @@ class Role(BaseRole):
         """
         self._state_ctl.set_active(value)
 
+    def get_bg_pool(self) -> BackgroundTaskPool:
+        """Return the background task pool (capability surface; delegates)."""
+        return self._capabilities.get_bg_pool()
+
     async def ask_human(self, question: str) -> str:
         """Ask the human user a question and return their response.
 
         Only valid inside an MGXEnv. A trailing 'stop' deactivates the role.
+        Capability surface; delegates to :class:`RoleCapabilities`.
         """
-        if not question:
-            return "Error: 'question' argument is required."
-
-        env = self.state.env
-        if env is None:
-            return "Not in MGXEnv, command will not be executed."
-
-        response = await env.ask_human(question, sent_from=self.role_schema.name)
-        if response.strip().lower().endswith(("stop", "<stop>")):
-            response += " The user has asked me to stop because I have encountered a problem."
-            self.deactivate()
-        return response
+        return await self._capabilities.ask_human(question)
 
     async def request_approval(self, prompt: str) -> str:
         """Ask the human to approve a tool call and return their raw reply.
 
         The interactive channel for the PermissionEngine's ``ask`` decisions.
-        Unlike ask_human(), this does NOT treat a trailing 'stop' as a kill
-        switch — an approval prompt should never silently deactivate the Role.
-        Outside an MGXEnv there is no channel, so it returns "" and the engine
-        fails closed (denies).
+        Capability surface; delegates to :class:`RoleCapabilities`.
         """
-        env = self.state.env
-        if env is None:
-            return ""
-        return await env.ask_human(prompt, sent_from=self.role_schema.name)
+        return await self._capabilities.request_approval(prompt)
 
     async def reply_to_human(self, content: str) -> str:
         """Reply to the human user with the provided content.
 
-        Only valid inside an MGXEnv.
+        Only valid inside an MGXEnv. Capability surface; delegates to
+        :class:`RoleCapabilities`.
         """
-        if not content:
-            return "Error: 'content' argument is required."
-
-        env = self.state.env
-        if env is None:
-            return "Not in MGXEnv, command will not be executed."
-
-        return await env.reply_to_human(content, sent_from=self.role_schema.name)
+        return await self._capabilities.reply_to_human(content)
 
     async def wait_interruptible(self, duration_seconds: float) -> tuple[float, bool]:
         """Sleep for up to *duration_seconds*, waking early on activity.
 
-        Wake conditions: a new message arrives in the message buffer (user
-        input, background-task notification, etc.) or a background task
-        completes. Owns the wait coordination so the Sleep tool stays a thin
-        trigger and never touches RoleState, the msg_buffer, or the bg pool.
-
-        Returns:
-            (slept_seconds, interrupted) — elapsed time rounded to 0.1s and
-            whether the sleep was cut short by activity.
+        Capability surface for the Sleep tool; delegates to
+        :class:`RoleCapabilities` (which owns the wait coordination).
         """
-        msg_buffer = self.state.msg_buffer
-        bg_pool = self._peek_bg_pool()
-
-        start = time.time()
-        sleep_task = asyncio.create_task(asyncio.sleep(duration_seconds))
-        waiters = {sleep_task}
-
-        msg_task = asyncio.create_task(msg_buffer.wait_for_message())
-        waiters.add(msg_task)
-
-        if bg_pool is not None:
-            waiters.add(asyncio.create_task(bg_pool.wait_for_completion()))
-
-        try:
-            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-            interrupted = sleep_task not in done
-        finally:
-            for t in waiters:
-                t.cancel()
-
-        return round(time.time() - start, 1), interrupted
+        return await self._capabilities.wait_interruptible(duration_seconds)
 
     async def end_session(self) -> str:
-        """End the current session and produce a summary if configured."""
-        self._state_ctl.deactivate()
+        """End the current session and produce a summary if configured.
 
-        memory = self.context_manager
-        messages = memory.get(self.role_schema.memory_k)
-        result = self.think_engine.result
-        if not result.is_empty:
-            messages = messages + [AIMessage(content=result.content)]
-        messages = attach_media(messages)
-
-        outputs = ""
-        if self.role_schema.use_summary:
-            need_recommend = self.role_schema.need_end_recommendations_tag
-            reporter_cls = RecommendReporter if need_recommend else ThoughtReporter
-            summary_prompt = PromptBuilder.pick_summary_prompt(
-                summary_prompt=self.role_schema.summary_prompt,
-                recommend_prompt=self.role_schema.summary_with_recommend_prompt,
-                need_recommend=need_recommend,
-            )
-            summary_messages = messages + [UserMessage(content=summary_prompt)]
-            # Peripheral (non-loop) call: routed via the "summary" task so it can
-            # use a cheaper/different model (claude-sonnet-4-8) than the main llm.
-            summary_llm = self.router.route_for_task(SUMMARY_TASK)
-            async with reporter_cls() as reporter:
-                await reporter.async_report({"type": "summary"})
-                outputs = await summary_llm.aask(summary_messages)
-
-        self.state.last_end_output = outputs
-        detach_media(messages)
-        return outputs
+        Capability surface for the End tool; delegates to
+        :class:`RoleCapabilities`.
+        """
+        return await self._capabilities.end_session()
 
     def get_memories(self, k=0) -> list[Message]:
         return self.context_manager.get(k=k)
@@ -573,6 +551,53 @@ class Role(BaseRole):
             get_bg_pool=self._peek_bg_pool,
         )
 
+    def _coerce_to_message(self, with_message) -> Message:
+        """Normalize the run() input (str / list / Message) into one Message.
+
+        Stamps the default USER_REQUIREMENT cause and routes the message to this
+        role so the loop observes it. Kept out of run() so the dispatch table
+        stays readable.
+        """
+        if isinstance(with_message, Message):
+            msg = with_message
+        elif isinstance(with_message, list):
+            msg = Message(content="\n".join(with_message))
+        else:
+            msg = Message(content=with_message)
+        if not msg.cause_by:
+            msg.cause_by = CauseBy.USER_REQUIREMENT
+        msg.send_to.add(self.role_schema.name)
+        return msg
+
+    async def _emit_session_start(self) -> None:
+        """Emit ``SessionStartEvent`` exactly once across this Role's run() calls.
+
+        The HookSubscriber fires the SessionStart hook; the recorder's meta line
+        is already written when the session_log was built. Also starts the opt-in
+        external-file watcher (the property is None when disabled / no hook
+        layer); its polling loop is stopped in :meth:`cleanup`.
+        """
+        if self._session_started:
+            return
+        self._session_started = True
+
+        await self.event_bus.emit(
+            SessionStartEvent(
+                session_id=self.state.session_id,
+                parent_session_id=self.state.parent_session_id,
+                working_dir=self.state.working_dir,
+                original_working_dir=self.state.original_working_dir,
+                project_root=self.state.project_root,
+                model=getattr(self.config.llm, "model", None),
+                role_class=f"{type(self).__module__}.{type(self).__qualname__}",
+                source="startup",
+            )
+        )
+
+        watcher = self.file_watch_service
+        if watcher is not None and not watcher.watcher.is_running():
+            watcher.start()
+
     @role_raise_decorator
     async def run(self, with_message=None) -> Message | None:
         """Observe, and think and act based on the results of the observation"""
@@ -581,95 +606,55 @@ class Role(BaseRole):
         # Bind the event bus to the async context so deep call sites (the LLM
         # client streaming tokens, a tool capturing a snapshot) can emit onto the
         # same spine without threading the bus through every signature.
-        from metagpt.common.events import set_bus
+        with bind_trace(self.session_id), set_bus(self.event_bus):
+            async with span(f"role.run:{self.name}"):
+                await self._ensure_ready()
+                await self._emit_session_start()
 
-        with bind_trace(self.session_id), set_bus(self.event_bus), maybe_trace(
-            self.session_id, name=f"role.run:{self.name}"
-        ):
-            await self._ensure_ready()
+                if with_message:
+                    msg = self._coerce_to_message(with_message)
 
-            # SessionStart event: emitted once per Role across its run() calls.
-            # The HookSubscriber fires the SessionStart hook; the recorder's meta
-            # line is already written when the session_log was built.
-            if not self._session_started:
-                self._session_started = True
-                from metagpt.common.events import SessionStartEvent
-
-                await self.event_bus.emit(
-                    SessionStartEvent(
-                        session_id=self.state.session_id,
-                        parent_session_id=self.state.parent_session_id,
-                        working_dir=self.state.working_dir,
-                        original_working_dir=self.state.original_working_dir,
-                        project_root=self.state.project_root,
-                        model=getattr(self.config.llm, "model", None),
-                        role_class=f"{type(self).__module__}.{type(self).__qualname__}",
-                        source="startup",
+                    # UserPromptSubmit event: a subscriber (hook) may inject extra
+                    # context (prepended to the prompt) or veto the turn (stop ->
+                    # deactivate before loop). Emitting always; the folded outcome is
+                    # EMPTY when no hook layer is wired.
+                    outcome = await self.event_bus.emit(
+                        UserPromptSubmitEvent(prompt=msg.content)
                     )
-                )
+                    if outcome.additional_context:
+                        injected = "\n".join(outcome.additional_context)
+                        msg.content = f"{injected}\n{msg.content}" if msg.content else injected
+                    if outcome.stop:
+                        self.deactivate()
 
-                # Start the external-file watcher once per session (opt-in; the
-                # property returns None when disabled / no hook layer). It runs a
-                # background polling loop and is stopped in cleanup().
-                watcher = self.file_watch_service
-                if watcher is not None and not watcher.watcher.is_running():
-                    watcher.start()
+                    # LSP diagnostics now flow through the per-turn ephemeral-context
+                    # bus (turn_context layer): drained every think() cycle into the
+                    # user prompt's <system-reminder> (never stored in history),
+                    # alongside git status / token pressure / background-task feeds.
+                    self.put_message(msg)
 
-            if with_message:
-                msg = None
-                if isinstance(with_message, str):
-                    msg = Message(content=with_message)
-                elif isinstance(with_message, Message):
-                    msg = with_message
-                elif isinstance(with_message, list):
-                    msg = Message(content="\n".join(with_message))
-                if not msg.cause_by:
-                    msg.cause_by = CauseBy.USER_REQUIREMENT
-                msg.send_to.add(self.role_schema.name)
+                loop = self._make_loop()
+                try:
+                    rsp = await loop.run()
+                finally:
+                    # Always propagate for recovery (role_raise_decorator reads it).
+                    self.state.latest_observed_msg = loop.latest_observed_msg
+                    # TurnEnd event: the recorder marks the turn boundary in the
+                    # durable log (working_dir may have moved via `cd`, so capture
+                    # the live value at turn end) and the HookSubscriber fires the
+                    # Stop hook. Guarded on the slot so a failure before the bus was
+                    # built never triggers lazy construction in teardown.
+                    await self._emit_turn_end()
+                if rsp is None:
+                    return None
 
-                # UserPromptSubmit event: a subscriber (hook) may inject extra
-                # context (prepended to the prompt) or veto the turn (stop ->
-                # deactivate before loop). Emitting always; the folded outcome is
-                # EMPTY when no hook layer is wired.
-                from metagpt.common.events import UserPromptSubmitEvent
-
-                outcome = await self.event_bus.emit(
-                    UserPromptSubmitEvent(prompt=msg.content)
-                )
-                if outcome.additional_context:
-                    injected = "\n".join(outcome.additional_context)
-                    msg.content = f"{injected}\n{msg.content}" if msg.content else injected
-                if outcome.stop:
-                    self.deactivate()
-
-                # LSP diagnostics now flow through the per-turn ephemeral-context
-                # bus (turn_context layer): drained every think() cycle into the
-                # user prompt's <system-reminder> (never stored in history),
-                # alongside git status / token pressure / background-task feeds.
-                self.put_message(msg)
-
-            loop = self._make_loop()
-            try:
-                rsp = await loop.run()
-            finally:
-                # Always propagate for recovery (role_raise_decorator reads it).
-                self.state.latest_observed_msg = loop.latest_observed_msg
-                # TurnEnd event: the recorder marks the turn boundary in the
-                # durable log (working_dir may have moved via `cd`, so capture
-                # the live value at turn end) and the HookSubscriber fires the
-                # Stop hook. Guarded on the slot so a failure before the bus was
-                # built never triggers lazy construction in teardown.
-                await self._emit_turn_end()
-            if rsp is None:
-                return None
-
-            # Post-loop finalization (was Role.react): clear the active signal
-            # and tag the response with this Role's display name.
-            self._state_ctl.deactivate()
-            if isinstance(rsp, AIMessage):
-                rsp.with_agent(self.role_schema.display_name)
-            self.publish_message(rsp)
-            return rsp
+                # Post-loop finalization (was Role.react): clear the active signal
+                # and tag the response with this Role's display name.
+                self._state_ctl.deactivate()
+                if isinstance(rsp, AIMessage):
+                    rsp.with_agent(self.role_schema.display_name)
+                self.publish_message(rsp)
+                return rsp
 
     @staticmethod
     def list_sessions(base_dir: str | None = None, *, cwd: str | None = None) -> list:
@@ -701,7 +686,7 @@ class Role(BaseRole):
         if not log.exists():
             return False
 
-        result = replay(log)
+        result = replay(log)  # replay scans via iter_raw, whose drain flushes queued writes first
         # Assign in place so the ContextManager (which backs onto this same list)
         # sees the rebuilt history without re-recording it.
         self.state.context.messages[:] = result.messages
@@ -760,8 +745,6 @@ class Role(BaseRole):
         try:
             from dataclasses import asdict
             from uuid import uuid4
-
-            from metagpt.common.events import TurnEndEvent
 
             token_state = None
             try:

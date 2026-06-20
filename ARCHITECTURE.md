@@ -79,7 +79,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 ```
 
 - `common` 是叶子，**只依赖标准库 + 第三方**（pydantic / loguru / openai / anthropic …），永不反向 import 任何上层。
-- 低层要用高层能力 → 先在 `common/interface/` 定义 `@runtime_checkable` Protocol，由高层在装配期注入实例，**不直接 import**（依赖倒置）。典型：`context↛session`（经 `SessionRecorder`）、`executor↛session`（经 `FileSnapshotStore`）、`executor↛roles`（经 `HookRunner`/`LspNotifier`）、`turn_context↛tasks`（经 `EphemeralContextSource`）。
+- 低层要用高层能力 → 先在 `common/interface/` 定义 `@runtime_checkable` Protocol，由高层在装配期注入实例，**不直接 import**（依赖倒置）。典型：`executor↛session`（经 `FileSnapshotStore`）、`executor↛roles`（经 `HookRunner`/`LspNotifier`）、`turn_context↛tasks`（经 `EphemeralContextSource`）。（`context↛session` 不再走 Protocol：context 只往 `common/events` 的 EventBus 发事件，由 `RecorderSubscriber` 落盘——见会话记录一节。）
 - `environment → session` 可在加载期直接 import（无环）；`environment → roles` 必须惰性 import 打破环。
 - `session` 虽被 `roles`/`environment` 消费，但自身只依赖 `common`，故归在第 1 层。
 
@@ -853,7 +853,7 @@ context/
 - **`manage_history()`**：先 microcompact（原地折叠）再 autocompact（LLM 摘要），是历史压缩的总编排入口。
 - **`prepare_request(user_prompt, manage=True)`**：组装一次请求的历史（manage=True 时先跑压缩）。
 - **熔断**：连续压缩失败计数，触发后停用 autocompact 防雪崩。
-- **注入点**：构造期注入 `SessionRecorder`（Protocol）做 rollout 落盘；`add`→record_message，compacted→record_compaction。
+- **事件注入点**：构造期注入 `bus`（`common.events` 的 EventBus）；`add`→发 `MessageAppendedEvent`，compacted→发 `CompactionCheckpointEvent`，由 `RecorderSubscriber` 落盘 rollout（无 bus 时静默不发，standalone/test 用）。
 
 ### token 预算（token_budget.py）
 - `count_tokens` / `context_window` / `effective_window` / `autocompact_buffer` / `autocompact_threshold`。

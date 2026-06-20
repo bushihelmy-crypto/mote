@@ -23,10 +23,11 @@ class SimpleState(GraphState):
     x: int = 0
 
 
-def sync_node(fn):
+def sync_node(fn, *, field=None):
     async def node(state):
         async def submit():
-            return fn(state)
+            result = fn(state)
+            return {field: result} if field is not None else result
         return Stage(submit=submit())
     return node
 
@@ -46,7 +47,7 @@ def pool():
 
 def _failing_graph():
     g = BgGraph("failing", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x * 2))
+    g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node("b", boom_node())
     g.add_edge(START, "a")
     g.add_edge("a", "b")
@@ -57,7 +58,7 @@ def _failing_graph():
 def _detail_graph():
     """a doubles x; b consumes a's output (declared param) then fails."""
     g = BgGraph("detail", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x * 2))
+    g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node(
         "b",
         boom_node(),
@@ -126,7 +127,7 @@ class TestGetNodeState:
         assert "from 'a' output" in result
         assert "[int]" in result
         assert "the doubled x" in result
-        assert "output: state.b" in result
+        assert "output: writes to state" in result
         # Detail mode is scoped: a's own detail block is not rendered.
         assert "Node 'a'" not in result
 
@@ -141,7 +142,7 @@ class TestGetNodeState:
         tool = _make_tool(pool)
         result = await tool.call(task_id=tid, nodes=["a"])
         # a's output is consumed by b's 'val' input.
-        assert "output: state.a" in result
+        assert "output: writes to state" in result
         assert "consumed by: b.val" in result
 
     async def test_detail_mode_unknown_node_raises(self, pool):

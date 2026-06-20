@@ -62,10 +62,11 @@ class TestStartEnd:
         g = BgGraph("g", state_schema=S)
         _node(g, "a")
         g.add_edge("a", END)
-        with pytest.raises(ValueError, match="exactly one edge from START"):
+        with pytest.raises(ValueError, match="at least one edge from START"):
             g.compile()
 
-    def test_two_start_edges(self):
+    def test_multiple_start_edges_ok(self):
+        # langgraph alignment: several START edges seed parallel entry nodes.
         g = BgGraph("g", state_schema=S)
         _node(g, "a")
         _node(g, "b")
@@ -73,8 +74,7 @@ class TestStartEnd:
         g.add_edge(START, "b")
         g.add_edge("a", END)
         g.add_edge("b", END)
-        with pytest.raises(ValueError, match="exactly one edge from START"):
-            g.compile()
+        g.compile()  # no raise — multiple entry points fan out in parallel
 
     def test_no_end_edge(self):
         g = BgGraph("g", state_schema=S)
@@ -246,13 +246,15 @@ class TestParamValidation:
         g.add_edge("a", END)
         g.compile()  # no raise
 
-    def test_unknown_node_ref(self):
+    def test_undeclared_field_ref_allowed(self):
+        # With the field/channel model a param's non-$input ``from`` references a
+        # state field, not a node. ``extra="allow"`` lets undeclared fields land
+        # at runtime, so an undeclared reference is no longer a compile error.
         g = BgGraph("g", state_schema=S)
         g.add_node("a", sync_node(lambda s: 1), params={"p": {"from": "ghost.out"}})
         g.add_edge(START, "a")
         g.add_edge("a", END)
-        with pytest.raises(ValueError, match="unknown node"):
-            g.compile()
+        g.compile()  # no raise
 
 
 class TestParamTypeValidation:

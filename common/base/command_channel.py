@@ -15,6 +15,17 @@ if TYPE_CHECKING:
     from metagpt.common.interface import MessageStore
 
 
+#: The protocol-specific ``${placeholder}`` names the prompt templates expect
+#: every channel's ``prompt_vars()`` to fill (system prompt: output_format /
+#: command_guide; per-turn user prompt: command_hint). The builder asserts a
+#: channel covers these, so a partial dict fails the build instead of leaking a
+#: literal ``${output_format}`` to the model. Extending the prompt with a new
+#: protocol section is a three-line change: add its key here, a ``${key}`` in
+#: the template, and the value in each channel's ``prompt_vars()`` — nothing in
+#: ThinkInputs / ThinkContext / collect_context changes.
+PROMPT_VAR_KEYS = ("output_format", "command_guide", "command_hint")
+
+
 class CommandChannel(ABC):
     """Protocol-specific prompt/call/parse strategy for the react loop."""
 
@@ -43,31 +54,26 @@ class CommandChannel(ABC):
         """
         return _lower_symbols(text, normalize_vocabulary(self.vocabulary()))
 
-    @abstractmethod
-    def output_format(self) -> str:
-        """System-prompt OUTPUT section text for this protocol ("" if none)."""
+    def prompt_vars(self) -> dict[str, str]:
+        """Named ``${placeholder}`` fills this protocol contributes to the prompts.
 
-    def command_guide(self) -> str:
-        """System-prompt "# Using commands" section text for this protocol.
+        The single seam by which a channel injects its protocol-specific prompt
+        sections — output_format (system OUTPUT block), command_guide (system
+        "# Using commands" mechanics), command_hint (per-turn user-prompt hint).
+        The builder merges this dict straight into the template substitutions, so
+        the channel — not ThinkInputs/ThinkContext — owns every protocol section.
 
-        Protocol-specific command-usage instructions (the ${command_guide}
-        section). XML supplies the <end></end> / command-tag mechanics; native
-        supplies tool-call mechanics. Default "" => no section, so the static
-        prompt never hard-codes one protocol's mechanics for the other.
+        Symmetric with ``vocabulary()``: that supplies inline ``⟦symbol⟧``
+        surfaces, this supplies block-level ``${section}`` text. XML fills all
+        three with its ``<end></end>`` / command-tag mechanics; native fills only
+        command_guide (output is API-constrained, no per-turn hint) and never
+        carries the ``<end></end>`` marker.
+
+        Must cover ``PROMPT_VAR_KEYS`` (the placeholders the templates reference);
+        the default fills them all with "" — a channel that adds no protocol
+        sections is valid.
         """
-        return ""
-
-    def command_hint(self) -> str:
-        """Per-turn user-prompt command hint for this protocol ("" if none).
-
-        Supplied as CMD_PROMPT's ${command_hint} section (the user prompt sent
-        each turn). XML carries the "ONE and ONLY ONE command block ... <end></end>"
-        instruction; native supplies "" so the model is never told to emit
-        <end></end> (which it would otherwise echo as literal text). Mirrors
-        command_guide(), but for the per-turn user prompt rather than the system
-        prompt.
-        """
-        return ""
+        return {key: "" for key in PROMPT_VAR_KEYS}
 
     @abstractmethod
     def tool_specs(self, executor) -> Optional[list[dict]]:
@@ -111,6 +117,20 @@ class CommandChannel(ABC):
         """
         return think_engine.result.content or ""
 
+    def react_result(self, outputs: str) -> str:
+        """The react loop's PUBLISHED result message for one completed action round.
+
+        This is the loop's return envelope handed to the environment / other
+        roles (via publish_message) — NOT a prompt and NOT this role's own
+        history (record_turn writes history separately). Because it is an
+        orchestration signal it is protocol-flavored: XML overrides this to ask
+        an orchestrator to mark the task finished (the <end></end>-era contract);
+        native keeps the plain outputs, since a native turn finishes via a plain
+        text reply (see is_terminal / the loop's _finish) and never needs the XML
+        orchestration phrasing. Default: the joined outputs verbatim.
+        """
+        return outputs
+
     async def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
         """Whether the react loop should stop after this think round.
 
@@ -127,6 +147,22 @@ class CommandChannel(ABC):
             tool_calls -- see NativeToolChannel.
         """
         return False
+
+
+#: Notice surfaced as the round's "outputs" when no valid command ran this turn.
+#: Single source shared by the loop (building the react result) and the XML
+#: channel (building its user-message outputs), so the two never drift.
+NO_VALID_COMMANDS = "No valid commands found for execution, pay attention to the output format."
+
+
+def join_command_outputs(executed: list[dict]) -> str:
+    """Join this round's executed-command outputs, or the no-commands notice.
+
+    The single definition of "what the round's outputs string is": the
+    blank-line-joined per-command outputs, or ``NO_VALID_COMMANDS`` when nothing
+    ran. Used by both the react loop and ``XmlCommandChannel.record_turn``.
+    """
+    return "\n\n".join(e["output"] for e in executed) if executed else NO_VALID_COMMANDS
 
 
 def _collect_media(executed: list[dict]) -> tuple[list[str], list[str]]:

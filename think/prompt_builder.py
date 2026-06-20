@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Optional
 
+from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
+
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.prompt.role import (
     CONSTRAINT_TEMPLATE,
@@ -63,9 +65,6 @@ class ThinkInputs:
     team_info: str = ""
     working_dir: str = ""
     project_root: Any = None
-    output_format: Optional[str] = None
-    command_guide: Optional[str] = None
-    command_hint: Optional[str] = None
     memory_dir: Any = None
     language: Optional[str] = None
     scratchpad_dir: Any = None
@@ -76,13 +75,16 @@ class ThinkSubsystems:
     """The live collaborators a Role hands to PromptBuilder for one think() cycle.
 
     Counterpart to ThinkInputs: where ThinkInputs is a pure-data snapshot, this
-    bundles the active objects PromptBuilder queries (config, llm, executor,
+    bundles the active objects PromptBuilder queries (config, executor,
     skill_manager). Kept separate so the data/behavior split stays
     as clean as ThinkContext (data) vs the subsystems (behavior).
+
+    ``model_name`` is the configured model's display name (for the "powered by"
+    line) — not a live LLM handle, so PromptBuilder never resolves an LLM.
     """
 
     config: Any
-    llm: Any
+    model_name: str
     executor: Any
     skill_manager: Any
     # The unified per-turn ephemeral-context bus (git/token/bg-tasks/LSP feeds).
@@ -130,21 +132,15 @@ class ThinkContext:
     summarize_tool_results: str = ""
     pipeline_section: str = ""
 
-    # Output command-block format (parser contract). Defaults to "" (no format
-    # section); the command channel supplies OUTPUT_SECTION for the XML protocol
-    # via ThinkInputs.output_format.
-    output_format: str = ""
-
-    # "# Using commands" section. Defaults to "" (no section); the command
-    # channel supplies the protocol-specific guidance via ThinkInputs.command_guide
-    # (XML <end></end> mechanics vs native tool-call mechanics).
-    command_guide: str = ""
-
-    # Per-turn command hint injected into the user prompt (CMD_PROMPT's
-    # ${command_hint}). Defaults to "" (none); the command channel supplies the
-    # protocol-specific text via ThinkInputs.command_hint — XML carries the
-    # <end></end> instruction, native supplies "" so it never leaks that marker.
-    command_hint: str = ""
+    # Protocol-specific ${placeholder} fills supplied by the active command
+    # channel's prompt_vars() — output_format (system OUTPUT block), command_guide
+    # (system "# Using commands" mechanics), command_hint (per-turn user-prompt
+    # hint). Merged into both the system and user template substitutions; each
+    # template consumes only the keys it references (safe_substitute ignores the
+    # rest). The single seam for protocol prompt sections (was three ThinkInputs
+    # fields + three collect_context override blocks). Defaults to "" for every
+    # PROMPT_VAR_KEYS entry when no channel is wired.
+    prompt_vars: dict = field(default_factory=lambda: {k: "" for k in PROMPT_VAR_KEYS})
 
     # MEMORY.md content injected into the user prompt (CC injects the index via
     # user context so a changing index never busts the system-prompt cache).
@@ -160,9 +156,6 @@ class ThinkContext:
 
     # User prompt
     working_dir: str = ""
-
-    # State data passed to exp_cache
-    state_data: dict = field(default_factory=dict)
 
     # The active channel's symbol-lowering callable (``channel.lower``). Applied
     # to the fully-assembled system+user prompt at the end of ``build`` so the
@@ -253,8 +246,8 @@ class PromptBuilder:
             frc=ctx.frc,
             summarize_tool_results=ctx.summarize_tool_results,
             pipeline_section=ctx.pipeline_section,
-            output_format=ctx.output_format,
-            command_guide=ctx.command_guide,
+            # output_format / command_guide (+ any future protocol section).
+            **ctx.prompt_vars,
         )
 
     @staticmethod
@@ -262,7 +255,9 @@ class PromptBuilder:
         """Map ThinkContext fields to the command template's $placeholders."""
         return dict(
             current_state=f"current directory: {ctx.working_dir}",
-            command_hint=ctx.command_hint,
+            # command_hint lives here; the system-only protocol keys merged in are
+            # harmlessly ignored by the user template (safe_substitute drops extras).
+            **ctx.prompt_vars,
         )
 
     @staticmethod
@@ -340,7 +335,7 @@ class PromptBuilder:
         # prompt's <system-reminder>, so volatile git state never touches this
         # cacheable section.
         ctx.env_section = PromptBuilder._make_env_section(
-            subsystems.llm,
+            subsystems.model_name,
             working_dir=ctx.working_dir,
             project_root=inputs.project_root,
         )
@@ -358,30 +353,26 @@ class PromptBuilder:
         # user prompt as a <system-reminder>. None bus => "" (nothing injected).
         ctx.reminders = await PromptBuilder._make_reminders(subsystems.turn_context_bus, ctx.working_dir)
 
-        # Output-format section comes from the command channel: XML supplies
-        # OUTPUT_SECTION, native tool-use supplies "" (API constrains output).
-        # None means "caller didn't override" — keep the ThinkContext default.
-        if inputs.output_format is not None:
-            ctx.output_format = inputs.output_format
-
-        # "# Using commands" guidance, also from the command channel: XML supplies
-        # the <end></end> / command-tag mechanics, native supplies tool-call
-        # mechanics. None means "caller didn't override" — keep the default "".
-        if inputs.command_guide is not None:
-            ctx.command_guide = inputs.command_guide
-
-        # Per-turn user-prompt command hint, also from the command channel: XML
-        # supplies the <end></end> instruction, native supplies "". None means
-        # "caller didn't override" — keep the default "".
-        if inputs.command_hint is not None:
-            ctx.command_hint = inputs.command_hint
-
-        ctx.state_data = dict(instruction=ctx.instruction)
+        # Protocol-specific prompt sections (output_format / command_guide /
+        # command_hint) come from the active channel as ONE dict — the single
+        # source, replacing the old three-fields-on-ThinkInputs + three override
+        # blocks here. The channel object is already in subsystems (we also read
+        # its lower below), so there is no reason to pre-extract these into the
+        # pure-data ThinkInputs. None channel => the ThinkContext defaults ("").
+        channel = subsystems.command_channel
+        if channel is not None:
+            ctx.prompt_vars = channel.prompt_vars()
+            missing = set(PROMPT_VAR_KEYS) - ctx.prompt_vars.keys()
+            if missing:
+                raise ValueError(
+                    f"command channel {type(channel).__name__}.prompt_vars() is missing "
+                    f"required keys {sorted(missing)}; the templates would leak a literal "
+                    f"${{...}} for each. PROMPT_VAR_KEYS = {list(PROMPT_VAR_KEYS)}."
+                )
 
         # Capture the active channel's symbol-lowering callable so build() can
         # apply it as the final assembly step (protocol surface syntax goes in
         # last). None channel => no lowering (identity).
-        channel = subsystems.command_channel
         ctx.lower = channel.lower if channel is not None else None
         return ctx
 
@@ -476,7 +467,7 @@ class PromptBuilder:
         )
 
     @staticmethod
-    def _make_env_section(llm, working_dir: str = "", project_root=None) -> str:
+    def _make_env_section(model_name: str, working_dir: str = "", project_root=None) -> str:
         cwd = working_dir or str(DEFAULT_WORKSPACE_ROOT)
         root = str(project_root) if project_root else str(DEFAULT_WORKSPACE_ROOT)
         lines = [
@@ -488,7 +479,7 @@ class PromptBuilder:
             f" - Platform: {sys.platform}",
             f" - Shell: {os.environ.get('SHELL', '')}",
             f" - OS Version: {platform.platform()}",
-            f" - You are powered by the model named {llm.model}.",
+            f" - You are powered by the model named {model_name}.",
             "",
         ]
         return "\n".join(lines)

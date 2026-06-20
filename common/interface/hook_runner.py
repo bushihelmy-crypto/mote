@@ -3,8 +3,9 @@
 The structural slice the ``ToolExecutor`` / ``ContextManager`` / ``Role`` depend
 on to fire hooks, without naming the concrete ``HookManager``. A direct import of
 ``HookManager`` would also be legal (it lives in ``common``, the bottom layer),
-but consumers take this Protocol — mirroring ``SessionRecorder`` — so the
-subsystem stays swappable and the injection site is statically checked.
+but consumers take this Protocol — mirroring the other ``common.interface``
+faces — so the subsystem stays swappable and the injection site is statically
+checked.
 
 Leaf module: imports only ``typing`` plus (under TYPE_CHECKING) ``HookOutcome``.
 """

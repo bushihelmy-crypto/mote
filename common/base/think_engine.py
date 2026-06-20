@@ -39,7 +39,7 @@ class BaseThinkEngine(ABC):
     result: ThinkResult
 
     @abstractmethod
-    async def start(self, req, system_prompt, state_data, tool_specs=None) -> None:
+    async def start(self, req, system_prompt, tool_specs=None) -> None:
         """Launch one think round.
 
         When ``tool_specs`` is provided the native tool-use channel is used;

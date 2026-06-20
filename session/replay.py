@@ -23,13 +23,17 @@ Reconstruction is forgiving: a message payload that fails to load is skipped
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
 from metagpt.common.logs import log_call
 from metagpt.common.schema import Message
-from metagpt.session.events import COMPACTED, MESSAGE, SESSION_META
+from metagpt.session.events import (
+    CompactedEvent,
+    MessageEvent,
+    SessionMetaEvent,
+    parse_event,
+)
 from metagpt.session.log import SessionLog
 
 
@@ -53,35 +57,21 @@ def replay(log: SessionLog) -> ReplayResult:
     """Reconstruct the stored history from ``log`` (single forward pass)."""
     result = ReplayResult()
     for record in log.iter_raw():
-        rtype = record.get("type")
-        payload = record.get("payload") or {}
-
-        if rtype == SESSION_META:
-            result.meta = payload
-        elif rtype == MESSAGE:
+        event = parse_event(record)
+        if isinstance(event, SessionMetaEvent):
+            result.meta = asdict(event)
+        elif isinstance(event, MessageEvent):
             result.message_events += 1
-            msg = Message.load(_dumps(payload))
-            if msg is None:
-                result.skipped += 1
+            if event.message is None:
+                result.skipped += 1  # unloadable payload, skipped (counted)
             else:
-                result.messages.append(msg)
-        elif rtype == COMPACTED:
+                result.messages.append(event.message)
+        elif isinstance(event, CompactedEvent):
             result.checkpoints += 1
             # Reset to the self-contained checkpoint history.
-            rebuilt: List[Message] = []
-            for item in payload.get("replacement_history", []):
-                msg = Message.load(_dumps(item))
-                if msg is None:
-                    result.skipped += 1
-                else:
-                    rebuilt.append(msg)
-            result.messages = rebuilt
-        # turn_context / meta_update: not part of the history rebuild.
+            result.messages = list(event.messages)
+        # turn_context / meta_update / unknown: not part of the history rebuild.
     return result
-
-
-def _dumps(payload: Dict) -> str:
-    return json.dumps(payload)
 
 
 __all__ = ["ReplayResult", "replay"]

@@ -19,9 +19,11 @@ from metagpt.session.events import (
     SessionMetaEvent,
 )
 from metagpt.session.fork import fork
+from metagpt.session.history import diff_snapshot, file_history, restore
 from metagpt.session.listing import list_sessions
 from metagpt.session.log import SessionLog
 from metagpt.session.replay import replay
+from metagpt.session.snapshot import FileSnapshotRecorder
 
 
 def _seed(tmp_path, sid, *, working_dir="/w", project_root="/p", model="m", messages=()):
@@ -99,6 +101,40 @@ def test_fork_listing_surfaces_parent(tmp_path):
     infos = {i.session_id: i for i in list_sessions(base_dir=str(tmp_path))}
     assert infos["child"].parent_session_id == "parent"
     assert infos["parent"].parent_session_id is None
+
+
+def test_fork_inherits_file_history_and_blobs(tmp_path):
+    log = _seed(tmp_path, "parent", messages=["a"])
+    target = tmp_path / "f.txt"
+    target.write_text("v1")
+    rec = FileSnapshotRecorder(log)
+    rec.snapshot(str(target), tool="Write")
+    target.write_text("v2")  # current on-disk now differs from the before-image
+
+    fork("parent", new_session_id="child", base_dir=str(tmp_path))
+    child = SessionLog("child", base_dir=str(tmp_path))
+
+    # The child sees the inherited snapshot event...
+    hist = file_history(child)
+    assert str(target) in hist
+    assert hist[str(target)][0].pre_hash is not None
+    # ...and can diff/restore using its own (copied) blob store.
+    diff = diff_snapshot(child, str(target))
+    assert "v1" in diff and "v2" in diff
+    assert restore(child, str(target)) is True
+    assert target.read_text() == "v1"
+
+
+def test_fork_file_history_independent_of_parent(tmp_path):
+    log = _seed(tmp_path, "parent", messages=["a"])
+    target = tmp_path / "f.txt"
+    target.write_text("v1")
+    FileSnapshotRecorder(log).snapshot(str(target), tool="Write")
+
+    fork("parent", new_session_id="child", base_dir=str(tmp_path))
+    # The child's blob store is its own dir, not shared with the parent.
+    child_blobs = tmp_path / "child" / "blobs"
+    assert child_blobs.exists() and any(child_blobs.rglob("*"))
 
 
 @pytest.mark.asyncio

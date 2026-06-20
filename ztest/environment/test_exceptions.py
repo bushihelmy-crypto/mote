@@ -18,9 +18,9 @@ def test_all_are_agent_control_errors():
         assert issubclass(exc, AgentControlError)
 
 
-def test_agent_limit_reached_carries_max_threads():
+def test_agent_limit_reached_carries_max_agents():
     err = AgentLimitReached(3)
-    assert err.max_threads == 3
+    assert err.max_agents == 3
     assert "3" in str(err)
     with pytest.raises(AgentLimitReached):
         raise AgentLimitReached(1)

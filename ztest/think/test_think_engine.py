@@ -51,7 +51,7 @@ class TestXMLChannel:
         llm = FakeLLM(reply="my thought")
         engine = make_engine()
         await engine.start(req=[{"role": "user", "content": "hi"}], system_prompt="sys",
-                           state_data={}, llm=llm)
+                           llm=llm)
         await engine.join()
         assert engine.result.content == "my thought"
         # XML channel -> no structured tool calls.
@@ -62,7 +62,7 @@ class TestXMLChannel:
     async def test_uses_aask_not_aask_tool(self):
         llm = FakeLLM(reply="t")
         engine = make_engine()
-        await engine.start(req="REQ", system_prompt="SYS", state_data={}, llm=llm)
+        await engine.start(req="REQ", system_prompt="SYS", llm=llm)
         await engine.join()
         assert len(llm.aask_calls) == 1
         assert llm.aask_calls[0]["msg"] == "REQ"
@@ -73,7 +73,7 @@ class TestXMLChannel:
     async def test_start_assigns_llm(self):
         llm = FakeLLM()
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=llm)
+        await engine.start(req="r", system_prompt="s", llm=llm)
         assert engine.llm is llm
         await engine.join()
 
@@ -83,7 +83,7 @@ class TestXMLChannel:
         mem = FakeMemory([UserMessage(content="something else")])
         llm = FakeLLM(reply="fresh thought")
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=llm)
+        await engine.start(req="r", system_prompt="s", llm=llm)
         await engine.join()
         assert engine.result.content == "fresh thought"
 
@@ -95,7 +95,7 @@ class TestXMLChannel:
         llm = FakeLLM(reply=dup)
         engine = make_engine(memory=mem)
         await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s",
-                           state_data={}, llm=llm)
+                           llm=llm)
         await engine.join()
         # Overrides with a synthesized AskUserQuestion call (the registered tool),
         # not the unregistered ask_human (which the loop would filter out).
@@ -110,7 +110,7 @@ class TestNativeChannel:
         resp = make_tool_response(("call-1", "Read", {"path": "a.py"}), content="reading")
         llm = FakeLLM(tool_response=resp)
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={},
+        await engine.start(req="r", system_prompt="s",
                            tool_specs=[{"name": "Read"}], llm=llm)
         await engine.join()
         assert engine.result.content == "reading"
@@ -124,7 +124,7 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Glob", {})))
         engine = make_engine()
         specs = [{"name": "Glob"}]
-        await engine.start(req="REQ", system_prompt="SYS", state_data={},
+        await engine.start(req="REQ", system_prompt="SYS",
                            tool_specs=specs, llm=llm)
         await engine.join()
         assert len(llm.aask_tool_calls) == 1
@@ -138,7 +138,7 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Bash", {"cmd": "ls"})))
         llm._tool_response.content = None
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={},
+        await engine.start(req="r", system_prompt="s",
                            tool_specs=[{"name": "Bash"}], llm=llm)
         await engine.join()
         assert engine.result.content == ""
@@ -149,7 +149,7 @@ class TestNativeChannel:
         # Native channel with zero calls -> tool_calls == [] (still is_native).
         llm = FakeLLM(tool_response=make_tool_response(content="just text"))
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={},
+        await engine.start(req="r", system_prompt="s",
                            tool_specs=[{"name": "X"}], llm=llm)
         await engine.join()
         assert engine.result.tool_calls == []
@@ -161,7 +161,7 @@ class TestNativeChannel:
         mem = FakeMemory(history_with_calls([{"name": "Read", "args": {"path": "z"}}]))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Read", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", state_data={},
+        await engine.start(req="r", system_prompt="s",
                            tool_specs=[{"name": "Read"}], llm=llm)
         await engine.join()
         assert engine.result.tool_calls == [
@@ -177,7 +177,7 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
         engine = make_engine(memory=mem)
         await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s",
-                           state_data={}, tool_specs=[{"name": "Editor"}], llm=llm)
+                           tool_specs=[{"name": "Editor"}], llm=llm)
         await engine.join()
         assert len(engine.result.tool_calls) == 1
         override = engine.result.tool_calls[0]
@@ -193,7 +193,7 @@ class TestNativeChannel:
         )
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", state_data={},
+        await engine.start(req="r", system_prompt="s",
                            tool_specs=[{"name": "Editor"}], llm=llm)
         await engine.join()
         # Only 2 matching signatures (< 3) -> no override.
@@ -206,7 +206,7 @@ class TestNativeChannel:
         mem = FakeMemory(history_with_calls(sig, sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "end", {})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", state_data={},
+        await engine.start(req="r", system_prompt="s",
                            tool_specs=[{"name": "end"}], llm=llm)
         await engine.join()
         assert engine.result.tool_calls[0]["command_name"] == "end"
@@ -218,7 +218,7 @@ class TestTaskLifecycle:
         # start schedules the task but yields control before it runs.
         llm = FakeLLM()
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=llm)
+        await engine.start(req="r", system_prompt="s", llm=llm)
         assert engine.done is False
         await engine.join()
         assert engine.done is True
@@ -226,7 +226,7 @@ class TestTaskLifecycle:
     @pytest.mark.asyncio
     async def test_join_clears_task(self):
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=FakeLLM())
+        await engine.start(req="r", system_prompt="s", llm=FakeLLM())
         await engine.join()
         assert engine._task is None
 
@@ -240,10 +240,10 @@ class TestTaskLifecycle:
     @pytest.mark.asyncio
     async def test_result_replaced_each_round(self):
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=FakeLLM(reply="one"))
+        await engine.start(req="r", system_prompt="s", llm=FakeLLM(reply="one"))
         await engine.join()
         first = engine.result
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=FakeLLM(reply="two"))
+        await engine.start(req="r", system_prompt="s", llm=FakeLLM(reply="two"))
         await engine.join()
         assert engine.result is not first
         assert engine.result.content == "two"
@@ -253,7 +253,7 @@ class TestReporter:
     @pytest.mark.asyncio
     async def test_emits_react_report(self):
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", state_data={}, llm=FakeLLM())
+        await engine.start(req="r", system_prompt="s", llm=FakeLLM())
         await engine.join()
         assert FakeReporter.instances, "ThoughtReporter should be entered"
         reporter = FakeReporter.instances[0]

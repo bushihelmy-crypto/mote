@@ -57,3 +57,31 @@ class RuleStore:
         if self._has_match("allow", tool_name, target):
             return "allow"
         return None
+
+    def resolve_segments(
+        self, tool_name: str, segments: list[str]
+    ) -> Optional[PermissionBehavior]:
+        """Resolve a compound command by folding its segments strictest-wins.
+
+        A command like ``git status && ./deploy.sh`` is split (by the caller)
+        into per-segment targets; each is resolved independently and folded:
+
+          * any segment denies                 -> ``deny``
+          * else any segment asks              -> ``ask``
+          * else every segment allows          -> ``allow``
+          * else (a segment is unmatched)      -> ``None`` (defer to mode)
+
+        This makes a ``deny`` rule catch the dangerous half of a compound
+        command, and requires *every* segment to be allowed before the whole
+        command rides an ``allow`` rule.
+        """
+        if not segments:
+            return None
+        behaviors = [self.resolve(tool_name, seg) for seg in segments]
+        if any(b == "deny" for b in behaviors):
+            return "deny"
+        if any(b == "ask" for b in behaviors):
+            return "ask"
+        if all(b == "allow" for b in behaviors):
+            return "allow"
+        return None

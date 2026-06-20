@@ -19,7 +19,7 @@ def test_execution_guards_count_active_turns():
 
     with pytest.raises(AgentLimitReached) as exc:
         limiter.ensure_capacity()
-    assert exc.value.max_threads == 1
+    assert exc.value.max_agents == 1
 
     guard.release()
     limiter.ensure_capacity()  # capacity released

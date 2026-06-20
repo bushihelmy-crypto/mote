@@ -19,7 +19,7 @@ tool's output. Keeping it here means the dependency points downward
 ``ContextManagerConfig`` composes :class:`ToolResultLimitConfig` and re-exports
 these constants.
 
-Disk writes go through :mod:`metagpt.common.utils.disk_io` so this shares the exact
+Disk writes go through :mod:`metagpt.common.disk.disk_io` so this shares the exact
 read/write primitives with ``tasks/disk_output.py`` (per the project decision
 to factor common disk I/O into one place).
 """
@@ -41,7 +41,7 @@ from metagpt.common.schema import (
 )
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.logs import logger
-from metagpt.common.utils import disk_io
+from metagpt.common.disk import disk_io
 
 PathLike = Union[str, Path]
 

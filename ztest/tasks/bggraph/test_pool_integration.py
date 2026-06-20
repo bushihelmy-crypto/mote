@@ -43,10 +43,10 @@ def pool(msg_buffer, store):
 
 def _media_graph() -> BgGraph:
     g = BgGraph("media", state_schema=S)
-    g.add_node("split", sync_node(lambda s: {"parts": 2}))
-    g.add_node("tts", sync_node(lambda s: "audio"))
-    g.add_node("render", sync_node(lambda s: "video"))
-    g.add_node("merge", sync_node(lambda s: {"out": [s.tts, s.render]}))
+    g.add_node("split", sync_node(lambda s: {"parts": 2}, field="split"))
+    g.add_node("tts", sync_node(lambda s: "audio", field="tts"))
+    g.add_node("render", sync_node(lambda s: "video", field="render"))
+    g.add_node("merge", sync_node(lambda s: {"out": [s.tts, s.render]}, field="merge"))
     g.add_edge(START, "split")
     g.add_edge("split", "tts")
     g.add_edge("split", "render")
@@ -147,8 +147,8 @@ class TestPoolIntegration:
 def _llm_pause_graph() -> BgGraph:
     """Graph that pauses on an LLM edge after node 'a'."""
     g = BgGraph("llmpause", state_schema=S)
-    g.add_node("a", sync_node(lambda s: "a-done"))
-    g.add_node("nextstep", sync_node(lambda s: "next-done"))
+    g.add_node("a", sync_node(lambda s: "a-done", field="a"))
+    g.add_node("nextstep", sync_node(lambda s: "next-done", field="nextstep"))
     g.add_edge(START, "a")
     g.add_llm_edges("a", "Pick route", {"go": "nextstep", "stop": END})
     g.add_edge("nextstep", END)
@@ -235,8 +235,8 @@ def _timeout_graph(gate: "asyncio.Event") -> BgGraph:
     does, so the per-task timeout fires while ``second`` is still running.
     """
     g = BgGraph("hanggraph", state_schema=S)
-    g.add_node("first", sync_node(lambda s: "first-done"))
-    g.add_node("second", gated_node(gate, lambda s: "second-done"))
+    g.add_node("first", sync_node(lambda s: "first-done", field="first"))
+    g.add_node("second", gated_node(gate, lambda s: "second-done", field="second"))
     g.add_edge(START, "first")
     g.add_edge("first", "second")
     g.add_edge("second", END)

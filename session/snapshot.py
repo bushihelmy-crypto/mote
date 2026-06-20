@@ -17,7 +17,8 @@ Two pieces:
   ``metagpt.common.interface.FileSnapshotStore``: reads the before-image, puts
   it in the blob store, appends the metadata event. Best-effort and never raises
   into the tool (a snapshot failure must not break a write). ``enabled`` gates
-  recording (off during resume replay, mirroring :class:`SessionRecorder`).
+  recording (off during resume replay, mirroring
+  :class:`~metagpt.session.subscribers.RecorderSubscriber`).
 
 Only the *before* image is stored: that is what undo/rollback needs (the "after"
 is whatever the tool just wrote, recoverable from the file itself or the next
@@ -33,6 +34,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from metagpt.common.disk import atomic_write, get_disk_writer
 from metagpt.common.utils.git_state import find_git_root
 from metagpt.common.logs import log_class, logger
 from metagpt.session.events import FileSnapshotEvent
@@ -69,21 +71,19 @@ class BlobStore:
     def put(self, content: bytes) -> str:
         """Store ``content`` and return its sha256 hex digest (dedup on existing).
 
-        Atomic write: content is written to a per-pid temp file then
-        ``os.replace``-d into place, so a concurrent reader sees either the old
-        absence or the complete blob, never a partial one.
+        The digest is computed in memory, so the hash is returned immediately
+        (no disk wait); the actual blob write is ordered through the shared
+        :class:`~metagpt.common.disk.DiskWriter` (per-blob key) using
+        :func:`~metagpt.common.disk.atomic_write`. A reader therefore sees either
+        the old absence or the complete blob — but should ``drain`` first if it
+        needs the bytes (see :mod:`metagpt.session.history`). Idempotent: an
+        already-present hash is a no-op.
         """
         digest = hashlib.sha256(content).hexdigest()
         dest = self._path(digest)
         if dest.exists():
             return digest  # dedup: identical content already stored
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(dest.name + f".tmp.{os.getpid()}")
-        with open(tmp, "wb") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, dest)
+        get_disk_writer().enqueue(str(dest), lambda: atomic_write(dest, content))
         return digest
 
     def get(self, digest: str) -> Optional[bytes]:

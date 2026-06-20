@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from metagpt.common.exception import RecoveryAction, RecoveryRunner
 from metagpt.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
 from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
+from metagpt.executor.tasks.bggraph.channels import apply_updates
 from metagpt.executor.tasks.bggraph.notify import (
     _MSG_RESUMING,
     _MSG_SKIPPING,
@@ -215,7 +216,17 @@ async def _run_one_node(
             )
         raise
 
-    setattr(state, node_name, result)
+    # Field/channel state sync: a node returns a dict of field updates which is
+    # merged into the declared state fields (reducer channels combine, plain
+    # fields are last-value). ``None`` means "no update". A non-dict return is a
+    # wiring bug (un-migrated node) and fails loudly.
+    if result is None:
+        result = {}
+    if not isinstance(result, dict):
+        raise GraphParamTypeError(
+            node=node_name, param="<return>", expected=dict, got=type(result)
+        )
+    apply_updates(state, result, graph._reducers)
     completed.add(node_name)
     if run_state is not None:
         run_state.mark_success(node_name)
@@ -288,10 +299,9 @@ def successors(
 
 
 def _collect_finish_result(graph: "BgGraph", state: GraphState) -> Any:
-    finish_nodes = graph._get_finish_nodes()
-    if len(finish_nodes) == 1:
-        return getattr(state, finish_nodes[0])
-    return {n: getattr(state, n) for n in finish_nodes if getattr(state, n, None) is not None}
+    # Field/channel model: the run result is the full final state (langgraph
+    # ``.invoke()`` semantics), not a per-finish-node slot value.
+    return state.model_dump()
 
 
 async def _cancel_running(running: dict) -> None:
@@ -464,7 +474,7 @@ def _build_executor(graph: "BgGraph"):
 
     async def executor(**initial_state) -> BgTaskResult:
         state = graph.state_schema(**initial_state)
-        entry = graph._get_entry_node()
+        entry_nodes = graph._get_entry_nodes()
         initial_params = dict(initial_state)
         # One run_state, shared between the driver coroutine and the GraphMeta
         # handoff so the pool snapshots the very object the driver mutates.
@@ -473,7 +483,7 @@ def _build_executor(graph: "BgGraph"):
             poll_factory=lambda: _run_driver(
                 graph,
                 state,
-                execute_nodes=[entry],
+                execute_nodes=entry_nodes,
                 completed=set(),
                 trigger_count=defaultdict(set),
                 initial_params=initial_params,
@@ -527,7 +537,6 @@ def resume(
     run_state = _ensure_run_state(graph, state, run_state)
     completed: set[str] = run_state.completed_names() - set(from_nodes)
     for node_name in from_nodes:
-        setattr(state, node_name, None)
         run_state.reset(node_name)
 
     trigger_count: dict = defaultdict(set)
@@ -556,14 +565,10 @@ def _apply_skip(
     run_state: Optional[GraphRunState] = None,
 ) -> None:
     for sn in skip_nodes:
-        existing = getattr(state, sn, None)
-        if existing is None:
-            setattr(state, sn, {})
         if run_state is not None:
             run_state.mark_skipped(sn)
-        suffix = " with partial results" if existing is not None else ""
         report_progress(
-            sn, BgStatus.SKIPPED, _MSG_SKIPPING.format(skip_nodes=sn, suffix=suffix)
+            sn, BgStatus.SKIPPED, _MSG_SKIPPING.format(skip_nodes=sn, suffix="")
         )
 
 
@@ -609,7 +614,6 @@ def resume_skip_and_from(
     _apply_skip(graph, state, skip_nodes, run_state)
     completed: set[str] = (run_state.completed_names() | set(skip_nodes)) - set(from_nodes)
     for node_name in from_nodes:
-        setattr(state, node_name, None)
         run_state.reset(node_name)
 
     trigger_count: dict = defaultdict(set)

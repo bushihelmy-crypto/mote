@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Optional, Union
 
 from metagpt.common.utils.docstring import first_line
 from metagpt.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
+from metagpt.executor.tasks.bggraph.channels import derive_reducers
 from metagpt.executor.tasks.types import BgTaskResult
 from metagpt.executor.tasks.bggraph.types import (
     END,
@@ -22,17 +23,6 @@ from metagpt.executor.tasks.bggraph.types import (
     _NodeDef,
     _WaitingEdge,
 )
-
-
-# Node results are written onto the state via ``setattr(state, node_name, result)``.
-# A node whose name shadows a pydantic ``BaseModel`` attribute (``model_dump``, the
-# deprecated v1 ``dict`` / ``json`` / ``copy`` / ``schema`` …, or any dunder) would
-# silently lose its result: the class attribute wins on ``getattr`` while the value
-# lands unreachable in ``__pydantic_extra__``. These names are forbidden at compile
-# time. Sharing a name with a *declared* field is explicitly allowed — that is the
-# typed output-placeholder pattern (e.g. a ``storyboard`` node writing to a declared
-# ``storyboard`` field).
-_RESERVED_STATE_ATTRS = frozenset(dir(GraphState))
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +105,9 @@ class BgGraph:
         self._waiting_edges: list[_WaitingEdge] = []
         self._conditional_edges: list[_ConditionalEdge] = []
         self._llm_edges: list[_LlmEdge] = []
+        # field name → reducer, derived from ``state_schema`` Annotated metadata
+        # at compile time (see ``compile``).
+        self._reducers: dict[str, Callable] = {}
 
     # --- node registration ---
 
@@ -214,6 +207,7 @@ class BgGraph:
         self._normalize_waiting_edges()
         self._validate()
         self._validate_params()
+        self._reducers = derive_reducers(self.state_schema)
         from metagpt.executor.tasks.bggraph.engine import _build_executor
 
         return _build_executor(self)
@@ -342,16 +336,9 @@ class BgGraph:
     # --- validation ---
 
     def _validate(self) -> None:
-        # Node names must not shadow reserved state attributes — see
-        # ``_RESERVED_STATE_ATTRS``. (Overlap with a declared field is fine.)
-        for name in self._nodes:
-            if name in _RESERVED_STATE_ATTRS:
-                raise ValueError(
-                    f"Node name '{name}' collides with a reserved state attribute "
-                    f"(pydantic BaseModel); its result would be unreachable. "
-                    f"Choose a different node name."
-                )
-
+        # Node names no longer become state attributes (results are merged into
+        # declared state *fields*), so there is no reserved-attr collision to
+        # guard against here.
         all_names = set(self._nodes.keys()) | {START, END}
 
         for edge in self._edges:
@@ -379,8 +366,8 @@ class BgGraph:
                     raise ValueError(f"Unknown target in LLM edge: {target}")
 
         start_edges = [e for e in self._edges if e.from_node == START]
-        if len(start_edges) != 1:
-            raise ValueError("Graph must have exactly one edge from START")
+        if not start_edges:
+            raise ValueError("Graph must have at least one edge from START")
 
         has_end = (
             any(e.to_node == END for e in self._edges)
@@ -448,12 +435,13 @@ class BgGraph:
                                     f"expected {expected_type}"
                                 )
                 else:
-                    ref_node = source.split(".")[0]
-                    if ref_node not in self._nodes and ref_node != name:
-                        raise ValueError(
-                            f"Node '{name}' param '{param_name}' references "
-                            f"unknown node: {ref_node}"
-                        )
+                    # Non-$input source references a state *field* (the first
+                    # dotted segment). With the field/channel model any node may
+                    # write any field — and ``extra="allow"`` lets undeclared
+                    # fields land at runtime — so an undeclared reference is not
+                    # a compile-time error. Declared fields are accepted as-is;
+                    # nothing to reject here.
+                    pass
 
     # --- helpers ---
 
@@ -470,8 +458,15 @@ class BgGraph:
                         preds[we.to_node].add(s)
         return preds
 
-    def _get_entry_node(self) -> str:
-        return next(e.to_node for e in self._edges if e.from_node == START)
+    def _get_entry_nodes(self) -> list[str]:
+        """All START targets — multiple entry nodes fan out in parallel.
+
+        Mirrors langgraph: ``add_edge(START, x)`` for several ``x`` seeds them as
+        concurrent entry points. Deduped, preserving declaration order.
+        """
+        return list(dict.fromkeys(
+            e.to_node for e in self._edges if e.from_node == START
+        ))
 
     def _get_finish_nodes(self) -> list[str]:
         finish = [e.from_node for e in self._edges if e.to_node == END]

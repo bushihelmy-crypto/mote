@@ -116,18 +116,15 @@ class GraphRunState:
 
     @classmethod
     def infer_from_state(cls, graph: Any, state: Any) -> "GraphRunState":
-        """Best-effort run state for a task that has no recorded one yet.
+        """Empty (all-PENDING) run state for a task that has no recorded one.
 
-        Falls back to the legacy inference (a node with a non-None value on the
-        state is treated as SUCCESS). Used only to bridge tasks whose snapshot
-        predates run-state recording; live runs always carry a real record.
+        With the field/channel state model, node results are merged into state
+        *fields* (not stored under the node's own name), so completion can no
+        longer be inferred from ``getattr(state, node) is not None``. Live runs
+        always carry an authoritative ``GraphRunState``; this fallback only
+        bridges callers without one, and yields an empty record set.
         """
-        rs = cls.for_graph(graph)
-        for name in graph._nodes:
-            if getattr(state, name, None) is not None:
-                rec = rs.records[name]
-                rec.status = BgStatus.SUCCESS
-        return rs
+        return cls.for_graph(graph)
 
     def get(self, name: str) -> NodeRecord:
         rec = self.records.get(name)
@@ -216,12 +213,18 @@ class Stage:
 
 
 class GraphState(BaseModel):
-    """Base class for graph state. Subclass and declare input fields.
+    """Base class for graph state. Subclass and declare input + output fields.
 
-    Node results are stored back onto the state by node name via ``setattr``
-    (``state.<node> = result``), so ``extra="allow"`` is required to let those
-    dynamic, non-declared attributes through. Declared fields hold the initial
-    inputs; node outputs land in pydantic ``__pydantic_extra__``.
+    State sync is **field/channel-based** (langgraph model): a node returns a
+    ``dict`` of field updates (``{field: value}``) which the engine merges into
+    the declared state fields. A field annotated ``Annotated[T, reducer]`` is a
+    reducer channel — multiple writers are combined via the reducer (e.g.
+    ``Annotated[list, operator.add]`` appends); a plain field is last-value
+    (most recent write wins).
+
+    ``extra="allow"`` is kept so a node may also write undeclared keys (they
+    land last-value in ``__pydantic_extra__``); declaring the field is preferred
+    so reducers and type/introspection apply.
     """
 
     model_config = ConfigDict(extra="allow")

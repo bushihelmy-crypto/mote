@@ -55,16 +55,62 @@ def read_tail(path: PathLike, max_bytes: int) -> bytes:
     return read_range(path, offset, size - offset)
 
 
-def write_bytes(path: PathLike, data: bytes, *, append: bool = True) -> int:
+def write_bytes(path: PathLike, data: bytes, *, append: bool = True, fsync: bool = False) -> int:
     """Write *data* to *path*. Returns the number of bytes written.
 
     ``append=True`` appends to (or creates) the file; ``append=False``
-    truncates first.
+    truncates first. ``fsync=True`` forces the bytes to durable storage before
+    returning (the append/journal path uses this; bulk callers leave it off).
     """
     mode = "ab" if append else "wb"
     with open(path, mode) as f:
         f.write(data)
+        f.flush()
+        if fsync:
+            os.fsync(f.fileno())
     return len(data)
+
+
+def append_line(path: PathLike, line: str, *, fsync: bool = True) -> None:
+    """Append a single text *line* (a trailing newline is added) to *path*.
+
+    The append-only journal primitive: ``O_APPEND`` keeps concurrent appends
+    atomic at the line level and leaves earlier lines intact on crash, and
+    ``fsync`` (on by default here) makes the line durable before returning.
+    """
+    write_bytes(path, (line + "\n").encode("utf-8"), append=True, fsync=fsync)
+
+
+def atomic_write(path: PathLike, data: bytes, *, fsync: bool = True) -> None:
+    """Atomically replace *path* with *data* (tmp-write + ``os.replace``).
+
+    Writes to a per-pid temp file in the same directory, flushes (and, when
+    ``fsync`` is set, fsyncs) it, then ``os.replace``-s it into place. A
+    concurrent reader therefore sees either the old file or the complete new
+    one — never a half-written file. With ``fsync`` the parent directory is also
+    fsynced (best-effort) so the rename itself survives a crash.
+
+    This is the single home for the ``tmp + fsync + replace`` pattern previously
+    duplicated across BlobStore and CronTaskStore.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + f".tmp.{os.getpid()}")
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        if fsync:
+            os.fsync(f.fileno())
+    os.replace(tmp, p)
+    if fsync:
+        try:
+            dir_fd = os.open(str(p.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass  # directory fsync is best-effort (e.g. unsupported on the FS)
 
 
 def write_capped(

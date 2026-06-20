@@ -96,7 +96,7 @@ async def test_send_input_queue_only_defers(control):
     control.send_input("a", UserMessage("later"), mode=DeliveryMode.QUEUE_ONLY)
     turns = await control.run(1)
     assert turns == 0
-    assert rt.mailbox.has_pending()
+    assert not rt.mailbox.empty()
 
 
 def test_send_input_unknown_agent_raises(control):
@@ -105,7 +105,7 @@ def test_send_input_unknown_agent_raises(control):
 
 
 def test_send_input_respects_execution_limit(tmp_path):
-    control = make_control(tmp_path, max_threads=1)
+    control = make_control(tmp_path, max_agents=1)
     rt = make_runtime("a")
     control.add_agent(rt)
     # occupy the single execution slot
@@ -126,7 +126,7 @@ def test_send_communication_records_last_task_message(control):
         trigger_turn=True,
     )
     control.send_inter_agent_communication("a", comm)
-    meta = control.registry.agent_metadata_for_thread("a")
+    meta = control.registry.agent_metadata_for_id("a")
     assert meta.last_task_message == "do the thing"
     assert rt.mailbox.has_trigger_turn()
 
@@ -196,7 +196,7 @@ async def test_completion_watcher_notifies_parent(control):
     child.status = AgentStatus.COMPLETED
     await task
     # parent received a queue-only notification (no trigger)
-    assert parent.mailbox.has_pending()
+    assert not parent.mailbox.empty()
     assert not parent.mailbox.has_trigger_turn()
     drained = parent.mailbox.drain_for_turn()
     assert "finished with status" in drained[0].content
@@ -219,3 +219,39 @@ def test_format_completion_notification():
     msg = format_completion_notification("researcher", AgentStatus.COMPLETED)
     assert "researcher" in msg
     assert "completed" in msg
+
+
+# ---------------------------------------------------------------------------
+# Runtime-level bus: agent-lifecycle milestones
+# ---------------------------------------------------------------------------
+
+
+class _CaptureSub:
+    """A sync subscriber that records agent-lifecycle events off the runtime bus."""
+
+    priority = 50
+
+    def __init__(self):
+        self.events = []
+
+    def handle_sync(self, event) -> None:
+        from metagpt.common.events import AgentLifecycleEvent
+
+        if isinstance(event, AgentLifecycleEvent):
+            self.events.append((event.phase, event.session_id))
+
+
+def test_runtime_bus_emits_added_on_add_agent(control):
+    cap = _CaptureSub()
+    control.event_bus.subscribe(cap)
+    control.add_agent(make_runtime("a"))
+    assert ("added", "a") in cap.events
+
+
+@pytest.mark.asyncio
+async def test_runtime_bus_emits_interrupted(control):
+    cap = _CaptureSub()
+    control.event_bus.subscribe(cap)
+    control.add_agent(make_runtime("a", status=AgentStatus.RUNNING))
+    await control.interrupt("a")
+    assert ("interrupted", "a") in cap.events

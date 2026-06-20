@@ -161,7 +161,7 @@ def test_fire_delivers_to_real_runtime_mailbox(tmp_path):
     task = CronTask.new("* * * * *", "ping", _ms(2026, 6, 15), target_session_id="sess")
     svc._on_fire(task)
 
-    assert runtime.mailbox.has_pending()
+    assert not runtime.mailbox.empty()
     assert runtime.mailbox.has_trigger_turn()
     drained = runtime.mailbox.drain_for_turn()
     assert [m.content for m in drained] == ["ping"]

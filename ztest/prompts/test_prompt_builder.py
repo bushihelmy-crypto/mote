@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from metagpt.common import prompt as R
+from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
 from metagpt.think.prompt_builder import (
     PromptBuilder,
     ThinkContext,
@@ -21,11 +24,24 @@ from metagpt.think.prompt_builder import (
     ThinkSubsystems,
 )
 
-from .conftest import FakeExecutor, FakeInjector, FakeLLM, FakeSkillManager, make_config
+from .conftest import FakeExecutor, FakeInjector, FakeSkillManager, make_config
 
 
 def run(coro):
     return asyncio.run(coro)
+
+
+class _FakeChannel:
+    """Minimal command-channel stand-in: supplies prompt_vars + an identity lower."""
+
+    def __init__(self, prompt_vars: dict):
+        self._vars = prompt_vars
+
+    def prompt_vars(self) -> dict:
+        return self._vars
+
+    def lower(self, text: str) -> str:
+        return text
 
 
 # --------------------------------------------------------------------------
@@ -35,13 +51,13 @@ class TestDataclasses:
     def test_think_inputs_defaults(self):
         ti = ThinkInputs()
         assert ti.name == "" and ti.profile == "" and ti.goal == ""
-        assert ti.output_format is None
         assert ti.memory_dir is None
 
     def test_think_context_defaults(self):
         tc = ThinkContext()
-        assert tc.role_info == "" and tc.output_format == ""
-        assert tc.state_data == {}
+        assert tc.role_info == ""
+        # The protocol fills default to empty strings until a channel supplies them.
+        assert tc.prompt_vars == {k: "" for k in PROMPT_VAR_KEYS}
 
 
 # --------------------------------------------------------------------------
@@ -304,17 +320,17 @@ class TestMakeDomainInfo:
 
 class TestMakeEnvSection:
     def test_contains_cwd_and_model(self):
-        out = PromptBuilder._make_env_section(FakeLLM(model="claude-x"), working_dir="/work")
+        out = PromptBuilder._make_env_section("claude-x", working_dir="/work")
         assert "/work" in out
         assert "claude-x" in out
         assert "# Environment" in out
 
     def test_falls_back_to_default_workspace(self):
-        out = PromptBuilder._make_env_section(FakeLLM(), working_dir="")
+        out = PromptBuilder._make_env_section("", working_dir="")
         assert "Primary working directory:" in out
 
     def test_uses_project_root(self):
-        out = PromptBuilder._make_env_section(FakeLLM(), working_dir="/w", project_root="/proj")
+        out = PromptBuilder._make_env_section("", working_dir="/w", project_root="/proj")
         assert "/proj" in out
 
 
@@ -338,9 +354,10 @@ class TestCollectContext:
     def _subsystems(self, **overrides):
         return ThinkSubsystems(
             config=overrides.get("config", make_config()),
-            llm=overrides.get("llm", FakeLLM()),
+            model_name=overrides.get("model_name", "test-model"),
             executor=overrides.get("executor", FakeExecutor()),
             skill_manager=overrides.get("skill_manager", FakeSkillManager()),
+            command_channel=overrides.get("command_channel"),
         )
 
     def test_basic_assembly(self):
@@ -349,7 +366,6 @@ class TestCollectContext:
         assert isinstance(ctx, ThinkContext)
         assert "Bob" in ctx.role_info
         assert ctx.instruction == "do it"  # stripped
-        assert ctx.state_data == {"instruction": "do it"}
 
     def test_tool_info_is_json(self):
         executor = FakeExecutor(tools=[{"name": "Read"}], mcp_tools=[{"name": "srv:x"}])
@@ -375,15 +391,24 @@ class TestCollectContext:
         assert "Chinese" in ctx.language
         assert "/sp" in ctx.scratchpad
 
-    def test_output_format_override(self):
-        inputs = ThinkInputs(output_format="OUTPUT_SECTION")
-        ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
-        assert ctx.output_format == "OUTPUT_SECTION"
+    def test_prompt_vars_from_channel(self):
+        # A channel supplies its protocol fills; collect_context copies them
+        # verbatim into ctx.prompt_vars (the single-source path).
+        channel = _FakeChannel({k: "FILL-" + k for k in PROMPT_VAR_KEYS})
+        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(command_channel=channel)))
+        assert ctx.prompt_vars == {k: "FILL-" + k for k in PROMPT_VAR_KEYS}
 
-    def test_output_format_none_keeps_default(self):
-        inputs = ThinkInputs(output_format=None)
-        ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
-        assert ctx.output_format == ""
+    def test_prompt_vars_default_when_no_channel(self):
+        # No channel -> ctx keeps the empty-string defaults (nothing overrides).
+        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
+        assert ctx.prompt_vars == {k: "" for k in PROMPT_VAR_KEYS}
+
+    def test_partial_prompt_vars_rejected(self):
+        # A channel that drops a required key would leak a literal ${...}; the
+        # completeness guard raises instead.
+        channel = _FakeChannel({"output_format": "X"})  # missing the other keys
+        with pytest.raises(ValueError, match="missing required keys"):
+            run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(command_channel=channel)))
 
     def test_reminders_stub_empty(self):
         ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))

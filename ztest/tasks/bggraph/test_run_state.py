@@ -26,10 +26,11 @@ class SimpleState(GraphState):
     x: int = 0
 
 
-def sync_node(fn):
+def sync_node(fn, *, field=None):
     async def node(state):
         async def submit():
-            return fn(state)
+            result = fn(state)
+            return {field: result} if field is not None else result
         return Stage(submit=submit())
     return node
 
@@ -49,8 +50,8 @@ def pool():
 
 def _linear_graph():
     g = BgGraph("linear", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x * 2))
-    g.add_node("b", sync_node(lambda s: s.a + 10))
+    g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
+    g.add_node("b", sync_node(lambda s: s.a + 10, field="b"))
     g.add_edge(START, "a")
     g.add_edge("a", "b")
     g.add_edge("b", END)
@@ -59,7 +60,7 @@ def _linear_graph():
 
 def _failing_graph():
     g = BgGraph("failing", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x * 2))
+    g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node("b", boom_node())
     g.add_edge(START, "a")
     g.add_edge("a", "b")
@@ -118,12 +119,15 @@ class TestGraphRunStateUnit:
         rs.mark_success("a")
         assert rs.running_names() == []
 
-    def test_infer_from_state_bridges_legacy(self):
+    def test_infer_from_state_returns_all_pending(self):
+        # Per-node value inference is gone: the run-state is authoritative and
+        # always carried live, so ``infer_from_state`` just seeds all-PENDING
+        # records (delegating to ``for_graph``) regardless of state contents.
         g = _linear_graph()
         state = SimpleState(x=5)
-        setattr(state, "a", 10)  # a produced output; b did not
+        setattr(state, "a", 10)  # field set, but no longer implies completion
         rs = GraphRunState.infer_from_state(g, state)
-        assert rs.completed_names() == {"a"}
+        assert rs.completed_names() == set()
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +185,7 @@ class TestRunStateRecording:
 
         # Fix b, resume from it; the same run_state is reused so b's prior
         # attempts are preserved and the new run adds to them.
-        g._nodes["b"].fn = sync_node(lambda s: s.a + 100)
+        g._nodes["b"].fn = sync_node(lambda s: s.a + 100, field="b")
         from metagpt.executor.tools.resume_tasks import ResumeTasks
         tool = ResumeTasks()
         tool.get_bg_pool = lambda: pool
@@ -202,9 +206,9 @@ class TestRunStateRecording:
 def _branch_graph(threshold: int):
     """a → router(big|small) → big|small → END. Router keys on s.a vs threshold."""
     g = BgGraph("branch", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x))
-    g.add_node("big", sync_node(lambda s: "BIG"))
-    g.add_node("small", sync_node(lambda s: "SMALL"))
+    g.add_node("a", sync_node(lambda s: s.x, field="a"))
+    g.add_node("big", sync_node(lambda s: "BIG", field="big"))
+    g.add_node("small", sync_node(lambda s: "SMALL", field="small"))
     g.add_edge(START, "a")
     g.add_conditional_edges(
         "a",

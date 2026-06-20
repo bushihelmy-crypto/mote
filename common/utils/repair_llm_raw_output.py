@@ -39,7 +39,7 @@ def repair_case_sensitivity(output: str, req_key: str) -> str:
         lidx = output_lower.find(req_key_lower)
         source = output[lidx : lidx + len(req_key_lower)]
         output = output.replace(source, req_key)
-        logger.info(f"repair_case_sensitivity: {req_key}")
+        logger.debug(f"repair_case_sensitivity: {req_key}")
 
     return output
 
@@ -62,7 +62,7 @@ def repair_special_character_missing(output: str, req_key: str = "[/CONTENT]") -
             # req_key with special_character usually in the tail side
             ridx = output.rfind(req_key_pure)
             output = f"{output[:ridx]}{req_key}{output[ridx + len(req_key_pure):]}"
-            logger.info(f"repair_special_character_missing: {sc} in {req_key_pure} as position {ridx}")
+            logger.debug(f"repair_special_character_missing: {sc} in {req_key_pure} as position {ridx}")
 
     return output
 
@@ -116,10 +116,10 @@ def repair_json_format(output: str) -> str:
 
     if output.startswith("[{"):
         output = output[1:]
-        logger.info(f"repair_json_format: {'[{'}")
+        logger.debug(f"repair_json_format: {'[{'}")
     elif output.endswith("}]"):
         output = output[:-1]
-        logger.info(f"repair_json_format: {'}]'}")
+        logger.debug(f"repair_json_format: {'}]'}")
     elif output.startswith("{") and output.endswith("]"):
         output = output[:-1] + "}"
 
@@ -246,7 +246,7 @@ def repair_invalid_json(output: str, error: str) -> str:
 
         arr[line_no] = new_line
         output = "\n".join(arr)
-        logger.info(f"repair_invalid_json, raw error: {error}")
+        logger.debug(f"repair_invalid_json, raw error: {error}")
 
     return output
 
@@ -334,7 +334,7 @@ def extract_content_from_output(content: str, right_key: str = "[/CONTENT]"):
     if not new_content.startswith("{"):
         # TODO find a more general pattern
         # # for `[CONTENT]xxx[CONTENT]xxxx[/CONTENT] situation
-        logger.warning(f"extract_content try another pattern: {pattern}")
+        logger.debug(f"extract_content try another pattern: {pattern}")
         if right_key not in new_content:
             raw_content = copy.deepcopy(new_content + "\n" + right_key)
         # # pattern = r"\[CONTENT\](\s*\{.*?\}\s*)\[/CONTENT\]"

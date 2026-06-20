@@ -17,9 +17,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable, Optional
 
 from metagpt.common.base import BaseLoop, LoopContext
+from metagpt.common.base.command_channel import join_command_outputs
 from metagpt.common.const.message import MESSAGE_ROUTE_TO_ALL
+from metagpt.common.events import span
 from metagpt.common.logs import log_class
-from metagpt.common.observability.langfuse_integration import maybe_span
 from metagpt.common.prompt.output import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
 from metagpt.common.schema import (
     AIMessage,
@@ -35,6 +36,11 @@ if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine
     from metagpt.parser import CommandChannel
     from metagpt.roles.context_provider import BaseContextProvider
+
+
+#: Placeholder react result before any action runs; overwritten on the first
+#: act, so it only ever surfaces if the loop returns without acting.
+_NO_ACTIONS_YET = "No actions taken yet"
 
 
 @log_class(level="DEBUG")
@@ -137,18 +143,18 @@ class ReActLoop(BaseLoop):
         if not self._is_active():
             return False
 
-        with maybe_span("think"):
+        async with span("think"):
             tr = await self._context_provider.prepare()
             # Trigger the router only now that an LLM is actually needed, picking the
             # model from this request's messages when intelligent routing is enabled.
             llm = await self._context_provider.resolve_llm(tr.req)
             await self._think_engine.start(
-                tr.req, tr.system_prompt, tr.state_data, tool_specs=tr.tool_specs, llm=llm
+                tr.req, tr.system_prompt, tool_specs=tr.tool_specs, llm=llm
             )
         return True
 
     async def _step_act(self) -> Message:
-        with maybe_span("act"):
+        async with span("act"):
             valid_names = set(self._ctx.tools)
             commands = [
                 cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)
@@ -184,9 +190,7 @@ class ReActLoop(BaseLoop):
                 if not result.success:
                     failed = True
 
-            outputs = "\n\n".join(e["output"] for e in executed) if executed else (
-                "No valid commands found for execution, pay attention to the output format."
-            )
+            outputs = join_command_outputs(executed)
 
             # The channel writes this turn into memory in its protocol's shape
             # (XML: text + merged outputs; native: tool_calls + per-call tool results).
@@ -194,8 +198,11 @@ class ReActLoop(BaseLoop):
 
             await self._think_engine.join()
 
+            # The published react result is protocol-flavored: XML asks the
+            # orchestrator to mark the task finished, native returns the plain
+            # outputs. The channel owns that phrasing (see react_result).
             return AIMessage(
-                content=f"I have finished the task, please mark my task as finished. Outputs: {outputs}",
+                content=self._channel.react_result(outputs),
                 sent_from=self._ctx.name,
                 cause_by=CauseBy.RUN_COMMAND,
             )
@@ -217,6 +224,26 @@ class ReActLoop(BaseLoop):
             cause_by=CauseBy.RUN_COMMAND,
         )
 
+    async def _ask_user(self, question: str, header: str, options: list[tuple[str, str]]) -> str:
+        """Run the AskUserQuestion tool with a single question; return its answer.
+
+        Consolidates the two post-check prompts in run() (the max-rounds gate and
+        the consecutive-actions gate), which differ only in their question text and
+        their option pairs. ``options`` is a list of ``(label, description)``.
+        """
+        result = await self._executor.run_command(
+            "AskUserQuestion",
+            {
+                "questions": [
+                    {
+                        "question": question,
+                        "header": header,
+                        "options": [{"label": label, "description": desc} for label, desc in options],
+                    }
+                ]
+            },
+        )
+        return result.output
 
     async def run(self) -> Message | None:
         # Pull the static observe + loop-control bundle once per run(). The loop
@@ -231,7 +258,7 @@ class ReActLoop(BaseLoop):
 
         actions_taken = 0
         self._consecutive = 0
-        rsp = AIMessage(content="No actions taken yet", cause_by=CauseBy.ACTION)
+        rsp = AIMessage(content=_NO_ACTIONS_YET, cause_by=CauseBy.ACTION)
         while actions_taken < self._ctx.max_react_loop:
             if await self._observe(max_priority=MessagePriority.NEXT):
                 self._consecutive = 0
@@ -241,9 +268,9 @@ class ReActLoop(BaseLoop):
             if not has_todo:
                 bg_pool = self._get_bg_pool()
                 if bg_pool and bg_pool.has_pending():
-                    while bg_pool.has_pending():
-                        await bg_pool.wait_any()
-                        break
+                    # Block until one background task settles, then re-observe so
+                    # its result message can drive another think round.
+                    await bg_pool.wait_any()
                     await self._observe(max_priority=MessagePriority.NEXT)
                     self._set_active(True)
                     continue
@@ -267,22 +294,12 @@ class ReActLoop(BaseLoop):
             if self._ctx.max_react_loop >= 10 and actions_taken >= self._ctx.max_react_loop:
                 if not can_ask:
                     break
-                result = await self._executor.run_command(
-                    "AskUserQuestion",
-                    {
-                        "questions": [
-                            {
-                                "question": "I have reached my max action rounds, do you want me to continue?",
-                                "header": "Continue?",
-                                "options": [
-                                    {"label": "Yes", "description": "Continue working on the task."},
-                                    {"label": "No", "description": "Stop here."},
-                                ],
-                            }
-                        ]
-                    },
+                answer = await self._ask_user(
+                    "I have reached my max action rounds, do you want me to continue?",
+                    "Continue?",
+                    [("Yes", "Continue working on the task."), ("No", "Stop here.")],
                 )
-                if "yes" in result.output.lower():
+                if "yes" in answer.lower():
                     actions_taken = 0
             if self._consecutive >= self._ctx.max_consecutive_react_limit:
                 if not can_ask:
@@ -291,23 +308,13 @@ class ReActLoop(BaseLoop):
                 context = memory + [UserMessage(content=SUMMARIZE_STATUS_WHEN_CONSECUTIVE)]
                 llm = await self._context_provider.resolve_llm(context)
                 question = await llm.aask(context)
-                result = await self._executor.run_command(
-                    "AskUserQuestion",
-                    {
-                        "questions": [
-                            {
-                                "question": question,
-                                "header": "Guidance?",
-                                "options": [
-                                    {"label": "Continue", "description": "Proceed as planned."},
-                                    {"label": "Adjust", "description": "Provide different instructions."},
-                                ],
-                            }
-                        ]
-                    },
+                answer = await self._ask_user(
+                    question,
+                    "Guidance?",
+                    [("Continue", "Proceed as planned."), ("Adjust", "Provide different instructions.")],
                 )
                 await self._memory.add(
-                    UserMessage(content="User's extra instruction: " + result.output, cause_by=CauseBy.RUN_COMMAND)
+                    UserMessage(content="User's extra instruction: " + answer, cause_by=CauseBy.RUN_COMMAND)
                 )
                 self._consecutive = 0
 

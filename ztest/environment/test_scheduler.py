@@ -11,7 +11,7 @@ from metagpt.common.schema.messages import UserMessage
 from metagpt.common.schema.queue import MessageQueue
 from metagpt.environment.mailbox import DeliveryMode
 from metagpt.environment.runtime import AgentRuntime, AgentStatus
-from metagpt.environment.scheduler import EventDrivenScheduler
+from metagpt.environment.turn_scheduler import EventDrivenScheduler
 
 
 class FakeRole:
@@ -69,7 +69,7 @@ async def test_queue_only_does_not_wake():
     turns = await sched.run(1)
     assert turns == 0  # not ready -> no turn
     assert rt.role.observed_turns == []
-    assert rt.mailbox.has_pending()  # still queued
+    assert not rt.mailbox.empty()  # still queued
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_mid_turn_queue_only_is_deferred():
     await sched.run(5)
     # only the first turn ran; mid-turn queue-only mail deferred (not delivered)
     assert rt.role.observed_turns == [["first"]]
-    assert rt.mailbox.has_pending()
+    assert not rt.mailbox.empty()
 
 
 @pytest.mark.asyncio

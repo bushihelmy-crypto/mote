@@ -11,7 +11,9 @@ Mechanics (disk-only; no Role needed):
   * replay the parent log to its final history (single forward pass), then
   * create the child log with a ``session_meta`` that copies the parent's
     cwd/project/model anchors and sets ``parent_session_id``, then
-  * append the inherited history as ``message`` events.
+  * append the inherited history as ``message`` events, then
+  * inherit the parent's file-history (``file_snapshot`` events + their
+    before-image blobs) so the child can still diff/restore inherited files.
 
 Replay collapses any compaction into a flat message list, so the child begins
 exactly where the parent stood. The child is fully independent afterwards;
@@ -20,13 +22,19 @@ mutating it never touches the parent's log.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 from uuid import uuid4
 
 from metagpt.common.logs import log_call
-from metagpt.session.events import MessageEvent, SessionMetaEvent
+from metagpt.session.events import (
+    FileSnapshotEvent,
+    MessageEvent,
+    SessionMetaEvent,
+    parse_event,
+)
 from metagpt.session.log import SessionLog
 from metagpt.session.replay import replay
+from metagpt.session.snapshot import make_blob_store
 
 
 @log_call(level="DEBUG")
@@ -56,7 +64,7 @@ def fork(
     if child.exists():
         raise FileExistsError(f"fork target session {child_id!r} already exists")
 
-    result = replay(source)
+    result = replay(source)  # replay scans via iter_raw, whose drain flushes the parent log first
     meta = result.meta or {}
     child.create(
         SessionMetaEvent(
@@ -71,7 +79,38 @@ def fork(
     )
     for message in result.messages:
         child.append(MessageEvent(message=message))
+    _inherit_file_history(source, child)
     return child_id
+
+
+def _inherit_file_history(source: SessionLog, child: SessionLog) -> None:
+    """Copy the parent's file-history (snapshot events + before-image blobs).
+
+    ``replay`` flattens the message history but drops ``file_snapshot`` events, so
+    without this the child could not diff/restore files inherited from the parent.
+    Each snapshot event is re-appended in order and its referenced blob copied into
+    the child's own store — the store is content-addressed, so the recorded hash is
+    unchanged and the child stays a fully independent truth source. A blob missing
+    in the parent is skipped (the event is still copied; diff/restore then degrade
+    gracefully, exactly as they do for a parent with a missing blob).
+    """
+    parent_stores: Dict[str, object] = {}
+    child_stores: Dict[str, object] = {}
+    for record in source.iter_raw():
+        event = parse_event(record)
+        if not isinstance(event, FileSnapshotEvent):
+            continue
+        if event.pre_hash is not None:
+            src_store = parent_stores.setdefault(
+                event.backend, make_blob_store(source.path.parent, event.backend)
+            )
+            content = src_store.get(event.pre_hash)
+            if content is not None:
+                dst_store = child_stores.setdefault(
+                    event.backend, make_blob_store(child.path.parent, event.backend)
+                )
+                dst_store.put(content)
+        child.append(event)
 
 
 __all__ = ["fork"]

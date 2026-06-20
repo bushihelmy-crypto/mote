@@ -31,7 +31,7 @@ def test_mailbox_data_event_set_on_enqueue():
     assert mailbox.empty()
     assert not mailbox._data_event.is_set()
     mailbox.enqueue_communication(make_mail("/root", "/root/worker", "one", False))
-    assert mailbox.has_pending()
+    assert not mailbox.empty()
     assert mailbox._data_event.is_set()
 
 
@@ -42,7 +42,7 @@ def test_mailbox_drains_in_delivery_order():
 
     drained = mailbox.drain_for_turn()
     assert [m.content for m in drained] == ["one", "two"]
-    assert not mailbox.has_pending()
+    assert mailbox.empty()
     assert not mailbox._data_event.is_set()
     # metadata carries author + recipient
     assert drained[0].metadata[MAILBOX_AUTHOR_PATH] == "/root"
@@ -87,5 +87,5 @@ async def test_wait_for_data():
 
     task = asyncio.create_task(producer())
     await asyncio.wait_for(mailbox.wait_for_data(), timeout=1.0)
-    assert mailbox.has_pending()
+    assert not mailbox.empty()
     await task

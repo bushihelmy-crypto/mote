@@ -4,7 +4,7 @@ Port of the relevant ``CodexErr`` variants used by the multi-agent control
 plane (``codex-rs/core/src/agent``). Reparented onto :class:`MetaGPTError` so
 control-plane failures carry a stable :class:`ErrorCode` and serialize via
 ``to_dict()`` like every other typed error. The custom ``__init__`` signatures
-(``max_threads`` / ``agent_id`` / ``agent_path`` / ``reference``) are preserved
+(``max_agents`` / ``agent_id`` / ``agent_path`` / ``reference``) are preserved
 because the control plane reads those attributes; each is also mirrored into
 ``context`` so it surfaces in ``to_dict()``.
 """
@@ -31,15 +31,15 @@ class AgentLimitReached(AgentControlError):
 
     default_code: ClassVar[ErrorCode] = ErrorCode.AGENT_LIMIT_REACHED
 
-    def __init__(self, max_threads: Optional[int] = None, message: Optional[str] = None):
-        self.max_threads = max_threads
+    def __init__(self, max_agents: Optional[int] = None, message: Optional[str] = None):
+        self.max_agents = max_agents
         if message is None:
             message = (
-                f"agent limit reached (max_threads={max_threads})"
-                if max_threads is not None
+                f"agent limit reached (max_agents={max_agents})"
+                if max_agents is not None
                 else "agent limit reached"
             )
-        super().__init__(message, max_threads=max_threads)
+        super().__init__(message, max_agents=max_agents)
 
 
 class AgentNotFound(AgentControlError):

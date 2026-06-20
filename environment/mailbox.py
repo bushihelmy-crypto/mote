@@ -133,9 +133,6 @@ class Mailbox:
     # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------
-    def has_pending(self) -> bool:
-        return bool(self._items)
-
     def has_trigger_turn(self) -> bool:
         return any(item.trigger_turn for item in self._items)
 

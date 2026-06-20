@@ -17,17 +17,20 @@ stateful Python work; use the one-shot :class:`Bash` tool for shell commands and
 the :class:`Terminal` tool when you need a persistent shell or to drive an
 arbitrary interactive program.
 
-Live state lives in the shared :data:`KERNELS` engine, keyed by the Role session.
+The live :class:`KernelSession` is owned by the Role: it is stored on the Role's
+``RoleState`` (via the ``get_tool_session`` / ``set_tool_session`` capabilities)
+rather than a process-global singleton, so each Role's kernel is isolated and
+torn down with it.
 """
 from __future__ import annotations
 
 import os
-from typing import Callable, ClassVar
+from typing import Any, Callable, ClassVar
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KERNELS
+from metagpt.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KernelSession
 from metagpt.common.prompt.tools import PYTHON_DESCRIPTION
 
 
@@ -39,13 +42,37 @@ class Python(BaseTool):
     aliases = ["Python"]
     max_result_size_chars: ClassVar[int] = 30_000
     description = PYTHON_DESCRIPTION
-    requires = ("get_cwd",)
+    requires = ("get_cwd", "get_tool_session", "set_tool_session")
     # Arbitrary code execution.
     risk_level = "high"
+    # Holds a live Jupyter kernel on RoleState between calls.
+    stateful = True
 
-    # Injected from Role by bind() — only the cwd accessor (seeds the kernel's
-    # initial working directory on first use).
+    # Injected from Role by bind(): the cwd accessor (seeds the kernel's initial
+    # working directory on first use) + the per-Role tool-session store (where
+    # the live KernelSession is kept, so it persists across calls and is owned
+    # by the Role rather than a process-global singleton).
     get_cwd: Callable[[], str]
+    get_tool_session: Callable[[str], Any]
+    set_tool_session: Callable[[str, Any], None]
+
+    async def _ensure_session(self) -> KernelSession:
+        """Return this Role's live kernel, starting a fresh one if needed.
+
+        The session is stored on RoleState keyed by the tool name; a previously
+        stored kernel that has since died is dropped and replaced.
+        """
+        session = self.get_tool_session(self.name)
+        if session is not None and not session.closed:
+            return session
+        if session is not None:
+            session.kill()  # previous kernel died — start fresh
+        cwd = self.get_cwd()
+        base_cwd = cwd if cwd and os.path.isdir(cwd) else None
+        session = KernelSession(session_key=self.session_id, cwd=base_cwd)
+        await session.start()
+        self.set_tool_session(self.name, session)
+        return session
 
     async def call(
         self,
@@ -72,22 +99,29 @@ class Python(BaseTool):
                 preserved) and whatever it printed so far is returned.
         """
         if close:
-            existed = await KERNELS.close(self.session_id)
-            return "[kernel closed]" if existed else "[no kernel to close]"
-
-        cwd = self.get_cwd()
-        base_cwd = cwd if cwd and os.path.isdir(cwd) else None
+            session = self.get_tool_session(self.name)
+            if session is None:
+                return "[no kernel to close]"
+            await session.shutdown()
+            self.set_tool_session(self.name, None)
+            return "[kernel closed]"
 
         try:
             if restart:
-                await KERNELS.restart(self.session_id, base_cwd)
+                session = self.get_tool_session(self.name)
+                if session is None or session.closed:
+                    await self._ensure_session()  # none live — start a clean one
+                else:
+                    await session.restart()
                 return "[kernel restarted; all variables cleared]"
             if interrupt:
-                text = await KERNELS.interrupt(self.session_id)
+                session = self.get_tool_session(self.name)
+                if session is None or session.closed:
+                    raise ToolError("Error: no live kernel to interrupt.")
+                text = await session.interrupt()
                 return _join(text, "[kernel interrupted]")
-            text, timed_out = await KERNELS.execute(
-                self.session_id, base_cwd, code, timeout
-            )
+            session = await self._ensure_session()
+            text, timed_out = await session.execute(code, timeout)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -102,8 +136,11 @@ class Python(BaseTool):
         return text
 
     def cleanup_session(self, session_id: str) -> None:
-        """Tear down this session's kernel."""
-        KERNELS.cleanup_session(session_id)
+        """Tear down this Role's kernel (idempotent)."""
+        session = self.get_tool_session(self.name)
+        if session is not None:
+            session.kill()
+            self.set_tool_session(self.name, None)
 
 
 def _join(text: str, footer: str) -> str:

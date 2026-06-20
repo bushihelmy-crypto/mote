@@ -16,15 +16,26 @@ from typing import Literal
 ApprovalChoice = Literal["allow_once", "allow_session", "deny"]
 
 
-def build_approval_prompt(tool_name: str, target: str, reason: str = "") -> str:
-    """Compose the approval question shown to the user."""
+def build_approval_prompt(
+    tool_name: str, target: str, reason: str = "", suggestion: str = ""
+) -> str:
+    """Compose the approval question shown to the user.
+
+    ``suggestion`` (when given) is the permission rule an "always" reply will
+    add for the session — surfaced so the user sees exactly what they are
+    granting (e.g. ``Bash(git commit:*)`` rather than just this one command).
+    """
     target_line = f"\n  target: {target}" if target else ""
     reason_line = f"\n  reason: {reason}" if reason else ""
+    always = (
+        f"'always' to add the rule {suggestion} for the rest of the session"
+        if suggestion
+        else "'always' to allow for the rest of the session"
+    )
     return (
         f"[APPROVAL REQUIRED] The agent wants to run tool '{tool_name}'."
         f"{target_line}{reason_line}\n"
-        "Reply 'yes' to allow once, 'always' to allow for the rest of the session, "
-        "or 'no' to deny."
+        f"Reply 'yes' to allow once, {always}, or 'no' to deny."
     )
 
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Optional
 
 from metagpt.common.events.types import (
+    AgentLifecycleEvent,
     CompactionCheckpointEvent,
     DiagnosticsEvent,
     FileChangedEvent,
@@ -56,9 +57,10 @@ class LogSubscriber:
     priority: int = 90
 
     async def handle(self, event) -> Optional[HookOutcome]:
-        # TaskProgress arrives via the sync fan-out (handle_sync); ignore it here
-        # so live progress isn't logged twice should it ever reach the async path.
-        if isinstance(event, TaskProgressEvent):
+        # TaskProgress and agent-lifecycle ride the sync fan-out (handle_sync);
+        # ignore them here so they aren't logged twice should one ever reach the
+        # async path.
+        if isinstance(event, (TaskProgressEvent, AgentLifecycleEvent)):
             return None
         try:
             self._log(event)
@@ -67,17 +69,20 @@ class LogSubscriber:
         return None
 
     def handle_sync(self, event) -> None:
-        # Narrowly opt into the sync fan-out only for low-frequency background
-        # task progress (per-token stream deltas are deliberately *not* logged).
-        if not isinstance(event, TaskProgressEvent):
-            return
+        # Narrowly opt into the sync fan-out: low-frequency background task
+        # progress and the orchestration layer's agent-lifecycle milestones
+        # (both emitted from sync call sites). Per-token stream deltas are
+        # deliberately *not* logged.
         try:
-            logger.debug(
-                f"event task_progress task={event.task_id} stage={event.stage} "
-                f"status={event.status} '{_clip(event.detail)}'"
-            )
+            if isinstance(event, TaskProgressEvent):
+                logger.debug(
+                    f"event task_progress task={event.task_id} stage={event.stage} "
+                    f"status={event.status} '{_clip(event.detail)}'"
+                )
+            elif isinstance(event, AgentLifecycleEvent):
+                self._log(event)
         except Exception as exc:  # noqa: BLE001 — logging must never break a turn
-            logger.warning(f"LogSubscriber: failed to log task_progress: {exc}")
+            logger.warning(f"LogSubscriber: failed to log {getattr(event, 'name', '?')}: {exc}")
 
     @staticmethod
     def _log(event) -> None:
@@ -122,6 +127,12 @@ class LogSubscriber:
             logger.debug(f"event file_changed type={event.change_type} path={event.path}")
         elif isinstance(event, DiagnosticsEvent):
             logger.debug(f"event diagnostics files={len(event.paths)} chars={len(event.block)}")
+        elif isinstance(event, AgentLifecycleEvent):
+            detail = f" {event.detail}" if event.detail else ""
+            logger.info(
+                f"event agent_lifecycle phase={event.phase} "
+                f"id={event.session_id[:8] or '?'}{detail}"
+            )
         elif isinstance(event, RecoveryEvent):
             logger.info(
                 f"event recovery phase={event.phase} action={event.action} "

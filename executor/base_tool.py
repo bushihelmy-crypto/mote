@@ -71,6 +71,15 @@ class BaseTool(ABC):
     # per-tool `maxResultSizeChars`.
     max_result_size_chars: ClassVar[int] = DEFAULT_MAX_RESULT_SIZE_CHARS
 
+    # Whether this tool keeps live, per-Role session state (a persistent shell,
+    # a Python kernel, ...). A stateful tool stores its live session on the
+    # owning Role's RoleState — via the get_tool_session / set_tool_session
+    # capabilities — instead of a process-global singleton, so the state is
+    # owned by the Role, isolated per session, and torn down with it (no
+    # cross-session leakage). Stateless tools (the default) hold no state
+    # between calls.
+    stateful: ClassVar[bool] = False
+
     # --- Permission metadata (consumed by the PermissionEngine) ---
     # Coarse risk label a tool self-declares (advisory in phase 1). See
     # metagpt.common.schema.permission_types.RiskLevel.
@@ -144,6 +153,17 @@ class BaseTool(ABC):
         """
         target = self.permission_target(args)
         return [target] if target else []
+
+    def permission_segments(self, args: dict) -> "list[str] | None":
+        """Split a shell command into independently-evaluated segments.
+
+        Shell-command tools (``Bash``/``Terminal``) override this to return the
+        command split on ``&&  ||  ;  |`` so the permission engine resolves rules
+        per segment (a deny rule catches the dangerous half of ``ls && rm -rf``)
+        and can remember an approval as a stable *prefix* rule. ``None`` (the
+        default) means "not a command" — the engine matches the whole target.
+        """
+        return None
 
     def check_permissions(self, args: dict) -> "PermissionDecision | None":
         """Tool-specific permission self-check, run before mode/rule fallback.

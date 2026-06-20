@@ -155,21 +155,25 @@ def _format_auto_retries(run_state: Optional[GraphRunState], node_name: str) -> 
 
 
 def _resolve_param_source(source: str, state: Any, initial_params: dict) -> Any:
-    """Resolve a ``params['from']`` source against the state / initial params."""
+    """Resolve a ``params['from']`` source against the state / initial params.
+
+    A non-``$input`` source references a state *field* (first dotted segment),
+    optionally indexed into by a ``.key`` for dict-valued fields.
+    """
     if source.startswith("$input."):
         field_name = source[len("$input."):]
         if field_name in initial_params:
             return initial_params.get(field_name)
         return getattr(state, field_name, None)
     parts = source.split(".", 1)
-    node_name = parts[0]
-    node_output = getattr(state, node_name, None)
+    field_name = parts[0]
+    field_value = getattr(state, field_name, None)
     if len(parts) == 1:
-        return node_output
+        return field_value
     key = parts[1]
-    if isinstance(node_output, dict):
-        return node_output.get(key)
-    return getattr(node_output, key, None)
+    if isinstance(field_value, dict):
+        return field_value.get(key)
+    return getattr(field_value, key, None)
 
 
 def _render_node_params(node_name: str, graph: Any, state: Any) -> str:
@@ -182,7 +186,7 @@ def _render_node_params(node_name: str, graph: Any, state: Any) -> str:
         source_text = (
             "task input param"
             if source.startswith("$input.")
-            else f"from {source.split('.')[0]} node output"
+            else f"from state field '{source.split('.')[0]}'"
         )
         value = _resolve_param_source(source, state, {})
         lines.append(
@@ -242,10 +246,9 @@ def _render_completed_nodes(
     for name in names:
         if name not in graph._nodes or name in excluded:
             continue
+        # Completion is authoritative on the run state — node results merge into
+        # state *fields*, so there is no per-node value to gate on anymore.
         if run_state.get(name).status != BgStatus.SUCCESS:
-            continue
-        result = getattr(state, name, None)
-        if result is None:
             continue
         blocks.append(_FMT_BARE_NODE_BLOCK.format(node_name=name))
     return "\n".join(blocks) if blocks else "  (none)"
@@ -470,7 +473,9 @@ def push_node_notification(
 def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: str = "(current)") -> None:
     from_node_def = graph._nodes.get(llm_edge.from_node)
     from_node_desc = from_node_def.description if from_node_def else ""
-    from_node_result = _truncate(getattr(state, llm_edge.from_node, None))
+    # Field/channel model: there is no per-node result slot, so surface a
+    # compact snapshot of the full state instead of one node's value.
+    from_node_result = _truncate(state.model_dump())
 
     has_end = END in llm_edge.mapping.values()
     options = []

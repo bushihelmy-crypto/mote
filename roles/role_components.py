@@ -98,8 +98,33 @@ class RoleComponents:
     @property
     def skill_manager(self) -> SkillManager:
         if self._skill_mgr is None:
-            self._skill_mgr = SkillManager(skills=self._role.role_schema.skills)
+            cfg = self._role.config.role_zero.skills
+            self._skill_mgr = SkillManager(
+                skills=self._role.role_schema.skills,
+                enabled=cfg.enabled,
+                source_dirs=self._skill_source_dirs(cfg),
+            )
         return self._skill_mgr
+
+    def _skill_source_dirs(self, cfg) -> list:
+        """Layered skill source directories (precedence-as-data, low→high).
+
+        Bundled package skills are the lowest layer; the conventional
+        ``~/.agent/skills`` (user) and ``<cwd>/.agent/skills`` (project) dirs
+        and any configured ``extra_dirs`` stack above them (later overrides
+        earlier for same-named skills).
+        """
+        from pathlib import Path
+
+        from metagpt.context.skills.skill_pool import _BUILTIN_DIR
+
+        dirs: list[Path] = [_BUILTIN_DIR]
+        if cfg.include_user_dir:
+            dirs.append(Path.home() / ".agent" / "skills")
+        if cfg.include_project_dir:
+            dirs.append(Path(self._role.get_cwd()) / ".agent" / "skills")
+        dirs.extend(Path(d) for d in cfg.extra_dirs)
+        return dirs
 
     @property
     def bg_pool(self) -> BackgroundTaskPool:
@@ -129,7 +154,13 @@ class RoleComponents:
     def executor(self) -> ToolExecutor:
         if self._executor is None:
             all_tools = self._role.role_schema.mcps + self._role.role_schema.tools
-            all_tools = _resolve_shell_tools(all_tools)
+            # Auto-expose the ``Skill`` bridge tool when skills are enabled (the
+            # single on-demand entry point for invoking project skills). Mirrors
+            # Terminal's "always-on when relevant" wiring: appended, then deduped
+            # so an explicit declaration is harmless and order is preserved.
+            if self._role.config.role_zero.skills.enabled:
+                all_tools = all_tools + ["Skill"]
+            all_tools = _dedupe_tools(all_tools)
             self._executor = ToolExecutor(
                 session_id=self._role.state.session_id,
                 tools=all_tools,
@@ -210,45 +241,66 @@ class RoleComponents:
         recorder persists; the logger last).
         """
         if self._event_bus is None:
-            from metagpt.common.events import EventBus, LogSubscriber
-            from metagpt.session.subscribers import RecorderSubscriber
-
-            bus = EventBus()
-            hook_manager = self.hook_manager
-            if hook_manager is not None:
-                from metagpt.common.hook.subscriber import HookSubscriber
-
-                bus.subscribe(HookSubscriber(hook_manager))
-            bus.subscribe(RecorderSubscriber(self.session_log))
-            bus.subscribe(LogSubscriber())
-            # The compaction-notice feed catches PostCompactEvent here (input
-            # edge) and replays it as a one-shot turn-context block (output edge,
-            # via turn_context_bus). Always wired — it self-suppresses until a
-            # compaction fires.
-            bus.subscribe(self.compaction_notice)
-            # ResourceReporter pushes (non-streaming UI observations) ride the
-            # bus too: emit -> ReporterSubscriber POSTs. Wired only when a report
-            # endpoint is configured (METAGPT_REPORTER_URL); empty = dormant.
-            from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
-            from metagpt.common.utils.report import ReporterSubscriber
-
-            if METAGPT_REPORTER_DEFAULT_URL:
-                bus.subscribe(ReporterSubscriber(METAGPT_REPORTER_DEFAULT_URL))
-            # The LSP feed rides the bus on both edges (opt-in: only wired when
-            # an LSP layer is configured). Input: the service subscribes to
-            # FileMutatedEvent (a tool write) to sync the doc + collect
-            # diagnostics, then broadcasts them as a DiagnosticsEvent (so it
-            # needs the bus to emit on). Output: the buffer subscribes to those
-            # DiagnosticsEvents and stages them for next-turn context.
-            lsp = self.lsp_service
-            if lsp is not None:
-                lsp.bus = bus
-                bus.subscribe(lsp)
-                buffer = self.diagnostics_buffer
-                if buffer is not None:
-                    bus.subscribe(buffer)
-            self._event_bus = bus
+            self._event_bus = self._build_event_bus()
         return self._event_bus
+
+    def _build_event_bus(self):
+        """Construct the event bus and wire every (opt-in) subscriber onto it.
+
+        Split out of the :attr:`event_bus` property so the property stays a thin
+        lazy-cache and the (conditional, multi-subscriber) wiring has an explicit
+        home. See the property docstring for the subscriber roster.
+        """
+        from metagpt.common.events import EventBus, LogSubscriber
+        from metagpt.session.subscribers import RecorderSubscriber
+
+        bus = EventBus()
+        hook_manager = self.hook_manager
+        if hook_manager is not None:
+            from metagpt.common.hook.subscriber import HookSubscriber
+
+            bus.subscribe(HookSubscriber(hook_manager))
+        bus.subscribe(RecorderSubscriber(self.session_log))
+        bus.subscribe(LogSubscriber())
+        # Tracing rides the same spine: when enabled, a backend-agnostic
+        # TracingSubscriber consumes the span + LLM request/response/error
+        # events and rebuilds the trace tree from their explicit IDs, driving a
+        # pluggable TracerBackend (langfuse today). Dormant — and not even
+        # imported — when disabled.
+        from metagpt.common.observability.langfuse_integration import is_enabled, step_tracing_enabled
+
+        if is_enabled():
+            from metagpt.common.observability.langfuse_backend import LangfuseBackend
+            from metagpt.common.observability.tracing import TracingSubscriber
+
+            bus.subscribe(TracingSubscriber(LangfuseBackend(), trace_steps=step_tracing_enabled()))
+        # The compaction-notice feed catches PostCompactEvent here (input
+        # edge) and replays it as a one-shot turn-context block (output edge,
+        # via turn_context_bus). Always wired — it self-suppresses until a
+        # compaction fires.
+        bus.subscribe(self.compaction_notice)
+        # ResourceReporter pushes (non-streaming UI observations) ride the
+        # bus too: emit -> ReporterSubscriber POSTs. Wired only when a report
+        # endpoint is configured (METAGPT_REPORTER_URL); empty = dormant.
+        from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
+        from metagpt.common.utils.report import ReporterSubscriber
+
+        if METAGPT_REPORTER_DEFAULT_URL:
+            bus.subscribe(ReporterSubscriber(METAGPT_REPORTER_DEFAULT_URL))
+        # The LSP feed rides the bus on both edges (opt-in: only wired when
+        # an LSP layer is configured). Input: the service subscribes to
+        # FileMutatedEvent (a tool write) to sync the doc + collect
+        # diagnostics, then broadcasts them as a DiagnosticsEvent (so it
+        # needs the bus to emit on). Output: the buffer subscribes to those
+        # DiagnosticsEvents and stages them for next-turn context.
+        lsp = self.lsp_service
+        if lsp is not None:
+            lsp.bus = bus
+            bus.subscribe(lsp)
+            buffer = self.diagnostics_buffer
+            if buffer is not None:
+                bus.subscribe(buffer)
+        return bus
 
     @property
     def file_snapshot_recorder(self) -> "FileSnapshotRecorder":
@@ -375,38 +427,48 @@ class RoleComponents:
         ``Role.cleanup``.
         """
         if self._file_watch_service is None:
-            cfg = self._role.role_schema.file_watch
-            if cfg is None or not cfg.enabled:
-                return None
-
-            roots = list(cfg.roots) or [self._role.state.project_root or self._role.get_cwd()]
-
-            # Auto-wire the opt-in hot-reload handlers *before* touching the hook
-            # manager: registering them engages the hook layer (so the service
-            # has a consumer for its FileChanged events) and extends the watched
-            # roots to the relevant source dirs/files.
-            if cfg.reload_skills:
-                self.register_hook("FileChanged", self._reload_skills_on_change, r"SKILL\.md$")
-                roots.extend(self.skill_manager.source_dirs())
-            if cfg.reload_config:
-                self.register_hook("FileChanged", self._reload_config_on_change, r"config2?\.yaml$")
-                roots.extend(self._config_source_roots())
-
-            hook_runner = self.hook_manager
-            if hook_runner is None:
-                return None  # nothing would consume the FileChanged events
-            from metagpt.environment.watching import FileWatchService
-
-            seen: set[str] = set()
-            deduped = [r for r in roots if not (r in seen or seen.add(r))]
-            self._file_watch_service = FileWatchService(
-                hook_runner,
-                deduped,
-                ignore=cfg.ignore,
-                check_interval=cfg.check_interval,
-                bus=self.event_bus,
-            )
+            self._file_watch_service = self._build_file_watch_service()
         return self._file_watch_service
+
+    def _build_file_watch_service(self):
+        """Construct the file-watch service, or return ``None`` when disabled.
+
+        Split out of the :attr:`file_watch_service` property because building it
+        is *side-effectful* — it registers the opt-in hot-reload hooks (which
+        engages the hook layer) and extends the watched roots — so it reads as a
+        deliberate construction step rather than a transparent attribute read.
+        """
+        cfg = self._role.role_schema.file_watch
+        if cfg is None or not cfg.enabled:
+            return None
+
+        roots = list(cfg.roots) or [self._role.state.project_root or self._role.get_cwd()]
+
+        # Auto-wire the opt-in hot-reload handlers *before* touching the hook
+        # manager: registering them engages the hook layer (so the service
+        # has a consumer for its FileChanged events) and extends the watched
+        # roots to the relevant source dirs/files.
+        if cfg.reload_skills:
+            self.register_hook("FileChanged", self._reload_skills_on_change, r"SKILL\.md$")
+            roots.extend(self.skill_manager.source_dirs())
+        if cfg.reload_config:
+            self.register_hook("FileChanged", self._reload_config_on_change, r"config2?\.yaml$")
+            roots.extend(self._config_source_roots())
+
+        hook_runner = self.hook_manager
+        if hook_runner is None:
+            return None  # nothing would consume the FileChanged events
+        from metagpt.environment.watching import FileWatchService
+
+        seen: set[str] = set()
+        deduped = [r for r in roots if not (r in seen or seen.add(r))]
+        return FileWatchService(
+            hook_runner,
+            deduped,
+            ignore=cfg.ignore,
+            check_interval=cfg.check_interval,
+            bus=self.event_bus,
+        )
 
     def _config_source_roots(self) -> list[str]:
         """Discovered config source files to watch (best-effort, may be empty)."""
@@ -424,7 +486,7 @@ class RoleComponents:
         """FileChanged handler: atomically re-scan skills (no-op if uninitialized)."""
         mgr = self._skill_mgr
         if mgr is not None and mgr.reload():
-            logger.info("RoleComponents: skills hot-reloaded after a SKILL.md change")
+            logger.debug("RoleComponents: skills hot-reloaded after a SKILL.md change")
 
     async def _reload_config_on_change(self, hook_input) -> None:
         """FileChanged handler: reload the layered config into ``role.config``.
@@ -439,7 +501,7 @@ class RoleComponents:
 
         try:
             self._role.config = load_config(Path(self._role.get_cwd()), reload=True)
-            logger.info("RoleComponents: config hot-reloaded after a source-file change")
+            logger.debug("RoleComponents: config hot-reloaded after a source-file change")
         except Exception as exc:  # noqa: BLE001 — a bad reload must not break the watcher
             logger.warning(f"RoleComponents: config hot-reload failed: {exc}")
 
@@ -471,6 +533,7 @@ class RoleComponents:
         if self._turn_context_bus is None:
             from metagpt.context.turn_context import (
                 GitContextSource,
+                SkillActivationContextSource,
                 TokenPressureContextSource,
                 TurnContextBus,
             )
@@ -481,6 +544,13 @@ class RoleComponents:
                 # Reactive post-compaction notice (same instance subscribes to
                 # the event bus to arm itself off PostCompactEvent).
                 self.compaction_notice,
+                # Path-gated skills: surfaced per-turn (NOT the steady index) so
+                # touching a matching file never busts the cached system prompt.
+                # Self-suppresses when skills are disabled or nothing matches.
+                SkillActivationContextSource(
+                    get_pool=lambda: self.skill_manager.pool,
+                    get_touched_files=self._touched_files,
+                ),
             ]
             # LSP diagnostics: the buffer is itself the turn-context source
             # (dual-role — it's also the bus subscriber fed by the LspService),
@@ -490,6 +560,18 @@ class RoleComponents:
                 sources.append(buffer)
             self._turn_context_bus = TurnContextBus(sources)
         return self._turn_context_bus
+
+    def _touched_files(self) -> list[str]:
+        """Absolute paths this session has read (the record_file_read trajectory).
+
+        Feeds :class:`SkillActivationContextSource` so path-gated skills light up
+        when their patterns match a file the agent is working with. Best-effort —
+        returns an empty list before any read or if state is unavailable.
+        """
+        try:
+            return list(self._role.state._file_read_state.keys())
+        except Exception:  # noqa: BLE001 — purely advisory
+            return []
 
     @property
     def think_engine(self) -> ThinkEngine:
@@ -591,11 +673,11 @@ class RoleComponents:
             self._hook_callbacks.append((event, fn, matcher))
 
 
-def _resolve_shell_tools(tools: list[str]) -> list[str]:
-    """Normalize a tool list, preserving order and removing duplicates.
+def _dedupe_tools(tools: list[str]) -> list[str]:
+    """Remove duplicate tool names, preserving first-seen order.
 
     ``Bash`` (one-shot, jam-proof) and ``Terminal`` (persistent PTY) are
-    distinct tools and are both kept as declared.
+    distinct tools and are both kept as declared — no name rewriting happens.
     """
     seen: set[str] = set()
     deduped: list[str] = []

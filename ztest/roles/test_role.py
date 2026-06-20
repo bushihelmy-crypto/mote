@@ -14,7 +14,7 @@ from metagpt.common.exception import RoleContextNotSetError
 from metagpt.common.schema import AIMessage, Message
 from metagpt.common.utils.common import any_to_str
 from metagpt.roles import Role, RoleSchema, RoleState
-from metagpt.roles.role import _resolve_shell_tools
+from metagpt.roles.role_components import _dedupe_tools
 
 from .conftest import FakeContextManager, FakeEnv, FakeLLM, FakeRouter, FakeThinkEngine, _FakeThinkResult
 
@@ -183,9 +183,11 @@ class TestTurnContextBus:
         # DiagnosticsBuffer is the source, wired only when LSP is configured).
         # Background-task progress is NOT a turn-context source: it is delivered
         # via msg_buffer notifications, so no <task-attachment> feed here.
+        # The skill-activation feed is wired unconditionally (self-suppresses
+        # when skills are disabled or no touched file matches a conditional one).
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
-        assert names == {"git", "token", "compaction"}
+        assert names == {"git", "token", "compaction", "skill_activation"}
 
     def test_lsp_source_present_when_configured(self):
         from metagpt.common.schema import LspConfig, LspServerConfig
@@ -430,6 +432,61 @@ class TestFrameworkProperties:
 
 
 # =============================================================================
+# Fork-skill isolated execution (run_skill_fork)
+# =============================================================================
+class _ForkProbeRole(Role):
+    """Role whose run() records the child's schema/state instead of looping."""
+
+    captured: dict = {}
+
+    async def run(self, with_message=None):  # type: ignore[override]
+        _ForkProbeRole.captured = {
+            "schema": self.role_schema,
+            "state": self.state,
+            "message": with_message,
+        }
+        self.state.last_end_output = "  child summary  "
+
+
+class TestRunSkillFork:
+    def _parent(self):
+        parent_state = RoleState(session_id="parent-sid", working_dir="/work/dir")
+        return _ForkProbeRole(role_schema=RoleSchema(name="P"), state=parent_state)
+
+    def test_returns_stripped_child_output(self):
+        parent = self._parent()
+        out = asyncio.run(
+            parent.run_skill_fork(instructions="BODY", arguments="payload")
+        )
+        assert out == "child summary"
+
+    def test_child_isolated_with_lineage(self):
+        parent = self._parent()
+        asyncio.run(parent.run_skill_fork(instructions="BODY", arguments="x"))
+        child_state = _ForkProbeRole.captured["state"]
+        assert child_state.parent_session_id == "parent-sid"
+        assert child_state.session_id != "parent-sid"
+        assert child_state.working_dir == "/work/dir"
+
+    def test_child_schema_injects_body_and_limits_tools(self):
+        parent = self._parent()
+        asyncio.run(
+            parent.run_skill_fork(instructions="SKILL BODY", allowed_tools=["Read"])
+        )
+        schema = _ForkProbeRole.captured["schema"]
+        assert schema.instruction == "SKILL BODY"
+        assert schema.tools == ["Read"]
+        # A fork skill cannot spawn its own children.
+        assert schema.mcps == [] and schema.agents == [] and schema.skills == []
+
+    def test_child_receives_arguments_as_message(self):
+        parent = self._parent()
+        asyncio.run(parent.run_skill_fork(instructions="B", arguments="the task"))
+        msg = _ForkProbeRole.captured["message"]
+        assert msg.content == "the task"
+
+
+# =============================================================================
 # Capabilities allowlist + active signal
 # =============================================================================
 class TestCapabilities:
@@ -438,7 +495,8 @@ class TestCapabilities:
         assert set(caps) == {
             "get_cwd", "set_cwd", "deactivate", "ask_human", "request_approval",
             "reply_to_human", "end_session", "record_file_read", "get_file_read_mtime",
-            "record_file_snapshot", "wait_interruptible", "get_bg_pool",
+            "record_file_snapshot", "get_tool_session", "set_tool_session",
+            "wait_interruptible", "get_bg_pool", "get_skill_pool", "run_skill_fork",
         }
 
     def test_capability_values_are_bound_methods(self):
@@ -632,23 +690,23 @@ class TestGetMemories:
 
 
 # =============================================================================
-# shell_tool resolution (Bash and Terminal are distinct; dedup only)
+# tool list dedup (Bash and Terminal are distinct; dedup only)
 # =============================================================================
-class TestResolveShellTools:
+class TestDedupeTools:
     def test_bash_kept_as_is(self):
-        assert _resolve_shell_tools(["Bash"]) == ["Bash"]
+        assert _dedupe_tools(["Bash"]) == ["Bash"]
 
     def test_bash_and_terminal_coexist(self):
-        assert _resolve_shell_tools(["Bash", "Terminal"]) == ["Bash", "Terminal"]
+        assert _dedupe_tools(["Bash", "Terminal"]) == ["Bash", "Terminal"]
 
     def test_non_shell_tools_untouched(self):
-        assert _resolve_shell_tools(["Read", "Write"]) == ["Read", "Write"]
+        assert _dedupe_tools(["Read", "Write"]) == ["Read", "Write"]
 
     def test_duplicates_removed(self):
-        assert _resolve_shell_tools(["Terminal", "Bash", "Terminal"]) == ["Terminal", "Bash"]
+        assert _dedupe_tools(["Terminal", "Bash", "Terminal"]) == ["Terminal", "Bash"]
 
     def test_order_preserved(self):
-        assert _resolve_shell_tools(["Read", "Bash", "Write"]) == [
+        assert _dedupe_tools(["Read", "Bash", "Write"]) == [
             "Read",
             "Bash",
             "Write",

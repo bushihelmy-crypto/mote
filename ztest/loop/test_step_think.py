@@ -37,6 +37,5 @@ async def test_step_think_prepares_and_starts(make_loop):
     tr = b.provider._think_request
     assert call["req"] is tr.req
     assert call["system_prompt"] == tr.system_prompt
-    assert call["state_data"] == tr.state_data
     assert call["tool_specs"] == tr.tool_specs
     assert call["llm"] is b.provider.llm

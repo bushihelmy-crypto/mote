@@ -203,10 +203,10 @@ async def storyboard_node(state: MediaPipelineState) -> Stage:
     has_media = state.images or state.audios or state.musics or state.videos
     if not state.prompt and has_media:
         # Manual mode — media already specified, skip planning
-        return Stage(submit=_noop_result({"mode": "manual"}))
+        return Stage(submit=_noop_result({"storyboard": {"mode": "manual"}}))
     if not state.prompt:
         # Empty mode — nothing to do, pass through
-        return Stage(submit=_noop_result({"mode": "empty"}))
+        return Stage(submit=_noop_result({"storyboard": {"mode": "empty"}}))
 
     # Auto mode — use LLM to plan
     async def submit():
@@ -241,7 +241,7 @@ async def storyboard_node(state: MediaPipelineState) -> Stage:
             if plan["promo"].get("promo_dir"):
                 state.promo_dir = plan["promo"]["promo_dir"]
         state.storyboard = plan
-        return plan
+        return {"storyboard": plan}
 
     return Stage(submit=submit())
 
@@ -263,12 +263,12 @@ async def template_init_node(state: MediaPipelineState) -> Stage:
         promo_dir = state.promo_dir or state.promo.get("promo_dir", "")
         state.promo_dir = promo_dir
         if not promo_dir:
-            return {"status": "no_dir"}
+            return {"template_init_out": {"status": "no_dir"}}
         try:
             os.makedirs(promo_dir, exist_ok=True)
         except OSError as e:
-            return {"status": "error", "promo_dir": promo_dir, "error": str(e)}
-        return {"status": "ready", "promo_dir": promo_dir}
+            return {"template_init_out": {"status": "error", "promo_dir": promo_dir, "error": str(e)}}
+        return {"template_init_out": {"status": "ready", "promo_dir": promo_dir}}
 
     return Stage(submit=submit())
 
@@ -307,8 +307,8 @@ async def image_node(state: MediaPipelineState) -> Stage:
 
     async def poll(bg_result):
         if hasattr(bg_result, "poll_factory") and bg_result.poll_factory is not None:
-            return await bg_result.poll_factory()
-        return getattr(bg_result, "result", bg_result)
+            return {"image": await bg_result.poll_factory()}
+        return {"image": getattr(bg_result, "result", bg_result)}
 
     return Stage(submit=submit(), poll=poll)
 
@@ -337,8 +337,8 @@ async def audio_node(state: MediaPipelineState) -> Stage:
 
     async def poll(bg_result):
         if hasattr(bg_result, "poll_factory") and bg_result.poll_factory is not None:
-            return await bg_result.poll_factory()
-        return getattr(bg_result, "result", bg_result)
+            return {"audio": await bg_result.poll_factory()}
+        return {"audio": getattr(bg_result, "result", bg_result)}
 
     return Stage(submit=submit(), poll=poll)
 
@@ -367,8 +367,8 @@ async def music_node(state: MediaPipelineState) -> Stage:
 
     async def poll(bg_result):
         if hasattr(bg_result, "poll_factory") and bg_result.poll_factory is not None:
-            return await bg_result.poll_factory()
-        return getattr(bg_result, "result", bg_result)
+            return {"music": await bg_result.poll_factory()}
+        return {"music": getattr(bg_result, "result", bg_result)}
 
     return Stage(submit=submit(), poll=poll)
 
@@ -441,8 +441,8 @@ async def video_node(state: MediaPipelineState) -> Stage:
 
     async def poll(bg_result):
         if hasattr(bg_result, "poll_factory") and bg_result.poll_factory is not None:
-            return await bg_result.poll_factory()
-        return getattr(bg_result, "result", bg_result)
+            return {"video": await bg_result.poll_factory()}
+        return {"video": getattr(bg_result, "result", bg_result)}
 
     return Stage(submit=submit(), poll=poll)
 
@@ -472,7 +472,7 @@ async def duration_measure_node(state: MediaPipelineState) -> Stage:
         except ImportError:
             # Gracefully degrade — can't measure without the utility
             state.durations = {"audio": audio_durations, "music": music_durations}
-            return state.durations
+            return {"durations": state.durations}
 
         # Measure audio outputs
         if audio_results and isinstance(audio_results, (list, dict)):
@@ -501,7 +501,7 @@ async def duration_measure_node(state: MediaPipelineState) -> Stage:
                             pass
 
         state.durations = {"audio": audio_durations, "music": music_durations}
-        return state.durations
+        return {"durations": state.durations}
 
     return Stage(submit=submit())
 
@@ -556,7 +556,7 @@ async def render_gate_node(state: MediaPipelineState) -> Stage:
             "produced. The output is individual clips/images/audio, not a single "
             "finished video."
         )
-    return Stage(submit=_noop_result(summary))
+    return Stage(submit=_noop_result({"render_gate_out": summary}))
 
 
 # ---------------------------------------------------------------------------
@@ -587,8 +587,8 @@ async def promo_node(state: MediaPipelineState) -> Stage:
         promo_dir = state.promo_dir or state.promo.get("promo_dir", "")
         clips = _ordered_local_paths(state.videos, getattr(state, "video", None))
         if not clips:
-            return {"status": "failed", "stage": "preflight",
-                    "error": "No local video clips available to compose."}
+            return {"promo_out": {"status": "failed", "stage": "preflight",
+                    "error": "No local video clips available to compose."}}
 
         narration = _ordered_local_paths(state.audios, getattr(state, "audio", None))
         music = _ordered_local_paths(
@@ -600,11 +600,12 @@ async def promo_node(state: MediaPipelineState) -> Stage:
         output_path = os.path.join(promo_dir, f"promo-{width}x{height}.mp4")
 
         composer = FfmpegComposer()
-        return await composer.compose(
+        composed = await composer.compose(
             videos=clips,
             narration=narration,
             music=music,
             output_path=output_path,
         )
+        return {"promo_out": composed}
 
     return Stage(submit=submit(), poll=poll)

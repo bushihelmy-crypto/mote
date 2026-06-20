@@ -167,19 +167,28 @@ class Message(BaseModel):
         """Convert the object to json string"""
         return self.model_dump_json(exclude_none=True, warnings=False)
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Message":
+        """Reconstruct a Message from an already-parsed payload dict.
+
+        The dict counterpart of :meth:`load` (which is just ``from_dict`` on a
+        JSON string). Used by persistence layers that already hold a dict, to
+        avoid a redundant ``json.dumps``/``json.loads`` round-trip. The stored
+        ``id`` is preserved as-is rather than regenerated.
+        """
+        m = dict(data)
+        id = m.pop("id", None)
+        msg = cls(**m)
+        if id:
+            msg.id = id
+        return msg
+
     @staticmethod
     @handle_exception(exception_type=JSONDecodeError, default_return=None)
     def load(val):
         """Convert the json string to object."""
         try:
-            m = json.loads(val)
-            id = m.get("id")
-            if "id" in m:
-                del m["id"]
-            msg = Message(**m)
-            if id:
-                msg.id = id
-            return msg
+            return Message.from_dict(json.loads(val))
         except JSONDecodeError as err:
             logger.error(f"parse json failed: {val}, error:{err}")
         return None

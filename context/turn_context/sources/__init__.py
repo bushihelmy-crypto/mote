@@ -9,6 +9,9 @@ from metagpt.context.turn_context.sources.compaction import (
     CompactionNoticeContextSource,
 )
 from metagpt.context.turn_context.sources.git import GitContextSource
+from metagpt.context.turn_context.sources.skill_activation import (
+    SkillActivationContextSource,
+)
 from metagpt.context.turn_context.sources.token_pressure import (
     TokenPressureContextSource,
 )
@@ -16,5 +19,6 @@ from metagpt.context.turn_context.sources.token_pressure import (
 __all__ = [
     "CompactionNoticeContextSource",
     "GitContextSource",
+    "SkillActivationContextSource",
     "TokenPressureContextSource",
 ]

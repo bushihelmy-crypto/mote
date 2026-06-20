@@ -7,20 +7,45 @@ request: keep the system preamble, then trim/sketch user+assistant turns so the
 payload fits the model's window. The strategies (POST/PRE/BALANCED cut by
 token/msg) are unchanged.
 
-This module lives in ``router.llm`` because it is tightly coupled to ``BaseLLM``
-(uses count_tokens, _system_msg, get_content_under_limit_token, etc.) and has
-no dependency on the ``context`` package.
+This module lives in ``router.llm`` because it operates on the token-budgeting
+surface of an LLM. It depends on the narrow :class:`MessageBudgeter` protocol
+(not the full ``BaseLLM``), so the contract it needs is explicit and it has no
+dependency on the ``context`` package.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Protocol, runtime_checkable
 
 from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.utils.token_counter import TOKEN_MAX
 from metagpt.router.llm.editor_read_parser import find_editor_read_segments
 
-if TYPE_CHECKING:
-    from metagpt.router.llm.base_llm import BaseLLM
+
+@runtime_checkable
+class MessageBudgeter(Protocol):
+    """The token-budgeting surface :class:`RequestContextBuilder` needs from an LLM.
+
+    Declaring it explicitly (instead of taking the whole ``BaseLLM``) documents
+    the actual coupling and lets the builder be tested with a lightweight stub.
+    """
+
+    model: str
+
+    def count_tokens(self, messages: list[dict]) -> int:
+        ...
+
+    def system_role(self) -> str:
+        ...
+
+    def get_content_under_limit_token(
+        self, msg: dict, target_token_count: int, from_end: bool = True, delta: int = 2
+    ) -> dict:
+        ...
+
+    def get_content_under_limit_token_balanced(
+        self, msg: dict, target_token_count: int, delta: int = 8, head_ratio: float = 0.5
+    ) -> dict:
+        ...
 
 
 class RequestContextBuilder:
@@ -35,7 +60,7 @@ class RequestContextBuilder:
     # not invalidate prompt-cache prefixes on earlier editor.read messages.
     PHASE1_KEEP_RATIO = 0.5
 
-    def __init__(self, llm: "BaseLLM"):
+    def __init__(self, llm: MessageBudgeter):
         self.llm = llm
 
     def build(
@@ -58,7 +83,7 @@ class RequestContextBuilder:
     def _compress_messages(self, messages: list[dict], compress_type: CompressType, keep_token: int) -> list[dict]:
         compressed = []
 
-        system_msg_val = self.llm._system_msg("")["role"]
+        system_msg_val = self.llm.system_role()
         system_msgs = []
         user_assistant_msgs = []
         for i, msg in enumerate(messages):
@@ -130,7 +155,6 @@ class RequestContextBuilder:
             msg_tokens.append(tokens)
 
         total_tokens = sum(msg_tokens)
-        original_total_tokens = total_tokens
         if total_tokens <= available_tokens:
             compressed.extend(user_assistant_msgs)
             return compressed
@@ -140,7 +164,6 @@ class RequestContextBuilder:
         # compressed message's bytes stable across turns — so appending new messages does
         # not invalidate prompt-cache prefixes on earlier editor.read messages.
         compressed_msgs = []
-        phase1_compressed_count = 0
 
         for i, msg in enumerate(user_assistant_msgs):
             content = msg.get("content", "")
@@ -159,7 +182,6 @@ class RequestContextBuilder:
 
             actual_tokens = self.llm.count_tokens([compacted])
             msg_tokens[i] = actual_tokens
-            phase1_compressed_count += 1
 
         # Phase 2: If still over limit, compress messages above average proportionally
         total_tokens = sum(msg_tokens)
@@ -180,7 +202,6 @@ class RequestContextBuilder:
         above_avg_total = sum(msg_tokens[i] for i in above_avg_indices)
 
         final_msgs = []
-        phase2_compressed_count = 0
         for i, msg in enumerate(compressed_msgs):
             if i not in above_avg_indices or above_avg_total <= 0:
                 final_msgs.append(msg)
@@ -193,12 +214,10 @@ class RequestContextBuilder:
             final_msgs.append(compacted)
             actual_tokens = self.llm.count_tokens([compacted])
             msg_tokens[i] = actual_tokens
-            phase2_compressed_count += 1
 
         # Phase 3 fallback: keep newest messages, drop oldest, balanced-truncate the
         # boundary message.
         total_after_phase2 = system_tokens + sum(msg_tokens)
-        phase3_dropped_count = 0
         if total_after_phase2 > keep_token:
             kept_reverse = []
             kept_tokens = system_tokens
@@ -215,9 +234,7 @@ class RequestContextBuilder:
                     truncated_tokens = self.llm.count_tokens([truncated])
                     if kept_tokens + truncated_tokens <= keep_token:
                         kept_reverse.append(truncated)
-                        phase3_dropped_count = i
                         break
-                phase3_dropped_count = i + 1
                 break
             final_msgs = list(reversed(kept_reverse))
 

@@ -33,7 +33,7 @@ from metagpt.environment.mgx.mgx_env import MGXEnv
 from metagpt.environment.registry import AgentMetadata, AgentRegistry
 from metagpt.environment.residency import Residency
 from metagpt.environment.runtime import AgentRuntime, AgentStatus
-from metagpt.environment.scheduler import EventDrivenScheduler
+from metagpt.environment.turn_scheduler import EventDrivenScheduler
 from metagpt.environment.scheduling import CronScheduler, CronService, CronTask
 from metagpt.environment.store import ResidencyStore
 from metagpt.environment.watching import FileChangeEvent, FileWatcher, FileWatchService

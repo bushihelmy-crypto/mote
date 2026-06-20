@@ -24,11 +24,13 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # serialization
     "BaseSerialization": ("serialization", "BaseSerialization"),
     # env
-    "BaseEnvActionType": ("env", "BaseEnvActionType"),
-    "BaseEnvAction": ("env", "BaseEnvAction"),
-    "BaseEnvObsType": ("env", "BaseEnvObsType"),
-    "BaseEnvObsParams": ("env", "BaseEnvObsParams"),
     "BaseEnvironment": ("env", "BaseEnvironment"),
+    # gym_env (RL/gym interface, decoupled from the orchestration core)
+    "BaseEnvActionType": ("gym_env", "BaseEnvActionType"),
+    "BaseEnvAction": ("gym_env", "BaseEnvAction"),
+    "BaseEnvObsType": ("gym_env", "BaseEnvObsType"),
+    "BaseEnvObsParams": ("gym_env", "BaseEnvObsParams"),
+    "GymEnvironment": ("gym_env", "GymEnvironment"),
     # document
     "CauseBy": ("document", "CauseBy"),
     "ActionOutput": ("document", "ActionOutput"),

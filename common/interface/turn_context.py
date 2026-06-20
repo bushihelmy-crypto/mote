@@ -5,7 +5,7 @@ on for each pluggable feed it aggregates — git status, token-pressure notes,
 background-task progress, LSP diagnostics, ... — without naming any of those
 higher layers.
 
-Mirrors ``SessionRecorder`` / ``HookRunner`` / ``FileSnapshotStore``: the bus lives in
+Mirrors ``HookRunner`` / ``FileSnapshotStore``: the bus lives in
 the low ``context`` layer and must never import ``tasks`` / ``roles``, so it
 takes this Protocol and the concrete sources (which DO live in those layers) are
 injected by ``Role``. A source's ``render`` must be best-effort: the bus guards

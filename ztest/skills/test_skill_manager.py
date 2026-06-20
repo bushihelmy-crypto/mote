@@ -54,7 +54,9 @@ class TestEnabled:
         mgr = SkillManager(["auto"])
         mgr.ensure_ready()
         content = mgr.injector.build_content()
-        assert "## Available Skills" in content
+        # An alwaysApply skill is emitted in full under Always Active Skills
+        # (not the index, which lists only on-demand model-invocable skills).
+        assert "## Always Active Skills" in content
         assert "AUTO" in content
 
     def test_idempotent_when_enabled(self, monkeypatch, builtin_dir):
@@ -116,3 +118,36 @@ class TestSourceDirs:
         mgr = SkillManager(["alpha"])
         mgr.ensure_ready()
         assert mgr.source_dirs() == [str(builtin_dir)]
+
+    def test_source_dirs_reports_all_layers(self, tmp_path):
+        low = tmp_path / "low"
+        high = tmp_path / "high"
+        low.mkdir()
+        high.mkdir()
+        mgr = SkillManager([], enabled=True, source_dirs=[low, high])
+        assert mgr.source_dirs() == [str(low), str(high)]
+
+
+class TestEnabledMasterSwitch:
+    def test_enabled_false_disables_even_with_skills(self, monkeypatch, builtin_dir):
+        write_skill(builtin_dir, "alpha")
+        _patch_builtin(monkeypatch, builtin_dir)
+        mgr = SkillManager(["alpha"], enabled=False)
+        mgr.ensure_ready()
+        assert mgr.pool is None
+        assert mgr.injector is None
+
+    def test_enabled_true_auto_discovers_all_with_empty_filter(self, builtin_dir):
+        write_skill(builtin_dir, "alpha")
+        write_skill(builtin_dir, "beta")
+        mgr = SkillManager([], enabled=True, source_dirs=[builtin_dir])
+        mgr.ensure_ready()
+        assert mgr.pool is not None
+        assert {s.name for s in mgr.pool.get_all()} == {"alpha", "beta"}
+
+    def test_enabled_true_with_filter_narrows(self, builtin_dir):
+        write_skill(builtin_dir, "alpha")
+        write_skill(builtin_dir, "beta")
+        mgr = SkillManager(["alpha"], enabled=True, source_dirs=[builtin_dir])
+        mgr.ensure_ready()
+        assert {s.name for s in mgr.pool.get_all()} == {"alpha"}

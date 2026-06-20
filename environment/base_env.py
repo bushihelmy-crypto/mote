@@ -28,7 +28,7 @@ from pydantic import ConfigDict, PrivateAttr
 from metagpt.common.logs import logger
 from metagpt.common.const import MESSAGE_ROUTE_TO_ALL
 from metagpt.common.schema import Message
-from metagpt.common.schema.env import BaseEnvAction, BaseEnvironment, BaseEnvObsParams
+from metagpt.common.schema.env import BaseEnvironment
 from metagpt.environment.control import AgentControl
 from metagpt.common.exception import AgentLimitReached, AgentNotFound
 from metagpt.environment.mailbox import DeliveryMode
@@ -162,18 +162,6 @@ class AgentEnvironment(BaseEnvironment):
     async def reply_to_human(self, content: str, sent_from: Optional[Any] = None) -> str:
         """Default: this environment has no human channel."""
         return "Not in MGXEnv, command will not be executed."
-
-    # ------------------------------------------------------------------
-    # BaseEnvironment gym-style stubs (unused by the react flow)
-    # ------------------------------------------------------------------
-    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
-        return {}, {}
-
-    def observe(self, obs_params: Optional[BaseEnvObsParams] = None) -> Any:
-        return self.role_names()
-
-    def step(self, action: BaseEnvAction):
-        return {}, 0.0, False, False, {}
 
     # ------------------------------------------------------------------
     # Internals

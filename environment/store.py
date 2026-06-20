@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from metagpt.common.disk import atomic_write, get_disk_writer
 from metagpt.common.logs import logger
 from metagpt.common.schema import MessageQueue
 from metagpt.environment.mailbox import Mailbox
@@ -135,7 +136,12 @@ class ResidencyStore:
             msg_buffer_dump=await runtime.msg_buffer.dump(),
         )
         self._base.mkdir(parents=True, exist_ok=True)
-        self._path(runtime.session_id).write_text(record.to_json(), encoding="utf-8")
+        # Atomic + ordered: a crash mid-write never leaves a half-written record
+        # (the old non-atomic write_text could corrupt it), and awaiting submit
+        # guarantees the record is on disk before this returns.
+        path = self._path(runtime.session_id)
+        data = record.to_json().encode("utf-8")
+        await get_disk_writer().submit(str(path), lambda: atomic_write(path, data))
         return record
 
     # ------------------------------------------------------------------
@@ -180,6 +186,7 @@ class ResidencyStore:
         is duck-typed without a ``state.context.messages`` list — in which case
         whatever the loader produced is left untouched.
         """
+        # replay scans via iter_raw, whose drain flushes queued rollout writes first.
         replayed = replay(self._session_log(session_id))
         if not replayed.messages:
             return

@@ -25,8 +25,6 @@ _MSG_NO_RUN_STATE = (
 )
 _MSG_NODE_NOT_FOUND = "Node '{node_name}' not found in graph. Available: {available}"
 
-_MISSING = object()
-
 
 def _as_list(val) -> list:
     if val is None:
@@ -52,7 +50,15 @@ def _format_source(source: str) -> str:
 
 
 def _consumers(graph, node_name: str) -> list[str]:
-    """Downstream params that read this node's output, e.g. ['c.in', ...]."""
+    """Downstream params that read *node_name*'s output, e.g. ['c.in', ...].
+
+    With the field/channel state model a node writes to declared state fields,
+    not to a slot named after itself. Without an explicit output-field
+    declaration we fall back to the common ``{node_name: value}`` convention:
+    a param whose ``from`` field matches the node's name is treated as a
+    consumer. If a node writes to a differently-named field this degrades to
+    not finding the link (``[]`` for that pairing).
+    """
     out: list[str] = []
     for other_name, other_def in graph._nodes.items():
         if other_name == node_name:
@@ -175,11 +181,7 @@ class GetNodeState(BaseTool):
             else:
                 block.append("  inputs: (none declared)")
 
-            out_line = f"  output: state.{n}"
-            if state is not None:
-                val = getattr(state, n, _MISSING)
-                if val is not _MISSING:
-                    out_line += f" [{type(val).__name__}]"
+            out_line = "  output: writes to state (merged into state fields)"
             consumers = _consumers(graph, n)
             if consumers:
                 out_line += f" — consumed by: {', '.join(consumers)}"

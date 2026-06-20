@@ -93,7 +93,7 @@ def test_completed_graph_pushes_node_completed_and_task_success():
     h = _Harness()
 
     async def _run():
-        g = _media_pipeline_graph(sync_node(lambda s: "video.mp4"))
+        g = _media_pipeline_graph(sync_node(lambda s: "video.mp4", field="image"))
         state = g.state_schema(x=1)
         token = set_progress_writer(h.writer())
         try:
@@ -128,7 +128,7 @@ def test_stuck_running_node_never_reports_completion():
 
     async def _run():
         gate = asyncio.Event()  # never released while we snapshot
-        g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4"))
+        g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
         state = g.state_schema(x=1)
         token = set_progress_writer(h.writer())
         try:
@@ -166,7 +166,7 @@ def test_cancelled_node_pushes_cancelled_not_success():
 
     async def _run():
         gate = asyncio.Event()  # never released → node stays running until cancelled
-        g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4"))
+        g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
         state = g.state_schema(x=1)
         run_state = GraphRunState.for_graph(g)
         token = set_progress_writer(h.writer())

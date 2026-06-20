@@ -53,3 +53,40 @@ class TestSessionRules:
             PermissionRule(tool_name="Bash", pattern="make test", behavior="allow", source="session")
         )
         assert store.resolve("Bash", "make test") == "allow"
+
+
+class TestResolveSegments:
+    def test_empty_segments_none(self):
+        assert make_store().resolve_segments("Bash", []) is None
+
+    def test_single_segment_delegates(self):
+        assert make_store().resolve_segments("Bash", ["git status"]) == "allow"
+
+    def test_deny_wins_over_allow(self):
+        # "git status" allows, "rm -rf /" denies -> the whole command denies.
+        assert make_store().resolve_segments("Bash", ["git status", "rm -rf /"]) == "deny"
+
+    def test_ask_beats_allow(self):
+        store = RuleStore.from_config(
+            PermissionConfig(allow=["Bash(git*)"], ask=["Bash(deploy*)"])
+        )
+        assert store.resolve_segments("Bash", ["git status", "deploy now"]) == "ask"
+
+    def test_all_allow_required(self):
+        # Every segment must be allowed for the command to ride an allow rule;
+        # an unmatched segment defers (None).
+        assert make_store().resolve_segments("Bash", ["git status", "ls -la"]) is None
+
+    def test_every_segment_allowed(self):
+        assert make_store().resolve_segments("Bash", ["git status", "git log"]) == "allow"
+
+    def test_deny_beats_ask(self):
+        store = RuleStore.from_config(
+            PermissionConfig(
+                allow=["Bash(git*)"], ask=["Bash(deploy*)"], deny=["Bash(rm -rf*)"]
+            )
+        )
+        assert (
+            store.resolve_segments("Bash", ["git status", "deploy x", "rm -rf /"])
+            == "deny"
+        )

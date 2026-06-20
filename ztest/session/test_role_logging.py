@@ -37,6 +37,7 @@ def test_session_log_writes_meta_first_line(role_in_tmp):
 @pytest.mark.asyncio
 async def test_context_manager_messages_are_recorded(role_in_tmp):
     await role_in_tmp.context_manager.add(UserMessage(content="persist me"))
+    # iter_raw() drains queued log writes before reading them back.
     records = list(role_in_tmp.session_log.iter_raw())
     types = [r["type"] for r in records]
     assert "message" in types
@@ -110,5 +111,6 @@ async def test_resume_does_not_re_record_replayed_history(tmp_path, monkeypatch)
 
     from metagpt.session.log import SessionLog
 
+    # iter_raw() drains queued log writes before reading them back.
     msgs = [r for r in SessionLog(sid, base_dir=str(tmp_path)).iter_raw() if r["type"] == "message"]
     assert [m["payload"]["content"] for m in msgs] == ["one", "two"]

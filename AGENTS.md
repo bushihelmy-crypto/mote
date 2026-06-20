@@ -22,7 +22,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 - 子系统已收敛进所属层：`skills/` 在 `context/skills/`，`tasks/` 在 `executor/tasks/`（含 `bggraph/` DAG），二者不再是顶层包。
 - `common/` 是叶子，永不 import 任何上层。
 - 低层要用高层能力时，**走 `common/interface/` 里的 Protocol**（`@runtime_checkable`），由高层在装配期注入实例。新增跨层能力 = 先在 `common/interface/` 定义 Protocol，再让高层实现并注入，**不要直接 import**。
-- 典型例子：`context` 要记录会话 → 依赖 `SessionRecorder` Protocol，由 `roles` 注入 `session` 的实现；`executor` 要通知 LSP → 依赖 `LspNotifier`；`executor` 文件改写 → 依赖 `FileSnapshotStore`。
+- 典型例子：`executor` 要通知 LSP → 依赖 `LspNotifier`；`executor` 文件改写 → 依赖 `FileSnapshotStore`。（会话记录走另一条路：`context` 只往 `common/events` 的 EventBus 发事件，`RecorderSubscriber` 落盘，不经 Protocol。）
 - `session` 虽被 `roles`/`environment` 消费，但自身只依赖 `common`，故归在低层。
 - `environment → session` 可在模块加载期直接 import（无环）；`environment → roles` 必须惰性 import 打破环。
 - 写新源（turn_context source）这类低层组件时，若要 import 高层（如 `executor/tasks`），**把实现放到那个高层包里**（如 `BackgroundTaskContextSource` 放在 `executor/tasks/` 而非 `context/turn_context/`），守住分层。

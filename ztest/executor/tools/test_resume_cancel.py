@@ -29,10 +29,11 @@ class SimpleState(GraphState):
     x: int = 0
 
 
-def sync_node(fn):
+def sync_node(fn, *, field=None):
     async def node(state):
         async def submit():
-            return fn(state)
+            result = fn(state)
+            return {field: result} if field is not None else result
         return Stage(submit=submit())
     return node
 
@@ -54,8 +55,8 @@ def pool():
 def _build_linear_graph():
     """a → b → END. a doubles x, b adds 10."""
     g = BgGraph("linear", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x * 2))
-    g.add_node("b", sync_node(lambda s: s.a + 10))
+    g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
+    g.add_node("b", sync_node(lambda s: s.a + 10, field="b"))
     g.add_edge(START, "a")
     g.add_edge("a", "b")
     g.add_edge("b", END)
@@ -65,7 +66,7 @@ def _build_linear_graph():
 def _build_failing_graph():
     """a succeeds, b always fails."""
     g = BgGraph("failing", state_schema=SimpleState, recursion_limit=10)
-    g.add_node("a", sync_node(lambda s: s.x * 2))
+    g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node("b", boom_node())
     g.add_edge(START, "a")
     g.add_edge("a", "b")
@@ -132,7 +133,7 @@ class TestResumeTasks:
         setattr(meta.state_snapshot, "a", 10)  # a completed with x*2=10
 
         # Now fix node b to succeed
-        g._nodes["b"].fn = sync_node(lambda s: s.a + 100)
+        g._nodes["b"].fn = sync_node(lambda s: s.a + 100, field="b")
 
         tool = _make_resume_tool(pool)
         result = await tool.call(task_id=tid, from_node="b")
@@ -160,7 +161,7 @@ class TestResumeTasks:
         # retry_count starts at 0, max_restarts=1, first resubmit sets retry_count=1
         # Then trying again should be blocked
         # First resume should work (retry_count=0 < max_restarts=1)
-        g._nodes["b"].fn = sync_node(lambda s: 42)
+        g._nodes["b"].fn = sync_node(lambda s: 42, field="b")
         result = await tool.call(task_id=tid, from_node="b")
         assert "resumed" in result.lower()
         await pool.wait_all()
@@ -209,7 +210,7 @@ class TestResumeTasks:
         # but x should still be updated on state
         tool = _make_resume_tool(pool)
         # Make b succeed (reads state.a + 10)
-        g._nodes["b"].fn = sync_node(lambda s: s.a + 10)
+        g._nodes["b"].fn = sync_node(lambda s: s.a + 10, field="b")
         result = await tool.call(task_id=tid, from_node="b", overrides={"x": 99})
         assert "resumed" in result.lower()
 
@@ -224,9 +225,9 @@ class TestResumeTasks:
         skipping b) would run c with a missing input, so the tool rejects it.
         """
         g = BgGraph("chain", state_schema=SimpleState, recursion_limit=10)
-        g.add_node("a", sync_node(lambda s: s.x * 2))
+        g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
         g.add_node("b", boom_node())
-        g.add_node("c", sync_node(lambda s: 1), params={"in": {"from": "b"}})
+        g.add_node("c", sync_node(lambda s: 1, field="c"), params={"in": {"from": "b"}})
         g.add_edge(START, "a")
         g.add_edge("a", "b")
         g.add_edge("b", "c")
@@ -247,7 +248,7 @@ class TestResumeTasks:
             await tool.call(task_id=tid, from_node="c")
 
         # Re-running b alongside c satisfies the dependency — no longer infeasible.
-        g._nodes["b"].fn = sync_node(lambda s: s.a + 10)
+        g._nodes["b"].fn = sync_node(lambda s: s.a + 10, field="b")
         result = await tool.call(task_id=tid, from_node=["b", "c"])
         assert "resumed" in result.lower()
 
@@ -266,7 +267,7 @@ class TestResumeTasks:
         assert meta.state_snapshot is not None  # captured on failure
 
         tool = _make_resume_tool(pool)
-        g._nodes["b"].fn = sync_node(lambda s: s.a + 1)
+        g._nodes["b"].fn = sync_node(lambda s: s.a + 1, field="b")
         with pytest.raises(ToolError, match="Unknown override key"):
             await tool.call(task_id=tid, from_node="b", overrides={"bogus": 1})
 

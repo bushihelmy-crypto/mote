@@ -1,17 +1,17 @@
-"""Centralized Langfuse integration — code-noninvasive, default-off.
+"""Centralized Langfuse activation — code-noninvasive, default-off.
 
 All langfuse imports are lazy (inside functions) so the framework runs without
-langfuse installed when tracing is disabled. The public surface is thin helpers
-used at the integration points:
+langfuse installed when tracing is disabled. This module now owns only
+*activation*: it reads config, sets the ``LANGFUSE_*`` env vars, constructs the
+client, and exposes the enabled / step-tracing flags.
 
-- ``maybe_trace(session_id, name, **attrs)``: contextmanager creating a root
-  span for one role run with session propagation; ``nullcontext`` when disabled.
-- ``maybe_span(name, **attrs)``: contextmanager for a child span (think/act/
-  tool); ``nullcontext`` when disabled or ``trace_steps`` is off.
-- ``maybe_generation(model, messages, **attrs)``: contextmanager for a single
-  LLM generation (the proper Langfuse observation type for model calls).
-  Records model, input messages, and — on exit — output and usage. Used by
-  ``BaseLLM`` as a unified instrumentation hook for all providers.
+Instrumentation moved onto the spine: spans are emitted by the framework-native
+``span`` contextmanager (:mod:`metagpt.common.events.trace`) as
+``SpanStart``/``SpanEnd`` events, and LLM generations as request/response/error
+events. A backend-agnostic :class:`~metagpt.common.observability.tracing.TracingSubscriber`
+rebuilds the trace tree from explicit IDs and drives a pluggable
+:class:`~metagpt.common.observability.tracing.TracerBackend`
+(:class:`~metagpt.common.observability.langfuse_backend.LangfuseBackend` today).
 
 Activation is idempotent via ``init_langfuse``, called once from Config's
 model_validator so env/client are ready before any LLM client is built.
@@ -19,7 +19,6 @@ model_validator so env/client are ready before any LLM client is built.
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING
 
 from metagpt.common.logs import logger
@@ -74,93 +73,11 @@ def is_enabled() -> bool:
     return _ENABLED
 
 
-def steps_enabled() -> bool:
-    return _ENABLED and _STEPS_ENABLED
+def step_tracing_enabled() -> bool:
+    """Whether per-step spans (think/act/tool) should be exported.
 
-
-@contextmanager
-def maybe_trace(session_id: str, name: str, **attrs):
-    """Root span for a single role run, with session propagation.
-
-    Zero-cost ``nullcontext`` when tracing is disabled.
+    Read by the bus wiring to seed :class:`TracingSubscriber.trace_steps`, which
+    applies the knob at the exporter boundary (root span + generations always
+    export; non-root step spans are skipped when this is off).
     """
-    if not _ENABLED:
-        with nullcontext():
-            yield
-        return
-
-    from langfuse import get_client
-
-    client = get_client()
-    with client.start_as_current_observation(as_type="span", name=name) as span:
-        try:
-            client.update_current_trace(session_id=session_id)
-        except Exception:  # noqa: BLE001 - propagation is best-effort
-            pass
-        if attrs:
-            try:
-                span.update(metadata=attrs)
-            except Exception:  # noqa: BLE001
-                pass
-        yield
-
-
-@contextmanager
-def maybe_span(name: str, **attrs):
-    """Child span for think/act/tool steps.
-
-    Zero-cost ``nullcontext`` when tracing or step-tracing is disabled.
-    """
-    if not (_ENABLED and _STEPS_ENABLED):
-        with nullcontext():
-            yield
-        return
-
-    from langfuse import get_client
-
-    client = get_client()
-    with client.start_as_current_observation(as_type="span", name=name) as span:
-        if attrs:
-            try:
-                span.update(input=attrs)
-            except Exception:  # noqa: BLE001
-                pass
-        yield
-
-
-@contextmanager
-def maybe_generation(model: str, input_messages: list | None = None, **attrs):
-    """LLM generation observation — the unified instrumentation hook for BaseLLM.
-
-    Creates a Langfuse ``generation`` observation (the correct type for model
-    calls, recording model name, input, output, and usage). The yielded object
-    exposes a ``.update()`` method that the caller uses to report output and
-    usage after the completion returns. When tracing is disabled the yielded
-    object is a no-op stub.
-
-    Usage in BaseLLM::
-
-        with maybe_generation(self.model, messages) as gen:
-            rsp = await self._achat_completion(messages, ...)
-            gen.update(output=..., usage=...)
-    """
-
-    class _NoOp:
-        """Stub yielded when tracing is disabled — all methods are silent no-ops."""
-
-        def update(self, **_kwargs):
-            pass
-
-    if not _ENABLED:
-        yield _NoOp()
-        return
-
-    from langfuse import get_client
-
-    client = get_client()
-    with client.start_as_current_observation(as_type="generation", name=f"llm:{model}") as gen:
-        try:
-            gen.update(model=model, input=input_messages, metadata=attrs or None)
-        except Exception:  # noqa: BLE001
-            pass
-        yield gen
+    return _STEPS_ENABLED

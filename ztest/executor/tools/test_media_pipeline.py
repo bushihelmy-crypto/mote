@@ -410,7 +410,7 @@ class TestSummarizePollResults:
 class TestRenderGateAggregation:
     async def _run(self, state):
         stage = await render_gate_node(state)
-        return await stage.submit
+        return (await stage.submit)["render_gate_out"]
 
     async def test_aggregates_artifacts_and_failures(self):
         state = MediaPipelineState()
@@ -650,7 +650,7 @@ class TestFfmpegComposer:
         stage = await promo_node(state)
         submit_result = await stage.submit
         assert submit_result["status"] == "running"
-        result = await stage.poll(submit_result)
+        result = (await stage.poll(submit_result))["promo_out"]
         assert result["status"] == "success", result.get("error")
         expected = tmp_path / "promo-1920x1080.mp4"
         assert expected.exists() and expected.stat().st_size > 0

@@ -41,7 +41,8 @@ from metagpt.common.exception import (
 )
 from metagpt.common.const import USE_CONFIG_TIMEOUT
 from metagpt.common.logs import log_llm_stream, logger
-from metagpt.router.llm.base_llm import BaseLLM
+from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
+from metagpt.router.llm.credentials import CredentialRotationMixin
 from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
 from metagpt.router.llm.llm_provider_registry import register_provider
 from metagpt.common.utils.common import CodeParser, decode_image, log_and_reraise
@@ -52,6 +53,14 @@ from metagpt.common.utils.token_counter import (
     count_string_tokens,
     get_max_completion_tokens,
 )
+
+# Models that reject standard chat params. Keyed by model name → the set of
+# request kwargs to drop. Data-driven so adding a model is a table edit, not a
+# new ``if self.model == ...`` branch in ``_cons_kwargs``.
+_UNSUPPORTED_REQUEST_PARAMS: dict[str, frozenset] = {
+    "gpt-5": frozenset({"max_tokens", "temperature"}),  # GPT-5: only default temperature, no max_tokens
+    "claude-opus-4-8": frozenset({"temperature"}),  # claude-opus-4-8: only default temperature
+}
 
 
 @register_provider(
@@ -66,7 +75,7 @@ from metagpt.common.utils.token_counter import (
         LLMType.SILICONFLOW,
     ]
 )
-class OpenAILLM(BaseLLM):
+class OpenAILLM(CredentialRotationMixin, BaseLLM):
     """Check https://platform.openai.com/examples for examples"""
 
     def __init__(self, config: LLMConfig):
@@ -80,26 +89,13 @@ class OpenAILLM(BaseLLM):
         self.model = self.config.model  # Used in _calc_usage & _cons_kwargs
         self.max_completion_token = self.config.max_token
         self.pricing_plan = self.config.pricing_plan or self.model
-        # Normalize api_key into a rotatable list; index points at the active key.
-        keys = self.config.api_key
-        self._api_keys: list[str] = list(keys) if isinstance(keys, list) else [keys]
-        self._api_key_index: int = 0
-        # Opt-in OAuth: when configured, the bearer token comes from the OAuth
-        # manager (proactive-refresh) instead of the static api_key list.
-        self._oauth = self._build_oauth_manager()
-        kwargs = self._make_client_kwargs()
-        self.aclient = AsyncOpenAI(**kwargs)
+        # Normalize credentials (api_key list / OAuth) via the shared mixin, then
+        # build the client from the active one.
+        self._init_credentials()
+        self.aclient = self._rebuild_client()
 
-    def _build_oauth_manager(self):
-        """Construct an OAuthManager when ``config.oauth`` is set, else None."""
-        if not getattr(self.config, "oauth", None):
-            return None
-        from metagpt.router.oauth import OAuthManager
-
-        return OAuthManager(self.config.oauth)
-
-    def _current_api_key(self) -> str:
-        return self._api_keys[self._api_key_index]
+    def _rebuild_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(**self._make_client_kwargs())
 
     def _make_client_kwargs(self) -> dict:
         if self._oauth is not None:
@@ -117,28 +113,6 @@ class OpenAILLM(BaseLLM):
 
         return kwargs
 
-    def rotate_credential(self) -> bool:
-        """Advance to the next configured API key and rebuild the client.
-
-        Consumed by the recovery loop on ROTATE_CREDENTIAL (auth/billing errors).
-        Returns False when no further key remains (rotation exhausted).
-
-        In OAuth mode, "rotation" means force-refreshing the bearer token: a new
-        token rebuilds the client and returns True; a permanently failed refresh
-        returns False.
-        """
-        if self._oauth is not None:
-            token = self._oauth.force_refresh()
-            if token is None:
-                return False
-            self.aclient = AsyncOpenAI(**self._make_client_kwargs())
-            return True
-        if self._api_key_index + 1 >= len(self._api_keys):
-            return False
-        self._api_key_index += 1
-        self.aclient = AsyncOpenAI(**self._make_client_kwargs())
-        return True
-
     def _get_proxy_params(self) -> dict:
         params = {}
         if self.config.proxy:
@@ -147,6 +121,23 @@ class OpenAILLM(BaseLLM):
                 params["base_url"] = self.config.base_url
 
         return params
+
+    def _extract_stream_usage(self, chunk, choice=None) -> Optional[CompletionUsage]:
+        """Pull usage off a streaming chunk across provider shapes.
+
+        Chunk-level usage covers OpenAI/Fireworks/OpenRouter; choice-level usage
+        covers Moonshot. Handles dict-vs-object forms and returns ``None`` when the
+        chunk carries no usage so callers can keep an earlier value
+        (``usage = self._extract_stream_usage(...) or usage``).
+        """
+        chunk_usage = getattr(chunk, "usage", None)
+        if chunk_usage:
+            return CompletionUsage(**chunk_usage) if isinstance(chunk_usage, dict) else chunk_usage
+        target = choice if choice is not None else (chunk.choices[0] if getattr(chunk, "choices", None) else None)
+        choice_usage = getattr(target, "usage", None) if target is not None else None
+        if choice_usage:
+            return CompletionUsage(**choice_usage) if isinstance(choice_usage, dict) else choice_usage
+        return None
 
     async def _achat_completion_stream(
         self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, raise_if_empty: bool = True
@@ -161,23 +152,9 @@ class OpenAILLM(BaseLLM):
             )
             async for chunk in response:
                 chunk_message = chunk.choices[0].delta.content or "" if chunk.choices else ""  # extract the message
-                finish_reason = (
-                    chunk.choices[0].finish_reason
-                    if chunk.choices and hasattr(chunk.choices[0], "finish_reason")
-                    else None
-                )
                 log_llm_stream(chunk_message)
                 collected_messages.append(chunk_message)
-                if finish_reason:
-                    if hasattr(chunk, "usage"):
-                        # Some services have usage as an attribute of the chunk, such as Fireworks
-                        usage = CompletionUsage(**chunk.usage) if isinstance(chunk.usage, dict) else chunk.usage
-                    elif hasattr(chunk.choices[0], "usage"):
-                        # The usage of some services is an attribute of chunk.choices[0], such as Moonshot
-                        usage = CompletionUsage(**chunk.choices[0].usage)
-                    if "openrouter.ai" in self.config.base_url and hasattr(chunk, "usage") and chunk.usage is not None:
-                        # due to it get token cost from api
-                        usage = chunk.usage
+                usage = self._extract_stream_usage(chunk) or usage
         except Exception as e:
             raise classify_llm_error(e) or e
 
@@ -217,8 +194,7 @@ class OpenAILLM(BaseLLM):
             async for chunk in response:
                 if not chunk.choices:
                     # A usage-only trailer chunk (when stream_options.include_usage is on).
-                    if getattr(chunk, "usage", None):
-                        usage = chunk.usage
+                    usage = self._extract_stream_usage(chunk) or usage
                     continue
                 choice = chunk.choices[0]
                 delta = choice.delta
@@ -240,10 +216,7 @@ class OpenAILLM(BaseLLM):
                             slot["args"] += tc.function.arguments
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
-                    if getattr(chunk, "usage", None):
-                        usage = CompletionUsage(**chunk.usage) if isinstance(chunk.usage, dict) else chunk.usage
-                    elif hasattr(choice, "usage") and choice.usage:
-                        usage = CompletionUsage(**choice.usage)
+                usage = self._extract_stream_usage(chunk, choice) or usage
         except Exception as e:
             raise classify_llm_error(e) or e
 
@@ -281,12 +254,8 @@ class OpenAILLM(BaseLLM):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
-        if self.model == "gpt-5":
-            kwargs.pop("max_tokens", None)  # GPT-5 doesn't support max_tokens
-            kwargs.pop("temperature", None)  # GPT-5 doesn't support temperature, only default
-
-        if self.model == "claude-opus-4-8":
-            kwargs.pop("temperature", None)  # claude-opus-4-8 doesn't support temperature
+        for param in _UNSUPPORTED_REQUEST_PARAMS.get(self.model, frozenset()):
+            kwargs.pop(param, None)
 
         return kwargs
 
@@ -319,7 +288,7 @@ class OpenAILLM(BaseLLM):
 
     @retry(
         wait=wait_random_exponential(min=1, max=60),
-        stop=stop_after_attempt(6),
+        stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         after=after_log(logger, logger.level("WARNING").name),
         retry=retry_if_exception(is_retryable),
         retry_error_callback=log_and_reraise,
@@ -414,7 +383,7 @@ class OpenAILLM(BaseLLM):
 
     def get_choice_text(self, rsp: ChatCompletion) -> str:
         """Required to provide the first text of choice"""
-        return rsp.choices[0].message.content if rsp.choices else ""
+        return (rsp.choices[0].message.content or "") if rsp.choices else ""
 
     def get_choice_tool_calls(self, rsp: ChatCompletion) -> list[dict]:
         """Normalize OpenAI ``tool_calls`` (object form) to the agnostic list.
@@ -514,5 +483,5 @@ class OpenAILLM(BaseLLM):
     def count_tokens(self, messages: list[dict]) -> int:
         try:
             return count_message_tokens(messages, self.model)
-        except:
+        except Exception:
             return super().count_tokens(messages)

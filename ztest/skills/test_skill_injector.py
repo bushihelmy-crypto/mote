@@ -38,12 +38,12 @@ class TestBuildContentIndex:
         injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         assert "Skill Loading Guide" in injector.build_content()
 
-    def test_index_path_points_at_source_skill_md(self, builtin_dir):
-        skill_md = write_skill(builtin_dir, "alpha")
+    def test_loading_guide_points_at_skill_tool(self, builtin_dir):
+        write_skill(builtin_dir, "alpha")
         injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         content = injector.build_content()
-        # The on-demand load path points at the builtin source SKILL.md.
-        assert str(skill_md) in content
+        assert "Skill(name=" in content
+        assert "Editor.read" not in content
 
 
 class TestAlwaysActive:
@@ -90,7 +90,7 @@ class TestBuildIndex:
         write_skill(builtin_dir, "beta", description="Beta desc")
         injector = SkillInjector(pool=_pool(builtin_dir, ["alpha", "beta"]))
         text = injector._build_index()
-        assert "| Skill | Description | Path |" in text
+        assert "| Skill | Description | Arguments |" in text
         assert "alpha" in text and "Alpha desc" in text
         assert "beta" in text and "Beta desc" in text
 
@@ -114,19 +114,61 @@ class TestSanitizeAndTruncate:
         assert "</system>" not in content
         assert "before" in content and "after" in content
 
-    def test_truncation_when_over_max_tokens(self, builtin_dir):
-        # Build a pool with a large always-apply skill via direct injection.
-        pool = SkillPool(builtin_dir=builtin_dir)
-        big = make_skill_def(
-            name="big", description="d", always_apply=True, instructions="word " * 5000
-        )
-        pool._skills["big"] = big
-        injector = SkillInjector(pool=pool)
-        content = injector.build_content(max_tokens=50)
-        assert "[... truncated due to token limit]" in content
-
-    def test_no_truncation_when_under_max_tokens(self, builtin_dir):
-        write_skill(builtin_dir, "auto", always_apply=True, instructions="short body")
+    def test_always_active_body_preserved_under_tight_budget(self, builtin_dir):
+        # alwaysApply bodies are preserved in full even with a tiny budget.
+        write_skill(builtin_dir, "auto", always_apply=True, instructions="KEEP THIS BODY")
         injector = SkillInjector(pool=_pool(builtin_dir, ["auto"]))
-        content = injector.build_content(max_tokens=2000)
-        assert "[... truncated due to token limit]" not in content
+        content = injector.build_content(max_tokens=5)
+        assert "KEEP THIS BODY" in content
+
+
+class TestIndexDegradation:
+    def _big_desc_pool(self, builtin_dir, n=5):
+        pool = SkillPool(builtin_dir=builtin_dir)
+        for i in range(n):
+            pool._skills[f"s{i}"] = make_skill_def(
+                name=f"s{i}", description="word " * 60, instructions="body"
+            )
+        return pool
+
+    def test_tier0_full_description_when_budget_ample(self, builtin_dir):
+        write_skill(builtin_dir, "alpha", description="A full clear description here")
+        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
+        text = injector.build_content(max_tokens=5000)
+        assert "A full clear description here" in text
+        assert "| Skill | Description | Arguments |" in text
+
+    def test_tier2_name_only_when_budget_tiny(self, builtin_dir):
+        injector = SkillInjector(pool=self._big_desc_pool(builtin_dir))
+        text = injector.build_content(max_tokens=30)
+        # Name-only tier: no table header, just bullet list of names.
+        assert "- s0" in text
+        assert "| Skill | Description | Arguments |" not in text
+
+    def test_tier1_half_description_mid_budget(self, builtin_dir):
+        # A budget between full and name-only triggers the half-description tier.
+        injector = SkillInjector(pool=self._big_desc_pool(builtin_dir, n=3))
+        full = injector._build_index(injector._index_skills(), tier=0)
+        half = injector._build_index(injector._index_skills(), tier=1)
+        assert "…" in half
+        assert len(half) < len(full)
+
+
+class TestConditionalAndHiddenExcluded:
+    def test_conditional_skill_excluded_from_index(self, builtin_dir):
+        write_skill(builtin_dir, "cond", description="Conditional", extra_meta={"paths": ["*.py"]})
+        write_skill(builtin_dir, "plain", description="Plain skill")
+        injector = SkillInjector(pool=_pool(builtin_dir, ["cond", "plain"]))
+        text = injector.build_content(max_tokens=5000)
+        assert "plain" in text
+        assert "cond" not in text
+
+    def test_disable_model_invocation_excluded(self, builtin_dir):
+        write_skill(
+            builtin_dir, "hidden", description="Hidden", extra_meta={"disable_model_invocation": True}
+        )
+        write_skill(builtin_dir, "shown", description="Shown skill")
+        injector = SkillInjector(pool=_pool(builtin_dir, ["hidden", "shown"]))
+        text = injector.build_content(max_tokens=5000)
+        assert "shown" in text
+        assert "hidden" not in text

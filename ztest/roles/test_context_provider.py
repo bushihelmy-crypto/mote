@@ -22,10 +22,9 @@ from .conftest import FakeEnv
 
 class TestThinkRequest:
     def test_dataclass_fields(self):
-        tr = ThinkRequest(req=[1], system_prompt="sys", state_data={"k": 1}, tool_specs=["t"])
+        tr = ThinkRequest(req=[1], system_prompt="sys", tool_specs=["t"])
         assert tr.req == [1]
         assert tr.system_prompt == "sys"
-        assert tr.state_data == {"k": 1}
         assert tr.tool_specs == ["t"]
 
 

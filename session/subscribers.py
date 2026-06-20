@@ -2,9 +2,15 @@
 
 Replaces ``session/recorder.py``'s ``SessionRecorder``: instead of being a sink
 injected into ``ContextManager``, it subscribes to the unified event bus and
-maps the agent's lifecycle events to ``session/events.py`` records appended to a
-:class:`SessionLog`. Screen (renderer subscriber) and disk (this) are now fed by
-the *same* event stream, so they can no longer diverge.
+maps the agent's lifecycle events (message / compaction / turn-end) to
+``session/events.py`` records appended to a :class:`SessionLog`. Screen (renderer
+subscriber) and disk (this) are now fed by the *same* event stream, so they can
+no longer diverge.
+
+The ``session_meta`` first line is **not** written here: the
+:attr:`~metagpt.roles.role_components.RoleComponents.session_log` property writes
+it when it builds the log (before this subscriber is even constructed), so meta
+has a single source of truth and this sink only appends.
 
 It runs at a **high priority** so it persists after the hook subscriber has had
 its say (a vetoed action is never recorded as having happened).
@@ -20,16 +26,16 @@ from typing import Optional
 
 from metagpt.common.events.types import (
     CompactionCheckpointEvent,
+    LLMResponseEvent,
     MessageAppendedEvent,
-    SessionStartEvent,
     TurnEndEvent,
 )
 from metagpt.common.hook.types import HookOutcome
 from metagpt.common.logs import log_class, logger
 from metagpt.session.events import (
     CompactedEvent,
+    LLMCallEvent,
     MessageEvent,
-    SessionMetaEvent,
     TurnContextEvent,
 )
 from metagpt.session.log import SessionLog
@@ -57,6 +63,20 @@ class RecorderSubscriber:
             if isinstance(event, MessageAppendedEvent):
                 if event.message is not None:
                     self._log.append(MessageEvent(message=event.message))
+            elif isinstance(event, LLMResponseEvent):
+                # Compact per-request telemetry: token usage + cost only (the
+                # prompt/completion already land as message records). Skip the
+                # no-usage placeholder calls so the rollout isn't polluted.
+                if event.usage is not None:
+                    self._log.append(
+                        LLMCallEvent(
+                            request_id=event.request_id,
+                            model=event.model,
+                            usage=event.usage,
+                            cost_usd=event.cost_usd,
+                            latency_ms=event.latency_ms,
+                        )
+                    )
             elif isinstance(event, CompactionCheckpointEvent):
                 self._log.append(
                     CompactedEvent(messages=list(event.messages), summary=event.summary or "")
@@ -70,20 +90,12 @@ class RecorderSubscriber:
                         token_state=event.token_state,
                     )
                 )
-            elif isinstance(event, SessionStartEvent):
-                # First-line metadata; no-ops when the log already exists
-                # (restart / resume never re-writes meta).
-                self._log.create(
-                    SessionMetaEvent(
-                        session_id=event.session_id,
-                        parent_session_id=event.parent_session_id,
-                        working_dir=event.working_dir,
-                        original_working_dir=event.original_working_dir,
-                        project_root=event.project_root,
-                        model=event.model,
-                        role_class=event.role_class,
-                    )
-                )
+                # Durability checkpoint: flush this turn's queued writes to disk
+                # so the rollout is complete at the turn boundary (a crash before
+                # the next turn loses only an in-progress, unfinished turn).
+                from metagpt.common.disk import get_disk_writer
+
+                await get_disk_writer().drain()
         except Exception as exc:  # noqa: BLE001 — logging must not break a turn
             logger.warning(f"RecorderSubscriber: failed to record {getattr(event, 'name', '?')}: {exc}")
         return None

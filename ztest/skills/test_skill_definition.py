@@ -105,3 +105,66 @@ class TestDescriptionMaxLength:
     def test_over_max_length_raises(self):
         with pytest.raises(ValidationError):
             SkillDefinition(name="x", description="d" * 1025)
+
+
+class TestExtendedFrontmatter:
+    def test_new_fields_default(self):
+        s = SkillDefinition(name="x", description="d")
+        assert s.when_to_use == ""
+        assert s.context == "inline"
+        assert s.allowed_tools == []
+        assert s.model == ""
+        assert s.effort == ""
+        assert s.argument_hint == ""
+        assert s.disable_model_invocation is False
+        assert s.paths == []
+
+    def test_context_fork_accepted(self):
+        s = SkillDefinition(name="x", description="d", context="fork")
+        assert s.context == "fork"
+
+    def test_context_invalid_falls_back_to_inline(self):
+        s = SkillDefinition(name="x", description="d", context="bogus")
+        assert s.context == "inline"
+
+    def test_context_none_falls_back_to_inline(self):
+        s = SkillDefinition(name="x", description="d", context=None)
+        assert s.context == "inline"
+
+    def test_explicit_fields(self):
+        s = SkillDefinition(
+            name="x",
+            description="d",
+            when_to_use="when making PDFs",
+            context="fork",
+            allowed_tools=["Read", "Write"],
+            model="claude-opus-4-6",
+            effort="high",
+            argument_hint="<topic>",
+            disable_model_invocation=True,
+            paths=["**/*.pdf"],
+        )
+        assert s.when_to_use == "when making PDFs"
+        assert s.allowed_tools == ["Read", "Write"]
+        assert s.model == "claude-opus-4-6"
+        assert s.effort == "high"
+        assert s.argument_hint == "<topic>"
+        assert s.disable_model_invocation is True
+        assert s.paths == ["**/*.pdf"]
+
+
+class TestActivationPatterns:
+    def test_merges_paths_and_globs_deduped(self):
+        s = SkillDefinition(
+            name="x", description="d", paths=["a", "b"], globs=["b", "c"]
+        )
+        assert s.activation_patterns == ["a", "b", "c"]
+
+    def test_empty_when_no_patterns(self):
+        s = SkillDefinition(name="x", description="d")
+        assert s.activation_patterns == []
+        assert s.is_conditional is False
+
+    def test_is_conditional_with_paths(self):
+        assert SkillDefinition(name="x", description="d", paths=["*.py"]).is_conditional
+        assert SkillDefinition(name="x", description="d", globs=["*.py"]).is_conditional

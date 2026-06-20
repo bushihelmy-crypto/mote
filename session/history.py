@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from metagpt.session.events import FILE_SNAPSHOT
+from metagpt.session.events import FileSnapshotEvent, parse_event
 from metagpt.session.log import SessionLog
 from metagpt.session.snapshot import make_blob_store
 
@@ -60,24 +60,21 @@ def file_history(log: SessionLog) -> Dict[str, List[SnapshotEntry]]:
     """
     history: Dict[str, List[SnapshotEntry]] = {}
     for record in log.iter_raw():
-        if record.get("type") != FILE_SNAPSHOT:
+        event = parse_event(record)
+        if not isinstance(event, FileSnapshotEvent) or not event.path:
             continue
-        payload = record.get("payload") or {}
-        path = payload.get("path")
-        if not path:
-            continue
-        bucket = history.setdefault(path, [])
+        bucket = history.setdefault(event.path, [])
         bucket.append(
             SnapshotEntry(
-                path=path,
-                operation=payload.get("operation", "update"),
-                pre_hash=payload.get("pre_hash"),
-                pre_size=payload.get("pre_size", 0),
-                display_path=payload.get("display_path") or path,
-                tool=payload.get("tool", ""),
+                path=event.path,
+                operation=event.operation,
+                pre_hash=event.pre_hash,
+                pre_size=event.pre_size,
+                display_path=event.display_path or event.path,
+                tool=event.tool,
                 ts=record.get("ts", ""),
                 index=len(bucket),
-                backend=payload.get("backend", "blob"),
+                backend=event.backend,
             )
         )
     return history
@@ -108,6 +105,8 @@ def diff_snapshot(log: SessionLog, path: str, *, index: int = -1) -> str:
     if entry.pre_hash is None:
         before = b""  # file did not exist before this mutation (a create)
     else:
+        # ``_entry_at`` already scanned the log via ``iter_raw``, whose drain
+        # barrier flushed any queued blob writes — the blob is on disk now.
         before = _blobs_for(log, entry.backend).get(entry.pre_hash) or b""
 
     try:
@@ -149,6 +148,7 @@ def restore(log: SessionLog, path: str, *, index: int = -1) -> bool:
             pass
         return True
 
+    # ``_entry_at`` scanned via ``iter_raw`` (drain barrier) — blob is on disk.
     content = _blobs_for(log, entry.backend).get(entry.pre_hash)
     if content is None:
         return False

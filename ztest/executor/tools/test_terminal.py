@@ -9,19 +9,25 @@ offline.
 A live terminal keeps a reader task on the event loop it was started on. In
 production a Role runs in one persistent loop; here we must drive a whole
 multi-call scenario inside ONE ``asyncio.run`` (the conftest ``run`` opens a new
-loop per call, which would orphan the reader). Each test uses a unique
-``session_id`` and tears the terminal down so the module-level ``TERMINAL``
-singleton does not leak across tests.
+loop per call, which would orphan the reader). The live session is owned by the
+per-test ``CapRole`` (stored on its ``tool_sessions``, mirroring
+``RoleState._tool_sessions``), so there is no process-global singleton to leak
+across tests; each test still tears its terminal down to free the subprocess.
 """
 from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._terminal import TERMINAL, HeadTailBuffer
+from metagpt.executor.dependency._terminal import HeadTailBuffer
 from metagpt.executor.tools.terminal import Terminal
 from metagpt.executor.tool_result import ToolError
 
 from .conftest import CapRole, bind, run
+
+
+def _has_terminal(role: CapRole) -> bool:
+    """Whether a live terminal session is stored on the (fake) Role."""
+    return role.get_tool_session("Terminal") is not None
 
 
 @pytest.fixture
@@ -44,7 +50,7 @@ class TestShort:
             # Finished -> back at prompt, no "still running" footer.
             assert "still running" not in out
         finally:
-            TERMINAL.cleanup_session("t_short1")
+            tool.cleanup_session("t_short1")
 
     def test_exit_closes_terminal(self, caprole, workspace):
         tool = bind(Terminal(), caprole, session_id="t_short2")
@@ -53,9 +59,9 @@ class TestShort:
             # `exit` ends the shell -> the terminal is torn down. (The shell's own
             # exit code isn't captured: the prompt marker never fires after exit.)
             assert "terminal exited" in out
-            assert not TERMINAL.has("t_short2")
+            assert not _has_terminal(caprole)
         finally:
-            TERMINAL.cleanup_session("t_short2")
+            tool.cleanup_session("t_short2")
 
     def test_false_returns_exit_code(self, caprole, workspace):
         tool = bind(Terminal(), caprole, session_id="t_short3")
@@ -63,7 +69,7 @@ class TestShort:
             out = run(tool.call(input="false", yield_time_ms=2000))
             assert "[exit code: 1]" in out
         finally:
-            TERMINAL.cleanup_session("t_short3")
+            tool.cleanup_session("t_short3")
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +87,7 @@ class TestPersistence:
             await tool.call(input=f"cd {sub}", yield_time_ms=2000)
             out = await tool.call(input="pwd", yield_time_ms=2000)
             assert str(sub) in out
-            TERMINAL.cleanup_session("t_cwd")
+            tool.cleanup_session("t_cwd")
 
         run(scenario())
 
@@ -92,7 +98,7 @@ class TestPersistence:
             await tool.call(input="export FOO=bar123", yield_time_ms=2000)
             out = await tool.call(input="echo $FOO", yield_time_ms=2000)
             assert "bar123" in out
-            TERMINAL.cleanup_session("t_env")
+            tool.cleanup_session("t_env")
 
         run(scenario())
 
@@ -118,7 +124,7 @@ class TestInteractive:
             done = await tool.call(input="exit()", yield_time_ms=1500)
             # Back at the shell prompt (or shell exited) — no longer "running".
             assert "still running" not in done
-            TERMINAL.cleanup_session("t_py")
+            tool.cleanup_session("t_py")
 
         run(scenario())
 
@@ -132,7 +138,7 @@ class TestInteractive:
             done = await tool.call(interrupt=True, yield_time_ms=1500)
             # Ctrl-C returns control to the shell prompt.
             assert "still running" not in done
-            TERMINAL.cleanup_session("t_int")
+            tool.cleanup_session("t_int")
 
         run(scenario())
 
@@ -160,7 +166,7 @@ class TestCloseCleanup:
             await tool.call(input="echo hi", yield_time_ms=2000)
             out = await tool.call(close=True)
             assert "terminal closed" in out
-            assert not TERMINAL.has("t_close1")
+            assert not _has_terminal(caprole)
 
         run(scenario())
 
@@ -169,9 +175,9 @@ class TestCloseCleanup:
 
         async def scenario():
             await tool.call(input="sleep 30", yield_time_ms=500)
-            assert TERMINAL.has("t_clean")
+            assert _has_terminal(caprole)
             tool.cleanup_session("t_clean")
-            assert not TERMINAL.has("t_clean")
+            assert not _has_terminal(caprole)
             tool.cleanup_session("t_clean")  # idempotent — must not raise
 
         run(scenario())
@@ -210,4 +216,4 @@ class TestHeadTailBuffer:
             )
             assert "omitted" in out
         finally:
-            TERMINAL.cleanup_session("t_big")
+            tool.cleanup_session("t_big")

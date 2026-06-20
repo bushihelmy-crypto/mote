@@ -120,7 +120,7 @@ async def test_running_agent_is_not_evicted(live, residency):
 
     with pytest.raises(AgentLimitReached) as exc:
         await residency.reserve_slot(1)
-    assert exc.value.max_threads == 1
+    assert exc.value.max_agents == 1
     # not evicted, restored as resident
     assert "worker-1" not in live.removed
     assert residency.residents() == ["worker-1"]

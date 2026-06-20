@@ -8,17 +8,24 @@ offline.
 
 A live kernel keeps its client channels on the event loop it was started on, so
 multi-call scenarios run inside ONE ``asyncio.run`` (the conftest ``run`` opens a
-fresh loop per call). Each test uses a unique ``session_id`` and tears the kernel
-down so the module-level ``KERNELS`` singleton does not leak across tests.
+fresh loop per call). The live session is owned by the per-test ``CapRole``
+(stored on its ``tool_sessions``, mirroring ``RoleState._tool_sessions``), so
+there is no process-global singleton to leak across tests; each test still tears
+its kernel down to free the subprocess.
 """
 from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._kernel import KERNELS, _cap_text, _strip_ansi
+from metagpt.executor.dependency._kernel import _cap_text, _strip_ansi
 from metagpt.executor.tools.python import Python
 
 from .conftest import CapRole, bind, run
+
+
+def _has_kernel(role: CapRole) -> bool:
+    """Whether a live kernel session is stored on the (fake) Role."""
+    return role.get_tool_session("Jupyter") is not None
 
 
 @pytest.fixture
@@ -38,7 +45,7 @@ class TestExecute:
         async def scenario():
             out = await tool.call(code="print('hello')")
             assert "hello" in out
-            await KERNELS.close("k_out")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -48,7 +55,7 @@ class TestExecute:
         async def scenario():
             out = await tool.call(code="40 + 2")
             assert "42" in out
-            await KERNELS.close("k_repr")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -59,7 +66,7 @@ class TestExecute:
             await tool.call(code="x = 100")
             out = await tool.call(code="print(x + 1)")
             assert "101" in out
-            await KERNELS.close("k_state")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -71,7 +78,7 @@ class TestExecute:
             assert "ValueError" in out
             assert "boom" in out
             assert "\x1b[" not in out  # ANSI stripped
-            await KERNELS.close("k_err")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -81,7 +88,7 @@ class TestExecute:
         async def scenario():
             out = await tool.call(code="import os; print(os.getcwd())")
             assert str(workspace) in out
-            await KERNELS.close("k_cwd")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -106,7 +113,7 @@ class TestTimeout:
             # State survived the interrupt.
             alive = await tool.call(code="print(y)")
             assert "7" in alive
-            await KERNELS.close("k_to")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -126,7 +133,7 @@ class TestControl:
             assert "restarted" in msg
             out = await tool.call(code="print('z' in dir())")
             assert "False" in out
-            await KERNELS.close("k_restart")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -137,7 +144,7 @@ class TestControl:
             await tool.call(code="pass")
             msg = await tool.call(interrupt=True)
             assert "interrupted" in msg
-            await KERNELS.close("k_int")
+            await tool.call(close=True)
 
         run(scenario())
 
@@ -160,7 +167,7 @@ class TestControl:
             await tool.call(code="a = 1")
             out = await tool.call(close=True)
             assert "kernel closed" in out
-            assert not KERNELS.has("k_close1")
+            assert not _has_kernel(caprole)
 
         run(scenario())
 
@@ -169,9 +176,9 @@ class TestControl:
 
         async def scenario():
             await tool.call(code="b = 2")
-            assert KERNELS.has("k_cleanup")
+            assert _has_kernel(caprole)
             tool.cleanup_session("k_cleanup")
-            assert not KERNELS.has("k_cleanup")
+            assert not _has_kernel(caprole)
             tool.cleanup_session("k_cleanup")  # idempotent
 
         run(scenario())

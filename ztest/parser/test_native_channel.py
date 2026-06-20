@@ -36,21 +36,31 @@ class TestContract:
     def test_provider_is_stored(self):
         assert NativeToolChannel(provider="anthropic")._provider == "anthropic"
 
-    def test_output_format_is_empty(self):
+    def test_prompt_vars_output_format_is_empty(self):
         # Native channel injects no OUTPUT prompt section.
-        assert NativeToolChannel().output_format() == ""
+        assert NativeToolChannel().prompt_vars()["output_format"] == ""
 
-    def test_command_guide_has_no_end_marker(self):
+    def test_prompt_vars_command_guide_has_no_end_marker(self):
         # Native mode ends a turn by making no tool call, so the guidance must
         # never teach the XML <end></end> marker (the model would leak it).
-        guide = NativeToolChannel().command_guide()
+        guide = NativeToolChannel().prompt_vars()["command_guide"]
         assert "# Using commands" in guide
         assert "<end>" not in guide
 
-    def test_command_hint_is_empty(self):
+    def test_prompt_vars_command_hint_is_empty(self):
         # Per-turn user-prompt hint must be empty for native: no <end></end>
         # instruction, no "ONE and ONLY ONE command block" XML framing.
-        assert NativeToolChannel().command_hint() == ""
+        assert NativeToolChannel().prompt_vars()["command_hint"] == ""
+
+    def test_prompt_vars_covers_required_keys(self):
+        from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
+
+        assert set(NativeToolChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
+
+    def test_react_result_is_plain_outputs(self):
+        # Native finishes via a plain-text reply (_finish), so the published
+        # react result keeps the outputs verbatim — no XML orchestration phrasing.
+        assert NativeToolChannel().react_result("OUT") == "OUT"
 
     def test_lower_renders_ctl_finish_without_end_marker(self):
         # The CTL_FINISH symbol must lower to a plain-English turn-end, never the

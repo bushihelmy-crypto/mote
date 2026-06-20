@@ -22,9 +22,11 @@ to a prompt. So after sending input we read until either
 This is the standard "sentinel prompt" technique used by expect-style persistent
 shells. Echo is disabled on the PTY so the typed line is not duplicated in output.
 
-A module-level singleton :data:`TERMINAL` holds the live sessions, keyed by the
-owning Role's ``session_id`` (there is no model-facing session id — one implicit
-terminal per session, like a Jupyter kernel).
+The live :class:`TerminalSession` is owned by the Role: the ``Terminal`` tool
+stores it on the Role's ``RoleState`` (one implicit terminal per session, like a
+Jupyter kernel — there is no model-facing session id) rather than in a
+process-global registry, so terminals are isolated per Role and torn down with
+it. This module owns only the engine; the per-Role lifecycle lives in the tool.
 """
 from __future__ import annotations
 
@@ -46,8 +48,6 @@ MAX_YIELD_MS = 60_000
 OUTPUT_MAX_BYTES = 1024 * 1024
 # Ctrl-C (ETX).
 INTERRUPT = "\x03"
-# Hard cap on concurrent terminals across the manager.
-MAX_TERMINALS = 64
 
 _READ_CHUNK = 65_536
 # How long start() waits for the shell's first prompt marker (ready signal).
@@ -334,67 +334,3 @@ class TerminalSession:
             except OSError:
                 pass
         self._master_fd = None
-
-
-class TerminalManager:
-    """Holds one :class:`TerminalSession` per Role ``session_id``."""
-
-    def __init__(self) -> None:
-        self._sessions: dict[str, TerminalSession] = {}
-
-    def has(self, session_key: str) -> bool:
-        return session_key in self._sessions
-
-    async def _ensure(self, session_key: str, cwd: Optional[str]) -> TerminalSession:
-        session = self._sessions.get(session_key)
-        if session is not None and not session.closed:
-            return session
-        if session is not None:
-            # Previous shell exited; drop it and start fresh.
-            session.shutdown()
-            self._sessions.pop(session_key, None)
-        if len(self._sessions) >= MAX_TERMINALS:
-            raise ToolError(f"Error: too many live terminals (max {MAX_TERMINALS}).")
-        session = TerminalSession(session_key=session_key, cwd=cwd)
-        await session.start()
-        self._sessions[session_key] = session
-        return session
-
-    async def interact(
-        self, session_key: str, cwd: Optional[str], text: str, yield_ms: int
-    ) -> tuple[str, Optional[int], bool, bool]:
-        """Type *text* into the session's terminal (creating it on first use)."""
-        session = await self._ensure(session_key, cwd)
-        result = await session.feed(text, yield_ms)
-        if result[3]:  # shell exited
-            self._sessions.pop(session_key, None)
-            session.shutdown()
-        return result
-
-    async def interrupt(
-        self, session_key: str, yield_ms: int
-    ) -> tuple[str, Optional[int], bool, bool]:
-        session = self._sessions.get(session_key)
-        if session is None or session.closed:
-            raise ToolError("Error: no live terminal to interrupt.")
-        result = await session.interrupt(yield_ms)
-        if result[3]:
-            self._sessions.pop(session_key, None)
-            session.shutdown()
-        return result
-
-    def close(self, session_key: str) -> bool:
-        """Tear down the session's terminal. Returns True if one existed."""
-        session = self._sessions.pop(session_key, None)
-        if session is None:
-            return False
-        session.shutdown()
-        return True
-
-    def cleanup_session(self, session_key: str) -> None:
-        """Terminate + remove the session's terminal (idempotent)."""
-        self.close(session_key)
-
-
-# Module-level singleton shared by the terminal tool.
-TERMINAL = TerminalManager()

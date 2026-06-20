@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from metagpt.common.events import (
+    AgentLifecycleEvent,
     EventBus,
     LLMStreamDeltaEvent,
     LogSubscriber,
@@ -141,3 +142,42 @@ async def test_async_handle_ignores_task_progress(monkeypatch):
     out = await LogSubscriber().handle(TaskProgressEvent(task_id="bg_1", stage="s", status="running"))
     assert out is None
     assert info == [] and debug == []
+
+
+# ---------------------------------------------------------------------------
+# Agent lifecycle: emitted by the runtime-level bus (control / residency)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase", ["added", "rehydrated", "evicted", "interrupted"])
+def test_agent_lifecycle_logged_via_handle_sync(monkeypatch, phase):
+    info, debug, _ = _capture(monkeypatch)
+    LogSubscriber().handle_sync(AgentLifecycleEvent(session_id="abcd1234ef", phase=phase, detail="Role"))
+    assert debug == []
+    assert len(info) == 1 and "agent_lifecycle" in info[0] and phase in info[0] and "abcd1234" in info[0]
+
+
+def test_agent_lifecycle_detail_optional(monkeypatch):
+    # No detail -> no trailing segment, but still logged at info with the phase.
+    info, debug, _ = _capture(monkeypatch)
+    LogSubscriber().handle_sync(AgentLifecycleEvent(session_id="zzzz", phase="evicted"))
+    assert debug == []
+    assert len(info) == 1 and "agent_lifecycle" in info[0] and "evicted" in info[0]
+
+
+@pytest.mark.asyncio
+async def test_async_handle_ignores_agent_lifecycle(monkeypatch):
+    # Lifecycle rides the sync fan-out; the async path must not double-log it.
+    info, debug, _ = _capture(monkeypatch)
+    out = await LogSubscriber().handle(AgentLifecycleEvent(session_id="abcd1234ef", phase="added"))
+    assert out is None
+    assert info == [] and debug == []
+
+
+def test_agent_lifecycle_via_emit_sync(monkeypatch):
+    info, _, _ = _capture(monkeypatch)
+    bus = EventBus()
+    bus.subscribe(LogSubscriber())
+    with set_bus(bus):
+        emit_event_sync(AgentLifecycleEvent(session_id="feedface", phase="added", detail="Foo"))
+    assert any("agent_lifecycle" in line and "added" in line for line in info)
