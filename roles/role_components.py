@@ -37,7 +37,13 @@ from metagpt.think.think_engine import ThinkEngine
 
 if TYPE_CHECKING:
     from metagpt.roles.role import Role
-    from metagpt.session import FileSnapshotRecorder, SessionLog
+    from metagpt.session import (
+        BrowserStateRecorder,
+        FileSnapshotRecorder,
+        KernelStateRecorder,
+        SessionLog,
+        TerminalStateRecorder,
+    )
 
 
 class RoleComponents:
@@ -58,12 +64,17 @@ class RoleComponents:
         self._session_log = None
         self._event_bus = None
         self._file_snapshot_recorder = None
+        self._terminal_state_recorder = None
+        self._kernel_state_recorder = None
+        self._browser_state_recorder = None
         self._hook_manager = None
         self._lsp_service = None
         self._diagnostics_buffer = None
         self._compaction_notice = None
         self._file_watch_service = None
         self._turn_context_bus = None
+        self._sandbox_runtime = None
+        self._resource_guard = None
         # Wake callback for bg-task completions, set by the scheduler/REPL via
         # ``set_task_completion_wake``. Stored here because that call can land
         # before the background pool is built; the builder passes it to the pool
@@ -237,8 +248,13 @@ class RoleComponents:
         concise log line per semantic event (event-level trace complementing the
         method-level ``@log_class``). The :class:`LspService` (opt-in) subscribes
         to ``FileMutatedEvent`` to sync edited docs + collect diagnostics.
-        Subscribers run in priority order (hooks early so a veto folds before the
-        recorder persists; the logger last).
+
+        The bus classifies each subscriber by capability, not by this call order:
+        the :class:`HookSubscriber` exposes ``handle_control`` so it lands on the
+        **control plane** (phase 1, awaited inline, folds a veto *before* any
+        observer runs); every other subscriber is an **observer** (phase 2,
+        fanned out, return ignored). Within each plane subscribers run in
+        ascending ``priority`` (the recorder before the logger).
         """
         if self._event_bus is None:
             self._event_bus = self._build_event_bus()
@@ -330,6 +346,63 @@ class RoleComponents:
         return self._file_snapshot_recorder
 
     @property
+    def terminal_state_recorder(self) -> "TerminalStateRecorder":
+        """Persistent-terminal state sink (lazy-init), shared with the rollout log.
+
+        Reuses the same :class:`SessionLog` as :attr:`session_log` so the
+        terminal-state event interleaves with the session's other events.
+        ``enabled`` follows the schema flag ``record_terminal_state`` (default
+        True) so it can be turned off per role.
+        """
+        if self._terminal_state_recorder is None:
+            from metagpt.session import TerminalStateRecorder
+
+            self._terminal_state_recorder = TerminalStateRecorder(
+                self.session_log,
+                enabled=self._role.role_schema.record_terminal_state,
+            )
+        return self._terminal_state_recorder
+
+    @property
+    def kernel_state_recorder(self) -> "KernelStateRecorder":
+        """Persistent-kernel state sink (lazy-init), shared with the rollout log.
+
+        The Python sibling of :attr:`terminal_state_recorder`. Reuses the same
+        :class:`SessionLog` as :attr:`session_log` so the kernel-state event
+        interleaves with the session's other events. ``enabled`` follows the
+        schema flag ``record_kernel_state`` (default True) so it can be turned
+        off per role.
+        """
+        if self._kernel_state_recorder is None:
+            from metagpt.session import KernelStateRecorder
+
+            self._kernel_state_recorder = KernelStateRecorder(
+                self.session_log,
+                enabled=self._role.role_schema.record_kernel_state,
+            )
+        return self._kernel_state_recorder
+
+    @property
+    def browser_state_recorder(self) -> "BrowserStateRecorder":
+        """Persistent-browser state sink (lazy-init), shared with the rollout log.
+
+        The browser sibling of :attr:`terminal_state_recorder`. Reuses the same
+        :class:`SessionLog` as :attr:`session_log` so the browser-state event
+        interleaves with the session's other events. ``enabled`` follows the
+        schema flag ``record_browser_state`` (default True) so it can be turned
+        off per role — relevant here because ``storage_state`` may carry session
+        cookies.
+        """
+        if self._browser_state_recorder is None:
+            from metagpt.session import BrowserStateRecorder
+
+            self._browser_state_recorder = BrowserStateRecorder(
+                self.session_log,
+                enabled=self._role.role_schema.record_browser_state,
+            )
+        return self._browser_state_recorder
+
+    @property
     def hook_manager(self):
         """Opt-in agent-lifecycle hook runner (lazy-init), or ``None``.
 
@@ -373,6 +446,52 @@ class RoleComponents:
             root = self._role.state.project_root or self._role.get_cwd()
             self._lsp_service = LspService(cfg, root)
         return self._lsp_service
+
+    @property
+    def sandbox_runtime(self):
+        """Opt-in OS-level sandbox runtime (lazy-init), or ``None``.
+
+        Built only when ``permissions.runtime`` is declared with
+        ``enabled=True``; otherwise stays ``None`` so the command-execution
+        tools (Bash / terminal / python) run un-sandboxed exactly as before
+        (same opt-in model as the LSP / hook layers). The runtime confines
+        commands with ``bwrap`` (filesystem + pid namespaces), applies process
+        hardening, and routes network through a local allowlist proxy.
+
+        Policy source: a fresh :class:`SandboxGuard` derived from the same
+        ``permissions.sandbox`` config the logical boundary uses (or a
+        permissive default when none is declared), so OS-level writable roots
+        track the logical ones.
+        """
+        if self._sandbox_runtime is None:
+            permissions = self._role.role_schema.permissions
+            cfg = permissions.runtime if permissions is not None else None
+            if cfg is None or not cfg.enabled:
+                return None
+            from metagpt.common.schema import SandboxConfig
+            from metagpt.executor.permission.sandbox import (
+                ResourceGuard,
+                SandboxGuard,
+                build_runtime,
+            )
+
+            role = self._role
+            sandbox_cfg = (permissions.sandbox if permissions is not None else None) or SandboxConfig()
+
+            def guard_factory() -> "SandboxGuard":
+                return SandboxGuard(sandbox_cfg, get_cwd=role.get_cwd)
+
+            # Hold the live resource-cap guard so an interactive session
+            # adjustment (e.g. raising the memory cap) takes effect on the next
+            # command — mirroring how the SandboxGuard backs the policy provider.
+            self._resource_guard = ResourceGuard(cfg)
+            self._sandbox_runtime = build_runtime(
+                cfg,
+                get_cwd=role.get_cwd,
+                guard_factory=guard_factory,
+                resource_guard=self._resource_guard,
+            )
+        return self._sandbox_runtime
 
     @property
     def diagnostics_buffer(self):
@@ -639,6 +758,19 @@ class RoleComponents:
     def peek_lsp_service(self):
         """The LSP service if already built, else ``None``."""
         return self._lsp_service
+
+    def peek_sandbox_runtime(self):
+        """The OS-level sandbox runtime if already built, else ``None``."""
+        return self._sandbox_runtime
+
+    def peek_resource_guard(self):
+        """The live resource-cap guard if the sandbox runtime is built, else ``None``.
+
+        Exposes the mutable :class:`ResourceGuard` so an interactive session can
+        adjust caps (``set_memory_max`` etc.); the change is read fresh by the
+        runtime on the next wrapped command.
+        """
+        return self._resource_guard
 
     def peek_file_watch_service(self):
         """The file-watch service if already built, else ``None``."""

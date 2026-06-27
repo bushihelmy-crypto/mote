@@ -23,6 +23,7 @@ from metagpt.common.exception import RecoveryAction, RecoveryRunner
 from metagpt.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
 from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
 from metagpt.executor.tasks.bggraph.channels import apply_updates
+from metagpt.executor.tasks.bggraph.marker import mark_pipeline_executor
 from metagpt.executor.tasks.bggraph.notify import (
     _MSG_RESUMING,
     _MSG_SKIPPING,
@@ -499,7 +500,9 @@ def _build_executor(graph: "BgGraph"):
             ),
         )
 
-    return executor
+    # Stamp the executor so a tool wiring it in (MediaPipeline-style) is
+    # auto-recognised as a pipeline tool — no per-tool flag to maintain.
+    return mark_pipeline_executor(executor)
 
 
 # ---------------------------------------------------------------------------

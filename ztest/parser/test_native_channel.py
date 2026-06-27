@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for :class:`metagpt.parser.native_channel.NativeToolChannel`.
 
-Covers the five protocol hooks (output_format / tool_specs / iter_commands /
+Covers the protocol hooks (prompt_vars / tool_specs / iter_commands /
 record_turn / turn_signature / is_terminal) plus the contract that this channel
 is a :class:`CommandChannel`. The think round is faked via
 :class:`FakeThinkEngine` (a real :class:`ThinkResult` behind ``done`` /
@@ -36,21 +36,12 @@ class TestContract:
     def test_provider_is_stored(self):
         assert NativeToolChannel(provider="anthropic")._provider == "anthropic"
 
-    def test_prompt_vars_output_format_is_empty(self):
-        # Native channel injects no OUTPUT prompt section.
-        assert NativeToolChannel().prompt_vars()["output_format"] == ""
-
     def test_prompt_vars_command_guide_has_no_end_marker(self):
         # Native mode ends a turn by making no tool call, so the guidance must
         # never teach the XML <end></end> marker (the model would leak it).
         guide = NativeToolChannel().prompt_vars()["command_guide"]
         assert "# Using commands" in guide
         assert "<end>" not in guide
-
-    def test_prompt_vars_command_hint_is_empty(self):
-        # Per-turn user-prompt hint must be empty for native: no <end></end>
-        # instruction, no "ONE and ONLY ONE command block" XML framing.
-        assert NativeToolChannel().prompt_vars()["command_hint"] == ""
 
     def test_prompt_vars_covers_required_keys(self):
         from metagpt.common.base.command_channel import PROMPT_VAR_KEYS

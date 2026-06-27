@@ -65,6 +65,8 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # permission_config
     "PermissionConfig": ("permission_config", "PermissionConfig"),
     "SandboxConfig": ("permission_config", "SandboxConfig"),
+    # sandbox_runtime_config
+    "SandboxRuntimeConfig": ("sandbox_runtime_config", "SandboxRuntimeConfig"),
     # permission_types
     "PermissionMode": ("permission_types", "PermissionMode"),
     "PermissionBehavior": ("permission_types", "PermissionBehavior"),

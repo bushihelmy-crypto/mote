@@ -75,6 +75,33 @@ class RoleState(SerializationMixin):
     # fields above and rides the checkpoint as usual.
     _tool_sessions: dict[str, Any] = PrivateAttr(default_factory=dict)
 
+    # Pending persistent-terminal state to restore on the next terminal start,
+    # set by ``resume_session`` from the rollout's latest TerminalStateEvent
+    # ({cwd, env, unset}). The Terminal tool consumes it once when it spins up a
+    # fresh shell (re-seeding cwd/env without re-running user commands), then it
+    # is cleared. Runtime-only: like ``_tool_sessions`` it is recomputed from the
+    # rollout on resume, never serialized into the checkpoint. Kept separate from
+    # ``_tool_sessions`` (whose values are *live session objects*) to avoid
+    # polluting that map's semantics with plain restore data.
+    _pending_terminal_restore: Optional[dict] = PrivateAttr(default=None)
+    # Pending kernel-state to restore on resume ({cwd, env, unset}), the Python
+    # sibling of ``_pending_terminal_restore``. The Python tool consumes it once
+    # when it spins up a fresh kernel (re-seeding cwd/env without re-running user
+    # code), then it is cleared. Runtime-only: recomputed from the rollout on
+    # resume, never serialized. Kept separate from ``_pending_terminal_restore``
+    # because the kernel and shell restores are independent (different processes,
+    # different restore mechanisms) and must not clobber each other.
+    _pending_kernel_restore: Optional[dict] = PrivateAttr(default=None)
+    # Pending browser-state to restore on resume ({urls, active, storage_state}),
+    # the browser sibling of ``_pending_terminal_restore``. The WebBrowser tool
+    # consumes it once when it launches a fresh browser (re-opening the saved tabs
+    # seeded with the stored session without re-running navigation/click actions),
+    # then it is cleared. Runtime-only: recomputed from the rollout on resume,
+    # never serialized. Kept separate from the terminal/kernel restores because
+    # the browser restore is independent (a different runtime, a different restore
+    # mechanism) and must not clobber the others.
+    _pending_browser_restore: Optional[dict] = PrivateAttr(default=None)
+
 
 class RoleStateController:
     """Behaviour over a :class:`RoleState` — keeps the DTO pure.
@@ -126,6 +153,30 @@ class RoleStateController:
             self._state._tool_sessions.pop(key, None)
         else:
             self._state._tool_sessions[key] = value
+
+    def get_pending_terminal_restore(self) -> Optional[dict]:
+        """Return the pending terminal-restore state ({cwd, env, unset}), else None."""
+        return self._state._pending_terminal_restore
+
+    def set_pending_terminal_restore(self, value: Optional[dict]) -> None:
+        """Stage (or clear) the terminal state to restore on next shell start."""
+        self._state._pending_terminal_restore = value
+
+    def get_pending_kernel_restore(self) -> Optional[dict]:
+        """Return the pending kernel-restore state ({cwd, env, unset}), else None."""
+        return self._state._pending_kernel_restore
+
+    def set_pending_kernel_restore(self, value: Optional[dict]) -> None:
+        """Stage (or clear) the kernel state to restore on next kernel start."""
+        self._state._pending_kernel_restore = value
+
+    def get_pending_browser_restore(self) -> Optional[dict]:
+        """Return the pending browser-restore state ({urls, active, storage_state}), else None."""
+        return self._state._pending_browser_restore
+
+    def set_pending_browser_restore(self, value: Optional[dict]) -> None:
+        """Stage (or clear) the browser state to restore on next browser launch."""
+        self._state._pending_browser_restore = value
 
     def is_active(self) -> bool:
         """Read the react-loop active signal."""

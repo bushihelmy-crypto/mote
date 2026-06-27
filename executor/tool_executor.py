@@ -41,6 +41,7 @@ from metagpt.executor.tool_registry import registry as tool_registry
 from metagpt.common.logs import log_class
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
+from metagpt.executor.tasks.bggraph.marker import is_pipeline_tool
 from metagpt.executor.mcp_adapter import MCPToolAdapter
 from metagpt.executor.tool_spec_adapter import to_native_tool_specs
 
@@ -119,7 +120,13 @@ def _failed_result(exc: Exception) -> "ToolResult":
     level="DEBUG",
     # Schema introspection getters are pure/derived and called frequently when
     # building prompts — tracing them only adds noise.
-    exclude={"get_tool_schemas", "get_mcp_tool_schemas", "get_all_tool_schemas", "get_native_tool_specs"},
+    exclude={
+        "get_tool_schemas",
+        "get_mcp_tool_schemas",
+        "get_pipeline_tool_schemas",
+        "get_all_tool_schemas",
+        "get_native_tool_specs",
+    },
 )
 class ToolExecutor(BaseToolExecutor):
     """Dispatch LLM tool calls to BaseTool instances.
@@ -454,12 +461,28 @@ class ToolExecutor(BaseToolExecutor):
         """Return True if the tool is a runtime-discovered MCP adapter."""
         return isinstance(tool, MCPToolAdapter)
 
-    def get_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for built-in (non-MCP) tools only.
+    def _is_pipeline_tool(self, tool) -> bool:
+        """Return True if the tool is backed by a compiled BgGraph pipeline."""
+        return is_pipeline_tool(tool)
 
-        Returns:
-            dict mapping primary tool name -> schema dict.
-            Deduplicates aliases so each tool appears once.
+    def _category(self, tool) -> str:
+        """Classify a tool into one of three categories.
+
+        MCP adapters and pipeline tools are runtime/graph-backed and are listed
+        in their own system-prompt sections ("# MCP Tools" / "# Pipeline
+        Tools"); everything else is a built-in command. MCP is checked first
+        since an MCP adapter never wires a compiled graph.
+        """
+        if self._is_mcp_tool(tool):
+            return "mcp"
+        if self._is_pipeline_tool(tool):
+            return "pipeline"
+        return "builtin"
+
+    def _schemas_for(self, category: str | None) -> dict[str, dict]:
+        """Collect deduplicated tool schemas.
+
+        Filters to ``category`` when given; ``None`` returns every category.
         """
         schemas: dict[str, dict] = {}
         seen_ids: set[int] = set()
@@ -467,11 +490,20 @@ class ToolExecutor(BaseToolExecutor):
             if id(tool) in seen_ids:
                 continue
             seen_ids.add(id(tool))
-            if self._is_mcp_tool(tool):
+            if category is not None and self._category(tool) != category:
                 continue
             schema = tool.tool_schema()
             schemas[schema["name"]] = schema
         return schemas
+
+    def get_tool_schemas(self) -> dict[str, dict]:
+        """Return schemas for built-in tools only (excludes MCP and pipeline).
+
+        Returns:
+            dict mapping primary tool name -> schema dict.
+            Deduplicates aliases so each tool appears once.
+        """
+        return self._schemas_for("builtin")
 
     def get_mcp_tool_schemas(self) -> dict[str, dict]:
         """Return schemas for MCP tools only.
@@ -480,34 +512,25 @@ class ToolExecutor(BaseToolExecutor):
             dict mapping namespaced tool name (server:tool) -> schema dict.
             Deduplicates aliases so each tool appears once.
         """
-        schemas: dict[str, dict] = {}
-        seen_ids: set[int] = set()
-        for tool in self._tools.values():
-            if id(tool) in seen_ids:
-                continue
-            seen_ids.add(id(tool))
-            if not self._is_mcp_tool(tool):
-                continue
-            schema = tool.tool_schema()
-            schemas[schema["name"]] = schema
-        return schemas
+        return self._schemas_for("mcp")
 
-    def get_all_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for all declared tools (built-in + MCP).
+    def get_pipeline_tool_schemas(self) -> dict[str, dict]:
+        """Return schemas for pipeline tools only (compiled-graph backed).
 
         Returns:
             dict mapping primary tool name -> schema dict.
             Deduplicates aliases so each tool appears once.
         """
-        schemas: dict[str, dict] = {}
-        seen_ids: set[int] = set()
-        for tool in self._tools.values():
-            if id(tool) in seen_ids:
-                continue
-            seen_ids.add(id(tool))
-            schema = tool.tool_schema()
-            schemas[schema["name"]] = schema
-        return schemas
+        return self._schemas_for("pipeline")
+
+    def get_all_tool_schemas(self) -> dict[str, dict]:
+        """Return schemas for all declared tools (built-in + MCP + pipeline).
+
+        Returns:
+            dict mapping primary tool name -> schema dict.
+            Deduplicates aliases so each tool appears once.
+        """
+        return self._schemas_for(None)
 
     def get_native_tool_specs(self, provider: str = "anthropic") -> list[dict]:
         """Return native tool-use specs for all declared tools (static + MCP).

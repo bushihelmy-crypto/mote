@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 from dataclasses import dataclass, field
 from string import Template
@@ -26,7 +27,6 @@ from metagpt.common.prompt.role import (
     CONSTRAINT_TEMPLATE,
     FRC_SECTION,
     LANGUAGE_SECTION,
-    MGX_INFO,
     PREFIX_TEMPLATE,
     SCRATCHPAD_SECTION,
     SUMMARIZE_TOOL_RESULTS_SECTION,
@@ -109,13 +109,17 @@ class ThinkContext:
     # ThinkInputs by build_role_prefix / build_role_info).
     role_info: str = ""
     role_prefix: str = ""
-    domain_info: str = ""
-    example: str = ""
-    instruction: str = ""
+    team_info: str = ""
 
     # Tools
     tool_info: str = ""       # built-in tools (rendered JSON for ${available_commands})
     mcp_info: str = ""        # MCP tools (rendered JSON for ${mcp_tools})
+    pipeline_info: str = ""   # pipeline tools (rendered JSON for ${pipeline_tools})
+    # Note introducing the external tool categories (MCP / pipeline). Built only
+    # for the categories actually present, and "" when neither exists — so the
+    # model is never pointed at a "# MCP Tools" / "# Pipeline Tools" section that
+    # was omitted because it was empty.
+    external_tools_note: str = ""
 
     # Environment
     env_section: str = ""
@@ -133,12 +137,11 @@ class ThinkContext:
     pipeline_section: str = ""
 
     # Protocol-specific ${placeholder} fills supplied by the active command
-    # channel's prompt_vars() — output_format (system OUTPUT block), command_guide
-    # (system "# Using commands" mechanics), command_hint (per-turn user-prompt
-    # hint). Merged into both the system and user template substitutions; each
-    # template consumes only the keys it references (safe_substitute ignores the
-    # rest). The single seam for protocol prompt sections (was three ThinkInputs
-    # fields + three collect_context override blocks). Defaults to "" for every
+    # channel's prompt_vars() — command_guide (system "# Using commands"
+    # mechanics). Merged into the system template substitutions; the template
+    # consumes only the keys it references (safe_substitute ignores the rest).
+    # The single seam for protocol prompt sections (was three ThinkInputs fields
+    # + three collect_context override blocks). Defaults to "" for every
     # PROMPT_VAR_KEYS entry when no channel is wired.
     prompt_vars: dict = field(default_factory=lambda: {k: "" for k in PROMPT_VAR_KEYS})
 
@@ -229,15 +232,26 @@ class PromptBuilder:
         return f"{role_prefix}\nYour team member:\n{team_info}"
 
     @staticmethod
+    def _section(heading: str, body: str) -> str:
+        """Render '{heading}\\n{body}', or '' when body is empty/blank.
+
+        Keeps the section heading with its content so a section with no body
+        (e.g. no MCP tools) renders nothing at all — no orphan heading.
+        """
+        if not body or not body.strip():
+            return ""
+        return f"{heading}\n{body}"
+
+    @staticmethod
     def _system_substitutions(ctx: ThinkContext) -> dict:
         """Map ThinkContext fields to the system template's $placeholders."""
         return dict(
-            role_info=ctx.role_info,
-            domain_info=ctx.domain_info,
-            available_commands=ctx.tool_info,
-            mcp_tools=ctx.mcp_info,
-            example=ctx.example,
-            instruction=ctx.instruction,
+            role_info=PromptBuilder._section("# Basic Info", ctx.role_info),
+            team_info=PromptBuilder._section("# Team", ctx.team_info),
+            available_commands=PromptBuilder._section("# Available Commands", ctx.tool_info),
+            external_tools_note=ctx.external_tools_note,
+            mcp_tools=PromptBuilder._section("# MCP Tools", ctx.mcp_info),
+            pipeline_tools=PromptBuilder._section("# Pipeline Tools", ctx.pipeline_info),
             env_section=ctx.env_section,
             skills_info=ctx.skills_info,
             memory=ctx.memory,
@@ -246,7 +260,7 @@ class PromptBuilder:
             frc=ctx.frc,
             summarize_tool_results=ctx.summarize_tool_results,
             pipeline_section=ctx.pipeline_section,
-            # output_format / command_guide (+ any future protocol section).
+            # command_guide (+ any future protocol section).
             **ctx.prompt_vars,
         )
 
@@ -254,10 +268,7 @@ class PromptBuilder:
     def _user_substitutions(ctx: ThinkContext) -> dict:
         """Map ThinkContext fields to the command template's $placeholders."""
         return dict(
-            current_state=f"current directory: {ctx.working_dir}",
-            # command_hint lives here; the system-only protocol keys merged in are
-            # harmlessly ignored by the user template (safe_substitute drops extras).
-            **ctx.prompt_vars,
+            current_state=f"current directory: {ctx.working_dir}\n{get_time_info()}",
         )
 
     @staticmethod
@@ -271,9 +282,15 @@ class PromptBuilder:
         # split point stays a real, stable boundary for future prompt-caching:
         # nothing above it contains a $placeholder, so the prefix is byte-stable.
         rendered = Template(system_tpl).safe_substitute(PromptBuilder._system_substitutions(ctx))
-        return rendered.replace(SYSTEM_PROMPT_DYNAMIC_BOUNDARY + "\n", "").replace(
+        rendered = rendered.replace(SYSTEM_PROMPT_DYNAMIC_BOUNDARY + "\n", "").replace(
             SYSTEM_PROMPT_DYNAMIC_BOUNDARY, ""
         )
+        # Inactive sections substitute to "" and leave runs of blank lines behind.
+        # Collapse any run of 3+ newlines down to a single blank line and trim the
+        # ends. This is idempotent on the already-clean static prefix (its blocks
+        # are single-blank-line separated), so the cacheable prefix stays
+        # byte-identical across turns.
+        return re.sub(r"\n{3,}", "\n\n", rendered).strip() + "\n"
 
     @staticmethod
     def _build_user_prompt(cmd_tpl: str, ctx: ThinkContext) -> str:
@@ -319,16 +336,20 @@ class PromptBuilder:
         ctx = ThinkContext()
 
         # Splice the raw inputs into the rendered identity.
-        ctx.role_prefix = PromptBuilder.build_role_prefix(inputs)
-        ctx.role_info = PromptBuilder.build_role_info(ctx.role_prefix, inputs.team_info)
-        ctx.domain_info = PromptBuilder._make_domain_info(config)
-        ctx.example = inputs.example
-        ctx.instruction = inputs.instruction.strip()
+        # role_info loads only the role's desc; empty desc => "" => _section
+        # renders nothing (no "# Basic Info" heading).
+        ctx.role_info = inputs.desc
+        # Team listing (rendered below role_info); empty => no "# Team" section.
+        ctx.team_info = inputs.team_info
 
         ctx.working_dir = inputs.working_dir
 
         ctx.tool_info = json.dumps(subsystems.executor.get_tool_schemas())
-        ctx.mcp_info = json.dumps(subsystems.executor.get_mcp_tool_schemas())
+        mcp_schemas = subsystems.executor.get_mcp_tool_schemas()
+        ctx.mcp_info = json.dumps(mcp_schemas) if mcp_schemas else ""
+        pipeline_schemas = subsystems.executor.get_pipeline_tool_schemas()
+        ctx.pipeline_info = json.dumps(pipeline_schemas) if pipeline_schemas else ""
+        ctx.external_tools_note = PromptBuilder._make_external_tools_note(ctx.mcp_info, ctx.pipeline_info)
         # The static environment block (cwd / platform / model). Git working-tree
         # state used to be appended here; it now flows through the per-turn
         # ephemeral-context bus (the turn_context layer) and lands in the user
@@ -353,12 +374,12 @@ class PromptBuilder:
         # user prompt as a <system-reminder>. None bus => "" (nothing injected).
         ctx.reminders = await PromptBuilder._make_reminders(subsystems.turn_context_bus, ctx.working_dir)
 
-        # Protocol-specific prompt sections (output_format / command_guide /
-        # command_hint) come from the active channel as ONE dict — the single
-        # source, replacing the old three-fields-on-ThinkInputs + three override
-        # blocks here. The channel object is already in subsystems (we also read
-        # its lower below), so there is no reason to pre-extract these into the
-        # pure-data ThinkInputs. None channel => the ThinkContext defaults ("").
+        # Protocol-specific prompt sections (command_guide) come from the active
+        # channel as ONE dict — the single source, replacing the old
+        # fields-on-ThinkInputs + collect_context override blocks here. The
+        # channel object is already in subsystems (we also read its lower below),
+        # so there is no reason to pre-extract these into the pure-data
+        # ThinkInputs. None channel => the ThinkContext defaults ("").
         channel = subsystems.command_channel
         if channel is not None:
             ctx.prompt_vars = channel.prompt_vars()
@@ -418,6 +439,31 @@ class PromptBuilder:
         return await turn_context_bus.collect(cwd=cwd or None)
 
     @staticmethod
+    def _make_external_tools_note(mcp_info: str, pipeline_info: str) -> str:
+        """Introduce the external tool categories that live in their own sections.
+
+        Tailored to the categories actually present (MCP / pipeline). Returns ""
+        when neither exists, so the model is never told to look for a
+        "# MCP Tools" / "# Pipeline Tools" section that was omitted as empty.
+        """
+        has_mcp = bool(mcp_info and mcp_info.strip())
+        has_pipeline = bool(pipeline_info and pipeline_info.strip())
+        if not has_mcp and not has_pipeline:
+            return ""
+        prefix = "The commands listed in `# Available Commands` above are your built-in tools; "
+        call = " Call every command directly by name with keyword arguments, regardless of category."
+        mcp_phrase = 'external MCP tools (named `server:tool_name`, e.g. "github:get_me")'
+        warn = " MCP tools connect to external services and may fail — if one does, inform the user."
+        if has_mcp and has_pipeline:
+            body = f"{mcp_phrase} and background pipeline tools are listed in their own sections below."
+            return prefix + body + call + warn
+        if has_mcp:
+            body = f"{mcp_phrase} are listed in their own section below."
+            return prefix + body + call + warn
+        body = "background pipeline tools are listed in their own section below."
+        return prefix + body + call
+
+    @staticmethod
     def _make_language(language) -> str:
         if not language:
             return ""
@@ -449,22 +495,24 @@ class PromptBuilder:
 
     @staticmethod
     def _make_pipeline_section(executor) -> str:
-        """Include DAG pipeline guidance when resume_tasks/cancel_tasks are registered."""
+        """Include the pipeline brief when pipeline tools or their controls exist.
+
+        Emitted when the role has any pipeline tool (compiled-graph backed,
+        listed under ``# Pipeline Tools``) or the ``resume_tasks`` / ``get_node_state``
+        control commands. ``get_tool_schemas`` now excludes pipeline tools, so
+        pipeline presence is read from ``get_pipeline_tool_schemas``.
+        """
         schemas = executor.get_tool_schemas()
         if isinstance(schemas, dict):
             names = set(schemas.keys())
         else:
             names = {s.get("name", "") for s in schemas} if schemas else set()
-        if not {"resume_tasks", "cancel_tasks"} & names:
+        get_pipeline = getattr(executor, "get_pipeline_tool_schemas", None)
+        has_pipeline = bool(get_pipeline()) if callable(get_pipeline) else False
+        if not has_pipeline and not ({"resume_tasks", "get_node_state"} & names):
             return ""
         from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
         return BACKGROUND_PIPELINE_SECTION
-
-    @staticmethod
-    def _make_domain_info(config) -> str:
-        return Template(MGX_INFO).safe_substitute(
-            ai_capability_models=", ".join(config.role_zero.ai_capability_models),
-        )
 
     @staticmethod
     def _make_env_section(model_name: str, working_dir: str = "", project_root=None) -> str:
@@ -473,13 +521,11 @@ class PromptBuilder:
         lines = [
             "# Environment",
             "You have been invoked in the following environment:",
-            f" - {get_time_info()}",
-            f" - Primary working directory: {cwd}",
-            f" - Project root: {root}",
             f" - Platform: {sys.platform}",
             f" - Shell: {os.environ.get('SHELL', '')}",
             f" - OS Version: {platform.platform()}",
             f" - You are powered by the model named {model_name}.",
+            f" - Project directory: {cwd}",
             "",
         ]
         return "\n".join(lines)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from string import Template
 
+from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
 from metagpt.executor.agent_registry import registry as agent_registry
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
@@ -42,31 +43,38 @@ class Agent(BaseTool):
             available = ", ".join(sorted(agent_registry.all_agents().keys()))
             return f"Error: unknown agent_type '{agent_type}'. Available: {available}"
 
-        # Agent type defines everything itself — we only pass parent session_id
-        agent = agent_cls(parent_session_id=self.session_id)
-        task_brief = Template(AGENT_TASK_PROMPT).safe_substitute(
-            parent_name=self.session_id,
-            context=context or "(no additional context)",
-            task=prompt,
+        # Agent type defines everything itself — we only pass the parent linkage.
+        # The child is born through the single spawn authority (resolved via the
+        # ambient control plane), which enforces the cap / depth / lineage and
+        # rolls its cost up to the parent. The handle always tears the child down
+        # (its own terminal/kernel PTY, LSP servers, file-watch loop — all
+        # session-scoped OS resources that leak if dropped without cleanup()).
+        def role_factory(spawn_ctx: SpawnContext):
+            return agent_cls(parent_session_id=spawn_ctx.parent_id or self.session_id)
+
+        def build_message(agent):
+            task_brief = Template(AGENT_TASK_PROMPT).safe_substitute(
+                parent_name=self.session_id,
+                context=context or "(no additional context)",
+                task=prompt,
+            )
+            # The brief carries protocol symbols (⟦...⟧); lower them through the
+            # child's own channel so it receives its protocol's surface syntax
+            # (e.g. native agents never see <end></end>). A build-time assert in
+            # the lowerer fails loudly on any unlowered symbol.
+            return UserMessage(content=agent.command_channel.lower(task_brief))
+
+        spec = SpawnSpec(
+            role_factory=role_factory,
+            nickname=agent_type,
+            agent_role=agent_type,
+            parent_id=self.session_id,
+            lifecycle=Lifecycle.EPHEMERAL,
         )
-        # The task brief carries protocol symbols (⟦...⟧); lower them through the
-        # child agent's own channel so it receives its protocol's surface syntax
-        # (e.g. native agents never see <end></end>). build-time assert in the
-        # lowerer fails loudly on any unlowered symbol rather than leaking it.
-        task_brief = agent.command_channel.lower(task_brief)
-        msg = UserMessage(content=task_brief)
-        # Always tear the child down: it may have spun up its own terminal/kernel
-        # PTY, LSP servers, or file-watch loop — session-scoped OS resources that
-        # leak if the child is dropped without cleanup() (the child has its own
-        # session_id, so this never touches the parent's resources).
-        try:
-            await agent.run(with_message=msg)
-        finally:
-            await agent.cleanup()
-        report = agent.state.last_end_output.strip()
-        if not report:
-            report = "Agent finished without a final summary."
-        return report
+        report = await spawn_and_run(spec, build_message)
+        if report is None:
+            return f"Error: could not spawn agent '{agent_type}' (agent limit reached)."
+        return report or "Agent finished without a final summary."
 
     @classmethod
     def custom_schema(cls) -> dict | None:

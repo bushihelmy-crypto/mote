@@ -203,3 +203,95 @@ class TestHelpers:
 
     def test_cap_text_short_unchanged(self):
         assert _cap_text("short") == "short"
+
+
+# ---------------------------------------------------------------------------
+# kernel-state capture / restore (session resume)
+# ---------------------------------------------------------------------------
+
+
+class TestStateCaptureRestore:
+    def test_capture_records_cwd_and_env_diff(self, caprole, workspace):
+        """After chdir + environ set, a call records (cwd, env_diff) on the Role."""
+        sub = workspace / "sub"
+        sub.mkdir()
+        tool = bind(Python(), caprole, session_id="k_cap")
+
+        async def scenario():
+            await tool.call(
+                code=(
+                    "import os\n"
+                    f"os.chdir({str(sub)!r})\n"
+                    "os.environ['CAP_FOO'] = 'cap_bar'"
+                )
+            )
+            tool.cleanup_session("k_cap")
+
+        run(scenario())
+        # Every idle call records; the last capture reflects the final state.
+        assert caprole.kernel_states, "no kernel state captured"
+        cwd, env, unset, tool_name = caprole.kernel_states[-1]
+        assert cwd == str(sub)
+        assert env.get("CAP_FOO") == "cap_bar"
+        assert tool_name == "Jupyter"
+        # Noise keys must be filtered out of the diff.
+        assert "PWD" not in env and "SHLVL" not in env and "_" not in env
+
+    def test_restore_state_reseeds_new_kernel(self, caprole, workspace):
+        """restore_state injects cwd/env into a fresh kernel (no user code rerun)."""
+        sub = workspace / "restored"
+        sub.mkdir()
+        tool = bind(Python(), caprole, session_id="k_restore")
+
+        async def scenario():
+            session = await tool._ensure_session()
+            await session.restore_state(str(sub), {"REZ_FOO": "rez_bar"}, [])
+            out = await tool.call(
+                code="import os; print(os.getcwd()); print(os.environ.get('REZ_FOO'))"
+            )
+            assert str(sub) in out
+            assert "rez_bar" in out
+            await tool.call(close=True)
+
+        run(scenario())
+
+    def test_pending_restore_applied_on_ensure_session(self, caprole, workspace):
+        """_ensure_session consumes the pending restore and re-seeds the kernel."""
+        sub = workspace / "pending"
+        sub.mkdir()
+        caprole._pending_kernel_restore = {
+            "cwd": str(sub),
+            "env": {"PEND_FOO": "pend_bar"},
+            "unset": [],
+        }
+        tool = bind(Python(), caprole, session_id="k_pending")
+
+        async def scenario():
+            await tool._ensure_session()  # applies pending restore once
+            out = await tool.call(
+                code="import os; print(os.getcwd()); print(os.environ.get('PEND_FOO'))"
+            )
+            assert str(sub) in out
+            assert "pend_bar" in out
+            # Pending state is consumed exactly once.
+            assert caprole.take_pending_kernel_restore() is None
+            await tool.call(close=True)
+
+        run(scenario())
+
+    def test_restore_value_is_reprd_no_injection(self, caprole, workspace):
+        """A value with code metacharacters is taken literally (no eval)."""
+        tool = bind(Python(), caprole, session_id="k_quote")
+
+        async def scenario():
+            session = await tool._ensure_session()
+            # repr() embeds the value as a literal — the embedded expression is
+            # never evaluated.
+            await session.restore_state("", {"INJ": "__import__('os').getcwd()"}, [])
+            out = await tool.call(
+                code="import os; print(repr(os.environ.get('INJ')))"
+            )
+            assert "__import__('os').getcwd()" in out
+            await tool.call(close=True)
+
+        run(scenario())

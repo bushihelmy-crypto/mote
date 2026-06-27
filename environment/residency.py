@@ -87,6 +87,22 @@ class Residency:
             self._pending_slots += 1
             return True
 
+    def try_reserve_sync(self, capacity: Optional[int]) -> Optional["ResidencySlot"]:
+        """Synchronous soft-reservation: a slot iff under cap (no eviction).
+
+        The synchronous twin of :meth:`reserve_slot`: it returns the same RAII
+        :class:`ResidencySlot` (so both reservation paths share one commit /
+        rollback discipline), but never awaits an async unload to make room.
+        Callable from the synchronous delivery path (``send_input`` →
+        ``_try_load_sync``) where rehydrating an evicted agent must occupy a
+        live slot. Returns a fresh slot (and ``pending++``) when ``residents +
+        pending < capacity`` (or ``capacity`` is ``None``); ``None`` when the
+        hard cap is hit and no synchronous room can be made.
+        """
+        if self._try_reserve_pending_slot(capacity):
+            return ResidencySlot(self)
+        return None
+
     async def _try_unload_one_resident(self, protected_session_id: Optional[str]) -> bool:
         candidates_to_scan = self._resident_count()
         for _ in range(candidates_to_scan):

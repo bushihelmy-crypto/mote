@@ -29,9 +29,12 @@ from typing import Dict, List, Optional
 from metagpt.common.logs import log_call
 from metagpt.common.schema import Message
 from metagpt.session.events import (
+    BrowserStateEvent,
     CompactedEvent,
+    KernelStateEvent,
     MessageEvent,
     SessionMetaEvent,
+    TerminalStateEvent,
     parse_event,
 )
 from metagpt.session.log import SessionLog
@@ -46,6 +49,18 @@ class ReplayResult:
     message_events: int = 0
     checkpoints: int = 0
     skipped: int = 0
+    #: Latest persisted persistent-terminal state ({cwd, env, unset}), or None.
+    #: Used by resume to re-seed a fresh shell without re-running user commands.
+    terminal_state: Optional[Dict] = None
+    #: Latest persisted persistent-kernel state ({cwd, env, unset}), or None.
+    #: Used by resume to re-seed a fresh kernel without re-running user code.
+    #: Independent of ``terminal_state`` (separate event stream, no clobber).
+    kernel_state: Optional[Dict] = None
+    #: Latest persisted persistent-browser state ({urls, active, storage_state}),
+    #: or None. Used by resume to re-open the same tabs (seeded with the saved
+    #: session) without re-running navigation/click actions. Independent of the
+    #: terminal/kernel state above (separate event stream, no clobber).
+    browser_state: Optional[Dict] = None
 
     @property
     def from_checkpoint(self) -> bool:
@@ -70,6 +85,32 @@ def replay(log: SessionLog) -> ReplayResult:
             result.checkpoints += 1
             # Reset to the self-contained checkpoint history.
             result.messages = list(event.messages)
+        elif isinstance(event, TerminalStateEvent):
+            # Last-write-wins: only the most recent terminal state is restored
+            # (not part of the message-history rebuild).
+            result.terminal_state = {
+                "cwd": event.cwd,
+                "env": dict(event.env),
+                "unset": list(event.unset),
+            }
+        elif isinstance(event, KernelStateEvent):
+            # Last-write-wins: only the most recent kernel state is restored
+            # (not part of the message-history rebuild). Independent of the
+            # terminal state above — both restore on resume without clobbering.
+            result.kernel_state = {
+                "cwd": event.cwd,
+                "env": dict(event.env),
+                "unset": list(event.unset),
+            }
+        elif isinstance(event, BrowserStateEvent):
+            # Last-write-wins: only the most recent browser state is restored
+            # (not part of the message-history rebuild). Independent of the
+            # terminal/kernel state above — restores on resume without clobbering.
+            result.browser_state = {
+                "urls": list(event.urls),
+                "active": event.active,
+                "storage_state": event.storage_state,
+            }
         # turn_context / meta_update / unknown: not part of the history rebuild.
     return result
 

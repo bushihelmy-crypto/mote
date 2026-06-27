@@ -10,7 +10,7 @@ on the **input** side and broadcasts diagnostics on the **output** side:
   then emit a :class:`DiagnosticsEvent` carrying any *changed* set;
 - ``shutdown()`` : tear down all servers (called on session cleanup by the Role).
 
-It is an :class:`~metagpt.common.interface.EventSubscriber` on both edges: the
+It is an :class:`~metagpt.common.interface.ObservationSubscriber` on both edges: the
 executor no longer pokes it directly (it emits a ``FileMutatedEvent`` this
 service subscribes to), and the diagnostics it produces ride the bus as a
 ``DiagnosticsEvent`` (the :class:`DiagnosticsBuffer` accumulates them for
@@ -31,9 +31,9 @@ from metagpt.roles.lsp.manager import LspServerManager
 
 
 class LspService:
-    """LSP diagnostics for one Role session; an :class:`EventSubscriber`."""
+    """LSP diagnostics for one Role session; an :class:`ObservationSubscriber`."""
 
-    # EventSubscriber priority: mid — runs before the file-watcher's late
+    # ObservationSubscriber priority: mid — runs before the file-watcher's late
     # self-write bookkeeping (90) but its ordering vs other subscribers is
     # immaterial (it only reacts to FileMutatedEvent).
     priority: int = 50

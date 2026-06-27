@@ -36,6 +36,7 @@ from metagpt.common.schema import (
     AIMessage,
     CauseBy,
     Message,
+    UserMessage,
 )
 from metagpt.context.skills.skill_manager import SkillManager
 from metagpt.parser import CommandChannel
@@ -44,7 +45,13 @@ from metagpt.executor.tasks import BackgroundTaskPool
 from metagpt.common.utils.common import any_to_str, role_raise_decorator
 
 if TYPE_CHECKING:
-    from metagpt.session import FileSnapshotRecorder, SessionLog
+    from metagpt.session import (
+        BrowserStateRecorder,
+        FileSnapshotRecorder,
+        KernelStateRecorder,
+        SessionLog,
+        TerminalStateRecorder,
+    )
 
 
 @log_class(
@@ -238,12 +245,28 @@ class Role(BaseRole):
         return self._components.file_snapshot_recorder
 
     @property
+    def terminal_state_recorder(self) -> "TerminalStateRecorder":
+        return self._components.terminal_state_recorder
+
+    @property
+    def kernel_state_recorder(self) -> "KernelStateRecorder":
+        return self._components.kernel_state_recorder
+
+    @property
+    def browser_state_recorder(self) -> "BrowserStateRecorder":
+        return self._components.browser_state_recorder
+
+    @property
     def hook_manager(self):
         return self._components.hook_manager
 
     @property
     def lsp_service(self):
         return self._components.lsp_service
+
+    @property
+    def sandbox_runtime(self):
+        return self._components.sandbox_runtime
 
     @property
     def diagnostics_buffer(self):
@@ -395,6 +418,87 @@ class Role(BaseRole):
         """
         self.file_snapshot_recorder.snapshot(full_path, tool=tool)
 
+    def record_terminal_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
+        """Record the persistent terminal's final cwd + env diff into the rollout.
+
+        Delegates to the session's :attr:`terminal_state_recorder`, which appends
+        a terminal-state event (last-write-wins) so a resumed session can re-seed
+        a fresh shell to this state — without re-running any user commands. The
+        Terminal tool calls this capability; best-effort, never raises.
+        """
+        self.terminal_state_recorder.record(cwd, env, unset, tool=tool)
+
+    def take_pending_terminal_restore(self) -> Optional[dict]:
+        """Return and clear the pending terminal-restore state ({cwd, env, unset}).
+
+        Capability surface for the Terminal tool: when it starts a fresh shell it
+        consumes the state staged by :meth:`resume_session` and re-seeds the
+        shell once. Reading clears it so the restore happens exactly once.
+        """
+        value = self._state_ctl.get_pending_terminal_restore()
+        if value is not None:
+            self._state_ctl.set_pending_terminal_restore(None)
+        return value
+
+    def record_kernel_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
+        """Record the persistent kernel's final cwd + env diff into the rollout.
+
+        The Python sibling of :meth:`record_terminal_state`. Delegates to the
+        session's :attr:`kernel_state_recorder`, which appends a kernel-state
+        event (last-write-wins) so a resumed session can re-seed a fresh kernel
+        to this state — without re-running any user code. The Python tool calls
+        this capability; best-effort, never raises.
+        """
+        self.kernel_state_recorder.record(cwd, env, unset, tool=tool)
+
+    def take_pending_kernel_restore(self) -> Optional[dict]:
+        """Return and clear the pending kernel-restore state ({cwd, env, unset}).
+
+        Capability surface for the Python tool: when it starts a fresh kernel it
+        consumes the state staged by :meth:`resume_session` and re-seeds the
+        kernel once. Reading clears it so the restore happens exactly once.
+        """
+        value = self._state_ctl.get_pending_kernel_restore()
+        if value is not None:
+            self._state_ctl.set_pending_kernel_restore(None)
+        return value
+
+    def record_browser_state(
+        self,
+        urls: list,
+        *,
+        active: int = 0,
+        storage_state: Optional[dict] = None,
+        tool: str = "",
+    ) -> None:
+        """Record the persistent browser's final tab URLs + session into the rollout.
+
+        The browser sibling of :meth:`record_terminal_state`. Delegates to the
+        session's :attr:`browser_state_recorder`, which appends a browser-state
+        event (last-write-wins) so a resumed session can re-open the same tabs
+        seeded with the saved session — without re-running any navigation/click
+        actions. The WebBrowser tool calls this capability; best-effort, never
+        raises. ``storage_state`` may carry cookies, so capture is gated by the
+        recorder's ``enabled`` flag (the role's ``record_browser_state`` schema
+        flag).
+        """
+        self.browser_state_recorder.record(
+            urls, active=active, storage_state=storage_state, tool=tool
+        )
+
+    def take_pending_browser_restore(self) -> Optional[dict]:
+        """Return and clear the pending browser-restore state.
+
+        Capability surface for the WebBrowser tool: when it launches a fresh
+        browser it consumes the state ({urls, active, storage_state}) staged by
+        :meth:`resume_session` and re-opens the saved tabs once. Reading clears
+        it so the restore happens exactly once.
+        """
+        value = self._state_ctl.get_pending_browser_restore()
+        if value is not None:
+            self._state_ctl.set_pending_browser_restore(None)
+        return value
+
     def get_skill_pool(self):
         """Return the live SkillPool, or None when skills are disabled.
 
@@ -438,11 +542,19 @@ class Role(BaseRole):
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
             "record_file_snapshot": self.record_file_snapshot,
+            "record_terminal_state": self.record_terminal_state,
+            "take_pending_terminal_restore": self.take_pending_terminal_restore,
+            "record_kernel_state": self.record_kernel_state,
+            "take_pending_kernel_restore": self.take_pending_kernel_restore,
+            "record_browser_state": self.record_browser_state,
+            "take_pending_browser_restore": self.take_pending_browser_restore,
+            "get_browser_headless": self.get_browser_headless,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
             "wait_interruptible": self.wait_interruptible,
             "get_skill_pool": self.get_skill_pool,
             "run_skill_fork": self.run_skill_fork,
+            "get_sandbox_runtime": self.get_sandbox_runtime,
         }
 
     def deactivate(self) -> None:
@@ -465,6 +577,24 @@ class Role(BaseRole):
     def get_bg_pool(self) -> BackgroundTaskPool:
         """Return the background task pool (capability surface; delegates)."""
         return self._capabilities.get_bg_pool()
+
+    def get_sandbox_runtime(self):
+        """Return the OS-level sandbox runtime, or ``None`` when not configured.
+
+        Capability surface for the command-execution tools (Bash / terminal /
+        python). ``None`` when ``permissions.runtime`` is absent/disabled, in
+        which case those tools run un-sandboxed (the historical behavior).
+        """
+        return self._components.sandbox_runtime
+
+    def get_browser_headless(self) -> bool:
+        """Return the role's ``browser_headless`` flag (True => run headless).
+
+        Capability surface for the WebBrowser tool: lets the tool launch headed
+        (a visible window) when the role opts in, without the executor layer
+        reaching into the role schema. Defaults to True (headless).
+        """
+        return self.role_schema.browser_headless
 
     async def ask_human(self, question: str) -> str:
         """Ask the human user a question and return their response.
@@ -530,6 +660,22 @@ class Role(BaseRole):
     def put_message(self, message):
         """Place the message into the Role object's private message buffer."""
         self._state_ctl.put_message(message)
+
+    async def _record_turn_context(self) -> None:
+        """Persist this turn's save_to_context turn-context block into history.
+
+        Renders the bus's persisted bucket (git status / token pressure / LSP
+        diagnostics / ... — everything not flagged ``save_to_context=False``) and,
+        when non-empty, appends it as a user message through the ContextManager so
+        it is stored in history and recorded to the durable log. Best-effort:
+        change-gated sources self-suppress, so quiet turns add nothing.
+        """
+        bus = self.turn_context_bus
+        if bus is None:
+            return
+        block = await bus.collect_to_context(cwd=self.state.working_dir or None)
+        if block:
+            await self.context_manager.add(UserMessage(content=block))
 
     def _make_loop(self) -> BaseLoop:
         """Build the react-loop strategy for one run(), injecting components.
@@ -633,6 +779,12 @@ class Role(BaseRole):
                     # alongside git status / token pressure / background-task feeds.
                     self.put_message(msg)
 
+                # Persistent turn-context: the bus sources flagged save_to_context
+                # (the default) are rendered once per turn and written into history
+                # via the ContextManager, so they survive across turns / compaction
+                # (vs the ephemeral request-only block in the user prompt).
+                await self._record_turn_context()
+
                 loop = self._make_loop()
                 try:
                     rsp = await loop.run()
@@ -698,6 +850,20 @@ class Role(BaseRole):
                 setattr(self.state, field_name, value)
 
         self.state.recovered = True
+        # Stage the latest persistent-terminal state (if any) so the Terminal
+        # tool re-seeds a fresh shell to it on first use — without re-running
+        # any of the original commands.
+        if result.terminal_state:
+            self._state_ctl.set_pending_terminal_restore(result.terminal_state)
+        # Likewise stage the latest persistent-kernel state so the Python tool
+        # re-seeds a fresh kernel to it on first use (independent of the shell).
+        if result.kernel_state:
+            self._state_ctl.set_pending_kernel_restore(result.kernel_state)
+        # Likewise stage the latest persistent-browser state so the WebBrowser
+        # tool re-opens the saved tabs (seeded with the stored session) on first
+        # use — without re-running any navigation/click actions.
+        if result.browser_state:
+            self._state_ctl.set_pending_browser_restore(result.browser_state)
         return True
 
     def fork_session(self) -> "Role":
@@ -791,6 +957,14 @@ class Role(BaseRole):
         executor = self._components.peek_executor()
         if executor is not None:
             await executor.cleanup()
+        sandbox_runtime = self._components.peek_sandbox_runtime()
+        if sandbox_runtime is not None:
+            try:
+                await sandbox_runtime.shutdown()
+            except Exception as exc:  # noqa: BLE001 — best-effort shutdown
+                from metagpt.common.logs import logger
+
+                logger.warning(f"Role: sandbox_runtime.shutdown() failed: {exc}")
 
     # =========================================================================
     # Readiness

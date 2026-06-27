@@ -28,6 +28,7 @@ class BackgroundTaskContextSource:
 
     name = "background_tasks"
     priority = 30
+    save_to_context = False  # ephemeral: in-flight task progress, never persisted
 
     def __init__(self, get_pool: Callable[[], object], store=None) -> None:
         self._get_pool = get_pool

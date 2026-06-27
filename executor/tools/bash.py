@@ -40,14 +40,18 @@ class Bash(BaseTool):
     # Shell output can be verbose; cap below the default (CC).
     max_result_size_chars: ClassVar[int] = 30_000
     description = BASH_DESCRIPTION
-    requires = ("get_cwd", "set_cwd")
+    requires = ("get_cwd", "set_cwd", "get_sandbox_runtime")
     # Arbitrary command execution — the highest-risk tool.
     risk_level = "high"
 
-    # Injected from Role by bind() — only these two cwd accessors, never RoleState
-    # or memory.
+    # Injected from Role by bind() — only these cwd accessors + the optional
+    # OS-level sandbox runtime accessor, never RoleState or memory.
     get_cwd: Callable[[], str]
     set_cwd: Callable[[str], None]
+    # Capability accessor returning the session's SandboxRuntime, or None when
+    # no OS-level sandbox is configured. Defaults to a no-runtime stub so a
+    # tool bound without a Role (some unit tests) still runs un-sandboxed.
+    get_sandbox_runtime: Callable[[], object] = staticmethod(lambda: None)
 
     def permission_target(self, args: dict) -> str:
         """The command string — matched against ``Bash(pattern)`` rules."""
@@ -121,9 +125,19 @@ class Bash(BaseTool):
         probe = f'echo "{_CWD_MARKER}$?:$(pwd)"'
         wrapped = f"{command}\n{probe}"
 
+        # OS-level sandbox: when a runtime is wired, aexecute wraps the command
+        # (bwrap + hardening) and amends the env before spawning. None => the
+        # historical un-sandboxed path.
+        runtime = self.get_sandbox_runtime() if self.get_sandbox_runtime is not None else None
+
         try:
             _rc, stdout, stderr, timed_out = await aexecute(
-                wrapped, working_dir=run_cwd, wait=True, timeout=timeout, return_partial_on_timeout=True
+                wrapped,
+                working_dir=run_cwd,
+                wait=True,
+                timeout=timeout,
+                return_partial_on_timeout=True,
+                sandbox_runtime=runtime,
             )
         except Exception as e:
             raise ToolError(f"Error executing command: {e}")

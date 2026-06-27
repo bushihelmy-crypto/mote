@@ -24,7 +24,8 @@ Two drive modes (don't mix them on the same scheduler instance):
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, Optional
+from contextlib import nullcontext
+from typing import Awaitable, Callable, ContextManager, Dict, Optional
 
 from metagpt.common.logs import logger
 from metagpt.environment.limiter import AgentExecutionLimiter
@@ -35,12 +36,27 @@ from metagpt.environment.runtime import AgentRuntime
 class EventDrivenScheduler:
     """Schedules turns for a set of :class:`AgentRuntime` instances."""
 
-    def __init__(self, *, limiter: Optional[AgentExecutionLimiter] = None):
+    def __init__(
+        self,
+        *,
+        limiter: Optional[AgentExecutionLimiter] = None,
+        control_binder: Optional[Callable[[], ContextManager]] = None,
+        pending_flush: Optional[Callable[[], Awaitable]] = None,
+    ):
         self._runtimes: Dict[str, AgentRuntime] = {}
         self._started = False
         # Optional concurrency cap: a guard is held around every turn so the
         # limiter's ``active`` count reflects in-flight turns (codex RAII guard).
         self._limiter = limiter
+        # Optional ambient-control binder: a context manager opened around every
+        # turn so a deep spawn site can discover the live plane via
+        # ``current_control()`` (inherited by child asyncio tasks via context-copy).
+        self._control_binder = control_binder
+        # Optional plane-level pending-delivery flush: awaited at each turn
+        # boundary so a message parked because its target was evicted at the hard
+        # cap is fulfilled (an eviction may be awaited here) the moment capacity
+        # could have improved — i.e. right after a turn frees a resident.
+        self._pending_flush = pending_flush
 
     # ------------------------------------------------------------------
     # Runtime membership
@@ -104,6 +120,9 @@ class EventDrivenScheduler:
             runtime.wake_event.clear()
             self._stage_mailbox(runtime)
             await self._run_turn_safe(runtime)
+            # A turn just completed → a resident may now be idle/evictable, so
+            # fulfil any mail parked behind the hard cap.
+            await self._flush_pending()
 
     async def stop(self) -> None:
         """Stop persistent driving and shut down every runtime's task."""
@@ -125,6 +144,10 @@ class EventDrivenScheduler:
         """
         turns = 0
         for _ in range(max(0, k)):
+            # Fulfil parked mail first: a delivery whose target was evicted at
+            # the hard cap can be rehydrated here (async eviction allowed) and
+            # its runtime woken, so it becomes ready within this same budget.
+            await self._flush_pending()
             ready = [rt for rt in self._runtimes.values() if self._is_ready(rt)]
             if not ready:
                 break
@@ -165,10 +188,21 @@ class EventDrivenScheduler:
         if self._started and not runtime.stopped:
             self._spawn_driver(runtime)
 
+    async def _flush_pending(self) -> None:
+        """Run the injected pending-delivery flush (best-effort, never fatal)."""
+        if self._pending_flush is None:
+            return
+        try:
+            await self._pending_flush()
+        except Exception as exc:  # noqa: BLE001 — keep driving
+            logger.warning(f"Scheduler: pending-delivery flush failed: {exc}")
+
     async def _run_turn_safe(self, runtime: AgentRuntime) -> None:
         guard = self._limiter.guard() if self._limiter is not None else None
+        binder = self._control_binder() if self._control_binder is not None else nullcontext()
         try:
-            await runtime.run_one_turn()
+            with binder:
+                await runtime.run_one_turn()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — status already ERRORED; keep driving

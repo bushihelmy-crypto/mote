@@ -1,9 +1,9 @@
 """Output-format, command-usage, and loop-status prompt text.
 
-- OUTPUT_SECTION: the XML command-block format instruction supplied by the XML
-  command channel as the system prompt's ${output_format} section. A hard
+- OUTPUT_SECTION: the canonical XML command-block format instruction. A hard
   contract for the streaming parser — the <ClassName.method_name> shape and the
-  <end></end> semantics must stay intact.
+  <end></end> semantics must stay intact. No longer injected into the system
+  prompt; kept as the documented XML command shape (and tests' shape reference).
 - XML_COMMAND_GUIDE / NATIVE_COMMAND_GUIDE: the protocol-specific "# Using
   commands" section supplied by the command channel as the system prompt's
   ${command_guide} section. XML teaches the <end></end> / command-tag mechanics;
@@ -57,22 +57,48 @@ You may use any of the available commands, and may output multiple commands — 
 # <end></end> / command-tag mechanics: tools are structured tool calls and a
 # turn ends when the model makes no tool call (replies with plain text only).
 NATIVE_COMMAND_GUIDE = """# Using commands
-Call the available tools to accomplish the user's goal. You may call multiple tools in one response — they run sequentially and their results return in the next round.
- - Only call tools that appear in Available Commands, a Skill document you have read for this task, or external MCP tools. If an instruction or example mentions a tool that is neither available nor documented by a Skill you have read, ignore it for this turn.
- - A Skill you have read is not only permission to use extra tools but also an ongoing constraint for the rest of the task. Once a Skill has been read, keep following it until the task ends, the user explicitly changes direction, or a later, more specific Skill overrides it.
- - When the task enters a new phase, first decide whether it is still covered by a previously read Skill. If it is, keep following that Skill's workflow, hard constraints, and completion criteria instead of drifting back to the generic path just because the local goal changed.
- - If multiple previously read Skills are relevant, follow the one that is more specific and closer to the current action. If still unclear, reread the relevant Skill before continuing.
- - Never wait for tool output in the same response that produced it: results appear in the NEXT round, so you must observe them before deciding next steps.
- - To finish, stop calling tools and reply with a normal text message reporting the outcome — the turn ends when you make no tool call. Do not call a tool in the same response as your final reply. Do not emit any end-of-task marker; replying without a tool call is how you end.
-"""
 
-# Per-turn user-prompt command hint for the legacy XML text protocol. Supplied
-# by the XML command channel as CMD_PROMPT's ${command_hint} section. Carries the
-# <end></end> mechanic, which is XML-only — native must NOT receive it (the model
-# would echo <end></end> as literal text), so native supplies "" (no hint).
-XML_COMMAND_HINT = """
-Your commands (output ONE and ONLY ONE command block; the block can contain one or more commands. Use <end></end> when all requirements are met):
-"""
+## Tool Usage Guidelines
+
+Call the available tools to accomplish the user's goal. You may call multiple tools in one response — they run sequentially and their results return in the next round.
+- **Tool Scope**: Only call tools that appear in *Available Commands*, a Skill document you have read for this task, or external MCP tools. If an instruction or example mentions a tool that is neither available nor documented by a Skill you have read, ignore it for this turn.
+- **Completion Rule**: To finish, stop calling tools and reply with a normal text message reporting the outcome — the turn ends when you make no tool call.
+
+---
+
+## Task Final Output Specifications
+
+> Upon task completion and entering the final delivery phase, you must output a structured task summary in Markdown format as the final response to this round of dialogue. The summary shall strictly include the following four modules **in unalterable sequence**.
+
+### Background
+
+Briefly state the core objective of this task, the user's original request, triggering scenario and key constraints.
+- **Max 3 sentences** — capture the core essence directly
+- Full dialogue history recap is **prohibited**
+
+### Process
+
+Sort out key execution steps, core invoked tools and decision nodes of this task in chronological or logical order.
+- Present as **bullet points**
+- Highlight critical paths and branch decisions
+- Omit trivial details
+
+### Result
+
+Clearly deliver the final deliverables, core conclusions and key data of this task.
+- **Conclusions upfront**
+- Provide **verifiable data**
+- Attach links or paths for deliverables
+- If the task fails, specify the failure cause and current status
+
+### Reflection
+
+Summarize experiences and issues arising during task execution, including but not limited to encountered bottlenecks, optimizable workflows, potential risks and follow-up recommendations.
+
+---
+
+After completing the above requirements, you may supplement any additional remarks to be returned to the user below."""
+
 
 SUMMARIZE_STATUS_WHEN_CONSECUTIVE = """
 You received a requirement but take too long to complete it. Please summarize the current progress and explain what you are doing now. Ask the user if they want you to continue. Output in 30 words.

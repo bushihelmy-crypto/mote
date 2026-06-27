@@ -13,10 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from metagpt.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
 from metagpt.common.prompt.role import (
     CMD_PROMPT,
-    ROLE_INSTRUCTION,
     SUMMARY_PROMPT,
     SUMMARY_WITH_RECOMMEND_PROMPT,
     SYSTEM_PROMPT,
+    ROLE_INFO
 )
 
 
@@ -32,12 +32,14 @@ class RoleSchema(BaseModel):
     constraints: str = ""
     desc: str = ""
     role_id: str = ""
-
+    role_info: str = ROLE_INFO
+    example: str = ""
+    instruction: str = ""
+    
     # --- Prompt templates ---
     system_prompt: str = SYSTEM_PROMPT
     cmd_prompt: str = CMD_PROMPT
-    instruction: str = ROLE_INSTRUCTION
-    example: str = ""
+    team_info: str = ""
     # End-of-session summary prompts (consumed by Role.end_session). Kept on the
     # schema like the other deploy-time templates so a Role can override the
     # summary voice without patching role_zero imports. The "with recommend"
@@ -73,9 +75,7 @@ class RoleSchema(BaseModel):
         "AskUserQuestion",
         "Sleep",
         "ResumeTasks",
-        "CancelTasks",
         "GetNodeState",
-        "MediaPipeline"
     ]
     mcps: list[str] = []
     agents: list[str] = []
@@ -87,7 +87,7 @@ class RoleSchema(BaseModel):
     # the user for confirmation. Set ``mode="bypass"`` (or specific allow rules)
     # to loosen this, or build a custom PermissionConfig for finer control.
     permissions: Optional[PermissionConfig] = Field(default_factory=PermissionConfig)
-    language : str = "中文"
+    language : str = "chinese"
     # --- Hooks ---
     # Opt-in agent-lifecycle hooks (command handlers). When None (default) and
     # no callbacks are registered programmatically, no hook layer is engaged
@@ -121,6 +121,31 @@ class RoleSchema(BaseModel):
     # inside a code repo and the git binary is present, else the plain "blob"
     # store. Force "blob" or "git" to override the heuristic.
     snapshot_backend: Literal["auto", "blob", "git"] = "auto"
+    # When True (default), the persistent terminal records its final environment
+    # state (cwd + env diff vs the shell's launch baseline) into the rollout, so
+    # a resumed session can re-seed a fresh shell to that state without re-running
+    # any user commands. Set False to disable (the shell starts clean on resume).
+    record_terminal_state: bool = True
+    # When True (default), the persistent Python kernel records its final
+    # environment state (cwd + env diff vs the kernel's launch baseline) into the
+    # rollout, so a resumed session can re-seed a fresh kernel to that state
+    # without re-running any user code. Only cwd + env vars are restored — NOT
+    # Python variables/imports/functions (the model re-establishes those from the
+    # replayed message history; no code is auto-rerun, avoiding side effects).
+    # Set False to disable (the kernel starts clean on resume).
+    record_kernel_state: bool = True
+    # When True (default), the persistent browser records its final browsing
+    # state (open-tab URLs + active tab + an optional storage_state carrying the
+    # logged-in session: cookies / localStorage) into the rollout, so a resumed
+    # session can re-open the same tabs seeded with that session without
+    # re-running any navigation/click actions. Set False to disable — relevant
+    # for privacy, since storage_state may carry sensitive cookies (the browser
+    # then starts clean on resume).
+    record_browser_state: bool = True
+    # When True, the persistent browser launches with a visible window (headed);
+    # default False runs headless. A headed window is useful for watching the
+    # agent browse or for sites that behave differently without a real display.
+    browser_headless: bool = True
 
     # --- Memory / summary config ---
     enable_memory: bool = True

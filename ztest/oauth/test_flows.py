@@ -58,6 +58,11 @@ def _free_port() -> int:
     return port
 
 
+# A urllib opener that never routes through an HTTP(S) proxy, so the loopback
+# callback reaches the local server even when *_PROXY env vars are set.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 # --- authorization_code (loopback) ---------------------------------------
 
 
@@ -86,7 +91,7 @@ def test_run_auth_code_flow_success(monkeypatch):
 
         def hit():
             redirect = f"http://127.0.0.1:{port}/callback?code=the-code&state={state}"
-            urllib.request.urlopen(redirect, timeout=5).read()
+            _NO_PROXY_OPENER.open(redirect, timeout=5).read()
 
         threading.Thread(target=hit, daemon=True).start()
 
@@ -108,7 +113,7 @@ def test_run_auth_code_flow_state_mismatch(monkeypatch):
     def on_url(url: str):
         def hit():
             redirect = f"http://127.0.0.1:{port}/callback?code=c&state=WRONG"
-            urllib.request.urlopen(redirect, timeout=5).read()
+            _NO_PROXY_OPENER.open(redirect, timeout=5).read()
 
         threading.Thread(target=hit, daemon=True).start()
 

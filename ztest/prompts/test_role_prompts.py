@@ -47,9 +47,6 @@ class TestSystemPromptBoundary:
             "${role_info}",
             "${available_commands}",
             "${mcp_tools}",
-            "${domain_info}",
-            "${example}",
-            "${instruction}",
             "${memory}",
             "${language}",
             "${scratchpad}",
@@ -57,7 +54,6 @@ class TestSystemPromptBoundary:
             "${skills_info}",
             "${frc}",
             "${summarize_tool_results}",
-            "${output_format}",
         ):
             assert ph in below, ph
 
@@ -74,17 +70,6 @@ class TestDynamicSectionPlaceholders:
 
     def test_summarize_tool_results_has_no_placeholder(self):
         assert "${" not in R.SUMMARIZE_TOOL_RESULTS_SECTION
-
-
-class TestDomainInfo:
-    def test_mgx_info_formats_models(self):
-        out = Template(R.MGX_INFO).safe_substitute(ai_capability_models="m1, m2")
-        assert "m1, m2" in out
-
-    def test_mgx_info_only_models_placeholder(self):
-        # The single placeholder is ${ai_capability_models}; safe_substitute
-        # leaves any literal braces (JSON/code examples) untouched.
-        assert "${ai_capability_models}" in R.MGX_INFO
 
 
 class TestAgentPrompts:

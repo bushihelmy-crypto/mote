@@ -29,11 +29,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from metagpt.common.schema import Message, UserMessage
 from metagpt.environment.agent_path import AgentPath
+from metagpt.environment.comms import CommKind
 
 # Metadata keys carried on the staged UserMessage so the recipient can see who
-# wrote it and which path it was addressed to.
+# wrote it, which path it was addressed to, what kind of message it is, and which
+# named channel (if any) it arrived on.
 MAILBOX_AUTHOR_PATH = "mailbox_author_path"
 MAILBOX_RECIPIENT_PATH = "mailbox_recipient_path"
+MAILBOX_KIND = "mailbox_kind"
+MAILBOX_CHANNEL = "mailbox_channel"
 
 
 class DeliveryMode(str, Enum):
@@ -53,6 +57,11 @@ class InterAgentCommunication(BaseModel):
     attachments: list = Field(default_factory=list)
     content: str = ""
     trigger_turn: bool = False
+    # The semantic kind of the message (orthogonal to ``trigger_turn``, which is
+    # only the wake-a-turn flag); ``channel`` names the broadcast group it
+    # arrived on, when delivered via a named channel.
+    kind: CommKind = CommKind.TASK
+    channel: Optional[str] = None
 
     @classmethod
     def new(
@@ -62,6 +71,8 @@ class InterAgentCommunication(BaseModel):
         attachments: Optional[list] = None,
         content: str = "",
         trigger_turn: bool = False,
+        kind: CommKind = CommKind.TASK,
+        channel: Optional[str] = None,
     ) -> "InterAgentCommunication":
         """Positional constructor matching the rust ``::new`` signature."""
         return cls(
@@ -70,6 +81,8 @@ class InterAgentCommunication(BaseModel):
             attachments=list(attachments or []),
             content=content,
             trigger_turn=trigger_turn,
+            kind=kind,
+            channel=channel,
         )
 
     def to_message(self) -> UserMessage:
@@ -77,6 +90,9 @@ class InterAgentCommunication(BaseModel):
         msg = UserMessage(content=self.content, sent_from=self.author.as_str())
         msg.add_metadata(MAILBOX_AUTHOR_PATH, self.author.as_str())
         msg.add_metadata(MAILBOX_RECIPIENT_PATH, self.recipient.as_str())
+        msg.add_metadata(MAILBOX_KIND, self.kind.value)
+        if self.channel is not None:
+            msg.add_metadata(MAILBOX_CHANNEL, self.channel)
         return msg
 
 
@@ -173,4 +189,6 @@ __all__ = [
     "Mailbox",
     "MAILBOX_AUTHOR_PATH",
     "MAILBOX_RECIPIENT_PATH",
+    "MAILBOX_KIND",
+    "MAILBOX_CHANNEL",
 ]

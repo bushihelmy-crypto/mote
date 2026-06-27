@@ -13,8 +13,9 @@ already bound to the ``session_id`` via ``bind_trace``) — no new trace-id conc
 
 Leaf module: imports only ``common.events.context``, ``common.events.types`` and
 ``common.logs``. When no bus is bound (standalone client use / tests),
-``emit_event`` is a no-op, so a ``span`` just mints a uuid and runs the body —
-negligible cost. Spans are part of the spine; exporters decide what to do.
+``observe_event`` is a no-op, so a ``span`` just mints a uuid and runs the body —
+negligible cost. A span is pure observation (no veto), so it rides the
+observation transport. Spans are part of the spine; exporters decide what to do.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from contextvars import ContextVar
 from typing import AsyncIterator, Optional
 from uuid import uuid4
 
-from metagpt.common.events.context import emit_event
+from metagpt.common.events.context import observe_event
 from metagpt.common.events.types import SpanEndEvent, SpanStartEvent
 from metagpt.common.logs import current_trace_id
 
@@ -49,7 +50,7 @@ async def span(label: str, *, attributes: Optional[dict] = None) -> AsyncIterato
     span_id = uuid4().hex
     parent = current_span_id()
     trace_id = current_trace_id() or ""
-    await emit_event(
+    await observe_event(
         SpanStartEvent(
             span_id=span_id,
             parent_span_id=parent,
@@ -69,7 +70,7 @@ async def span(label: str, *, attributes: Optional[dict] = None) -> AsyncIterato
         raise
     finally:
         _CURRENT_SPAN.reset(token)
-        await emit_event(
+        await observe_event(
             SpanEndEvent(
                 span_id=span_id,
                 trace_id=trace_id,

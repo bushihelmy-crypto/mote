@@ -198,6 +198,47 @@ async def test_unbounded_capacity_never_evicts(live, residency):
 
 
 @pytest.mark.asyncio
+async def test_try_reserve_sync_under_cap_bumps_pending(residency):
+    assert residency.try_reserve_sync(2) is not None
+    assert residency.pending_slots == 1
+    assert residency.try_reserve_sync(2) is not None
+    assert residency.pending_slots == 2
+
+
+@pytest.mark.asyncio
+async def test_try_reserve_sync_at_cap_returns_none(live, residency):
+    slot = await residency.reserve_slot(1)
+    live.add(make_runtime("a", status=AgentStatus.COMPLETED))
+    slot.commit("a")  # one resident, cap 1
+    assert residency.try_reserve_sync(1) is None
+    assert residency.pending_slots == 0
+
+
+@pytest.mark.asyncio
+async def test_try_reserve_sync_unbounded_always_returns_slot(residency):
+    assert residency.try_reserve_sync(None) is not None
+    assert residency.try_reserve_sync(None) is not None
+    assert residency.pending_slots == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_slot_commit_turns_pending_resident(residency):
+    slot = residency.try_reserve_sync(2)
+    assert slot is not None
+    slot.commit("x")
+    assert residency.pending_slots == 0
+    assert residency.residents() == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_sync_slot_rollback_frees_reservation(residency):
+    slot = residency.try_reserve_sync(2)
+    assert slot is not None
+    slot.rollback()
+    assert residency.pending_slots == 0
+
+
+@pytest.mark.asyncio
 async def test_missing_runtime_is_dropped_during_unload(live, residency):
     # Resident recorded but absent from the live map. Faithful to codex: the
     # scan pops + drops the ghost (no push-back) but reports no eviction, so the

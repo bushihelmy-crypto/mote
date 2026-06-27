@@ -20,7 +20,9 @@ from metagpt.common.events.types import (
 
 def test_recovery_event_classvars_and_fields():
     assert RecoveryEvent.name == RECOVERY == "recovery"
-    assert RecoveryEvent.is_control is False
+    # Events carry no control/observation marker; the plane lives on the
+    # subscriber. There must be no ``is_control`` attribute to drift out of sync.
+    assert not hasattr(RecoveryEvent, "is_control")
     e = RecoveryEvent(phase="recovered", action="retry", attempt=2, error_type="ValueError", error="boom")
     assert (e.phase, e.action, e.attempt, e.error_type, e.error) == (
         "recovered",
@@ -36,7 +38,7 @@ def test_recovery_event_classvars_and_fields():
 
 def test_task_progress_event_classvars_and_fields():
     assert TaskProgressEvent.name == TASK_PROGRESS == "task_progress"
-    assert TaskProgressEvent.is_control is False
+    assert not hasattr(TaskProgressEvent, "is_control")
     e = TaskProgressEvent(task_id="bg_1", stage="split", status="running", detail="x")
     assert (e.task_id, e.stage, e.status, e.detail) == ("bg_1", "split", "running", "x")
     assert TaskProgressEvent().detail == ""
@@ -44,7 +46,7 @@ def test_task_progress_event_classvars_and_fields():
 
 def test_resource_report_event_uses_name_underscore():
     assert ResourceReportEvent.name == RESOURCE_REPORT == "resource_report"
-    assert ResourceReportEvent.is_control is False
+    assert not hasattr(ResourceReportEvent, "is_control")
     # ``name_`` carries the report's data-type name; ``name`` stays the
     # ClassVar discriminator (they must not collide).
     e = ResourceReportEvent(block="Terminal", name_="path", value="/x", uuid="u", role="r")

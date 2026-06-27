@@ -4,8 +4,6 @@ import json
 from datetime import datetime
 from typing import Optional, Tuple
 
-import pytz
-
 from metagpt.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
 from metagpt.common.prompt.role import (
     SUMMARIZE_PROBLEM_WHEN_DUPLICATE,
@@ -171,10 +169,10 @@ async def parse_commands2(command_rsp, valid_names: set[str]) -> Tuple[list[dict
 
 
 def get_time_info():
-    time_zone = pytz.timezone("America/Los_Angeles")
-    current_time = datetime.now(time_zone)
-    formatted_time = current_time.strftime("%Y-%m-%d")
-    return f"Current date in Los Angeles is {formatted_time}."
+    # Local system time (with timezone offset), including time-of-day.
+    current_time = datetime.now().astimezone()
+    formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return f"Current local time is {formatted_time}."
 
 
 async def loads_xml(data, valid_names: set[str]) -> Tuple[list[dict], str]:

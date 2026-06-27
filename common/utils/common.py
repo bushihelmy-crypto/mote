@@ -572,6 +572,7 @@ async def aexecute(
     check: bool = False,
     wait: bool = False,
     return_partial_on_timeout: bool = False,
+    sandbox_runtime: Optional[Any] = None,
 ) -> Union[None, Tuple[int, str, str], Tuple[int, str, str, bool]]:
     """
     Generic async function to execute shell commands
@@ -590,6 +591,11 @@ async def aexecute(
              In this mode aexecute NEVER raises on timeout and ALWAYS returns the
              4-tuple ``(return_code, stdout, stderr, timed_out)``; on timeout the
              return code is ``EXEC_TIMEOUT_EXIT_CODE`` (124).
+        sandbox_runtime: Optional OS-level sandbox runtime (a
+             :class:`metagpt.sandbox.SandboxRuntime`). When supplied, the command
+             is wrapped (bwrap + process hardening) and the env is amended with
+             the network-proxy policy *before* spawning. None => no OS-level
+             isolation (the historical behavior).
 
     Returns:
         If wait=False: None
@@ -601,6 +607,12 @@ async def aexecute(
             return_partial_on_timeout=False)
         RuntimeError: If check=True and command returns non-zero status code
     """
+    if sandbox_runtime is not None:
+        # Wrap the command + amend the env for OS-level isolation. wrap_command
+        # returns a single shell-quoted string still meant for the shell, so the
+        # ``shell=True`` spawn below is unchanged.
+        cmd, env = await sandbox_runtime.wrap_command(cmd, cwd=working_dir, env=env)
+
     process = await asyncio.create_subprocess_shell(
         cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=working_dir, shell=shell
     )

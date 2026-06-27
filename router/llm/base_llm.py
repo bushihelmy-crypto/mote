@@ -32,7 +32,7 @@ from metagpt.common.events import (
     LLMRequestEvent,
     LLMResponseEvent,
     current_span_id,
-    emit_event,
+    observe_event,
 )
 from metagpt.common.exception import RecoveryAction, RecoveryRunner, is_retryable
 from metagpt.common.logs import current_trace_id, logger
@@ -391,11 +391,11 @@ class BaseLLM(ABC):
             # Open the LLM-call observation on the shared event spine. One
             # request → response|error pair per recovery attempt (so retries /
             # rotations / fallbacks each trace independently), correlated by
-            # ``request_id``. ``emit_event`` is a no-op when no bus is bound
+            # ``request_id``. ``observe_event`` is a no-op when no bus is bound
             # (standalone client use / tests), so this stays zero-cost there.
             request_id = uuid4().hex
             model = llm.model or "unknown"
-            await emit_event(
+            await observe_event(
                 LLMRequestEvent(
                     request_id=request_id,
                     model=model,
@@ -409,7 +409,7 @@ class BaseLLM(ABC):
             try:
                 result = await send(llm, msgs)
             except Exception as exc:  # noqa: BLE001 — mirror the failure, then re-raise
-                await emit_event(
+                await observe_event(
                     LLMErrorEvent(
                         request_id=request_id,
                         model=model,
@@ -419,7 +419,7 @@ class BaseLLM(ABC):
                     )
                 )
                 raise
-            await emit_event(
+            await observe_event(
                 self._build_response_event(
                     request_id, llm, result, (time.monotonic() - started) * 1000.0
                 )

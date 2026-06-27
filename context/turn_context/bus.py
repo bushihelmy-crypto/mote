@@ -26,26 +26,64 @@ from metagpt.context.turn_context.format import wrap_system_reminder
 
 
 class TurnContextBus:
-    """Orders and merges ephemeral context sources into one reminder block."""
+    """Orders and merges turn-context sources into ``<system-reminder>`` blocks.
+
+    Sources fall into two disjoint buckets keyed by their ``save_to_context``
+    flag (default ``True``):
+
+    - ``collect_to_context`` renders the ``save_to_context=True`` sources — the
+      block the Role persists into history once per turn.
+    - ``collect`` renders the ``save_to_context=False`` sources — the ephemeral,
+      request-only block appended to the cycle's user prompt.
+
+    Both share the same concurrent-render / priority-order / merge machinery.
+    """
 
     def __init__(self, sources: Sequence[EphemeralContextSource]) -> None:
         # Stable priority order (lower first); ties keep registration order.
         self._sources: List[EphemeralContextSource] = sorted(
             sources, key=lambda s: getattr(s, "priority", 0)
         )
+        # Partition by save_to_context (missing attribute => persisted).
+        self._persistent: List[EphemeralContextSource] = [
+            s for s in self._sources if getattr(s, "save_to_context", True)
+        ]
+        self._ephemeral: List[EphemeralContextSource] = [
+            s for s in self._sources if not getattr(s, "save_to_context", True)
+        ]
 
     async def collect(self, *, cwd: Optional[str] = None) -> str:
-        """Render every source and return the merged ``<system-reminder>`` block.
+        """Render the ephemeral (request-only) sources into one reminder block.
 
-        Returns ``""`` when no source produced anything. Sources run
-        concurrently; an exception (or non-string return) from one is logged and
+        These are the ``save_to_context=False`` feeds; their block is appended to
+        the cycle's user prompt and never stored in history. Returns ``""`` when
+        nothing was produced.
+        """
+        return await self._render_bucket(self._ephemeral, cwd)
+
+    async def collect_to_context(self, *, cwd: Optional[str] = None) -> str:
+        """Render the persisted sources into one reminder block for history.
+
+        These are the ``save_to_context=True`` feeds (the default); the Role
+        writes their block into history through the ``ContextManager`` once per
+        turn. Returns ``""`` when nothing was produced.
+        """
+        return await self._render_bucket(self._persistent, cwd)
+
+    async def _render_bucket(
+        self, sources: List[EphemeralContextSource], cwd: Optional[str]
+    ) -> str:
+        """Render a bucket of sources concurrently and merge the survivors.
+
+        Returns ``""`` when the bucket is empty or no source produced anything.
+        An exception (or non-string return) from one source is logged and
         dropped, never propagated.
         """
-        if not self._sources:
+        if not sources:
             return ""
 
         results = await asyncio.gather(
-            *(self._render_one(s, cwd) for s in self._sources)
+            *(self._render_one(s, cwd) for s in sources)
         )
         return wrap_system_reminder(r for r in results if r)
 

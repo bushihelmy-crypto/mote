@@ -38,9 +38,7 @@ class TestDefaults:
             "AskUserQuestion",
             "Sleep",
             "ResumeTasks",
-            "CancelTasks",
             "GetNodeState",
-            "MediaPipeline",
         ]
         assert s.mcps == []
         assert s.agents == []
@@ -64,7 +62,9 @@ class TestDefaults:
         s = RoleSchema()
         assert s.system_prompt
         assert s.cmd_prompt
-        assert s.instruction
+        # instruction defaults to "" by design — it is populated per-skill at
+        # assembly time (see roles/capabilities.py), not from a constant template.
+        assert s.instruction == ""
         assert s.summary_prompt
         assert s.summary_with_recommend_prompt
 

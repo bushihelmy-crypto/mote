@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from metagpt.common.events import PostCompactEvent, TurnEndEvent
-from metagpt.common.interface import EphemeralContextSource, EventSubscriber
+from metagpt.common.interface import EphemeralContextSource, ObservationSubscriber
 from metagpt.context.turn_context import (
     CompactionNoticeContextSource,
     GitContextSource,
@@ -30,7 +30,7 @@ class TestProtocolConformance:
 
     def test_compaction_notice_is_also_event_subscriber(self):
         # Dual-role: it consumes the bus event AND renders the turn-context block.
-        assert isinstance(CompactionNoticeContextSource(), EventSubscriber)
+        assert isinstance(CompactionNoticeContextSource(), ObservationSubscriber)
 
 
 # --------------------------------------------------------------------------
@@ -69,6 +69,56 @@ class TestGitContextSource:
     def test_priority_and_name(self):
         s = GitContextSource()
         assert s.name == "git" and s.priority == 10
+
+    def test_unchanged_state_is_silent_after_first_render(self, monkeypatch):
+        import metagpt.context.turn_context.sources.git as gitmod
+
+        state = object()  # stable identity so `==` holds across renders
+
+        async def fake_collect(cwd):
+            return state
+
+        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
+        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
+
+        src = GitContextSource()
+        assert run(src.render(cwd="/x")) == " - Git branch: main"
+        # Same state on the next cycle -> nothing to report.
+        assert run(src.render(cwd="/x")) is None
+
+    def test_changed_state_renders_again(self, monkeypatch):
+        import metagpt.context.turn_context.sources.git as gitmod
+
+        states = [object(), object()]  # two distinct snapshots
+
+        async def fake_collect(cwd):
+            return states.pop(0)
+
+        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
+        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
+
+        src = GitContextSource()
+        assert run(src.render(cwd="/x")) == " - Git branch: main"
+        # A different snapshot re-renders.
+        assert run(src.render(cwd="/x")) == " - Git branch: main"
+
+    def test_leaving_repo_resets_and_re_renders(self, monkeypatch):
+        import metagpt.context.turn_context.sources.git as gitmod
+
+        state = object()
+        seq = [state, None, state]  # in repo -> out -> back in (same state)
+
+        async def fake_collect(cwd):
+            return seq.pop(0)
+
+        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
+        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
+
+        src = GitContextSource()
+        assert run(src.render(cwd="/x")) == " - Git branch: main"
+        assert run(src.render(cwd="/x")) is None  # left the repo
+        # Re-entering re-renders even though the state object is the same.
+        assert run(src.render(cwd="/x")) == " - Git branch: main"
 
 
 # --------------------------------------------------------------------------

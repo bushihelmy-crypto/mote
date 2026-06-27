@@ -136,10 +136,9 @@ class TestJoinSections:
 # --------------------------------------------------------------------------
 class TestBuildSystemPrompt:
     def test_substitutes_and_strips_boundary(self):
-        ctx = ThinkContext(role_info="ROLE", domain_info="DOM", tool_info="[]", mcp_info="[]")
+        ctx = ThinkContext(role_info="ROLE", tool_info="[]", mcp_info="[]")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
         assert "ROLE" in sys_p
-        assert "DOM" in sys_p
         # boundary marker removed
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in sys_p
         # no unresolved placeholders for the keys we mapped
@@ -190,14 +189,14 @@ class TestSubstitutionMaps:
     def test_system_substitutions_keys(self):
         ctx = ThinkContext(role_info="r", tool_info="t", mcp_info="m")
         d = PromptBuilder._system_substitutions(ctx)
-        assert d["role_info"] == "r"
-        assert d["available_commands"] == "t"
-        assert d["mcp_tools"] == "m"
+        assert d["role_info"] == "# Basic Info\nr"
+        assert d["available_commands"] == "# Available Commands\nt"
+        assert d["mcp_tools"] == "# MCP Tools\nm"
 
     def test_user_substitutions_keys(self):
         ctx = ThinkContext(working_dir="/here")
         d = PromptBuilder._user_substitutions(ctx)
-        assert d["current_state"] == "current directory: /here"
+        assert d["current_state"].startswith("current directory: /here")
 
 
 # --------------------------------------------------------------------------
@@ -311,27 +310,15 @@ class TestMakeCompactionSections:
         assert summarize == R.SUMMARIZE_TOOL_RESULTS_SECTION
 
 
-class TestMakeDomainInfo:
-    def test_joins_models(self):
-        cfg = make_config(ai_capability_models=["m1", "m2", "m3"])
-        out = PromptBuilder._make_domain_info(cfg)
-        assert "m1, m2, m3" in out
-
-
 class TestMakeEnvSection:
-    def test_contains_cwd_and_model(self):
+    def test_contains_model_and_header(self):
         out = PromptBuilder._make_env_section("claude-x", working_dir="/work")
-        assert "/work" in out
         assert "claude-x" in out
         assert "# Environment" in out
 
-    def test_falls_back_to_default_workspace(self):
-        out = PromptBuilder._make_env_section("", working_dir="")
-        assert "Primary working directory:" in out
-
-    def test_uses_project_root(self):
-        out = PromptBuilder._make_env_section("", working_dir="/w", project_root="/proj")
-        assert "/proj" in out
+    def test_renders_project_directory(self):
+        out = PromptBuilder._make_env_section("m", working_dir="/w", project_root="/proj")
+        assert "Project directory: /w" in out
 
 
 class TestMakeSkillsInfo:
@@ -361,17 +348,27 @@ class TestCollectContext:
         )
 
     def test_basic_assembly(self):
-        inputs = ThinkInputs(profile="Eng", name="Bob", goal="ship", instruction="  do it  ")
+        inputs = ThinkInputs(profile="Eng", name="Bob", goal="ship", desc="I am Bob the engineer")
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         assert isinstance(ctx, ThinkContext)
-        assert "Bob" in ctx.role_info
-        assert ctx.instruction == "do it"  # stripped
+        # collect_context loads role_info from the role's desc verbatim.
+        assert ctx.role_info == "I am Bob the engineer"
 
     def test_tool_info_is_json(self):
         executor = FakeExecutor(tools=[{"name": "Read"}], mcp_tools=[{"name": "srv:x"}])
         ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(executor=executor)))
         assert ctx.tool_info == '[{"name": "Read"}]'
         assert ctx.mcp_info == '[{"name": "srv:x"}]'
+
+    def test_pipeline_info_is_json_when_present(self):
+        executor = FakeExecutor(pipeline_tools=[{"name": "Pipe"}])
+        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(executor=executor)))
+        assert ctx.pipeline_info == '[{"name": "Pipe"}]'
+
+    def test_pipeline_info_empty_when_absent(self):
+        # No pipeline tools -> empty string so "# Pipeline Tools" renders nothing.
+        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
+        assert ctx.pipeline_info == ""
 
     def test_memory_populated_when_dir_set(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("idx-line", encoding="utf-8")
@@ -406,7 +403,7 @@ class TestCollectContext:
     def test_partial_prompt_vars_rejected(self):
         # A channel that drops a required key would leak a literal ${...}; the
         # completeness guard raises instead.
-        channel = _FakeChannel({"output_format": "X"})  # missing the other keys
+        channel = _FakeChannel({"bogus": "X"})  # missing the required key(s)
         with pytest.raises(ValueError, match="missing required keys"):
             run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(command_channel=channel)))
 
@@ -423,11 +420,11 @@ class TestCollectContext:
     def test_end_to_end_build_from_collected_context(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("mem-idx", encoding="utf-8")
         inputs = ThinkInputs(
-            profile="Eng", name="Bob", goal="ship", working_dir="/work", memory_dir=tmp_path
+            profile="Eng", name="Bob", goal="ship", desc="I am Bob", working_dir="/work", memory_dir=tmp_path
         )
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         sys_p, usr_p = PromptBuilder.build(R.SYSTEM_PROMPT, R.CMD_PROMPT, ctx)
-        assert "Bob" in sys_p
+        assert "I am Bob" in sys_p
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in sys_p
         assert usr_p.startswith("# MEMORY.md")
         assert "current directory: /work" in usr_p

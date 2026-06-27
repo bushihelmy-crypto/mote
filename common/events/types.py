@@ -1,13 +1,19 @@
 """AgentEvent — the in-memory signals that flow on the unified event spine.
 
-A small tagged union (discriminated by the ``name`` ClassVar) carrying the
-agent's lifecycle signals. Two roles:
+An **open** tagged union (discriminated by the ``name`` ClassVar) carrying the
+agent's lifecycle signals. The set is intentionally open: a new event never
+breaks an existing subscriber (subscribers consume selectively), so adding one
+is a pure leaf extension.
 
-* **Observation** events are fire-and-forget: subscribers persist / mirror them
-  and return ``None``/``EMPTY`` (the bus ignores the folded outcome).
-* **Control** events let a subscriber influence the host: a hook may veto a tool
-  call, mutate its args, inject context, or stop the agent. The bus folds the
-  per-subscriber :class:`HookOutcome`\\s and the emitter reads the result.
+Crucially, an event carries **no control/observation marker** — that plane is a
+property of the *subscriber*, not the event (see
+``common/interface/event_subscriber.py``). The same event (e.g. a tool-use) is
+routed to a :class:`ControlSubscriber` (a hook that may veto/mutate, phase 1) and
+to :class:`ObservationSubscriber`\\s (recorder/renderer/logger, phase 2) by the
+bus. Only a control subscriber can fold a :class:`HookOutcome`; an observer's
+return is structurally dropped, so an observer can never influence the host. This
+is why there is no ``is_control`` flag to keep in sync — influence is enforced by
+*where a subscriber is registered*, not by an advisory boolean on the data.
 
 These are pure data — they name *what happened*, not *who consumes it*. Each
 subscriber owns the translation from a bus event to its own sink shape (the
@@ -15,6 +21,10 @@ subscriber owns the translation from a bus event to its own sink shape (the
 :class:`HookSubscriber` maps to ``HookManager.fire`` calls). Keeping the events
 free of consumer knowledge is what lets a new frontend subscribe to the same
 stream without touching producers.
+
+Organized by domain below: session · turn · message · llm · compaction · file ·
+diagnostics · recovery · task · resource · lifecycle · trace · tool. The names
+already carry the domain prefix; the section headers are navigational only.
 
 Leaf module: imports only ``dataclasses``/``typing`` plus (under TYPE_CHECKING)
 the ``Message`` type, so it sits at the very bottom of the layering.
@@ -61,7 +71,8 @@ SPAN_END = "span_end"
 
 
 # ---------------------------------------------------------------------------
-# Observation events (subscribers return None / EMPTY)
+# Fan-out events — no control subscriber maps these, so they reach observers
+# only (recorder / renderer / logger / tracing). The bus folds nothing for them.
 # ---------------------------------------------------------------------------
 
 
@@ -79,8 +90,6 @@ class SessionStartEvent:
     source: str = "startup"  # CC SessionStart "source" matcher (startup|resume|...)
 
     name: ClassVar[str] = SESSION_START
-    is_control: ClassVar[bool] = True  # also fired as a hook (SessionStart)
-
 
 @dataclass
 class SessionEndEvent:
@@ -89,8 +98,6 @@ class SessionEndEvent:
     session_id: str = ""
 
     name: ClassVar[str] = SESSION_END
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class TurnStartEvent:
@@ -99,8 +106,6 @@ class TurnStartEvent:
     turn_id: str = ""
 
     name: ClassVar[str] = TURN_START
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class TurnEndEvent:
@@ -112,8 +117,6 @@ class TurnEndEvent:
     token_state: Optional[dict] = None
 
     name: ClassVar[str] = TURN_END
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class MessageAppendedEvent:
@@ -122,8 +125,6 @@ class MessageAppendedEvent:
     message: "Message" = None  # type: ignore[assignment]
 
     name: ClassVar[str] = MESSAGE_APPENDED
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class LLMStreamDeltaEvent:
@@ -132,16 +133,12 @@ class LLMStreamDeltaEvent:
     token: str = ""
 
     name: ClassVar[str] = LLM_STREAM_DELTA
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class LLMStreamEndEvent:
     """The current LLM stream finished (turn boundary for the renderer)."""
 
     name: ClassVar[str] = LLM_STREAM_END
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class LLMRequestEvent:
@@ -166,8 +163,6 @@ class LLMRequestEvent:
     trace_id: str = ""
 
     name: ClassVar[str] = LLM_REQUEST
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class LLMResponseEvent:
@@ -190,8 +185,6 @@ class LLMResponseEvent:
     trace_id: str = ""  # correlation symmetry with the request
 
     name: ClassVar[str] = LLM_RESPONSE
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class LLMErrorEvent:
@@ -210,8 +203,6 @@ class LLMErrorEvent:
     trace_id: str = ""  # correlation symmetry with the request
 
     name: ClassVar[str] = LLM_ERROR
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class CompactionCheckpointEvent:
@@ -221,8 +212,6 @@ class CompactionCheckpointEvent:
     summary: str = ""
 
     name: ClassVar[str] = COMPACTION_CHECKPOINT
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class FileSnapshotEvent:
@@ -237,8 +226,6 @@ class FileSnapshotEvent:
     backend: str = "blob"
 
     name: ClassVar[str] = FILE_SNAPSHOT
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class FileChangedEvent:
@@ -250,8 +237,6 @@ class FileChangedEvent:
     size: int = 0
 
     name: ClassVar[str] = FILE_CHANGED
-    is_control: ClassVar[bool] = True  # routed to the FileChanged hook
-
 
 @dataclass
 class FileMutatedEvent:
@@ -271,8 +256,6 @@ class FileMutatedEvent:
     operation: str = "update"  # create / update / delete (best-effort)
 
     name: ClassVar[str] = FILE_MUTATED
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class DiagnosticsEvent:
@@ -291,8 +274,6 @@ class DiagnosticsEvent:
     paths: List[str] = field(default_factory=list)
 
     name: ClassVar[str] = DIAGNOSTICS
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class RecoveryEvent:
@@ -312,8 +293,6 @@ class RecoveryEvent:
     error: str = ""
 
     name: ClassVar[str] = RECOVERY
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class TaskProgressEvent:
@@ -330,8 +309,6 @@ class TaskProgressEvent:
     detail: str = ""  # rendered, no trailing newline
 
     name: ClassVar[str] = TASK_PROGRESS
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class ResourceReportEvent:
@@ -351,8 +328,6 @@ class ResourceReportEvent:
     role: Optional[str] = None
 
     name: ClassVar[str] = RESOURCE_REPORT
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class AgentLifecycleEvent:
@@ -368,8 +343,6 @@ class AgentLifecycleEvent:
     detail: str = ""
 
     name: ClassVar[str] = AGENT_LIFECYCLE
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class SpanStartEvent:
@@ -389,8 +362,6 @@ class SpanStartEvent:
     attributes: dict = field(default_factory=dict)
 
     name: ClassVar[str] = SPAN_START
-    is_control: ClassVar[bool] = False
-
 
 @dataclass
 class SpanEndEvent:
@@ -403,11 +374,13 @@ class SpanEndEvent:
     attributes: dict = field(default_factory=dict)
 
     name: ClassVar[str] = SPAN_END
-    is_control: ClassVar[bool] = False
 
 
 # ---------------------------------------------------------------------------
-# Control events (subscribers may return a non-empty outcome -> folded)
+# Hook-routed events — a control subscriber (the lone HookSubscriber) maps these
+# in phase 1 and may veto / mutate args / inject context / stop. They still also
+# reach observers in phase 2 (rendered, logged, persisted). Being "hook-routed"
+# is about which subscriber consumes them, not a property carried on the data.
 # ---------------------------------------------------------------------------
 
 
@@ -418,8 +391,6 @@ class UserPromptSubmitEvent:
     prompt: str = ""
 
     name: ClassVar[str] = USER_PROMPT_SUBMIT
-    is_control: ClassVar[bool] = True
-
 
 @dataclass
 class PreToolUseEvent:
@@ -430,8 +401,6 @@ class PreToolUseEvent:
     tool_use_id: Optional[str] = None
 
     name: ClassVar[str] = PRE_TOOL_USE
-    is_control: ClassVar[bool] = True
-
 
 @dataclass
 class PostToolUseEvent:
@@ -443,8 +412,6 @@ class PostToolUseEvent:
     tool_use_id: Optional[str] = None
 
     name: ClassVar[str] = POST_TOOL_USE
-    is_control: ClassVar[bool] = True
-
 
 @dataclass
 class PreCompactEvent:
@@ -453,8 +420,6 @@ class PreCompactEvent:
     trigger: str = "auto"
 
     name: ClassVar[str] = PRE_COMPACT
-    is_control: ClassVar[bool] = True
-
 
 @dataclass
 class PostCompactEvent:
@@ -464,10 +429,8 @@ class PostCompactEvent:
     summary: str = ""
 
     name: ClassVar[str] = POST_COMPACT
-    is_control: ClassVar[bool] = True
 
-
-#: Any concrete event (all expose ``.name`` + ``.is_control``).
+#: Any concrete event (all expose a ``.name`` discriminator ClassVar).
 AgentEvent = Any
 
 

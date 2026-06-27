@@ -20,6 +20,7 @@ class TokenPressureContextSource:
 
     name = "token"
     priority = 20
+    save_to_context = True
 
     def __init__(self, provider) -> None:
         # `provider` is anything with a `token_state()` -> TokenState method.

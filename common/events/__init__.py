@@ -6,13 +6,15 @@ sink, session recorder, hook fire-sites) onto a single decoupled bus.
 
 Public surface:
   * :class:`EventBus` + the active-bus contextvar (:func:`set_bus` /
-    :func:`current_bus` / :func:`emit_event` / :func:`emit_event_sync`).
+    :func:`current_bus` / :func:`observe_event` / :func:`observe_event_sync`).
+    The contextvar entrypoints are **observation-only** — control reaches the bus
+    through an explicit emitter-held reference, never the ambient contextvar.
   * The :mod:`~metagpt.common.events.types` tagged-union event dataclasses.
   * The outcome fold (re-exported from the hook layer).
 """
 
 from metagpt.common.events.bus import EventBus
-from metagpt.common.events.context import current_bus, emit_event, emit_event_sync, set_bus
+from metagpt.common.events.context import current_bus, observe_event, observe_event_sync, set_bus
 from metagpt.common.events.log_subscriber import LogSubscriber
 from metagpt.common.events.outcome import EMPTY, EventOutcome, HookOutcome, fold
 from metagpt.common.events.trace import current_span_id, span
@@ -77,8 +79,8 @@ __all__ = [
     "EventBus",
     "set_bus",
     "current_bus",
-    "emit_event",
-    "emit_event_sync",
+    "observe_event",
+    "observe_event_sync",
     # trace instrumentation
     "span",
     "current_span_id",

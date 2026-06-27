@@ -77,6 +77,9 @@ TURN_CONTEXT = "turn_context"
 META_UPDATE = "meta_update"
 FILE_SNAPSHOT = "file_snapshot"
 LLM_CALL = "llm_call"
+TERMINAL_STATE = "terminal_state"
+KERNEL_STATE = "kernel_state"
+BROWSER_STATE = "browser_state"
 
 
 @dataclass
@@ -260,6 +263,118 @@ class LLMCallEvent:
         return cls(**_dataclass_kwargs(cls, payload))
 
 
+@dataclass
+class TerminalStateEvent:
+    """The persistent terminal's final environment state (resume restore point).
+
+    Captures the live PTY shell's cwd plus the env diff relative to the shell's
+    launch baseline (``env`` = added/changed vars, ``unset`` = vars present at
+    launch but removed since). On resume, the latest such event lets the freshly
+    started shell be re-seeded (``cd`` + ``export`` + ``unset``) to the saved
+    state — *without* re-running any of the original user commands. Last-write-
+    wins: replay keeps only the most recent one.
+    """
+
+    cwd: str = ""
+    env: Dict[str, str] = field(default_factory=dict)
+    unset: List[str] = field(default_factory=list)
+    tool: str = ""
+
+    type = TERMINAL_STATE
+
+    def payload(self) -> Dict[str, Any]:
+        return {
+            "cwd": self.cwd,
+            "env": self.env,
+            "unset": self.unset,
+            "tool": self.tool,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "TerminalStateEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class KernelStateEvent:
+    """The persistent kernel's final environment state (resume restore point).
+
+    The Python sibling of :class:`TerminalStateEvent`. Captures the live Jupyter
+    kernel process's cwd plus the env diff relative to the kernel's launch
+    baseline (``env`` = added/changed vars, ``unset`` = vars present at launch
+    but removed since). On resume, the latest such event lets the freshly started
+    kernel be re-seeded (``os.chdir`` + ``os.environ.update`` + ``pop``) to the
+    saved state — *without* re-running any of the original user code. Only cwd +
+    env are restored; the Python namespace (variables/imports/functions) is not.
+    Last-write-wins: replay keeps only the most recent one.
+
+    Tracked as a distinct event from :class:`TerminalStateEvent` (not a shared
+    ``tool``-tagged record) so the kernel and terminal restores stay independent
+    on replay and never clobber each other.
+    """
+
+    cwd: str = ""
+    env: Dict[str, str] = field(default_factory=dict)
+    unset: List[str] = field(default_factory=list)
+    tool: str = ""
+
+    type = KERNEL_STATE
+
+    def payload(self) -> Dict[str, Any]:
+        return {
+            "cwd": self.cwd,
+            "env": self.env,
+            "unset": self.unset,
+            "tool": self.tool,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "KernelStateEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class BrowserStateEvent:
+    """The persistent browser's final browsing state (resume restore point).
+
+    Captures the live Playwright session's open-tab URLs (in page order, plus
+    the active tab index) and an optional ``storage_state`` dict ({cookies,
+    origins}) carrying the logged-in session. On resume, the latest such event
+    lets a freshly launched browser re-open the same tabs (re-navigate to each
+    URL) seeded with the saved cookies / localStorage — *without* re-running any
+    of the original navigation/click actions. Only the page URLs + storage are
+    restored; live DOM state, scroll position, and in-flight JS are not. Last-
+    write-wins: replay keeps only the most recent one.
+
+    Tracked as a distinct event from the terminal/kernel state events (not a
+    shared ``tool``-tagged record) so the browser restore stays independent on
+    replay and never clobbers the others (a session may run a shell + kernel +
+    browser, each restored separately).
+
+    Privacy note: ``storage_state`` may include sensitive cookies; it is only
+    written when the role's ``record_browser_state`` flag is enabled.
+    """
+
+    urls: List[str] = field(default_factory=list)
+    active: int = 0
+    storage_state: Optional[Dict[str, Any]] = None
+    tool: str = ""
+
+    type = BROWSER_STATE
+
+    def payload(self) -> Dict[str, Any]:
+        return {
+            "urls": self.urls,
+            "active": self.active,
+            "storage_state": self.storage_state,
+            "tool": self.tool,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "BrowserStateEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
 #: Any concrete event (tagged union; every member exposes ``.type`` and
 #: ``.payload()`` for writing, and a ``from_payload`` classmethod for reading).
 SessionEvent = Union[
@@ -270,6 +385,9 @@ SessionEvent = Union[
     MetaUpdateEvent,
     FileSnapshotEvent,
     LLMCallEvent,
+    TerminalStateEvent,
+    KernelStateEvent,
+    BrowserStateEvent,
 ]
 
 #: Discriminator -> event class, for typed reconstruction from a raw record.
@@ -281,6 +399,9 @@ _EVENT_TYPES = {
     META_UPDATE: MetaUpdateEvent,
     FILE_SNAPSHOT: FileSnapshotEvent,
     LLM_CALL: LLMCallEvent,
+    TERMINAL_STATE: TerminalStateEvent,
+    KERNEL_STATE: KernelStateEvent,
+    BROWSER_STATE: BrowserStateEvent,
 }
 
 
@@ -342,6 +463,9 @@ __all__ = [
     "META_UPDATE",
     "FILE_SNAPSHOT",
     "LLM_CALL",
+    "TERMINAL_STATE",
+    "KERNEL_STATE",
+    "BROWSER_STATE",
     "SessionMetaEvent",
     "MessageEvent",
     "CompactedEvent",
@@ -349,6 +473,9 @@ __all__ = [
     "MetaUpdateEvent",
     "FileSnapshotEvent",
     "LLMCallEvent",
+    "TerminalStateEvent",
+    "KernelStateEvent",
+    "BrowserStateEvent",
     "SessionEvent",
     "to_line",
     "parse_line",

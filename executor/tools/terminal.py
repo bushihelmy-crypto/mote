@@ -45,7 +45,14 @@ class Terminal(BaseTool):
     aliases = ["terminal.run"]
     max_result_size_chars: ClassVar[int] = 30_000
     description = TERMINAL_DESCRIPTION
-    requires = ("get_cwd", "get_tool_session", "set_tool_session")
+    requires = (
+        "get_cwd",
+        "get_tool_session",
+        "set_tool_session",
+        "get_sandbox_runtime",
+        "record_terminal_state",
+        "take_pending_terminal_restore",
+    )
     # Arbitrary command execution — the highest-risk tool.
     risk_level = "high"
     # Holds a live PTY shell on RoleState between calls.
@@ -58,6 +65,19 @@ class Terminal(BaseTool):
     get_cwd: Callable[[], str]
     get_tool_session: Callable[[str], Any]
     set_tool_session: Callable[[str, Any], None]
+    # Capability accessor returning the session's SandboxRuntime, or None when no
+    # OS-level sandbox is configured. Defaults to a no-runtime stub so a tool
+    # bound without a Role (some unit tests) still runs un-sandboxed.
+    get_sandbox_runtime: Callable[[], object] = staticmethod(lambda: None)
+    # Capability accessors for session-resume terminal-state restore:
+    #   record_terminal_state — persist (cwd, env diff, unset) into the rollout
+    #     after a call settles at a prompt (so resume can re-seed a shell).
+    #   take_pending_terminal_restore — pop the state staged by resume_session
+    #     (or None); applied once when a fresh shell starts.
+    # Both default to no-op stubs so a tool bound without a Role (unit tests)
+    # still runs (no recording, no restore).
+    record_terminal_state: Callable[..., None] = staticmethod(lambda *a, **k: None)
+    take_pending_terminal_restore: Callable[[], Optional[dict]] = staticmethod(lambda: None)
 
     async def _ensure_session(self) -> TerminalSession:
         """Return this Role's live terminal, starting a fresh one if needed.
@@ -72,8 +92,19 @@ class Terminal(BaseTool):
             session.shutdown()  # previous shell exited — start fresh
         cwd = self.get_cwd()
         base_cwd = cwd if cwd and os.path.isdir(cwd) else None
-        session = TerminalSession(session_key=self.session_id, cwd=base_cwd)
+        runtime = self.get_sandbox_runtime() if self.get_sandbox_runtime is not None else None
+        session = TerminalSession(session_key=self.session_id, cwd=base_cwd, sandbox_runtime=runtime)
         await session.start()
+        # On a resumed session, re-seed the fresh shell to the saved terminal
+        # state (cwd + env diff) without re-running any user commands. Consumed
+        # once (the accessor clears it), so a subsequent restart starts clean.
+        pending = self.take_pending_terminal_restore()
+        if pending:
+            await session.restore_state(
+                pending.get("cwd", ""),
+                pending.get("env", {}),
+                pending.get("unset", []),
+            )
         self.set_tool_session(self.name, session)
         return session
 
@@ -163,6 +194,16 @@ class Terminal(BaseTool):
         if result[3]:  # the shell itself exited — drop the stored session
             session.shutdown()
             self.set_tool_session(self.name, None)
+        elif result[2]:  # at_prompt and still alive — snapshot the env for resume
+            try:
+                state = await session.capture_state()
+            except Exception:  # noqa: BLE001 — capture must not break the call
+                state = None
+            if state is not None:
+                # getattr-tolerant for tools bound without the capability (tests).
+                recorder = getattr(self, "record_terminal_state", None)
+                if recorder is not None:
+                    recorder(*state, tool=self.name)
         return _format_output(*result)
 
     def cleanup_session(self, session_id: str) -> None:

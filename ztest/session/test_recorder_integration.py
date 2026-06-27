@@ -29,7 +29,7 @@ from metagpt.session.subscribers import RecorderSubscriber
 
 
 class SpySubscriber:
-    """An EventSubscriber that records the message/compaction events it sees."""
+    """An ObservationSubscriber that records the message/compaction events it sees."""
 
     priority = 80
 

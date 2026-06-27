@@ -161,7 +161,8 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 | `HookRunner` | `fire(event,payload,*,permission_mode)` | `HookManager` | ToolExecutor、ContextManager、Role |
 | `FileSnapshotStore` | `snapshot(full_path,*,tool)` | `session.FileSnapshotRecorder` | executor 文件改写工具（隔离 executor↛session） |
 | `EphemeralContextSource` | `name`/`priority`/`render(*,cwd)` | Git/Token/Lsp/BgTask Source | `TurnContextBus`（隔离 context↛tasks/roles） |
-| `EventSubscriber` | `priority`/`handle`/`handle_sync` | 各订阅者 | `EventBus` |
+| `ControlSubscriber` | `priority`/`handle_control`（折叠 `HookOutcome`） | 钩子订阅者（唯一控制面） | `EventBus`（phase 1，inline 串行 + 否决） |
+| `ObservationSubscriber` | `priority`/`handle`/`handle_sync` | recorder/logger/renderer/LSP 等观察者 | `EventBus`（phase 2，fan-out + 投递分级） |
 
 > 关键作用：`ContextManager` 同时满足 `MessageStore`（存储面）与 `RequestAssembler`（请求构建面），接口隔离让不同消费方只看到对象的不同侧面，无法触及其编排逻辑（如 `manage_history`）。
 
@@ -467,7 +468,7 @@ loguru + trace-id 上下文 + 装饰器/mixin 自动装配 + 流式事件发射�
 - `server.py` `LspServerInstance`：一 server 子进程 + LSP 语义（start 握手/did_save full-sync/shutdown），`alive` 失败后 no-op。
 - `manager.py` `LspServerManager`：per-session 持有 servers + 共享 registry，`server_for` 懒启动（lock 双检，`_failed` 不重试）。
 - `service.py` `LspService`：双角色 bus 订阅者+生产者，`file_saved`/`drain_diagnostics`/`shutdown`，`bus=None` 时禁 emit。
-- `buffer.py` `DiagnosticsBuffer`：push→pull 桥（既是 EventSubscriber 又是 EphemeralContextSource），edits 事件驱动入、think cycle 拉一次出，drain 后清空。
+- `buffer.py` `DiagnosticsBuffer`：push→pull 桥（既是 ObservationSubscriber 又是 EphemeralContextSource），edits 事件驱动入、think cycle 拉一次出，drain 后清空。
 
 ---
 

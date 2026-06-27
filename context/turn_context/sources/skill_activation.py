@@ -28,6 +28,7 @@ class SkillActivationContextSource:
     # After git/token/compaction/bg/lsp — conditional skills are a low-urgency
     # hint, so they ride at the tail of the reminder.
     priority = 50
+    save_to_context = True
 
     def __init__(
         self,

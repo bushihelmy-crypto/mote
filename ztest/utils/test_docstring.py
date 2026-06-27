@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from common.utils.docstring import first_line, parse_section
+from metagpt.common.utils.docstring import first_line, parse_section
 
 
 # ---------------------------------------------------------------------------

@@ -11,9 +11,12 @@ Two reference styles are reproduced:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from metagpt.router.cost.tracker import CostTracker
+
+if TYPE_CHECKING:
+    from metagpt.router.cost.node import CostNode
 
 
 def format_cost(cost: float) -> str:
@@ -57,6 +60,31 @@ def final_output(tracker: CostTracker) -> str:
         f"input={u.input_tokens} (+ {u.cached_input_tokens} cached) "
         f"output={u.output_tokens} (reasoning {u.reasoning_tokens})"
     )
+
+
+def format_cost_tree(root: "CostNode") -> str:
+    """Render a fleet cost mirror tree: per-node self/subtree cost + tokens.
+
+    Indents by ``agent_path`` depth, showing each agent's own spend and its
+    subtree total. The fleet grand total is ``root.subtree_cost()``.
+    """
+    lines = []
+    for node in root.walk():
+        path = node.agent_path or "/root"
+        depth = max(0, path.strip("/").count("/"))
+        indent = "  " * depth
+        self_usage = node.tracker.total_token_usage()
+        subtree = node.subtree_cost()
+        estimated = " ~estimated" if node.subtree_has_estimated() else ""
+        lines.append(
+            f"{indent}{path}: self {format_cost(node.tracker.total_cost)} "
+            f"({self_usage.total_tokens} tok) | "
+            f"subtree {format_cost(subtree)}{estimated}"
+        )
+    total = root.subtree_cost()
+    fleet_estimated = " (includes estimated cost for unknown models)" if root.subtree_has_estimated() else ""
+    lines.append(f"Fleet total: {format_cost(total)}{fleet_estimated}")
+    return "\n".join(lines)
 
 
 def status_line_dict(tracker: CostTracker, model: Optional[str] = None) -> dict:

@@ -78,8 +78,15 @@ class DiskWriter:
                 self._queue.task_done()
                 break
             _key, fn, future = job
+            # ``fn`` runs *inline* in this coroutine, not on a worker thread: the
+            # write is fully on disk before the coroutine next suspends. That is
+            # what keeps the queue the single source of truth about durability —
+            # a job is either still queued (the sync barrier flushes it) or done.
+            # A thread pool would split that into a third "off the queue but not
+            # yet on disk" state the synchronous barrier could not observe. JSONL
+            # appends are tiny, so blocking the loop for one is negligible.
             try:
-                result = await asyncio.to_thread(fn)
+                result = fn()
                 if future is not None and not future.done():
                     future.set_result(result)
             except Exception as exc:  # noqa: BLE001 — one bad write never breaks the queue
@@ -146,6 +153,10 @@ class DiskWriter:
         can flush a backlog left behind when a short-lived loop (``asyncio.run``)
         finished before its worker processed everything. Used by the synchronous
         :func:`drain_blocking` barrier and the ``atexit`` safety net.
+
+        The queue is the whole story: because the worker writes inline (never on
+        a thread), a job is either still here — flushed below — or already on
+        disk. There is no in-flight-on-another-thread state to wait out.
         """
         if self._queue is None:
             return
@@ -228,9 +239,11 @@ def drain_blocking() -> None:
       a backlog left over from a finished ``asyncio.run`` loop whose worker was
       torn down before draining; and
     * **a sync frame inside a running loop** (e.g. ``resume_session`` / ``fork``
-      invoked mid-turn) — the loop is single-threaded, so while this frame runs
-      the async worker is suspended and cannot race; ``flush_inline`` removes each
-      job from the queue before running it, so the worker never re-runs it.
+      invoked mid-turn) — the loop is single-threaded and the worker writes
+      inline, so while this frame runs the worker is necessarily suspended at
+      ``queue.get`` (every dequeued job is already on disk, never mid-write on a
+      thread); ``flush_inline`` removes each remaining job before running it, so
+      the worker never re-runs it.
 
     Cross-process resume is safe regardless: the previous process drained at its
     last turn boundary / ``aclose``, so the file is complete on disk.

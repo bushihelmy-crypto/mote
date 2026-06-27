@@ -12,7 +12,7 @@ from metagpt.common.base.command_channel import (
     _media_message,
     join_command_outputs,
 )
-from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE, XML_COMMAND_HINT
+from metagpt.common.prompt.output import XML_COMMAND_GUIDE
 from metagpt.common.prompt.refs import Sym
 
 if TYPE_CHECKING:
@@ -36,13 +36,9 @@ class XmlCommandChannel(CommandChannel):
         }
 
     def prompt_vars(self) -> dict[str, str]:
-        # XML supplies all three protocol sections: the OUTPUT format block, the
-        # <end></end> / command-tag "# Using commands" guidance, and the per-turn
-        # "ONE and ONLY ONE command block ... <end></end>" user-prompt hint.
+        # XML supplies the <end></end> / command-tag "# Using commands" guidance.
         return {
-            "output_format": OUTPUT_SECTION,
             "command_guide": XML_COMMAND_GUIDE,
-            "command_hint": XML_COMMAND_HINT,
         }
 
     def tool_specs(self, executor) -> Optional[list[dict]]:

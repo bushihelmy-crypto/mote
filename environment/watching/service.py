@@ -16,7 +16,7 @@ so a hook matcher like ``"*.py"`` or a regex selects which files to react to.
 Mirrors :class:`CronService`: own the watcher, expose ``start``/``stop``, keep
 the firing best-effort so a misbehaving hook never breaks the watch loop.
 
-The service also doubles as an :class:`EventSubscriber` on the agent event
+The service also doubles as an :class:`ObservationSubscriber` on the agent event
 spine: when injected with the shared :class:`EventBus`, it subscribes itself and
 turns each :class:`FileMutatedEvent` (a tool-driven write) into a
 :meth:`FileWatcher.note_self_write`, so the watcher's next poll doesn't echo the
@@ -41,7 +41,7 @@ FILE_CHANGED_EVENT = "FileChanged"
 class FileWatchService:
     """Owns a :class:`FileWatcher` and fires ``FileChanged`` hooks on changes."""
 
-    # EventSubscriber priority: late (self-write notes are pure bookkeeping with
+    # ObservationSubscriber priority: late (self-write notes are pure bookkeeping with
     # no influence to fold; they only need to land before the next poll tick).
     priority: int = 90
 
@@ -72,7 +72,7 @@ class FileWatchService:
         return self._watcher
 
     # ------------------------------------------------------------------
-    # EventSubscriber: record agent self-writes off the event spine
+    # ObservationSubscriber: record agent self-writes off the event spine
     # ------------------------------------------------------------------
     async def handle(self, event) -> None:
         """Note a tool-driven write so the watcher suppresses its own echo."""

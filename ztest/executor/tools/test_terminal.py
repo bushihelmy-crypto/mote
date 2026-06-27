@@ -217,3 +217,81 @@ class TestHeadTailBuffer:
             assert "omitted" in out
         finally:
             tool.cleanup_session("t_big")
+
+
+# ---------------------------------------------------------------------------
+# terminal-state capture / restore (session resume)
+# ---------------------------------------------------------------------------
+
+
+class TestStateCaptureRestore:
+    def test_capture_records_cwd_and_env_diff(self, caprole, workspace):
+        """After cd + export, a call records (cwd, env_diff) on the fake Role."""
+        sub = workspace / "sub"
+        sub.mkdir()
+        tool = bind(Terminal(), caprole, session_id="t_cap")
+
+        async def scenario():
+            await tool.call(input=f"cd {sub} && export CAP_FOO=cap_bar", yield_time_ms=2000)
+            tool.cleanup_session("t_cap")
+
+        run(scenario())
+        # Every at-prompt call records; the last capture reflects the final state.
+        assert caprole.terminal_states, "no terminal state captured"
+        cwd, env, unset, tool_name = caprole.terminal_states[-1]
+        assert cwd == str(sub)
+        assert env.get("CAP_FOO") == "cap_bar"
+        assert tool_name == "Terminal"
+        # Noise keys must be filtered out of the diff.
+        assert "PWD" not in env and "SHLVL" not in env and "_" not in env
+
+    def test_restore_state_reseeds_new_shell(self, caprole, workspace):
+        """restore_state injects cwd/env into a fresh shell (no user command rerun)."""
+        sub = workspace / "restored"
+        sub.mkdir()
+        tool = bind(Terminal(), caprole, session_id="t_restore")
+
+        async def scenario():
+            session = await tool._ensure_session()
+            await session.restore_state(str(sub), {"REZ_FOO": "rez_bar"}, [])
+            pwd = await tool.call(input="pwd", yield_time_ms=2000)
+            val = await tool.call(input="echo $REZ_FOO", yield_time_ms=2000)
+            assert str(sub) in pwd
+            assert "rez_bar" in val
+            tool.cleanup_session("t_restore")
+
+        run(scenario())
+
+    def test_pending_restore_applied_on_ensure_session(self, caprole, workspace):
+        """_ensure_session consumes the pending restore and re-seeds the shell."""
+        sub = workspace / "pending"
+        sub.mkdir()
+        caprole._pending_restore = {"cwd": str(sub), "env": {"PEND_FOO": "pend_bar"}, "unset": []}
+        tool = bind(Terminal(), caprole, session_id="t_pending")
+
+        async def scenario():
+            await tool._ensure_session()  # applies pending restore once
+            pwd = await tool.call(input="pwd", yield_time_ms=2000)
+            val = await tool.call(input="echo $PEND_FOO", yield_time_ms=2000)
+            assert str(sub) in pwd
+            assert "pend_bar" in val
+            # Pending state is consumed exactly once.
+            assert caprole.take_pending_terminal_restore() is None
+            tool.cleanup_session("t_pending")
+
+        run(scenario())
+
+    def test_restore_value_is_quoted_no_injection(self, caprole, workspace):
+        """A value with shell metacharacters is taken literally (no $(...) eval)."""
+        tool = bind(Terminal(), caprole, session_id="t_quote")
+
+        async def scenario():
+            session = await tool._ensure_session()
+            await session.restore_state("", {"INJ": "$(echo pwned)"}, [])
+            out = await tool.call(input="echo \"$INJ\"", yield_time_ms=2000)
+            assert "$(echo pwned)" in out
+            assert "pwned" not in out.replace("$(echo pwned)", "")
+            tool.cleanup_session("t_quote")
+
+        run(scenario())
+

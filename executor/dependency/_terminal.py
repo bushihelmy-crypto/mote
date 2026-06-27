@@ -52,6 +52,24 @@ INTERRUPT = "\x03"
 _READ_CHUNK = 65_536
 # How long start() waits for the shell's first prompt marker (ready signal).
 _READY_TIMEOUT_S = 5.0
+# Yield window (ms) for the internal, non-model-facing env probe.
+_PROBE_YIELD_MS = 2_000
+# Env keys that are noise for a resume diff (per-process / shell bookkeeping):
+# they change on every shell and must not be re-exported into a fresh one.
+_ENV_NOISE_KEYS = frozenset(
+    {
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "_",
+        "PROMPT_COMMAND",
+        "PS1",
+        "PS2",
+        "LINES",
+        "COLUMNS",
+        "RANDOM",
+    }
+)
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -61,6 +79,16 @@ def _clamp(value: int, low: int, high: int) -> int:
 def _decode(data: bytes) -> str:
     """Decode PTY output, normalising the terminal's CRLF line endings to LF."""
     return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+
+def _shell_quote(value: str) -> str:
+    """Single-quote *value* for safe literal use in a shell command.
+
+    Wraps in single quotes and escapes embedded single quotes the POSIX way
+    (``'\\''``), so the value is taken verbatim — no word-splitting, no glob, no
+    ``$(...)`` / variable expansion. Used to inject restored cwd/env safely.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
 
 
 class HeadTailBuffer:
@@ -139,9 +167,14 @@ class TerminalSession:
     the window and reports whether we are back at a prompt (with the exit code).
     """
 
-    def __init__(self, *, session_key: str, cwd: Optional[str]) -> None:
+    def __init__(self, *, session_key: str, cwd: Optional[str], sandbox_runtime: Optional[object] = None) -> None:
         self.session_key = session_key
         self.cwd = cwd
+        # Optional OS-level sandbox runtime. When set, start() wraps the shell's
+        # argv (bwrap + hardened env) before spawning so the whole interactive
+        # session — and anything it forks — runs inside the sandbox. None => the
+        # historical un-sandboxed PTY shell.
+        self.sandbox_runtime = sandbox_runtime
         self.nonce = uuid.uuid4().hex[:12]
         self.mark = f"__TERM_{self.nonce}__"
         # Matches the PROMPT_COMMAND marker line: optional leading CR/LF, the mark,
@@ -161,6 +194,9 @@ class TerminalSession:
         self._master_fd: Optional[int] = None
         self._transport: Optional[asyncio.BaseTransport] = None
         self._wait_task: Optional[asyncio.Task] = None
+        # The shell's env at launch (captured by start()), used as the baseline
+        # for capture_state()'s diff. Empty until start() probes it.
+        self._baseline_env: dict[str, str] = {}
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -179,17 +215,21 @@ class TerminalSession:
             pass
 
         shell = os.environ.get("SHELL") or "/bin/bash"
+        argv = [shell, "--norc", "--noprofile", "--noediting", "-i"]
+        spawn_env: Optional[dict] = None
+        # When a sandbox runtime is wired, wrap the shell's argv (bwrap + hardened
+        # env) so the interactive session — and everything it forks — runs inside
+        # the sandbox. Falls back to the bare argv when no runtime is configured.
+        if self.sandbox_runtime is not None:
+            argv, spawn_env = await self.sandbox_runtime.wrap_exec(argv, cwd=self.cwd, env=dict(os.environ))
         try:
             self._proc = await asyncio.create_subprocess_exec(
-                shell,
-                "--norc",
-                "--noprofile",
-                "--noediting",
-                "-i",
+                *argv,
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
                 cwd=self.cwd,
+                env=spawn_env,
                 start_new_session=True,
             )
         finally:
@@ -211,6 +251,13 @@ class TerminalSession:
         os.write(master_fd, setup.encode())
         loop_time = loop.time()
         await self.collect(loop_time + _READY_TIMEOUT_S)
+
+        # Snapshot the shell's launch env as the baseline for capture_state()'s
+        # diff (best-effort: a probe failure just leaves an empty baseline, in
+        # which case capture reports the full env as the diff).
+        probed = await self._probe_env()
+        if probed is not None:
+            self._baseline_env = probed[1]
 
     async def _wait_exit(self) -> None:
         assert self._proc is not None
@@ -310,6 +357,110 @@ class TerminalSession:
         yield_ms = _clamp(yield_ms, MIN_YIELD_MS, MAX_YIELD_MS)
         loop = asyncio.get_event_loop()
         return await self.collect(loop.time() + yield_ms / 1000.0)
+
+    # --- state capture / restore (for session resume) ----------------------
+
+    async def _probe_env(self) -> Optional[tuple[str, dict[str, str]]]:
+        """Run a non-model-facing probe and parse out ``(cwd, env)``.
+
+        Reuses the existing :meth:`feed`/:meth:`collect` sentinel machinery: echo
+        is already disabled, so the probe's ``printf`` output *is* the captured
+        text, and the prompt marker (stripped by ``collect``) terminates the
+        window. The probe wraps its output in a private nonce sentinel and uses a
+        US (``\\037``) byte to separate the ``pwd`` section from the ``env``
+        section, so neither can be confused with command output.
+
+        Env is parsed line-by-line as ``KEY=VALUE``. Multi-line values (env
+        prints them across lines) cannot be reliably attributed to a key, so any
+        line without an ``=`` is dropped — a known limitation (documented).
+
+        Best-effort: any failure returns ``None``.
+        """
+        try:
+            probe_nonce = uuid.uuid4().hex[:12]
+            begin = f"__ENVPROBE_{probe_nonce}__"
+            end = f"__ENVPROBE_END_{probe_nonce}__"
+            probe = (
+                f"printf '\\n{begin}\\n'; pwd; printf '\\037'; env; "
+                f"printf '\\n{end}\\n'"
+            )
+            text, _exit, at_prompt, closed = await self.feed(probe, _PROBE_YIELD_MS)
+            if closed or not at_prompt:
+                return None
+            start = text.find(begin)
+            stop = text.find(end)
+            if start == -1 or stop == -1 or stop < start:
+                return None
+            body = text[start + len(begin):stop]
+            sep = body.find("\037")
+            if sep == -1:
+                return None
+            cwd = body[:sep].strip()
+            env_block = body[sep + 1:]
+            env: dict[str, str] = {}
+            for line in env_block.split("\n"):
+                if "=" not in line:
+                    continue  # multi-line value continuation — cannot attribute
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if not key or not key.isidentifier():
+                    continue
+                env[key] = value
+            return (cwd, env)
+        except Exception:  # noqa: BLE001 — capture is best-effort
+            return None
+
+    async def capture_state(self) -> Optional[tuple[str, dict[str, str], list[str]]]:
+        """Capture ``(cwd, env_diff, unset)`` relative to the launch baseline.
+
+        ``env_diff`` = keys added/changed since launch; ``unset`` = keys present
+        at launch but now gone. Noise keys (per-process bookkeeping) are filtered
+        out of both. Best-effort: returns ``None`` on any failure or when the
+        shell is not idle at a prompt (a foreground program holds the terminal).
+        """
+        probed = await self._probe_env()
+        if probed is None:
+            return None
+        cwd, env = probed
+        diff: dict[str, str] = {}
+        for key, value in env.items():
+            if key in _ENV_NOISE_KEYS:
+                continue
+            if self._baseline_env.get(key) != value:
+                diff[key] = value
+        unset = [
+            key
+            for key in self._baseline_env
+            if key not in env and key not in _ENV_NOISE_KEYS
+        ]
+        return (cwd, diff, unset)
+
+    async def restore_state(
+        self, cwd: str, env: dict[str, str], unset: list[str]
+    ) -> None:
+        """Re-seed a fresh shell to a saved ``(cwd, env, unset)`` state.
+
+        Issues ``cd``, ``export``, and ``unset`` as a single fed command and
+        collects to the prompt (output discarded). Values are single-quote
+        escaped so they are taken literally — no command injection, no ``$(...)``
+        evaluation. Best-effort: never raises.
+        """
+        try:
+            parts: list[str] = []
+            if cwd:
+                parts.append(f"cd {_shell_quote(cwd)}")
+            for key, value in env.items():
+                if key in _ENV_NOISE_KEYS or not key.isidentifier():
+                    continue
+                parts.append(f"export {key}={_shell_quote(value)}")
+            keys_to_unset = [k for k in unset if k.isidentifier() and k not in _ENV_NOISE_KEYS]
+            if keys_to_unset:
+                parts.append("unset " + " ".join(keys_to_unset))
+            if not parts:
+                return
+            await self.feed("; ".join(parts), _PROBE_YIELD_MS)
+        except Exception:  # noqa: BLE001 — restore is best-effort
+            pass
 
     def shutdown(self) -> None:
         """Best-effort synchronous teardown (idempotent)."""

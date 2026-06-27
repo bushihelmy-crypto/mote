@@ -144,7 +144,12 @@ class BackgroundTaskPool:
         if progress and self._output_store is not None:
             self._output_store.init_output(task_id)
             meta.output_path = self._output_store.get_output_path(task_id)
-            coro = self._with_progress(coro, task_id)
+            # Capture the spawner's live bus *now* (synchronously, before the
+            # task is created) and hand it to the wrapper explicitly, rather than
+            # leaning on the contextvar surviving the create_task boundary.
+            from metagpt.common.events import current_bus
+
+            coro = self._with_progress(coro, task_id, current_bus())
 
         if timeout is not None and timeout > 0:
             coro = self._with_timeout(coro, timeout)
@@ -358,7 +363,9 @@ class BackgroundTaskPool:
 
         if progress and self._output_store is not None:
             # Output already initialized from original submit; just wrap progress.
-            coro = self._with_progress(coro, task_id)
+            from metagpt.common.events import current_bus
+
+            coro = self._with_progress(coro, task_id, current_bus())
         if timeout is not None and timeout > 0:
             coro = self._with_timeout(coro, timeout)
         coro = self._run_with_semaphore(coro, task_id)
@@ -453,13 +460,22 @@ class BackgroundTaskPool:
         """Wrap *coro* so it raises ``asyncio.TimeoutError`` after *timeout* seconds."""
         return await asyncio.wait_for(coro, timeout=timeout)
 
-    async def _with_progress(self, coro: Coroutine, task_id: str):
+    async def _with_progress(self, coro: Coroutine, task_id: str, bus=None):
         """Run *coro* with the bggraph progress writer bound to this task.
 
         The writer renders each ``report_progress`` event and appends it to the
         task's disk output. The contextvar is set inside the running task so it
         propagates to the driver coroutine and the node tasks it spawns.
+
+        ``bus`` is the event bus captured *synchronously at spawn time* (the only
+        moment the spawner's live contextvar is guaranteed visible). It is
+        re-bound here, inside the spawned task, with an explicit ``set_bus`` —
+        so progress telemetry (``_emit_task_progress``) reaches the right bus by
+        an explicit hand-off, not by relying on ``create_task`` snapshotting the
+        contextvar across the spawn boundary. Pure observation, so losing it
+        could only ever drop a progress mirror, never a control veto.
         """
+        from metagpt.common.events import set_bus
         from metagpt.executor.tasks.bggraph.report import (
             make_progress_writer,
             reset_progress_writer,
@@ -477,7 +493,8 @@ class BackgroundTaskPool:
         )
         token = set_progress_writer(writer)
         try:
-            return await coro
+            with set_bus(bus):
+                return await coro
         finally:
             reset_progress_writer(token)
 

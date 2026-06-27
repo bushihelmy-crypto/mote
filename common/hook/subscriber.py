@@ -35,7 +35,14 @@ from metagpt.common.hook.types import HookOutcome
 
 
 class HookSubscriber:
-    """Routes control events to the wrapped :class:`HookManager`."""
+    """Routes control events to the wrapped :class:`HookManager`.
+
+    Exposing ``handle_control`` (not ``handle``) is what places this subscriber on
+    the bus's **control plane**: the bus awaits it inline, in priority order, and
+    folds the :class:`HookOutcome` it returns into the value the emitter reads.
+    This is the *only* subscriber that can veto/mutate/stop — influence over the
+    host is confined to the control plane by construction.
+    """
 
     #: Run early so a hook veto lands before the recorder persists the event.
     priority: int = 10
@@ -43,7 +50,7 @@ class HookSubscriber:
     def __init__(self, hook_manager) -> None:
         self._hook = hook_manager
 
-    async def handle(self, event) -> Optional[HookOutcome]:
+    async def handle_control(self, event) -> Optional[HookOutcome]:
         name, payload = self._to_fire(event)
         if name is None:
             return None

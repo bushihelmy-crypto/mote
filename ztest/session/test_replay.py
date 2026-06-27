@@ -12,8 +12,10 @@ from __future__ import annotations
 from metagpt.common.schema import AIMessage, UserMessage
 from metagpt.session.events import (
     CompactedEvent,
+    KernelStateEvent,
     MessageEvent,
     SessionMetaEvent,
+    TerminalStateEvent,
     TurnContextEvent,
 )
 from metagpt.session.log import SessionLog
@@ -101,3 +103,64 @@ def test_replay_missing_log_is_empty(tmp_path):
     result = replay(log)
     assert result.messages == []
     assert result.meta is None
+
+
+def test_terminal_state_none_by_default(tmp_path):
+    log = _fresh_log(tmp_path)
+    log.append(MessageEvent(message=UserMessage(content="hi")))
+    result = replay(log)
+    assert result.terminal_state is None
+
+
+def test_terminal_state_captured(tmp_path):
+    log = _fresh_log(tmp_path)
+    log.append(MessageEvent(message=UserMessage(content="hi")))
+    log.append(TerminalStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Terminal"))
+    result = replay(log)
+    # Terminal state is not part of the message-history rebuild.
+    assert [m.content for m in result.messages] == ["hi"]
+    assert result.terminal_state == {"cwd": "/tmp", "env": {"FOO": "bar"}, "unset": ["OLD"]}
+
+
+def test_terminal_state_last_write_wins(tmp_path):
+    log = _fresh_log(tmp_path)
+    log.append(TerminalStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
+    log.append(TerminalStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
+    result = replay(log)
+    assert result.terminal_state == {"cwd": "/second", "env": {"B": "2"}, "unset": ["A"]}
+
+
+def test_kernel_state_none_by_default(tmp_path):
+    log = _fresh_log(tmp_path)
+    log.append(MessageEvent(message=UserMessage(content="hi")))
+    result = replay(log)
+    assert result.kernel_state is None
+
+
+def test_kernel_state_captured(tmp_path):
+    log = _fresh_log(tmp_path)
+    log.append(MessageEvent(message=UserMessage(content="hi")))
+    log.append(KernelStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Jupyter"))
+    result = replay(log)
+    # Kernel state is not part of the message-history rebuild.
+    assert [m.content for m in result.messages] == ["hi"]
+    assert result.kernel_state == {"cwd": "/tmp", "env": {"FOO": "bar"}, "unset": ["OLD"]}
+
+
+def test_kernel_state_last_write_wins(tmp_path):
+    log = _fresh_log(tmp_path)
+    log.append(KernelStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
+    log.append(KernelStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
+    result = replay(log)
+    assert result.kernel_state == {"cwd": "/second", "env": {"B": "2"}, "unset": ["A"]}
+
+
+def test_terminal_and_kernel_states_are_independent(tmp_path):
+    """Both restore on resume without clobbering each other (the split's point)."""
+    log = _fresh_log(tmp_path)
+    log.append(TerminalStateEvent(cwd="/shell", env={"SH": "1"}, unset=[]))
+    log.append(KernelStateEvent(cwd="/kernel", env={"KE": "2"}, unset=[]))
+    result = replay(log)
+    assert result.terminal_state == {"cwd": "/shell", "env": {"SH": "1"}, "unset": []}
+    assert result.kernel_state == {"cwd": "/kernel", "env": {"KE": "2"}, "unset": []}
+

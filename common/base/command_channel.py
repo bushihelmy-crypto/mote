@@ -16,14 +16,14 @@ if TYPE_CHECKING:
 
 
 #: The protocol-specific ``${placeholder}`` names the prompt templates expect
-#: every channel's ``prompt_vars()`` to fill (system prompt: output_format /
-#: command_guide; per-turn user prompt: command_hint). The builder asserts a
-#: channel covers these, so a partial dict fails the build instead of leaking a
-#: literal ``${output_format}`` to the model. Extending the prompt with a new
-#: protocol section is a three-line change: add its key here, a ``${key}`` in
-#: the template, and the value in each channel's ``prompt_vars()`` — nothing in
-#: ThinkInputs / ThinkContext / collect_context changes.
-PROMPT_VAR_KEYS = ("output_format", "command_guide", "command_hint")
+#: every channel's ``prompt_vars()`` to fill (the system-prompt command_guide
+#: section). The builder asserts a channel covers these, so a partial dict fails
+#: the build instead of leaking a literal ``${command_guide}`` to the model.
+#: Extending the prompt with a new protocol section is a three-line change: add
+#: its key here, a ``${key}`` in the template, and the value in each channel's
+#: ``prompt_vars()`` — nothing in ThinkInputs / ThinkContext / collect_context
+#: changes.
+PROMPT_VAR_KEYS = ("command_guide",)
 
 
 class CommandChannel(ABC):
@@ -58,16 +58,15 @@ class CommandChannel(ABC):
         """Named ``${placeholder}`` fills this protocol contributes to the prompts.
 
         The single seam by which a channel injects its protocol-specific prompt
-        sections — output_format (system OUTPUT block), command_guide (system
-        "# Using commands" mechanics), command_hint (per-turn user-prompt hint).
-        The builder merges this dict straight into the template substitutions, so
-        the channel — not ThinkInputs/ThinkContext — owns every protocol section.
+        sections — command_guide (system "# Using commands" mechanics). The
+        builder merges this dict straight into the template substitutions, so the
+        channel — not ThinkInputs/ThinkContext — owns every protocol section.
 
         Symmetric with ``vocabulary()``: that supplies inline ``⟦symbol⟧``
-        surfaces, this supplies block-level ``${section}`` text. XML fills all
-        three with its ``<end></end>`` / command-tag mechanics; native fills only
-        command_guide (output is API-constrained, no per-turn hint) and never
-        carries the ``<end></end>`` marker.
+        surfaces, this supplies block-level ``${section}`` text. XML fills
+        command_guide with its ``<end></end>`` / command-tag mechanics; native
+        fills it with tool-call mechanics and never carries the ``<end></end>``
+        marker.
 
         Must cover ``PROMPT_VAR_KEYS`` (the placeholders the templates reference);
         the default fills them all with "" — a channel that adds no protocol

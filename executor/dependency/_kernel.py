@@ -25,9 +25,11 @@ This module owns only the engine; the per-Role lifecycle lives in the tool.
 from __future__ import annotations
 
 import asyncio
+import json
 import queue
 import re
 import signal
+import uuid
 from typing import Optional
 
 from metagpt.executor.tool_result import ToolError
@@ -45,6 +47,28 @@ _INTERRUPT_GRACE_S = 5.0
 _READY_TIMEOUT_S = 30.0
 # Output cap: keep a head 50% + tail 50%, drop the middle.
 OUTPUT_MAX_CHARS = 1024 * 1024
+
+# Timeout (s) for the internal, non-model-facing env probe / restore.
+_PROBE_TIMEOUT_S = 5.0
+# Env keys that are noise for a resume diff (per-process / launch bookkeeping):
+# they vary on every kernel start and must not be re-applied into a fresh one.
+# Anything jupyter/ipykernel injects at launch is already in the baseline (probed
+# right after start), so only the per-process / launch-varying keys remain noise.
+# PWD is doubly noise for a kernel: os.environ["PWD"] is NOT updated by os.chdir,
+# so it is stale — the authoritative cwd comes from os.getcwd() (the probe's cwd).
+_ENV_NOISE_KEYS = frozenset(
+    {
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "_",
+        "JPY_PARENT_PID",
+        "JPY_SESSION_NAME",
+        "JPY_INTERRUPT_EVENT",
+        "JPY_API_TOKEN",
+        "KERNEL_LAUNCH_TIMEOUT",
+    }
+)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -77,20 +101,93 @@ class KernelSession:
     interrupted and the partial output returned).
     """
 
-    def __init__(self, *, session_key: str, cwd: Optional[str]) -> None:
+    def __init__(self, *, session_key: str, cwd: Optional[str], sandbox_runtime: Optional[object] = None) -> None:
         self.session_key = session_key
         self.cwd = cwd
+        # Optional OS-level sandbox runtime. When set, start() wraps the kernel's
+        # launch command (bwrap + hardened env) before spawning so the kernel —
+        # and anything it forks — runs inside the sandbox. None => the historical
+        # un-sandboxed kernel.
+        #
+        # NB (control-channel transport): inside the sandbox the kernel<->client
+        # channels run over ipc:// unix sockets (filesystem-bound, NOT loopback
+        # TCP), so they are unaffected by the network namespace. The socket
+        # directory is bind-mounted into the sandbox via wrap_exec's
+        # ``extra_writable`` (host client + sandboxed kernel see the same socket
+        # inodes), so the kernel can safely run under the netns sole-egress chain.
+        # The un-sandboxed kernel keeps the historical tcp transport + manager
+        # ``{connection_file}`` substitution.
+        self.sandbox_runtime = sandbox_runtime
+        # Host temp dir holding the ipc:// sockets + connection file when
+        # sandboxed; bind-mounted into the sandbox and rmtree'd at teardown.
+        self._sock_dir: Optional[str] = None
         self._km = None  # AsyncKernelManager
         self._kc = None  # AsyncKernelClient
         self._closed = False
+        # Snapshot of the kernel's launch env, baseline for capture_state()'s
+        # diff. Empty until start() probes it.
+        self._baseline_env: dict[str, str] = {}
 
     # --- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
+        import os
+
         from jupyter_client.manager import AsyncKernelManager
 
         self._km = AsyncKernelManager()
-        await self._km.start_kernel(cwd=self.cwd)
+        start_kwargs: dict = {"cwd": self.cwd}
+        # When a sandbox runtime is wired, wrap the kernel launch command so the
+        # kernel runs inside the sandbox.
+        #
+        # The control channels use ipc:// unix sockets (not loopback TCP) so they
+        # survive the network namespace the sandbox may unshare for sole-egress.
+        # unix sockets live on the filesystem, so we put them in a short-pathed
+        # host temp dir (AF_UNIX caps paths at ~108 chars; the default jupyter
+        # runtime dir + uuid can overflow) and bind that dir read-write into the
+        # sandbox via ``extra_writable`` so the host client and sandboxed kernel
+        # share the same socket inodes.
+        #
+        # The connection file is PRE-RESOLVED here (write_connection_file) rather
+        # than relying on the manager's ``{connection_file}`` substitution: under
+        # the netns launcher the payload argv is base64-encoded into a config
+        # token, so the manager can't find/replace a brace nested inside it. A
+        # concrete ``-f <path>`` sidesteps that for both the direct-bwrap and
+        # netns paths.
+        if self.sandbox_runtime is not None:
+            import sys
+            import tempfile
+
+            self._sock_dir = tempfile.mkdtemp(prefix="mgk-")
+            self._km.transport = "ipc"
+            # Pin the connection file inside the (bind-mounted) socket dir so the
+            # sandboxed kernel can read it. We set ``connection_file`` directly
+            # rather than ``connection_dir`` because write_connection_file ignores
+            # the latter and would otherwise drop a random ``/tmp/tmpXXX.json``
+            # that bwrap's ``--tmpfs /tmp`` masks out (unreadable inside).
+            self._km.connection_file = os.path.join(self._sock_dir, "conn.json")
+            # Absolute socket prefix => k-1 .. k-5. A relative prefix would be
+            # resolved against each side's cwd and never line up.
+            self._km.ip = os.path.join(self._sock_dir, "k")
+            self._km.write_connection_file()
+            conn = self._km.connection_file
+            base_cmd = [sys.executable, "-m", "ipykernel_launcher", "-f", conn]
+            wrapped, env = await self.sandbox_runtime.wrap_exec(
+                base_cmd,
+                cwd=self.cwd,
+                env=dict(os.environ),
+                extra_writable=[self._sock_dir],
+            )
+            # Inject the wrapped launch command via the kernel spec's argv — the
+            # seam the local provisioner actually reads (format_kernel_cmd builds
+            # from ``kernel_spec.argv``). The ``KernelManager.kernel_cmd`` trait
+            # is NOT honoured by jupyter_client's provisioner path, so setting it
+            # would silently leave the kernel un-sandboxed. The argv carries a
+            # concrete ``-f <conn>`` (no ``{connection_file}`` brace), so
+            # format_kernel_cmd's substitution is a harmless no-op.
+            self._km.kernel_spec.argv = wrapped
+            start_kwargs["env"] = env
+        await self._km.start_kernel(**start_kwargs)
         self._kc = self._km.client()
         self._kc.start_channels()
         try:
@@ -98,6 +195,12 @@ class KernelSession:
         except RuntimeError as e:
             self.kill()
             raise ToolError(f"Error: Python kernel failed to start: {e}")
+        # Snapshot the kernel's launch env as the baseline for capture_state()'s
+        # diff (best-effort; an empty baseline just makes the first diff report
+        # the full env, which is harmless).
+        probed = await self._probe_env()
+        if probed is not None:
+            self._baseline_env = probed[1]
 
     @property
     def closed(self) -> bool:
@@ -175,6 +278,122 @@ class KernelSession:
         await self._drain("", parts, loop.time() + _INTERRUPT_GRACE_S)
         return _cap_text("".join(parts))
 
+    # --- state capture / restore (for session resume) ----------------------
+
+    async def _run_internal(self, code: str, timeout: float) -> Optional[str]:
+        """Run non-model-facing code WITHOUT touching the execution history.
+
+        ``store_history=False`` keeps stdout streaming (so the probe's ``print``
+        is captured) while leaving the kernel's ``execution_count`` and IPython's
+        ``_`` / ``Out`` / ``In`` untouched — the kernel analog of the terminal's
+        echo-disabled, non-model-facing probe. Returns the drained stdout text,
+        or ``None`` on timeout / failure (best-effort).
+        """
+        try:
+            msg_id = self._kc.execute(code, store_history=False, allow_stdin=False)
+            loop = asyncio.get_event_loop()
+            parts: list[str] = []
+            if not await self._drain(msg_id, parts, loop.time() + timeout):
+                return None
+            return "".join(parts)
+        except Exception:  # noqa: BLE001 — internal probe/restore is best-effort
+            return None
+
+    async def _probe_env(self) -> Optional[tuple[str, dict[str, str]]]:
+        """Run a non-model-facing probe and parse out ``(cwd, env)``.
+
+        Runs a one-liner that prints ``{"cwd", "env"}`` as JSON wrapped in a
+        private nonce sentinel. Uses inline ``__import__`` so it binds **no**
+        names in the user namespace, and ``store_history=False`` so it does not
+        advance the execution counter. JSON serialization sidesteps the shell
+        probe's multi-line / quoting pitfalls entirely.
+
+        Best-effort: any failure returns ``None``.
+        """
+        try:
+            nonce = uuid.uuid4().hex[:12]
+            begin = f"__KPROBE_{nonce}__"
+            end = f"__KEND_{nonce}__"
+            code = (
+                f"print('{begin}' + __import__('json').dumps("
+                f"{{'cwd': __import__('os').getcwd(), "
+                f"'env': dict(__import__('os').environ)}}) + '{end}')"
+            )
+            text = await self._run_internal(code, _PROBE_TIMEOUT_S)
+            if not text:
+                return None
+            start = text.find(begin)
+            stop = text.find(end)
+            if start == -1 or stop == -1 or stop < start:
+                return None
+            payload = json.loads(text[start + len(begin):stop])
+            env = {
+                str(k): str(v)
+                for k, v in dict(payload.get("env", {})).items()
+            }
+            return (str(payload.get("cwd", "")), env)
+        except Exception:  # noqa: BLE001 — capture is best-effort
+            return None
+
+    async def capture_state(self) -> Optional[tuple[str, dict[str, str], list[str]]]:
+        """Capture ``(cwd, env_diff, unset)`` relative to the launch baseline.
+
+        ``env_diff`` = keys added/changed since launch; ``unset`` = keys present
+        at launch but now gone. Noise keys (per-process / launch bookkeeping) are
+        filtered out of both. Best-effort: returns ``None`` on any failure (e.g.
+        the kernel is not idle/healthy).
+        """
+        probed = await self._probe_env()
+        if probed is None:
+            return None
+        cwd, env = probed
+        diff: dict[str, str] = {}
+        for key, value in env.items():
+            if key in _ENV_NOISE_KEYS:
+                continue
+            if self._baseline_env.get(key) != value:
+                diff[key] = value
+        unset = [
+            key
+            for key in self._baseline_env
+            if key not in env and key not in _ENV_NOISE_KEYS
+        ]
+        return (cwd, diff, unset)
+
+    async def restore_state(
+        self, cwd: str, env: dict[str, str], unset: list[str]
+    ) -> None:
+        """Re-seed a fresh kernel to a saved ``(cwd, env, unset)`` state.
+
+        Injects ``os.chdir`` + ``os.environ.update`` + ``pop`` as one
+        non-model-facing cell (``store_history=False``, binds no names). Values
+        are embedded with ``repr()`` — the Python analog of the terminal's
+        single-quote escaping — so a str/dict/list-of-str yields a safe literal
+        and no embedded code is evaluated. Restores cwd + env only, never the
+        Python namespace. Best-effort: never raises.
+        """
+        try:
+            env = {
+                k: v
+                for k, v in env.items()
+                if k not in _ENV_NOISE_KEYS and k.isidentifier()
+            }
+            unset = [k for k in unset if k.isidentifier() and k not in _ENV_NOISE_KEYS]
+            lines: list[str] = []
+            if cwd:
+                lines.append(f"__import__('os').chdir({cwd!r})")
+            if env:
+                lines.append(f"__import__('os').environ.update({env!r})")
+            if unset:
+                lines.append(
+                    f"[__import__('os').environ.pop(_k, None) for _k in {unset!r}]"
+                )
+            if not lines:
+                return
+            await self._run_internal("\n".join(lines), _PROBE_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 — restore is best-effort
+            pass
+
     async def restart(self) -> None:
         """Restart the kernel — clears all in-memory state."""
         await self._km.restart_kernel(now=True)
@@ -199,6 +418,7 @@ class KernelSession:
                 self.kill()
         self._km = None
         self._kc = None
+        self._cleanup_sock_dir()
 
     def kill(self) -> None:
         """Best-effort synchronous teardown (idempotent) — for cleanup_session.
@@ -221,3 +441,12 @@ class KernelSession:
                 except (ProcessLookupError, OSError):
                     pass
             self._km = None
+        self._cleanup_sock_dir()
+
+    def _cleanup_sock_dir(self) -> None:
+        """Remove the ephemeral ipc:// socket dir, if any (idempotent)."""
+        if self._sock_dir is not None:
+            import shutil
+
+            shutil.rmtree(self._sock_dir, ignore_errors=True)
+            self._sock_dir = None

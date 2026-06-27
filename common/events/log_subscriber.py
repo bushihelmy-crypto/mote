@@ -14,13 +14,12 @@ LLM stream deltas are deliberately *not* logged: they arrive via the bus's sync
 fan-out (``handle_sync``), which this subscriber does not implement, so per-token
 chunks never reach :meth:`handle` (and would flood the log if they did).
 
-Best-effort: :meth:`handle` returns ``None`` (never folds an outcome) and
+Best-effort: as an observation subscriber :meth:`handle` returns nothing (the bus
+structurally drops an observer's return — it can never fold an outcome) and
 swallows its own errors — a logging failure must never break a turn.
 """
 
 from __future__ import annotations
-
-from typing import Optional
 
 from metagpt.common.events.types import (
     AgentLifecycleEvent,
@@ -42,7 +41,6 @@ from metagpt.common.events.types import (
     TurnStartEvent,
     UserPromptSubmitEvent,
 )
-from metagpt.common.hook.types import HookOutcome
 from metagpt.common.logs import logger
 
 def _clip(text: str) -> str:
@@ -56,17 +54,16 @@ class LogSubscriber:
     #: it reads cleanly as "log what finally happened".
     priority: int = 90
 
-    async def handle(self, event) -> Optional[HookOutcome]:
+    async def handle(self, event) -> None:
         # TaskProgress and agent-lifecycle ride the sync fan-out (handle_sync);
         # ignore them here so they aren't logged twice should one ever reach the
         # async path.
         if isinstance(event, (TaskProgressEvent, AgentLifecycleEvent)):
-            return None
+            return
         try:
             self._log(event)
         except Exception as exc:  # noqa: BLE001 — logging must never break a turn
             logger.warning(f"LogSubscriber: failed to log {getattr(event, 'name', '?')}: {exc}")
-        return None
 
     def handle_sync(self, event) -> None:
         # Narrowly opt into the sync fan-out: low-frequency background task

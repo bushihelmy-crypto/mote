@@ -4,9 +4,8 @@
 
 ``iter_commands`` runs the *real* XML lexer (``parse_commands2`` ->
 ``PythonObjectParser``), so the inputs here are genuine XML command blocks in
-the documented OUTPUT_SECTION shape. ``record_turn`` and ``output_format`` are
-exercised against the channel directly; the think round is faked via
-:class:`FakeThinkEngine`.
+the documented OUTPUT_SECTION shape. ``record_turn`` is exercised against the
+channel directly; the think round is faked via :class:`FakeThinkEngine`.
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ import pytest
 
 from metagpt.common.base import CommandChannel
 from metagpt.common.const import IMAGES, PDFS
-from metagpt.common.prompt.output import OUTPUT_SECTION, XML_COMMAND_GUIDE, XML_COMMAND_HINT
+from metagpt.common.prompt.output import XML_COMMAND_GUIDE
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
@@ -30,18 +29,10 @@ class TestContract:
     def test_is_command_channel(self):
         assert isinstance(XmlCommandChannel(), CommandChannel)
 
-    def test_prompt_vars_output_format_is_output_section(self):
-        assert XmlCommandChannel().prompt_vars()["output_format"] == OUTPUT_SECTION
-
     def test_prompt_vars_command_guide_is_xml_guide_with_end_marker(self):
         guide = XmlCommandChannel().prompt_vars()["command_guide"]
         assert guide == XML_COMMAND_GUIDE
         assert "<end></end>" in guide
-
-    def test_prompt_vars_command_hint_is_xml_hint_with_end_marker(self):
-        hint = XmlCommandChannel().prompt_vars()["command_hint"]
-        assert hint == XML_COMMAND_HINT
-        assert "<end></end>" in hint
 
     def test_prompt_vars_covers_required_keys(self):
         from metagpt.common.base.command_channel import PROMPT_VAR_KEYS

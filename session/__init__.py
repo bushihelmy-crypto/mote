@@ -12,11 +12,14 @@ resume/list. Core pieces:
 """
 
 from metagpt.session.events import (
+    BrowserStateEvent,
     CompactedEvent,
     FileSnapshotEvent,
+    KernelStateEvent,
     MessageEvent,
     MetaUpdateEvent,
     SessionMetaEvent,
+    TerminalStateEvent,
     TurnContextEvent,
 )
 from metagpt.session.fork import fork
@@ -31,6 +34,9 @@ from metagpt.session.log import SessionLog
 from metagpt.session.replay import ReplayResult, replay
 from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
 from metagpt.session.subscribers import RecorderSubscriber
+from metagpt.session.terminal_state import TerminalStateRecorder
+from metagpt.session.kernel_state import KernelStateRecorder
+from metagpt.session.browser_state import BrowserStateRecorder
 
 __all__ = [
     "SessionLog",
@@ -41,6 +47,12 @@ __all__ = [
     "TurnContextEvent",
     "MetaUpdateEvent",
     "FileSnapshotEvent",
+    "TerminalStateEvent",
+    "TerminalStateRecorder",
+    "KernelStateEvent",
+    "KernelStateRecorder",
+    "BrowserStateEvent",
+    "BrowserStateRecorder",
     "ReplayResult",
     "replay",
     "SessionInfo",

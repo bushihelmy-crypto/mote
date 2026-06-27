@@ -274,6 +274,47 @@ class TestMcpFiltering:
         assert set(ex.get_all_tool_schemas()) == {"Echo", "server:tool"}
 
 
+class TestPipelineFiltering:
+    """A pipeline tool is recognised by holding a compiled-graph executor —
+    an instance attribute stamped by ``mark_pipeline_executor`` — so it lands
+    in its own category, separate from built-in and MCP tools."""
+
+    def _pipeline_tool(self, name="Pipe"):
+        from metagpt.executor.tasks.bggraph.marker import mark_pipeline_executor
+
+        async def _exec(**state):  # a stand-in compiled-graph executor
+            return None
+
+        class PipelineTool(BaseTool):
+            async def call(self, **kwargs):
+                return None
+
+        PipelineTool.name = name
+        tool = PipelineTool()
+        # Wiring a compiled executor onto the instance is what makes it a pipeline.
+        tool._executor = mark_pipeline_executor(_exec)
+        return tool
+
+    async def test_builtin_schemas_exclude_pipeline(self):
+        ex = make_executor(EchoTool(), self._pipeline_tool())
+        builtin = ex.get_tool_schemas()
+        assert "Echo" in builtin
+        assert "Pipe" not in builtin
+
+    async def test_pipeline_schemas_only(self):
+        ex = make_executor(EchoTool(), self._pipeline_tool())
+        pipeline = ex.get_pipeline_tool_schemas()
+        assert set(pipeline) == {"Pipe"}
+
+    async def test_pipeline_excluded_from_mcp(self):
+        ex = make_executor(self._pipeline_tool())
+        assert ex.get_mcp_tool_schemas() == {}
+
+    async def test_all_schemas_include_pipeline(self):
+        ex = make_executor(EchoTool(), self._pipeline_tool())
+        assert set(ex.get_all_tool_schemas()) == {"Echo", "Pipe"}
+
+
 class TestConstructorAndCleanup:
     async def test_constructor_prebinds_from_registry(self, restore_global_registry):
         # Register a test tool into the (snapshotted) global registry, then let

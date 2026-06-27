@@ -15,8 +15,8 @@ from metagpt.common.events import (
     ResourceReportEvent,
     SessionStartEvent,
     TaskProgressEvent,
-    emit_event,
-    emit_event_sync,
+    observe_event,
+    observe_event_sync,
     set_bus,
 )
 from metagpt.common.events.log_subscriber import _clip
@@ -76,7 +76,7 @@ async def test_stream_deltas_are_not_logged(monkeypatch):
     bus = EventBus()
     bus.subscribe(LogSubscriber())
     with set_bus(bus):
-        emit_event_sync(LLMStreamDeltaEvent(token="tok"))
+        observe_event_sync(LLMStreamDeltaEvent(token="tok"))
     assert info == [] and debug == []
 
 
@@ -86,7 +86,7 @@ async def test_subscribed_on_bus_logs_via_emit(monkeypatch):
     bus = EventBus()
     bus.subscribe(LogSubscriber())
     with set_bus(bus):
-        await emit_event(SessionStartEvent(session_id="zzzz", source="resume"))
+        await observe_event(SessionStartEvent(session_id="zzzz", source="resume"))
     assert any("session_start" in line for line in info)
 
 
@@ -179,5 +179,5 @@ def test_agent_lifecycle_via_emit_sync(monkeypatch):
     bus = EventBus()
     bus.subscribe(LogSubscriber())
     with set_bus(bus):
-        emit_event_sync(AgentLifecycleEvent(session_id="feedface", phase="added", detail="Foo"))
+        observe_event_sync(AgentLifecycleEvent(session_id="feedface", phase="added", detail="Foo"))
     assert any("agent_lifecycle" in line and "added" in line for line in info)

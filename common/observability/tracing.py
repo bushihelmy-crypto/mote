@@ -36,7 +36,6 @@ from metagpt.common.events.types import (
     SpanEndEvent,
     SpanStartEvent,
 )
-from metagpt.common.hook.types import HookOutcome
 from metagpt.common.logs import logger
 
 
@@ -106,7 +105,7 @@ class TracingSubscriber:
         #: request_id -> backend generation handle.
         self._gens: Dict[str, Any] = {}
 
-    async def handle(self, event) -> Optional[HookOutcome]:
+    async def handle(self, event) -> None:
         try:
             if isinstance(event, SpanStartEvent):
                 self._start_span(event)
@@ -120,7 +119,6 @@ class TracingSubscriber:
                 self._fail_generation(event)
         except Exception as exc:  # noqa: BLE001 — tracing must never break a turn
             logger.debug(f"TracingSubscriber: failed on {getattr(event, 'name', '?')}: {exc}")
-        return None
 
     # ------------------------------------------------------------------ spans
     def _start_span(self, event: SpanStartEvent) -> None:

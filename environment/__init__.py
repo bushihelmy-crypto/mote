@@ -13,8 +13,18 @@ Faithful Python/asyncio port of ``codex-rs/core/src/agent/*``.
 
 from __future__ import annotations
 
+from metagpt.common.agent_control import (
+    Lifecycle,
+    SpawnContext,
+    SpawnSpec,
+    current_control,
+    resolve_control,
+    set_control,
+    spawn_and_run,
+)
 from metagpt.environment.agent_path import AgentPath
 from metagpt.environment.base_env import AgentEnvironment
+from metagpt.environment.comms import CommGraph, CommKind
 from metagpt.environment.control import AgentControl
 from metagpt.common.exception import (
     AgentControlError,
@@ -23,6 +33,7 @@ from metagpt.common.exception import (
     AgentNotKnown,
     AgentPathExists,
 )
+from metagpt.environment.handle import ChildAgentHandle
 from metagpt.environment.limiter import AgentExecutionLimiter
 from metagpt.environment.mailbox import (
     DeliveryMode,
@@ -52,6 +63,9 @@ __all__ = [
     "AgentRegistry",
     "AgentRuntime",
     "AgentStatus",
+    "ChildAgentHandle",
+    "CommGraph",
+    "CommKind",
     "CronScheduler",
     "CronService",
     "CronTask",
@@ -61,8 +75,15 @@ __all__ = [
     "FileWatcher",
     "FileWatchService",
     "InterAgentCommunication",
+    "Lifecycle",
     "Mailbox",
     "MGXEnv",
     "Residency",
     "ResidencyStore",
+    "SpawnContext",
+    "SpawnSpec",
+    "current_control",
+    "resolve_control",
+    "set_control",
+    "spawn_and_run",
 ]

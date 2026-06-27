@@ -17,22 +17,25 @@ def get_metagpt_package_root():
 
 
 def get_metagpt_root():
-    """Get the project root directory."""
-    # Check if a project root is specified in the environment variable
+    """Get the project root directory.
+
+    Resolution order: the ``METAGPT_PROJECT_ROOT`` env override, then the
+    package root when it looks like a project checkout (carries a ``.git`` /
+    ``.project_root`` / ``.gitignore`` marker), else the current directory.
+    Deriving from the package location keeps ``SOURCE_ROOT`` (and the shipped
+    ``metagpt/config.yaml`` it points at) stable regardless of ``cwd``.
+    """
     project_root_env = os.getenv("METAGPT_PROJECT_ROOT")
     if project_root_env:
         project_root = Path(project_root_env)
         logger.info(f"PROJECT_ROOT set from environment variable to {str(project_root)}")
-    else:
-        # Fallback to package root if no environment variable is set
-        project_root = get_metagpt_package_root()
-        for i in (".git", ".project_root", ".gitignore"):
-            if (project_root / i).exists():
-                break
-        else:
-            project_root = Path.cwd()
+        return project_root
 
-    return project_root
+    project_root = get_metagpt_package_root()
+    for marker in (".git", ".project_root", ".gitignore"):
+        if (project_root / marker).exists():
+            return project_root
+    return Path.cwd()
 
 
 # METAGPT PROJECT ROOT AND VARS

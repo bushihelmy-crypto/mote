@@ -37,13 +37,10 @@ class NativeToolChannel(CommandChannel):
         }
 
     def prompt_vars(self) -> dict[str, str]:
-        # Native supplies only the tool-call "# Using commands" guidance; output is
-        # API-constrained (no OUTPUT section) and there is no per-turn hint —
-        # crucially neither carries the <end></end> marker the model would echo.
+        # Native supplies the tool-call "# Using commands" guidance; it carries no
+        # <end></end> marker the model would echo.
         return {
-            "output_format": "",
             "command_guide": NATIVE_COMMAND_GUIDE,
-            "command_hint": "",
         }
 
     def tool_specs(self, executor) -> Optional[list[dict]]:

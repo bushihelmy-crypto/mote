@@ -9,7 +9,7 @@ until the turn boundary, then *renders* them into the cycle's
 A single object playing both sides of the bridge (the same dual-role shape as
 ``CompactionNoticeContextSource``, since the producer — ``LspService`` — already
 lives elsewhere, so no extra wrapper is warranted):
-- as an :class:`~metagpt.common.interface.EventSubscriber` it ``handle``\\s each
+- as an :class:`~metagpt.common.interface.ObservationSubscriber` it ``handle``\\s each
   DiagnosticsEvent and stages its block (several edits within one turn collapse
   into one drained block);
 - as an :class:`~metagpt.common.interface.EphemeralContextSource` it ``render``\\s
@@ -33,9 +33,10 @@ class DiagnosticsBuffer:
 
     name = "lsp"
     # Render order in the turn-context bus (after git/token/compaction/tasks).
-    # The same value serves as the EventSubscriber dispatch priority, where it is
+    # The same value serves as the ObservationSubscriber dispatch priority, where it is
     # immaterial — this handler only accumulates, returning no outcome.
     priority: int = 40
+    save_to_context: bool = True
 
     def __init__(self) -> None:
         self._blocks: List[str] = []

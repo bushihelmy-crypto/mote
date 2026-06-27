@@ -13,6 +13,7 @@ Public surface:
       :func:`final_output`, :func:`status_line_dict`, :func:`format_cost`.
 """
 
+from metagpt.router.cost.node import CostNode
 from metagpt.router.cost.pricing import (
     DEFAULT_UNKNOWN_PRICING,
     PRICING,
@@ -25,6 +26,7 @@ from metagpt.router.cost.pricing import (
 from metagpt.router.cost.report import (
     final_output,
     format_cost,
+    format_cost_tree,
     format_model_usage,
     format_total_cost,
     status_line_dict,
@@ -56,8 +58,11 @@ __all__ = [
     "Costs",
     "BASELINE_TOKENS",
     "context_window_for",
+    # node (fleet cost mirror tree)
+    "CostNode",
     # report
     "format_cost",
+    "format_cost_tree",
     "format_model_usage",
     "format_total_cost",
     "final_output",

@@ -83,6 +83,44 @@ TERMINAL_DESCRIPTION = (
     "ordinary one-shot commands prefer the Bash tool."
 )
 
+WEB_BROWSER_DESCRIPTION = (
+    "Drive a persistent web browser kept alive across calls (one per session). "
+    "The open tabs, navigated URLs, and logged-in session persist between calls, "
+    "so you build up browsing state step by step. Pick an action: "
+    "snapshot (list the page's interactive elements, each tagged with an index "
+    "like [5]), navigate (go to url), click (selector — an element index from the "
+    "latest snapshot like '5', or a CSS selector), type (selector + text; set "
+    "clear=false to append instead of replace), wait (block until a selector "
+    "appears or a JS expression is truthy — for dynamic/SPA content), "
+    "detect_forms (list the page's forms and their fillable fields with "
+    "selectors), fill_form (fill many fields at once via a {selector: value} "
+    "mapping, with an optional submit selector), extract (pull structured data "
+    "via a {key: 'selector[@attr]'} schema, returning JSON), read (return the "
+    "page's main content as Markdown), screenshot (capture the page as an image), "
+    "eval (run JavaScript and return its result as JSON), "
+    "assist (pause and ask the user to supply something only they can — their "
+    "own private data (phone number, email, account, address), a one-time code, "
+    "scan a login QR code, clear a graphical captcha; pass a prompt describing "
+    "what you need. Never invent a user's personal details (phone, email, ID) — "
+    "ask via assist. Code-by-phone/email login is two assists: first ask for the "
+    "phone number or email and type it to trigger the code, then ask for the code "
+    "the user received. Headless: a "
+    "screenshot of the page is saved to disk and the user is told where to view "
+    "it, then replies with the value; works for OTP / QR / graphical captcha. "
+    "assist only asks — it does not fill anything; act on the user's reply with "
+    "type/fill_form. Interactive challenges like sliders need a headed browser), "
+    "back (history back), "
+    "tabs (list open tabs), new_tab (open url in a new tab), switch_tab (index), "
+    "close_tab (index), close (shut the browser down). "
+    "Typical loop: snapshot to see what's on the page and get element indices, "
+    "then click/type by index. Re-snapshot after navigation or any DOM change — "
+    "indices are only valid for the latest snapshot. For forms, detect_forms then "
+    "fill_form is faster than typing fields one by one. Use read to pull a page's "
+    "text content; use screenshot when layout matters. When you hit a step only a "
+    "human can complete (one-time code, login QR scan, graphical captcha), use "
+    "assist to let the user supply it — never try to bypass such a check."
+)
+
 # --- ApplyPatch grammar (embedded in the tool description so the model learns
 # the exact patch format on both the native and XML channels) ---------------
 APPLY_PATCH_GRAMMAR = """\
@@ -142,98 +180,25 @@ Usage notes:
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
 """
 
-# --- Background pipeline (DAG) lifecycle guidance -----------------------------
-# Injected into the system prompt when pipeline tools are available.
+# --- Background pipeline brief ------------------------------------------------
+# Injected into the system prompt when pipeline tools are available. Kept concise
+# and aligned with the MCP description: the pipeline tools themselves are listed
+# in the system-prompt "# Pipeline Tools" section; this brief only explains how
+# they behave and how to inspect / steer a running one. The engine is a langgraph-style
+# transition scheduler (not a static topological DAG) — keep the wording aligned.
 
 BACKGROUND_PIPELINE_SECTION = """\
-# Background Pipelines (DAG Tasks)
+# Background Pipelines
 
-Some tools launch multi-step background pipelines. Each pipeline is a directed \
-acyclic graph (DAG) of nodes that execute in parallel where possible, with \
-dependency edges controlling ordering.
+Some commands are background pipeline tools (listed under "# Pipeline Tools"): each \
+runs a multi-step node graph asynchronously — a langgraph-style transition engine .\ 
+Calling one returns immediately with a `task_id`; \
+progress and the final result are pushed to you automatically.
 
-## Lifecycle
-
-1. **Launch** — A pipeline tool returns immediately with a `task_id` (e.g. \
-`bg_3`). You receive a notification showing the stage-summary (node topology).
-2. **Running** — Nodes execute concurrently. Each node auto-retries transient \
-errors (network/timeout) up to 3 times with backoff. You receive incremental \
-progress in `<system-reminder>` blocks.
-3. **Terminal** — The pipeline finishes in one of:
-   - **success** — all nodes completed; result is reported.
-   - **failed** — one or more nodes failed after exhausting retries; the \
-notification lists failed/completed/pending nodes with error details.
-   - **cancelled** — you called `cancel_tasks`; completed node results are \
-preserved.
-   - **waiting_for_route** — the pipeline paused at an LLM-routing decision \
-point; you must choose which branch to resume.
-
-## Decision Points
-
-When you receive a failure or routing notification, you have these options:
-
-| Situation | Action | Tool call |
-|-----------|--------|-----------|
-| A node failed, want to retry it | Re-run from that node | `resume_tasks(task_id="bg_3", from_node="failed_node")` |
-| A node failed, want to retry with different params | Override + re-run | `resume_tasks(task_id="bg_3", from_node="failed_node", overrides={"prompt": "..."})` |
-| A node failed, want to skip it | Skip and continue downstream | `resume_tasks(task_id="bg_3", skip_node="failed_node")` |
-| Pipeline stuck or no longer needed | Cancel the whole DAG | `cancel_tasks(task_id="bg_3", reason="...")` |
-| Routing pause (LLM edge) | Choose the target branch | `resume_tasks(task_id="bg_3", from_node="chosen_target")` |
-| Want to restart entirely | Omit from_node/skip_node | `resume_tasks(task_id="bg_3")` |
-| Want to restart with new inputs | Overrides merge into initial params | `resume_tasks(task_id="bg_3", overrides={"style": "cinematic"})` |
-
-## Parameter Overrides
-
-The `overrides` dict lets you change graph state fields before resuming. The \
-keys you can override are shown in the `params` section of failure notifications:
-```
-failed nodes:
-  - video_node
-    error: content policy violation
-    params:
-      prompt: {from: "videos[0].prompt", desc: "Video generation prompt"}
-      style: {from: "videos[0].style", desc: "Visual style"}
-```
-In this example, you can override `prompt` or `style` via:
-```
-resume_tasks(task_id="bg_3", from_node="video_node",
-             overrides={"prompt": "a calm ocean scene", "style": "realistic"})
-```
-Overrides apply directly to the graph state before the node re-runs. For \
-full restarts (no from_node), overrides merge into the original launch params.
-
-## Reading Notifications
-
-Notifications follow this structure:
-```
-"<command>" task <status> (task_id: bg_N)
-stage-summary:
-  node_a(description) → node_b
-  node_b(description) → merge [join: node_b & node_c]
-  ...
-failed nodes:
-  - node_name
-    error: <what went wrong>
-    auto_retries: 3/3 (all failed)
-completed nodes:
-  - node_name
-    result: <output>
-```
-
-The `stage-summary` shows the DAG topology — use node names from it when \
-calling `resume_tasks(from_node=...)` or `resume_tasks(skip_node=...)`.
-
-## Guidelines
-
-- Do NOT poll or sleep-wait for background tasks. You will be notified \
-automatically when they complete or fail.
-- When a node fails, read the error carefully. If it is a configuration or \
-input problem, fix the root cause (e.g. ask the user) before resuming. \
-Blindly retrying a permanent error wastes the restart budget.
-- Each task has a restart limit (default 3). `skip_node` does not consume \
-the restart budget; `from_node` and full restarts do.
-- You can combine `from_node` and `skip_node` in one call to skip some \
-nodes while re-running others.
-- After cancelling, the task can be resumed later — completed node results \
-are preserved in the state snapshot.
+A run pauses and notifies you when it needs a decision: a node failed, or an LLM \
+edge is asking you to pick a route. Then:
+ - `get_node_state(task_id, nodes=...)` — inspect node status / inputs / output.
+ - `resume_tasks(task_id, from_node=..., skip_node=..., overrides=...)` — pick a \
+route, re-run or skip a node, or restart; `overrides` changes graph inputs.
+Read the information and fix the root cause before resuming.
 """

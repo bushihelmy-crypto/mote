@@ -53,6 +53,7 @@ class CapRole:
         ask_reply: str = "",
         end_output: str = "session ended",
         wait_result: Optional[tuple[float, bool]] = None,
+        sandbox_runtime: Any = None,
     ) -> None:
         self._cwd = cwd or os.getcwd()
         # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
@@ -63,6 +64,23 @@ class CapRole:
         self.tool_sessions: dict[str, Any] = {}
         # Before-image snapshot calls: (full_path, tool) recorded for assertions.
         self.snapshots: list[tuple[str, str]] = []
+        # Persistent-terminal state captures: (cwd, env, unset, tool) recorded.
+        self.terminal_states: list[tuple] = []
+        # Persistent-kernel state captures: (cwd, env, unset, tool) recorded.
+        self.kernel_states: list[tuple] = []
+        # Persistent-browser state captures: (urls, active, storage_state, tool).
+        self.browser_states: list[tuple] = []
+        # Pending terminal-restore state ({cwd, env, unset}) staged by a resume;
+        # consumed once via take_pending_terminal_restore().
+        self._pending_restore: Optional[dict] = None
+        # Pending kernel-restore state ({cwd, env, unset}) staged by a resume;
+        # consumed once via take_pending_kernel_restore().
+        self._pending_kernel_restore: Optional[dict] = None
+        # Pending browser-restore state ({urls, active, storage_state}) staged by
+        # a resume; consumed once via take_pending_browser_restore().
+        self._pending_browser_restore: Optional[dict] = None
+        # Whether the browser launches headless (WebBrowser get_browser_headless).
+        self.browser_headless: bool = True
         # Scriptable human/session behaviour.
         self.ask_reply = ask_reply
         self.ask_questions: list[str] = []  # records every prompt sent to ask_human
@@ -70,6 +88,9 @@ class CapRole:
         self.end_calls = 0
         # (slept_seconds, interrupted); defaults to "slept the full duration".
         self._wait_result = wait_result
+        # Optional OS-level sandbox runtime for the command-execution tools.
+        # None => those tools run un-sandboxed (the historical test behavior).
+        self._sandbox_runtime = sandbox_runtime
 
     # --- cwd accessors (Bash) ---
     def get_cwd(self) -> str:
@@ -88,6 +109,36 @@ class CapRole:
     # --- file-history snapshot (Write/Edit/NotebookEdit capture before-images) ---
     def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
         self.snapshots.append((full_path, tool))
+
+    # --- persistent-terminal state (Terminal captures cwd+env for resume) ---
+    def record_terminal_state(self, cwd, env, unset, *, tool: str = "") -> None:
+        self.terminal_states.append((cwd, env, unset, tool))
+
+    def take_pending_terminal_restore(self) -> Optional[dict]:
+        value = self._pending_restore
+        self._pending_restore = None
+        return value
+
+    # --- persistent-kernel state (Python captures cwd+env for resume) ---
+    def record_kernel_state(self, cwd, env, unset, *, tool: str = "") -> None:
+        self.kernel_states.append((cwd, env, unset, tool))
+
+    def take_pending_kernel_restore(self) -> Optional[dict]:
+        value = self._pending_kernel_restore
+        self._pending_kernel_restore = None
+        return value
+
+    # --- persistent-browser state (WebBrowser captures tabs+session for resume) ---
+    def record_browser_state(self, urls, *, active=0, storage_state=None, tool: str = "") -> None:
+        self.browser_states.append((urls, active, storage_state, tool))
+
+    def take_pending_browser_restore(self) -> Optional[dict]:
+        value = self._pending_browser_restore
+        self._pending_browser_restore = None
+        return value
+
+    def get_browser_headless(self) -> bool:
+        return self.browser_headless
 
     # --- stateful-tool sessions (Terminal/Python live state on RoleState) ---
     def get_tool_session(self, key: str) -> Any:
@@ -117,6 +168,10 @@ class CapRole:
             return self._wait_result
         return (duration_seconds, False)
 
+    # --- OS-level sandbox runtime (Bash/terminal/python) ---
+    def get_sandbox_runtime(self) -> Any:
+        return self._sandbox_runtime
+
     # --- the allowlist bind() consults ---
     def tool_capabilities(self) -> dict[str, Any]:
         return {
@@ -125,12 +180,20 @@ class CapRole:
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
             "record_file_snapshot": self.record_file_snapshot,
+            "record_terminal_state": self.record_terminal_state,
+            "take_pending_terminal_restore": self.take_pending_terminal_restore,
+            "record_kernel_state": self.record_kernel_state,
+            "take_pending_kernel_restore": self.take_pending_kernel_restore,
+            "record_browser_state": self.record_browser_state,
+            "take_pending_browser_restore": self.take_pending_browser_restore,
+            "get_browser_headless": self.get_browser_headless,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
             "ask_human": self.ask_human,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,
             "wait_interruptible": self.wait_interruptible,
+            "get_sandbox_runtime": self.get_sandbox_runtime,
         }
 
 

@@ -220,13 +220,15 @@ def _deliver_progress(
 
 
 def _emit_task_progress(task_id: str, stage: str, status: str, detail: str) -> None:
-    """Broadcast a progress event onto the active bus (best-effort, sync emit).
+    """Broadcast a progress event onto the active bus (best-effort, sync observe).
 
-    This is the *telemetry* sink: fire-and-forget onto the ambient
-    ``_ACTIVE_BUS`` contextvar (same model as logging / ``bind_trace``), not an
-    injected dependency. The bus is scoped to this task automatically because
-    ``create_task`` snapshots the contextvar at spawn time, so no bus reference
-    needs threading down here.
+    This is the *telemetry* sink: a fire-and-forget **observation** onto the
+    ambient ``_ACTIVE_BUS`` contextvar. That contextvar is bound explicitly
+    inside the spawned task by ``BackgroundPool._with_progress`` (it captures the
+    bus synchronously at spawn time and re-binds it with ``set_bus``), so this
+    does not depend on ``create_task`` snapshotting the contextvar across the
+    spawn boundary. Being observation-only, a lost bus could only drop a progress
+    mirror, never a control veto.
 
     ``report_progress`` is a synchronous API, so this uses the sync fan-out.
     No-ops without a ``task_id`` (the disk append is unaffected) or when no bus
@@ -235,9 +237,9 @@ def _emit_task_progress(task_id: str, stage: str, status: str, detail: str) -> N
     if not task_id:
         return
     try:
-        from metagpt.common.events import TaskProgressEvent, emit_event_sync
+        from metagpt.common.events import TaskProgressEvent, observe_event_sync
 
-        emit_event_sync(
+        observe_event_sync(
             TaskProgressEvent(task_id=task_id, stage=stage, status=status, detail=detail)
         )
     except Exception:  # noqa: BLE001 — emitting must never break the pipeline

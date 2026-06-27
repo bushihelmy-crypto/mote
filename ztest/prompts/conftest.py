@@ -26,15 +26,19 @@ class FakeLLM:
 class FakeExecutor:
     """Exposes the two schema getters collect_context() serializes to JSON."""
 
-    def __init__(self, tools=None, mcp_tools=None):
+    def __init__(self, tools=None, mcp_tools=None, pipeline_tools=None):
         self._tools = tools if tools is not None else [{"name": "Read"}]
         self._mcp = mcp_tools if mcp_tools is not None else []
+        self._pipeline = pipeline_tools if pipeline_tools is not None else []
 
     def get_tool_schemas(self):
         return self._tools
 
     def get_mcp_tool_schemas(self):
         return self._mcp
+
+    def get_pipeline_tool_schemas(self):
+        return self._pipeline
 
 
 class FakeInjector:

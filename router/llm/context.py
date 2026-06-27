@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from typing import Any, Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from metagpt.common.config.meta_config import Config
@@ -29,6 +31,11 @@ class Context(BaseModel):
 
     config: Config = Field(default_factory=Config.default)
     cost_manager: CostTracker = Field(default_factory=CostTracker)
+    # Explicit reference to the live control plane (an ``AgentControl``), when a
+    # caller that holds this Context knows its plane. Duck-typed to ``Any`` to
+    # keep the router layer free of any ``environment`` import; ``resolve_control``
+    # reads it first, then falls back to the ambient ``current_control()``.
+    agent_control: Optional[Any] = Field(default=None, exclude=True)
 
     def _select_cost_manager(self, llm_config: LLMConfig) -> CostTracker:
         """Return a CostTracker whose pricing mode matches the config's api_type.

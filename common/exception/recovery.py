@@ -120,9 +120,9 @@ class RecoveryRunner:
         bus is bound (standalone use, tests).
         """
         try:
-            from metagpt.common.events import RecoveryEvent, emit_event
+            from metagpt.common.events import RecoveryEvent, observe_event
 
-            await emit_event(
+            await observe_event(
                 RecoveryEvent(
                     phase=phase,
                     action=getattr(action, "value", str(action)),

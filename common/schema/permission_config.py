@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 # Single source of truth for the approval-mode Literal (pure-data, no executor dep).
 from metagpt.common.schema.permission_types import PermissionMode
+from metagpt.common.schema.sandbox_runtime_config import SandboxRuntimeConfig
 
 # Sandbox axis — ORTHOGONAL to the approval mode above. The mode decides whether
 # to ask the user; the sandbox decides the filesystem/network boundary a tool
@@ -51,6 +52,14 @@ class SandboxConfig(BaseModel):
         default="restricted",
         description="Advisory network policy (not enforced in phase 2).",
     )
+    allowed_domains: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Domain allowlist forwarded to the OS-level runtime's network proxy "
+            "(glob: '*.x' / '**.x' / exact). Only meaningful when an OS-level "
+            "SandboxRuntimeConfig is enabled; ignored by the logical guard."
+        ),
+    )
 
 
 class PermissionConfig(BaseModel):
@@ -82,4 +91,11 @@ class PermissionConfig(BaseModel):
     sandbox: Optional[SandboxConfig] = Field(
         default=None,
         description="Optional filesystem sandbox. None disables boundary checks (full access).",
+    )
+    runtime: Optional[SandboxRuntimeConfig] = Field(
+        default=None,
+        description=(
+            "Optional OS-level sandbox runtime (bwrap + hardening + network proxy). "
+            "None disables OS-level isolation, leaving only the logical boundary."
+        ),
     )

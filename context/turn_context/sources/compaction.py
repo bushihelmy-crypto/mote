@@ -8,7 +8,7 @@ was dropped.
 
 Push→pull bridge in one object (the ``ContextManager`` is already the producer,
 so unlike the LSP feed no separate buffer object is needed):
-- as an :class:`~metagpt.common.interface.EventSubscriber` it catches
+- as an :class:`~metagpt.common.interface.ObservationSubscriber` it catches
   :class:`~metagpt.common.events.PostCompactEvent` off the bus and arms a
   pending flag (several compactions between turns collapse into one notice);
 - as an :class:`~metagpt.common.interface.EphemeralContextSource` it renders the
@@ -32,9 +32,10 @@ class CompactionNoticeContextSource:
     name = "compaction"
     # Render order in the turn-context bus: between token-pressure (20, the
     # pre-compaction warning) and background tasks (30). The same value serves as
-    # the EventSubscriber dispatch priority, where it is immaterial (this handler
+    # the ObservationSubscriber dispatch priority, where it is immaterial (this handler
     # only observes — it returns no outcome).
     priority = 25
+    save_to_context = True
 
     def __init__(self) -> None:
         self._pending = False

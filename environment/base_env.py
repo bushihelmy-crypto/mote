@@ -26,12 +26,10 @@ from typing import Any, Dict, Optional, Set
 from pydantic import ConfigDict, PrivateAttr
 
 from metagpt.common.logs import logger
-from metagpt.common.const import MESSAGE_ROUTE_TO_ALL
 from metagpt.common.schema import Message
 from metagpt.common.schema.env import BaseEnvironment
 from metagpt.environment.control import AgentControl
-from metagpt.common.exception import AgentLimitReached, AgentNotFound
-from metagpt.environment.mailbox import DeliveryMode
+from metagpt.common.exception import AgentNotFound
 from metagpt.environment.registry import AgentMetadata
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.environment.store import ResidencyStore
@@ -47,7 +45,6 @@ class AgentEnvironment(BaseEnvironment):
     # Runtime-only state (never serialized).
     _control: AgentControl = PrivateAttr(default=None)
     _roles: Dict[str, Any] = PrivateAttr(default_factory=dict)  # name -> Role
-    _addresses: Dict[str, Set[str]] = PrivateAttr(default_factory=dict)  # session_id -> addresses
 
     def model_post_init(self, __context: Any) -> None:
         if self._control is None:
@@ -74,9 +71,15 @@ class AgentEnvironment(BaseEnvironment):
         runtime = AgentRuntime(role)
         self._roles[name] = role
         self._control.add_agent(runtime, metadata=AgentMetadata(agent_nickname=name))
+        # Wire the explicit plane reference onto the role's context so spawn
+        # sites holding it (skill forks) reach the live plane directly; turns
+        # driven through the scheduler also bind it ambiently.
+        ctx = getattr(role, "_context", None)
+        if ctx is not None and getattr(ctx, "agent_control", None) is None:
+            ctx.agent_control = self._control
         # Seed the routing index (set_env -> set_addresses will refine it).
         addresses = getattr(getattr(role, "state", None), "addresses", None) or {name}
-        self._addresses[role.session_id] = set(addresses)
+        self._control.comm_graph.set_addresses(role.session_id, set(addresses))
         if hasattr(role, "set_env"):
             role.set_env(self)
         return role
@@ -87,7 +90,7 @@ class AgentEnvironment(BaseEnvironment):
 
     def set_addresses(self, role: Any, addresses: Set[str]) -> None:
         """Update the address→agent routing index for *role* (codex address map)."""
-        self._addresses[role.session_id] = set(addresses or [])
+        self._control.comm_graph.set_addresses(role.session_id, set(addresses or []))
 
     # ------------------------------------------------------------------
     # Views consumed by provider.py
@@ -115,10 +118,6 @@ class AgentEnvironment(BaseEnvironment):
         for session_id in recipients:
             try:
                 self._control.send_input(session_id, message)
-            except AgentLimitReached:
-                # No execution slot right now: queue it so it lands at the next
-                # turn boundary instead of dropping it.
-                self._control.send_input(session_id, message, mode=DeliveryMode.QUEUE_ONLY)
             except AgentNotFound:
                 logger.warning(f"AgentEnvironment: recipient {session_id} not found; dropping message")
         return True
@@ -131,13 +130,9 @@ class AgentEnvironment(BaseEnvironment):
         residency-evicted to disk: routing to it rehydrates it transparently
         (the control plane's ``send_input`` loads it on the way in).
         """
-        if MESSAGE_ROUTE_TO_ALL in send_to:
-            return list(self._control.runtimes().keys())
-        recipients = []
-        for session_id, addresses in self._addresses.items():
-            if addresses & send_to:
-                recipients.append(session_id)
-        return recipients
+        return self._control.comm_graph.resolve_recipients(
+            send_to, all_ids=self._control.runtimes().keys()
+        )
 
     # ------------------------------------------------------------------
     # Driving

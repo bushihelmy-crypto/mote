@@ -25,7 +25,7 @@ torn down with it.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, Optional
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
@@ -42,7 +42,14 @@ class Python(BaseTool):
     aliases = ["Python"]
     max_result_size_chars: ClassVar[int] = 30_000
     description = PYTHON_DESCRIPTION
-    requires = ("get_cwd", "get_tool_session", "set_tool_session")
+    requires = (
+        "get_cwd",
+        "get_tool_session",
+        "set_tool_session",
+        "get_sandbox_runtime",
+        "record_kernel_state",
+        "take_pending_kernel_restore",
+    )
     # Arbitrary code execution.
     risk_level = "high"
     # Holds a live Jupyter kernel on RoleState between calls.
@@ -55,6 +62,19 @@ class Python(BaseTool):
     get_cwd: Callable[[], str]
     get_tool_session: Callable[[str], Any]
     set_tool_session: Callable[[str, Any], None]
+    # Capability accessor returning the session's SandboxRuntime, or None when no
+    # OS-level sandbox is configured. Defaults to a no-runtime stub so a tool
+    # bound without a Role (some unit tests) still runs un-sandboxed.
+    get_sandbox_runtime: Callable[[], object] = staticmethod(lambda: None)
+    # Capability accessors for session-resume kernel-state restore:
+    #   record_kernel_state — persist (cwd, env diff, unset) into the rollout
+    #     after a cell settles at idle (so resume can re-seed a kernel).
+    #   take_pending_kernel_restore — pop the state staged by resume_session
+    #     (or None); applied once when a fresh kernel starts.
+    # Both default to no-op stubs so a tool bound without a Role (unit tests)
+    # still runs (no recording, no restore).
+    record_kernel_state: Callable[..., None] = staticmethod(lambda *a, **k: None)
+    take_pending_kernel_restore: Callable[[], Optional[dict]] = staticmethod(lambda: None)
 
     async def _ensure_session(self) -> KernelSession:
         """Return this Role's live kernel, starting a fresh one if needed.
@@ -69,8 +89,19 @@ class Python(BaseTool):
             session.kill()  # previous kernel died — start fresh
         cwd = self.get_cwd()
         base_cwd = cwd if cwd and os.path.isdir(cwd) else None
-        session = KernelSession(session_key=self.session_id, cwd=base_cwd)
+        runtime = self.get_sandbox_runtime() if self.get_sandbox_runtime is not None else None
+        session = KernelSession(session_key=self.session_id, cwd=base_cwd, sandbox_runtime=runtime)
         await session.start()
+        # On a resumed session, re-seed the fresh kernel to the saved kernel
+        # state (cwd + env diff) without re-running any user code. Consumed once
+        # (the accessor clears it), so a subsequent restart starts clean.
+        pending = self.take_pending_kernel_restore()
+        if pending:
+            await session.restore_state(
+                pending.get("cwd", ""),
+                pending.get("env", {}),
+                pending.get("unset", []),
+            )
         self.set_tool_session(self.name, session)
         return session
 
@@ -126,6 +157,20 @@ class Python(BaseTool):
             raise
         except Exception as e:  # noqa: BLE001
             raise ToolError(f"Error running Python kernel: {e}")
+
+        if not timed_out:
+            # Cell settled at idle — snapshot the kernel env for resume. Skipped
+            # on timeout (the kernel was just interrupted and may be recovering),
+            # mirroring the terminal capturing only when back at a prompt.
+            try:
+                state = await session.capture_state()
+            except Exception:  # noqa: BLE001 — capture must not break the call
+                state = None
+            if state is not None:
+                # getattr-tolerant for tools bound without the capability (tests).
+                recorder = getattr(self, "record_kernel_state", None)
+                if recorder is not None:
+                    recorder(*state, tool=self.name)
 
         if timed_out:
             return _join(

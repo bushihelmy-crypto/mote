@@ -139,9 +139,9 @@ class ResourceReporter(BaseModel):
         cls._async_report = fn
 
     def _report(self, value: Any, name: str, extra: Optional[dict] = None):
-        from metagpt.common.events import ResourceReportEvent, emit_event_sync
+        from metagpt.common.events import ResourceReportEvent, observe_event_sync
 
-        emit_event_sync(
+        observe_event_sync(
             ResourceReportEvent(
                 block=self.block.value,
                 name_=name,
@@ -153,9 +153,9 @@ class ResourceReporter(BaseModel):
         )
 
     async def _async_report(self, value: Any, name: str, extra: Optional[dict] = None):
-        from metagpt.common.events import ResourceReportEvent, emit_event
+        from metagpt.common.events import ResourceReportEvent, observe_event
 
-        await emit_event(
+        await observe_event(
             ResourceReportEvent(
                 block=self.block.value,
                 name_=name,

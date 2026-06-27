@@ -54,9 +54,10 @@ class _RenderSubscriber:
       3. ``TaskProgressEvent`` — bggraph node progress display
 
     Stream deltas and task progress are emitted synchronously
-    (``emit_event_sync``) and delivered via ``handle_sync``. Tool-use events are
-    control events dispatched via the async ``handle`` path (they carry
-    outcomes), though this subscriber is read-only (returns ``None``).
+    (``observe_event_sync``) and delivered via ``handle_sync``. Tool-use events
+    reach this subscriber on the async observation path (``handle``); it is an
+    **observer** — it only renders panels and returns nothing. The hook plane
+    (a separate control subscriber) is what may actually veto a tool call.
 
     One instance is shared across every role's bus — each role owns its own
     :class:`~metagpt.common.events.EventBus`, so subscribing per role never
@@ -825,6 +826,10 @@ def build_repl(
     runtime = AgentRuntime(role)
     control = AgentControl(session_id=role.session_id)
     control.add_agent(runtime, root=True)
+    # Wire the explicit plane reference so spawn sites holding this Context (e.g.
+    # skill forks) reach the live plane directly; turns driven through the
+    # scheduler also bind it ambiently via ``current_control()``.
+    context.agent_control = control
     repl = Repl(control, role.session_id, role, renderer=build_renderer(), role_factory=role_factory)
     # Route the AskUserQuestion tool's human channel to the REPL console.
     role.state.env = _ConsoleHumanChannel(repl._console_ask)

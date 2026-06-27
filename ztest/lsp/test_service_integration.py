@@ -138,7 +138,7 @@ async def test_shutdown_idempotent(tmp_path):
 
 @aio
 async def test_handle_file_mutated_delegates_to_file_saved(tmp_path):
-    # As an EventSubscriber, a FileMutatedEvent routes through handle() to
+    # As an ObservationSubscriber, a FileMutatedEvent routes through handle() to
     # file_saved() — same diagnostics回流 as a direct file_saved call.
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
@@ -286,12 +286,12 @@ def test_buffer_ignores_non_diagnostics_events():
 
 def test_buffer_is_dual_role_event_subscriber_and_context_source():
     # The buffer plays both sides of the push->pull bridge in one object: it is
-    # the bus EventSubscriber AND the turn-context EphemeralContextSource (so the
-    # thin LspContextSource wrapper is no longer needed).
-    from metagpt.common.interface import EphemeralContextSource, EventSubscriber
+    # the bus ObservationSubscriber AND the turn-context EphemeralContextSource
+    # (so the thin LspContextSource wrapper is no longer needed).
+    from metagpt.common.interface import EphemeralContextSource, ObservationSubscriber
 
     buffer = DiagnosticsBuffer()
-    assert isinstance(buffer, EventSubscriber)
+    assert isinstance(buffer, ObservationSubscriber)
     assert isinstance(buffer, EphemeralContextSource)
     assert buffer.name == "lsp" and buffer.priority == 40
 

@@ -21,16 +21,29 @@ from typing import Optional, Protocol, runtime_checkable
 
 @runtime_checkable
 class EphemeralContextSource(Protocol):
-    """One pluggable feed of per-turn, request-only context.
+    """One pluggable feed of per-turn context.
 
     Each source renders a self-contained text block that the bus wraps (with the
-    others) into a single ``<system-reminder>`` appended to the cycle's user
-    prompt — never stored in history. ``name`` is a stable key (logging /
-    dedupe); ``priority`` orders the blocks within the envelope (lower first).
+    others) into a single ``<system-reminder>``. ``name`` is a stable key
+    (logging / dedupe); ``priority`` orders the blocks within the envelope
+    (lower first).
+
+    ``save_to_context`` routes the source into one of the bus's two disjoint
+    buckets:
+
+    - ``True`` (the default): the rendered block is **persisted into history**
+      via ``TurnContextBus.collect_to_context`` — written once per turn through
+      the ``ContextManager`` so it survives across turns and compaction.
+    - ``False``: the block is **ephemeral / request-only** — gathered by
+      ``TurnContextBus.collect`` and appended to the cycle's user prompt, never
+      stored in history.
+
+    A source missing the attribute is treated as ``True`` (persisted).
     """
 
     name: str
     priority: int
+    save_to_context: bool
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
         """Return this source's context block, or ``None`` when it has nothing.

@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import types
 
 import pytest
 
+from metagpt.common.agent_control import set_control
 from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
 from metagpt.common.exception import RoleContextNotSetError
 from metagpt.common.schema import AIMessage, Message
@@ -208,6 +210,48 @@ class TestTurnContextBus:
         bus = role.turn_context_bus
         priorities = [getattr(s, "priority", 0) for s in bus._sources]
         assert priorities == sorted(priorities)
+
+
+class TestRecordTurnContext:
+    """_record_turn_context persists the bus's save_to_context bucket to history."""
+
+    class _FakeBus:
+        def __init__(self, block):
+            self._block = block
+            self.seen_cwd = "unset"
+
+        async def collect_to_context(self, *, cwd=None):
+            self.seen_cwd = cwd
+            return self._block
+
+    def test_non_empty_block_added_to_history(self, role):
+        import asyncio
+
+        fake = self._FakeBus("<system-reminder>\ngit changed\n</system-reminder>")
+        role._components._turn_context_bus = fake
+        before = role.context_manager.count()
+        asyncio.run(role._record_turn_context())
+        msgs = role.context_manager.get()
+        assert role.context_manager.count() == before + 1
+        assert msgs[-1].content == "<system-reminder>\ngit changed\n</system-reminder>"
+        assert msgs[-1].role == "user"
+
+    def test_empty_block_adds_nothing(self, role):
+        import asyncio
+
+        role._components._turn_context_bus = self._FakeBus("")
+        before = role.context_manager.count()
+        asyncio.run(role._record_turn_context())
+        assert role.context_manager.count() == before
+
+    def test_passes_working_dir_as_cwd(self, role):
+        import asyncio
+
+        fake = self._FakeBus("")
+        role._components._turn_context_bus = fake
+        role.state.working_dir = "/some/dir"
+        asyncio.run(role._record_turn_context())
+        assert fake.seen_cwd == "/some/dir"
 
 
 # =============================================================================
@@ -448,21 +492,61 @@ class _ForkProbeRole(Role):
         self.state.last_end_output = "  child summary  "
 
 
+class _ForkHandle:
+    """Inline handle: runs the spawned fork child to completion, tears it down."""
+
+    def __init__(self, role):
+        self.runtime = types.SimpleNamespace(role=role)
+        self._role = role
+
+    async def run_to_completion(self, message):
+        try:
+            await self._role.run(with_message=message)
+            return (getattr(self._role.state, "last_end_output", "") or "").strip()
+        finally:
+            cleanup = getattr(self._role, "cleanup", None)
+            if cleanup is not None:
+                await cleanup()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _InlineForkControl:
+    """Minimal plane for skill-fork: builds the child via the spec factory."""
+
+    async def spawn_agent(self, spec):
+        from metagpt.common.agent_control import SpawnContext
+
+        return _ForkHandle(spec.role_factory(SpawnContext(parent_id=spec.parent_id)))
+
+
 class TestRunSkillFork:
     def _parent(self):
         parent_state = RoleState(session_id="parent-sid", working_dir="/work/dir")
         return _ForkProbeRole(role_schema=RoleSchema(name="P"), state=parent_state)
 
+    def _run_fork(self, parent, **kwargs):
+        # run_skill_fork is born on the plane through the single spawn authority;
+        # bind a minimal inline plane (builds the child via the spec factory and
+        # runs it to completion) so the fork has a plane to be born on.
+        async def _go():
+            with set_control(_InlineForkControl()):
+                return await parent.run_skill_fork(**kwargs)
+
+        return asyncio.run(_go())
+
     def test_returns_stripped_child_output(self):
         parent = self._parent()
-        out = asyncio.run(
-            parent.run_skill_fork(instructions="BODY", arguments="payload")
-        )
+        out = self._run_fork(parent, instructions="BODY", arguments="payload")
         assert out == "child summary"
 
     def test_child_isolated_with_lineage(self):
         parent = self._parent()
-        asyncio.run(parent.run_skill_fork(instructions="BODY", arguments="x"))
+        self._run_fork(parent, instructions="BODY", arguments="x")
         child_state = _ForkProbeRole.captured["state"]
         assert child_state.parent_session_id == "parent-sid"
         assert child_state.session_id != "parent-sid"
@@ -470,9 +554,7 @@ class TestRunSkillFork:
 
     def test_child_schema_injects_body_and_limits_tools(self):
         parent = self._parent()
-        asyncio.run(
-            parent.run_skill_fork(instructions="SKILL BODY", allowed_tools=["Read"])
-        )
+        self._run_fork(parent, instructions="SKILL BODY", allowed_tools=["Read"])
         schema = _ForkProbeRole.captured["schema"]
         assert schema.instruction == "SKILL BODY"
         assert schema.tools == ["Read"]
@@ -481,7 +563,7 @@ class TestRunSkillFork:
 
     def test_child_receives_arguments_as_message(self):
         parent = self._parent()
-        asyncio.run(parent.run_skill_fork(instructions="B", arguments="the task"))
+        self._run_fork(parent, instructions="B", arguments="the task")
         msg = _ForkProbeRole.captured["message"]
         assert msg.content == "the task"
 
@@ -496,7 +578,12 @@ class TestCapabilities:
             "get_cwd", "set_cwd", "deactivate", "ask_human", "request_approval",
             "reply_to_human", "end_session", "record_file_read", "get_file_read_mtime",
             "record_file_snapshot", "get_tool_session", "set_tool_session",
+            "record_terminal_state", "take_pending_terminal_restore",
+            "record_kernel_state", "take_pending_kernel_restore",
+            "record_browser_state", "take_pending_browser_restore",
+            "get_browser_headless",
             "wait_interruptible", "get_bg_pool", "get_skill_pool", "run_skill_fork",
+            "get_sandbox_runtime",
         }
 
     def test_capability_values_are_bound_methods(self):
