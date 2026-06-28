@@ -24,8 +24,10 @@ torn down with it.
 """
 from __future__ import annotations
 
+import base64
 from typing import Any, Awaitable, Callable, ClassVar, Optional
 
+from metagpt.common.logs import logger
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError, ToolResult
@@ -258,8 +260,6 @@ class WebBrowser(BaseTool):
         if action == "read":
             return await session.read()
         if action == "screenshot":
-            import base64
-
             png = await session.screenshot()
             b64 = base64.b64encode(png).decode("ascii")
             return ToolResult(
@@ -292,7 +292,8 @@ class WebBrowser(BaseTool):
         """Snapshot the browsing state into the rollout (best-effort)."""
         try:
             state = await session.capture_state()
-        except Exception:  # noqa: BLE001 — capture must not break the call
+        except Exception as exc:  # noqa: BLE001 — capture must not break the call
+            logger.debug(f"web_browser: session state capture failed: {exc}")
             state = None
         if state is None:
             return

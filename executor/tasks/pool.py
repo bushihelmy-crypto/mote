@@ -19,7 +19,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional
 from xml.sax.saxutils import escape as _escape_xml
 
-from metagpt.common.logs import log_class
+from metagpt.common.logs import log_class, logger
 from metagpt.common.schema import CauseBy, MessagePriority
 from metagpt.executor.tasks.types import (
     BackgroundTaskNotification,
@@ -40,6 +40,11 @@ from metagpt.common.const.tasks import (
     DEFAULT_MAX_CONCURRENCY as _DEFAULT_MAX_CONCURRENCY,
     MAX_TASK_OUTPUT_BYTES_DISPLAY as _OUTPUT_CAP_DISPLAY,
 )
+from metagpt.common.events import set_bus
+from metagpt.executor.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
+from metagpt.common.exception import BackgroundTaskCancelledError, BackgroundTaskTimeoutError, ErrorReport, render_error_block
+from metagpt.executor.tasks.bggraph.types import LlmPauseResult
+from metagpt.common.events import current_bus
 
 
 @log_class(
@@ -147,7 +152,6 @@ class BackgroundTaskPool:
             # Capture the spawner's live bus *now* (synchronously, before the
             # task is created) and hand it to the wrapper explicitly, rather than
             # leaning on the contextvar surviving the create_task boundary.
-            from metagpt.common.events import current_bus
 
             coro = self._with_progress(coro, task_id, current_bus())
 
@@ -363,7 +367,6 @@ class BackgroundTaskPool:
 
         if progress and self._output_store is not None:
             # Output already initialized from original submit; just wrap progress.
-            from metagpt.common.events import current_bus
 
             coro = self._with_progress(coro, task_id, current_bus())
         if timeout is not None and timeout > 0:
@@ -475,12 +478,6 @@ class BackgroundTaskPool:
         contextvar across the spawn boundary. Pure observation, so losing it
         could only ever drop a progress mirror, never a control veto.
         """
-        from metagpt.common.events import set_bus
-        from metagpt.executor.tasks.bggraph.report import (
-            make_progress_writer,
-            reset_progress_writer,
-            set_progress_writer,
-        )
 
         store = self._output_store
         meta = self._meta.get(task_id)
@@ -525,8 +522,8 @@ class BackgroundTaskPool:
             return
         try:
             self._wake()
-        except Exception:  # noqa: BLE001 — best-effort wake
-            pass
+        except Exception as exc:  # noqa: BLE001 — best-effort wake
+            logger.debug(f"BackgroundTaskPool: runtime wake failed (delivery already queued): {exc}")
 
     def deliver(self, notification: BackgroundTaskNotification) -> None:
         """Single delivery choke point for a background-task notification.
@@ -549,7 +546,8 @@ class BackgroundTaskPool:
         """
         try:
             self._msg_buffer.push(notification, priority=MessagePriority.NEXT)
-        except Exception:  # noqa: BLE001 — delivery must never break the pipeline
+        except Exception as exc:  # noqa: BLE001 — delivery must never break the pipeline
+            logger.debug(f"BackgroundTaskPool: terminal notification delivery failed: {exc}")
             return
         self._wake_runtime()
 
@@ -562,13 +560,6 @@ class BackgroundTaskPool:
         completion is a pure observation with a single consumer, so it goes
         straight to the queue the react loop observes.
         """
-        from metagpt.common.exception import (
-            BackgroundTaskCancelledError,
-            BackgroundTaskTimeoutError,
-            ErrorReport,
-            render_error_block,
-        )
-        from metagpt.executor.tasks.bggraph.types import LlmPauseResult
 
         status: str
         result: Optional[str] = None

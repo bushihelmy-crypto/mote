@@ -10,6 +10,8 @@ from metagpt.common.base.command_channel import CommandChannel, _collect_media, 
 from metagpt.common.prompt.output import NATIVE_COMMAND_GUIDE
 from metagpt.common.prompt.refs import Sym
 from metagpt.parser.xml_channel import XmlCommandChannel
+from metagpt.common.config.config.llm_config import LLMType
+from metagpt.router.llm.llm_provider_registry import resolve_api_type
 
 if TYPE_CHECKING:
     from metagpt.common.base import BaseThinkEngine
@@ -114,8 +116,6 @@ def infer_native_tool_provider(llm_config) -> str:
     Anthropic shape there yields a ``tools`` field the gateway silently drops —
     the model then receives no tools and falls back to inventing text commands.
     """
-    from metagpt.common.config.config.llm_config import LLMType
-    from metagpt.router.llm.llm_provider_registry import resolve_api_type
 
     try:
         if resolve_api_type(llm_config) == LLMType.ANTHROPIC:

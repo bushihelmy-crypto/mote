@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Optional, Set
+from uuid import uuid4
 
 from metagpt.common.base import BaseRole
 from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
@@ -43,6 +45,10 @@ from metagpt.parser import CommandChannel
 from metagpt.think.think_engine import ThinkEngine
 from metagpt.executor.tasks import BackgroundTaskPool
 from metagpt.common.utils.common import any_to_str, role_raise_decorator
+from metagpt.session import list_sessions as _list
+from metagpt.session import SessionLog, replay
+from metagpt.session import fork
+from metagpt.common.logs import logger
 
 if TYPE_CHECKING:
     from metagpt.session import (
@@ -815,7 +821,6 @@ class Role(BaseRole):
         A thin, discoverable entry point onto the lite directory scan. ``cwd``
         filters to sessions started under that working dir / project root.
         """
-        from metagpt.session import list_sessions as _list
 
         return _list(base_dir, cwd=cwd)
 
@@ -832,7 +837,6 @@ class Role(BaseRole):
         the recorder stays live for messages added after resume, and
         ``SessionLog.create`` no-ops on the existing file (no duplicate meta).
         """
-        from metagpt.session import SessionLog, replay
 
         log = SessionLog(self.state.session_id)
         if not log.exists():
@@ -876,7 +880,6 @@ class Role(BaseRole):
         inherited history. The two sessions are independent afterwards: mutating
         the fork never touches this role's log.
         """
-        from metagpt.session import fork
 
         child_id = fork(self.state.session_id)
 
@@ -909,9 +912,6 @@ class Role(BaseRole):
         if bus is None:
             return
         try:
-            from dataclasses import asdict
-            from uuid import uuid4
-
             token_state = None
             try:
                 token_state = asdict(self.context_manager.token_state())
@@ -926,7 +926,6 @@ class Role(BaseRole):
                 )
             )
         except Exception as exc:  # noqa: BLE001
-            from metagpt.common.logs import logger
 
             logger.warning(f"session: failed to emit turn end: {exc}")
 
@@ -943,7 +942,6 @@ class Role(BaseRole):
             try:
                 await file_watch_service.stop()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
-                from metagpt.common.logs import logger
 
                 logger.warning(f"Role: file_watch_service.stop() failed: {exc}")
         lsp_service = self._components.peek_lsp_service()
@@ -951,7 +949,6 @@ class Role(BaseRole):
             try:
                 await lsp_service.shutdown()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
-                from metagpt.common.logs import logger
 
                 logger.warning(f"Role: lsp_service.shutdown() failed: {exc}")
         executor = self._components.peek_executor()
@@ -962,7 +959,6 @@ class Role(BaseRole):
             try:
                 await sandbox_runtime.shutdown()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
-                from metagpt.common.logs import logger
 
                 logger.warning(f"Role: sandbox_runtime.shutdown() failed: {exc}")
 

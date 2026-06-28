@@ -15,6 +15,7 @@ from typing import Optional
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.executor.tools.code_review.graph import build_code_review_graph
 
 
 @register_tool
@@ -46,7 +47,6 @@ class CodeReview(BaseTool):
 
     def __init__(self):
         super().__init__()
-        from metagpt.executor.tools.code_review.graph import build_code_review_graph
 
         self._graph = build_code_review_graph()
         self._executor = self._graph.compile()

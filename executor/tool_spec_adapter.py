@@ -24,6 +24,7 @@ import typing
 from typing import Any, Callable, Union
 
 from pydantic import BaseModel
+from metagpt.common.utils.docstring import parse_section
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types
 # but maps to JSON Schema's "object" (not the parser's internal "map").
@@ -103,7 +104,6 @@ def _parse_arg_descriptions(docstring: str | None) -> dict[str, str]:
     Returns {param_name: description}. Delegates to the shared
     ``parse_section`` utility for the actual parsing.
     """
-    from metagpt.common.utils.docstring import parse_section
 
     return dict(parse_section(docstring, "Args"))
 

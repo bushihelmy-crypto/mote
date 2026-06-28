@@ -20,16 +20,17 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple, Union
 
+from metagpt.common.config.diagnostics import unknown_key_paths
 from metagpt.common.config.env import build_env_layer
 from metagpt.common.config.layers import ConfigLayer, ConfigLayerStack, strip_sensitive
+from metagpt.common.config.meta_config import Config
 from metagpt.common.config.overrides import ConfigOverrides, parse_cli_overrides
 from metagpt.common.config.sources import ConfigSource, discover_source_files
 from metagpt.common.utils.yaml_model import YamlModel
-
-if TYPE_CHECKING:
-    from metagpt.common.config.meta_config import Config
+from metagpt.common.config.secrets import resolve_api_key
+from metagpt.common.exception import UnknownConfigKeysError
 
 Programmatic = Union[Dict[str, Any], ConfigOverrides]
 
@@ -107,16 +108,10 @@ def _cache_key(cwd: Optional[Path], profile: Optional[str]) -> str:
 
 def _build_config(stack: ConfigLayerStack, strict: bool) -> "Config":
     """Construct the typed Config; in strict mode reject unknown keys first."""
-    from metagpt.common.config.secrets import resolve_api_key
-    from metagpt.common.config.meta_config import Config  # local import avoids a cycle
-
     merged = stack.effective()
     # Fill llm.api_key from api_key_helper when no static/env key is present.
     resolve_api_key(merged)
     if strict:
-        from metagpt.common.config.diagnostics import unknown_key_paths
-        from metagpt.common.exception import UnknownConfigKeysError
-
         unknown = unknown_key_paths(merged, Config)
         if unknown:
             raise UnknownConfigKeysError(unknown)

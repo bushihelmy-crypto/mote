@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator, Union
 
-from metagpt.common.disk import disk_io
+import metagpt.common.disk.disk_io as disk_io
 from metagpt.common.disk.writer import get_disk_writer
 
 PathLike = Union[str, Path]

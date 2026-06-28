@@ -36,6 +36,7 @@ from metagpt.common.prompt.role import (
 from metagpt.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
 from metagpt.common.prompt.refs import assert_no_symbols
 from metagpt.common.utils.role_zero_utils import get_time_info
+from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
 
 
 @dataclass
@@ -511,7 +512,6 @@ class PromptBuilder:
         has_pipeline = bool(get_pipeline()) if callable(get_pipeline) else False
         if not has_pipeline and not ({"resume_tasks", "get_node_state"} & names):
             return ""
-        from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
         return BACKGROUND_PIPELINE_SECTION
 
     @staticmethod

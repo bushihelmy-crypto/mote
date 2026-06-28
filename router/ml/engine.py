@@ -16,6 +16,7 @@ from typing import Optional
 from metagpt.common.logs import logger
 from metagpt.router.ml.config import default_model_dir, load_runtime_config
 from metagpt.router.ml.inference.types import InferenceRequest, InferenceResult
+from metagpt.router.ml.inference.core import InferenceCore
 
 
 class SquillaMLEngine:
@@ -51,7 +52,6 @@ class SquillaMLEngine:
             return
         try:
             # Lazy import: pulls lightgbm/onnxruntime/sklearn only on demand.
-            from metagpt.router.ml.inference.core import InferenceCore
 
             self._core = InferenceCore.from_model_dir(
                 str(self.model_dir),

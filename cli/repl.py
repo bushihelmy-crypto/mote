@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
 from metagpt.cli.render import build_renderer
-from metagpt.common.config.meta_config import Config
+from metagpt.common.config.loader import load_config
 from metagpt.common.utils.git_state import find_git_root
 from metagpt.environment.control import AgentControl
 from metagpt.environment.runtime import AgentRuntime
@@ -40,6 +40,8 @@ from metagpt.cli.commands import SlashCommands
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.common.logs import suspend_console_log
 from metagpt.common.logs import resume_console_log
+from metagpt.common.events import LLMStreamDeltaEvent, TaskProgressEvent
+from metagpt.common.events import PreToolUseEvent, PostToolUseEvent
 
 
 class _RenderSubscriber:
@@ -70,7 +72,6 @@ class _RenderSubscriber:
         self._repl = repl
 
     def handle_sync(self, event) -> None:
-        from metagpt.common.events import LLMStreamDeltaEvent, TaskProgressEvent
 
         if isinstance(event, LLMStreamDeltaEvent):
             self._repl._stream_sink(event.token)
@@ -78,7 +79,6 @@ class _RenderSubscriber:
             self._repl._on_task_progress(event)
 
     async def handle(self, event):
-        from metagpt.common.events import PreToolUseEvent, PostToolUseEvent
 
         if isinstance(event, PreToolUseEvent):
             self._repl._on_pre_tool(event)
@@ -800,7 +800,7 @@ def build_repl(
     """Assemble Config -> Context -> Role -> AgentRuntime -> AgentControl -> Repl."""
 
 
-    config = Config.default(**({"llm__model": model} if model else {}))
+    config = load_config(programmatic=({"llm__model": model} if model else None))
     context = Context(config=config)
 
     def role_factory(*, name: str = name, session_id: Optional[str] = None):

@@ -33,6 +33,7 @@ on slirp's default route before installing the nft lock.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 
@@ -61,8 +62,6 @@ def enforcement_available() -> bool:
     """
     if not sys.platform.startswith("linux"):
         return False
-    import os
-
     for binary in ("bwrap", "slirp4netns", "nft"):
         if shutil.which(binary) is None:
             return False

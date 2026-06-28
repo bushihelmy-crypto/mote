@@ -17,6 +17,7 @@ from xml.sax.saxutils import escape as _escape_xml
 
 from metagpt.executor.tasks.types import BgStatus
 from metagpt.common.const.tasks import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
+from metagpt.common.exception import ErrorReport, render_error_block
 
 if TYPE_CHECKING:
     from metagpt.executor.tasks.pool import BackgroundTaskPool
@@ -220,7 +221,6 @@ def format_attachment_xml(att: TaskAttachment) -> str:
         # Reuse the single shared error renderer so a failed task's attachment
         # carries the same <error> block (code/recovery/detail) as its
         # notification.
-        from metagpt.common.exception import ErrorReport, render_error_block
 
         lines.append(render_error_block(ErrorReport.from_dict(att.error)))
     lines.append("</task-attachment>")

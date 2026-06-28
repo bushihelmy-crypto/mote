@@ -578,8 +578,8 @@ class AgentControl:
                 await task
             except asyncio.CancelledError:
                 pass
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 — driver crashed on interrupt
+                logger.debug(f"AgentControl: driver task raised on interrupt: {exc}")
             runtime.task = None
             self._scheduler.ensure_driver(runtime)
         elif not is_final(runtime.status):
@@ -818,8 +818,8 @@ class AgentControl:
                 await self._pending_waker_task
             except asyncio.CancelledError:
                 pass
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 — waker crashed during stop
+                logger.debug(f"AgentControl: pending-waker task raised during stop: {exc}")
         self._pending_waker_task = None
         await self._scheduler.stop()
 

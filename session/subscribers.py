@@ -41,6 +41,7 @@ from metagpt.session.events import (
     TurnContextEvent,
 )
 from metagpt.session.log import SessionLog
+from metagpt.common.disk import get_disk_writer
 
 
 @log_class(level="DEBUG", exclude={"handle"})
@@ -96,7 +97,6 @@ class RecorderSubscriber:
             # Durability checkpoint: flush this turn's queued writes to disk
             # so the rollout is complete at the turn boundary (a crash before
             # the next turn loses only an in-progress, unfinished turn).
-            from metagpt.common.disk import get_disk_writer
 
             await get_disk_writer().drain()
 

@@ -403,7 +403,7 @@ class TestFileWatchHotReload:
         assert svc is not None  # config handler alone engaged the hook layer
 
         sentinel = object()
-        monkeypatch.setattr("metagpt.common.config.loader.load_config", lambda *a, **k: sentinel)
+        monkeypatch.setattr("metagpt.roles.role_components.load_config", lambda *a, **k: sentinel)
 
         async def scenario():
             await role.hook_manager.fire(

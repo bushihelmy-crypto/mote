@@ -26,12 +26,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import re
+import shutil
 import signal
+import sys
+import tempfile
 import uuid
 from typing import Optional
 
+from metagpt.common.logs import logger
 from metagpt.executor.tool_result import ToolError
 
 # --- Constants -------------------------------------------------------------
@@ -131,8 +136,6 @@ class KernelSession:
     # --- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
-        import os
-
         from jupyter_client.manager import AsyncKernelManager
 
         self._km = AsyncKernelManager()
@@ -155,9 +158,6 @@ class KernelSession:
         # concrete ``-f <path>`` sidesteps that for both the direct-bwrap and
         # netns paths.
         if self.sandbox_runtime is not None:
-            import sys
-            import tempfile
-
             self._sock_dir = tempfile.mkdtemp(prefix="mgk-")
             self._km.transport = "ipc"
             # Pin the connection file inside the (bind-mounted) socket dir so the
@@ -296,7 +296,8 @@ class KernelSession:
             if not await self._drain(msg_id, parts, loop.time() + timeout):
                 return None
             return "".join(parts)
-        except Exception:  # noqa: BLE001 — internal probe/restore is best-effort
+        except Exception as exc:  # noqa: BLE001 — internal probe/restore is best-effort
+            logger.debug(f"Kernel: internal probe/restore failed: {exc}")
             return None
 
     async def _probe_env(self) -> Optional[tuple[str, dict[str, str]]]:
@@ -332,7 +333,8 @@ class KernelSession:
                 for k, v in dict(payload.get("env", {})).items()
             }
             return (str(payload.get("cwd", "")), env)
-        except Exception:  # noqa: BLE001 — capture is best-effort
+        except Exception as exc:  # noqa: BLE001 — capture is best-effort
+            logger.debug(f"Kernel: env capture/parse failed: {exc}")
             return None
 
     async def capture_state(self) -> Optional[tuple[str, dict[str, str], list[str]]]:
@@ -391,8 +393,8 @@ class KernelSession:
             if not lines:
                 return
             await self._run_internal("\n".join(lines), _PROBE_TIMEOUT_S)
-        except Exception:  # noqa: BLE001 — restore is best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 — restore is best-effort
+            logger.debug(f"Kernel: env restore failed: {exc}")
 
     async def restart(self) -> None:
         """Restart the kernel — clears all in-memory state."""
@@ -409,12 +411,13 @@ class KernelSession:
         if self._kc is not None:
             try:
                 self._kc.stop_channels()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Kernel: stop_channels during shutdown failed: {exc}")
         if self._km is not None:
             try:
                 await self._km.shutdown_kernel(now=True)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Kernel: shutdown_kernel failed, killing: {exc}")
                 self.kill()
         self._km = None
         self._kc = None
@@ -430,8 +433,8 @@ class KernelSession:
         if self._kc is not None:
             try:
                 self._kc.stop_channels()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Kernel: stop_channels during kill failed: {exc}")
             self._kc = None
         if self._km is not None:
             proc = getattr(getattr(self._km, "provisioner", None), "process", None)
@@ -446,7 +449,5 @@ class KernelSession:
     def _cleanup_sock_dir(self) -> None:
         """Remove the ephemeral ipc:// socket dir, if any (idempotent)."""
         if self._sock_dir is not None:
-            import shutil
-
             shutil.rmtree(self._sock_dir, ignore_errors=True)
             self._sock_dir = None

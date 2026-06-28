@@ -15,6 +15,7 @@ from metagpt.common.config.config.multimodal_config import MultimodalConfig
 from metagpt.common.config.config.role_zero_config import RoleZeroConfig
 from metagpt.common.config.config.sentry_config import SentryConfig
 from metagpt.common.utils.yaml_model import YamlModel
+from metagpt.common.observability.langfuse_integration import init_langfuse
 
 
 class Config(YamlModel):
@@ -91,21 +92,6 @@ class Config(YamlModel):
     def activate_langfuse(self):
         """Idempotently activate Langfuse so env/client are ready before any
         LLM client is built. No-op (and no langfuse import) when disabled."""
-        from metagpt.common.observability.langfuse_integration import init_langfuse
 
         init_langfuse(self.langfuse)
         return self
-
-    @classmethod
-    def default(cls, reload: bool = False, **kwargs) -> "Config":
-        """Load the default config through the layered config center.
-
-        Precedence (low -> high): defaults < system < user < project < workdir
-        < env < cli-flags < programmatic. The user's ``metagpt/config.yaml`` is
-        the trusted PROJECT layer (overriding the legacy ``config/config2.yaml``);
-        ``kwargs`` are the highest-priority programmatic overrides. See
-        ``common/config/loader.py``.
-        """
-        from metagpt.common.config.loader import load_config
-
-        return load_config(reload=reload, programmatic=kwargs or None)

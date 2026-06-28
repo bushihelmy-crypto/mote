@@ -20,6 +20,9 @@ from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spa
 from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
 from metagpt.common.schema.permission_config import PermissionConfig
+from metagpt.roles.role import Role
+from metagpt.roles.role_schema import RoleSchema
+from metagpt.roles.role_state import RoleState
 
 
 def build_child_role(
@@ -46,9 +49,6 @@ def build_child_role(
     """
     # Imported lazily so this module can be scanned for tool registration
     # without pulling the full roles stack at import time.
-    from metagpt.roles.role import Role
-    from metagpt.roles.role_schema import RoleSchema
-    from metagpt.roles.role_state import RoleState
 
     schema = RoleSchema(
         name=name,

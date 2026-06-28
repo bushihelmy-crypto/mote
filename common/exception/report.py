@@ -29,6 +29,7 @@ from typing import Any
 
 from metagpt.common.exception.base import MetaGPTError
 from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+from metagpt.common.exception.handlers import is_retryable
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,6 @@ class ErrorReport:
                 cause=repr(exc.cause) if exc.cause is not None else None,
             )
 
-        from metagpt.common.exception.handlers import is_retryable
 
         retryable = is_retryable(exc)
         recovery = RecoveryAction.RETRY if retryable else RecoveryAction.ABORT

@@ -20,6 +20,8 @@ from metagpt.router.oauth.errors import OAuthConfigError, OAuthRefreshError
 from metagpt.router.oauth.flows import LoginCallbacks
 from metagpt.router.oauth.models import OAuthToken
 from metagpt.router.oauth.storage import CredentialStore, get_store
+from metagpt.router.oauth.flows import run_auth_code_flow
+from metagpt.router.oauth.flows import run_device_code_flow
 
 _INTERACTIVE_GRANTS = (GrantType.AUTHORIZATION_CODE, GrantType.DEVICE_CODE)
 
@@ -84,11 +86,9 @@ class OAuthManager:
         """
         grant = self.config.grant_type
         if grant == GrantType.AUTHORIZATION_CODE:
-            from metagpt.router.oauth.flows import run_auth_code_flow
 
             token = run_auth_code_flow(self.config, callbacks)
         elif grant == GrantType.DEVICE_CODE:
-            from metagpt.router.oauth.flows import run_device_code_flow
 
             token = run_device_code_flow(self.config, callbacks)
         else:

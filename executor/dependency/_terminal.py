@@ -37,6 +37,7 @@ import signal
 import uuid
 from typing import Optional
 
+from metagpt.common.logs import logger
 from metagpt.executor.tool_result import ToolError
 
 # --- Constants -------------------------------------------------------------
@@ -263,8 +264,8 @@ class TerminalSession:
         assert self._proc is not None
         try:
             await self._proc.wait()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Terminal: proc.wait() failed: {exc}")
         self._on_closed()
 
     # --- output plumbing ---------------------------------------------------
@@ -407,7 +408,8 @@ class TerminalSession:
                     continue
                 env[key] = value
             return (cwd, env)
-        except Exception:  # noqa: BLE001 — capture is best-effort
+        except Exception as exc:  # noqa: BLE001 — capture is best-effort
+            logger.debug(f"Terminal: state capture/parse failed: {exc}")
             return None
 
     async def capture_state(self) -> Optional[tuple[str, dict[str, str], list[str]]]:
@@ -459,8 +461,8 @@ class TerminalSession:
             if not parts:
                 return
             await self.feed("; ".join(parts), _PROBE_YIELD_MS)
-        except Exception:  # noqa: BLE001 — restore is best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 — restore is best-effort
+            logger.debug(f"Terminal: env restore failed: {exc}")
 
     def shutdown(self) -> None:
         """Best-effort synchronous teardown (idempotent)."""
@@ -469,16 +471,16 @@ class TerminalSession:
         if self._transport is not None:
             try:
                 self._transport.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Terminal: transport close during shutdown failed: {exc}")
         if self._proc is not None and self._proc.returncode is None:
             try:
                 os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError):
                 try:
                     self._proc.terminate()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"Terminal: proc terminate fallback failed: {exc}")
         if self._master_fd is not None and self._transport is None:
             try:
                 os.close(self._master_fd)

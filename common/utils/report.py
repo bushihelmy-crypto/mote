@@ -11,6 +11,7 @@ from aiohttp import ClientSession, UnixConnector
 from pydantic import BaseModel, Field, PrivateAttr
 
 from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
+from metagpt.common.logs import logger
 
 if typing.TYPE_CHECKING:
     from metagpt.roles.role import Role
@@ -29,7 +30,6 @@ class _StreamQueueSubscriber:
         self._queue = queue
 
     def handle_sync(self, event) -> None:
-        from metagpt.common.events import LLMStreamDeltaEvent
 
         if isinstance(event, LLMStreamDeltaEvent):
             self._queue.put_nowait(event.token)
@@ -43,6 +43,10 @@ except ImportError:
     import requests
 
 from contextvars import ContextVar
+from metagpt.common.events import LLMStreamDeltaEvent
+from metagpt.common.events import ResourceReportEvent, observe_event_sync
+from metagpt.common.events import observe_event
+from metagpt.common.events import current_bus
 
 CURRENT_ROLE: ContextVar["Role"] = ContextVar("role")
 
@@ -139,7 +143,6 @@ class ResourceReporter(BaseModel):
         cls._async_report = fn
 
     def _report(self, value: Any, name: str, extra: Optional[dict] = None):
-        from metagpt.common.events import ResourceReportEvent, observe_event_sync
 
         observe_event_sync(
             ResourceReportEvent(
@@ -153,7 +156,6 @@ class ResourceReporter(BaseModel):
         )
 
     async def _async_report(self, value: Any, name: str, extra: Optional[dict] = None):
-        from metagpt.common.events import ResourceReportEvent, observe_event
 
         await observe_event(
             ResourceReportEvent(
@@ -203,7 +205,6 @@ class ResourceReporter(BaseModel):
         bound (standalone use): nothing to mirror.
         """
         if self.enable_llm_stream:
-            from metagpt.common.events import current_bus
 
             bus = current_bus()
             if bus is not None:
@@ -316,17 +317,15 @@ class ReporterSubscriber:
         self.callback_url = callback_url
 
     def handle_sync(self, event) -> None:
-        from metagpt.common.events import ResourceReportEvent
 
         if not isinstance(event, ResourceReportEvent) or not self.callback_url:
             return
         try:
             requests.post(self.callback_url, json=_build_report_payload(event))
-        except Exception:  # noqa: BLE001 — UI push is fire-and-forget
-            pass
+        except Exception as exc:  # noqa: BLE001 — UI push is fire-and-forget
+            logger.debug(f"report: sync UI push to {self.callback_url} failed: {exc}")
 
     async def handle(self, event):
-        from metagpt.common.events import ResourceReportEvent
 
         if not isinstance(event, ResourceReportEvent) or not self.callback_url:
             return None
@@ -345,6 +344,6 @@ class ReporterSubscriber:
             async with ClientSession(**session_kwargs) as client:
                 async with client.post(url, json=data) as resp:
                     await resp.text()
-        except Exception:  # noqa: BLE001 — UI push is fire-and-forget
-            pass
+        except Exception as exc:  # noqa: BLE001 — UI push is fire-and-forget
+            logger.debug(f"report: async UI push to {self.callback_url} failed: {exc}")
         return None

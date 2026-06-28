@@ -29,8 +29,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import select
 import shlex
+import subprocess
 import sys
+import time
 from typing import Optional
 
 from metagpt.sandbox.network.enforce import build_slirp_argv
@@ -89,9 +92,6 @@ def launcher_command(config_token: str) -> str:
 
 def _read_child_pid(info_r: int, *, timeout: float = 5.0) -> Optional[int]:
     """Read the bwrap ``child-pid`` from the info pipe read-end (best-effort)."""
-    import select
-    import time
-
     buf = b""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -146,8 +146,6 @@ def _run_launcher(config_token: str) -> int:
       5. spawn ``slirp4netns`` attached to that pid; wait its ready byte,
       6. wait for bwrap to exit; tear slirp down.
     """
-    import subprocess
-
     cfg = json.loads(base64.b64decode(config_token).decode("utf-8"))
     bwrap_argv: list[str] = cfg["bwrap_argv"]
     seccomp_path: Optional[str] = cfg.get("seccomp_path")

@@ -46,6 +46,15 @@ from metagpt.sandbox.resources import (
 )
 from metagpt.sandbox.seccomp import build_hardening_filter, seccomp_available
 from metagpt.sandbox.violations import SandboxViolation, parse_violations
+from metagpt.sandbox.network.enforce import build_inner_prelude
+from metagpt.sandbox.network.orchestrator import build_inner_argv
+from metagpt.sandbox.network.orchestrator import encode_config
+from metagpt.sandbox.bwrap import BwrapBackend
+from metagpt.sandbox.network.enforce import TUN_DEVICE
+from metagpt.sandbox.network.orchestrator import launcher_command
+from metagpt.sandbox.network.orchestrator import launcher_argv
+from metagpt.sandbox.network.enforce import enforcement_available
+from metagpt.sandbox.network.enforce import proxy_url_in_netns
 
 # The shell used to run the hardening prelude + inner command inside the sandbox.
 _INNER_SHELL = "/bin/sh"
@@ -138,7 +147,6 @@ class SandboxRuntime:
 
         resolved = detect_backend(self._requested_backend)
         if resolved == "bwrap":
-            from metagpt.sandbox.bwrap import BwrapBackend
 
             backend = BwrapBackend()
             if backend.available:
@@ -191,7 +199,6 @@ class SandboxRuntime:
             # a bwrap backend to host it, and the slirp/nft toolchain exists.
             # Otherwise stay on env-var proxy injection (P1 behaviour).
             if self._network_enforcement and not isinstance(self._backend, NullBackend):
-                from metagpt.sandbox.network.enforce import enforcement_available
 
                 self._netns_egress = enforcement_available()
 
@@ -248,7 +255,6 @@ class SandboxRuntime:
         # inner process must be userns-root with CAP_NET_ADMIN to bring up lo +
         # install the nft lock, and needs /dev/net/tun for slirp4netns.
         if self._netns_egress:
-            from metagpt.sandbox.network.enforce import TUN_DEVICE
 
             policy.unshare_net = True
             policy.uid_root = True
@@ -271,7 +277,6 @@ class SandboxRuntime:
                 # is only reachable via the slirp gateway. Point proxy-aware
                 # tools at the gateway URL (the nft lock backstops everything
                 # else regardless of whether the tool honours the proxy).
-                from metagpt.sandbox.network.enforce import proxy_url_in_netns
 
                 return inject_proxy_env(env, proxy_url_in_netns(self._proxy.port))
             return inject_proxy_env(env, self._proxy.url)
@@ -332,8 +337,6 @@ class SandboxRuntime:
         /dev/net/tun --info-fd 3``. ``extra_writable`` (e.g. the kernel ipc://
         socket dir) is bound read-write inside the netns sandbox too.
         """
-        from metagpt.sandbox.network.enforce import build_inner_prelude
-        from metagpt.sandbox.network.orchestrator import build_inner_argv
 
         assert self._proxy is not None  # guarded by callers
         prelude = build_inner_prelude(self._proxy.port)
@@ -343,7 +346,6 @@ class SandboxRuntime:
 
     def _netns_config_token(self, bwrap_argv: list[str]) -> str:
         """Encode the launcher config (bwrap argv + proxy port + seccomp path)."""
-        from metagpt.sandbox.network.orchestrator import encode_config
 
         assert self._proxy is not None
         return encode_config(
@@ -358,7 +360,6 @@ class SandboxRuntime:
     ) -> Optional[str]:
         """Return the launcher *shell string* for ``wrap_command`` (or None)."""
         try:
-            from metagpt.sandbox.network.orchestrator import launcher_command
 
             bwrap_argv = self._build_netns_bwrap_argv(payload_argv, cwd)
             return launcher_command(self._netns_config_token(bwrap_argv))
@@ -375,7 +376,6 @@ class SandboxRuntime:
     ) -> Optional[list[str]]:
         """Return the launcher *argv* for ``wrap_exec`` (or None)."""
         try:
-            from metagpt.sandbox.network.orchestrator import launcher_argv
 
             bwrap_argv = self._build_netns_bwrap_argv(payload_argv, cwd, extra_writable)
             return launcher_argv(self._netns_config_token(bwrap_argv))
@@ -461,8 +461,6 @@ class SandboxRuntime:
         # When no env was supplied, fall back to a copy of the current process
         # env so proxy/hardening edits have something to layer onto.
         if env is None:
-            import os
-
             base_env = harden_env(dict(os.environ)) if self._harden else dict(os.environ)
         out_env = self._apply_network_env(base_env)
 
@@ -537,8 +535,6 @@ class SandboxRuntime:
         unchanged (only env policy applies).
         """
         await self.start()
-        import os
-
         if env is None:
             base = dict(os.environ)
         else:

@@ -17,6 +17,8 @@ reorders and annotates.
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from typing import List
 
@@ -137,9 +139,6 @@ def _extract_plan_object(text: str) -> dict | None:
     Reuses the array extractor's fence handling by trying the same candidates,
     but accepts an object (``{...}``) rather than an array.
     """
-    import json
-    import re
-
     if not text:
         return None
     text = text.strip()

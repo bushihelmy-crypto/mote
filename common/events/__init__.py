@@ -17,6 +17,7 @@ from metagpt.common.events.bus import EventBus
 from metagpt.common.events.context import current_bus, observe_event, observe_event_sync, set_bus
 from metagpt.common.events.log_subscriber import LogSubscriber
 from metagpt.common.events.outcome import EMPTY, EventOutcome, HookOutcome, fold
+from metagpt.common.events.stream import log_llm_stream
 from metagpt.common.events.trace import current_span_id, span
 from metagpt.common.events.types import (
     AGENT_LIFECYCLE,
@@ -81,6 +82,8 @@ __all__ = [
     "current_bus",
     "observe_event",
     "observe_event_sync",
+    # llm stream
+    "log_llm_stream",
     # trace instrumentation
     "span",
     "current_span_id",

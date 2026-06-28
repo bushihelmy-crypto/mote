@@ -25,6 +25,7 @@ from typing import Iterator, Optional
 from metagpt.common.disk import Journal, drain_blocking
 from metagpt.common.logs import log_class
 from metagpt.session.events import SessionEvent, SessionMetaEvent, parse_line, to_line
+from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 
 #: Directory name under the workspace root holding all session logs.
 SESSIONS_DIRNAME = ".agent_sessions"
@@ -33,7 +34,6 @@ ROLLOUT_FILENAME = "rollout.jsonl"
 
 
 def _default_base_dir() -> Path:
-    from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 
     return Path(DEFAULT_WORKSPACE_ROOT) / SESSIONS_DIRNAME
 

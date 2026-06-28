@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from metagpt.common.config.meta_config import Config
+from metagpt.common.config.loader import load_config
 from metagpt.common.exception import RecoveryAction, RecoveryRunner
 from metagpt.common.exception.media import (
     MediaGenerationError,
@@ -269,7 +269,7 @@ class AudioCreator:
     }
 
     def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = Config.default().multimodal.audio_generation
+        cfg = load_config().multimodal.audio_generation
         self._api_key: str = cfg.api_key
         self._base_url: str = cfg.base_url.rstrip("/")
         self._model: str = cfg.model
@@ -401,7 +401,7 @@ class MusicCreator:
     """Async music generation via POST /v1/audio/music/async."""
 
     def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = Config.default().multimodal.music_generation
+        cfg = load_config().multimodal.music_generation
         self._api_key: str = cfg.api_key
         self._base_url: str = cfg.base_url.rstrip("/")
         self._model: str = cfg.model
@@ -529,7 +529,7 @@ class ImageCreator:
     """
 
     def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = Config.default().multimodal.image_generation
+        cfg = load_config().multimodal.image_generation
         self._api_key: str = cfg.api_key
         self._base_url: str = cfg.base_url.rstrip("/")
         self._model: str = cfg.model
@@ -694,7 +694,7 @@ class VideoCreator:
     """
 
     def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = Config.default().multimodal.video_generation
+        cfg = load_config().multimodal.video_generation
         self._api_key: str = cfg.api_key
         self._base_url: str = cfg.base_url.rstrip("/")
         self._t2v_model: str = cfg.text_to_video_model

@@ -47,6 +47,9 @@ from typing import Awaitable, Callable, Mapping, Optional
 
 from metagpt.common.exception.base import MetaGPTError
 from metagpt.common.exception.codes import RecoveryAction
+from metagpt.common.exception.handlers import is_retryable
+from metagpt.common.events import RecoveryEvent, observe_event
+from metagpt.common.logs import logger
 
 # A no-arg coroutine factory: each invocation issues one attempt and returns its result.
 Call = Callable[[], Awaitable]
@@ -120,7 +123,6 @@ class RecoveryRunner:
         bus is bound (standalone use, tests).
         """
         try:
-            from metagpt.common.events import RecoveryEvent, observe_event
 
             await observe_event(
                 RecoveryEvent(
@@ -131,8 +133,9 @@ class RecoveryRunner:
                     error=str(exc),
                 )
             )
-        except Exception:  # noqa: BLE001 — emitting must never break recovery
-            pass
+        except Exception as exc:  # noqa: BLE001 — emitting must never break recovery
+
+            logger.debug(f"recovery: RecoveryEvent emit failed: {exc}")
 
     @staticmethod
     def _action_for(exc: BaseException) -> RecoveryAction:
@@ -147,6 +150,5 @@ class RecoveryRunner:
         """
         if isinstance(exc, MetaGPTError):
             return exc.recovery
-        from metagpt.common.exception.handlers import is_retryable
 
         return RecoveryAction.RETRY if is_retryable(exc) else RecoveryAction.ABORT

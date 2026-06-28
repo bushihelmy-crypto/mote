@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.executor.tools.media_pipeline.graph import build_media_pipeline_graph
 
 
 class PromoParams(BaseModel):
@@ -57,7 +58,6 @@ class MediaPipeline(BaseTool):
 
     def __init__(self):
         super().__init__()
-        from metagpt.executor.tools.media_pipeline.graph import build_media_pipeline_graph
 
         self._graph = build_media_pipeline_graph()
         self._executor = self._graph.compile()

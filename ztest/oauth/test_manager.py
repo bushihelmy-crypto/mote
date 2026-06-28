@@ -135,10 +135,10 @@ def test_refresh_grant_without_token_errors(tmp_path):
 
 
 def test_login_dispatches_device_code_and_persists(tmp_path, monkeypatch):
-    import metagpt.router.oauth.flows as flows_mod
+    import metagpt.router.oauth.manager as manager_mod
 
     captured = OAuthToken(access_token="logged-in", refresh_token="r-li", expires_at=time.time() + 3600)
-    monkeypatch.setattr(flows_mod, "run_device_code_flow", lambda config, callbacks=None: captured)
+    monkeypatch.setattr(manager_mod, "run_device_code_flow", lambda config, callbacks=None: captured)
 
     mgr, store = _manager(tmp_path, FakeClient(), grant_type=GrantType.DEVICE_CODE)
     tok = mgr.login()
@@ -149,10 +149,10 @@ def test_login_dispatches_device_code_and_persists(tmp_path, monkeypatch):
 
 
 def test_login_dispatches_authorization_code(tmp_path, monkeypatch):
-    import metagpt.router.oauth.flows as flows_mod
+    import metagpt.router.oauth.manager as manager_mod
 
     token = OAuthToken(access_token="ac-token", expires_at=time.time() + 3600)
-    monkeypatch.setattr(flows_mod, "run_auth_code_flow", lambda config, callbacks=None: token)
+    monkeypatch.setattr(manager_mod, "run_auth_code_flow", lambda config, callbacks=None: token)
 
     mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.AUTHORIZATION_CODE)
     assert mgr.login().access_token == "ac-token"

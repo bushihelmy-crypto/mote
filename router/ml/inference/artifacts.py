@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from metagpt.router.ml.features import extract_handcrafted
+from metagpt.router.ml.features import ContextMetadata, extract_context_features
+from metagpt.router.ml.features import extract_hist_features
+from metagpt.router.ml.v4_features import BGEChannelExtractor
 
 _V4_TFIDF_DIMS = 102
 
@@ -26,7 +30,6 @@ class V3FeatureRuntime:
         self._svd = svd_model
 
     def extract_handcrafted(self, text: str) -> np.ndarray:
-        from metagpt.router.ml.features import extract_handcrafted
 
         return extract_handcrafted(text).astype(np.float32)
 
@@ -39,7 +42,6 @@ class V3FeatureRuntime:
         return tfidf
 
     def extract_context(self, metadata: dict) -> np.ndarray:
-        from metagpt.router.ml.features import ContextMetadata, extract_context_features
 
         if not metadata:
             return extract_context_features(None)
@@ -48,7 +50,6 @@ class V3FeatureRuntime:
         return extract_context_features(context)
 
     def extract_hist(self, prev_route_decisions: list) -> np.ndarray:
-        from metagpt.router.ml.features import extract_hist_features
 
         return extract_hist_features(prev_route_decisions or None)
 
@@ -116,7 +117,6 @@ class InferenceArtifacts:
         import lightgbm as lgb
         import onnxruntime as ort
 
-        from metagpt.router.ml.v4_features import BGEChannelExtractor
 
         paths = self.required_paths()
         main_model = lgb.Booster(model_file=str(paths["main_model"]))

@@ -15,6 +15,7 @@ from typing import ClassVar, Optional, get_type_hints
 
 from metagpt.common.utils.docstring import first_line, parse_section
 from metagpt.executor.tasks.bggraph.types import GraphState, Stage
+from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +171,6 @@ class BaseNode(ABC):
         Reuses :func:`~metagpt.executor.tool_spec_adapter.annotation_to_json_schema`
         so the type mapping is consistent with the tool system.
         """
-        from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
 
         params = cls.get_params()
         properties: dict[str, dict] = {}

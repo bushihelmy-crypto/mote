@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 from typing import Callable, List, Optional
 
-from metagpt.common.logs import log_class
+from metagpt.common.logs import log_class, logger
 from metagpt.common.schema import UserMessage
 from metagpt.environment.control import AgentControl
 from metagpt.environment.mailbox import DeliveryMode
@@ -134,8 +134,8 @@ class CronService:
         message = UserMessage(content=task.prompt)
         try:
             self._control.send_input(target, message, mode=DeliveryMode.TRIGGER_TURN)
-        except Exception:  # noqa: BLE001 — target may be gone; best-effort, never raise
-            pass
+        except Exception as exc:  # noqa: BLE001 — target may be gone; best-effort, never raise
+            logger.debug(f"CronService: fire of task into {target} dropped: {exc}")
 
     def _is_idle(self) -> bool:
         """True when no targeted runtime is mid-turn (safe to deliver)."""

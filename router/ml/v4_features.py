@@ -22,6 +22,7 @@ import re
 import joblib
 import numpy as np
 from sklearn.decomposition import PCA
+from metagpt.router.ml.bge_onnx import OnnxBGE
 
 __all__ = [
     "extract_assistant_handcrafted",
@@ -214,7 +215,6 @@ class BGEChannelExtractor:
     def _ensure_bge(self):
         if self._bge is None:
             if self.backend == "onnx":
-                from metagpt.router.ml.bge_onnx import OnnxBGE
 
                 self._bge = OnnxBGE(self.onnx_model_dir)
             else:

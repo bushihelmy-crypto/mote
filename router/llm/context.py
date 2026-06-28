@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from metagpt.common.config.loader import load_config
 from metagpt.common.config.meta_config import Config
 from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.router.cost import CostTracker, PricingMode
@@ -29,7 +30,7 @@ class Context(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    config: Config = Field(default_factory=Config.default)
+    config: Config = Field(default_factory=load_config)
     cost_manager: CostTracker = Field(default_factory=CostTracker)
     # Explicit reference to the live control plane (an ``AgentControl``), when a
     # caller that holds this Context knows its plane. Duck-typed to ``Any`` to

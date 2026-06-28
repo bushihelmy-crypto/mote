@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from metagpt.common.logs import logger
 from metagpt.router.oauth.models import OAuthToken
 from metagpt.router.oauth.storage.base import CredentialStore
 
@@ -42,5 +43,5 @@ class KeyringCredentialStore(CredentialStore):
     def delete(self) -> None:
         try:
             self._keyring.delete_password(_SERVICE, self.provider)
-        except Exception:  # noqa: BLE001 - absent / backend error is non-fatal
-            pass
+        except Exception as exc:  # noqa: BLE001 - absent / backend error is non-fatal
+            logger.debug(f"OAuth keyring delete failed for {self.provider}: {exc}")

@@ -26,6 +26,7 @@ import pkgutil
 from typing import ClassVar
 
 from metagpt.common.base.singleton import Singleton
+from metagpt.roles.role import Role
 
 
 class AgentRegistry(metaclass=Singleton):
@@ -71,7 +72,6 @@ class AgentRegistry(metaclass=Singleton):
         # Contract: spawnable agents must be runnable Roles. Catch a missing
         # `Role` base at registration time instead of at spawn time. Imported
         # lazily to avoid an import cycle (role -> ... -> agents).
-        from metagpt.roles.role import Role
 
         if not issubclass(cls, Role):
             raise TypeError(

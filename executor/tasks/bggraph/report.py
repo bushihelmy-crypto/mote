@@ -10,6 +10,12 @@ from __future__ import annotations
 import contextvars
 from typing import Any, Callable, Optional
 
+from metagpt.common.logs import logger
+from metagpt.executor.tasks.bggraph.types import END
+from metagpt.common.schema import CauseBy
+from metagpt.executor.tasks.types import BackgroundTaskNotification
+from metagpt.common.events import TaskProgressEvent, observe_event_sync
+
 # ---------------------------------------------------------------------------
 # Generic progress reporting via contextvars
 # ---------------------------------------------------------------------------
@@ -30,8 +36,8 @@ def report_progress(stage: str, status: Any, detail: Any = None) -> None:
     if writer is not None:
         try:
             writer(stage, status, detail)
-        except Exception:  # best-effort — never break the pipeline on a sink error
-            pass
+        except Exception as exc:  # noqa: BLE001 — never break the pipeline on a sink error
+            logger.debug(f"report_progress: progress writer failed: {exc}")
 
 
 def set_progress_writer(writer: Optional[ProgressWriter]) -> contextvars.Token:
@@ -76,7 +82,6 @@ def _is_push_worthy(stage: str, status: str) -> bool:
     Everything else (e.g. a mid-flight node ``running`` update) only lands on
     disk and is *not* pushed.
     """
-    from metagpt.executor.tasks.bggraph.types import END
 
     if stage == END and status == "running":
         return True
@@ -101,7 +106,6 @@ def _is_task_terminal(stage: str, status: str) -> bool:
     END`` with a terminal status) and the route pause (``waiting_for_route``)
     from mid-flight node events.
     """
-    from metagpt.executor.tasks.bggraph.types import END
 
     if status == "waiting_for_route":
         return True
@@ -202,8 +206,6 @@ def _deliver_progress(
     never break the task pipeline. The ``detail`` is already
     ``(current)``-substituted by the writer.
     """
-    from metagpt.common.schema import CauseBy
-    from metagpt.executor.tasks.types import BackgroundTaskNotification
 
     notification = BackgroundTaskNotification(
         content=detail or f"[{stage}] {status}",
@@ -215,8 +217,8 @@ def _deliver_progress(
     )
     try:
         deliver(notification)
-    except Exception:  # noqa: BLE001 — delivery must never break the pipeline
-        pass
+    except Exception as exc:  # noqa: BLE001 — delivery must never break the pipeline
+        logger.debug(f"bggraph: task notification delivery failed: {exc}")
 
 
 def _emit_task_progress(task_id: str, stage: str, status: str, detail: str) -> None:
@@ -237,10 +239,9 @@ def _emit_task_progress(task_id: str, stage: str, status: str, detail: str) -> N
     if not task_id:
         return
     try:
-        from metagpt.common.events import TaskProgressEvent, observe_event_sync
 
         observe_event_sync(
             TaskProgressEvent(task_id=task_id, stage=stage, status=status, detail=detail)
         )
-    except Exception:  # noqa: BLE001 — emitting must never break the pipeline
-        pass
+    except Exception as exc:  # noqa: BLE001 — emitting must never break the pipeline
+        logger.debug(f"bggraph: task progress emit failed: {exc}")

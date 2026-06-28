@@ -23,7 +23,9 @@ import asyncio
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
+from metagpt.common.logs import logger
 from metagpt.common.schema import LspServerConfig
 from metagpt.roles.lsp.jsonrpc import JsonRpcEndpoint
 from metagpt.roles.lsp.registry import DiagnosticRegistry, parse_diagnostic
@@ -89,7 +91,8 @@ class LspServerInstance:
             await self._endpoint.request(
                 "initialize", self._initialize_params(), timeout=self.init_timeout
             )
-        except Exception:  # noqa: BLE001 — handshake failed; tear down
+        except Exception as exc:  # noqa: BLE001 — handshake failed; tear down
+            logger.debug(f"LspServer: initialize handshake failed, tearing down: {exc}")
             await self.shutdown()
             return False
 
@@ -145,8 +148,8 @@ class LspServerInstance:
             try:
                 await endpoint.request("shutdown", {}, timeout=2.0)
                 endpoint.notify("exit", {})
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"LspServer: graceful shutdown handshake failed: {exc}")
             await endpoint.close()
         await self._kill_proc()
 
@@ -199,8 +202,6 @@ class LspServerInstance:
 def _uri_to_path(uri: str) -> str:
     """Convert a ``file://`` URI back to a filesystem path (best-effort)."""
     if uri.startswith("file://"):
-        from urllib.parse import unquote, urlparse
-
         return unquote(urlparse(uri).path)
     return uri
 

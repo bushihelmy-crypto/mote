@@ -14,9 +14,16 @@ from __future__ import annotations
 import json
 import os
 
+from metagpt.common.logs import logger
 from metagpt.executor.tasks.bggraph import Stage
 
 from .state import MediaPipelineState
+from metagpt.executor.tools.media_pipeline.creators import ImageCreator
+from metagpt.executor.tools.media_pipeline.creators import AudioCreator
+from metagpt.executor.tools.media_pipeline.creators import MusicCreator
+from metagpt.executor.tools.media_pipeline.creators import VideoCreator
+from metagpt.router import LLM
+from metagpt.executor.tools.media_pipeline.creators import FfmpegComposer
 
 # ---------------------------------------------------------------------------
 # Storyboard LLM prompt
@@ -210,7 +217,6 @@ async def storyboard_node(state: MediaPipelineState) -> Stage:
 
     # Auto mode — use LLM to plan
     async def submit():
-        from metagpt.router import LLM
 
         llm = LLM()
         user_msg = state.prompt
@@ -297,7 +303,6 @@ async def image_node(state: MediaPipelineState) -> Stage:
     if not state.images:
         return Stage(submit=_noop())
 
-    from metagpt.executor.tools.media_pipeline.creators import ImageCreator
 
     creator = ImageCreator(output_dir=_assets_dir(state, "images"))
 
@@ -327,7 +332,6 @@ async def audio_node(state: MediaPipelineState) -> Stage:
     if not state.audios:
         return Stage(submit=_noop())
 
-    from metagpt.executor.tools.media_pipeline.creators import AudioCreator
 
     creator = AudioCreator(output_dir=_assets_dir(state, "audio"))
 
@@ -357,7 +361,6 @@ async def music_node(state: MediaPipelineState) -> Stage:
     if not state.musics:
         return Stage(submit=_noop())
 
-    from metagpt.executor.tools.media_pipeline.creators import MusicCreator
 
     creator = MusicCreator(output_dir=_assets_dir(state, "music"))
 
@@ -431,7 +434,6 @@ async def video_node(state: MediaPipelineState) -> Stage:
     image_results = getattr(state, "image", None)
     videos = _inject_image_refs(state.videos, image_results)
 
-    from metagpt.executor.tools.media_pipeline.creators import VideoCreator
 
     creator = VideoCreator(output_dir=_assets_dir(state, "videos"))
 
@@ -484,8 +486,8 @@ async def duration_measure_node(state: MediaPipelineState) -> Stage:
                         try:
                             dur = await probe_media_duration_seconds(url)
                             audio_durations.append(dur)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug(f"media_pipeline: audio duration probe failed for {url}: {exc}")
 
         # Measure music outputs
         if music_results and isinstance(music_results, (list, dict)):
@@ -497,8 +499,8 @@ async def duration_measure_node(state: MediaPipelineState) -> Stage:
                         try:
                             dur = await probe_media_duration_seconds(url)
                             music_durations.append(dur)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug(f"media_pipeline: music duration probe failed for {url}: {exc}")
 
         state.durations = {"audio": audio_durations, "music": music_durations}
         return {"durations": state.durations}
@@ -582,7 +584,6 @@ async def promo_node(state: MediaPipelineState) -> Stage:
         return {"status": "running", "message": "FFmpeg compose started."}
 
     async def poll(_submit_result):
-        from metagpt.executor.tools.media_pipeline.creators import FfmpegComposer
 
         promo_dir = state.promo_dir or state.promo.get("promo_dir", "")
         clips = _ordered_local_paths(state.videos, getattr(state, "video", None))

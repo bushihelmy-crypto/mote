@@ -23,6 +23,8 @@ import asyncio
 import json
 from typing import Callable, Optional
 
+from metagpt.common.logs import logger
+
 # Notification dispatch: (method, params) -> None. Sync; the endpoint never
 # awaits it (handlers stage work, they don't block the read loop).
 NotificationHandler = Callable[[str, dict], None]
@@ -96,8 +98,8 @@ class JsonRpcEndpoint:
         self._fail_pending(ConnectionError("endpoint closed"))
         try:
             self._writer.close()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"JsonRpc: writer close failed: {exc}")
 
     # --- internals ---------------------------------------------------------
 
@@ -107,8 +109,8 @@ class JsonRpcEndpoint:
         header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
         try:
             self._writer.write(header + body)
-        except Exception:  # noqa: BLE001 — dead pipe; reader loop will tear down
-            pass
+        except Exception as exc:  # noqa: BLE001 — dead pipe; reader loop will tear down
+            logger.debug(f"JsonRpc: write to dead pipe failed: {exc}")
 
     async def _read_loop(self) -> None:
         """Parse frames until EOF/error, dispatching responses + notifications."""
@@ -120,8 +122,8 @@ class JsonRpcEndpoint:
                 self._dispatch(message)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 — any transport error ends the loop
-            pass
+        except Exception as exc:  # noqa: BLE001 — any transport error ends the loop
+            logger.debug(f"JsonRpc: read loop ended on transport error: {exc}")
         finally:
             self._fail_pending(ConnectionError("reader stopped"))
 
@@ -155,8 +157,8 @@ class JsonRpcEndpoint:
         if method and self._on_notification is not None:
             try:
                 self._on_notification(method, message.get("params") or {})
-            except Exception:  # noqa: BLE001 — handler errors never break transport
-                pass
+            except Exception as exc:  # noqa: BLE001 — handler errors never break transport
+                logger.debug(f"JsonRpc: notification handler for {method!r} raised: {exc}")
 
     def _fail_pending(self, exc: Exception) -> None:
         for future in self._pending.values():

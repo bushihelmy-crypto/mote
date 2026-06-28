@@ -38,7 +38,7 @@ from metagpt.executor.permission import PermissionEngine, RuleStore
 from metagpt.executor.permission.sandbox import SandboxGuard
 from metagpt.executor.tool_result import ToolError, ToolResult
 from metagpt.executor.tool_registry import registry as tool_registry
-from metagpt.common.logs import log_class
+from metagpt.common.logs import log_class, logger
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
 from metagpt.executor.tasks.bggraph.marker import is_pipeline_tool
@@ -419,8 +419,8 @@ class ToolExecutor(BaseToolExecutor):
                 if path:
                     try:
                         await self._bus.emit(FileMutatedEvent(path=path, tool=name))
-                    except Exception:  # noqa: BLE001 — never break the tool call
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — never break the tool call
+                        logger.debug(f"ToolExecutor: FileMutatedEvent emit for {path} failed: {exc}")
 
             return self._limit_result(result, name, result_id)
 

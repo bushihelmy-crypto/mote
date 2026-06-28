@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from metagpt.common.events import DiagnosticsEvent, FileMutatedEvent
+from metagpt.common.logs import logger
 from metagpt.common.schema import LspConfig
 from metagpt.roles.lsp.format import format_diagnostics
 from metagpt.roles.lsp.manager import LspServerManager
@@ -59,8 +60,8 @@ class LspService:
             server = await self._manager.server_for(path)
             if server is not None:
                 await server.did_save(path)
-        except Exception:  # noqa: BLE001 — never break the tool/turn
-            pass
+        except Exception as exc:  # noqa: BLE001 — never break the tool/turn
+            logger.debug(f"LspService: did_save for {path} failed: {exc}")
 
     async def _publish_diagnostics(self) -> None:
         """Drain any changed diagnostics and broadcast them on the bus."""
@@ -70,8 +71,8 @@ class LspService:
             block, paths = self._drain_changed()
             if block:
                 await self.bus.emit(DiagnosticsEvent(block=block, paths=paths))
-        except Exception:  # noqa: BLE001 — never break the turn
-            pass
+        except Exception as exc:  # noqa: BLE001 — never break the turn
+            logger.debug(f"LspService: diagnostics publish failed: {exc}")
 
     def _drain_changed(self) -> Tuple[str, List[str]]:
         """Render changed diagnostics + their paths, marking them delivered."""
@@ -90,15 +91,16 @@ class LspService:
         """
         try:
             return self._drain_changed()[0]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"LspService: drain_diagnostics failed: {exc}")
             return ""
 
     async def shutdown(self) -> None:
         """Tear down all managed language servers."""
         try:
             await self._manager.shutdown()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"LspService: manager shutdown failed: {exc}")
 
 
 __all__ = ["LspService"]

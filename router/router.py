@@ -19,6 +19,7 @@ from metagpt.common.logs import log_class, logger
 from metagpt.router.llm.base_llm import BaseLLM
 from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
 from metagpt.router.strategy import RoutingStrategy, RuleBasedStrategy
+from metagpt.router.llm.context import Context
 
 if TYPE_CHECKING:
     from metagpt.router.llm.context import Context
@@ -58,7 +59,6 @@ class LLMRouter:
     ):
         # lazy import keeps router.py free of a hard Context dependency at import
         # time (mirrors the old factory constructing Context() on demand).
-        from metagpt.router.llm.context import Context
 
         self.context: "Context" = context or Context()
         self.strategy: RoutingStrategy = strategy or RuleBasedStrategy()

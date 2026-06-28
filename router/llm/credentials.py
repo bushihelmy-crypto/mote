@@ -12,6 +12,7 @@ SDK client from the current credential). It must call :meth:`_init_credentials`
 during its client init, before the first :meth:`_rebuild_client`.
 """
 from __future__ import annotations
+from metagpt.router.oauth import OAuthManager
 
 
 class CredentialRotationMixin:
@@ -32,7 +33,6 @@ class CredentialRotationMixin:
         """Construct an OAuthManager when ``config.oauth`` is set, else None."""
         if not getattr(self.config, "oauth", None):
             return None
-        from metagpt.router.oauth import OAuthManager
 
         return OAuthManager(self.config.oauth)
 

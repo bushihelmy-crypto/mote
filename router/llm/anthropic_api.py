@@ -34,13 +34,15 @@ from metagpt.common.exception import (
     classify_llm_error,
     is_retryable,
 )
-from metagpt.common.logs import log_llm_stream, logger
+from metagpt.common.events import log_llm_stream
+from metagpt.common.logs import logger
 from metagpt.common.utils.common import log_and_reraise, sniff_image_media_type
 from metagpt.common.utils.token_counter import count_message_tokens, count_string_tokens
 from metagpt.router.cost import CostTracker
 from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from metagpt.router.llm.credentials import CredentialRotationMixin
 from metagpt.router.llm.llm_provider_registry import register_provider
+from metagpt.router.cost import TokenUsage
 
 
 @register_provider([LLMType.ANTHROPIC])
@@ -416,7 +418,6 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         return self.max_completion_token or 4096
 
     def _calc_usage(self, messages: list[dict], rsp: str):
-        from metagpt.router.cost import TokenUsage
 
         if not self.config.calc_usage:
             return TokenUsage()

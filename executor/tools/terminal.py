@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, ClassVar, Optional
 
+from metagpt.common.logs import logger
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.permission.classifier import classify_command
 from metagpt.executor.permission.command_parse import segment_strings
@@ -197,7 +198,8 @@ class Terminal(BaseTool):
         elif result[2]:  # at_prompt and still alive — snapshot the env for resume
             try:
                 state = await session.capture_state()
-            except Exception:  # noqa: BLE001 — capture must not break the call
+            except Exception as exc:  # noqa: BLE001 — capture must not break the call
+                logger.debug(f"terminal: session state capture failed: {exc}")
                 state = None
             if state is not None:
                 # getattr-tolerant for tools bound without the capability (tests).

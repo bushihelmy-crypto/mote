@@ -195,8 +195,8 @@ class DiskWriter:
             self._queue.put_nowait(None)  # shutdown sentinel
             try:
                 await self._worker
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 — worker crash may have lost writes
+                logger.warning(f"DiskWriter: worker exited with error on close: {exc}")
         else:
             # Worker's loop is gone / never ran: flush whatever is left inline.
             self.flush_inline()
@@ -262,8 +262,8 @@ def _atexit_close() -> None:
         return
     try:
         _writer.flush_inline()
-    except Exception:  # noqa: BLE001 — shutdown is best-effort
-        pass
+    except Exception as exc:  # noqa: BLE001 — shutdown is best-effort
+        logger.warning(f"DiskWriter: flush at interpreter shutdown failed: {exc}")
 
 
 __all__ = ["DiskWriter", "get_disk_writer", "set_disk_writer", "drain_blocking"]

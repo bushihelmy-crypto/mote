@@ -102,34 +102,19 @@ from metagpt.common.exception.task import (
     BackgroundTaskTimeoutError,
 )
 
-# NOTE: ``handlers`` is imported LAST on purpose. It pulls in
-# ``common.utils.exceptions`` → utils → schema → document →
-# ``common.utils.common``, whose module body imports ``MetaGPTError`` and
-# ``NoMoneyException`` back from this package.
-#
-# Unlike the tiers above (pure leaves that import only ``base``/``codes``), the
-# ``handlers`` submodule re-exports ``handle_exception`` from ``common.utils`` and
-# therefore drags the heavyweight ``common.utils`` package (→ ``config2`` →
-# ``llm_config``, which itself imports from THIS package) into what should be a leaf
-# exception package. Importing it eagerly at the top of ``__init__`` makes any module
-# that does ``from metagpt.common.exception import <leaf-error>`` (e.g.
-# ``llm_config.py`` for ``MissingAPIKeyError``) re-enter a half-initialised
-# ``common.utils``/``llm_config`` and crash with a circular ImportError.
-#
-# Fix: expose the three handler helpers LAZILY via PEP 562 ``__getattr__``. The
-# package body now finishes with only leaf-tier imports, so importing it never pulls
-# in ``common.utils``. The first actual *access* to ``is_retryable`` /
-# ``classify_llm_error`` / ``handle_exception`` (always well after ``llm_config`` /
-# ``config2`` have finished initialising) loads ``handlers`` on demand — no cycle.
-_LAZY_HANDLER_NAMES = frozenset({"classify_llm_error", "handle_exception", "is_retryable"})
-
-
-def __getattr__(name: str):  # PEP 562
-    if name in _LAZY_HANDLER_NAMES:
-        from metagpt.common.exception import handlers
-
-        return getattr(handlers, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# ``handlers`` is leaf-tier and imported eagerly. Its only cross-package edge is
+# ``from metagpt.common.utils.exceptions import handle_exception``; both
+# ``common.utils`` (re-exports only ``token_counter`` → tiktoken/loguru) and
+# ``common.utils.exceptions`` (imports only ``common.logs``) are pure leaves, so this
+# pulls in neither ``config2`` nor ``llm_config``. (Historically ``common.utils``
+# re-exported ``Singleton``/``read_docx`` which dragged config2 in, forcing a PEP 562
+# lazy ``__getattr__`` here; that re-export was dropped, so the cycle is gone and the
+# helpers are now plain top-level imports.)
+from metagpt.common.exception.handlers import (
+    classify_llm_error,
+    handle_exception,
+    is_retryable,
+)
 
 
 __all__ = [

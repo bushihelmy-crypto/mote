@@ -9,6 +9,7 @@ from metagpt.common.config.config.oauth_config import StoreBackend
 from metagpt.router.oauth.storage.base import CredentialStore
 from metagpt.router.oauth.storage.fallback_store import FallbackCredentialStore
 from metagpt.router.oauth.storage.file_store import FileCredentialStore
+from metagpt.router.oauth.storage.keyring_store import KeyringCredentialStore
 
 
 def get_store(provider: str, backend: Union[StoreBackend, str] = StoreBackend.FALLBACK) -> CredentialStore:
@@ -21,7 +22,6 @@ def get_store(provider: str, backend: Union[StoreBackend, str] = StoreBackend.FA
     if backend == StoreBackend.FILE:
         return FileCredentialStore(provider)
     if backend == StoreBackend.KEYRING:
-        from metagpt.router.oauth.storage.keyring_store import KeyringCredentialStore
 
         return KeyringCredentialStore(provider)
     return FallbackCredentialStore(provider)

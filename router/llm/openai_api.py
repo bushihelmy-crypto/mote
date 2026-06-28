@@ -40,7 +40,8 @@ from metagpt.common.exception import (
     is_retryable,
 )
 from metagpt.common.const import USE_CONFIG_TIMEOUT
-from metagpt.common.logs import log_llm_stream, logger
+from metagpt.common.events import log_llm_stream
+from metagpt.common.logs import logger
 from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from metagpt.router.llm.credentials import CredentialRotationMixin
 from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA

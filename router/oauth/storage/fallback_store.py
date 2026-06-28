@@ -13,6 +13,7 @@ from metagpt.common.logs import logger
 from metagpt.router.oauth.models import OAuthToken
 from metagpt.router.oauth.storage.base import CredentialStore
 from metagpt.router.oauth.storage.file_store import FileCredentialStore
+from metagpt.router.oauth.storage.keyring_store import KeyringCredentialStore
 
 
 class FallbackCredentialStore(CredentialStore):
@@ -23,7 +24,6 @@ class FallbackCredentialStore(CredentialStore):
         self._file = FileCredentialStore(provider)
         self._keyring: Optional[CredentialStore] = None
         try:
-            from metagpt.router.oauth.storage.keyring_store import KeyringCredentialStore
 
             self._keyring = KeyringCredentialStore(provider)
         except Exception as e:  # noqa: BLE001
@@ -52,8 +52,8 @@ class FallbackCredentialStore(CredentialStore):
         if self._keyring is not None:
             try:
                 self._keyring.delete()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"OAuth keyring delete failed, falling back to file: {e}")
         self._file.delete()
 
     def mtime(self) -> Optional[float]:

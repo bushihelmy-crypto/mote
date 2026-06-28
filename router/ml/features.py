@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
+from metagpt.router.ml.trajectory import Trajectory, classify
 
 # ---------------------------------------------------------------------------
 # Channel 1: Hand-crafted features
@@ -119,7 +120,6 @@ def extract_hist_features(
       [6] dominant_route   [7] switches
       [8..15] trajectory one-hot (8 Trajectory enum values)
     """
-    from metagpt.router.ml.trajectory import Trajectory, classify
     assert len(Trajectory) <= _HIST_ONEHOT_SLOTS, \
         f"Trajectory enum has {len(Trajectory)} members but only {_HIST_ONEHOT_SLOTS} one-hot slots"
 

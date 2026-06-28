@@ -121,8 +121,8 @@ class ChildAgentHandle:
         if cleanup is not None:
             try:
                 await cleanup()
-            except Exception:  # noqa: BLE001 — teardown is best-effort
-                pass
+            except Exception as exc:  # noqa: BLE001 — teardown is best-effort
+                logger.warning(f"ChildAgentHandle: cleanup of {self._agent_id} failed: {exc}")
 
     async def __aenter__(self) -> "ChildAgentHandle":
         return self

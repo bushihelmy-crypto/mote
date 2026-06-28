@@ -5,11 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.config.diagnostics import (
-    format_report,
-    unknown_key_paths,
-)
+from metagpt.common.config.diagnostics import unknown_key_paths
 from metagpt.common.config.loader import load_config
+from metagpt.common.config.report import format_report
 from metagpt.common.config.meta_config import Config
 from metagpt.common.exception import UnknownConfigKeysError
 

@@ -40,6 +40,7 @@ it is not importable, :func:`seccomp_available` is False and callers degrade
 from __future__ import annotations
 
 import os
+import tempfile
 from typing import Optional
 
 from metagpt.common.logs import logger
@@ -122,8 +123,6 @@ def _export_to_file(filt) -> Optional[str]:
     it at shutdown) — unlike a one-shot fd, a path can be redirected from many
     times. Created ``0600`` in the system temp dir.
     """
-    import tempfile
-
     try:
         fd, path = tempfile.mkstemp(prefix="sbx-seccomp-", suffix=".bpf")
         with os.fdopen(fd, "wb") as fh:

@@ -26,7 +26,7 @@ import asyncio
 from enum import Enum
 from typing import Any, Optional
 
-from metagpt.common.logs import log_class
+from metagpt.common.logs import log_class, logger
 from metagpt.environment.agent_path import AgentPath
 from metagpt.environment.mailbox import Mailbox
 
@@ -162,8 +162,8 @@ class AgentRuntime:
                 await task
             except asyncio.CancelledError:
                 pass
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 — driver crashed during stop
+                logger.debug(f"AgentRuntime: driver task raised during stop: {exc}")
         self.task = None
 
     @property

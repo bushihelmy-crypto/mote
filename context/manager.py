@@ -39,7 +39,7 @@ from metagpt.common.events import (
     PreCompactEvent,
     PostCompactEvent,
 )
-from metagpt.context import token_budget
+import metagpt.context.token_budget as token_budget
 from metagpt.context.autocompact import autocompact
 from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
 from metagpt.common.logs import log_class

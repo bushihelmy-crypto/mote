@@ -7,6 +7,7 @@ is the frontier-scheduler driver coroutine.  See :mod:`engine` for execution.
 from __future__ import annotations
 
 import inspect
+import typing
 from typing import Any, Awaitable, Callable, Optional, Union
 
 from metagpt.common.utils.docstring import first_line
@@ -23,6 +24,11 @@ from metagpt.executor.tasks.bggraph.types import (
     _NodeDef,
     _WaitingEdge,
 )
+from metagpt.executor.tasks.bggraph.engine import _build_executor
+from metagpt.executor.tasks.bggraph.engine import resume as _resume
+from metagpt.executor.tasks.bggraph.engine import resume_skip as _resume_skip
+from metagpt.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
+from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +46,6 @@ def _types_compatible(source_type: type, target_type: type) -> bool:
 
     Does NOT perform full variance analysis or generic parameter checks.
     """
-    import typing
-
     origin = getattr(source_type, "__origin__", None)
 
     # typing.Any is compatible with anything
@@ -208,7 +212,6 @@ class BgGraph:
         self._validate()
         self._validate_params()
         self._reducers = derive_reducers(self.state_schema)
-        from metagpt.executor.tasks.bggraph.engine import _build_executor
 
         return _build_executor(self)
 
@@ -217,14 +220,12 @@ class BgGraph:
     def resume(
         self, state: GraphState, from_nodes: list[str], run_state: Any = None
     ) -> BgTaskResult:
-        from metagpt.executor.tasks.bggraph.engine import resume as _resume
 
         return _resume(self, state, from_nodes, run_state)
 
     def resume_skip(
         self, state: GraphState, skip_nodes: list[str], run_state: Any = None
     ) -> BgTaskResult:
-        from metagpt.executor.tasks.bggraph.engine import resume_skip as _resume_skip
 
         return _resume_skip(self, state, skip_nodes, run_state)
 
@@ -235,7 +236,6 @@ class BgGraph:
         from_nodes: list[str],
         run_state: Any = None,
     ) -> BgTaskResult:
-        from metagpt.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
 
         return _rsaf(self, state, skip_nodes, from_nodes, run_state)
 
@@ -258,7 +258,6 @@ class BgGraph:
         Each schema is derived from the node's declared params (type + description).
         Nodes without typed params get an empty-properties schema.
         """
-        from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
 
         result: dict[str, dict] = {}
         for name, node_def in self._nodes.items():

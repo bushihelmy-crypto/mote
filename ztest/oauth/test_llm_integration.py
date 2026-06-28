@@ -7,7 +7,7 @@ so no network/token-endpoint call happens.
 """
 from __future__ import annotations
 
-import metagpt.router.oauth as oauth_pkg
+import metagpt.router.llm.credentials as cred_mod
 from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.config.config.oauth_config import OAuthProviderConfig
 from metagpt.router.llm.openai_api import OpenAILLM
@@ -47,7 +47,7 @@ def test_static_key_path_byte_for_byte_unchanged():
 
 
 def test_oauth_injects_token_as_api_key_and_headers(monkeypatch):
-    monkeypatch.setattr(oauth_pkg, "OAuthManager", FakeManager)
+    monkeypatch.setattr(cred_mod, "OAuthManager", FakeManager)
     cfg = LLMConfig(
         api_key="",
         base_url="https://api.example/v1",
@@ -61,7 +61,7 @@ def test_oauth_injects_token_as_api_key_and_headers(monkeypatch):
 
 
 def test_rotate_credential_refreshes_in_oauth_mode(monkeypatch):
-    monkeypatch.setattr(oauth_pkg, "OAuthManager", FakeManager)
+    monkeypatch.setattr(cred_mod, "OAuthManager", FakeManager)
     cfg = LLMConfig(api_key="", oauth=_oauth_cfg())
     llm = OpenAILLM(cfg)
     assert llm._make_client_kwargs()["api_key"] == "tok-0"

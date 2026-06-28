@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 
 from metagpt.common.exception.base import MetaGPTError, NonRetryableError, RetryableError
 from metagpt.common.exception.codes import ErrorCode
+from metagpt.common.exception.report import ErrorReport
 
 
 class GraphError(MetaGPTError):
@@ -57,7 +58,6 @@ class GraphBatchFailureError(GraphError):
         renderer surfaces every node's code + message uniformly (not just the
         joined names in the top-level message).
         """
-        from metagpt.common.exception.report import ErrorReport
 
         return {
             "failures": [

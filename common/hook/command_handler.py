@@ -82,8 +82,8 @@ async def run_command_handler(
             try:
                 proc.kill()
                 await proc.wait()
-            except Exception:  # noqa: BLE001 — cleanup is best-effort
-                pass
+            except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
+                logger.debug(f"hook: killing timed-out command handler failed: {exc}")
         return EMPTY
     except Exception as exc:  # noqa: BLE001 — any spawn failure is non-fatal
         logger.warning(f"hook: command handler failed to run {command!r}: {exc}")

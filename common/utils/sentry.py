@@ -2,7 +2,7 @@ import asyncio
 import functools
 from typing import Any, Callable, Optional, TypeVar
 
-from metagpt.common.config.meta_config import Config
+from metagpt.common.config.loader import load_config
 from metagpt.common.logs import logger
 
 ReturnType = TypeVar("ReturnType")
@@ -20,7 +20,7 @@ def _init_sentry() -> bool:
     global _sentry_initialized
 
     try:
-        config = Config.default()
+        config = load_config()
         sentry_config = config.sentry
 
         if not sentry_config.enable:
@@ -144,7 +144,7 @@ def _handle_exception_sync(
         extra_data = extra_data or {}
 
         # Get config extra data and merge with passed extra_data (higher priority)
-        config = Config.default()
+        config = load_config()
         merged_extra_data = (config.sentry.extra_data or {}).copy()
         if extra_data:
             merged_extra_data.update(extra_data)

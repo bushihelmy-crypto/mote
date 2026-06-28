@@ -12,7 +12,7 @@ from metagpt.executor.mcp.client.base import MCPBaseClient
 from metagpt.executor.mcp.mcp_registry import MCP_REGISTRY
 from metagpt.common.logs import logger
 from metagpt.common.utils.async_helper import run_coroutine_sync
-from metagpt.common.config.meta_config import Config
+from metagpt.common.config.loader import load_config
 
 class MCPClientManager:
     """MCP client manager responsible for managing the lifecycle of all MCP clients and tool registration"""
@@ -46,7 +46,7 @@ class MCPClientManager:
             return
 
         if server_configs is None:
-            config = Config.default()
+            config = load_config()
             server_configs = config.mcp.servers
 
         for server_config in server_configs:

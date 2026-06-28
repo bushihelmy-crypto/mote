@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, ClassVar, Optional
 
+from metagpt.common.logs import logger
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
@@ -164,7 +165,8 @@ class Python(BaseTool):
             # mirroring the terminal capturing only when back at a prompt.
             try:
                 state = await session.capture_state()
-            except Exception:  # noqa: BLE001 — capture must not break the call
+            except Exception as exc:  # noqa: BLE001 — capture must not break the call
+                logger.debug(f"python: kernel state capture failed: {exc}")
                 state = None
             if state is not None:
                 # getattr-tolerant for tools bound without the capability (tests).

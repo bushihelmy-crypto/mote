@@ -16,6 +16,7 @@ cleanly.
 """
 from __future__ import annotations
 
+import json
 from typing import List
 
 from metagpt.common.logs import logger
@@ -53,8 +54,6 @@ Output the JSON array of indices to keep.
 
 
 def _render_comments(findings: List[Finding]) -> str:
-    import json
-
     lines: List[str] = []
     for i, f in enumerate(findings):
         payload = {

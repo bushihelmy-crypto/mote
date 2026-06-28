@@ -396,8 +396,7 @@ def test_stream_sink_mirrors_and_flags_turn():
 def test_stream_subscriber_forwards_bus_deltas():
     # The REPL mirrors streamed tokens off the role's event bus (no global sink):
     # subscribing on the bus then emitting a delta drives ``_stream_sink``.
-    from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
-    from metagpt.common.logs import log_llm_stream
+    from metagpt.common.events import EventBus, LLMStreamDeltaEvent, log_llm_stream, set_bus
 
     repl, control, role, out = make_repl([])  # no renderer -> plain stdout
     bus = EventBus()

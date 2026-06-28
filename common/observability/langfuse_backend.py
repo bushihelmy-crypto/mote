@@ -56,13 +56,13 @@ class LangfuseBackend:
                 # Root span: propagate the session id onto the langfuse trace.
                 try:
                     client.update_current_trace(session_id=trace_id)
-                except Exception:  # noqa: BLE001 — propagation is best-effort
-                    pass
+                except Exception as exc:  # noqa: BLE001 — propagation is best-effort
+                    logger.debug(f"LangfuseBackend: trace session-id propagation failed: {exc}")
             if attributes:
                 try:
                     handle.update(input=attributes)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"LangfuseBackend: span input attributes update failed: {exc}")
             return handle
         except Exception as exc:  # noqa: BLE001 — observability never breaks a turn
             logger.debug(f"LangfuseBackend.start_span failed: {exc}")

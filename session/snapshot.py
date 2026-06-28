@@ -172,8 +172,8 @@ def detect_blob_backend(working_dir: Optional[str] = None) -> str:
     try:
         if find_git_root(working_dir or os.getcwd()) is not None:
             return "git"
-    except Exception:  # noqa: BLE001 — best-effort; never break recorder setup
-        pass
+    except Exception as exc:  # noqa: BLE001 — best-effort; never break recorder setup
+        logger.debug(f"snapshot: git-root probe failed, using blob backend: {exc}")
     return "blob"
 
 

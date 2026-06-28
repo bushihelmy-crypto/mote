@@ -27,9 +27,13 @@ storage are restored; live DOM state, scroll position, and in-flight JS are not.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import signal
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from metagpt.common.logs import logger
 from metagpt.executor.tool_result import ToolError
 
 # --- Constants -------------------------------------------------------------
@@ -684,8 +688,6 @@ class BrowserSession:
                 )
             return f"[{selector} appeared]"
         # expression: poll to truthy with exponential backoff.
-        import time
-
         deadline = time.monotonic() + timeout_ms / 1000.0
         delay = 0.005
         last_err = None
@@ -769,9 +771,6 @@ class BrowserSession:
         Returns the absolute path. The directory is ``{cwd}/.agent_browser`` (cwd
         falls back to the process cwd when the session has none).
         """
-        import os
-        import time
-
         png = await self.screenshot()
         base = self.cwd or os.getcwd()
         shot_dir = os.path.join(base, ".agent_browser")
@@ -791,8 +790,6 @@ class BrowserSession:
         field selectors straight into :meth:`fill_form`. Mirrors obscura's
         detect_forms.
         """
-        import json
-
         page = self._active_page()
         try:
             data = await page.evaluate(_DETECT_FORMS_JS)
@@ -850,8 +847,6 @@ class BrowserSession:
         yields ``null``. Mirrors obscura's schema-driven extract. Returns a JSON
         object keyed by your schema keys.
         """
-        import json
-
         if not isinstance(schema, dict) or not schema:
             raise ToolError(
                 "Error: 'extract' needs a non-empty {key: 'selector[@attr]'} mapping."
@@ -877,8 +872,6 @@ class BrowserSession:
         anything not JSON-serializable (e.g. a value carrying ``NaN``/circular
         structure that survived the bridge).
         """
-        import json
-
         page = self._active_page()
         result = await page.evaluate(expression)
         try:
@@ -952,10 +945,12 @@ class BrowserSession:
             # navigations. Keep the list aligned with the active index.
             try:
                 storage_state = await self._context.storage_state()
-            except Exception:  # noqa: BLE001 — storage capture is best-effort
+            except Exception as exc:  # noqa: BLE001 — storage capture is best-effort
+                logger.debug(f"Browser: storage_state capture failed: {exc}")
                 storage_state = None
             return (urls, self._active, storage_state)
-        except Exception:  # noqa: BLE001 — capture must not break the call
+        except Exception as exc:  # noqa: BLE001 — capture must not break the call
+            logger.debug(f"Browser: state capture failed: {exc}")
             return None
 
     async def restore_state(
@@ -983,12 +978,12 @@ class BrowserSession:
                     page = await self._context.new_page()
                 try:
                     await page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
-                except Exception:  # noqa: BLE001 — one bad tab must not abort
-                    pass
+                except Exception as exc:  # noqa: BLE001 — one bad tab must not abort
+                    logger.debug(f"Browser: restore goto {url!r} failed: {exc}")
             n = len(self._pages)
             self._active = active if 0 <= active < n else max(0, n - 1)
-        except Exception:  # noqa: BLE001 — restore is best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 — restore is best-effort
+            logger.debug(f"Browser: tab restore failed: {exc}")
 
     # --- teardown ----------------------------------------------------------
 
@@ -1002,12 +997,13 @@ class BrowserSession:
             if closer is not None:
                 try:
                     await closer()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"Browser: close during shutdown failed: {exc}")
         if self._cm is not None:
             try:
                 await self._cm.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Browser: context __aexit__ failed, killing: {exc}")
                 self.kill()
         self._context = None
         self._browser = None
@@ -1032,8 +1028,6 @@ class BrowserSession:
         )
         pid = getattr(proc, "pid", None)
         if pid is not None and getattr(proc, "returncode", None) is None:
-            import os
-
             try:
                 os.kill(pid, signal.SIGKILL)
             except (ProcessLookupError, OSError):

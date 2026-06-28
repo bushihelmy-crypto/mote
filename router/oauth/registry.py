@@ -2,104 +2,20 @@
 # -*- coding: utf-8 -*-
 """Provider preset registry for OAuth-authenticated providers.
 
-A *preset* fills in the **public, provider-specific endpoint metadata** (issuer,
-token URL, authorize/device endpoints, default scopes, extra headers, default
-grant) so a user only has to supply a ``client_id`` (+ secret / refresh_token).
-
-``client_id`` is an ordinary optional config field (default ``None``): presets
-deliberately DO NOT ship one, because the hardcoded client IDs in Codex / Claude
-Code identify *those* CLIs and reusing them would impersonate them. Out-of-box
-login only happens when someone fills the public PKCE ``client_id`` themselves
-(config/env). The requirement is enforced at flow-time, not config-time.
-
-Values are sourced from the public OAuth endpoints used by Codex
-(``codex-rs/login``) and Claude Code (``src/constants/oauth.ts``,
-``services/api/openai/chatgptAuth.ts``). Each preset names an env var that, when
-set, overrides ``token_url`` (staging/testing hook), mirroring those tools'
-prod/staging/local switch.
+The presets now live beside :class:`OAuthProviderConfig` in
+``metagpt.common.config.config.oauth_config`` so the config validator can apply
+them without a ``common -> router`` import cycle. This module re-exports those
+names as the router-facing surface (``router -> common`` is the correct
+dependency direction), keeping ``metagpt.router.oauth.registry`` import paths
+stable for existing callers and tests.
 """
 from __future__ import annotations
 
-import copy
-from typing import Dict, List
-
-from metagpt.common.config.config.oauth_config import GrantType
-
-# name -> preset of OAuthProviderConfig fields (NO client_id / client_secret).
-PROVIDER_PRESETS: Dict[str, dict] = {
-    "openai": {
-        "issuer": "https://auth.openai.com",
-        "token_url": "https://auth.openai.com/oauth/token",
-        "authorize_url": "https://auth.openai.com/oauth/authorize",
-        "grant_type": GrantType.REFRESH_TOKEN.value,
-        "scopes": ["openid", "profile", "email", "offline_access"],
-        "headers_extra": {},
-        "token_url_env_override": "METAGPT_OAUTH_OPENAI_TOKEN_URL",
-    },
-    "anthropic": {
-        "issuer": "https://platform.claude.com",
-        "token_url": "https://platform.claude.com/v1/oauth/token",
-        "authorize_url": "https://claude.ai/oauth/authorize",
-        "grant_type": GrantType.REFRESH_TOKEN.value,
-        "scopes": ["user:profile", "user:inference"],
-        # Claude's OAuth bearer requires this beta opt-in header.
-        "headers_extra": {"anthropic-beta": "oauth-2025-04-20"},
-        "token_url_env_override": "METAGPT_OAUTH_ANTHROPIC_TOKEN_URL",
-    },
-    # GitHub Copilot logs in via the OAuth 2.0 device flow (RFC 8628): no
-    # loopback redirect, the user enters a code at a verification URL.
-    "github-copilot": {
-        "issuer": "https://github.com",
-        "token_url": "https://github.com/login/oauth/access_token",
-        "device_authorization_url": "https://github.com/login/device/code",
-        "grant_type": GrantType.DEVICE_CODE.value,
-        "scopes": ["read:user"],
-        "headers_extra": {},
-        "token_url_env_override": "METAGPT_OAUTH_GITHUB_COPILOT_TOKEN_URL",
-    },
-}
-
-# Fields that should be merged (preset base + user overrides) rather than simply
-# filled-if-missing, so a user can add headers without dropping the beta header.
-_MERGE_FIELDS = {"headers_extra"}
-
-
-def list_presets() -> List[str]:
-    """Return the registered provider preset names."""
-    return sorted(PROVIDER_PRESETS)
-
-
-def get_preset(name: str) -> dict:
-    """Return a deep copy of the preset for ``name``.
-
-    Raises ``KeyError`` (with the list of known providers) when unknown.
-    """
-    key = (name or "").strip().lower()
-    if key not in PROVIDER_PRESETS:
-        raise KeyError(f"unknown OAuth provider preset {name!r}; known: {list_presets()}")
-    return copy.deepcopy(PROVIDER_PRESETS[key])
-
-
-def apply_preset(values: dict) -> dict:
-    """Merge a provider preset into a raw config ``values`` dict (user wins).
-
-    No-op when ``values`` has no ``provider`` key. For scalar/list fields the
-    preset only fills values the user left empty; ``headers_extra`` is merged so
-    user headers add to (not replace) the preset's. Returns ``values`` mutated
-    in place for convenience.
-    """
-    provider = values.get("provider")
-    if not provider:
-        return values
-
-    preset = get_preset(provider)
-    for field, preset_value in preset.items():
-        if field in _MERGE_FIELDS:
-            user_value = values.get(field) or {}
-            values[field] = {**preset_value, **user_value}
-        elif values.get(field) in (None, [], {}, ""):
-            values[field] = preset_value
-    return values
-
+from metagpt.common.config.config.oauth_config import (
+    PROVIDER_PRESETS,
+    apply_preset,
+    get_preset,
+    list_presets,
+)
 
 __all__ = ["PROVIDER_PRESETS", "list_presets", "get_preset", "apply_preset"]

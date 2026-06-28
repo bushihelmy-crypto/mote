@@ -19,6 +19,8 @@ import random
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Optional
 
+from pydantic import TypeAdapter, ValidationError
+
 from metagpt.common.exception import RecoveryAction, RecoveryRunner
 from metagpt.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
 from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
@@ -97,8 +99,6 @@ def _validate_node_params_runtime(graph: "BgGraph", node_name: str, state: Graph
     Union, nested models). Raises :class:`GraphParamTypeError` on mismatch —
     a wiring bug, not transient.
     """
-    from pydantic import TypeAdapter, ValidationError
-
     node_def = graph._nodes[node_name]
     for param_name, param_info in node_def.params.items():
         expected_type = param_info.get("type")

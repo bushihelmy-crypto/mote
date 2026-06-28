@@ -106,8 +106,8 @@ class FileWatchService:
         if self._bus is not None:
             try:
                 self._bus.unsubscribe(self)
-            except Exception:  # noqa: BLE001 — best-effort detach
-                pass
+            except Exception as exc:  # noqa: BLE001 — best-effort detach
+                logger.debug(f"FileWatchService: bus detach on stop failed: {exc}")
         await self._watcher.stop()
 
 

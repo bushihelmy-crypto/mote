@@ -463,8 +463,8 @@ class TestDurationWiring:
                 captured["msg"] = msg
                 return "{}"
 
-        import metagpt.router as router_mod
-        monkeypatch.setattr(router_mod, "LLM", lambda *a, **k: FakeLLM())
+        import metagpt.executor.tools.media_pipeline.nodes as nodes_mod
+        monkeypatch.setattr(nodes_mod, "LLM", lambda *a, **k: FakeLLM())
 
         state = MediaPipelineState(prompt="make a solar system video", duration=60)
         stage = await storyboard_node(state)
@@ -480,8 +480,8 @@ class TestDurationWiring:
                 captured["msg"] = msg
                 return "{}"
 
-        import metagpt.router as router_mod
-        monkeypatch.setattr(router_mod, "LLM", lambda *a, **k: FakeLLM())
+        import metagpt.executor.tools.media_pipeline.nodes as nodes_mod
+        monkeypatch.setattr(nodes_mod, "LLM", lambda *a, **k: FakeLLM())
 
         state = MediaPipelineState(prompt="make a video", duration=0)
         stage = await storyboard_node(state)

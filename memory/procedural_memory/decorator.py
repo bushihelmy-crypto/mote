@@ -6,7 +6,7 @@ from typing import Any, Callable, Coroutine, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from metagpt.common.config.meta_config import Config
+from metagpt.common.config.loader import load_config
 from metagpt.memory.procedural_memory.context_builders import BaseContextBuilder, SimpleContextBuilder
 from metagpt.memory.procedural_memory.manager import ExperienceManager, get_exp_manager
 from metagpt.memory.procedural_memory.perfect_judges import BasePerfectJudge, SimplePerfectJudge
@@ -58,7 +58,7 @@ def exp_cache(
     def decorator(func: Callable[..., ReturnType]) -> Callable[..., ReturnType]:
         @functools.wraps(func)
         async def get_or_create(args: Any, kwargs: Any) -> ReturnType:
-            config = Config.default()
+            config = load_config()
 
             if not config.exp_pool.enabled:
                 rsp = func(*args, **kwargs)

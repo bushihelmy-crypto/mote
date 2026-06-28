@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from fastmcp import Client
 
-from metagpt.common.config.meta_config import Config
+from metagpt.common.config.loader import load_config
 from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 from metagpt.common.exception import ToolNotFoundError
 from metagpt.common.logs import logger
@@ -40,7 +40,7 @@ class UniversalMCP:
         self.initialization_errors.clear()
 
         if servers is None:
-            all_servers = [s for s in Config.default().mcp.servers if s.enabled]
+            all_servers = [s for s in load_config().mcp.servers if s.enabled]
             if server_names is not None:
                 servers = [s for s in all_servers if s.name in server_names]
             else:

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Union
 import regex as re
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_fixed
 
+from metagpt.common.config.loader import load_config
 from metagpt.common.config.meta_config import Config
 from metagpt.common.logs import logger
 from metagpt.common.utils.custom_decoder import CustomDecoder
@@ -174,7 +175,7 @@ def repair_llm_raw_output(
             target: { xxx }
             output: { xxx }]
     """
-    config = config if config else Config.default()
+    config = config if config else load_config()
     if not config.repair_llm_output:
         return output
 
@@ -268,7 +269,7 @@ def run_after_exp_and_passon_next_retry(logger: "loguru.Logger") -> Callable[["R
                 "next_action":"None"
             }
         """
-        config = Config.default()
+        config = load_config()
         if retry_state.outcome.failed:
             if retry_state.args:
                 # # can't be used as args=retry_state.args
@@ -290,7 +291,7 @@ def run_after_exp_and_passon_next_retry(logger: "loguru.Logger") -> Callable[["R
 
 
 def repair_stop_after_attempt(retry_state):
-    return stop_after_attempt(3 if Config.default().repair_llm_output else 0)(retry_state)
+    return stop_after_attempt(3 if load_config().repair_llm_output else 0)(retry_state)
 
 
 @retry(
