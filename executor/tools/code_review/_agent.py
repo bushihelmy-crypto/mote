@@ -22,9 +22,9 @@ from metagpt.common.agent_control import (
     SpawnSpec,
     spawn_and_run,
 )
+from metagpt.common.interface.child_role import build_child_role as _build_child_role
 from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
-from metagpt.common.schema.permission_config import PermissionConfig
 
 
 def build_child_role(
@@ -36,6 +36,12 @@ def build_child_role(
     tools: Optional[List[str]] = None,
 ):
     """Construct a read-only, bypass-permission child Role.
+
+    Delegates to the ``roles``-layer builder registered into the common-layer
+    holder (:mod:`metagpt.common.interface.child_role`), so the executor never
+    imports the concrete ``roles`` stack — at import time *or* runtime — keeping
+    it a true leaf w.r.t. roles. Kept here as a named function so the pipeline's
+    existing monkeypatch seams (``plan.build_child_role`` etc.) stay intact.
 
     Args:
         name: Role name / profile (logging).
@@ -49,34 +55,13 @@ def build_child_role(
     Returns:
         An unstarted :class:`Role`.
     """
-    # Imported lazily so this module can be scanned for tool registration
-    # without pulling the full roles stack at import time (keeps executor a
-    # leaf w.r.t. roles).
-    from metagpt.roles.role import Role
-    from metagpt.roles.role_schema import RoleSchema
-    from metagpt.roles.role_state import RoleState
-
-    schema = RoleSchema(
+    return _build_child_role(
         name=name,
-        profile=name,
-        goal="Assist the code-review pipeline.",
-        command_protocol="native",
-        tools=["Read", "Grep", "Glob"] if tools is None else list(tools),
-        permissions=PermissionConfig(mode="bypass"),
         system_prompt=system_prompt,
-        use_summary=False,
-        enable_memory=False,
-        # No durable session artifacts for these ephemeral leaf agents.
-        record_file_history=False,
-        record_terminal_state=False,
-        record_kernel_state=False,
-        record_browser_state=False,
+        repo_dir=repo_dir,
+        parent_session_id=parent_session_id,
+        tools=tools,
     )
-    state = RoleState(parent_session_id=parent_session_id or "")
-    if repo_dir:
-        state.working_dir = repo_dir
-        state.original_working_dir = repo_dir
-    return Role(role_schema=schema, state=state)
 
 
 async def run_child(

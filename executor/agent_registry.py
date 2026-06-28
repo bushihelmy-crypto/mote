@@ -25,6 +25,7 @@ import importlib
 import pkgutil
 from typing import ClassVar
 
+from metagpt.common.base.role import BaseRole
 from metagpt.common.base.singleton import Singleton
 
 
@@ -63,18 +64,19 @@ class AgentRegistry(metaclass=Singleton):
         - agent_name: uses cls.agent_name if set, otherwise cls.__name__ (lookup key)
         - aliases: registers additional lookup names if provided
 
-        Enforces the spawn contract: a registered agent must be a Role subclass
-        (so it can actually run). Names/aliases must not collide with a different
+        Enforces the spawn contract: a registered agent must be a runnable role
+        (a ``BaseRole`` subclass). Names/aliases must not collide with a different
         already-registered agent. Schema/description are the agent's own
         responsibility (BaseAgent.get_schema) — not here.
         """
-        # Contract: spawnable agents must be runnable Roles. Catch a missing
-        # `Role` base at registration time instead of at spawn time. Imported
-        # lazily to keep executor a leaf w.r.t. roles (and avoid an import cycle
-        # role -> ... -> agents -> executor).
-        from metagpt.roles.role import Role
-
-        if not issubclass(cls, Role):
+        # Contract: spawnable agents must be runnable roles. Catch a missing role
+        # base at registration time instead of at spawn time. We check against the
+        # common-layer ``BaseRole`` (which `roles.Role` extends and which defines
+        # the runnable contract: think/act/react/run/...), so the executor never
+        # imports the concrete `roles` stack — keeping it a true leaf w.r.t. roles
+        # at both import time and runtime, with no cycle (role -> ... -> agents ->
+        # executor).
+        if not issubclass(cls, BaseRole):
             raise TypeError(
                 f"@register_agent: '{cls.__name__}' must subclass Role to be spawnable "
                 f"(expected `class {cls.__name__}(BaseAgent, Role)`)."

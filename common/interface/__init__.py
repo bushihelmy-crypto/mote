@@ -22,6 +22,11 @@ This is a LEAF package: it imports only ``typing`` and (under TYPE_CHECKING) the
 
 from metagpt.common.interface.background_pool import BackgroundPool
 from metagpt.common.interface.browser_state import BrowserStateStore
+from metagpt.common.interface.child_role import (
+    ChildRoleBuilder,
+    build_child_role,
+    register_child_role_builder,
+)
 from metagpt.common.interface.event_subscriber import (
     DURABLE,
     MIRROR,
@@ -52,6 +57,9 @@ __all__ = [
     "TerminalStateStore",
     "KernelStateStore",
     "BrowserStateStore",
+    "ChildRoleBuilder",
+    "build_child_role",
+    "register_child_role_builder",
     "EphemeralContextSource",
     "ControlSubscriber",
     "ObservationSubscriber",
