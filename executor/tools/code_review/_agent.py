@@ -16,7 +16,12 @@ import json
 import re
 from typing import Any, Callable, List, Optional
 
-from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from metagpt.common.agent_control import (
+    Lifecycle,
+    SpawnContext,
+    SpawnSpec,
+    spawn_and_run,
+)
 from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
 from metagpt.common.schema.permission_config import PermissionConfig

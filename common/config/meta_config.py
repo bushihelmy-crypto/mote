@@ -14,8 +14,8 @@ from metagpt.common.config.config.mcp_config import MCPConfig
 from metagpt.common.config.config.multimodal_config import MultimodalConfig
 from metagpt.common.config.config.role_zero_config import RoleZeroConfig
 from metagpt.common.config.config.sentry_config import SentryConfig
-from metagpt.common.utils.yaml_model import YamlModel
 from metagpt.common.observability.langfuse_integration import init_langfuse
+from metagpt.common.utils.yaml_model import YamlModel
 
 
 class Config(YamlModel):

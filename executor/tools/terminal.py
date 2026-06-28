@@ -28,14 +28,14 @@ import os
 from typing import Any, Callable, ClassVar, Optional
 
 from metagpt.common.logs import logger
+from metagpt.common.prompt.tools import TERMINAL_DESCRIPTION
+from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.base_tool import BaseTool
+from metagpt.executor.dependency._terminal import DEFAULT_YIELD_MS, TerminalSession
 from metagpt.executor.permission.classifier import classify_command
 from metagpt.executor.permission.command_parse import segment_strings
-from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.dependency._terminal import DEFAULT_YIELD_MS, TerminalSession
-from metagpt.common.prompt.tools import TERMINAL_DESCRIPTION
 
 
 @register_tool
@@ -216,9 +216,7 @@ class Terminal(BaseTool):
             self.set_tool_session(self.name, None)
 
 
-def _format_output(
-    text: str, exit_code: Optional[int], at_prompt: bool, closed: bool
-) -> str:
+def _format_output(text: str, exit_code: Optional[int], at_prompt: bool, closed: bool) -> str:
     """Append a footer describing the terminal's state after this call."""
     parts = []
     if text:

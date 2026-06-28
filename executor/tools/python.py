@@ -28,11 +28,11 @@ import os
 from typing import Any, Callable, ClassVar, Optional
 
 from metagpt.common.logs import logger
+from metagpt.common.prompt.tools import PYTHON_DESCRIPTION
 from metagpt.executor.base_tool import BaseTool
+from metagpt.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KernelSession
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
-from metagpt.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KernelSession
-from metagpt.common.prompt.tools import PYTHON_DESCRIPTION
 
 
 @register_tool
@@ -177,8 +177,7 @@ class Python(BaseTool):
         if timed_out:
             return _join(
                 text,
-                f"[execution timed out after {int(timeout)}s; kernel interrupted "
-                f"— state preserved]",
+                f"[execution timed out after {int(timeout)}s; kernel interrupted " f"— state preserved]",
             )
         return text
 

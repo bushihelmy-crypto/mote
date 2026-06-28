@@ -10,11 +10,11 @@ from __future__ import annotations
 import contextvars
 from typing import Any, Callable, Optional
 
-from metagpt.common.logs import logger
-from metagpt.executor.tasks.bggraph.types import END
-from metagpt.common.schema import CauseBy
-from metagpt.executor.tasks.types import BackgroundTaskNotification
 from metagpt.common.events import TaskProgressEvent, observe_event_sync
+from metagpt.common.logs import logger
+from metagpt.common.schema import CauseBy
+from metagpt.executor.tasks.bggraph.types import END
+from metagpt.executor.tasks.types import BackgroundTaskNotification
 
 # ---------------------------------------------------------------------------
 # Generic progress reporting via contextvars
@@ -25,9 +25,7 @@ from metagpt.common.events import TaskProgressEvent, observe_event_sync
 # a hard dependency on the enum definition.
 ProgressWriter = Callable[[str, Any, Any], None]
 
-_progress_ctx: contextvars.ContextVar[Optional[ProgressWriter]] = contextvars.ContextVar(
-    "_progress_ctx", default=None
-)
+_progress_ctx: contextvars.ContextVar[Optional[ProgressWriter]] = contextvars.ContextVar("_progress_ctx", default=None)
 
 
 def report_progress(stage: str, status: Any, detail: Any = None) -> None:
@@ -64,9 +62,7 @@ MAX_RESULT_DISPLAY_CHARS = 99999999
 # the terminal ``BgStatus`` values plus ``waiting_for_route`` (an LLM pause that
 # needs the model to pick a route). The graph-level START marker is handled
 # separately in :func:`_is_push_worthy`.
-_PUSH_WORTHY_STATUSES = frozenset(
-    {"success", "failed", "cancelled", "timeout", "waiting_for_route"}
-)
+_PUSH_WORTHY_STATUSES = frozenset({"success", "failed", "cancelled", "timeout", "waiting_for_route"})
 
 
 def _is_push_worthy(stage: str, status: str) -> bool:
@@ -239,9 +235,6 @@ def _emit_task_progress(task_id: str, stage: str, status: str, detail: str) -> N
     if not task_id:
         return
     try:
-
-        observe_event_sync(
-            TaskProgressEvent(task_id=task_id, stage=stage, status=status, detail=detail)
-        )
+        observe_event_sync(TaskProgressEvent(task_id=task_id, stage=stage, status=status, detail=detail))
     except Exception as exc:  # noqa: BLE001 — emitting must never break the pipeline
         logger.debug(f"bggraph: task progress emit failed: {exc}")

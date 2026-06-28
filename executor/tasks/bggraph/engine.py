@@ -22,24 +22,25 @@ from typing import TYPE_CHECKING, Any, Optional
 from pydantic import TypeAdapter, ValidationError
 
 from metagpt.common.exception import RecoveryAction, RecoveryRunner
-from metagpt.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
-from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
+from metagpt.common.exception.graph import (
+    GraphNodeRetryExhaustedError,
+    GraphNodeTimeoutError,
+)
 from metagpt.executor.tasks.bggraph.channels import apply_updates
 from metagpt.executor.tasks.bggraph.marker import mark_pipeline_executor
 from metagpt.executor.tasks.bggraph.notify import (
     _MSG_RESUMING,
+    _MSG_RETRYING,
     _MSG_SKIPPING,
     push_llm_route_notification,
     push_node_notification,
     push_started_notification,
     push_terminal_notification,
 )
-from metagpt.executor.tasks.bggraph.notify import (
-    _MSG_RETRYING,
-)
 from metagpt.executor.tasks.bggraph.report import report_progress
 from metagpt.executor.tasks.bggraph.types import (
     END,
+    BgStatus,
     GraphBatchFailureError,
     GraphParamTypeError,
     GraphRecursionError,
@@ -47,9 +48,9 @@ from metagpt.executor.tasks.bggraph.types import (
     GraphRunState,
     GraphState,
     LlmPauseResult,
-    BgStatus,
     Stage,
 )
+from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
 
 if TYPE_CHECKING:
     from metagpt.executor.tasks.bggraph.graph import BgGraph
@@ -109,7 +110,7 @@ def _validate_node_params_runtime(graph: "BgGraph", node_name: str, state: Graph
             continue
         # Resolve the attribute name on state
         if source.startswith("$input."):
-            field = source[len("$input."):]
+            field = source[len("$input.") :]
         else:
             field = source.split(".")[0]
         value = getattr(state, field, _MISSING)
@@ -119,8 +120,10 @@ def _validate_node_params_runtime(graph: "BgGraph", node_name: str, state: Graph
             TypeAdapter(expected_type).validate_python(value, strict=True)
         except ValidationError:
             raise GraphParamTypeError(
-                node=node_name, param=param_name,
-                expected=expected_type, got=type(value),
+                node=node_name,
+                param=param_name,
+                expected=expected_type,
+                got=type(value),
             )
 
 
@@ -205,16 +208,12 @@ async def _run_one_node(
         attempt = attempts - 1
         exhausted = GraphNodeRetryExhaustedError(node_name, attempts, e.__cause__ or e)
         if run_state is not None:
-            run_state.mark_failed(
-                node_name, exhausted, retries_attempted=attempt, retries_limit=_AUTO_RETRIES
-            )
+            run_state.mark_failed(node_name, exhausted, retries_attempted=attempt, retries_limit=_AUTO_RETRIES)
         raise exhausted from e
     except Exception as e:  # noqa: BLE001 — node failures are reported, not swallowed
         attempt = attempts - 1  # retries consumed before giving up
         if run_state is not None:
-            run_state.mark_failed(
-                node_name, e, retries_attempted=attempt, retries_limit=_AUTO_RETRIES
-            )
+            run_state.mark_failed(node_name, e, retries_attempted=attempt, retries_limit=_AUTO_RETRIES)
         raise
 
     # Field/channel state sync: a node returns a dict of field updates which is
@@ -224,9 +223,7 @@ async def _run_one_node(
     if result is None:
         result = {}
     if not isinstance(result, dict):
-        raise GraphParamTypeError(
-            node=node_name, param="<return>", expected=dict, got=type(result)
-        )
+        raise GraphParamTypeError(node=node_name, param="<return>", expected=dict, got=type(result))
     apply_updates(state, result, graph._reducers)
     completed.add(node_name)
     if run_state is not None:
@@ -271,9 +268,7 @@ def successors(
         except Exception as e:  # noqa: BLE001
             raise GraphRouterError(f"Router on '{node}' raised {type(e).__name__}: {e}") from e
         if key not in ce.mapping:
-            raise GraphRouterError(
-                f"Router on '{node}' returned '{key}', not in mapping {list(ce.mapping.keys())}"
-            )
+            raise GraphRouterError(f"Router on '{node}' returned '{key}', not in mapping {list(ce.mapping.keys())}")
         if run_state is not None:
             run_state.get(node).last_route_key = key
         out.append(ce.mapping[key])
@@ -374,8 +369,7 @@ async def _run_driver(
         activations += 1
         if activations > graph.recursion_limit:
             raise GraphRecursionError(
-                f"recursion_limit ({graph.recursion_limit}) exceeded "
-                f"after {activations} node activations"
+                f"recursion_limit ({graph.recursion_limit}) exceeded " f"after {activations} node activations"
             )
         scheduled.add(node)
         t = asyncio.create_task(_run_one_node(node, state, graph, completed, run_state))
@@ -429,9 +423,7 @@ async def _run_driver(
     except _LlmPauseSignal:
         await _cancel_running(running)
         push_llm_route_notification(pause_edge, state, graph)
-        return LlmPauseResult(
-            state=state, completed=completed, edge=pause_edge, run_state=run_state
-        )
+        return LlmPauseResult(state=state, completed=completed, edge=pause_edge, run_state=run_state)
     except (GraphRecursionError, GraphRouterError) as e:
         await _cancel_running(running)
         fatal = e
@@ -442,7 +434,11 @@ async def _run_driver(
         fatal.run_state = run_state
         fatal.graph_state = state
         push_terminal_notification(
-            graph, state, BgStatus.FAILED, error=fatal, initial_params=initial_params,
+            graph,
+            state,
+            BgStatus.FAILED,
+            error=fatal,
+            initial_params=initial_params,
             run_state=run_state,
         )
         raise fatal
@@ -452,14 +448,22 @@ async def _run_driver(
         error.run_state = run_state
         error.graph_state = state
         push_terminal_notification(
-            graph, state, BgStatus.FAILED, error=error, initial_params=initial_params,
+            graph,
+            state,
+            BgStatus.FAILED,
+            error=error,
+            initial_params=initial_params,
             run_state=run_state,
         )
         raise error
 
     result = _collect_finish_result(graph, state)
     push_terminal_notification(
-        graph, state, BgStatus.SUCCESS, result=result, initial_params=initial_params,
+        graph,
+        state,
+        BgStatus.SUCCESS,
+        result=result,
+        initial_params=initial_params,
         run_state=run_state,
     )
     return result
@@ -510,9 +514,7 @@ def _build_executor(graph: "BgGraph"):
 # ---------------------------------------------------------------------------
 
 
-def _ensure_run_state(
-    graph: "BgGraph", state: GraphState, run_state: Optional[GraphRunState]
-) -> GraphRunState:
+def _ensure_run_state(graph: "BgGraph", state: GraphState, run_state: Optional[GraphRunState]) -> GraphRunState:
     """Return an authoritative run state, inferring one for legacy snapshots.
 
     A live task always carries its run_state on the snapshot; only tasks whose
@@ -570,9 +572,7 @@ def _apply_skip(
     for sn in skip_nodes:
         if run_state is not None:
             run_state.mark_skipped(sn)
-        report_progress(
-            sn, BgStatus.SKIPPED, _MSG_SKIPPING.format(skip_nodes=sn, suffix="")
-        )
+        report_progress(sn, BgStatus.SKIPPED, _MSG_SKIPPING.format(skip_nodes=sn, suffix=""))
 
 
 def resume_skip(

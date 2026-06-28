@@ -45,10 +45,10 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Mapping, Optional
 
+from metagpt.common.events import RecoveryEvent, observe_event
 from metagpt.common.exception.base import MetaGPTError
 from metagpt.common.exception.codes import RecoveryAction
 from metagpt.common.exception.handlers import is_retryable
-from metagpt.common.events import RecoveryEvent, observe_event
 from metagpt.common.logs import logger
 
 # A no-arg coroutine factory: each invocation issues one attempt and returns its result.
@@ -112,9 +112,7 @@ class RecoveryRunner:
                 await self._emit_recovery("recovered", action, recoveries, exc)
 
     @staticmethod
-    async def _emit_recovery(
-        phase: str, action: RecoveryAction, attempt: int, exc: BaseException
-    ) -> None:
+    async def _emit_recovery(phase: str, action: RecoveryAction, attempt: int, exc: BaseException) -> None:
         """Mirror a recovery decision onto the active event bus (best-effort).
 
         Observation-only: the loop's own re-raise/retry is the real outcome.
@@ -123,7 +121,6 @@ class RecoveryRunner:
         bus is bound (standalone use, tests).
         """
         try:
-
             await observe_event(
                 RecoveryEvent(
                     phase=phase,
@@ -134,7 +131,6 @@ class RecoveryRunner:
                 )
             )
         except Exception as exc:  # noqa: BLE001 — emitting must never break recovery
-
             logger.debug(f"recovery: RecoveryEvent emit failed: {exc}")
 
     @staticmethod

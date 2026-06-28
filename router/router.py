@@ -17,9 +17,9 @@ from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.exception import ModelNotFoundError
 from metagpt.common.logs import log_class, logger
 from metagpt.router.llm.base_llm import BaseLLM
+from metagpt.router.llm.context import Context
 from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
 from metagpt.router.strategy import RoutingStrategy, RuleBasedStrategy
-from metagpt.router.llm.context import Context
 
 if TYPE_CHECKING:
     from metagpt.router.llm.context import Context

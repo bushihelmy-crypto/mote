@@ -24,7 +24,6 @@ class FallbackCredentialStore(CredentialStore):
         self._file = FileCredentialStore(provider)
         self._keyring: Optional[CredentialStore] = None
         try:
-
             self._keyring = KeyringCredentialStore(provider)
         except Exception as e:  # noqa: BLE001
             logger.debug(f"OAuth keyring backend unavailable, using file store: {e}")

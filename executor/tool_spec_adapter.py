@@ -24,6 +24,7 @@ import typing
 from typing import Any, Callable, Union
 
 from pydantic import BaseModel
+
 from metagpt.common.utils.docstring import parse_section
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types

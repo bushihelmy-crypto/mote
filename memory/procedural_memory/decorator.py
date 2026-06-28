@@ -7,19 +7,23 @@ from typing import Any, Callable, Coroutine, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from metagpt.common.config.loader import load_config
-from metagpt.memory.procedural_memory.context_builders import BaseContextBuilder, SimpleContextBuilder
-from metagpt.memory.procedural_memory.manager import ExperienceManager, get_exp_manager
-from metagpt.memory.procedural_memory.perfect_judges import BasePerfectJudge, SimplePerfectJudge
-from metagpt.memory.procedural_memory.schema import (
-    Experience,
-    Metric,
-    QueryType,
-    Score,
-)
-from metagpt.memory.procedural_memory.scorers import BaseScorer, SimpleScorer
-from metagpt.memory.procedural_memory.serializers import BaseSerializer, SimpleSerializer
 from metagpt.common.utils.async_helper import run_coroutine_sync
 from metagpt.common.utils.exceptions import handle_exception
+from metagpt.memory.procedural_memory.context_builders import (
+    BaseContextBuilder,
+    SimpleContextBuilder,
+)
+from metagpt.memory.procedural_memory.manager import ExperienceManager, get_exp_manager
+from metagpt.memory.procedural_memory.perfect_judges import (
+    BasePerfectJudge,
+    SimplePerfectJudge,
+)
+from metagpt.memory.procedural_memory.schema import Experience, Metric, QueryType, Score
+from metagpt.memory.procedural_memory.scorers import BaseScorer, SimpleScorer
+from metagpt.memory.procedural_memory.serializers import (
+    BaseSerializer,
+    SimpleSerializer,
+)
 
 ReturnType = TypeVar("ReturnType")
 

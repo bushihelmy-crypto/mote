@@ -16,14 +16,16 @@ import os
 
 from metagpt.common.logs import logger
 from metagpt.executor.tasks.bggraph import Stage
+from metagpt.executor.tools.media_pipeline.creators import (
+    AudioCreator,
+    FfmpegComposer,
+    ImageCreator,
+    MusicCreator,
+    VideoCreator,
+)
+from metagpt.router import LLM
 
 from .state import MediaPipelineState
-from metagpt.executor.tools.media_pipeline.creators import ImageCreator
-from metagpt.executor.tools.media_pipeline.creators import AudioCreator
-from metagpt.executor.tools.media_pipeline.creators import MusicCreator
-from metagpt.executor.tools.media_pipeline.creators import VideoCreator
-from metagpt.router import LLM
-from metagpt.executor.tools.media_pipeline.creators import FfmpegComposer
 
 # ---------------------------------------------------------------------------
 # Storyboard LLM prompt
@@ -127,7 +129,7 @@ def _parse_storyboard_response(text: str) -> dict:
     if text.startswith("```"):
         # Remove opening fence (possibly ```json)
         first_nl = text.index("\n")
-        text = text[first_nl + 1:]
+        text = text[first_nl + 1 :]
     if text.endswith("```"):
         text = text[:-3]
     text = text.strip()
@@ -140,6 +142,7 @@ def _parse_storyboard_response(text: str) -> dict:
 # ---------------------------------------------------------------------------
 # Router functions (conditional edge logic)
 # ---------------------------------------------------------------------------
+
 
 def _route_after_storyboard(state: MediaPipelineState) -> str:
     """Route after storyboard: full_pipeline if promo needed, else assets_only."""
@@ -217,7 +220,6 @@ async def storyboard_node(state: MediaPipelineState) -> Stage:
 
     # Auto mode — use LLM to plan
     async def submit():
-
         llm = LLM()
         user_msg = state.prompt
         if state.duration:
@@ -303,7 +305,6 @@ async def image_node(state: MediaPipelineState) -> Stage:
     if not state.images:
         return Stage(submit=_noop())
 
-
     creator = ImageCreator(output_dir=_assets_dir(state, "images"))
 
     async def submit():
@@ -332,7 +333,6 @@ async def audio_node(state: MediaPipelineState) -> Stage:
     if not state.audios:
         return Stage(submit=_noop())
 
-
     creator = AudioCreator(output_dir=_assets_dir(state, "audio"))
 
     async def submit():
@@ -360,7 +360,6 @@ async def music_node(state: MediaPipelineState) -> Stage:
     """
     if not state.musics:
         return Stage(submit=_noop())
-
 
     creator = MusicCreator(output_dir=_assets_dir(state, "music"))
 
@@ -433,7 +432,6 @@ async def video_node(state: MediaPipelineState) -> Stage:
     # Inject image references if image node produced results
     image_results = getattr(state, "image", None)
     videos = _inject_image_refs(state.videos, image_results)
-
 
     creator = VideoCreator(output_dir=_assets_dir(state, "videos"))
 
@@ -584,17 +582,19 @@ async def promo_node(state: MediaPipelineState) -> Stage:
         return {"status": "running", "message": "FFmpeg compose started."}
 
     async def poll(_submit_result):
-
         promo_dir = state.promo_dir or state.promo.get("promo_dir", "")
         clips = _ordered_local_paths(state.videos, getattr(state, "video", None))
         if not clips:
-            return {"promo_out": {"status": "failed", "stage": "preflight",
-                    "error": "No local video clips available to compose."}}
+            return {
+                "promo_out": {
+                    "status": "failed",
+                    "stage": "preflight",
+                    "error": "No local video clips available to compose.",
+                }
+            }
 
         narration = _ordered_local_paths(state.audios, getattr(state, "audio", None))
-        music = _ordered_local_paths(
-            state.musics, getattr(state, "music", None)
-        )
+        music = _ordered_local_paths(state.musics, getattr(state, "music", None))
 
         width = state.promo.get("width", 1920)
         height = state.promo.get("height", 1080)

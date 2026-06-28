@@ -26,6 +26,7 @@ The bus also never times this sink out: it must complete.
 
 from __future__ import annotations
 
+from metagpt.common.disk import get_disk_writer
 from metagpt.common.events.types import (
     CompactionCheckpointEvent,
     LLMResponseEvent,
@@ -41,7 +42,6 @@ from metagpt.session.events import (
     TurnContextEvent,
 )
 from metagpt.session.log import SessionLog
-from metagpt.common.disk import get_disk_writer
 
 
 @log_class(level="DEBUG", exclude={"handle"})
@@ -82,9 +82,7 @@ class RecorderSubscriber:
                     )
                 )
         elif isinstance(event, CompactionCheckpointEvent):
-            self._log.append(
-                CompactedEvent(messages=list(event.messages), summary=event.summary or "")
-            )
+            self._log.append(CompactedEvent(messages=list(event.messages), summary=event.summary or ""))
         elif isinstance(event, TurnEndEvent):
             self._log.append(
                 TurnContextEvent(

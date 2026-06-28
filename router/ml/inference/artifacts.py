@@ -14,9 +14,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from metagpt.router.ml.features import extract_handcrafted
-from metagpt.router.ml.features import ContextMetadata, extract_context_features
-from metagpt.router.ml.features import extract_hist_features
+
+from metagpt.router.ml.features import (
+    ContextMetadata,
+    extract_context_features,
+    extract_handcrafted,
+    extract_hist_features,
+)
 from metagpt.router.ml.v4_features import BGEChannelExtractor
 
 _V4_TFIDF_DIMS = 102
@@ -30,7 +34,6 @@ class V3FeatureRuntime:
         self._svd = svd_model
 
     def extract_handcrafted(self, text: str) -> np.ndarray:
-
         return extract_handcrafted(text).astype(np.float32)
 
     def extract_tfidf(self, text: str) -> np.ndarray:
@@ -42,7 +45,6 @@ class V3FeatureRuntime:
         return tfidf
 
     def extract_context(self, metadata: dict) -> np.ndarray:
-
         if not metadata:
             return extract_context_features(None)
         allowed = ContextMetadata.__dataclass_fields__.keys()
@@ -50,7 +52,6 @@ class V3FeatureRuntime:
         return extract_context_features(context)
 
     def extract_hist(self, prev_route_decisions: list) -> np.ndarray:
-
         return extract_hist_features(prev_route_decisions or None)
 
 
@@ -66,13 +67,9 @@ class InferenceArtifacts:
         manifest = json.loads(manifest_path.read_text())
 
         if manifest.get("feature_dim") != 390:
-            raise ValueError(
-                f"feature_dim mismatch: {manifest.get('feature_dim')}"
-            )
+            raise ValueError(f"feature_dim mismatch: {manifest.get('feature_dim')}")
         if manifest.get("mlp_input_dim") != 1536:
-            raise ValueError(
-                f"mlp_input_dim mismatch: {manifest.get('mlp_input_dim')}"
-            )
+            raise ValueError(f"mlp_input_dim mismatch: {manifest.get('mlp_input_dim')}")
         if "temperature" not in manifest:
             raise ValueError("temperature missing from inference manifest")
 
@@ -117,7 +114,6 @@ class InferenceArtifacts:
         import lightgbm as lgb
         import onnxruntime as ort
 
-
         paths = self.required_paths()
         main_model = lgb.Booster(model_file=str(paths["main_model"]))
         aux_model = None
@@ -130,16 +126,8 @@ class InferenceArtifacts:
 
         bge_extractor = BGEChannelExtractor.load(paths["bge_pca"])
         v4_cfg = (config or {}).get("v4", {})
-        bge_backend = (
-            v4_cfg.get("bge_backend")
-            or self.manifest.get("bge_backend")
-            or bge_extractor.backend
-        )
-        bge_onnx_dir = (
-            v4_cfg.get("bge_onnx_dir")
-            or self.manifest.get("bge_onnx_dir")
-            or bge_extractor.onnx_model_dir
-        )
+        bge_backend = v4_cfg.get("bge_backend") or self.manifest.get("bge_backend") or bge_extractor.backend
+        bge_onnx_dir = v4_cfg.get("bge_onnx_dir") or self.manifest.get("bge_onnx_dir") or bge_extractor.onnx_model_dir
         bge_onnx_dir = self._resolve_bge_onnx_dir(bge_onnx_dir)
         bge_extractor.backend = bge_backend
         bge_extractor.onnx_model_dir = bge_onnx_dir

@@ -6,14 +6,19 @@ is the frontier-scheduler driver coroutine.  See :mod:`engine` for execution.
 
 from __future__ import annotations
 
-import inspect
 import typing
 from typing import Any, Awaitable, Callable, Optional, Union
 
 from metagpt.common.utils.docstring import first_line
-from metagpt.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
+from metagpt.executor.tasks.bggraph.base_node import (
+    BaseNode,
+    _parse_params_from_docstring,
+)
 from metagpt.executor.tasks.bggraph.channels import derive_reducers
-from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.executor.tasks.bggraph.engine import _build_executor
+from metagpt.executor.tasks.bggraph.engine import resume as _resume
+from metagpt.executor.tasks.bggraph.engine import resume_skip as _resume_skip
+from metagpt.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
 from metagpt.executor.tasks.bggraph.types import (
     END,
     START,
@@ -24,12 +29,8 @@ from metagpt.executor.tasks.bggraph.types import (
     _NodeDef,
     _WaitingEdge,
 )
-from metagpt.executor.tasks.bggraph.engine import _build_executor
-from metagpt.executor.tasks.bggraph.engine import resume as _resume
-from metagpt.executor.tasks.bggraph.engine import resume_skip as _resume_skip
-from metagpt.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
+from metagpt.executor.tasks.types import BgTaskResult
 from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
-
 
 # ---------------------------------------------------------------------------
 # Type-compatibility check for compile-time param validation
@@ -217,16 +218,10 @@ class BgGraph:
 
     # --- resume (delegates to engine) ---
 
-    def resume(
-        self, state: GraphState, from_nodes: list[str], run_state: Any = None
-    ) -> BgTaskResult:
-
+    def resume(self, state: GraphState, from_nodes: list[str], run_state: Any = None) -> BgTaskResult:
         return _resume(self, state, from_nodes, run_state)
 
-    def resume_skip(
-        self, state: GraphState, skip_nodes: list[str], run_state: Any = None
-    ) -> BgTaskResult:
-
+    def resume_skip(self, state: GraphState, skip_nodes: list[str], run_state: Any = None) -> BgTaskResult:
         return _resume_skip(self, state, skip_nodes, run_state)
 
     def resume_skip_and_from(
@@ -236,7 +231,6 @@ class BgGraph:
         from_nodes: list[str],
         run_state: Any = None,
     ) -> BgTaskResult:
-
         return _rsaf(self, state, skip_nodes, from_nodes, run_state)
 
     @property
@@ -325,9 +319,7 @@ class BgGraph:
 
         # Rebuild waiting-edges: one merged AND-join per target. Preserve any
         # waiting-edge to END untouched (END is exempt — many nodes finish there).
-        rebuilt: list[_WaitingEdge] = [
-            we for we in self._waiting_edges if we.to_node == END
-        ]
+        rebuilt: list[_WaitingEdge] = [we for we in self._waiting_edges if we.to_node == END]
         for target, sources in merged.items():
             rebuilt.append(_WaitingEdge(sources=tuple(sources), to_node=target))
         self._waiting_edges = rebuilt
@@ -415,11 +407,10 @@ class BgGraph:
             for param_name, param_info in node_def.params.items():
                 source = param_info["from"]
                 if source.startswith("$input."):
-                    field_name = source[len("$input."):]
+                    field_name = source[len("$input.") :]
                     if field_name not in self.state_schema.model_fields:
                         raise ValueError(
-                            f"Node '{name}' param '{param_name}' references "
-                            f"unknown input field: {field_name}"
+                            f"Node '{name}' param '{param_name}' references " f"unknown input field: {field_name}"
                         )
                     # Type compatibility check for $input fields
                     expected_type = param_info.get("type")
@@ -463,9 +454,7 @@ class BgGraph:
         Mirrors langgraph: ``add_edge(START, x)`` for several ``x`` seeds them as
         concurrent entry points. Deduped, preserving declaration order.
         """
-        return list(dict.fromkeys(
-            e.to_node for e in self._edges if e.from_node == START
-        ))
+        return list(dict.fromkeys(e.to_node for e in self._edges if e.from_node == START))
 
     def _get_finish_nodes(self) -> list[str]:
         finish = [e.from_node for e in self._edges if e.to_node == END]
@@ -529,9 +518,7 @@ class BgGraph:
 
             for le in self._llm_edges:
                 if le.from_node == name:
-                    routes = " | ".join(
-                        k if v == END else f"{k}: {v}" for k, v in le.mapping.items()
-                    )
+                    routes = " | ".join(k if v == END else f"{k}: {v}" for k, v in le.mapping.items())
                     parts.append(f"─LLM route→ {routes}")
 
             if not parts:

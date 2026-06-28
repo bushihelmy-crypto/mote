@@ -21,8 +21,13 @@ from string import Template
 from typing import Any, Optional
 
 from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
-
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
+from metagpt.common.prompt.memory import (
+    MEMORY_CONTEXT,
+    MEMORY_EMPTY_STATE,
+    MEMORY_INSTRUCTIONS,
+)
+from metagpt.common.prompt.refs import assert_no_symbols
 from metagpt.common.prompt.role import (
     CONSTRAINT_TEMPLATE,
     FRC_SECTION,
@@ -32,11 +37,8 @@ from metagpt.common.prompt.role import (
     SUMMARIZE_TOOL_RESULTS_SECTION,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 )
-
-from metagpt.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
-from metagpt.common.prompt.refs import assert_no_symbols
-from metagpt.common.utils.role_zero_utils import get_time_info
 from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
+from metagpt.common.utils.role_zero_utils import get_time_info
 
 
 @dataclass
@@ -113,9 +115,9 @@ class ThinkContext:
     team_info: str = ""
 
     # Tools
-    tool_info: str = ""       # built-in tools (rendered JSON for ${available_commands})
-    mcp_info: str = ""        # MCP tools (rendered JSON for ${mcp_tools})
-    pipeline_info: str = ""   # pipeline tools (rendered JSON for ${pipeline_tools})
+    tool_info: str = ""  # built-in tools (rendered JSON for ${available_commands})
+    mcp_info: str = ""  # MCP tools (rendered JSON for ${mcp_tools})
+    pipeline_info: str = ""  # pipeline tools (rendered JSON for ${pipeline_tools})
     # Note introducing the external tool categories (MCP / pipeline). Built only
     # for the categories actually present, and "" when neither exists — so the
     # model is never pointed at a "# MCP Tools" / "# Pipeline Tools" section that
@@ -216,9 +218,7 @@ class PromptBuilder:
         """
         if inputs.desc:
             return inputs.desc
-        prefix = Template(PREFIX_TEMPLATE).safe_substitute(
-            profile=inputs.profile, name=inputs.name, goal=inputs.goal
-        )
+        prefix = Template(PREFIX_TEMPLATE).safe_substitute(profile=inputs.profile, name=inputs.name, goal=inputs.goal)
         if inputs.constraints:
             prefix += Template(CONSTRAINT_TEMPLATE).safe_substitute(constraints=inputs.constraints)
         if inputs.env_desc:
@@ -316,7 +316,6 @@ class PromptBuilder:
         is None or empty/whitespace is skipped entirely.
         """
         return "\n".join(s for s in sections if s and s.strip())
-
 
     # ------------------------------------------------------------------
     # Context collection — gathers all data from subsystems into ThinkContext
@@ -485,9 +484,7 @@ class PromptBuilder:
         comes from protected_recent_messages. Returns ("", "") otherwise.
         """
         rz = config.role_zero
-        active = getattr(rz, "enable_compressable_memory", False) and getattr(
-            rz, "compress_type", ""
-        ) == "compaction"
+        active = getattr(rz, "enable_compressable_memory", False) and getattr(rz, "compress_type", "") == "compaction"
         if not active:
             return "", ""
         keep_recent = getattr(rz, "protected_recent_messages", 8)
@@ -517,7 +514,7 @@ class PromptBuilder:
     @staticmethod
     def _make_env_section(model_name: str, working_dir: str = "", project_root=None) -> str:
         cwd = working_dir or str(DEFAULT_WORKSPACE_ROOT)
-        root = str(project_root) if project_root else str(DEFAULT_WORKSPACE_ROOT)
+        str(project_root) if project_root else str(DEFAULT_WORKSPACE_ROOT)
         lines = [
             "# Environment",
             "You have been invoked in the following environment:",

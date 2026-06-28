@@ -1,0 +1,4 @@
+# Match black's line length (configured to 120 in .pre-commit-config.yaml).
+# Without this, ruff falls back to its default of 88 and floods E501 on every
+# line black happily allows up to 120 chars.
+line-length = 120

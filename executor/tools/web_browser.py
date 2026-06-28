@@ -28,11 +28,11 @@ import base64
 from typing import Any, Awaitable, Callable, ClassVar, Optional
 
 from metagpt.common.logs import logger
+from metagpt.common.prompt.tools import WEB_BROWSER_DESCRIPTION
 from metagpt.executor.base_tool import BaseTool
+from metagpt.executor.dependency._browser import BrowserSession
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.dependency._browser import BrowserSession
-from metagpt.common.prompt.tools import WEB_BROWSER_DESCRIPTION
 
 
 async def _noop_ask(_question: str) -> str:
@@ -106,9 +106,7 @@ class WebBrowser(BaseTool):
         # context with the logged-in session before re-opening tabs.
         pending = self.take_pending_browser_restore()
         storage_state = pending.get("storage_state") if pending else None
-        session = BrowserSession(
-            session_key=self.session_id, cwd=cwd or None, headless=headless
-        )
+        session = BrowserSession(session_key=self.session_id, cwd=cwd or None, headless=headless)
         await session.start(storage_state=storage_state)
         if pending:
             await session.restore_state(
@@ -173,8 +171,18 @@ class WebBrowser(BaseTool):
         try:
             session = await self._ensure_session()
             result = await self._dispatch(
-                session, action, url, selector, text, expression, index, clear,
-                fields, schema, submit, prompt,
+                session,
+                action,
+                url,
+                selector,
+                text,
+                expression,
+                index,
+                clear,
+                fields,
+                schema,
+                submit,
+                prompt,
             )
         except ToolError:
             raise
@@ -225,25 +233,17 @@ class WebBrowser(BaseTool):
             return await session.type_text(selector, text, clear=clear)
         if action == "wait":
             if not selector and not expression:
-                raise ToolError(
-                    "Error: 'wait' requires a selector or an expression to wait for."
-                )
+                raise ToolError("Error: 'wait' requires a selector or an expression to wait for.")
             return await session.wait(selector=selector, expression=expression)
         if action == "detect_forms":
             return await session.detect_forms()
         if action == "fill_form":
             if not fields:
-                raise ToolError(
-                    "Error: 'fill_form' requires a 'fields' mapping of "
-                    "{selector_or_index: value}."
-                )
+                raise ToolError("Error: 'fill_form' requires a 'fields' mapping of " "{selector_or_index: value}.")
             return await session.fill_form(fields, submit=submit)
         if action == "extract":
             if not schema:
-                raise ToolError(
-                    "Error: 'extract' requires a 'schema' mapping of "
-                    "{key: 'selector[@attr]'}."
-                )
+                raise ToolError("Error: 'extract' requires a 'schema' mapping of " "{key: 'selector[@attr]'}.")
             return await session.extract(schema)
         if action == "assist":
             if not prompt:

@@ -579,16 +579,12 @@ class BrowserSession:
         we tell the model to re-snapshot rather than emit a raw selector error.
         """
         try:
-            handle = await page.wait_for_selector(
-                selector, timeout=timeout_ms, state="attached"
-            )
+            handle = await page.wait_for_selector(selector, timeout=timeout_ms, state="attached")
         except Exception as e:  # noqa: BLE001
             if ref is not None:
                 known = ref in self._ref_meta
                 hint = (
-                    "the page changed since the last snapshot"
-                    if known
-                    else f"no element [{ref}] in the last snapshot"
+                    "the page changed since the last snapshot" if known else f"no element [{ref}] in the last snapshot"
                 )
                 raise ToolError(
                     f"Error: element [{ref}] not found ({hint}). Take a fresh "
@@ -675,17 +671,13 @@ class BrowserSession:
         """
         page = self._active_page()
         if bool(selector) == bool(expression):
-            raise ToolError(
-                "Error: 'wait' needs exactly one of selector or expression."
-            )
+            raise ToolError("Error: 'wait' needs exactly one of selector or expression.")
         if selector:
             sel, ref = self._resolve_target(selector)
             try:
                 await page.wait_for_selector(sel, timeout=timeout_ms, state="visible")
             except Exception:  # noqa: BLE001
-                raise ToolError(
-                    f"Error: timed out after {timeout_ms}ms waiting for {selector!r}."
-                )
+                raise ToolError(f"Error: timed out after {timeout_ms}ms waiting for {selector!r}.")
             return f"[{selector} appeared]"
         # expression: poll to truthy with exponential backoff.
         deadline = time.monotonic() + timeout_ms / 1000.0
@@ -700,9 +692,7 @@ class BrowserSession:
             await asyncio.sleep(delay)
             delay = min(delay * 2, 0.2)
         suffix = f" (last error: {last_err})" if last_err else ""
-        raise ToolError(
-            f"Error: timed out after {timeout_ms}ms waiting for {expression!r}{suffix}."
-        )
+        raise ToolError(f"Error: timed out after {timeout_ms}ms waiting for {expression!r}{suffix}.")
 
     async def assist(self, prompt: str, *, ask_human, headless: bool) -> str:
         """Pause automation and ask the human to supply something only they can.
@@ -754,16 +744,12 @@ class BrowserSession:
             f"Current page: {page.url}\n"
             f"A screenshot of the page is saved at: {shot_path}\n"
             f"If you need to read something on the page (a QR / captcha), open it "
-            f"(e.g. `explorer.exe \"{shot_path}\"` on WSL2); otherwise just reply "
+            f'(e.g. `explorer.exe "{shot_path}"` on WSL2); otherwise just reply '
             f"with the value (e.g. the SMS / email code, your phone or email) to "
             f"continue."
         )
         reply = await ask_human(question)  # blocks until the user replies
-        return (
-            f"[user replied] now at {page.url}\n"
-            f"screenshot: {shot_path}\n"
-            f"user said: {reply}"
-        )
+        return f"[user replied] now at {page.url}\n" f"screenshot: {shot_path}\n" f"user said: {reply}"
 
     async def _save_assist_screenshot(self) -> str:
         """Capture the active tab and write it to a session-scoped PNG file.
@@ -816,9 +802,7 @@ class BrowserSession:
         all fields are filled. Mirrors obscura's fill_form. Returns a summary.
         """
         if not isinstance(fields, dict) or not fields:
-            raise ToolError(
-                "Error: 'fill_form' needs a non-empty {selector: value} mapping."
-            )
+            raise ToolError("Error: 'fill_form' needs a non-empty {selector: value} mapping.")
         page = self._active_page()
         filled = []
         for target, value in fields.items():
@@ -848,9 +832,7 @@ class BrowserSession:
         object keyed by your schema keys.
         """
         if not isinstance(schema, dict) or not schema:
-            raise ToolError(
-                "Error: 'extract' needs a non-empty {key: 'selector[@attr]'} mapping."
-            )
+            raise ToolError("Error: 'extract' needs a non-empty {key: 'selector[@attr]'} mapping.")
         page = self._active_page()
         try:
             data = await page.evaluate(_EXTRACT_JS, schema)

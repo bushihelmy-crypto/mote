@@ -22,7 +22,6 @@ def get_store(provider: str, backend: Union[StoreBackend, str] = StoreBackend.FA
     if backend == StoreBackend.FILE:
         return FileCredentialStore(provider)
     if backend == StoreBackend.KEYRING:
-
         return KeyringCredentialStore(provider)
     return FallbackCredentialStore(provider)
 

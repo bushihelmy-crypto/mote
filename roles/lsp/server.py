@@ -82,15 +82,11 @@ class LspServerInstance:
             await self._kill_proc()
             return False
 
-        self._endpoint = JsonRpcEndpoint(
-            self._proc.stdin, self._proc.stdout, on_notification=self._on_notification
-        )
+        self._endpoint = JsonRpcEndpoint(self._proc.stdin, self._proc.stdout, on_notification=self._on_notification)
         self._endpoint.start()
 
         try:
-            await self._endpoint.request(
-                "initialize", self._initialize_params(), timeout=self.init_timeout
-            )
+            await self._endpoint.request("initialize", self._initialize_params(), timeout=self.init_timeout)
         except Exception as exc:  # noqa: BLE001 — handshake failed; tear down
             logger.debug(f"LspServer: initialize handshake failed, tearing down: {exc}")
             await self.shutdown()
@@ -132,9 +128,7 @@ class LspServerInstance:
                     "contentChanges": [{"text": text}],  # full-document sync
                 },
             )
-        self._endpoint.notify(
-            "textDocument/didSave", {"textDocument": {"uri": uri}, "text": text}
-        )
+        self._endpoint.notify("textDocument/didSave", {"textDocument": {"uri": uri}, "text": text})
         # Give the server a moment to analyze + publish diagnostics. They arrive
         # asynchronously via _on_notification into the shared registry.
         await asyncio.sleep(self.diagnostics_wait)
@@ -181,9 +175,7 @@ class LspServerInstance:
                     },
                 }
             },
-            "workspaceFolders": (
-                [{"uri": root_uri, "name": "workspace"}] if root_uri else None
-            ),
+            "workspaceFolders": ([{"uri": root_uri, "name": "workspace"}] if root_uri else None),
         }
 
     async def _kill_proc(self) -> None:

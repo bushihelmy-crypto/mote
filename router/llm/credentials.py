@@ -12,6 +12,7 @@ SDK client from the current credential). It must call :meth:`_init_credentials`
 during its client init, before the first :meth:`_rebuild_client`.
 """
 from __future__ import annotations
+
 from metagpt.router.oauth import OAuthManager
 
 

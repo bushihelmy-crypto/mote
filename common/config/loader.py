@@ -27,10 +27,10 @@ from metagpt.common.config.env import build_env_layer
 from metagpt.common.config.layers import ConfigLayer, ConfigLayerStack, strip_sensitive
 from metagpt.common.config.meta_config import Config
 from metagpt.common.config.overrides import ConfigOverrides, parse_cli_overrides
-from metagpt.common.config.sources import ConfigSource, discover_source_files
-from metagpt.common.utils.yaml_model import YamlModel
 from metagpt.common.config.secrets import resolve_api_key
+from metagpt.common.config.sources import ConfigSource, discover_source_files
 from metagpt.common.exception import UnknownConfigKeysError
+from metagpt.common.utils.yaml_model import YamlModel
 
 Programmatic = Union[Dict[str, Any], ConfigOverrides]
 
@@ -138,9 +138,7 @@ def load_config_with_stack(
             _CACHE[key] = (_build_config(stack, strict=False), stack)
         return _CACHE[key]
 
-    stack = build_layer_stack(
-        cwd, profile=profile, env=env, cli_overrides=cli_overrides, programmatic=programmatic
-    )
+    stack = build_layer_stack(cwd, profile=profile, env=env, cli_overrides=cli_overrides, programmatic=programmatic)
     return _build_config(stack, strict=strict), stack
 
 

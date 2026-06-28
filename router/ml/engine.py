@@ -15,8 +15,8 @@ from typing import Optional
 
 from metagpt.common.logs import logger
 from metagpt.router.ml.config import default_model_dir, load_runtime_config
-from metagpt.router.ml.inference.types import InferenceRequest, InferenceResult
 from metagpt.router.ml.inference.core import InferenceCore
+from metagpt.router.ml.inference.types import InferenceRequest, InferenceResult
 
 
 class SquillaMLEngine:
@@ -35,8 +35,8 @@ class SquillaMLEngine:
             use_aux_head = bool(self.config.get("v4", {}).get("aux_head_inference", False))
         self.use_aux_head = use_aux_head
         self._core = None
-        self._loaded = False        # have we attempted a load yet?
-        self._available = False     # did the load succeed?
+        self._loaded = False  # have we attempted a load yet?
+        self._available = False  # did the load succeed?
 
     @property
     def available(self) -> bool:

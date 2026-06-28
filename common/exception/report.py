@@ -71,7 +71,6 @@ class ErrorReport:
                 cause=repr(exc.cause) if exc.cause is not None else None,
             )
 
-
         retryable = is_retryable(exc)
         recovery = RecoveryAction.RETRY if retryable else RecoveryAction.ABORT
         return cls(
@@ -144,10 +143,7 @@ def render_error_block(report: ErrorReport) -> str:
     machine-readable ``code`` / ``recovery`` / ``retryable`` so the model can
     reason about *how* to react, not just *what* failed.
     """
-    head = (
-        f'<error code="{report.code}" recovery="{report.recovery}" '
-        f'retryable="{str(report.retryable).lower()}">'
-    )
+    head = f'<error code="{report.code}" recovery="{report.recovery}" ' f'retryable="{str(report.retryable).lower()}">'
     lines = [head, report.message]
     lines.extend(_render_detail(report.detail))
     if report.cause:

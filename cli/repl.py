@@ -25,10 +25,17 @@ import sys
 import time
 from typing import Any, Callable, Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.schema import UserMessage
+from metagpt.cli.commands import SlashCommands
 from metagpt.cli.render import build_renderer
 from metagpt.common.config.loader import load_config
+from metagpt.common.events import (
+    LLMStreamDeltaEvent,
+    PostToolUseEvent,
+    PreToolUseEvent,
+    TaskProgressEvent,
+)
+from metagpt.common.logs import logger, resume_console_log, suspend_console_log
+from metagpt.common.schema import UserMessage
 from metagpt.common.utils.git_state import find_git_root
 from metagpt.environment.control import AgentControl
 from metagpt.environment.runtime import AgentRuntime
@@ -36,12 +43,6 @@ from metagpt.roles import Role
 from metagpt.roles.role_schema import RoleSchema
 from metagpt.roles.role_state import RoleState
 from metagpt.router.llm.context import Context
-from metagpt.cli.commands import SlashCommands
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.common.logs import suspend_console_log
-from metagpt.common.logs import resume_console_log
-from metagpt.common.events import LLMStreamDeltaEvent, TaskProgressEvent
-from metagpt.common.events import PreToolUseEvent, PostToolUseEvent
 
 
 class _RenderSubscriber:
@@ -72,14 +73,12 @@ class _RenderSubscriber:
         self._repl = repl
 
     def handle_sync(self, event) -> None:
-
         if isinstance(event, LLMStreamDeltaEvent):
             self._repl._stream_sink(event.token)
         elif isinstance(event, TaskProgressEvent):
             self._repl._on_task_progress(event)
 
     async def handle(self, event):
-
         if isinstance(event, PreToolUseEvent):
             self._repl._on_pre_tool(event)
         elif isinstance(event, PostToolUseEvent):
@@ -173,7 +172,6 @@ class Repl:
         # Builds fresh / resumed roles (sharing config + context); injected by
         # ``build_repl``. ``None`` => /new and /resume are unavailable.
         self._role_factory = role_factory
-
 
         self._commands = SlashCommands(self)
         self._last_sessions: list = []  # cached for index-based /resume
@@ -294,10 +292,7 @@ class Repl:
         restored = self._restored_input
         self._restored_input = None
         if restored:
-            self._notice(
-                "(interrupted — press Enter to resend, or type a new message)\n"
-                f"  {restored}\n"
-            )
+            self._notice("(interrupted — press Enter to resend, or type a new message)\n" f"  {restored}\n")
         self._reprompt()
         # Capture the baseline so a background-task-triggered turn that runs while
         # we're parked here can be detected and its reply printed (see
@@ -341,9 +336,7 @@ class Repl:
         answer could be silently stolen by the main loop.
         """
         while True:
-            done, _ = await asyncio.wait(
-                {self._read_task}, timeout=self._idle_poll_interval
-            )
+            done, _ = await asyncio.wait({self._read_task}, timeout=self._idle_poll_interval)
             if self._read_task in done:
                 data = self._read_task.result()
                 waiter = self._ask_waiter
@@ -725,7 +718,6 @@ class Repl:
         :meth:`_teardown`. Best-effort.
         """
         try:
-
             self._console_log_suspended = suspend_console_log()
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Repl: suspend_console_log failed: {exc}")
@@ -798,7 +790,6 @@ def build_repl(
     name: str = "Assistant",
 ) -> Repl:
     """Assemble Config -> Context -> Role -> AgentRuntime -> AgentControl -> Repl."""
-
 
     config = load_config(programmatic=({"llm__model": model} if model else None))
     context = Context(config=config)

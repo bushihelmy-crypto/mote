@@ -16,9 +16,6 @@ from uuid import uuid4
 
 from metagpt.common.base import BaseRole
 from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
-from metagpt.common.exception import RoleContextNotSetError
-from metagpt.context import ContextManager
-from metagpt.executor.tool_executor import ToolExecutor
 from metagpt.common.events import (
     SessionStartEvent,
     TurnEndEvent,
@@ -26,29 +23,26 @@ from metagpt.common.events import (
     set_bus,
     span,
 )
-from metagpt.common.logs import bind_trace, log_class
-from metagpt.roles.context_provider import ContextProvider
+from metagpt.common.exception import RoleContextNotSetError
+from metagpt.common.logs import bind_trace, log_class, logger
+from metagpt.common.schema import AIMessage, CauseBy, Message, UserMessage
+from metagpt.common.utils.common import any_to_str, role_raise_decorator
+from metagpt.context import ContextManager
+from metagpt.context.skills.skill_manager import SkillManager
+from metagpt.executor.tasks import BackgroundTaskPool
+from metagpt.executor.tool_executor import ToolExecutor
 from metagpt.loop import BaseLoop, ReActLoop
-from metagpt.router.router import LLMRouter
+from metagpt.parser import CommandChannel
 from metagpt.roles.capabilities import RoleCapabilities
+from metagpt.roles.context_provider import ContextProvider
 from metagpt.roles.role_components import RoleComponents
 from metagpt.roles.role_schema import RoleSchema
 from metagpt.roles.role_state import RoleState, RoleStateController
-from metagpt.common.schema import (
-    AIMessage,
-    CauseBy,
-    Message,
-    UserMessage,
-)
-from metagpt.context.skills.skill_manager import SkillManager
-from metagpt.parser import CommandChannel
-from metagpt.think.think_engine import ThinkEngine
-from metagpt.executor.tasks import BackgroundTaskPool
-from metagpt.common.utils.common import any_to_str, role_raise_decorator
+from metagpt.router.router import LLMRouter
+from metagpt.session import SessionLog, fork
 from metagpt.session import list_sessions as _list
-from metagpt.session import SessionLog, replay
-from metagpt.session import fork
-from metagpt.common.logs import logger
+from metagpt.session import replay
+from metagpt.think.think_engine import ThinkEngine
 
 if TYPE_CHECKING:
     from metagpt.session import (
@@ -341,9 +335,7 @@ class Role(BaseRole):
         """Set default addresses and recovery state."""
         if not self.state.addresses:
             self.state.addresses = (
-                {any_to_str(self), self.role_schema.name}
-                if self.role_schema.name
-                else {any_to_str(self)}
+                {any_to_str(self), self.role_schema.name} if self.role_schema.name else {any_to_str(self)}
             )
         if self.state.latest_observed_msg:
             self.state.recovered = True
@@ -488,9 +480,7 @@ class Role(BaseRole):
         recorder's ``enabled`` flag (the role's ``record_browser_state`` schema
         flag).
         """
-        self.browser_state_recorder.record(
-            urls, active=active, storage_state=storage_state, tool=tool
-        )
+        self.browser_state_recorder.record(urls, active=active, storage_state=storage_state, tool=tool)
 
     def take_pending_browser_restore(self) -> Optional[dict]:
         """Return and clear the pending browser-restore state.
@@ -770,9 +760,7 @@ class Role(BaseRole):
                     # context (prepended to the prompt) or veto the turn (stop ->
                     # deactivate before loop). Emitting always; the folded outcome is
                     # EMPTY when no hook layer is wired.
-                    outcome = await self.event_bus.emit(
-                        UserPromptSubmitEvent(prompt=msg.content)
-                    )
+                    outcome = await self.event_bus.emit(UserPromptSubmitEvent(prompt=msg.content))
                     if outcome.additional_context:
                         injected = "\n".join(outcome.additional_context)
                         msg.content = f"{injected}\n{msg.content}" if msg.content else injected
@@ -926,7 +914,6 @@ class Role(BaseRole):
                 )
             )
         except Exception as exc:  # noqa: BLE001
-
             logger.warning(f"session: failed to emit turn end: {exc}")
 
     async def cleanup(self) -> None:
@@ -942,14 +929,12 @@ class Role(BaseRole):
             try:
                 await file_watch_service.stop()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
-
                 logger.warning(f"Role: file_watch_service.stop() failed: {exc}")
         lsp_service = self._components.peek_lsp_service()
         if lsp_service is not None:
             try:
                 await lsp_service.shutdown()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
-
                 logger.warning(f"Role: lsp_service.shutdown() failed: {exc}")
         executor = self._components.peek_executor()
         if executor is not None:
@@ -959,7 +944,6 @@ class Role(BaseRole):
             try:
                 await sandbox_runtime.shutdown()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
-
                 logger.warning(f"Role: sandbox_runtime.shutdown() failed: {exc}")
 
     # =========================================================================
@@ -974,5 +958,3 @@ class Role(BaseRole):
 
         self.skill_manager.ensure_ready()
         await self.executor.init_mcp(self.role_schema.mcps)
-
-

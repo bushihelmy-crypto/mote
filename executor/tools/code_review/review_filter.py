@@ -109,9 +109,7 @@ async def filter_findings(
 
     keep = _parse_keep_indices(output, len(findings))
     if keep is None:
-        logger.warning(
-            "code_review: could not parse review_filter output; keeping all findings"
-        )
+        logger.warning("code_review: could not parse review_filter output; keeping all findings")
         return list(findings)
     return [findings[i] for i in keep]
 

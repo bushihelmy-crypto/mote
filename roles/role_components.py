@@ -22,10 +22,38 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from metagpt.common.config.loader import load_config
+from metagpt.common.config.sources import discover_source_files
+from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
+from metagpt.common.events import EventBus, LogSubscriber
+from metagpt.common.hook import HookManager
+from metagpt.common.hook.subscriber import HookSubscriber
 from metagpt.common.logs import logger
+from metagpt.common.observability.langfuse_backend import LangfuseBackend
+from metagpt.common.observability.langfuse_integration import (
+    is_enabled,
+    step_tracing_enabled,
+)
+from metagpt.common.observability.tracing import TracingSubscriber
+from metagpt.common.schema import SandboxConfig
+from metagpt.common.utils.report import ReporterSubscriber
 from metagpt.context import ContextManager
 from metagpt.context.skills.skill_manager import SkillManager
-from metagpt.executor.tasks import BackgroundTaskPool
+from metagpt.context.skills.skill_pool import _BUILTIN_DIR
+from metagpt.context.turn_context import (
+    CompactionNoticeContextSource,
+    GitContextSource,
+    SkillActivationContextSource,
+    TokenPressureContextSource,
+    TurnContextBus,
+)
+from metagpt.environment.watching import FileWatchService
+from metagpt.executor.permission.sandbox import (
+    ResourceGuard,
+    SandboxGuard,
+    build_runtime,
+)
+from metagpt.executor.tasks import BackgroundTaskPool, TaskOutputStore
 from metagpt.executor.tool_executor import ToolExecutor
 from metagpt.parser import (
     CommandChannel,
@@ -33,34 +61,19 @@ from metagpt.parser import (
     make_command_channel,
 )
 from metagpt.roles.context_provider import ContextProvider
+from metagpt.roles.lsp import DiagnosticsBuffer, LspService
 from metagpt.router.router import COMPRESSION_TASK, LLMRouter
-from metagpt.think.think_engine import ThinkEngine
-from metagpt.context.skills.skill_pool import _BUILTIN_DIR
-from metagpt.common.events import EventBus, LogSubscriber
-from metagpt.session.subscribers import RecorderSubscriber
-from metagpt.common.observability.langfuse_integration import is_enabled, step_tracing_enabled
-from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
-from metagpt.common.utils.report import ReporterSubscriber
-from metagpt.environment.watching import FileWatchService
-from metagpt.common.config.sources import discover_source_files
-from metagpt.common.config.loader import load_config
-from metagpt.executor.tasks import TaskOutputStore
-from metagpt.session import SessionLog, SessionMetaEvent
-from metagpt.common.hook.subscriber import HookSubscriber
-from metagpt.common.observability.langfuse_backend import LangfuseBackend
-from metagpt.common.observability.tracing import TracingSubscriber
-from metagpt.session import FileSnapshotRecorder
+from metagpt.session import (
+    BrowserStateRecorder,
+    FileSnapshotRecorder,
+    KernelStateRecorder,
+    SessionLog,
+    SessionMetaEvent,
+    TerminalStateRecorder,
+)
 from metagpt.session.snapshot import detect_blob_backend
-from metagpt.session import TerminalStateRecorder
-from metagpt.session import KernelStateRecorder
-from metagpt.session import BrowserStateRecorder
-from metagpt.common.hook import HookManager
-from metagpt.roles.lsp import LspService
-from metagpt.common.schema import SandboxConfig
-from metagpt.executor.permission.sandbox import ResourceGuard, SandboxGuard, build_runtime
-from metagpt.roles.lsp import DiagnosticsBuffer
-from metagpt.context.turn_context import CompactionNoticeContextSource
-from metagpt.context.turn_context import GitContextSource, SkillActivationContextSource, TokenPressureContextSource, TurnContextBus
+from metagpt.session.subscribers import RecorderSubscriber
+from metagpt.think.think_engine import ThinkEngine
 
 if TYPE_CHECKING:
     from metagpt.roles.role import Role
@@ -163,7 +176,6 @@ class RoleComponents:
     @property
     def bg_pool(self) -> BackgroundTaskPool:
         if self._bg_pool is None:
-
             # A disk-output store is required for ``submit(progress=True)`` to
             # install a per-task progress sink: without it, bggraph node-level
             # ``report_progress`` events (START / per-node SUCCESS|FAILED /
@@ -238,7 +250,6 @@ class RoleComponents:
         before-image snapshots into the same rollout).
         """
         if self._session_log is None:
-
             role = self._role
             log = SessionLog(role.state.session_id)
             log.create(
@@ -292,7 +303,6 @@ class RoleComponents:
         bus = EventBus()
         hook_manager = self.hook_manager
         if hook_manager is not None:
-
             bus.subscribe(HookSubscriber(hook_manager))
         bus.subscribe(RecorderSubscriber(self.session_log))
         bus.subscribe(LogSubscriber())
@@ -303,7 +313,6 @@ class RoleComponents:
         # imported — when disabled.
 
         if is_enabled():
-
             bus.subscribe(TracingSubscriber(LangfuseBackend(), trace_steps=step_tracing_enabled()))
         # The compaction-notice feed catches PostCompactEvent here (input
         # edge) and replays it as a one-shot turn-context block (output edge,
@@ -344,7 +353,6 @@ class RoleComponents:
         the plain blob store.
         """
         if self._file_snapshot_recorder is None:
-
             backend = self._role.role_schema.snapshot_backend
             if backend == "auto":
                 backend = detect_blob_backend(self._role.state.working_dir or None)
@@ -366,7 +374,6 @@ class RoleComponents:
         True) so it can be turned off per role.
         """
         if self._terminal_state_recorder is None:
-
             self._terminal_state_recorder = TerminalStateRecorder(
                 self.session_log,
                 enabled=self._role.role_schema.record_terminal_state,
@@ -384,7 +391,6 @@ class RoleComponents:
         off per role.
         """
         if self._kernel_state_recorder is None:
-
             self._kernel_state_recorder = KernelStateRecorder(
                 self.session_log,
                 enabled=self._role.role_schema.record_kernel_state,
@@ -403,7 +409,6 @@ class RoleComponents:
         cookies.
         """
         if self._browser_state_recorder is None:
-
             self._browser_state_recorder = BrowserStateRecorder(
                 self.session_log,
                 enabled=self._role.role_schema.record_browser_state,
@@ -524,7 +529,6 @@ class RoleComponents:
         actually happens), so it is wired unconditionally like git/token.
         """
         if self._compaction_notice is None:
-
             self._compaction_notice = CompactionNoticeContextSource()
         return self._compaction_notice
 
@@ -639,7 +643,6 @@ class RoleComponents:
         double-report the same progress.
         """
         if self._turn_context_bus is None:
-
             sources = [
                 GitContextSource(),
                 TokenPressureContextSource(self.context_manager),
@@ -679,7 +682,8 @@ class RoleComponents:
     def think_engine(self) -> ThinkEngine:
         if self._think_engine is None:
             self._think_engine = ThinkEngine(
-                memory=self.context_manager, config=self._role.config,
+                memory=self.context_manager,
+                config=self._role.config,
             )
         return self._think_engine
 

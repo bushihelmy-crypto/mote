@@ -30,14 +30,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from metagpt.common.base import BaseRole
+from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.disk import atomic_write, get_disk_writer
 from metagpt.common.logs import logger
 from metagpt.common.schema import MessageQueue
 from metagpt.environment.mailbox import Mailbox
 from metagpt.environment.runtime import AgentRuntime
 from metagpt.session import SessionLog, replay
-from metagpt.common.base import BaseRole
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 
 
 @dataclass
@@ -104,7 +104,6 @@ class ResidencyStore:
 
     def __init__(self, base_dir: Optional[str] = None, *, sessions_base_dir: Optional[str] = None):
         if base_dir is None:
-
             base_dir = str(Path(DEFAULT_WORKSPACE_ROOT) / ".agent_residency")
         self._base = Path(base_dir)
         self._sessions_base_dir = sessions_base_dir

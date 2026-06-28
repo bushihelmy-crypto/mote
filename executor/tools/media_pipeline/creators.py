@@ -16,7 +16,6 @@ renderer (no Node/pnpm/Remotion project required).
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import random
 import shutil
@@ -35,7 +34,6 @@ from metagpt.common.exception.media import (
 )
 from metagpt.common.logs import logger
 from metagpt.executor.tasks.types import BgTaskResult
-
 
 # ---------------------------------------------------------------------------
 # Shared async-task polling
@@ -91,10 +89,7 @@ async def _generate_one_with_retry(
         return await attempt_fn()
 
     async def _retry(exc: BaseException) -> bool:
-        logger.warning(
-            f"{noun} '{filename}' failed (attempt {attempts}/"
-            f"{_ITEM_RETRIES + 1}): {exc}; retrying."
-        )
+        logger.warning(f"{noun} '{filename}' failed (attempt {attempts}/" f"{_ITEM_RETRIES + 1}): {exc}; retrying.")
         await asyncio.sleep(_item_retry_delay(attempts))
         return True
 
@@ -106,17 +101,13 @@ async def _generate_one_with_retry(
         return _failure_entry(filename, e)
 
 
-async def _get_json(
-    session: aiohttp.ClientSession, url: str, headers: dict
-) -> dict:
+async def _get_json(session: aiohttp.ClientSession, url: str, headers: dict) -> dict:
     async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
         resp.raise_for_status()
         return await resp.json()
 
 
-async def _post_json(
-    session: aiohttp.ClientSession, url: str, headers: dict, payload: dict
-) -> dict:
+async def _post_json(session: aiohttp.ClientSession, url: str, headers: dict, payload: dict) -> dict:
     async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=300)) as resp:
         resp.raise_for_status()
         return await resp.json()
@@ -221,9 +212,7 @@ def _summarize_poll_results(results: list[dict], noun: str) -> dict:
     success = [r for r in results if r.get("status") == "success"]
     failed = [r for r in results if r.get("status") == "failed"]
     if results and not success:
-        detail = "; ".join(
-            f"{r.get('filename', '?')}: {r.get('error', 'unknown error')}" for r in failed
-        )
+        detail = "; ".join(f"{r.get('filename', '?')}: {r.get('error', 'unknown error')}" for r in failed)
         # Permanent only if EVERY failure is permanent — a single transient
         # failure makes the whole batch worth re-submitting.
         all_permanent = bool(failed) and all(r.get("permanent") for r in failed)
@@ -314,21 +303,25 @@ class AudioCreator:
                     task_id = data.get("id") or data.get("task_id") or ""
                     if not task_id:
                         raise RuntimeError("API returned empty task_id")
-                    submitted.append({
-                        "task_id": task_id,
-                        "filename": filename,
-                        "payload": payload,
-                        "pre_urls": data.get("pre_urls") or [],
-                        "status": data.get("status", "queued"),
-                    })
+                    submitted.append(
+                        {
+                            "task_id": task_id,
+                            "filename": filename,
+                            "payload": payload,
+                            "pre_urls": data.get("pre_urls") or [],
+                            "status": data.get("status", "queued"),
+                        }
+                    )
                 except Exception as e:
                     logger.error(f"Audio submit failed for '{filename}': {e}")
-                    submitted.append({
-                        "filename": filename,
-                        "payload": payload,
-                        "status": "failed",
-                        "error": str(e),
-                    })
+                    submitted.append(
+                        {
+                            "filename": filename,
+                            "payload": payload,
+                            "status": "failed",
+                            "error": str(e),
+                        }
+                    )
 
         immediate = {
             "submitted": [s for s in submitted if s.get("task_id")],
@@ -437,8 +430,7 @@ class MusicCreator:
                     "filename": filename,
                 }
                 # Optional fields
-                for key in ("negative_prompt", "seed", "lyrics",
-                            "audio_format", "sample_rate", "bitrate", "voice_id"):
+                for key in ("negative_prompt", "seed", "lyrics", "audio_format", "sample_rate", "bitrate", "voice_id"):
                     val = item.get(key)
                     if val is not None:
                         payload[key] = val
@@ -448,21 +440,25 @@ class MusicCreator:
                     task_id = data.get("id") or data.get("task_id") or ""
                     if not task_id:
                         raise RuntimeError("API returned empty task_id")
-                    submitted.append({
-                        "task_id": task_id,
-                        "filename": filename,
-                        "payload": payload,
-                        "pre_urls": data.get("pre_urls") or [],
-                        "status": data.get("status", "queued"),
-                    })
+                    submitted.append(
+                        {
+                            "task_id": task_id,
+                            "filename": filename,
+                            "payload": payload,
+                            "pre_urls": data.get("pre_urls") or [],
+                            "status": data.get("status", "queued"),
+                        }
+                    )
                 except Exception as e:
                     logger.error(f"Music submit failed for '{filename}': {e}")
-                    submitted.append({
-                        "filename": filename,
-                        "payload": payload,
-                        "status": "failed",
-                        "error": str(e),
-                    })
+                    submitted.append(
+                        {
+                            "filename": filename,
+                            "payload": payload,
+                            "status": "failed",
+                            "error": str(e),
+                        }
+                    )
 
         immediate = {
             "submitted": [s for s in submitted if s.get("task_id")],
@@ -569,21 +565,25 @@ class ImageCreator:
                     task_id = data.get("id") or data.get("task_id") or ""
                     if not task_id:
                         raise RuntimeError("API returned empty task_id")
-                    submitted.append({
-                        "task_id": task_id,
-                        "filename": filename,
-                        "spec": spec,
-                        "pre_urls": data.get("pre_urls") or [],
-                        "status": data.get("status", "queued"),
-                    })
+                    submitted.append(
+                        {
+                            "task_id": task_id,
+                            "filename": filename,
+                            "spec": spec,
+                            "pre_urls": data.get("pre_urls") or [],
+                            "status": data.get("status", "queued"),
+                        }
+                    )
                 except Exception as e:
                     logger.error(f"Image submit failed for '{filename}': {e}")
-                    submitted.append({
-                        "filename": filename,
-                        "spec": spec,
-                        "status": "failed",
-                        "error": str(e),
-                    })
+                    submitted.append(
+                        {
+                            "filename": filename,
+                            "spec": spec,
+                            "status": "failed",
+                            "error": str(e),
+                        }
+                    )
                 if i < len(images) - 1:
                     await asyncio.sleep(0.5)
 
@@ -608,9 +608,7 @@ class ImageCreator:
             return await self._submit_edit(
                 session, spec["description"], spec["filename"], spec["size"], spec["ref_image"]
             )
-        return await self._submit_gen(
-            session, self._headers(), spec["description"], spec["filename"], spec["size"]
-        )
+        return await self._submit_gen(session, self._headers(), spec["description"], spec["filename"], spec["size"])
 
     async def _submit_gen(self, session, headers, description, filename, size) -> dict:
         payload = {
@@ -639,11 +637,14 @@ class ImageCreator:
             form.add_field("image", img_bytes, filename="ref.png", content_type="image/png")
         else:
             import os
+
             with open(ref_image, "rb") as f:
                 img_bytes = f.read()
             form.add_field("image", img_bytes, filename=os.path.basename(ref_image), content_type="image/png")
         async with session.post(
-            f"{self._base_url}/images/edits/async", headers=headers, data=form,
+            f"{self._base_url}/images/edits/async",
+            headers=headers,
+            data=form,
             timeout=aiohttp.ClientTimeout(total=300),
         ) as resp:
             resp.raise_for_status()
@@ -703,6 +704,7 @@ class VideoCreator:
 
     def _client(self):
         from openai import AsyncOpenAI
+
         return AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
 
     async def generate_videos(self, videos: list[dict], **_: Any) -> BgTaskResult:
@@ -743,22 +745,30 @@ class VideoCreator:
                 video_id = getattr(video, "id", None) or (video.get("id") if isinstance(video, dict) else None)
                 if not video_id:
                     raise RuntimeError("API returned empty video id")
-                pre_urls = getattr(video, "pre_urls", None) or (video.get("pre_urls") if isinstance(video, dict) else []) or []
-                submitted.append({
-                    "task_id": video_id,
-                    "filename": filename,
-                    "create_params": create_params,
-                    "pre_urls": pre_urls,
-                    "status": getattr(video, "status", "queued") if not isinstance(video, dict) else video.get("status", "queued"),
-                })
+                pre_urls = (
+                    getattr(video, "pre_urls", None) or (video.get("pre_urls") if isinstance(video, dict) else []) or []
+                )
+                submitted.append(
+                    {
+                        "task_id": video_id,
+                        "filename": filename,
+                        "create_params": create_params,
+                        "pre_urls": pre_urls,
+                        "status": getattr(video, "status", "queued")
+                        if not isinstance(video, dict)
+                        else video.get("status", "queued"),
+                    }
+                )
             except Exception as e:
                 logger.error(f"Video submit failed for '{filename}': {e}")
-                submitted.append({
-                    "filename": filename,
-                    "create_params": create_params,
-                    "status": "failed",
-                    "error": str(e),
-                })
+                submitted.append(
+                    {
+                        "filename": filename,
+                        "create_params": create_params,
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
             if i < len(videos) - 1:
                 await asyncio.sleep(0.5)
 
@@ -903,13 +913,11 @@ class FfmpegComposer:
             narration_volume: Narration volume multiplier.
         """
         if shutil.which(self._ffmpeg) is None and not os.path.isabs(self._ffmpeg):
-            return {"status": "failed", "stage": "preflight",
-                    "error": "ffmpeg not found on PATH."}
+            return {"status": "failed", "stage": "preflight", "error": "ffmpeg not found on PATH."}
 
         clips = [v for v in (videos or []) if v and os.path.isfile(v)]
         if not clips:
-            return {"status": "failed", "stage": "preflight",
-                    "error": "No video clips available to compose."}
+            return {"status": "failed", "stage": "preflight", "error": "No video clips available to compose."}
 
         narration = [n for n in (narration or []) if n and os.path.isfile(n)]
         music_track = next((m for m in (music or []) if m and os.path.isfile(m)), "")
@@ -924,17 +932,19 @@ class FfmpegComposer:
         concat_path = work_dir / f"{out_path.stem}-video_concat.mp4"
         rc, durations = await self._concat_videos(clips, concat_path, log_path)
         if rc != 0:
-            return {"status": "failed", "stage": "concat", "log_path": str(log_path),
-                    "error": f"Video concat failed (exit {rc})."}
+            return {
+                "status": "failed",
+                "stage": "concat",
+                "log_path": str(log_path),
+                "error": f"Video concat failed (exit {rc}).",
+            }
         total_video = sum(durations)
 
         # 2. Build the narration track placed at each clip's offset.
         narration_path = ""
         if narration:
             narration_path = str(work_dir / f"{out_path.stem}-narration.m4a")
-            rc = await self._build_narration_track(
-                narration, durations, narration_path, log_path
-            )
+            rc = await self._build_narration_track(narration, durations, narration_path, log_path)
             if rc != 0:
                 logger.warning("Narration track build failed; composing without narration.")
                 narration_path = ""
@@ -951,8 +961,13 @@ class FfmpegComposer:
             log_path=log_path,
         )
         if rc != 0:
-            return {"status": "failed", "stage": "mux", "log_path": str(log_path),
-                    "output_path": str(out_path), "error": f"Final mux failed (exit {rc})."}
+            return {
+                "status": "failed",
+                "stage": "mux",
+                "log_path": str(log_path),
+                "output_path": str(out_path),
+                "error": f"Final mux failed (exit {rc}).",
+            }
 
         # Best-effort cleanup of intermediates.
         for tmp in (concat_path, Path(narration_path) if narration_path else None):
@@ -963,9 +978,13 @@ class FfmpegComposer:
                     pass
 
         if not out_path.exists() or out_path.stat().st_size == 0:
-            return {"status": "failed", "stage": "verify", "output_path": str(out_path),
-                    "log_path": str(log_path),
-                    "error": "Compose completed but output is missing or empty."}
+            return {
+                "status": "failed",
+                "stage": "verify",
+                "output_path": str(out_path),
+                "log_path": str(log_path),
+                "error": "Compose completed but output is missing or empty.",
+            }
 
         return {
             "status": "success",
@@ -982,9 +1001,14 @@ class FfmpegComposer:
     async def _probe_duration(self, path: str) -> float:
         """Return media duration in seconds (0.0 on failure)."""
         cmd = [
-            self._ffprobe, "-v", "quiet",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", path,
+            self._ffprobe,
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
         ]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -995,9 +1019,7 @@ class FfmpegComposer:
         except (ValueError, OSError):
             return 0.0
 
-    async def _concat_videos(
-        self, clips: list[str], concat_path: Path, log_path: Path
-    ) -> tuple[int, list[float]]:
+    async def _concat_videos(self, clips: list[str], concat_path: Path, log_path: Path) -> tuple[int, list[float]]:
         """Concat clips via the concat demuxer; re-encode for safe joining.
 
         Returns (returncode, per-clip durations).
@@ -1010,10 +1032,22 @@ class FfmpegComposer:
         # Re-encode (not -c copy): clips may differ in codec/timebase/fps, which
         # breaks stream-copy concat. Re-encoding guarantees a clean joined track.
         cmd = [
-            self._ffmpeg, "-y", "-f", "concat", "-safe", "0",
-            "-i", str(list_file),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
-            "-an", str(concat_path),
+            self._ffmpeg,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            "30",
+            "-an",
+            str(concat_path),
         ]
         rc = await self._run(cmd, log_path, stage="concat")
         try:
@@ -1023,8 +1057,11 @@ class FfmpegComposer:
         return rc, durations
 
     async def _build_narration_track(
-        self, narration: list[str], durations: list[float],
-        output_path: str, log_path: Path,
+        self,
+        narration: list[str],
+        durations: list[float],
+        output_path: str,
+        log_path: Path,
     ) -> int:
         """Place each narration clip at its matching clip's start offset, then mix.
 
@@ -1056,9 +1093,16 @@ class FfmpegComposer:
         return await self._run(cmd, log_path, stage="narration")
 
     async def _mux_final(
-        self, *, video: str, narration: str, music: str,
-        total_video: float, output_path: str,
-        bgm_volume: float, narration_volume: float, log_path: Path,
+        self,
+        *,
+        video: str,
+        narration: str,
+        music: str,
+        total_video: float,
+        output_path: str,
+        bgm_volume: float,
+        narration_volume: float,
+        log_path: Path,
     ) -> int:
         """Mux the concatenated video with narration + ducked music.
 
@@ -1088,14 +1132,24 @@ class FfmpegComposer:
         if len(audio_inputs) == 1:
             filt = f"{filt_parts[0]};[v1]anull[aout]"
         else:
-            filt = ";".join(filt_parts) + \
-                f";{''.join(labels)}amix=inputs={len(audio_inputs)}:duration=longest:normalize=0[aout]"
+            filt = (
+                ";".join(filt_parts)
+                + f";{''.join(labels)}amix=inputs={len(audio_inputs)}:duration=longest:normalize=0[aout]"
+            )
 
         cmd += [
-            "-filter_complex", filt,
-            "-map", "0:v", "-map", "[aout]",
-            "-c:v", "copy", "-c:a", "aac",
-            "-t", f"{total_video:.3f}",
+            "-filter_complex",
+            filt,
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-t",
+            f"{total_video:.3f}",
             output_path,
         ]
         return await self._run(cmd, log_path, stage="mux")
@@ -1118,5 +1172,3 @@ class FfmpegComposer:
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(stdout.decode(errors="replace"))
         return proc.returncode or 0
-
-

@@ -8,11 +8,9 @@ import or network is needed.
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,10 +18,13 @@ from metagpt.common.exception.media import (
     MediaGenerationError,
     PermanentMediaGenerationError,
 )
+from metagpt.executor.tasks.bggraph import END, START, BgGraph
+from metagpt.executor.tools.media_pipeline.creators import (
+    FfmpegComposer,
+    _summarize_poll_results,
+)
 from metagpt.executor.tools.media_pipeline.graph import build_media_pipeline_graph
-from metagpt.executor.tools.media_pipeline.creators import _summarize_poll_results, FfmpegComposer
 from metagpt.executor.tools.media_pipeline.nodes import (
-    _can_compose,
     _inject_image_refs,
     _ordered_local_paths,
     _parse_storyboard_response,
@@ -35,12 +36,12 @@ from metagpt.executor.tools.media_pipeline.nodes import (
 )
 from metagpt.executor.tools.media_pipeline.state import MediaPipelineState
 from metagpt.executor.tools.media_pipeline_tool import MediaPipeline
-from metagpt.executor.tasks.bggraph import START, END, BgGraph
 
 
 def _is_bg_task_result(obj) -> bool:
     """Duck-type check for BgTaskResult (avoids namespace-pkg isinstance mismatch)."""
     return type(obj).__name__ == "BgTaskResult" and hasattr(obj, "poll_factory")
+
 
 pytestmark = pytest.mark.asyncio
 
@@ -80,9 +81,16 @@ class TestGraphTopology:
         g = build_media_pipeline_graph()
         assert isinstance(g, BgGraph)
         expected_nodes = {
-            "storyboard", "template_init", "dispatch",
-            "image", "audio", "music",
-            "video", "duration_measure", "render_gate", "promo_render",
+            "storyboard",
+            "template_init",
+            "dispatch",
+            "image",
+            "audio",
+            "music",
+            "video",
+            "duration_measure",
+            "render_gate",
+            "promo_render",
         }
         assert set(g._nodes.keys()) == expected_nodes
 
@@ -193,9 +201,7 @@ class TestRouting:
             promo_dir=str(tmp_path),
             videos=[{"filename": "clip.mp4"}],
         )
-        state.video = {"results": [
-            {"status": "success", "filename": "clip.mp4", "local_path": str(clip)}
-        ]}
+        state.video = {"results": [{"status": "success", "filename": "clip.mp4", "local_path": str(clip)}]}
         assert _route_after_render_gate(state) == "render"
 
     def test_render_gate_route_done_clip_missing_on_disk(self, tmp_path):
@@ -204,9 +210,9 @@ class TestRouting:
             promo_dir=str(tmp_path),
             videos=[{"filename": "clip.mp4"}],
         )
-        state.video = {"results": [
-            {"status": "success", "filename": "clip.mp4", "local_path": str(tmp_path / "missing.mp4")}
-        ]}
+        state.video = {
+            "results": [{"status": "success", "filename": "clip.mp4", "local_path": str(tmp_path / "missing.mp4")}]
+        }
         # _ordered_local_paths returns the path; existence is checked at compose
         # time. Routing only needs a local_path to be present.
         assert _route_after_render_gate(state) == "render"
@@ -243,9 +249,7 @@ class TestSkipSemantics:
         """When all inputs are empty, every node short-circuits and graph completes."""
         g = build_media_pipeline_graph()
         executor = g.compile()
-        res = await executor(
-            prompt="", images=[], audios=[], musics=[], videos=[], promo={}, promo_dir=""
-        )
+        res = await executor(prompt="", images=[], audios=[], musics=[], videos=[], promo={}, promo_dir="")
         assert _is_bg_task_result(res)
         final = await res.poll_factory()
         # render_gate routes to done (END) since no promo_dir
@@ -257,9 +261,7 @@ class TestSkipSemantics:
         g = build_media_pipeline_graph()
         executor = g.compile()
         # All empty media — passes through storyboard with mode=empty, routes assets_only
-        res = await executor(
-            prompt="", images=[], audios=[], musics=[], videos=[], promo={}, promo_dir=""
-        )
+        res = await executor(prompt="", images=[], audios=[], musics=[], videos=[], promo={}, promo_dir="")
         final = await res.poll_factory()
         assert isinstance(final, dict)
 
@@ -414,18 +416,18 @@ class TestRenderGateAggregation:
 
     async def test_aggregates_artifacts_and_failures(self):
         state = MediaPipelineState()
-        state.video = {"results": [
-            {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
-            {"status": "failed", "filename": "sun.mp4", "error": "service failed"},
-        ]}
+        state.video = {
+            "results": [
+                {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
+                {"status": "failed", "filename": "sun.mp4", "error": "service failed"},
+            ]
+        }
         state.image = {"results": [{"status": "success", "filename": "i.png", "url": "u"}]}
         out = await self._run(state)
         assert out["gate"] == "reached"
         assert out["has_failures"] is True
         assert out["artifacts"]["videos"]["succeeded"] == ["/w/a.mp4"]
-        assert out["artifacts"]["videos"]["failed"] == [
-            {"filename": "sun.mp4", "error": "service failed"}
-        ]
+        assert out["artifacts"]["videos"]["failed"] == [{"filename": "sun.mp4", "error": "service failed"}]
         assert out["artifacts"]["images"]["succeeded"] == ["u"]
 
     async def test_not_composed_flag_without_promo(self):
@@ -441,9 +443,7 @@ class TestRenderGateAggregation:
             promo_dir=str(tmp_path),
             videos=[{"filename": "a.mp4"}],
         )
-        state.video = {"results": [
-            {"status": "success", "filename": "a.mp4", "local_path": str(clip)}
-        ]}
+        state.video = {"results": [{"status": "success", "filename": "a.mp4", "local_path": str(clip)}]}
         out = await self._run(state)
         assert out["final_video"] == "pending_compose"
         assert "note" not in out
@@ -464,6 +464,7 @@ class TestDurationWiring:
                 return "{}"
 
         import metagpt.executor.tools.media_pipeline.nodes as nodes_mod
+
         monkeypatch.setattr(nodes_mod, "LLM", lambda *a, **k: FakeLLM())
 
         state = MediaPipelineState(prompt="make a solar system video", duration=60)
@@ -481,6 +482,7 @@ class TestDurationWiring:
                 return "{}"
 
         import metagpt.executor.tools.media_pipeline.nodes as nodes_mod
+
         monkeypatch.setattr(nodes_mod, "LLM", lambda *a, **k: FakeLLM())
 
         state = MediaPipelineState(prompt="make a video", duration=0)
@@ -496,7 +498,8 @@ class TestDurationWiring:
         t = MediaPipeline()
         # Duration is accepted and threaded through without error.
         result = await t.call(
-            prompt="", duration=60,
+            prompt="",
+            duration=60,
             promo={"promo_dir": "/tmp", "width": 1920, "height": 1080},
         )
         assert _is_bg_task_result(result)
@@ -510,26 +513,32 @@ class TestDurationWiring:
 class TestOrderedLocalPaths:
     def test_orders_by_plan(self):
         plan = [{"filename": "b.mp4"}, {"filename": "a.mp4"}]
-        node_output = {"results": [
-            {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
-            {"status": "success", "filename": "b.mp4", "local_path": "/w/b.mp4"},
-        ]}
+        node_output = {
+            "results": [
+                {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
+                {"status": "success", "filename": "b.mp4", "local_path": "/w/b.mp4"},
+            ]
+        }
         assert _ordered_local_paths(plan, node_output) == ["/w/b.mp4", "/w/a.mp4"]
 
     def test_skips_failed_and_missing_path(self):
         plan = [{"filename": "a.mp4"}, {"filename": "b.mp4"}]
-        node_output = {"results": [
-            {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
-            {"status": "failed", "filename": "b.mp4", "error": "boom"},
-        ]}
+        node_output = {
+            "results": [
+                {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
+                {"status": "failed", "filename": "b.mp4", "error": "boom"},
+            ]
+        }
         assert _ordered_local_paths(plan, node_output) == ["/w/a.mp4"]
 
     def test_unmatched_success_appended(self):
         plan = [{"filename": "a.mp4"}]
-        node_output = {"results": [
-            {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
-            {"status": "success", "filename": "x.mp4", "local_path": "/w/x.mp4"},
-        ]}
+        node_output = {
+            "results": [
+                {"status": "success", "filename": "a.mp4", "local_path": "/w/a.mp4"},
+                {"status": "success", "filename": "x.mp4", "local_path": "/w/x.mp4"},
+            ]
+        }
         assert _ordered_local_paths(plan, node_output) == ["/w/a.mp4", "/w/x.mp4"]
 
     def test_none_output(self):
@@ -545,9 +554,11 @@ class TestOrderedLocalPaths:
             musics=[{"prompt": "epic", "filename": "bg.mp3", "duration": 60}],
         )
         # Engine stores the music node output under the node name ``music``.
-        state.music = {"results": [
-            {"status": "success", "filename": "bg.mp3", "local_path": "/w/bg.mp3"},
-        ]}
+        state.music = {
+            "results": [
+                {"status": "success", "filename": "bg.mp3", "local_path": "/w/bg.mp3"},
+            ]
+        }
         # Plan list is intact (not clobbered by the output dict).
         assert state.musics == [{"prompt": "epic", "filename": "bg.mp3", "duration": 60}]
         # promo_node's music resolution must not crash and orders by plan.
@@ -566,10 +577,17 @@ _needs_ffmpeg = pytest.mark.skipif(not _HAS_FFMPEG, reason="ffmpeg/ffprobe not i
 async def _make_test_clip(path, *, seconds: int, color: str = "blue") -> None:
     """Generate a tiny silent test video via ffmpeg lavfi."""
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"color=c={color}:s=320x240:d={seconds}:r=30",
-        "-pix_fmt", "yuv420p", str(path),
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c={color}:s=320x240:d={seconds}:r=30",
+        "-pix_fmt",
+        "yuv420p",
+        str(path),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
     await proc.communicate()
 
@@ -577,10 +595,15 @@ async def _make_test_clip(path, *, seconds: int, color: str = "blue") -> None:
 async def _make_test_audio(path, *, seconds: int, freq: int = 440) -> None:
     """Generate a tiny test audio (sine tone) via ffmpeg lavfi."""
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"sine=frequency={freq}:duration={seconds}",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency={freq}:duration={seconds}",
         str(path),
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
     await proc.communicate()
 
@@ -644,9 +667,7 @@ class TestFfmpegComposer:
             promo_dir=str(tmp_path),
             videos=[{"filename": "clip_a.mp4"}],
         )
-        state.video = {"results": [
-            {"status": "success", "filename": "clip_a.mp4", "local_path": str(c1)}
-        ]}
+        state.video = {"results": [{"status": "success", "filename": "clip_a.mp4", "local_path": str(c1)}]}
         stage = await promo_node(state)
         submit_result = await stage.submit
         assert submit_result["status"] == "running"
@@ -654,4 +675,3 @@ class TestFfmpegComposer:
         assert result["status"] == "success", result.get("error")
         expected = tmp_path / "promo-1920x1080.mp4"
         assert expected.exists() and expected.stat().st_size > 0
-

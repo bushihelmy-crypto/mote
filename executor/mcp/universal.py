@@ -4,11 +4,12 @@ from typing import Any, Dict, List
 
 from fastmcp import Client
 
-from metagpt.common.config.loader import load_config
 from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+from metagpt.common.config.loader import load_config
 from metagpt.common.exception import ToolNotFoundError
 from metagpt.common.logs import logger
 from metagpt.executor.mcp_adapter import MCPToolAdapter
+
 
 class MCPInitState(str, Enum):
     UNCONFIGURED = "unconfigured"
@@ -26,7 +27,9 @@ class UniversalMCP:
         self.initialization_errors: Dict[str, str] = {}
         self.state: MCPInitState = MCPInitState.UNCONFIGURED
 
-    async def initialize(self, server_names: List[str] | None = None, servers: List[MCPServerConfig] | None = None) -> None:
+    async def initialize(
+        self, server_names: List[str] | None = None, servers: List[MCPServerConfig] | None = None
+    ) -> None:
         """Connect to configured MCP servers and discover tools.
 
         Args:
@@ -80,7 +83,13 @@ class UniversalMCP:
                 logger.exception(f"Failed to initialize tools from {server_name}: {e}")
                 self.initialization_errors[server_name] = str(e)
 
-        self.state = MCPInitState.READY if self.tool_registry else MCPInitState.FAILED if self.initialization_errors else MCPInitState.UNCONFIGURED
+        self.state = (
+            MCPInitState.READY
+            if self.tool_registry
+            else MCPInitState.FAILED
+            if self.initialization_errors
+            else MCPInitState.UNCONFIGURED
+        )
 
     async def call_tool(self, tool_name: str, parameters: Dict[str, Any]) -> str:
         """Call a tool by name, return JSON string result."""
@@ -176,4 +185,14 @@ class UniversalMCP:
     def _build_client(self, server_config: MCPServerConfig) -> Client:
         if server_config.type == MCPTransportType.SSE:
             return Client(server_config.url)
-        return Client({"mcpServers": {server_config.name: {"command": server_config.command, "args": server_config.args or [], "env": server_config.env or {}}}})
+        return Client(
+            {
+                "mcpServers": {
+                    server_config.name: {
+                        "command": server_config.command,
+                        "args": server_config.args or [],
+                        "env": server_config.env or {},
+                    }
+                }
+            }
+        )

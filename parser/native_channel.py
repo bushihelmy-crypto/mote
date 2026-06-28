@@ -4,13 +4,17 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
+from metagpt.common.base.command_channel import (
+    CommandChannel,
+    _collect_media,
+    _media_message,
+)
+from metagpt.common.config.config.llm_config import LLMType
 from metagpt.common.logs import logger
-from metagpt.common.schema import AIMessage, ToolMessage
-from metagpt.common.base.command_channel import CommandChannel, _collect_media, _media_message
 from metagpt.common.prompt.output import NATIVE_COMMAND_GUIDE
 from metagpt.common.prompt.refs import Sym
+from metagpt.common.schema import AIMessage, ToolMessage
 from metagpt.parser.xml_channel import XmlCommandChannel
-from metagpt.common.config.config.llm_config import LLMType
 from metagpt.router.llm.llm_provider_registry import resolve_api_type
 
 if TYPE_CHECKING:
@@ -48,9 +52,7 @@ class NativeToolChannel(CommandChannel):
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return executor.get_native_tool_specs(provider=self._provider)
 
-    async def iter_commands(
-        self, think_engine: "BaseThinkEngine", valid_names: set[str]
-    ) -> AsyncGenerator[dict, None]:
+    async def iter_commands(self, think_engine: "BaseThinkEngine", valid_names: set[str]) -> AsyncGenerator[dict, None]:
         if not think_engine.done:
             await think_engine.join()
         for cmd in think_engine.result.tool_calls or []:
@@ -67,11 +69,7 @@ class NativeToolChannel(CommandChannel):
             }
 
     async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
-        tool_calls = [
-            {"id": e["id"], "name": e["name"], "args": e.get("args") or {}}
-            for e in executed
-            if e.get("id")
-        ]
+        tool_calls = [{"id": e["id"], "name": e["name"], "args": e.get("args") or {}} for e in executed if e.get("id")]
         await memory.add(AIMessage(content=command_rsp or "", tool_calls=tool_calls))
         for e in executed:
             if not e.get("id"):
@@ -83,8 +81,7 @@ class NativeToolChannel(CommandChannel):
 
     def turn_signature(self, think_engine: "BaseThinkEngine") -> str:
         calls = [
-            {"name": c["command_name"], "args": c.get("args") or {}}
-            for c in (think_engine.result.tool_calls or [])
+            {"name": c["command_name"], "args": c.get("args") or {}} for c in (think_engine.result.tool_calls or [])
         ]
         return json.dumps(calls, sort_keys=True, ensure_ascii=False)
 

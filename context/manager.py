@@ -32,18 +32,23 @@ the other way around.
 
 from __future__ import annotations
 
-from metagpt.common.schema import AutocompactResult, ContextManagerConfig, MicrocompactResult
+import metagpt.context.token_budget as token_budget
 from metagpt.common.events import (
     CompactionCheckpointEvent,
     MessageAppendedEvent,
-    PreCompactEvent,
     PostCompactEvent,
+    PreCompactEvent,
 )
-import metagpt.context.token_budget as token_budget
+from metagpt.common.logs import log_class
+from metagpt.common.schema import (
+    AutocompactResult,
+    ContextManagerConfig,
+    LLMCallContext,
+    Message,
+    UserMessage,
+)
 from metagpt.context.autocompact import autocompact
 from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
-from metagpt.common.logs import log_class
-from metagpt.common.schema import LLMCallContext, Message, UserMessage
 
 
 @log_class(
@@ -219,15 +224,11 @@ class ContextManager:
                 # history as a replay checkpoint (Codex style) so resume starts
                 # from the latest compaction rather than replaying everything.
                 await self._bus.emit(
-                    CompactionCheckpointEvent(
-                        messages=list(result.messages), summary=result.summary or ""
-                    )
+                    CompactionCheckpointEvent(messages=list(result.messages), summary=result.summary or "")
                 )
                 # PostCompact event: notify that a compaction just happened
                 # (carries the summary). Best-effort; outcome is advisory.
-                await self._bus.emit(
-                    PostCompactEvent(trigger="auto", summary=result.summary or "")
-                )
+                await self._bus.emit(PostCompactEvent(trigger="auto", summary=result.summary or ""))
 
         return changed
 
@@ -243,9 +244,7 @@ class ContextManager:
     # Request assembly (history + the current user prompt)
     # ------------------------------------------------------------------
 
-    async def prepare_request(
-        self, user_prompt: str | Message | None = None, *, manage: bool = True
-    ) -> list[Message]:
+    async def prepare_request(self, user_prompt: str | Message | None = None, *, manage: bool = True) -> list[Message]:
         """Build the ``req`` the think step sends: managed history + user prompt.
 
         Runs history-level management first (unless ``manage=False``), then
@@ -259,7 +258,5 @@ class ContextManager:
 
         req: list[Message] = list(self._context.messages)
         if user_prompt is not None:
-            req.append(
-                user_prompt if isinstance(user_prompt, Message) else UserMessage(content=user_prompt)
-            )
+            req.append(user_prompt if isinstance(user_prompt, Message) else UserMessage(content=user_prompt))
         return req

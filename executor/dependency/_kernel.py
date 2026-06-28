@@ -229,9 +229,7 @@ class KernelSession:
             return True
         return False
 
-    async def _drain(
-        self, msg_id: str, parts: list[str], deadline: float
-    ) -> bool:
+    async def _drain(self, msg_id: str, parts: list[str], deadline: float) -> bool:
         """Drain iopub messages for *msg_id* until idle or *deadline*.
 
         Returns True if idle was reached, False on timeout.
@@ -327,11 +325,8 @@ class KernelSession:
             stop = text.find(end)
             if start == -1 or stop == -1 or stop < start:
                 return None
-            payload = json.loads(text[start + len(begin):stop])
-            env = {
-                str(k): str(v)
-                for k, v in dict(payload.get("env", {})).items()
-            }
+            payload = json.loads(text[start + len(begin) : stop])
+            env = {str(k): str(v) for k, v in dict(payload.get("env", {})).items()}
             return (str(payload.get("cwd", "")), env)
         except Exception as exc:  # noqa: BLE001 — capture is best-effort
             logger.debug(f"Kernel: env capture/parse failed: {exc}")
@@ -355,16 +350,10 @@ class KernelSession:
                 continue
             if self._baseline_env.get(key) != value:
                 diff[key] = value
-        unset = [
-            key
-            for key in self._baseline_env
-            if key not in env and key not in _ENV_NOISE_KEYS
-        ]
+        unset = [key for key in self._baseline_env if key not in env and key not in _ENV_NOISE_KEYS]
         return (cwd, diff, unset)
 
-    async def restore_state(
-        self, cwd: str, env: dict[str, str], unset: list[str]
-    ) -> None:
+    async def restore_state(self, cwd: str, env: dict[str, str], unset: list[str]) -> None:
         """Re-seed a fresh kernel to a saved ``(cwd, env, unset)`` state.
 
         Injects ``os.chdir`` + ``os.environ.update`` + ``pop`` as one
@@ -375,11 +364,7 @@ class KernelSession:
         Python namespace. Best-effort: never raises.
         """
         try:
-            env = {
-                k: v
-                for k, v in env.items()
-                if k not in _ENV_NOISE_KEYS and k.isidentifier()
-            }
+            env = {k: v for k, v in env.items() if k not in _ENV_NOISE_KEYS and k.isidentifier()}
             unset = [k for k in unset if k.isidentifier() and k not in _ENV_NOISE_KEYS]
             lines: list[str] = []
             if cwd:
@@ -387,9 +372,7 @@ class KernelSession:
             if env:
                 lines.append(f"__import__('os').environ.update({env!r})")
             if unset:
-                lines.append(
-                    f"[__import__('os').environ.pop(_k, None) for _k in {unset!r}]"
-                )
+                lines.append(f"[__import__('os').environ.pop(_k, None) for _k in {unset!r}]")
             if not lines:
                 return
             await self._run_internal("\n".join(lines), _PROBE_TIMEOUT_S)

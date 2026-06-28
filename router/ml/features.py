@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
+
 from metagpt.router.ml.trajectory import Trajectory, classify
 
 # ---------------------------------------------------------------------------
@@ -32,13 +33,12 @@ _YAML_RE = re.compile(r"^[\w_]+:\s+\S", re.MULTILINE)
 _CSV_RE = re.compile(r"^[^,\n]+,[^,\n]+,[^,\n]+", re.MULTILINE)
 _TABLE_RE = re.compile(r"\|.*\|.*\|")
 _FILE_PATH_RE = re.compile(
-    r"(?:^|[\s\"'`(])([a-zA-Z_][\w.-]*/[\w./-]+\.[\w]+)", re.MULTILINE,
+    r"(?:^|[\s\"'`(])([a-zA-Z_][\w.-]*/[\w./-]+\.[\w]+)",
+    re.MULTILINE,
 )
 _URL_RE = re.compile(r"https?://\S+")
 _LOG_RE = re.compile(
-    r"(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}.*\n){3,}"
-    r"|"
-    r"(^\[?(INFO|WARN|ERROR|DEBUG)\]?\s.*\n){3,}",
+    r"(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}.*\n){3,}" r"|" r"(^\[?(INFO|WARN|ERROR|DEBUG)\]?\s.*\n){3,}",
     re.MULTILINE,
 )
 _SHELL_RE = re.compile(r"^\$\s+\w|^>\s+\w|```(?:bash|sh|shell)", re.MULTILINE)
@@ -46,34 +46,66 @@ _TRACEBACK_RE = re.compile(r"Traceback \(most recent|stderr:|\.py\", line \d+")
 _BULLET_RE = re.compile(r"^[\s]*[-*]\s", re.MULTILINE)
 _NUMBERED_RE = re.compile(r"^[\s]*\d+[.)]\s", re.MULTILINE)
 
-_DEBUG_KW = ["error", "bug", "exception", "traceback", "failed", "root cause",
-             "报错", "根因", "修复", "stack trace", "debug"]
-_RESEARCH_KW = ["调研", "research", "对比", "compare", "survey", "分析报告",
-                "competitive analysis", "综述"]
-_ARCH_KW = ["architecture", "架构", "重构", "refactor", "monorepo", "codebase",
-            "module", "dependency"]
+_DEBUG_KW = ["error", "bug", "exception", "traceback", "failed", "root cause", "报错", "根因", "修复", "stack trace", "debug"]
+_RESEARCH_KW = ["调研", "research", "对比", "compare", "survey", "分析报告", "competitive analysis", "综述"]
+_ARCH_KW = ["architecture", "架构", "重构", "refactor", "monorepo", "codebase", "module", "dependency"]
 _COMPARE_KW = ["对比", "compare", "audit", "审计", "review", "评估"]
-_PLANNING_KW = ["plan", "规划", "roadmap", "设计方案", "workflow", "pipeline",
-                "步骤", "step by step"]
-_STRICT_FMT_KW = ["JSON", "YAML", "CSV", "schema", "只返回", "不要解释",
-                  "按格式", "only return", "no explanation"]
-_HIGH_RISK_KW = ["deploy", "rollback", "migration", "delete", "overwrite",
-                 "production", "生产", "部署", "删除", "客户", "法务", "财务"]
+_PLANNING_KW = ["plan", "规划", "roadmap", "设计方案", "workflow", "pipeline", "步骤", "step by step"]
+_STRICT_FMT_KW = ["JSON", "YAML", "CSV", "schema", "只返回", "不要解释", "按格式", "only return", "no explanation"]
+_HIGH_RISK_KW = [
+    "deploy",
+    "rollback",
+    "migration",
+    "delete",
+    "overwrite",
+    "production",
+    "生产",
+    "部署",
+    "删除",
+    "客户",
+    "法务",
+    "财务",
+]
 _PRODUCTION_KW = ["production", "生产", "prod", "线上", "正式环境"]
 _CUSTOMER_KW = ["customer", "客户", "用户邮件", "client"]
-_DELETE_KW = ["delete", "remove", "drop", "truncate", "删除", "清空", "覆盖",
-              "overwrite"]
+_DELETE_KW = ["delete", "remove", "drop", "truncate", "删除", "清空", "覆盖", "overwrite"]
 _FORMAL_KW = ["formal", "正式", "official", "公文", "合同", "法律"]
-_CONSTRAINT_KW = ["必须", "不能", "不要", "只能", "must", "shall",
-                  "required", "forbidden", "不允许", "至少", "最多"]
+_CONSTRAINT_KW = ["必须", "不能", "不要", "只能", "must", "shall", "required", "forbidden", "不允许", "至少", "最多"]
 
 # R1-specific keyword lists
-_TEACHING_KW = ["how does", "explain", "what is", "why does", "how to",
-                "教我", "解释", "为什么", "怎么", "是什么", "how can",
-                "tell me about", "walk me through", "介绍", "说明"]
-_IMPLEMENT_KW = ["implement", "write function", "write a", "create a",
-                 "写个", "实现", "用法", "帮我写", "生成代码", "add a",
-                 "build a", "make a", "写一个", "编写"]
+_TEACHING_KW = [
+    "how does",
+    "explain",
+    "what is",
+    "why does",
+    "how to",
+    "教我",
+    "解释",
+    "为什么",
+    "怎么",
+    "是什么",
+    "how can",
+    "tell me about",
+    "walk me through",
+    "介绍",
+    "说明",
+]
+_IMPLEMENT_KW = [
+    "implement",
+    "write function",
+    "write a",
+    "create a",
+    "写个",
+    "实现",
+    "用法",
+    "帮我写",
+    "生成代码",
+    "add a",
+    "build a",
+    "make a",
+    "写一个",
+    "编写",
+]
 
 
 def _char_type_ratios(text: str) -> tuple[float, float, float]:
@@ -120,8 +152,9 @@ def extract_hist_features(
       [6] dominant_route   [7] switches
       [8..15] trajectory one-hot (8 Trajectory enum values)
     """
-    assert len(Trajectory) <= _HIST_ONEHOT_SLOTS, \
-        f"Trajectory enum has {len(Trajectory)} members but only {_HIST_ONEHOT_SLOTS} one-hot slots"
+    assert (
+        len(Trajectory) <= _HIST_ONEHOT_SLOTS
+    ), f"Trajectory enum has {len(Trajectory)} members but only {_HIST_ONEHOT_SLOTS} one-hot slots"
 
     vec = np.zeros(HIST_DIMS, dtype=np.float32)
 
@@ -165,6 +198,7 @@ def extract_hist_features(
 @dataclass
 class ContextMetadata:
     """Session and tool context for context-aware routing."""
+
     turn_index: int = 0
     context_tokens_est: int = 0
     n_tools: int = 0
@@ -213,7 +247,7 @@ def extract_context_features(ctx: ContextMetadata | None) -> np.ndarray:
     feats[7] = float(ctx.has_tool_results)
 
     # Derived signals
-    feats[8] = float(ctx.turn_index >= 4)   # is_deep_conversation
+    feats[8] = float(ctx.turn_index >= 4)  # is_deep_conversation
     feats[9] = float(ctx.context_tokens_est > 2000)  # is_heavy_context
 
     return feats
@@ -305,8 +339,7 @@ def extract_handcrafted(text: str) -> np.ndarray:
     feats[48] = 1.0 if 200 <= text_len <= 1000 else 0.0
     feats[49] = 1.0 if text_len > 1000 else 0.0
     # Low keyword density (50): total keyword signals < 2
-    total_kw = (feats[22] + feats[23] + feats[24] + feats[25]
-                + feats[26] + feats[27] + feats[28])
+    total_kw = feats[22] + feats[23] + feats[24] + feats[25] + feats[26] + feats[27] + feats[28]
     feats[50] = 1.0 if total_kw < 2 else 0.0
 
     return feats

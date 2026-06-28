@@ -69,9 +69,7 @@ class JsonRpcEndpoint:
         req_id = self._next_id
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._pending[req_id] = future
-        self._write_message(
-            {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
-        )
+        self._write_message({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         finally:
@@ -172,7 +170,7 @@ def _parse_content_length(header: bytes) -> Optional[int]:
     for line in header.split(b"\r\n"):
         if line.startswith(_CONTENT_LENGTH):
             try:
-                return int(line[len(_CONTENT_LENGTH):].strip())
+                return int(line[len(_CONTENT_LENGTH) :].strip())
             except ValueError:
                 return None
     return None

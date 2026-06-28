@@ -32,9 +32,22 @@ from typing import Callable, Optional
 
 from metagpt.common.logs import logger
 from metagpt.sandbox.backend import NullBackend, SandboxBackend, SandboxPolicy
+from metagpt.sandbox.bwrap import BwrapBackend
 from metagpt.sandbox.detect import detect_backend
 from metagpt.sandbox.hardening import harden_env, hardening_prelude
+from metagpt.sandbox.network.enforce import (
+    TUN_DEVICE,
+    build_inner_prelude,
+    enforcement_available,
+    proxy_url_in_netns,
+)
 from metagpt.sandbox.network.netns import block_all_network_env, inject_proxy_env
+from metagpt.sandbox.network.orchestrator import (
+    build_inner_argv,
+    encode_config,
+    launcher_argv,
+    launcher_command,
+)
 from metagpt.sandbox.network.policy import NetworkPolicy
 from metagpt.sandbox.network.proxy import EgressProxy
 from metagpt.sandbox.resources import (
@@ -46,15 +59,6 @@ from metagpt.sandbox.resources import (
 )
 from metagpt.sandbox.seccomp import build_hardening_filter, seccomp_available
 from metagpt.sandbox.violations import SandboxViolation, parse_violations
-from metagpt.sandbox.network.enforce import build_inner_prelude
-from metagpt.sandbox.network.orchestrator import build_inner_argv
-from metagpt.sandbox.network.orchestrator import encode_config
-from metagpt.sandbox.bwrap import BwrapBackend
-from metagpt.sandbox.network.enforce import TUN_DEVICE
-from metagpt.sandbox.network.orchestrator import launcher_command
-from metagpt.sandbox.network.orchestrator import launcher_argv
-from metagpt.sandbox.network.enforce import enforcement_available
-from metagpt.sandbox.network.enforce import proxy_url_in_netns
 
 # The shell used to run the hardening prelude + inner command inside the sandbox.
 _INNER_SHELL = "/bin/sh"
@@ -147,7 +151,6 @@ class SandboxRuntime:
 
         resolved = detect_backend(self._requested_backend)
         if resolved == "bwrap":
-
             backend = BwrapBackend()
             if backend.available:
                 self._backend = backend
@@ -199,7 +202,6 @@ class SandboxRuntime:
             # a bwrap backend to host it, and the slirp/nft toolchain exists.
             # Otherwise stay on env-var proxy injection (P1 behaviour).
             if self._network_enforcement and not isinstance(self._backend, NullBackend):
-
                 self._netns_egress = enforcement_available()
 
     def _handle_unavailable(self, name: str) -> None:
@@ -228,9 +230,7 @@ class SandboxRuntime:
 
     # --- command wrapping --------------------------------------------------
 
-    def _policy_for(
-        self, cwd: Optional[str], *, extra_writable: Optional[list[str]] = None
-    ) -> SandboxPolicy:
+    def _policy_for(self, cwd: Optional[str], *, extra_writable: Optional[list[str]] = None) -> SandboxPolicy:
         """Build the policy for this call (from the provider, or a cwd-only default)."""
         if self._policy_provider is not None:
             policy = self._policy_provider()
@@ -255,7 +255,6 @@ class SandboxRuntime:
         # inner process must be userns-root with CAP_NET_ADMIN to bring up lo +
         # install the nft lock, and needs /dev/net/tun for slirp4netns.
         if self._netns_egress:
-
             policy.unshare_net = True
             policy.uid_root = True
             policy.cap_net_admin = True
@@ -355,17 +354,13 @@ class SandboxRuntime:
             seccomp_fd=_SECCOMP_FD if self._seccomp_bpf_path is not None else None,
         )
 
-    def _build_netns_launcher_command(
-        self, payload_argv: list[str], cwd: Optional[str]
-    ) -> Optional[str]:
+    def _build_netns_launcher_command(self, payload_argv: list[str], cwd: Optional[str]) -> Optional[str]:
         """Return the launcher *shell string* for ``wrap_command`` (or None)."""
         try:
-
             bwrap_argv = self._build_netns_bwrap_argv(payload_argv, cwd)
             return launcher_command(self._netns_config_token(bwrap_argv))
         except Exception as exc:  # noqa: BLE001 — never break the command path
-            logger.warning(f"SandboxRuntime: netns launcher build failed ({exc}); "
-                           "falling back to direct bwrap")
+            logger.warning(f"SandboxRuntime: netns launcher build failed ({exc}); " "falling back to direct bwrap")
             return None
 
     def _build_netns_launcher_argv(
@@ -376,12 +371,10 @@ class SandboxRuntime:
     ) -> Optional[list[str]]:
         """Return the launcher *argv* for ``wrap_exec`` (or None)."""
         try:
-
             bwrap_argv = self._build_netns_bwrap_argv(payload_argv, cwd, extra_writable)
             return launcher_argv(self._netns_config_token(bwrap_argv))
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"SandboxRuntime: netns launcher build failed ({exc}); "
-                           "falling back to direct bwrap")
+            logger.warning(f"SandboxRuntime: netns launcher build failed ({exc}); " "falling back to direct bwrap")
             return None
 
     # --- cgroup resource limits --------------------------------------------
@@ -569,11 +562,7 @@ class SandboxRuntime:
             and not isinstance(self._backend, NullBackend)
         )
         if rlimit or seccomp_redirect:
-            redirect = (
-                f" {policy.seccomp_fd}<{shlex.quote(self._seccomp_bpf_path)}"
-                if seccomp_redirect
-                else ""
-            )
+            redirect = f" {policy.seccomp_fd}<{shlex.quote(self._seccomp_bpf_path)}" if seccomp_redirect else ""
             prefix = f"{rlimit}; " if rlimit else ""
             shim = f'{prefix}exec "$@"{redirect}'
             wrapped = [_INNER_SHELL, "-c", shim, "sbx", *wrapped]

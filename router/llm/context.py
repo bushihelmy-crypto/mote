@@ -11,12 +11,15 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.common.config.loader import load_config
 from metagpt.common.config.meta_config import Config
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.router.cost import CostTracker, PricingMode
 from metagpt.router.llm.base_llm import BaseLLM
-from metagpt.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
+from metagpt.router.llm.llm_provider_registry import (
+    create_llm_instance,
+    resolve_api_type,
+)
 
 
 class Context(BaseModel):

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-from typing import Awaitable, Callable, Optional, Tuple, TypeVar
+from typing import Callable, Optional, Tuple, TypeVar
 
 from metagpt.common.logs import logger
 

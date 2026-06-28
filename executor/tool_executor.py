@@ -20,7 +20,12 @@ import inspect
 import uuid
 from typing import Any, Callable, Mapping
 
-from metagpt.common.events import FileMutatedEvent, PostToolUseEvent, PreToolUseEvent, span
+from metagpt.common.events import (
+    FileMutatedEvent,
+    PostToolUseEvent,
+    PreToolUseEvent,
+    span,
+)
 from metagpt.common.exception import (
     ErrorReport,
     RecoveryAction,
@@ -31,18 +36,22 @@ from metagpt.common.exception import (
     ToolValidationError,
     render_error_block,
 )
-from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, ToolResultLimitConfig
+from metagpt.common.logs import log_class, logger
+from metagpt.common.schema import (
+    DEFAULT_MAX_RESULT_SIZE_CHARS,
+    PermissionConfig,
+    ToolResultLimitConfig,
+)
 from metagpt.executor import tool_result_limit
 from metagpt.executor.base_executor import BaseToolExecutor
+from metagpt.executor.mcp.universal import UniversalMCP
+from metagpt.executor.mcp_adapter import MCPToolAdapter
 from metagpt.executor.permission import PermissionEngine, RuleStore
 from metagpt.executor.permission.sandbox import SandboxGuard
-from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.tool_registry import registry as tool_registry
-from metagpt.common.logs import log_class, logger
-from metagpt.executor.mcp.universal import UniversalMCP
-from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
 from metagpt.executor.tasks.bggraph.marker import is_pipeline_tool
-from metagpt.executor.mcp_adapter import MCPToolAdapter
+from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
+from metagpt.executor.tool_registry import registry as tool_registry
+from metagpt.executor.tool_result import ToolError, ToolResult
 from metagpt.executor.tool_spec_adapter import to_native_tool_specs
 
 # Signature params that are framework plumbing, never LLM-facing arguments.
@@ -269,9 +278,7 @@ class ToolExecutor(BaseToolExecutor):
         tool = self._get_tool(name)
         if tool is None:
             available = list(self._tools.keys())
-            return _failed_result(
-                ToolNotFoundError(f"unknown tool '{name}'. Available: {available}")
-            )
+            return _failed_result(ToolNotFoundError(f"unknown tool '{name}'. Available: {available}"))
 
         args = kwargs or {}
 
@@ -282,9 +289,7 @@ class ToolExecutor(BaseToolExecutor):
             # via deny-wins: a hook block returns immediately; a hook allow never
             # overrides an engine deny (the engine still runs below).
             if self._bus is not None:
-                outcome = await self._bus.emit(
-                    PreToolUseEvent(tool_name=name, tool_input=args, tool_use_id=result_id)
-                )
+                outcome = await self._bus.emit(PreToolUseEvent(tool_name=name, tool_input=args, tool_use_id=result_id))
                 if outcome.updated_args is not None:
                     args = outcome.updated_args
                 if outcome.behavior == "deny" or outcome.stop:
@@ -407,7 +412,9 @@ class ToolExecutor(BaseToolExecutor):
                 if outcome.is_blocking:
                     reason = outcome.system_message or outcome.stop_reason or "blocked by PostToolUse hook"
                     result.success = False
-                    result.output = f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
+                    result.output = (
+                        f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
+                    )
 
             # After-edit notification: a successful filesystem-mutating tool
             # emits a FileMutatedEvent carrying the written path, so any
@@ -543,7 +550,6 @@ class ToolExecutor(BaseToolExecutor):
         NOT used by the XML path — it exists for the native tool-use channel.
         """
 
-
         native: dict[str, dict] = {}
         seen_ids: set[int] = set()
         for tool in self._tools.values():
@@ -553,8 +559,6 @@ class ToolExecutor(BaseToolExecutor):
             schema = tool.native_schema()
             native[schema["name"]] = schema
         return to_native_tool_specs(native, provider=provider)
-
-
 
     # ------------------------------------------------------------------
     # MCP lifecycle

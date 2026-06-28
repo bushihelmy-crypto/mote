@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Type
 if TYPE_CHECKING:
     from metagpt.common.utils.action_node import ActionNode
 
-from metagpt.memory.procedural_memory.serializers.simple import SimpleSerializer
 from metagpt.common.utils.action_node import ActionNode
+from metagpt.memory.procedural_memory.serializers.simple import SimpleSerializer
 
 
 class ActionNodeSerializer(SimpleSerializer):
@@ -28,7 +28,6 @@ class ActionNodeSerializer(SimpleSerializer):
 
             def model_dump_json(self):
                 return self.json_data
-
 
         action_node = ActionNode(key="", expected_type=Type[str], instruction="", example="")
         action_node.instruct_content = InstructContent(resp)

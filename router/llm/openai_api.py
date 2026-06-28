@@ -33,27 +33,27 @@ from tenacity import (
 )
 
 from metagpt.common.config.config.llm_config import LLMConfig, LLMType
+from metagpt.common.const import USE_CONFIG_TIMEOUT
+from metagpt.common.events import log_llm_stream
 from metagpt.common.exception import (
     LLMEmptyResponseError,
     LLMResponseParseError,
     classify_llm_error,
     is_retryable,
 )
-from metagpt.common.const import USE_CONFIG_TIMEOUT
-from metagpt.common.events import log_llm_stream
 from metagpt.common.logs import logger
-from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
-from metagpt.router.llm.credentials import CredentialRotationMixin
-from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
-from metagpt.router.llm.llm_provider_registry import register_provider
 from metagpt.common.utils.common import CodeParser, decode_image, log_and_reraise
 from metagpt.common.utils.exceptions import handle_exception
-from metagpt.router.cost import CostTracker
 from metagpt.common.utils.token_counter import (
     count_message_tokens,
     count_string_tokens,
     get_max_completion_tokens,
 )
+from metagpt.router.cost import CostTracker
+from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
+from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
+from metagpt.router.llm.credentials import CredentialRotationMixin
+from metagpt.router.llm.llm_provider_registry import register_provider
 
 # Models that reject standard chat params. Keyed by model name → the set of
 # request kwargs to drop. Data-driven so adding a model is a table edit, not a
@@ -277,7 +277,9 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
     ) -> ChatCompletion:
         kwargs = self._cons_kwargs(messages, timeout=self.get_timeout(timeout), **chat_configs)
         rsp: ChatCompletion = await self._acreate(**kwargs)
-        if raise_if_empty and (not rsp or not rsp.choices or not "".join([i.message.content or "" for i in rsp.choices])):
+        if raise_if_empty and (
+            not rsp or not rsp.choices or not "".join([i.message.content or "" for i in rsp.choices])
+        ):
             raise LLMEmptyResponseError("The LLM's response is empty.")
         self._update_costs(rsp.usage)
         return rsp
@@ -343,7 +345,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         code_pattern = r'(["\'`]{3}|["\'`])([\s\S]*?)\1'
         try:
             code_value = re.findall(code_pattern, arguments)[-1][-1]
-        except Exception as e:
+        except Exception:
             code_value = None
 
         if code_value is None:
@@ -368,7 +370,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
             # reponse is code
             try:
                 return json.loads(message.tool_calls[0].function.arguments, strict=False)
-            except json.decoder.JSONDecodeError as e:
+            except json.decoder.JSONDecodeError:
                 return self._parse_arguments(message.tool_calls[0].function.arguments)
         elif message.tool_calls is None and message.content is not None:
             # reponse is code, fix openai tools_call respond bug,

@@ -99,9 +99,7 @@ class OAuthProviderConfig(YamlModel):
     headers_extra: Dict[str, str] = Field(
         default_factory=dict, description="Extra HTTP headers merged into the LLM client's default_headers."
     )
-    expiry_buffer_s: int = Field(
-        default=300, description="Proactively refresh this many seconds before token expiry."
-    )
+    expiry_buffer_s: int = Field(default=300, description="Proactively refresh this many seconds before token expiry.")
 
     # Test hook: name of an env var that, when set, overrides ``token_url``.
     token_url_env_override: Optional[str] = Field(
@@ -124,9 +122,7 @@ class OAuthProviderConfig(YamlModel):
     def _require_token_url(self):
         """A token endpoint must be resolvable (set directly or via preset)."""
         if not self.token_url:
-            raise ValueError(
-                "OAuth config needs a 'token_url' (set it directly or use a known 'provider' preset)."
-            )
+            raise ValueError("OAuth config needs a 'token_url' (set it directly or use a known 'provider' preset).")
         return self
 
     def resolved_token_url(self) -> str:

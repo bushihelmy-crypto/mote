@@ -180,9 +180,7 @@ class TerminalSession:
         self.mark = f"__TERM_{self.nonce}__"
         # Matches the PROMPT_COMMAND marker line: optional leading CR/LF, the mark,
         # a (possibly negative) exit code, __END, optional trailing CR/LF.
-        self._marker_re = re.compile(
-            rf"\r?\n?{re.escape(self.mark)}(-?\d+)__END\r?\n?".encode()
-        )
+        self._marker_re = re.compile(rf"\r?\n?{re.escape(self.mark)}(-?\d+)__END\r?\n?".encode())
 
         self._buffer = HeadTailBuffer()
         # Rolling raw tail for marker detection (the marker is short and arrives at
@@ -238,17 +236,12 @@ class TerminalSession:
 
         loop = asyncio.get_event_loop()
         master_file = os.fdopen(master_fd, "rb", buffering=0)
-        self._transport, _ = await loop.connect_read_pipe(
-            lambda: _ReaderProtocol(self), master_file
-        )
+        self._transport, _ = await loop.connect_read_pipe(lambda: _ReaderProtocol(self), master_file)
         self._wait_task = asyncio.ensure_future(self._wait_exit())
 
         # Install the sentinel prompt and consume the shell's startup banner +
         # the first marker, so the session is "ready" at a known prompt.
-        setup = (
-            f"PS1=''; PS2=''; "
-            f"PROMPT_COMMAND='printf \"\\n{self.mark}%d__END\\n\" \"$?\"'\n"
-        )
+        setup = f"PS1=''; PS2=''; " f'PROMPT_COMMAND=\'printf "\\n{self.mark}%d__END\\n" "$?"\'\n'
         os.write(master_fd, setup.encode())
         loop_time = loop.time()
         await self.collect(loop_time + _READY_TIMEOUT_S)
@@ -381,10 +374,7 @@ class TerminalSession:
             probe_nonce = uuid.uuid4().hex[:12]
             begin = f"__ENVPROBE_{probe_nonce}__"
             end = f"__ENVPROBE_END_{probe_nonce}__"
-            probe = (
-                f"printf '\\n{begin}\\n'; pwd; printf '\\037'; env; "
-                f"printf '\\n{end}\\n'"
-            )
+            probe = f"printf '\\n{begin}\\n'; pwd; printf '\\037'; env; " f"printf '\\n{end}\\n'"
             text, _exit, at_prompt, closed = await self.feed(probe, _PROBE_YIELD_MS)
             if closed or not at_prompt:
                 return None
@@ -392,12 +382,12 @@ class TerminalSession:
             stop = text.find(end)
             if start == -1 or stop == -1 or stop < start:
                 return None
-            body = text[start + len(begin):stop]
+            body = text[start + len(begin) : stop]
             sep = body.find("\037")
             if sep == -1:
                 return None
             cwd = body[:sep].strip()
-            env_block = body[sep + 1:]
+            env_block = body[sep + 1 :]
             env: dict[str, str] = {}
             for line in env_block.split("\n"):
                 if "=" not in line:
@@ -430,16 +420,10 @@ class TerminalSession:
                 continue
             if self._baseline_env.get(key) != value:
                 diff[key] = value
-        unset = [
-            key
-            for key in self._baseline_env
-            if key not in env and key not in _ENV_NOISE_KEYS
-        ]
+        unset = [key for key in self._baseline_env if key not in env and key not in _ENV_NOISE_KEYS]
         return (cwd, diff, unset)
 
-    async def restore_state(
-        self, cwd: str, env: dict[str, str], unset: list[str]
-    ) -> None:
+    async def restore_state(self, cwd: str, env: dict[str, str], unset: list[str]) -> None:
         """Re-seed a fresh shell to a saved ``(cwd, env, unset)`` state.
 
         Issues ``cd``, ``export``, and ``unset`` as a single fed command and

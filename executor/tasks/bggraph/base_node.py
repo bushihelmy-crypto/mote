@@ -17,7 +17,6 @@ from metagpt.common.utils.docstring import first_line, parse_section
 from metagpt.executor.tasks.bggraph.types import GraphState, Stage
 from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
 
-
 # ---------------------------------------------------------------------------
 # Param source marker
 # ---------------------------------------------------------------------------

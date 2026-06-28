@@ -11,7 +11,11 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from metagpt.common.exception.base import MetaGPTError, NonRetryableError, RetryableError
+from metagpt.common.exception.base import (
+    MetaGPTError,
+    NonRetryableError,
+    RetryableError,
+)
 from metagpt.common.exception.codes import ErrorCode
 from metagpt.common.exception.report import ErrorReport
 
@@ -60,10 +64,7 @@ class GraphBatchFailureError(GraphError):
         """
 
         return {
-            "failures": [
-                {"node": node, **ErrorReport.from_exception(exc).as_dict()}
-                for node, exc in self.failures
-            ]
+            "failures": [{"node": node, **ErrorReport.from_exception(exc).as_dict()} for node, exc in self.failures]
         }
 
 

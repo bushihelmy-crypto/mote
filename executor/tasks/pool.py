@@ -33,18 +33,31 @@ from metagpt.executor.tasks.types import (
 if TYPE_CHECKING:
     from metagpt.common.interface import MessageSink
     from metagpt.executor.tasks.disk_output import TaskOutputStore
+
 from metagpt.common.const.tasks import (
-    MAX_RESULT_LEN as _MAX_RESULT_LEN,
-    DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT,
-    DEFAULT_WAIT_COMPLETION_TIMEOUT as _DEFAULT_WAIT_COMPLETION_TIMEOUT,
     DEFAULT_MAX_CONCURRENCY as _DEFAULT_MAX_CONCURRENCY,
+)
+from metagpt.common.const.tasks import DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT
+from metagpt.common.const.tasks import (
+    DEFAULT_WAIT_COMPLETION_TIMEOUT as _DEFAULT_WAIT_COMPLETION_TIMEOUT,
+)
+from metagpt.common.const.tasks import MAX_RESULT_LEN as _MAX_RESULT_LEN
+from metagpt.common.const.tasks import (
     MAX_TASK_OUTPUT_BYTES_DISPLAY as _OUTPUT_CAP_DISPLAY,
 )
-from metagpt.common.events import set_bus
-from metagpt.executor.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
-from metagpt.common.exception import BackgroundTaskCancelledError, BackgroundTaskTimeoutError, ErrorReport, render_error_block
+from metagpt.common.events import current_bus, set_bus
+from metagpt.common.exception import (
+    BackgroundTaskCancelledError,
+    BackgroundTaskTimeoutError,
+    ErrorReport,
+    render_error_block,
+)
+from metagpt.executor.tasks.bggraph.report import (
+    make_progress_writer,
+    reset_progress_writer,
+    set_progress_writer,
+)
 from metagpt.executor.tasks.bggraph.types import LlmPauseResult
-from metagpt.common.events import current_bus
 
 
 @log_class(
@@ -177,9 +190,7 @@ class BackgroundTaskPool:
         """Return *True* if there are still running tasks."""
         return bool(self._tasks)
 
-    async def wait_for_completion(
-        self, timeout: Optional[float] = _DEFAULT_WAIT_COMPLETION_TIMEOUT
-    ) -> bool:
+    async def wait_for_completion(self, timeout: Optional[float] = _DEFAULT_WAIT_COMPLETION_TIMEOUT) -> bool:
         """Block until the next background task completes, or *timeout* elapses.
 
         Registers a one-shot completion future and awaits it; the next task to
@@ -347,9 +358,7 @@ class BackgroundTaskPool:
             raise ValueError(f"Unknown task_id: {task_id}")
 
         if meta.retry_count >= meta.max_restarts:
-            raise ValueError(
-                f"Task {task_id} reached restart limit ({meta.retry_count}/{meta.max_restarts})"
-            )
+            raise ValueError(f"Task {task_id} reached restart limit ({meta.retry_count}/{meta.max_restarts})")
 
         if graph_meta is not None:
             meta.graph_meta = graph_meta
@@ -571,9 +580,7 @@ class BackgroundTaskPool:
             meta = self._meta.get(task_id)
             if meta is not None and meta._output_capped:
                 summary = f"{command_name} was killed because its output exceeded the disk size limit."
-                cancel_msg = (
-                    f"Background command killed: output exceeded {_OUTPUT_CAP_DISPLAY} disk cap."
-                )
+                cancel_msg = f"Background command killed: output exceeded {_OUTPUT_CAP_DISPLAY} disk cap."
             else:
                 summary = f"{command_name} was cancelled."
                 cancel_msg = summary

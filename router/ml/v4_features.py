@@ -22,6 +22,7 @@ import re
 import joblib
 import numpy as np
 from sklearn.decomposition import PCA
+
 from metagpt.router.ml.bge_onnx import OnnxBGE
 
 __all__ = [
@@ -38,18 +39,15 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 _RE_CLAR = re.compile(
-    r"(?:能否|请\s*提供|需要(?:更多|具体).{0,8}信息"
-    r"|could you (?:clarify|provide)|please (?:specify|provide)|clarify which)",
+    r"(?:能否|请\s*提供|需要(?:更多|具体).{0,8}信息" r"|could you (?:clarify|provide)|please (?:specify|provide)|clarify which)",
     re.I,
 )
 _RE_REFUSAL = re.compile(
-    r"(?:I cannot|I can't help|对不起.{0,5}无法|抱歉.{0,5}不能"
-    r"|作为(?:AI|大语言模型))",
+    r"(?:I cannot|I can't help|对不起.{0,5}无法|抱歉.{0,5}不能" r"|作为(?:AI|大语言模型))",
     re.I,
 )
 _RE_SELF_DOUBT = re.compile(
-    r"(?:我不(?:确定|清楚)|可能(?:不太|不一定)"
-    r"|not sure|might not be|I'm not entirely)",
+    r"(?:我不(?:确定|清楚)|可能(?:不太|不一定)" r"|not sure|might not be|I'm not entirely)",
     re.I,
 )
 _RE_CODE_INLINE = re.compile(r"`[^`]{4,}`")
@@ -59,8 +57,7 @@ _RE_CONTINUATION = re.compile(
     re.I,
 )
 _RE_REASONING = re.compile(
-    r"(?:why|compare|trade[ -]?off|analy[sz]e|architecture|reasoning|design"
-    r"|解释|原因|对比|分析|架构|设计|权衡)",
+    r"(?:why|compare|trade[ -]?off|analy[sz]e|architecture|reasoning|design" r"|解释|原因|对比|分析|架构|设计|权衡)",
     re.I,
 )
 
@@ -77,9 +74,9 @@ def _normalize_log_usage(usage: dict | None, key: str, divisor: float = 10.0) ->
     return float(np.log1p(max(value, 0)) / divisor)
 
 
-def extract_assistant_handcrafted(prev_assistant_text: str | None,
-                                   prev_assistant_usage: dict | None,
-                                   current_user_text: str) -> np.ndarray:
+def extract_assistant_handcrafted(
+    prev_assistant_text: str | None, prev_assistant_usage: dict | None, current_user_text: str
+) -> np.ndarray:
     """Return a 12-dim float32 vector of assistant signal features.
 
     Layout:
@@ -100,24 +97,26 @@ def extract_assistant_handcrafted(prev_assistant_text: str | None,
         return np.zeros(12, dtype=np.float32)
     t = prev_assistant_text
     u = prev_assistant_usage or {}
-    return np.array([
-        1.0,
-        float(_RE_CLAR.search(t) is not None),
-        float(_RE_REFUSAL.search(t) is not None),
-        float(_RE_SELF_DOUBT.search(t) is not None),
-        float("```" in t or _RE_CODE_INLINE.search(t) is not None),
-        float(_RE_NUMBERED_LIST.search(t) is not None),
-        np.log1p(u.get("output_tokens", 0) or 0) / 10.0,
-        np.log1p(u.get("reasoning_tokens", 0) or 0) / 10.0,
-        np.log1p(u.get("duration_ms", 0) or 0) / 10.0,
-        min(len(t) / max(len(current_user_text), 1), 5.0) / 5.0,
-        _zh_char_ratio(t),
-        (u.get("cached_tokens", 0) or 0) / max(u.get("input_tokens", 1) or 1, 1),
-    ], dtype=np.float32)
+    return np.array(
+        [
+            1.0,
+            float(_RE_CLAR.search(t) is not None),
+            float(_RE_REFUSAL.search(t) is not None),
+            float(_RE_SELF_DOUBT.search(t) is not None),
+            float("```" in t or _RE_CODE_INLINE.search(t) is not None),
+            float(_RE_NUMBERED_LIST.search(t) is not None),
+            np.log1p(u.get("output_tokens", 0) or 0) / 10.0,
+            np.log1p(u.get("reasoning_tokens", 0) or 0) / 10.0,
+            np.log1p(u.get("duration_ms", 0) or 0) / 10.0,
+            min(len(t) / max(len(current_user_text), 1), 5.0) / 5.0,
+            _zh_char_ratio(t),
+            (u.get("cached_tokens", 0) or 0) / max(u.get("input_tokens", 1) or 1, 1),
+        ],
+        dtype=np.float32,
+    )
 
 
-def extract_continuation_features(prev_assistant_usage: dict | None,
-                                  current_user_text: str) -> np.ndarray:
+def extract_continuation_features(prev_assistant_usage: dict | None, current_user_text: str) -> np.ndarray:
     """Return a 2-dim float32 vector for short continuation prompts.
 
     Layout:
@@ -127,14 +126,16 @@ def extract_continuation_features(prev_assistant_usage: dict | None,
     text = (current_user_text or "").strip()
     is_short = len(text) <= 24
     has_cue = bool(text) and is_short and _RE_CONTINUATION.search(text) is not None
-    return np.array([
-        float(has_cue),
-        _normalize_log_usage(prev_assistant_usage, "output_tokens"),
-    ], dtype=np.float32)
+    return np.array(
+        [
+            float(has_cue),
+            _normalize_log_usage(prev_assistant_usage, "output_tokens"),
+        ],
+        dtype=np.float32,
+    )
 
 
-def extract_reasoning_features(prev_assistant_usage: dict | None,
-                               current_user_text: str) -> np.ndarray:
+def extract_reasoning_features(prev_assistant_usage: dict | None, current_user_text: str) -> np.ndarray:
     """Return a 5-dim float32 vector for reasoning-heavy prompt cues.
 
     Layout:
@@ -146,13 +147,16 @@ def extract_reasoning_features(prev_assistant_usage: dict | None,
     """
     text = (current_user_text or "").strip()
     qmarks = text.count("?") + text.count("？")
-    return np.array([
-        float(_RE_REASONING.search(text) is not None),
-        min(qmarks / max(len(text), 1) * 20.0, 1.0),
-        float(np.log1p(len(text)) / 10.0),
-        _normalize_log_usage(prev_assistant_usage, "reasoning_tokens"),
-        _normalize_log_usage(prev_assistant_usage, "duration_ms"),
-    ], dtype=np.float32)
+    return np.array(
+        [
+            float(_RE_REASONING.search(text) is not None),
+            min(qmarks / max(len(text), 1) * 20.0, 1.0),
+            float(np.log1p(len(text)) / 10.0),
+            _normalize_log_usage(prev_assistant_usage, "reasoning_tokens"),
+            _normalize_log_usage(prev_assistant_usage, "duration_ms"),
+        ],
+        dtype=np.float32,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +166,7 @@ def extract_reasoning_features(prev_assistant_usage: dict | None,
 _HISTORY_SEP = "\n[SEP]\n"
 
 
-def make_history_user_text(prior_user_turns: list[str], max_turns: int = 4,
-                           max_chars: int = 1500) -> str:
+def make_history_user_text(prior_user_turns: list[str], max_turns: int = 4, max_chars: int = 1500) -> str:
     """Concatenate up to max_turns prior user turns, oldest→newest, [SEP]-separated.
 
     BGE tokenizer has a 512-token limit. Empirically 1500 chars is a safe
@@ -175,7 +178,7 @@ def make_history_user_text(prior_user_turns: list[str], max_turns: int = 4,
     selected = list(prior_user_turns[-max_turns:])  # oldest→newest of the window
     text = _HISTORY_SEP.join(selected)
     while len(text) > max_chars and len(selected) > 1:
-        selected = selected[1:]   # drop the oldest
+        selected = selected[1:]  # drop the oldest
         text = _HISTORY_SEP.join(selected)
     if len(text) > max_chars:
         # only one turn left and still too long: hard truncate from the front
@@ -187,6 +190,7 @@ def make_history_user_text(prior_user_turns: list[str], max_turns: int = 4,
 # Channel: BGE × 3 segments + shared PCA(64)
 # ---------------------------------------------------------------------------
 
+
 class BGEChannelExtractor:
     """Shared BGE encoder + shared PCA(64) for three text segments.
 
@@ -197,10 +201,14 @@ class BGEChannelExtractor:
     Output shape: (192,) = concat of 3 × PCA(64).
     """
 
-    def __init__(self, bge_model_name: str = "BAAI/bge-small-zh-v1.5",
-                 pca_dim: int = 64, seed: int = 42,
-                 backend: str = "sentence_transformers",
-                 onnx_model_dir: str | None = None):
+    def __init__(
+        self,
+        bge_model_name: str = "BAAI/bge-small-zh-v1.5",
+        pca_dim: int = 64,
+        seed: int = 42,
+        backend: str = "sentence_transformers",
+        onnx_model_dir: str | None = None,
+    ):
         self.bge_model_name = bge_model_name
         self.pca_dim = pca_dim
         self.seed = seed
@@ -215,7 +223,6 @@ class BGEChannelExtractor:
     def _ensure_bge(self):
         if self._bge is None:
             if self.backend == "onnx":
-
                 self._bge = OnnxBGE(self.onnx_model_dir)
             else:
                 from sentence_transformers import SentenceTransformer
@@ -233,12 +240,12 @@ class BGEChannelExtractor:
             raise RuntimeError("Call fit() before transform_one().")
         bge = self._ensure_bge()
         texts = [current_user or "", history_user or "", prev_assistant or ""]
-        raw = bge.encode(texts, batch_size=3, show_progress_bar=False,
-                         convert_to_numpy=True).astype(np.float32)   # (3, 512)
-        reduced = self.pca.transform(raw)                            # (3, k)
+        raw = bge.encode(texts, batch_size=3, show_progress_bar=False, convert_to_numpy=True).astype(
+            np.float32
+        )  # (3, 512)
+        reduced = self.pca.transform(raw)  # (3, k)
         if reduced.shape[1] < self.pca_dim:
-            pad = np.zeros((reduced.shape[0], self.pca_dim - reduced.shape[1]),
-                           dtype=reduced.dtype)
+            pad = np.zeros((reduced.shape[0], self.pca_dim - reduced.shape[1]), dtype=reduced.dtype)
             reduced = np.concatenate([reduced, pad], axis=1)
         return reduced.astype(np.float32), raw
 
@@ -262,16 +269,16 @@ class BGEChannelExtractor:
                 all_texts.extend([cur, hist, prev_asst])
                 user_history.append(cur)
         # BGE handles empty strings fine (returns near-constant vector)
-        embs = bge.encode(all_texts, batch_size=64, show_progress_bar=False,
-                          convert_to_numpy=True)
+        embs = bge.encode(all_texts, batch_size=64, show_progress_bar=False, convert_to_numpy=True)
         # PCA needs n_components <= min(n_samples, n_features). Clamp for tiny
         # fit corpora; transform_one pads back to self.pca_dim with zeros.
         n_components = min(self.pca_dim, embs.shape[0], embs.shape[1])
         self.pca = PCA(n_components=n_components, random_state=self.seed).fit(embs)
         self.fitted = True
 
-    def transform_one(self, current_user: str | None, history_user: str | None,
-                      prev_assistant: str | None) -> np.ndarray:
+    def transform_one(
+        self, current_user: str | None, history_user: str | None, prev_assistant: str | None
+    ) -> np.ndarray:
         reduced, _ = self._encode_triplet(
             current_user,
             history_user,
@@ -279,8 +286,9 @@ class BGEChannelExtractor:
         )
         return np.concatenate(reduced, axis=0).astype(np.float32)
 
-    def transform_triplet(self, current_user: str | None, history_user: str | None,
-                          prev_assistant: str | None) -> tuple[np.ndarray, np.ndarray]:
+    def transform_triplet(
+        self, current_user: str | None, history_user: str | None, prev_assistant: str | None
+    ) -> tuple[np.ndarray, np.ndarray]:
         reduced, raw = self._encode_triplet(
             current_user,
             history_user,
@@ -291,9 +299,12 @@ class BGEChannelExtractor:
             raw.reshape(-1).astype(np.float32),
         )
 
-    def transform_batch(self, triplets: list[tuple[str | None, str | None, str | None]],
-                        bge_batch_size: int = 128,
-                        show_progress: bool = False) -> np.ndarray:
+    def transform_batch(
+        self,
+        triplets: list[tuple[str | None, str | None, str | None]],
+        bge_batch_size: int = 128,
+        show_progress: bool = False,
+    ) -> np.ndarray:
         """Batched 3-segment BGE encoding for training-time featurization.
 
         Flattens N triplets to 3N texts, encodes in large batches (much
@@ -306,28 +317,30 @@ class BGEChannelExtractor:
         flat_texts: list[str] = []
         for cur, hist, prev in triplets:
             flat_texts.extend([cur or "", hist or "", prev or ""])
-        embs = bge.encode(flat_texts, batch_size=bge_batch_size,
-                          show_progress_bar=show_progress,
-                          convert_to_numpy=True)            # (3N, 512)
-        reduced = self.pca.transform(embs)                  # (3N, k)
+        embs = bge.encode(
+            flat_texts, batch_size=bge_batch_size, show_progress_bar=show_progress, convert_to_numpy=True
+        )  # (3N, 512)
+        reduced = self.pca.transform(embs)  # (3N, k)
         if reduced.shape[1] < self.pca_dim:
-            pad = np.zeros((reduced.shape[0], self.pca_dim - reduced.shape[1]),
-                           dtype=reduced.dtype)
+            pad = np.zeros((reduced.shape[0], self.pca_dim - reduced.shape[1]), dtype=reduced.dtype)
             reduced = np.concatenate([reduced, pad], axis=1)  # (3N, pca_dim)
         # Reshape (3N, pca_dim) → (N, 3, pca_dim) → (N, 3*pca_dim=192)
         n_triplets = len(triplets)
         return reduced.reshape(n_triplets, 3 * self.pca_dim).astype(np.float32)
 
     def save(self, path) -> None:
-        joblib.dump({
-            "bge_model_name": self.bge_model_name,
-            "pca_dim": self.pca_dim,
-            "seed": self.seed,
-            "backend": self.backend,
-            "onnx_model_dir": self.onnx_model_dir,
-            "pca": self.pca,
-            "fitted": self.fitted,
-        }, path)
+        joblib.dump(
+            {
+                "bge_model_name": self.bge_model_name,
+                "pca_dim": self.pca_dim,
+                "seed": self.seed,
+                "backend": self.backend,
+                "onnx_model_dir": self.onnx_model_dir,
+                "pca": self.pca,
+                "fitted": self.fitted,
+            },
+            path,
+        )
 
     @classmethod
     def load(cls, path) -> BGEChannelExtractor:

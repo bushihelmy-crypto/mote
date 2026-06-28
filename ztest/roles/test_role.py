@@ -18,7 +18,14 @@ from metagpt.common.utils.common import any_to_str
 from metagpt.roles import Role, RoleSchema, RoleState
 from metagpt.roles.role_components import _dedupe_tools
 
-from .conftest import FakeContextManager, FakeEnv, FakeLLM, FakeRouter, FakeThinkEngine, _FakeThinkResult
+from .conftest import (
+    FakeContextManager,
+    FakeEnv,
+    FakeLLM,
+    FakeRouter,
+    FakeThinkEngine,
+    _FakeThinkResult,
+)
 
 
 # =============================================================================
@@ -58,8 +65,16 @@ class TestConstruction:
 
     def test_lazy_slots_start_none(self):
         r = Role(name="X")
-        for slot in ("_think_engine", "_executor", "_skill_mgr", "_bg_pool",
-                     "_command_channel", "_context_provider", "_context_manager", "_router"):
+        for slot in (
+            "_think_engine",
+            "_executor",
+            "_skill_mgr",
+            "_bg_pool",
+            "_command_channel",
+            "_context_provider",
+            "_context_manager",
+            "_router",
+        ):
             assert getattr(r._components, slot) is None
 
     def test_hash_is_identity(self):
@@ -388,9 +403,7 @@ class TestFileWatchHotReload:
                 "FileChanged", {"path": "/proj/skills/demo/SKILL.md", "change_type": "modified"}
             )
             # A non-SKILL.md path must not trigger a skill reload (matcher gate).
-            await role.hook_manager.fire(
-                "FileChanged", {"path": "/proj/main.py", "change_type": "modified"}
-            )
+            await role.hook_manager.fire("FileChanged", {"path": "/proj/main.py", "change_type": "modified"})
 
         asyncio.run(scenario())
         assert calls["n"] == 1
@@ -575,14 +588,29 @@ class TestCapabilities:
     def test_capability_map_keys(self):
         caps = Role(name="X").tool_capabilities()
         assert set(caps) == {
-            "get_cwd", "set_cwd", "deactivate", "ask_human", "request_approval",
-            "reply_to_human", "end_session", "record_file_read", "get_file_read_mtime",
-            "record_file_snapshot", "get_tool_session", "set_tool_session",
-            "record_terminal_state", "take_pending_terminal_restore",
-            "record_kernel_state", "take_pending_kernel_restore",
-            "record_browser_state", "take_pending_browser_restore",
+            "get_cwd",
+            "set_cwd",
+            "deactivate",
+            "ask_human",
+            "request_approval",
+            "reply_to_human",
+            "end_session",
+            "record_file_read",
+            "get_file_read_mtime",
+            "record_file_snapshot",
+            "get_tool_session",
+            "set_tool_session",
+            "record_terminal_state",
+            "take_pending_terminal_restore",
+            "record_kernel_state",
+            "take_pending_kernel_restore",
+            "record_browser_state",
+            "take_pending_browser_restore",
             "get_browser_headless",
-            "wait_interruptible", "get_bg_pool", "get_skill_pool", "run_skill_fork",
+            "wait_interruptible",
+            "get_bg_pool",
+            "get_skill_pool",
+            "run_skill_fork",
             "get_sandbox_runtime",
         }
 

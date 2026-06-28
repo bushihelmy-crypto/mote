@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Optional
 
 from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tasks.types import BgTaskResult
+from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tools.code_review.graph import build_code_review_graph
 
 

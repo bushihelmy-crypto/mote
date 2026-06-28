@@ -30,12 +30,12 @@ class _StreamQueueSubscriber:
         self._queue = queue
 
     def handle_sync(self, event) -> None:
-
         if isinstance(event, LLMStreamDeltaEvent):
             self._queue.put_nowait(event.token)
 
     async def handle(self, event):  # observation-only; never influences the fold
         return None
+
 
 try:
     import requests_unixsocket as requests
@@ -43,10 +43,14 @@ except ImportError:
     import requests
 
 from contextvars import ContextVar
-from metagpt.common.events import LLMStreamDeltaEvent
-from metagpt.common.events import ResourceReportEvent, observe_event_sync
-from metagpt.common.events import observe_event
-from metagpt.common.events import current_bus
+
+from metagpt.common.events import (
+    LLMStreamDeltaEvent,
+    ResourceReportEvent,
+    current_bus,
+    observe_event,
+    observe_event_sync,
+)
 
 CURRENT_ROLE: ContextVar["Role"] = ContextVar("role")
 
@@ -143,7 +147,6 @@ class ResourceReporter(BaseModel):
         cls._async_report = fn
 
     def _report(self, value: Any, name: str, extra: Optional[dict] = None):
-
         observe_event_sync(
             ResourceReportEvent(
                 block=self.block.value,
@@ -156,7 +159,6 @@ class ResourceReporter(BaseModel):
         )
 
     async def _async_report(self, value: Any, name: str, extra: Optional[dict] = None):
-
         await observe_event(
             ResourceReportEvent(
                 block=self.block.value,
@@ -205,7 +207,6 @@ class ResourceReporter(BaseModel):
         bound (standalone use): nothing to mirror.
         """
         if self.enable_llm_stream:
-
             bus = current_bus()
             if bus is not None:
                 self._llm_queue = asyncio.Queue()
@@ -317,7 +318,6 @@ class ReporterSubscriber:
         self.callback_url = callback_url
 
     def handle_sync(self, event) -> None:
-
         if not isinstance(event, ResourceReportEvent) or not self.callback_url:
             return
         try:
@@ -326,7 +326,6 @@ class ReporterSubscriber:
             logger.debug(f"report: sync UI push to {self.callback_url} failed: {exc}")
 
     async def handle(self, event):
-
         if not isinstance(event, ResourceReportEvent) or not self.callback_url:
             return None
         try:

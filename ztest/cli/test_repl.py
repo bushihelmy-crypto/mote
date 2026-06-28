@@ -16,8 +16,6 @@ import asyncio
 import io
 import types
 
-import pytest
-
 from metagpt.cli.repl import Repl
 
 
@@ -396,7 +394,7 @@ def test_stream_sink_mirrors_and_flags_turn():
 def test_stream_subscriber_forwards_bus_deltas():
     # The REPL mirrors streamed tokens off the role's event bus (no global sink):
     # subscribing on the bus then emitting a delta drives ``_stream_sink``.
-    from metagpt.common.events import EventBus, LLMStreamDeltaEvent, log_llm_stream, set_bus
+    from metagpt.common.events import EventBus, log_llm_stream, set_bus
 
     repl, control, role, out = make_repl([])  # no renderer -> plain stdout
     bus = EventBus()
@@ -852,7 +850,7 @@ def test_task_progress_event_renders_via_bus():
 
 def test_tool_events_noop_without_renderer():
     """Without a renderer, bus tool events are silently swallowed."""
-    from metagpt.common.events import EventBus, PreToolUseEvent, PostToolUseEvent
+    from metagpt.common.events import EventBus, PostToolUseEvent, PreToolUseEvent
 
     repl, control, role, out = make_repl([])
     # No renderer set — default None

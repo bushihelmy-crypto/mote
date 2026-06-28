@@ -35,8 +35,8 @@ from pathlib import Path
 from typing import Optional
 
 from metagpt.common.disk import atomic_write, get_disk_writer
-from metagpt.common.utils.git_state import find_git_root
 from metagpt.common.logs import log_class, logger
+from metagpt.common.utils.git_state import find_git_root
 from metagpt.session.events import FileSnapshotEvent
 from metagpt.session.log import SessionLog
 
@@ -225,9 +225,7 @@ class FileSnapshotRecorder:
                 content = Path(full_path).read_bytes()
             except FileNotFoundError:
                 self._log.append(
-                    FileSnapshotEvent(
-                        path=full_path, operation="create", tool=tool, backend=self._store.name
-                    )
+                    FileSnapshotEvent(path=full_path, operation="create", tool=tool, backend=self._store.name)
                 )
                 return
             except OSError as exc:

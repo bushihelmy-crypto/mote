@@ -33,10 +33,10 @@ from typing import Callable, Dict, Optional
 
 from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, set_control
 from metagpt.common.events import AgentLifecycleEvent, EventBus, LogSubscriber
-from metagpt.common.logs import logger
-from metagpt.common.schema import Message, UserMessage
-from metagpt.environment.agent_path import AgentPath
 from metagpt.common.exception import AgentLimitReached, AgentNotFound, AgentNotKnown
+from metagpt.common.logs import logger
+from metagpt.common.schema import Message
+from metagpt.environment.agent_path import AgentPath
 from metagpt.environment.comms import CommGraph, CommKind
 from metagpt.environment.handle import ChildAgentHandle
 from metagpt.environment.limiter import AgentExecutionLimiter
@@ -50,10 +50,9 @@ from metagpt.environment.registry import (
 )
 from metagpt.environment.residency import Residency, ResidencySlot
 from metagpt.environment.runtime import AgentRuntime, AgentStatus, is_final
-from metagpt.environment.turn_scheduler import EventDrivenScheduler
 from metagpt.environment.store import ResidencyStore
+from metagpt.environment.turn_scheduler import EventDrivenScheduler
 from metagpt.router.cost.node import CostNode
-
 
 # Consecutive fulfilment passes a parked delivery may sit through before its
 # sustained back-pressure is surfaced as an AgentLifecycleEvent (and then once
@@ -312,9 +311,7 @@ class AgentControl:
 
         # Live-incarnation cap: residency reserves a slot, evicting the LRU idle
         # resident if full (raises AgentLimitReached when nothing can free room).
-        slot = await self._residency.reserve_slot(
-            self._residency_capacity, protected_session_id=spec.parent_id
-        )
+        slot = await self._residency.reserve_slot(self._residency_capacity, protected_session_id=spec.parent_id)
         try:
             # Identity bookkeeping only (no cap here — identities persist across
             # eviction; the live ceiling is the residency slot above).
@@ -346,9 +343,7 @@ class AgentControl:
 
         self._runtimes[agent_id] = runtime
         self._comm_graph.register(agent_id, agent_path=child_path)
-        self._event_bus.emit_sync(
-            AgentLifecycleEvent(session_id=agent_id, phase="added", detail=type(role).__name__)
-        )
+        self._event_bus.emit_sync(AgentLifecycleEvent(session_id=agent_id, phase="added", detail=type(role).__name__))
         if spec.lifecycle is Lifecycle.MANAGED:
             # Long-lived: drive it through the scheduler + watch for completion,
             # and become a (evictable) resident by committing the slot.
@@ -360,9 +355,7 @@ class AgentControl:
         # EPHEMERAL: caller runs it inline via the handle; never enters the
         # scheduler. It still occupies a live slot (held pending, not evictable)
         # — the handle releases it on aclose.
-        return ChildAgentHandle(
-            runtime, control=self, agent_id=agent_id, agent_path=child_path, residency_slot=slot
-        )
+        return ChildAgentHandle(runtime, control=self, agent_id=agent_id, agent_path=child_path, residency_slot=slot)
 
     def release_child(self, agent_id: str) -> None:
         """Release a spawned child: drop from map/scheduler/residency + free the cap slot."""

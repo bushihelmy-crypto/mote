@@ -185,12 +185,6 @@ def repair_llm_raw_output(
     return output
 
 
-
-
-
-
-
-
 def repair_invalid_json(output: str, error: str) -> str:
     """
     repair the situation like there are extra chars like
@@ -347,5 +341,3 @@ def extract_content_from_output(content: str, right_key: str = "[/CONTENT]"):
             new_content = new_content.strip()
 
     return new_content
-
-

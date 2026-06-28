@@ -179,7 +179,7 @@ def build_inner_prelude(proxy_port: int) -> str:
         f"{ruleset}"
         "__SBX_NFT__\n"
         "if command -v capsh >/dev/null 2>&1; then\n"
-        "  exec capsh --caps=\"\" -- -c 'exec \"$@\"' sbx \"$@\"\n"
+        '  exec capsh --caps="" -- -c \'exec "$@"\' sbx "$@"\n'
         "fi\n"
         'exec "$@"\n'
     )

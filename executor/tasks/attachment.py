@@ -15,17 +15,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as _escape_xml
 
-from metagpt.executor.tasks.types import BgStatus
 from metagpt.common.const.tasks import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
 from metagpt.common.exception import ErrorReport, render_error_block
+from metagpt.executor.tasks.types import BgStatus
 
 if TYPE_CHECKING:
-    from metagpt.executor.tasks.pool import BackgroundTaskPool
     from metagpt.executor.tasks.disk_output import TaskOutputStore
+    from metagpt.executor.tasks.pool import BackgroundTaskPool
 
-_TERMINAL_STATUSES = frozenset(
-    {BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT}
-)
+_TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -121,10 +119,7 @@ class TaskAttachmentGenerator:
                         task_id=tid,
                         status=meta.status,
                         command_name=meta.command_name,
-                        description=(
-                            f"{meta.command_name} is pending "
-                            f"(queued: {_fmt_elapsed(elapsed)})"
-                        ),
+                        description=(f"{meta.command_name} is pending " f"(queued: {_fmt_elapsed(elapsed)})"),
                         delta_summary=None,
                     )
                 )
@@ -140,9 +135,7 @@ class TaskAttachmentGenerator:
                         )
                         if delta_bytes:
                             self._offsets[tid] = new_off
-                            delta_summary = delta_bytes.decode(
-                                "utf-8", errors="replace"
-                            )[:DELTA_SUMMARY_MAX_CHARS]
+                            delta_summary = delta_bytes.decode("utf-8", errors="replace")[:DELTA_SUMMARY_MAX_CHARS]
                     except KeyError:
                         pass  # store has no output for this task
                 elapsed = time.time() - meta.start_time
@@ -151,10 +144,7 @@ class TaskAttachmentGenerator:
                         task_id=tid,
                         status=meta.status,
                         command_name=meta.command_name,
-                        description=(
-                            f"{meta.command_name} is running "
-                            f"(elapsed: {_fmt_elapsed(elapsed)})"
-                        ),
+                        description=(f"{meta.command_name} is running " f"(elapsed: {_fmt_elapsed(elapsed)})"),
                         delta_summary=delta_summary,
                     )
                 )
@@ -172,9 +162,7 @@ class TaskAttachmentGenerator:
                     try:
                         tail = await self._store.get_tail(tid, DELTA_MAX_BYTES)
                         if tail:
-                            delta_summary = tail.decode(
-                                "utf-8", errors="replace"
-                            )[:DELTA_SUMMARY_MAX_CHARS]
+                            delta_summary = tail.decode("utf-8", errors="replace")[:DELTA_SUMMARY_MAX_CHARS]
                     except KeyError:
                         pass
                 elapsed = (meta.end_time or time.time()) - meta.start_time
@@ -184,10 +172,7 @@ class TaskAttachmentGenerator:
                         task_id=tid,
                         status=meta.status,
                         command_name=meta.command_name,
-                        description=(
-                            f"{meta.command_name} {status_str} "
-                            f"(elapsed: {_fmt_elapsed(elapsed)})"
-                        ),
+                        description=(f"{meta.command_name} {status_str} " f"(elapsed: {_fmt_elapsed(elapsed)})"),
                         delta_summary=delta_summary,
                         error=meta.error,
                     )
