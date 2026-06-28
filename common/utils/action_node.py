@@ -8,15 +8,19 @@
 NOTE: You should use typing.List instead of list to do type annotation. Because in the markdown extraction process,
   we can use typing to extract the type of the node, but we cannot use built-in list to extract.
 """
+from __future__ import annotations
+
 import json
 import typing
-from typing import Any, Dict, List, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Type, Union
 
 from pydantic import BaseModel, Field, create_model, model_validator
 
 from metagpt.common.const import MARKDOWN_TITLE_PREFIX
-from metagpt.router import BaseLLM
 from metagpt.common.logs import logger
+
+if TYPE_CHECKING:
+    from metagpt.router import BaseLLM
 
 
 TAG = "CONTENT"

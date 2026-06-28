@@ -6,7 +6,6 @@ task can be resumed later via resume_tasks.
 """
 from __future__ import annotations
 
-from typing import Optional
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool

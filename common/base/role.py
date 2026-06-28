@@ -5,7 +5,7 @@ BaseRole — minimal base class for all roles.
 Provides the polymorphic registry for serialization. No ABC, no Pydantic.
 """
 
-from typing import Any, Optional, Union
+from typing import Any
 
 # ============================================================================
 # Polymorphic registry for serialization/deserialization

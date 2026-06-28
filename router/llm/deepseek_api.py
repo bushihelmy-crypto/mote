@@ -18,7 +18,7 @@ touched.
 """
 from __future__ import annotations
 
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
+from metagpt.common.config.config.llm_config import LLMType
 from metagpt.common.logs import logger
 from metagpt.router.llm.dsml import contains_dsml, parse_dsml_tool_calls
 from metagpt.router.llm.llm_provider_registry import register_provider

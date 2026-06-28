@@ -11,7 +11,7 @@ parameter overrides (**kwargs applied to the graph state).
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool

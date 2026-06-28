@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from metagpt.common.schema import CauseBy
 from metagpt.common.scheduling import PeriodicLoop

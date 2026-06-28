@@ -1,11 +1,10 @@
 """CommandChannel ABC and shared media helpers."""
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
-from metagpt.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS
+from metagpt.common.const import IMAGES, PDFS
 from metagpt.common.prompt.refs import lower as _lower_symbols
 from metagpt.common.prompt.refs import normalize_vocabulary
 from metagpt.common.schema import CauseBy, UserMessage

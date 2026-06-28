@@ -11,7 +11,7 @@ asking) without the loop or channels knowing which concrete engine is in play.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from metagpt.common.schema import ThinkResult
 

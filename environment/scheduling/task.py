@@ -21,7 +21,7 @@ scheduler to spread a thundering herd of identically-scheduled tasks.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

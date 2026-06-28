@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import glob as _glob_mod
 import os
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool

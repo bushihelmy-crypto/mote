@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializeAsAny
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin

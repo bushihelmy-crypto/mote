@@ -30,14 +30,11 @@ from pathlib import Path
 from typing import Union
 
 from metagpt.common.schema import (
-    BYTES_PER_TOKEN,
     DEFAULT_MAX_RESULT_SIZE_CHARS,
     PERSISTED_OUTPUT_CLOSE_TAG,
     PERSISTED_OUTPUT_OPEN_TAG,
     PREVIEW_SIZE_BYTES,
-    TOOL_MAX_RESULT_SIZE_CHARS,
     TOOL_RESULTS_SUBDIR,
-    ToolResultLimitConfig,
 )
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
 from metagpt.common.logs import logger

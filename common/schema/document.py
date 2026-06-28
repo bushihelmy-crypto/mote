@@ -7,7 +7,7 @@ from __future__ import annotations
 import os.path
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Dict, Iterable, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -15,11 +15,6 @@ from metagpt.common.schema.serialization import BaseSerialization
 from metagpt.common.const import SERDESER_PATH
 from metagpt.common.utils.common import aread, read_json_file, write_json_file
 from metagpt.common.utils.exceptions import handle_exception
-from metagpt.common.utils.serialize import (
-    actionoutput_mapping_to_str,
-    actionoutput_str_to_mapping,
-    actionoutout_schema_to_mapping,
-)
 
 
 class CauseBy(str, Enum):

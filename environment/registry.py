@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import random
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from metagpt.environment.agent_path import AgentPath

@@ -37,7 +37,6 @@ from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
 from metagpt.executor.dependency._document import (
-    DOCUMENT_EXTENSIONS as _DOCUMENT_EXTENSIONS,
     extract_document_text as _extract_document_text,
     is_document as _is_document,
 )

@@ -16,7 +16,7 @@ them into a single ``PermissionDecision``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Optional
 
 # ---------------------------------------------------------------------------

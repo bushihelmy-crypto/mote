@@ -26,7 +26,7 @@ JSON field mapping (Claude Code semantics):
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from metagpt.common.hook.types import EMPTY, HookOutcome
 from metagpt.common.logs import logger

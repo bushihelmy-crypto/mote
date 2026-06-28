@@ -18,7 +18,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import List, Optional
 
-from metagpt.common.const import CONFIG_ROOT, METAGPT_ROOT, SOURCE_ROOT
+from metagpt.common.const import CONFIG_ROOT, SOURCE_ROOT
 
 CONFIG_FILE_NAME = "config.yaml"
 LEGACY_CONFIG_FILE_NAME = "config2.yaml"
