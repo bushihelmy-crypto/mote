@@ -761,11 +761,13 @@ class Role(BaseRole):
                     # deactivate before loop). Emitting always; the folded outcome is
                     # EMPTY when no hook layer is wired.
                     outcome = await self.event_bus.emit(UserPromptSubmitEvent(prompt=msg.content))
-                    if outcome.additional_context:
-                        injected = "\n".join(outcome.additional_context)
-                        msg.content = f"{injected}\n{msg.content}" if msg.content else injected
-                    if outcome.stop:
-                        self.deactivate()
+                    # ``None`` when no hook layer is wired (nothing to inject/veto).
+                    if outcome is not None:
+                        if outcome.additional_context:
+                            injected = "\n".join(outcome.additional_context)
+                            msg.content = f"{injected}\n{msg.content}" if msg.content else injected
+                        if outcome.stop:
+                            self.deactivate()
 
                     # LSP diagnostics now flow through the per-turn ephemeral-context
                     # bus (turn_context layer): drained every think() cycle into the
@@ -779,18 +781,30 @@ class Role(BaseRole):
                 # (vs the ephemeral request-only block in the user prompt).
                 await self._record_turn_context()
 
-                loop = self._make_loop()
-                try:
-                    rsp = await loop.run()
-                finally:
-                    # Always propagate for recovery (role_raise_decorator reads it).
-                    self.state.latest_observed_msg = loop.latest_observed_msg
-                    # TurnEnd event: the recorder marks the turn boundary in the
-                    # durable log (working_dir may have moved via `cd`, so capture
-                    # the live value at turn end) and the HookSubscriber fires the
-                    # Stop hook. Guarded on the slot so a failure before the bus was
-                    # built never triggers lazy construction in teardown.
-                    await self._emit_turn_end()
+                # Auto-continue budget (opt-in, default 0): a TurnEnd control
+                # subscriber may block the "stop" to force another turn (CC's
+                # Stop-hook semantics). The budget bounds it so a misbehaving
+                # policy can never loop forever; with the default 0 (and no such
+                # subscriber wired) the loop runs exactly once — byte-identical
+                # to the old linear flow.
+                auto_continue_budget = self.role_schema.max_auto_continue
+                rsp = None
+                while True:
+                    loop = self._make_loop()
+                    try:
+                        rsp = await loop.run()
+                    finally:
+                        # Always propagate for recovery (role_raise_decorator reads it).
+                        self.state.latest_observed_msg = loop.latest_observed_msg
+                        # TurnEnd event: the recorder marks the turn boundary in the
+                        # durable log (working_dir may have moved via `cd`, so capture
+                        # the live value at turn end) and the HookSubscriber fires the
+                        # Stop hook. Guarded on the slot so a failure before the bus was
+                        # built never triggers lazy construction in teardown.
+                        turn_outcome = await self._emit_turn_end()
+                    if not self._should_auto_continue(turn_outcome, auto_continue_budget):
+                        break
+                    auto_continue_budget -= 1
                 if rsp is None:
                     return None
 
@@ -799,6 +813,16 @@ class Role(BaseRole):
                 self._state_ctl.deactivate()
                 if isinstance(rsp, AIMessage):
                     rsp.with_agent(self.role_schema.display_name)
+                # Unify termination on "the end returns the rsp": the react loop's
+                # terminal reply IS the run's result. The End tool (summary agents)
+                # already populated ``last_end_output`` via ``end_session``; a native
+                # terminal (no End, ``use_summary=False``) leaves it empty, so feed it
+                # the terminal reply here. ``last_end_output`` is the single channel
+                # the ephemeral spawn read-back (``ChildAgentHandle.result``) reads, so
+                # a native child's output (e.g. a reviewer's final JSON) no longer
+                # falls through the gap between the returned rsp and the read channel.
+                if not self.state.last_end_output:
+                    self.state.last_end_output = getattr(rsp, "content", "") or ""
                 self.publish_message(rsp)
                 return rsp
 
@@ -887,25 +911,50 @@ class Role(BaseRole):
         forked.resume_session()
         return forked
 
-    async def _emit_turn_end(self) -> None:
-        """Emit ``TurnEndEvent`` delimiting one completed turn.
+    def _should_auto_continue(self, turn_outcome: Optional[Any], budget: int) -> bool:
+        """Decide whether the run loop should force another turn.
+
+        The auto-continue seam (framework only — no built-in policy subscriber):
+        a TurnEnd control subscriber signals "don't stop, keep going" by folding
+        a :class:`TurnOutcome` with ``block=True`` (the stop is *blocked*, the
+        inverse of a UserPromptSubmit ``stop`` that aborts). We honor it only
+        while the budget allows, and enqueue any context the policy supplied as
+        the next turn's prompt so the model knows *why* it was asked to continue.
+        With the default budget 0 (and no such subscriber) this is always
+        ``False`` — the loop runs once, unchanged.
+        """
+        if budget <= 0 or turn_outcome is None or not turn_outcome.block:
+            return False
+        injected = "\n".join(turn_outcome.additional_context) or turn_outcome.system_message
+        if injected:
+            self.put_message(self._coerce_to_message(injected))
+        return True
+
+    async def _emit_turn_end(self) -> Optional[Any]:
+        """Emit ``TurnEndEvent`` delimiting one completed turn; return its outcome.
 
         Carries the per-turn runtime snapshot (working_dir may have moved via
         `cd`; token_state is optional metadata). The recorder subscriber maps it
         to a ``turn_context`` log record and the hook subscriber fires the Stop
         hook. Best-effort: skipped when the bus was never built (e.g. the run
         failed before _ensure_ready) and a failure never breaks the turn.
+
+        Returns the folded :class:`TurnOutcome` so the run loop can honor an
+        auto-continue policy: a control subscriber may ``block`` the turn end
+        (block the stop) to force another turn (CC Stop-hook semantics). Returns
+        ``None`` when there is no bus, the emit failed, or nothing maps TurnEnd
+        (never continue).
         """
         bus = self._components.peek_event_bus()
         if bus is None:
-            return
+            return None
         try:
             token_state = None
             try:
                 token_state = asdict(self.context_manager.token_state())
             except Exception:  # noqa: BLE001 — token math is optional metadata
                 token_state = None
-            await bus.emit(
+            return await bus.emit(
                 TurnEndEvent(
                     turn_id=uuid4().hex,
                     working_dir=self.state.working_dir,
@@ -915,6 +964,7 @@ class Role(BaseRole):
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"session: failed to emit turn end: {exc}")
+            return None
 
     async def cleanup(self) -> None:
         """Tear down session-scoped subsystems (best-effort, idempotent).

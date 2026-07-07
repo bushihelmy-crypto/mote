@@ -16,7 +16,7 @@ them into a single ``PermissionDecision``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 # ---------------------------------------------------------------------------
@@ -96,6 +96,37 @@ class PermissionDecision:
     @classmethod
     def ask(cls, reason_type: str, detail: str = "", *, message: str = "") -> "PermissionDecision":
         return cls("ask", DecisionReason(reason_type, detail), message=message or detail)
+
+
+# ---------------------------------------------------------------------------
+# Tool-derived facts
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PermissionFacts:
+    """The small bundle of tool-derived facts the permission engine needs.
+
+    The engine deliberately never imports tools (see ``executor/permission``);
+    instead the executor — which *does* own the tool — resolves these facts from
+    the (possibly hook-rewritten) arguments and hands them to whoever evaluates
+    the call. This is the single seam that lets the permission check run as a bus
+    subscriber without the bus/subscriber layer learning anything about tools.
+
+    * ``targets``    — the tool's *permission target* strings (command for Bash,
+      path for Edit, ...); one entry per distinct target (``check_multi`` fans
+      out over these).
+    * ``mutates_fs`` — whether running the tool writes to the filesystem.
+    * ``tool_check`` — a tool's self-declared :class:`PermissionDecision`
+      (``check_permissions``), or ``None`` if the tool defers entirely to rules.
+    * ``segments``   — sub-command segments for compound targets (e.g. a shell
+      pipeline split into stages); ``None`` when the tool has no notion of them.
+    """
+
+    targets: list[str] = field(default_factory=list)
+    mutates_fs: bool = False
+    tool_check: Optional[PermissionDecision] = None
+    segments: Optional[list[str]] = None
 
 
 # ---------------------------------------------------------------------------

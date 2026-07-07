@@ -202,9 +202,11 @@ class TestTurnContextBus:
         # via msg_buffer notifications, so no <task-attachment> feed here.
         # The skill-activation feed is wired unconditionally (self-suppresses
         # when skills are disabled or no touched file matches a conditional one).
+        # GitContextSource is short-circuited (cwd may be a repo root nesting
+        # another git repo, so its state would point at the wrong tree).
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
-        assert names == {"git", "token", "compaction", "skill_activation"}
+        assert names == {"token", "compaction", "skill_activation"}
 
     def test_lsp_source_present_when_configured(self):
         from metagpt.common.schema import LspConfig, LspServerConfig
@@ -826,3 +828,59 @@ class TestDedupeTools:
             "Bash",
             "Write",
         ]
+
+
+# =============================================================================
+# Auto-continue seam (_should_auto_continue) — framework only, default off
+# =============================================================================
+class TestAutoContinue:
+    """The TurnEnd auto-continue decision: a control subscriber blocking the stop
+    (``TurnOutcome.block=True``) forces another turn, bounded by
+    max_auto_continue."""
+
+    def _outcome(self, **kw):
+        from metagpt.common.events import TurnOutcome
+
+        return TurnOutcome(**kw)
+
+    def test_default_budget_zero_never_continues(self):
+        r = Role(name="A")
+        out = self._outcome(block=True, additional_context=["go on"])
+        # budget 0 → no continuation, no message enqueued (byte-identical to old).
+        assert r._should_auto_continue(out, 0) is False
+        assert r.state.msg_buffer.empty()
+
+    def test_block_with_budget_continues_and_enqueues_context(self):
+        r = Role(name="A")
+        out = self._outcome(block=True, additional_context=["keep working"])
+        assert r._should_auto_continue(out, 2) is True
+        assert not r.state.msg_buffer.empty()
+        msg = r.state.msg_buffer.pop()
+        assert "keep working" in msg.content
+
+    def test_block_falls_back_to_system_message(self):
+        r = Role(name="A")
+        out = self._outcome(block=True, system_message="not done yet")
+        assert r._should_auto_continue(out, 1) is True
+        msg = r.state.msg_buffer.pop()
+        assert "not done yet" in msg.content
+
+    def test_none_outcome_does_not_continue(self):
+        r = Role(name="A")
+        assert r._should_auto_continue(None, 3) is False
+        assert r.state.msg_buffer.empty()
+
+    def test_non_blocking_outcome_does_not_continue(self):
+        r = Role(name="A")
+        out = self._outcome(block=False)
+        assert r._should_auto_continue(out, 3) is False
+        assert r.state.msg_buffer.empty()
+
+    def test_block_without_context_continues_without_enqueue(self):
+        r = Role(name="A")
+        out = self._outcome(block=True)
+        assert r._should_auto_continue(out, 1) is True
+        assert r.state.msg_buffer.empty()  # nothing to inject, but still continues
+
+    def test_schema_default_is_zero(self):
+        assert RoleSchema().max_auto_continue == 0

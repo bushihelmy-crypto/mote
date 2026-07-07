@@ -31,8 +31,8 @@ import uuid
 import weakref
 from typing import Callable, Dict, Optional
 
-from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, set_control
-from metagpt.common.events import AgentLifecycleEvent, EventBus, LogSubscriber
+from metagpt.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, set_control
+from metagpt.common.events import AgentLifecycleEvent, EventBus, LogSubscriber, PreAgentSpawnEvent
 from metagpt.common.exception import AgentLimitReached, AgentNotFound, AgentNotKnown
 from metagpt.common.logs import logger
 from metagpt.common.schema import Message
@@ -45,14 +45,15 @@ from metagpt.environment.pending_delivery import PendingDelivery, PendingDeliver
 from metagpt.environment.registry import (
     AgentMetadata,
     AgentRegistry,
-    exceeds_agent_spawn_depth_limit,
     next_agent_spawn_depth,
 )
 from metagpt.environment.residency import Residency, ResidencySlot
 from metagpt.environment.runtime import AgentRuntime, AgentStatus, is_final
+from metagpt.environment.spawn_gate import SpawnGate
 from metagpt.environment.store import ResidencyStore
 from metagpt.environment.turn_scheduler import EventDrivenScheduler
 from metagpt.router.cost.node import CostNode
+from metagpt.router.llm.context import Context
 
 # Consecutive fulfilment passes a parked delivery may sit through before its
 # sustained back-pressure is surfaced as an AgentLifecycleEvent (and then once
@@ -106,6 +107,9 @@ class AgentControl:
         # agent-lifecycle milestones emitted below into central log lines.
         self._event_bus = EventBus()
         self._event_bus.subscribe(LogSubscriber())
+        # The spawn-depth veto runs on this runtime bus as a fail-closed control
+        # subscriber (see spawn_agent), replacing the old inline depth check.
+        self._event_bus.subscribe(SpawnGate())
         self._store = store if store is not None else ResidencyStore()
         # Bind self as the ambient plane around every turn so a deep spawn site
         # discovers it via ``current_control()`` (inherited by child tasks).
@@ -306,8 +310,20 @@ class AgentControl:
         parent_path = self._resolve_parent_path(spec.parent_id)
         child_depth = next_agent_spawn_depth(_path_depth(parent_path))
         max_depth = spec.max_depth if spec.max_depth is not None else self._max_depth
-        if max_depth is not None and exceeds_agent_spawn_depth_limit(child_depth, max_depth):
-            raise AgentLimitReached(message=f"spawn depth limit ({max_depth}) reached at {parent_path.as_str()}")
+        # Spawn-admission gate (axis A): the depth veto — and any future spawn
+        # policy — runs as a fail-closed control subscriber on the runtime bus.
+        # A deny is translated back into the AgentLimitReached callers expect.
+        spawn_outcome = await self._event_bus.emit(
+            PreAgentSpawnEvent(
+                parent_path=parent_path.as_str(),
+                child_depth=child_depth,
+                max_depth=max_depth,
+                agent_role=spec.agent_role or "",
+                nickname=spec.nickname or "",
+            )
+        )
+        if spawn_outcome is not None and spawn_outcome.is_blocking:
+            raise AgentLimitReached(message=spawn_outcome.reason or "spawn denied")
 
         # Live-incarnation cap: residency reserves a slot, evicting the LRU idle
         # resident if full (raises AgentLimitReached when nothing can free room).
@@ -325,6 +341,11 @@ class AgentControl:
 
                 spawn_ctx = self._build_spawn_context(spec, child_path)
                 role = spec.role_factory(spawn_ctx)
+                # Context provisioning is the authority's job, not the factory's:
+                # the factory declares *what agent*, we give it its Context per
+                # the declared policy — before the cost node is added (which reads
+                # role._context.cost_manager).
+                self._provision_context(role, spec, spawn_ctx)
 
                 runtime = AgentRuntime(role, agent_path=child_path)
                 agent_id = runtime.session_id
@@ -405,6 +426,34 @@ class AgentControl:
             parent_cost_tracker=parent_cost_tracker,
             parent_session_id=spec.parent_id or "",
         )
+
+    def _provision_context(self, role: object, spec: SpawnSpec, spawn_ctx: SpawnContext) -> None:
+        """Give the freshly-built child role its LLM Context, per the spawn policy.
+
+        The single place a spawned child's context is set — unconditionally, so a
+        factory can never (accidentally or otherwise) own this invariant. Runs
+        before the cost node is added, since that node adopts
+        ``role._context.cost_manager``.
+
+        ``FRESH`` builds an independent :class:`Context` from the spawn's config,
+        giving the child its own :class:`CostTracker` (a distinct cost-tree node).
+        ``SHARE_PARENT`` hands over the parent's own Context (fork-like spawns):
+        the shared tracker is deduped by :meth:`_add_cost_node`. SHARE_PARENT with
+        no live parent is a wiring bug — surfaced loudly, never silently patched.
+        """
+        if spec.context_policy is ContextPolicy.SHARE_PARENT:
+            parent_rt = self._runtimes.get(spec.parent_id) if spec.parent_id else None
+            if parent_rt is None:
+                raise RuntimeError(
+                    f"SHARE_PARENT spawn requires a live parent context; "
+                    f"parent '{spec.parent_id}' is not resident."
+                )
+            role._context = parent_rt.role._context
+            return
+        # FRESH: inherit the config flowing down the spawn (parent's), so the
+        # child talks to the same models; when none flows down (a root-less /
+        # test spawn) Context falls back to its own process-default config.
+        role._context = Context(config=spawn_ctx.config) if spawn_ctx.config is not None else Context()
 
     # ------------------------------------------------------------------
     # Status

@@ -39,6 +39,7 @@ class TestDefaults:
             "Sleep",
             "ResumeTasks",
             "GetNodeState",
+            "CodeReview",
         ]
         assert s.mcps == []
         assert s.agents == []

@@ -23,7 +23,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from metagpt.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
 from metagpt.common.schema import AIMessage, UserMessage
 from metagpt.common.utils.role_zero_utils import attach_media, detach_media
 from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
@@ -113,15 +113,15 @@ class RoleCapabilities:
         # Born on the plane through the single spawn authority (resolved via the
         # explicit ``ctx.agent_control`` on our shared Context), so the fork
         # counts against the cap / joins the lineage tree like any other child.
-        # The factory still shares our Context (so cost rolls up to us — the
-        # skill-fork contract), and the handle always tears the child down (its
-        # own terminal/kernel PTY, LSP servers, file-watch loop are session-
-        # scoped OS resources that leak if dropped without cleanup()).
+        # We declare SHARE_PARENT so the authority hands the child *our* Context
+        # (cost rolls up to us — the skill-fork contract); the factory itself no
+        # longer touches context. The handle always tears the child down (its own
+        # terminal/kernel PTY, LSP servers, file-watch loop are session-scoped OS
+        # resources that leak if dropped without cleanup()).
         def role_factory(spawn_ctx: SpawnContext):
             return type(role)(
                 role_schema=child_schema,
                 state=child_state,
-                context=role._context,
                 config=child_config,
             )
 
@@ -131,6 +131,7 @@ class RoleCapabilities:
             agent_role="skill_fork",
             parent_id=role.state.session_id,
             lifecycle=Lifecycle.EPHEMERAL,
+            context_policy=ContextPolicy.SHARE_PARENT,
         )
         report = await spawn_and_run(spec, UserMessage(content=arguments), ctx=role._context)
         if report is None:

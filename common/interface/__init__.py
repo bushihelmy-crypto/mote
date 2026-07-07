@@ -28,10 +28,16 @@ from metagpt.common.interface.child_role import (
     register_child_role_builder,
 )
 from metagpt.common.interface.event_subscriber import (
+    DEFAULT_STAGE,
     DURABLE,
+    FAIL_CLOSED,
+    FAIL_OPEN,
     MIRROR,
+    ControlOutcome,
+    ControlStage,
     ControlSubscriber,
     DeliveryPolicy,
+    FailMode,
     ObservationSubscriber,
 )
 from metagpt.common.interface.file_snapshot import FileSnapshotStore
@@ -62,8 +68,14 @@ __all__ = [
     "register_child_role_builder",
     "EphemeralContextSource",
     "ControlSubscriber",
+    "ControlOutcome",
+    "ControlStage",
+    "DEFAULT_STAGE",
     "ObservationSubscriber",
     "DeliveryPolicy",
     "MIRROR",
     "DURABLE",
+    "FailMode",
+    "FAIL_OPEN",
+    "FAIL_CLOSED",
 ]

@@ -82,6 +82,24 @@ class Lifecycle(Enum):
     EPHEMERAL = "ephemeral"
 
 
+class ContextPolicy(Enum):
+    """How the spawn authority provisions a child's LLM :class:`Context`.
+
+    Context provisioning is owned by the single authority (``spawn_agent``), not
+    the factory: a factory declares *what agent* (schema + state) and never
+    touches context. This policy declares *where the child's context comes from*,
+    which the authority enforces unconditionally.
+
+    ``FRESH`` gives the child an independent Context built from the spawn's
+    config — its own :class:`CostTracker` becomes a distinct node under the
+    parent in the cost tree. ``SHARE_PARENT`` hands the child the parent's own
+    Context (fork-like spawns), so the shared tracker is deduped in the cost tree.
+    """
+
+    FRESH = "fresh"
+    SHARE_PARENT = "share_parent"
+
+
 # ----------------------------------------------------------------------
 # Spawn request + factory context (pure data; all duck-typed)
 # ----------------------------------------------------------------------
@@ -122,6 +140,11 @@ class SpawnSpec:
     watch_completion: bool = True
     max_depth: Optional[int] = None
     agent_role: str = ""
+    # Where the child's LLM Context comes from. The single authority
+    # (``spawn_agent``) provisions it per this policy; the factory never touches
+    # context. FRESH = independent Context (own cost node); SHARE_PARENT = the
+    # parent's own Context (shared, deduped in the cost tree — fork-like spawns).
+    context_policy: ContextPolicy = ContextPolicy.FRESH
 
 
 # ----------------------------------------------------------------------
@@ -175,6 +198,7 @@ __all__ = [
     "set_control",
     "resolve_control",
     "Lifecycle",
+    "ContextPolicy",
     "SpawnSpec",
     "SpawnContext",
     "spawn_and_run",

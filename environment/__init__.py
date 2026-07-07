@@ -44,6 +44,7 @@ from metagpt.environment.mgx.mgx_env import MGXEnv
 from metagpt.environment.registry import AgentMetadata, AgentRegistry
 from metagpt.environment.residency import Residency
 from metagpt.environment.runtime import AgentRuntime, AgentStatus
+from metagpt.environment.spawn_gate import SpawnGate
 from metagpt.environment.turn_scheduler import EventDrivenScheduler
 from metagpt.environment.scheduling import CronScheduler, CronService, CronTask
 from metagpt.environment.store import ResidencyStore
@@ -81,6 +82,7 @@ __all__ = [
     "Residency",
     "ResidencyStore",
     "SpawnContext",
+    "SpawnGate",
     "SpawnSpec",
     "current_control",
     "resolve_control",

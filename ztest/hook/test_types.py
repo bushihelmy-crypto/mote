@@ -75,6 +75,18 @@ def test_fold_takes_last_updated_args():
     assert out.updated_args == {"x": 2}
 
 
+def test_fold_takes_last_updated_response():
+    out = fold([HookOutcome(updated_response="a"), HookOutcome(updated_response="b")])
+    assert out.updated_response == "b"
+
+
+def test_fold_updated_response_defaults_none_and_ignores_unset():
+    # A handler that leaves updated_response as None must not clobber an earlier
+    # rewrite.
+    out = fold([HookOutcome(updated_response="kept"), HookOutcome(behavior="allow")])
+    assert out.updated_response == "kept"
+
+
 def test_is_blocking():
     assert HookOutcome(behavior="deny").is_blocking is True
     assert HookOutcome(stop=True).is_blocking is True
