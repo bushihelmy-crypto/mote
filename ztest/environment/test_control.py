@@ -282,7 +282,12 @@ async def test_runtime_bus_emits_interrupted(control):
 # ---------------------------------------------------------------------------
 # Spawn authority: AgentControl.spawn_agent (the single birth channel)
 # ---------------------------------------------------------------------------
-from metagpt.common.agent_control import Lifecycle, SpawnSpec, current_control  # noqa: E402
+from metagpt.common.agent_control import (  # noqa: E402
+    ContextPolicy,
+    Lifecycle,
+    SpawnSpec,
+    current_control,
+)
 
 
 class SpawnRole:
@@ -652,12 +657,20 @@ async def test_skill_fork_shared_tracker_not_double_counted(control):
     control.add_agent(parent_rt, root=True)
     shared = parent_role._context.cost_manager
 
-    # A skill_fork child shares the parent's context (and thus its tracker).
+    # A skill_fork child declares SHARE_PARENT: the authority hands it the
+    # parent's own context (the factory never touches context), so the shared
+    # tracker is deduped in the cost tree.
     child_role = SpawnRole()
-    child_role._context = parent_role._context  # same context object
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="forked", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="forked",
+            parent_id=parent_rt.session_id,
+            context_policy=ContextPolicy.SHARE_PARENT,
+        )
     )
+    # The authority shared the parent's context onto the child.
+    assert child_role._context is parent_role._context
     # No separate node is created for the shared bucket.
     assert control.cost_node_for(handle.session_id) is None
     from metagpt.router.cost import TokenUsage
@@ -684,6 +697,49 @@ async def test_subtree_estimated_flag_rolls_up(control):
     )
     assert control.cost_root.subtree_has_estimated() is True
     assert control.cost_root.tracker.has_unknown_model_cost is False
+
+
+@pytest.mark.asyncio
+async def test_spawn_provisions_fresh_context_by_default(control):
+    # A context-less role from the factory MUST come out of spawn_agent with a
+    # real Context: provisioning is the authority's invariant, not the factory's.
+    from metagpt.router.llm.context import Context
+
+    child_role = SpawnRole()
+    assert not hasattr(child_role, "_context")
+    handle = await control.spawn_agent(SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker"))
+    assert isinstance(child_role._context, Context)
+    # Independent tracker -> a distinct cost node whose bucket is the child's own.
+    node = control.cost_node_for(handle.session_id)
+    assert node is not None
+    assert node.tracker is child_role._context.cost_manager
+
+
+@pytest.mark.asyncio
+async def test_fresh_children_get_independent_contexts(control):
+    a = SpawnRole()
+    b = SpawnRole()
+    await control.spawn_agent(SpawnSpec(role_factory=lambda ctx: a, nickname="a"))
+    await control.spawn_agent(SpawnSpec(role_factory=lambda ctx: b, nickname="b"))
+    # Two FRESH spawns never share a context / tracker.
+    assert a._context is not b._context
+    assert a._context.cost_manager is not b._context.cost_manager
+
+
+@pytest.mark.asyncio
+async def test_share_parent_without_live_parent_raises(control):
+    # SHARE_PARENT is a hard contract: no live parent context is a wiring bug,
+    # surfaced loudly rather than silently patched with a fresh one.
+    child_role = SpawnRole()
+    with pytest.raises(RuntimeError):
+        await control.spawn_agent(
+            SpawnSpec(
+                role_factory=lambda ctx: child_role,
+                nickname="orphan",
+                parent_id="nonexistent",
+                context_policy=ContextPolicy.SHARE_PARENT,
+            )
+        )
 
 
 @pytest.mark.asyncio

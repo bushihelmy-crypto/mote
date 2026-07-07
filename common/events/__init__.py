@@ -10,13 +10,20 @@ Public surface:
     The contextvar entrypoints are **observation-only** — control reaches the bus
     through an explicit emitter-held reference, never the ambient contextvar.
   * The :mod:`~metagpt.common.events.types` tagged-union event dataclasses.
-  * The outcome fold (re-exported from the hook layer).
+  * The :mod:`~metagpt.common.events.outcomes` typed per-event control outcomes.
 """
 
 from metagpt.common.events.bus import EventBus
 from metagpt.common.events.context import current_bus, observe_event, observe_event_sync, set_bus
 from metagpt.common.events.log_subscriber import LogSubscriber
-from metagpt.common.events.outcome import EMPTY, EventOutcome, HookOutcome, fold
+from metagpt.common.events.outcomes import (
+    CompactOutcome,
+    PromptOutcome,
+    SpawnOutcome,
+    ToolCallOutcome,
+    ToolResultOutcome,
+    TurnOutcome,
+)
 from metagpt.common.events.stream import log_llm_stream
 from metagpt.common.events.trace import current_span_id, span
 from metagpt.common.events.types import (
@@ -34,6 +41,7 @@ from metagpt.common.events.types import (
     MESSAGE_APPENDED,
     POST_COMPACT,
     POST_TOOL_USE,
+    PRE_AGENT_SPAWN,
     PRE_COMPACT,
     PRE_TOOL_USE,
     RECOVERY,
@@ -61,10 +69,13 @@ from metagpt.common.events.types import (
     MessageAppendedEvent,
     PostCompactEvent,
     PostToolUseEvent,
+    PreAgentSpawnEvent,
     PreCompactEvent,
     PreToolUseEvent,
     RecoveryEvent,
     ResourceReportEvent,
+    Rewritable,
+    Rewrite,
     SessionEndEvent,
     SessionStartEvent,
     SpanEndEvent,
@@ -89,11 +100,13 @@ __all__ = [
     "current_span_id",
     # subscribers
     "LogSubscriber",
-    # outcome
-    "EventOutcome",
-    "HookOutcome",
-    "fold",
-    "EMPTY",
+    # typed control outcomes
+    "ToolCallOutcome",
+    "ToolResultOutcome",
+    "PromptOutcome",
+    "CompactOutcome",
+    "SpawnOutcome",
+    "TurnOutcome",
     # events
     "AgentEvent",
     "AgentLifecycleEvent",
@@ -122,6 +135,10 @@ __all__ = [
     "PostToolUseEvent",
     "PreCompactEvent",
     "PostCompactEvent",
+    "PreAgentSpawnEvent",
+    # rewrite provenance
+    "Rewrite",
+    "Rewritable",
     # discriminators
     "SESSION_START",
     "SESSION_END",
@@ -149,4 +166,5 @@ __all__ = [
     "POST_TOOL_USE",
     "PRE_COMPACT",
     "POST_COMPACT",
+    "PRE_AGENT_SPAWN",
 ]

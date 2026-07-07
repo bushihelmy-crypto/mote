@@ -75,6 +75,7 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "RiskLevel": ("permission_types", "RiskLevel"),
     "DecisionReason": ("permission_types", "DecisionReason"),
     "PermissionDecision": ("permission_types", "PermissionDecision"),
+    "PermissionFacts": ("permission_types", "PermissionFacts"),
     "PermissionRule": ("permission_types", "PermissionRule"),
     # hook_config
     "HookConfig": ("hook_config", "HookConfig"),

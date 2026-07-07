@@ -21,6 +21,7 @@ import uuid
 from typing import Any, Callable, Mapping
 
 from metagpt.common.events import (
+    EventBus,
     FileMutatedEvent,
     PostToolUseEvent,
     PreToolUseEvent,
@@ -40,13 +41,14 @@ from metagpt.common.logs import log_class, logger
 from metagpt.common.schema import (
     DEFAULT_MAX_RESULT_SIZE_CHARS,
     PermissionConfig,
+    PermissionFacts,
     ToolResultLimitConfig,
 )
 from metagpt.executor import tool_result_limit
 from metagpt.executor.base_executor import BaseToolExecutor
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.executor.mcp_adapter import MCPToolAdapter
-from metagpt.executor.permission import PermissionEngine, RuleStore
+from metagpt.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
 from metagpt.executor.permission.sandbox import SandboxGuard
 from metagpt.executor.tasks.bggraph.marker import is_pipeline_tool
 from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
@@ -160,7 +162,7 @@ class ToolExecutor(BaseToolExecutor):
         role=None,
         limit_config: ToolResultLimitConfig | None = None,
         permission_config: PermissionConfig | None = None,
-        bus=None,
+        bus: EventBus | None = None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
         get_bg_pool: Callable[[], Any] | None = None,
     ) -> None:
@@ -168,12 +170,14 @@ class ToolExecutor(BaseToolExecutor):
         self._mcp: UniversalMCP | None = None
         self._tools: dict[str, Any] = {}  # name -> BaseTool instance (static + dynamic)
         self._get_bg_pool = get_bg_pool
-        # Optional event bus (``common.events.EventBus``). When set, PreToolUse /
-        # PostToolUse events are emitted around the tool call; a subscriber (the
-        # hook layer) may deny / mutate / inject context via the folded outcome.
-        # None => no events emitted (standalone/test use), exactly like the
-        # permission engine opt-in.
-        self._bus = bus
+        # The event spine (``common.events.EventBus``) is always present: every
+        # tool call emits PreToolUse / PostToolUse / FileMutated around it, and
+        # control subscribers (the hook layer, the permission gate) fold their
+        # influence via the returned outcome. A caller that constructs an
+        # executor standalone gets a private bus with no subscribers, which is a
+        # no-op fold — so there is a single, unconditional emit path (no
+        # bus-present branches to keep in sync).
+        self._bus = bus or EventBus()
         # Tool-level failover skeleton. The same domain-agnostic loop the LLM
         # layer uses (read ``exc.recovery`` → dispatch an injected strategy →
         # retry). The registry is EMPTY by default, so the runner is
@@ -212,6 +216,11 @@ class ToolExecutor(BaseToolExecutor):
                 ask_human=ask_human,
                 sandbox=sandbox,
             )
+            # Put the gate ON the control plane, after the hook subscriber, so it
+            # evaluates hook-rewritten args and fails closed. The engine stays
+            # tool-free — it reads only the PermissionFacts the PreToolUse event
+            # carries (resolved by the executor, which owns the tool).
+            self._bus.subscribe(PermissionSubscriber(self._permission_engine))
 
         # Ensure all @register_tool classes under the scanned packages are loaded
         # before we look them up by name. Idempotent — runs the package scan once.
@@ -283,53 +292,37 @@ class ToolExecutor(BaseToolExecutor):
         args = kwargs or {}
 
         async with span(f"tool:{name}", attributes=args):
-            # PreToolUse event: emitted before the permission gate. A subscriber
-            # (the hook layer) may rewrite the args (updated_args) or block the
-            # call outright (deny). Hook deny composes with the permission engine
-            # via deny-wins: a hook block returns immediately; a hook allow never
-            # overrides an engine deny (the engine still runs below).
-            if self._bus is not None:
-                outcome = await self._bus.emit(PreToolUseEvent(tool_name=name, tool_input=args, tool_use_id=result_id))
+            # PreToolUse: the single control-plane chokepoint before execution.
+            # Control subscribers run as an ordered reduce — first the hook layer
+            # (may rewrite args / block), then the permission gate (evaluates the
+            # already-rewritten args and folds allow/deny). The event carries a
+            # tool-bound ``resolve_facts`` closure so the gate reads what it needs
+            # (targets / mutates_fs / tool_check / segments) without the bus or
+            # subscriber layer ever importing a tool. A deny (hook or gate) or a
+            # stop halts the call; ``updated_args`` narrows it.
+            def _resolve_facts(a: dict) -> PermissionFacts:
+                return PermissionFacts(
+                    targets=tool.permission_targets(a),
+                    mutates_fs=getattr(tool, "mutates_filesystem", False),
+                    tool_check=tool.check_permissions(a),
+                    segments=tool.permission_segments(a),
+                )
+
+            outcome = await self._bus.emit(
+                PreToolUseEvent(
+                    tool_name=name,
+                    tool_input=args,
+                    tool_use_id=result_id,
+                    resolve_facts=_resolve_facts,
+                )
+            )
+            # ``None`` when no control subscriber maps the event (no hook, no gate).
+            if outcome is not None:
                 if outcome.updated_args is not None:
                     args = outcome.updated_args
                 if outcome.behavior == "deny" or outcome.stop:
-                    reason = outcome.system_message or outcome.stop_reason or "blocked by PreToolUse hook"
+                    reason = outcome.system_message or outcome.stop_reason or "blocked before tool use"
                     return _failed_result(ToolPermissionDeniedError(reason))
-
-            # Permission gate: when enabled, evaluate the call before executing. A
-            # denied call never reaches tool.call(); an approver may also narrow the
-            # arguments via updated_args.
-            if self._permission_engine is not None:
-                # Most tools touch a single target; a few (ApplyPatch) act on
-                # several paths in one call. Evaluate them together via
-                # check_multi so a multi-path patch yields one consolidated
-                # approval; single-target tools keep the existing check() path.
-                targets = tool.permission_targets(args)
-                mutates_fs = getattr(tool, "mutates_filesystem", False)
-                tool_check = tool.check_permissions(args)
-                if len(targets) > 1:
-                    decision = await self._permission_engine.check_multi(
-                        name,
-                        targets=targets,
-                        tool_check=tool_check,
-                        mutates_fs=mutates_fs,
-                    )
-                else:
-                    # Shell-command tools split into segments so rules are folded
-                    # per segment (deny catches the dangerous half of a compound
-                    # command) and an "always" grant is remembered as a prefix.
-                    segments = tool.permission_segments(args)
-                    decision = await self._permission_engine.check(
-                        name,
-                        target=targets[0] if targets else "",
-                        tool_check=tool_check,
-                        mutates_fs=mutates_fs,
-                        segments=segments,
-                    )
-                if decision.behavior == "deny":
-                    return _failed_result(ToolPermissionDeniedError(decision.message))
-                if decision.updated_args is not None:
-                    args = decision.updated_args
 
             async def _call():
                 # Validate inside the recovery loop so a strategy that repairs
@@ -394,18 +387,23 @@ class ToolExecutor(BaseToolExecutor):
             result = ToolResult.from_tool_return(raw)
 
             # PostToolUse event: emitted after the tool ran (and was normalized).
-            # A subscriber (the hook layer) may append extra context to the
-            # output or block (mark the result failed with a reason) for the
-            # model to react to.
-            if self._bus is not None:
-                outcome = await self._bus.emit(
-                    PostToolUseEvent(
-                        tool_name=name,
-                        tool_input=args,
-                        tool_response=result.output,
-                        tool_use_id=result_id,
-                    )
+            # A subscriber (the hook layer) may rewrite the output text
+            # (``updated_response``), append extra context to it, or block (mark
+            # the result failed with a reason) for the model to react to.
+            outcome = await self._bus.emit(
+                PostToolUseEvent(
+                    tool_name=name,
+                    tool_input=args,
+                    tool_response=result.output,
+                    tool_use_id=result_id,
                 )
+            )
+            # ``None`` when no control subscriber maps the event (no hook wired).
+            if outcome is not None:
+                # An output-rewrite (truncate/redact) replaces the base text before
+                # any context is appended on top of it.
+                if outcome.updated_response is not None:
+                    result.output = outcome.updated_response
                 if outcome.additional_context:
                     extra = "\n".join(outcome.additional_context)
                     result.output = f"{result.output}\n{extra}" if result.output else extra
@@ -421,7 +419,7 @@ class ToolExecutor(BaseToolExecutor):
             # subscriber can react — the LSP service syncs the doc + collects
             # diagnostics, the file-watcher suppresses echoing our own edit back
             # as an external change. Observation only; best-effort.
-            if result.success and getattr(tool, "mutates_filesystem", False) and self._bus is not None:
+            if result.success and getattr(tool, "mutates_filesystem", False):
                 path = tool.permission_target(args)
                 if path:
                     try:

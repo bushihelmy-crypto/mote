@@ -184,10 +184,12 @@ class ContextManager:
         # outcome's additional_context). Emits only when a bus is wired.
         if self._bus is not None:
             pre = await self._bus.emit(PreCompactEvent(trigger="auto"))
-            if pre.stop:
-                return False
-            if pre.additional_context:
-                custom_instructions = "\n".join(pre.additional_context)
+            # ``None`` when no hook layer maps PreCompact (nothing to veto/supply).
+            if pre is not None:
+                if pre.cancel:
+                    return False
+                if pre.additional_context:
+                    custom_instructions = "\n".join(pre.additional_context)
 
         # Pass 1 — cheap, no LLM. Fold old compactable tool results in place.
         micro = microcompact(

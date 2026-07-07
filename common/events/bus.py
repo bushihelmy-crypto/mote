@@ -3,12 +3,29 @@
 Every event is dispatched in **two phases**, giving each plane the contract it
 actually needs instead of forcing one policy on both:
 
-* **Phase 1 — control.** :class:`ControlSubscriber`\\s (normally just the hook
-  subscriber) are awaited *inline, in priority order*, and their
-  :class:`HookOutcome`\\s are folded into the value the emitter reads. Inline +
-  serial is mandatory here: a veto must be folded *before* the emitter proceeds
-  (a denied tool call is folded before the recorder ever sees it). Each handler
-  is time-boxed so a hung hook cannot freeze the agent forever.
+* **Phase 1 — control.** :class:`ControlSubscriber`\\s (e.g. the hook subscriber
+  and the permission gate) are **routed by event name** into per-event buckets:
+  each subscriber declares the events it ``handles``, so an event is delivered
+  only to the subscribers interested in it (no global list every subscriber must
+  scan). Within a bucket, subscribers run *inline* ordered by :class:`ControlStage`
+  as a **chained reduce**: each subscriber's :class:`ControlOutcome` is folded
+  into the running result via the outcome's own ``merge``, and if it rewrote the
+  call the rewrite is *threaded forward* (via the outcome's ``rebind``) so the
+  next subscriber observes the already-rewritten event. Inline + serial is
+  mandatory here: a veto must be folded *before* the emitter proceeds (a denied
+  tool call is folded before the recorder ever sees it). A blocking outcome
+  (deny/stop) short-circuits the remaining subscribers. Each handler is
+  time-boxed; how a *failure* (crash or timeout) is treated is the subscriber's
+  :data:`FailMode`:
+
+    - ``FAIL_OPEN`` (default): the failed subscriber contributes no outcome and
+      the chain continues — correct for advisory hooks (a broken hook must never
+      brick the agent).
+    - ``FAIL_CLOSED``: the failure *denies* the call and short-circuits — correct
+      for the security gate, where "could not decide" must fail safe. Because the
+      bus is generic (it does not know which outcome type a given event uses), a
+      fail-closed subscriber supplies ``on_failure(reason)`` returning the correct
+      typed deny for the bus to fold.
 
 * **Phase 2 — observation.** :class:`ObservationSubscriber`\\s (recorder,
   renderer, logger, tracing) are fanned out, *isolated per subscriber*. Their
@@ -21,26 +38,33 @@ actually needs instead of forcing one policy on both:
       failure is surfaced — logged loud and counted in :attr:`durable_failures`,
       never silently swallowed — because a missing rollout record is data loss.
 
-``emit`` runs both phases and returns the folded outcome. ``observe`` runs phase
-2 only (the transport for fire-and-forget observation events raised from deep
-call sites via the active-bus contextvar — it structurally cannot carry control,
-so losing the contextvar in a spawned task can only drop an observation, never a
-veto). ``emit_sync`` delivers observation events from synchronous call sites to
+``emit`` runs both phases and returns the folded outcome (an
+:class:`~metagpt.common.interface.event_subscriber.ControlOutcome`, or ``None``
+when no control subscriber maps the event). ``observe`` runs phase 2 only (the
+transport for fire-and-forget observation events raised from deep call sites via
+the active-bus contextvar — it structurally cannot carry control, so losing the
+contextvar in a spawned task can only drop an observation, never a veto).
+``emit_sync`` delivers observation events from synchronous call sites to
 subscribers exposing ``handle_sync``.
 
-Leaf module: imports only ``common.events`` siblings + ``common.logs`` + the
-subscriber protocols. It never imports roles/context/executor — those inject
-themselves as subscribers.
+Leaf module: imports only ``common.logs`` + the subscriber protocols. It never
+imports roles/context/executor — those inject themselves as subscribers — nor
+any concrete outcome type (it drives them through the ``ControlOutcome``
+protocol), so a new event's outcome needs no change here.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import List
+from collections import defaultdict
+from typing import Dict, List, Optional
 
-from metagpt.common.events.outcome import EMPTY, HookOutcome, fold
 from metagpt.common.interface.event_subscriber import (
+    DEFAULT_STAGE,
     DURABLE,
+    FAIL_CLOSED,
+    FAIL_OPEN,
+    ControlOutcome,
     ControlSubscriber,
     ObservationSubscriber,
 )
@@ -54,15 +78,35 @@ DEFAULT_CONTROL_TIMEOUT = 120.0
 DEFAULT_OBSERVER_TIMEOUT = 30.0
 
 
-def _insert_by_priority(subs: list, sub) -> None:
-    """Insert ``sub`` keeping ``subs`` sorted by ascending ``priority`` (stable)."""
-    priority = getattr(sub, "priority", 0)
+def _insert_by(subs: list, sub, key) -> None:
+    """Insert ``sub`` keeping ``subs`` sorted by ascending ``key(sub)`` (stable)."""
+    rank = key(sub)
     idx = len(subs)
     for i, existing in enumerate(subs):
-        if getattr(existing, "priority", 0) > priority:
+        if key(existing) > rank:
             idx = i
             break
     subs.insert(idx, sub)
+
+
+def _stage_of(sub) -> int:
+    """The subscriber's intra-bucket ordering stage (default: gate — judge last)."""
+    return int(getattr(sub, "stage", DEFAULT_STAGE))
+
+
+def _priority_of(sub) -> int:
+    """An observer's fan-out ordering priority (default 0)."""
+    return getattr(sub, "priority", 0)
+
+
+def _name_of(sub) -> str:
+    """The subscriber's provenance label, stamped onto any rewrite it produces.
+
+    Falls back to the class name so a subscriber that never rewrites need not
+    declare ``name``; a rewriting subscriber declares a stable label (like
+    ``handles``/``stage``) so provenance survives a rename of the class.
+    """
+    return getattr(sub, "name", type(sub).__name__)
 
 
 class EventBus:
@@ -74,7 +118,10 @@ class EventBus:
         control_timeout: float = DEFAULT_CONTROL_TIMEOUT,
         observer_timeout: float = DEFAULT_OBSERVER_TIMEOUT,
     ) -> None:
-        self._control: List[ControlSubscriber] = []
+        #: Control subscribers routed by the event *name* they handle; each bucket
+        #: is kept sorted by ``ControlStage`` so a shared bucket runs in causal
+        #: order (rewrite before gate). A bucket is usually a single subscriber.
+        self._control: Dict[str, List[ControlSubscriber]] = defaultdict(list)
         self._observers: List[ObservationSubscriber] = []
         self._control_timeout = control_timeout
         self._observer_timeout = observer_timeout
@@ -85,39 +132,78 @@ class EventBus:
     # -- registration -------------------------------------------------------
 
     def subscribe(self, sub) -> None:
-        """Register ``sub`` on the plane it implements (ascending priority).
+        """Register ``sub`` on the plane it implements.
 
-        A subscriber exposing ``handle_control`` joins the control plane; every
-        other subscriber is an observer. Stable for equal priorities.
+        A subscriber exposing ``handle_control`` joins the control plane: it must
+        declare a non-empty ``handles`` tuple of event names, and is filed into
+        each named bucket ordered by ``ControlStage``. A fail-closed control
+        subscriber must additionally expose ``on_failure`` so the bus can
+        synthesize the correct typed deny if it crashes. Every other subscriber is
+        an observer, filed into one fan-out list ordered by ``priority``.
         """
-        target = self._control if hasattr(sub, "handle_control") else self._observers
-        _insert_by_priority(target, sub)
+        if hasattr(sub, "handle_control"):
+            self._register_control(sub)
+        else:
+            _insert_by(self._observers, sub, _priority_of)
+
+    def _register_control(self, sub) -> None:
+        handles = getattr(sub, "handles", None)
+        if not handles:
+            raise ValueError(
+                f"control subscriber {type(sub).__name__} must declare a non-empty "
+                "`handles` tuple of event names"
+            )
+        if getattr(sub, "fail_mode", FAIL_OPEN) == FAIL_CLOSED and not hasattr(sub, "on_failure"):
+            raise ValueError(
+                f"fail-closed control subscriber {type(sub).__name__} must expose "
+                "`on_failure(reason)` so the bus can synthesize its typed deny"
+            )
+        for name in handles:
+            _insert_by(self._control[name], sub, _stage_of)
 
     def unsubscribe(self, sub) -> None:
         """Remove ``sub`` from whichever plane holds it (safe no-op otherwise)."""
-        for plane in (self._control, self._observers):
-            try:
-                plane.remove(sub)
-                return
-            except ValueError:
-                continue
+        if hasattr(sub, "handle_control"):
+            for bucket in self._control.values():
+                try:
+                    bucket.remove(sub)
+                except ValueError:
+                    continue
+            return
+        try:
+            self._observers.remove(sub)
+        except ValueError:
+            pass
 
     @property
     def subscribers(self) -> list:
-        """All subscribers in dispatch order: control plane, then observers."""
-        return list(self._control) + list(self._observers)
+        """All subscribers in dispatch order: control plane (deduped), then observers.
+
+        A control subscriber filed into several buckets appears once, in
+        first-seen order across buckets.
+        """
+        seen: list = []
+        for bucket in self._control.values():
+            for sub in bucket:
+                if sub not in seen:
+                    seen.append(sub)
+        return seen + list(self._observers)
 
     # -- dispatch -----------------------------------------------------------
 
-    async def emit(self, event) -> HookOutcome:
+    async def emit(self, event) -> Optional[ControlOutcome]:
         """Dispatch ``event`` through both phases; return the folded outcome.
 
         Phase 1 (control) folds an influence the caller acts on; phase 2
-        (observation) is fire-and-forget. Pure-observation events simply produce
-        an :data:`EMPTY` outcome (no control subscriber maps them).
+        (observation) is fire-and-forget. Pure-observation events (no control
+        subscriber maps their name) return ``None`` — the caller simply does not
+        read an outcome for them.
+
+        When phase 1 rewrote the call, observers receive the **final rewritten**
+        event, so what is recorded/rendered matches what actually runs.
         """
-        outcome = await self._run_control(event)
-        await self._dispatch_observers(event)
+        outcome, final_event = await self._run_control(event)
+        await self._dispatch_observers(final_event)
         return outcome
 
     async def observe(self, event) -> None:
@@ -148,32 +234,69 @@ class EventBus:
 
     # -- internals ----------------------------------------------------------
 
-    async def _run_control(self, event) -> HookOutcome:
-        """Phase 1: await control subscribers inline, fold their outcomes."""
-        outcomes: List[HookOutcome] = []
-        for sub in self._control:
+    async def _run_control(self, event):
+        """Phase 1: await this event's bucket inline as a chained reduce.
+
+        Returns ``(folded_outcome, final_event)``. Only subscribers that declared
+        the event's name run, ordered by stage. Each subscriber's outcome is
+        folded into the accumulator via ``merge`` and its rewrite threaded forward
+        via ``rebind`` (so subscriber *i+1* sees the event as rewritten by *i*),
+        stamped with the subscriber's name as provenance; a blocking outcome
+        (deny/stop) short-circuits the rest. A subscriber that
+        crashes/times out is handled per its :data:`FailMode`: ``FAIL_OPEN`` drops
+        its contribution and continues; ``FAIL_CLOSED`` folds its ``on_failure``
+        typed deny and short-circuits (fail-safe for security gates). Returns
+        ``(None, event)`` when nothing maps the event (pure observation).
+        """
+        acc: Optional[ControlOutcome] = None
+        current = event
+        for sub in self._control.get(event.name, ()):
             try:
-                out = await asyncio.wait_for(
-                    sub.handle_control(event), self._control_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"EventBus: control subscriber {type(sub).__name__} timed out "
-                    f"(>{self._control_timeout}s) on {getattr(event, 'name', '?')}; "
-                    "treating as no-outcome"
-                )
+                out = await asyncio.wait_for(sub.handle_control(current), self._control_timeout)
+            except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
+                out = self._on_control_failure(sub, current, exc)
+                if out is None:
+                    continue  # fail-open: dropped, chain continues
+                acc = out if acc is None else acc.merge(out)
+                break  # fail-closed: folded a deny, short-circuit
+            if out is None:
                 continue
-            except Exception as exc:  # noqa: BLE001 — one bad sub never breaks the spine
-                logger.warning(
-                    f"EventBus: control subscriber {type(sub).__name__} raised on "
-                    f"{getattr(event, 'name', '?')}: {exc}"
-                )
-                continue
-            if out:
-                outcomes.append(out)
-        if not outcomes:
-            return EMPTY
-        return fold(outcomes)
+            acc = out if acc is None else acc.merge(out)
+            # Thread this subscriber's rewrite forward to the next one, stamping
+            # *who* rewrote it — this is the single point that knows both the
+            # subscriber and the outcome it just produced, so provenance can never
+            # be forgotten by a subscriber.
+            current = out.rebind(current, by=_name_of(sub))
+            # A deny/stop is final — no later subscriber can un-block it.
+            if out.is_blocking:
+                break
+        return acc, current
+
+    def _on_control_failure(self, sub, event, exc) -> Optional[ControlOutcome]:
+        """Resolve a crashed/timed-out control subscriber per its ``fail_mode``.
+
+        ``FAIL_OPEN`` → ``None`` (drop its influence, continue). ``FAIL_CLOSED`` →
+        the subscriber's own ``on_failure(reason)`` typed deny (the bus cannot
+        build it — it does not know the event's outcome type).
+        """
+        timed_out = isinstance(exc, asyncio.TimeoutError)
+        what = f"timed out (>{self._control_timeout}s)" if timed_out else f"raised: {exc}"
+        name = getattr(event, "name", "?")
+        if getattr(sub, "fail_mode", FAIL_OPEN) == FAIL_CLOSED:
+            logger.error(
+                f"EventBus: control gate {type(sub).__name__} {what} on {name}; "
+                "failing closed (deny)"
+            )
+            reason = (
+                f"{type(sub).__name__} could not evaluate the request "
+                f"({'timeout' if timed_out else 'error'}); denied for safety."
+            )
+            return sub.on_failure(reason)
+        logger.warning(
+            f"EventBus: control subscriber {type(sub).__name__} {what} on {name}; "
+            "treating as no-outcome"
+        )
+        return None
 
     async def _dispatch_observers(self, event) -> None:
         """Phase 2: fan out to observers, isolated and graded by delivery policy."""

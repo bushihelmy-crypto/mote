@@ -107,10 +107,17 @@ class HookOutcome:
     live at the bottom layer. The executor seam translates the ``behavior`` /
     ``updated_args`` into a real ``PermissionDecision`` for tool-call influence;
     other consumers read ``additional_context`` / ``system_message`` / ``stop``.
+
+    ``updated_response`` is the *output* analogue of ``updated_args``: a
+    PostToolUse control subscriber may rewrite the tool's result text (e.g. to
+    truncate/redact it) and the executor applies the rewrite to the result
+    before the model sees it. It threads forward on the plane just like
+    ``updated_args`` so a later subscriber observes the already-rewritten output.
     """
 
     behavior: Optional[HookBehavior] = None
     updated_args: Optional[dict] = None
+    updated_response: Optional[str] = None
     additional_context: list[str] = field(default_factory=list)
     system_message: str = ""
     stop: bool = False
@@ -139,7 +146,8 @@ def fold(outcomes: Iterable[HookOutcome]) -> HookOutcome:
     lower-ranked behavior never overrides it. ``additional_context`` accumulates
     across all handlers (order preserved); ``system_message`` takes the last
     non-empty value; ``stop`` is sticky (any handler stopping stops the fold);
-    ``updated_args`` takes the last handler that supplied one.
+    ``updated_args`` / ``updated_response`` each take the last handler that
+    supplied one.
     """
     result = HookOutcome()
     best_rank = 0
@@ -150,6 +158,8 @@ def fold(outcomes: Iterable[HookOutcome]) -> HookOutcome:
             result.behavior = outcome.behavior
         if outcome.updated_args is not None:
             result.updated_args = outcome.updated_args
+        if outcome.updated_response is not None:
+            result.updated_response = outcome.updated_response
         if outcome.additional_context:
             result.additional_context.extend(outcome.additional_context)
         if outcome.system_message:

@@ -4,9 +4,12 @@
 
 The bus fans every event through two phases:
 
-* **control** (phase 1): subscribers exposing ``handle_control`` are awaited
-  inline in priority order, and their :class:`HookOutcome`\\s are folded into the
-  value ``emit`` returns. Only this plane can veto/mutate/stop.
+* **control** (phase 1): subscribers exposing ``handle_control`` are routed by
+  the event names they ``handles`` into per-event buckets, awaited inline in
+  ``ControlStage`` order, and their typed :class:`ControlOutcome`\\s are folded
+  (via each outcome's ``merge``) into the value ``emit`` returns. Only this plane
+  can veto/mutate/stop. ``emit`` returns ``None`` when no control subscriber maps
+  the event.
 * **observation** (phase 2): subscribers exposing ``handle`` are fanned out,
   isolated and graded by ``delivery`` policy; their return is structurally
   dropped — an observer can never influence the fold.
@@ -19,16 +22,20 @@ from typing import Optional
 import pytest
 
 from metagpt.common.events import (
+    POST_TOOL_USE,
+    PRE_TOOL_USE,
     EventBus,
     LLMStreamDeltaEvent,
+    PostToolUseEvent,
     PreToolUseEvent,
+    ToolCallOutcome,
+    ToolResultOutcome,
     current_bus,
     observe_event,
     observe_event_sync,
     set_bus,
 )
-from metagpt.common.interface.event_subscriber import DURABLE
-from metagpt.common.hook.types import HookOutcome
+from metagpt.common.interface.event_subscriber import DURABLE, ControlStage
 
 
 class ObserverSub:
@@ -44,16 +51,29 @@ class ObserverSub:
 
 
 class ControlSub:
-    """A control subscriber: folds a fixed outcome via ``handle_control``."""
+    """A control subscriber: folds a fixed typed outcome via ``handle_control``.
 
-    def __init__(self, priority: int, log: list, *, outcome: Optional[HookOutcome] = None, tag: str = ""):
-        self.priority = priority
+    Declares the event names it ``handles`` (the bus routes by name into buckets);
+    ``stage`` orders it within a shared bucket (rewrite before gate).
+    """
+
+    def __init__(
+        self,
+        log: list,
+        *,
+        handles: tuple[str, ...],
+        outcome=None,
+        tag: str = "",
+        stage: ControlStage = ControlStage.GATE,
+    ):
+        self.handles = handles
+        self.stage = stage
         self._log = log
         self._outcome = outcome
         self._tag = tag
 
-    async def handle_control(self, event) -> Optional[HookOutcome]:
-        self._log.append((self._tag or self.priority, event.name))
+    async def handle_control(self, event):
+        self._log.append((self._tag, event.name))
         return self._outcome
 
 
@@ -77,7 +97,7 @@ class SyncSub:
 def test_subscribe_classifies_control_vs_observers():
     bus = EventBus()
     log: list = []
-    ctrl = ControlSub(10, log, tag="ctrl")
+    ctrl = ControlSub(log, handles=(PRE_TOOL_USE,), tag="ctrl")
     obs = ObserverSub(50, log, tag="obs")
     bus.subscribe(obs)
     bus.subscribe(ctrl)
@@ -107,7 +127,7 @@ def test_equal_priority_keeps_insertion_order():
 def test_unsubscribe_removes_from_either_plane():
     bus = EventBus()
     log: list = []
-    ctrl = ControlSub(10, log)
+    ctrl = ControlSub(log, handles=(PRE_TOOL_USE,))
     obs = ObserverSub(50, log)
     bus.subscribe(ctrl)
     bus.subscribe(obs)
@@ -128,15 +148,26 @@ async def test_emit_dispatches_observers_in_priority_order():
 
 
 @pytest.mark.asyncio
-async def test_control_runs_before_observers_regardless_of_priority():
-    """Phase 1 (control) always precedes phase 2 (observers), even when the
-    control subscriber's numeric priority is higher than an observer's."""
+async def test_control_runs_before_observers():
+    """Phase 1 (control) always precedes phase 2 (observers)."""
     bus = EventBus()
     log: list = []
-    bus.subscribe(ObserverSub(5, log, tag="obs"))  # lower number = earlier *within* plane
-    bus.subscribe(ControlSub(90, log, tag="ctrl"))  # higher number, still runs first
+    bus.subscribe(ObserverSub(5, log, tag="obs"))
+    bus.subscribe(ControlSub(log, handles=(PRE_TOOL_USE,), tag="ctrl"))
     await bus.emit(PreToolUseEvent(tool_name="Bash"))
     assert log == [("ctrl", "pre_tool_use"), ("obs", "pre_tool_use")]
+
+
+def test_shared_bucket_orders_by_stage():
+    """Two control subscribers on the same event run rewrite-before-gate,
+    regardless of subscribe() order."""
+    bus = EventBus()
+    log: list = []
+    gate = ControlSub(log, handles=(PRE_TOOL_USE,), tag="gate", stage=ControlStage.GATE)
+    rewrite = ControlSub(log, handles=(PRE_TOOL_USE,), tag="rewrite", stage=ControlStage.REWRITE)
+    bus.subscribe(gate)  # subscribed first, but runs second (gate stage)
+    bus.subscribe(rewrite)
+    assert bus.subscribers == [rewrite, gate]
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +179,22 @@ async def test_control_runs_before_observers_regardless_of_priority():
 async def test_emit_folds_deny_over_allow():
     bus = EventBus()
     log: list = []
-    bus.subscribe(ControlSub(10, log, outcome=HookOutcome(behavior="allow")))
-    bus.subscribe(ControlSub(20, log, outcome=HookOutcome(behavior="deny")))
+    bus.subscribe(
+        ControlSub(
+            log,
+            handles=(PRE_TOOL_USE,),
+            outcome=ToolCallOutcome(behavior="allow"),
+            stage=ControlStage.REWRITE,
+        )
+    )
+    bus.subscribe(
+        ControlSub(
+            log,
+            handles=(PRE_TOOL_USE,),
+            outcome=ToolCallOutcome(behavior="deny"),
+            stage=ControlStage.GATE,
+        )
+    )
     out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
     assert out.behavior == "deny"
 
@@ -158,37 +203,123 @@ async def test_emit_folds_deny_over_allow():
 async def test_emit_accumulates_additional_context():
     bus = EventBus()
     log: list = []
-    bus.subscribe(ControlSub(10, log, outcome=HookOutcome(additional_context=["a"])))
-    bus.subscribe(ControlSub(20, log, outcome=HookOutcome(additional_context=["b"])))
-    out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
+    bus.subscribe(
+        ControlSub(
+            log,
+            handles=(POST_TOOL_USE,),
+            outcome=ToolResultOutcome(additional_context=["a"]),
+            stage=ControlStage.REWRITE,
+        )
+    )
+    bus.subscribe(
+        ControlSub(
+            log,
+            handles=(POST_TOOL_USE,),
+            outcome=ToolResultOutcome(additional_context=["b"]),
+            stage=ControlStage.GATE,
+        )
+    )
+    out = await bus.emit(PostToolUseEvent(tool_name="Read", tool_response="x"))
     assert out.additional_context == ["a", "b"]
 
 
 @pytest.mark.asyncio
 async def test_observer_return_is_dropped_never_folded():
     """An observer that (wrongly) returns an outcome cannot influence the fold —
-    only the control plane folds, by construction."""
+    only the control plane folds, by construction. With no control subscriber
+    mapping the event, ``emit`` returns ``None``."""
 
     class SneakyObserver:
         priority = 10
 
         async def handle(self, event):
-            return HookOutcome(behavior="deny")  # structurally ignored
+            return ToolCallOutcome(behavior="deny")  # structurally ignored
 
     bus = EventBus()
     bus.subscribe(SneakyObserver())
     out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
-    assert out.behavior is None  # the observer's "deny" never reaches the fold
+    assert out is None  # the observer's "deny" never reaches the fold
 
 
 @pytest.mark.asyncio
-async def test_emit_with_no_control_returns_empty():
+async def test_emit_with_no_control_returns_none():
     bus = EventBus()
     log: list = []
     bus.subscribe(ObserverSub(10, log))  # observer only
     out = await bus.emit(LLMStreamDeltaEvent(token="x"))
-    assert out.behavior is None
-    assert not out.additional_context
+    assert out is None
+
+
+# ---------------------------------------------------------------------------
+# Output-rewrite threading (PostToolUse ``updated_response``)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_tool_use_output_rewrite_threads_forward():
+    """A subscriber's ``updated_response`` is threaded to the next subscriber via
+    the event's generic ``rewrite`` — the output-side twin of ``updated_args``
+    threading — and the bus stamps *who* rewrote it (``by`` = the subscriber's
+    ``name``) onto the event as provenance."""
+    seen: list = []
+    provenance: list = []
+
+    class Rewriter:
+        handles = (POST_TOOL_USE,)
+        stage = ControlStage.REWRITE
+        name = "redactor"
+
+        async def handle_control(self, event):
+            return ToolResultOutcome(updated_response="rewritten")
+
+    class Observer:
+        handles = (POST_TOOL_USE,)
+        stage = ControlStage.GATE
+
+        async def handle_control(self, event):
+            seen.append(event.tool_response)  # sees the already-rewritten text
+            provenance.append(event.rewrites)  # and the recorded provenance
+            return None
+
+    bus = EventBus()
+    bus.subscribe(Rewriter())
+    bus.subscribe(Observer())
+    out = await bus.emit(PostToolUseEvent(tool_name="Read", tool_response="original"))
+    assert seen == ["rewritten"]
+    assert out.updated_response == "rewritten"
+    # The threaded event records the rewrite with its before-image and author.
+    (recorded,) = provenance
+    assert len(recorded) == 1
+    assert recorded[0].field == "tool_response"
+    assert recorded[0].before == "original"
+    assert recorded[0].after == "rewritten"
+    assert recorded[0].by == "redactor"  # bus stamped the subscriber's name
+
+
+@pytest.mark.asyncio
+async def test_output_rewrite_folds_last_wins():
+    """When two subscribers both rewrite the output, the last one wins the fold
+    (mirrors ``updated_args`` last-wins)."""
+
+    class First:
+        handles = (POST_TOOL_USE,)
+        stage = ControlStage.REWRITE
+
+        async def handle_control(self, event):
+            return ToolResultOutcome(updated_response="first")
+
+    class Second:
+        handles = (POST_TOOL_USE,)
+        stage = ControlStage.GATE
+
+        async def handle_control(self, event):
+            return ToolResultOutcome(updated_response="second")
+
+    bus = EventBus()
+    bus.subscribe(First())
+    bus.subscribe(Second())
+    out = await bus.emit(PostToolUseEvent(tool_name="Read", tool_response="orig"))
+    assert out.updated_response == "second"
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +342,7 @@ async def test_one_bad_observer_does_not_break_stream():
     bus.subscribe(ObserverSub(10, log, tag="ok"))
     out = await bus.emit(LLMStreamDeltaEvent(token="x"))
     assert log == [("ok", "llm_stream_delta")]
-    assert out.behavior is None
+    assert out is None
 
 
 @pytest.mark.asyncio
@@ -220,15 +351,24 @@ async def test_one_bad_control_subscriber_does_not_break_fold():
     log: list = []
 
     class BoomControl:
-        priority = 5
+        handles = (PRE_TOOL_USE,)
+        stage = ControlStage.REWRITE  # runs first, fails open (default)
 
         async def handle_control(self, event):
             raise RuntimeError("boom")
 
     bus.subscribe(BoomControl())
-    bus.subscribe(ControlSub(10, log, outcome=HookOutcome(behavior="deny"), tag="ok"))
+    bus.subscribe(
+        ControlSub(
+            log,
+            handles=(PRE_TOOL_USE,),
+            outcome=ToolCallOutcome(behavior="deny"),
+            tag="ok",
+            stage=ControlStage.GATE,
+        )
+    )
     out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
-    # The raising control sub is skipped; the good one still folds.
+    # The raising control sub (fail-open) is skipped; the good one still folds.
     assert out.behavior == "deny"
     assert log == [("ok", "pre_tool_use")]
 
@@ -241,17 +381,17 @@ async def test_one_bad_control_subscriber_does_not_break_fold():
 @pytest.mark.asyncio
 async def test_control_subscriber_timeout_is_skipped():
     class Hang:
-        priority = 5
+        handles = (PRE_TOOL_USE,)
 
         async def handle_control(self, event):
             await asyncio.sleep(10)
-            return HookOutcome(behavior="deny")
+            return ToolCallOutcome(behavior="deny")
 
     bus = EventBus(control_timeout=0.01)
     bus.subscribe(Hang())
     out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
-    # Timed out → treated as no-outcome, never freezes the spine.
-    assert out.behavior is None
+    # Timed out → fail-open (default) → no outcome, never freezes the spine.
+    assert out is None
 
 
 @pytest.mark.asyncio
@@ -323,7 +463,9 @@ async def test_durable_sink_is_not_time_boxed():
 async def test_observe_runs_observers_but_not_control():
     bus = EventBus()
     log: list = []
-    bus.subscribe(ControlSub(10, log, outcome=HookOutcome(behavior="deny"), tag="ctrl"))
+    bus.subscribe(
+        ControlSub(log, handles=(PRE_TOOL_USE,), outcome=ToolCallOutcome(behavior="deny"), tag="ctrl")
+    )
     bus.subscribe(ObserverSub(20, log, tag="obs"))
     await bus.observe(PreToolUseEvent(tool_name="Bash"))
     # Only the observer ran; control plane is skipped on the observation path.
@@ -419,7 +561,7 @@ async def test_control_runs_in_callers_contextvar_scope():
     seen: list = []
 
     class ContextProbe:
-        priority = 10
+        handles = (PRE_TOOL_USE,)
 
         async def handle_control(self, event):
             seen.append(marker.get())

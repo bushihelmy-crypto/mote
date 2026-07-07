@@ -10,7 +10,7 @@ property of the *subscriber*, not the event (see
 ``common/interface/event_subscriber.py``). The same event (e.g. a tool-use) is
 routed to a :class:`ControlSubscriber` (a hook that may veto/mutate, phase 1) and
 to :class:`ObservationSubscriber`\\s (recorder/renderer/logger, phase 2) by the
-bus. Only a control subscriber can fold a :class:`HookOutcome`; an observer's
+bus. Only a control subscriber can fold a :class:`ControlOutcome`; an observer's
 return is structurally dropped, so an observer can never influence the host. This
 is why there is no ``is_control`` flag to keep in sync — influence is enforced by
 *where a subscriber is registered*, not by an advisory boolean on the data.
@@ -32,11 +32,11 @@ the ``Message`` type, so it sits at the very bottom of the layering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, List, Optional
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, List, Optional
 
 if TYPE_CHECKING:
-    from metagpt.common.schema import Message
+    from metagpt.common.schema import Message, PermissionFacts
 
 # ---------------------------------------------------------------------------
 # Event-name discriminators
@@ -59,6 +59,7 @@ PRE_TOOL_USE = "pre_tool_use"
 POST_TOOL_USE = "post_tool_use"
 PRE_COMPACT = "pre_compact"
 POST_COMPACT = "post_compact"
+PRE_AGENT_SPAWN = "pre_agent_spawn"
 FILE_CHANGED = "file_changed"
 FILE_MUTATED = "file_mutated"
 DIAGNOSTICS = "diagnostics"
@@ -68,6 +69,61 @@ RESOURCE_REPORT = "resource_report"
 AGENT_LIFECYCLE = "agent_lifecycle"
 SPAN_START = "span_start"
 SPAN_END = "span_end"
+
+
+# ---------------------------------------------------------------------------
+# Rewrite provenance — a control subscriber may rewrite a mutable field of a
+# control event (tool args, tool output). Each such change is recorded as an
+# immutable :class:`Rewrite` on the event itself, so a rewrite is traceable
+# from the event alone — who changed which field, from what to what. The
+# provenance rides on the event (self-describing), never in a side table that
+# could drift from the value it describes.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Rewrite:
+    """One field mutation applied to a control event by a named subscriber.
+
+    ``field`` is the event attribute rewritten; ``before``/``after`` are its
+    values around the change; ``by`` is the rewriting subscriber's ``name``,
+    stamped by the bus at the single point that pairs a subscriber with the
+    event it just mutated. Immutable: a recorded rewrite is history.
+    """
+
+    field: str = ""
+    before: Any = None
+    after: Any = None
+    by: str = ""
+
+
+@dataclass
+class Rewritable:
+    """Mixin for a control event whose fields a subscriber may rewrite.
+
+    Carries the ordered provenance log and the *single* generic mutation
+    primitive :meth:`rewrite`, which reads the before-image and appends a
+    :class:`Rewrite` in one step — so a rewrite can never be applied without
+    being recorded. An event becomes rewritable by inheriting this alone; it
+    hand-rolls no per-field ``rebind_*`` method, and the one recording point
+    serves every rewritable event, present and future.
+    """
+
+    #: Ordered log of every rewrite applied as the event flowed through the
+    #: control bucket — the audit trail an observer reads off the final event.
+    rewrites: tuple[Rewrite, ...] = ()
+
+    def rewrite(self, field: str, after: Any, *, by: str = "") -> "Rewritable":
+        """Return a copy with ``field`` set to ``after`` and the change recorded.
+
+        The before-image is read here rather than supplied, so provenance is
+        captured atomically with the mutation and cannot be forged or forgotten.
+        ``by`` is the rewriting subscriber's name (the bus supplies it). Any
+        non-rewritten field (e.g. a tool-bound closure) is preserved by
+        :func:`~dataclasses.replace`.
+        """
+        record = Rewrite(field=field, before=getattr(self, field), after=after, by=by)
+        return replace(self, **{field: after}, rewrites=(*self.rewrites, record))
 
 
 # ---------------------------------------------------------------------------
@@ -393,18 +449,47 @@ class UserPromptSubmitEvent:
     name: ClassVar[str] = USER_PROMPT_SUBMIT
 
 @dataclass
-class PreToolUseEvent:
-    """A tool is about to run (a subscriber may deny / mutate args)."""
+class PreToolUseEvent(Rewritable):
+    """A tool is about to run (a subscriber may deny / mutate args).
+
+    ``resolve_facts`` is the seam that lets a permission gate run as a control
+    subscriber without the bus/subscriber layer importing tools: the executor —
+    which *does* own the tool — attaches a closure that derives the tool-specific
+    :class:`~metagpt.common.schema.PermissionFacts` from a given argument dict.
+    A subscriber evaluates the call by calling ``resolve_facts(self.tool_input)``,
+    so it always sees the facts for the *current* (possibly already-rewritten)
+    args. ``None`` when no gate is wired (nothing to resolve).
+
+    Because control subscribers run in sequence and each may rewrite the args,
+    the bus threads the running args forward with :meth:`Rewritable.rewrite`
+    (``field="tool_input"``): subscriber *i+1* observes the arguments as
+    rewritten by subscriber *i*, and each rewrite is recorded in ``rewrites``.
+    The tool-bound ``resolve_facts`` closure is preserved across a rewrite (it
+    reads whatever args it is handed).
+    """
 
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
     tool_use_id: Optional[str] = None
+    #: Tool-bound, args-agnostic fact resolver (executor-supplied). Excluded from
+    #: equality/repr — it is behavior, not data.
+    resolve_facts: Optional[Callable[[dict], "PermissionFacts"]] = field(
+        default=None, compare=False, repr=False
+    )
 
     name: ClassVar[str] = PRE_TOOL_USE
 
 @dataclass
-class PostToolUseEvent:
-    """A tool finished (a subscriber may inject context / block)."""
+class PostToolUseEvent(Rewritable):
+    """A tool finished (a subscriber may inject context / rewrite output / block).
+
+    ``tool_response`` is the tool's result text. A control subscriber may rewrite
+    it (truncate/redact) by returning ``ToolResultOutcome.updated_response``; the
+    bus threads that forward with :meth:`Rewritable.rewrite`
+    (``field="tool_response"``) so a later subscriber sees the already-rewritten
+    output and the change is recorded in ``rewrites``, mirroring how
+    :class:`PreToolUseEvent` threads ``updated_args``.
+    """
 
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
@@ -430,6 +515,30 @@ class PostCompactEvent:
 
     name: ClassVar[str] = POST_COMPACT
 
+@dataclass
+class PreAgentSpawnEvent:
+    """A child agent is about to be born (a subscriber may deny the spawn).
+
+    Emitted by the single birth channel (``AgentControl.spawn_agent``) *before*
+    any slot is reserved, carrying the resolved lineage facts a gate needs to
+    judge the spawn: the parent's path, the child's would-be depth, the
+    effective ``max_depth`` ceiling, and the requested role/nickname. The
+    depth-limit veto — previously a direct ``raise AgentLimitReached`` wedged
+    into the spawn method — now runs as a control subscriber
+    (:class:`~metagpt.environment.spawn_gate.SpawnGate`, fail-closed) so it is a
+    first-class, foldable, composable influence on the plane rather than hidden
+    imperative glue. A ``deny`` outcome is translated back into
+    :class:`AgentLimitReached` by the emitter.
+    """
+
+    parent_path: str = ""
+    child_depth: int = 0
+    max_depth: Optional[int] = None
+    agent_role: str = ""
+    nickname: str = ""
+
+    name: ClassVar[str] = PRE_AGENT_SPAWN
+
 #: Any concrete event (all expose a ``.name`` discriminator ClassVar).
 AgentEvent = Any
 
@@ -453,6 +562,7 @@ __all__ = [
     "POST_TOOL_USE",
     "PRE_COMPACT",
     "POST_COMPACT",
+    "PRE_AGENT_SPAWN",
     "FILE_CHANGED",
     "FILE_MUTATED",
     "DIAGNOSTICS",
@@ -462,6 +572,9 @@ __all__ = [
     "AGENT_LIFECYCLE",
     "SPAN_START",
     "SPAN_END",
+    # rewrite provenance
+    "Rewrite",
+    "Rewritable",
     # observation events
     "SessionStartEvent",
     "SessionEndEvent",
@@ -490,6 +603,7 @@ __all__ = [
     "PostToolUseEvent",
     "PreCompactEvent",
     "PostCompactEvent",
+    "PreAgentSpawnEvent",
     # union
     "AgentEvent",
 ]

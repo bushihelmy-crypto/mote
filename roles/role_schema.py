@@ -60,6 +60,10 @@ class RoleSchema(BaseModel):
     # --- Loop control ---
     max_react_loop: int = 50
     max_consecutive_react_limit: int = 10
+    # Auto-continue budget: max times a TurnEnd control subscriber may block the
+    # "stop" to force another turn (CC Stop-hook semantics). 0 disables the seam
+    # entirely — the run loop executes exactly once per call (the default).
+    max_auto_continue: int = 0
 
     # --- Tools / Agent declarations ---
     tools: list[str] = [
@@ -76,6 +80,7 @@ class RoleSchema(BaseModel):
         "Sleep",
         "ResumeTasks",
         "GetNodeState",
+        "CodeReview"
     ]
     mcps: list[str] = []
     agents: list[str] = []
