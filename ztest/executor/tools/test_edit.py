@@ -42,8 +42,19 @@ class TestExactReplace:
     def test_replaces_single_occurrence(self, workspace):
         tool, p, _ = _ready(workspace, "a.py", "x = 1\ny = 2\n")
         out = _edit(tool, file_path=p, old_string="x = 1", new_string="x = 42")
-        assert "has been updated successfully" in out
+        assert "has been updated successfully" in out.output
         assert open(p, encoding="utf-8").read() == "x = 42\ny = 2\n"
+
+    def test_update_carries_structured_file_change(self, workspace):
+        # The edit result carries old/new full contents as a structured fact so
+        # the view layer renders the change without sniffing the output text.
+        tool, p, _ = _ready(workspace, "a.py", "x = 1\ny = 2\n")
+        out = _edit(tool, file_path=p, old_string="x = 1", new_string="x = 42")
+        assert len(out.file_changes) == 1
+        ch = out.file_changes[0]
+        assert ch.path == p
+        assert ch.old == "x = 1\ny = 2\n"
+        assert ch.new == "x = 42\ny = 2\n"
 
     def test_multiple_matches_without_replace_all_raises(self, workspace):
         tool, p, _ = _ready(workspace, "a.py", "a\na\n")
@@ -53,7 +64,7 @@ class TestExactReplace:
     def test_replace_all(self, workspace):
         tool, p, _ = _ready(workspace, "a.py", "a\na\na\n")
         out = _edit(tool, file_path=p, old_string="a", new_string="b", replace_all=True)
-        assert "All 3 occurrence(s)" in out
+        assert "All 3 occurrence(s)" in out.output
         assert open(p, encoding="utf-8").read() == "b\nb\nb\n"
 
     def test_string_not_found_raises(self, workspace):
@@ -77,8 +88,12 @@ class TestCreateViaEmptyOld:
     def test_creates_new_file(self, workspace):
         p = str(workspace / "new.py")
         out = _edit(Edit(), file_path=p, old_string="", new_string="print('hi')\n")
-        assert "has been created successfully" in out
+        assert "has been created successfully" in out.output
         assert open(p, encoding="utf-8").read() == "print('hi')\n"
+        # A creation carries an empty ``old`` and the new content.
+        assert len(out.file_changes) == 1
+        assert out.file_changes[0].old == ""
+        assert out.file_changes[0].new == "print('hi')\n"
 
     def test_refuses_to_clobber_nonempty(self, workspace):
         p = write_file(workspace / "exists.py", "existing\n")
@@ -88,7 +103,7 @@ class TestCreateViaEmptyOld:
     def test_fills_existing_empty_file(self, workspace):
         p = write_file(workspace / "empty.py", "   \n")
         out = _edit(Edit(), file_path=p, old_string="", new_string="filled")
-        assert "has been updated successfully" in out
+        assert "has been updated successfully" in out.output
         assert open(p, encoding="utf-8").read() == "filled"
 
 
@@ -119,14 +134,14 @@ class TestMatchCascade:
         # File uses a real tab; the model copies it as 4 spaces (Read renders so).
         tool, p, _ = _ready(workspace, "t.py", "def f():\n\treturn 1\n")
         out = _edit(tool, file_path=p, old_string="    return 1", new_string="    return 2")
-        assert "updated successfully" in out
+        assert "updated successfully" in out.output
         assert "return 2" in open(p, encoding="utf-8").read()
 
     def test_curly_quote_normalized_match(self, workspace):
         tool, p, _ = _ready(workspace, "q.py", "s = \u201chello\u201d\n")
         # Model emits straight quotes; matcher normalizes curly->straight.
         out = _edit(tool, file_path=p, old_string='s = "hello"', new_string='s = "world"')
-        assert "updated successfully" in out
+        assert "updated successfully" in out.output
 
 
 class TestEditNewlinePreservation:

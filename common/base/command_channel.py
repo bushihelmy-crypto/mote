@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 #: its key here, a ``${key}`` in the template, and the value in each channel's
 #: ``prompt_vars()`` — nothing in ThinkInputs / ThinkContext / collect_context
 #: changes.
-PROMPT_VAR_KEYS = ("command_guide",)
+PROMPT_VAR_KEYS = ("command_guide", "tool_usage_guide")
 
 
 class CommandChannel(ABC):
@@ -57,21 +57,41 @@ class CommandChannel(ABC):
         """Named ``${placeholder}`` fills this protocol contributes to the prompts.
 
         The single seam by which a channel injects its protocol-specific prompt
-        sections — command_guide (system "# Using commands" mechanics). The
-        builder merges this dict straight into the template substitutions, so the
-        channel — not ThinkInputs/ThinkContext — owns every protocol section.
+        sections — command_guide (system "# Using commands" mechanics) and
+        tool_usage_guide (the static orientation on how tools are called and how
+        the tool categories relate). The builder merges this dict straight into
+        the template substitutions, so the channel — not ThinkInputs/ThinkContext
+        — owns every protocol section.
 
         Symmetric with ``vocabulary()``: that supplies inline ``⟦symbol⟧``
         surfaces, this supplies block-level ``${section}`` text. XML fills
-        command_guide with its ``<end></end>`` / command-tag mechanics; native
-        fills it with tool-call mechanics and never carries the ``<end></end>``
-        marker.
+        command_guide with its ``<end></end>`` / command-tag mechanics and
+        tool_usage_guide with the in-prompt catalog orientation; native fills
+        command_guide with tool-call mechanics (never the ``<end></end>`` marker)
+        and leaves tool_usage_guide empty (its tools ride the API ``tools=``
+        param, so the system prompt needs no catalog orientation).
 
         Must cover ``PROMPT_VAR_KEYS`` (the placeholders the templates reference);
         the default fills them all with "" — a channel that adds no protocol
         sections is valid.
         """
         return {key: "" for key in PROMPT_VAR_KEYS}
+
+    def wants_tool_catalog(self) -> bool:
+        """Whether the tool catalog (built-in / MCP / pipeline schemas) must be
+        described in the system prompt.
+
+        True for protocols with no API-native tool channel (XML), which can only
+        make the model aware of a tool by describing it in prose. False for
+        native tool-use: the provider already receives every tool via the API
+        ``tools=`` param (``get_native_tool_specs`` — built-in + MCP), so copying
+        the same schemas into the system prompt is pure token waste and bloats
+        the cacheable prefix. Mirrors Claude Code, which never puts native tool
+        definitions in the system prompt.
+
+        Default True (safe: describe tools). Native overrides to False.
+        """
+        return True
 
     @abstractmethod
     def tool_specs(self, executor) -> Optional[list[dict]]:

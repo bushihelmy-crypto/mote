@@ -31,6 +31,7 @@ from metagpt.session.history import (
 )
 from metagpt.session.listing import SessionInfo, list_sessions
 from metagpt.session.log import SessionLog
+from metagpt.session.recall import body_for_tool_call
 from metagpt.session.replay import ReplayResult, replay
 from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
 from metagpt.session.subscribers import RecorderSubscriber
@@ -64,4 +65,5 @@ __all__ = [
     "file_history",
     "diff_snapshot",
     "restore",
+    "body_for_tool_call",
 ]

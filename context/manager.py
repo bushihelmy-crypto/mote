@@ -32,23 +32,35 @@ the other way around.
 
 from __future__ import annotations
 
-import metagpt.context.token_budget as token_budget
-from metagpt.common.events import (
-    CompactionCheckpointEvent,
-    MessageAppendedEvent,
-    PostCompactEvent,
-    PreCompactEvent,
-)
+import metagpt.context.budget as budget
+from metagpt.common.events import MessageAppendedEvent, ToolsChangedEvent
+from metagpt.common.interface.event_subscriber import ObservationSubscriber
 from metagpt.common.logs import log_class
 from metagpt.common.schema import (
-    AutocompactResult,
     ContextManagerConfig,
     LLMCallContext,
     Message,
     UserMessage,
 )
-from metagpt.context.autocompact import autocompact
-from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
+from metagpt.context.compaction import (
+    ContextEngine,
+    EraseReducer,
+    FoldReducer,
+    HeadDropReducer,
+    RecoveryContextReducer,
+    ReductionReason,
+    ReductionRequest,
+    ReductionPipeline,
+    SummarizeReducer,
+    Transcript,
+    Urgency,
+)
+from metagpt.context.budget import TokenAccountant
+
+# Sentinel distinguishing "argument omitted" from an explicit ``None`` in
+# :meth:`ContextManager.rebuild_compression` (``None`` is a meaningful llm value
+# — it disables summarize — so it cannot double as "leave unchanged").
+_UNSET = object()
 
 
 @log_class(
@@ -58,7 +70,7 @@ from metagpt.context.microcompact import COMPACTABLE_TOOLS, microcompact
     # methods (manage_history / token_state / prepare_request) stay traced.
     exclude={"get", "add", "add_batch", "delete", "count", "clear"},
 )
-class ContextManager:
+class ContextManager(ObservationSubscriber):
     """Owns the stored conversation and orchestrates its compaction.
 
     Args:
@@ -71,6 +83,11 @@ class ContextManager:
         config: Tunable knobs; defaults reproduce Claude Code.
         model: Model name for token math. Falls back to ``llm.model`` then a
             generic default.
+        compactable: Names of tools whose result bodies may be folded/cleared
+            (re-derivable by re-running the tool). The Role derives this from the
+            live ToolExecutor (``reconstructable_tool_names()``) so the set tracks
+            whatever tools are actually bound. Defaults to the empty set —
+            standalone/test use folds nothing until a set is injected.
     """
 
     def __init__(
@@ -81,19 +98,141 @@ class ContextManager:
         config: ContextManagerConfig | None = None,
         model: str | None = None,
         bus=None,
+        sticky_provider=None,
+        rehydrate_provider=None,
+        compactable: frozenset[str] = frozenset(),
     ):
         self._context = context if context is not None else LLMCallContext()
         self._llm = llm
         self.config = config or ContextManagerConfig()
         self._model = model
+        # Tools whose result bodies are re-derivable (fold/clear-safe). Threaded
+        # into ``Transcript.from_messages`` (the single place the reconstructable
+        # judgment is made — the FoldReducer only consumes the resulting segment
+        # flag). Derived by the Role from the live executor; empty by default
+        # (standalone/test use folds nothing until a set is injected).
+        self._compactable = compactable
+        # Optional zero-arg callable returning sticky Messages to re-insert right
+        # after an autocompaction summary (e.g. loaded Skill bodies from the
+        # ResourceRegistry). None => nothing re-projected (standalone/test use).
+        self._sticky_provider = sticky_provider
+        # Optional zero-arg callable returning file-snapshot Messages (the recent
+        # working set re-read from disk) to re-insert after the summary. None =>
+        # no eager rehydration; the lazy re-read advisory still fires.
+        self._rehydrate_provider = rehydrate_provider
         # Optional event bus (``common.events.EventBus``). When set, appended
         # messages emit MessageAppendedEvent and a compaction emits
         # PreCompact/CompactionCheckpoint/PostCompact events; subscribers persist
         # to the session rollout and run hooks. Injected by Role; None in
         # standalone/test use => no events emitted.
         self._bus = bus
-        # Circuit-breaker counter threaded across autocompact attempts.
-        self._consecutive_failures = 0
+        # Keep the fold/clear-safe tool set current. When the executor
+        # de-registers a tool it announces the fresh reconstructable set on this
+        # same bus (:class:`ToolsChangedEvent`); observing it here refreshes
+        # ``_compactable`` so compaction never keeps folding a result whose tool
+        # has since gone (nor, conversely, treats a still-bound tool as
+        # non-reconstructable). Reading the post-change facts straight off the
+        # event keeps the manager decoupled from the executor (no live back-ref).
+        if bus is not None:
+            bus.subscribe(self)
+        # Server-truth token reader (falls back to tiktoken); reads the llm's
+        # shared cost manager, so no new reporting pipeline is needed.
+        self._accountant = TokenAccountant(llm)
+
+        # Build the reduction pipeline from the current inputs (config / model /
+        # llm / providers). Extracted so the pipeline is *swappable at runtime*:
+        # ``rebuild_compression`` re-runs this after retuning the config or
+        # rebinding the compression LLM, and the caches (accountant, model-derived
+        # thresholds) re-derive with it.
+        self._build_compression()
+
+    def _build_compression(self) -> None:
+        """(Re)construct the reduction pipeline, engine, and recovery reducer.
+
+        The single place the compression stack is assembled, from the manager's
+        current ``config`` / ``model`` / ``_llm`` / providers. Called once at
+        construction and again by :meth:`rebuild_compression` whenever any of
+        those inputs change, so a runtime swap rebuilds every dependent piece
+        (reducers, the threshold engine, the recovery reducer) coherently rather
+        than leaving a half-updated stack.
+
+        The reducers are the pluggable strategies; the engine wraps the pipeline
+        with the compaction event lifecycle (PreCompact / checkpoint / Post).
+        Erase and fold are both FREE, so the pipeline's stable cost-sort keeps
+        this insertion order: erase (true pair-delete of results the model tagged
+        erasable) runs before fold (placeholder-shrink of what remains).
+        """
+        model = self.model
+        self._erase = EraseReducer(self.config, model=model)
+        self._fold = FoldReducer(self.config, model=model)
+        self._summarize = SummarizeReducer(
+            self._llm,
+            self.config,
+            model=model,
+            sticky_provider=self._sticky_provider,
+            rehydrate_provider=self._rehydrate_provider,
+        )
+        self._drop = HeadDropReducer(self.config, model=model)
+        pipeline = ReductionPipeline([self._erase, self._fold, self._summarize, self._drop], model=model)
+        self._engine = ContextEngine(pipeline, bus=self._bus, summarize_reducer=self._summarize)
+        # Reactive (HARD) reducer for the LLM recovery loop. It runs the SAME
+        # boundary-safe machinery and escalates fold → summarize → drop, stopping
+        # as soon as the target is met. Summarize (LLM-condense the head, keep the
+        # tail) is far less lossy than the destructive head-drop, so on overflow we
+        # preserve as much history as possible — with drop kept as the guaranteed
+        # floor when summarize can't free enough (or is unavailable). Summarize
+        # issues its own inner aask(), but ``_llm`` here is the router's dedicated
+        # COMPRESSION instance, built reducer-less (context_reducer=None) so that
+        # inner call cannot re-enter _compress. The fold→summarize→drop cycle is
+        # thus broken at the injection layer — no runtime re-entrancy guard needed.
+        self._recovery_reducer = RecoveryContextReducer(
+            [self._erase, self._fold, self._summarize, self._drop], model=model
+        )
+
+    def rebuild_compression(self, *, llm: object = _UNSET, config: ContextManagerConfig | None = _UNSET) -> None:
+        """Swap the compression stack at runtime — rebind the LLM and/or retune.
+
+        The clean seam a control tool hangs on to change how history is
+        compacted mid-session: pass a fresh ``llm`` (e.g. the router hands over a
+        different COMPRESSION instance, or a bigger-context model) and/or a new
+        ``config`` (retuned thresholds), and the whole stack rebuilds coherently.
+        Rebinding the LLM also re-derives the model (``self.model`` reads
+        ``llm.model``) and refreshes the token accountant, which reads the llm's
+        shared cost manager — so the "re-fetch compression model + refresh caches"
+        happen together with the pipeline rebuild, never drifting apart.
+
+        Both arguments are optional (sentinel-guarded so ``None`` stays a
+        meaningful value): omitting one leaves that input untouched.
+        """
+        if llm is not _UNSET:
+            self._llm = llm
+            self._accountant = TokenAccountant(llm)
+        if config is not _UNSET:
+            self.config = config
+        self._build_compression()
+
+    @property
+    def _consecutive_failures(self) -> int:
+        """Summarize circuit-breaker counter (kept on the summarize reducer)."""
+        return self._summarize.consecutive_failures
+
+    @property
+    def recovery_reducer(self) -> "RecoveryContextReducer":
+        """The HARD fold+drop reducer the Role injects into the LLM for COMPRESS recovery."""
+        return self._recovery_reducer
+
+    async def handle(self, event) -> None:
+        """Observer hook — refresh the reconstructable-tool set on a tool change.
+
+        A :class:`ToolsChangedEvent` carries the fresh reconstructable name set
+        (post-change), which becomes the new ``compactable`` threaded into every
+        subsequent ``Transcript.from_messages``. All other events are ignored
+        (this manager also *emits* on the same bus; its own emissions fall
+        through here untouched).
+        """
+        if isinstance(event, ToolsChangedEvent):
+            self._compactable = frozenset(event.reconstructable)
+        return None
 
     # ------------------------------------------------------------------
     # Message-store API (the slice of the old Memory the loop depends on)
@@ -159,87 +298,50 @@ class ContextManager:
     # ------------------------------------------------------------------
 
     async def manage_history(self, *, custom_instructions: str | None = None) -> bool:
-        """Run the two history-level passes over the stored history in order.
+        """Reduce the stored history toward the autocompact threshold (SOFT).
 
-        Cheap first: ``microcompact`` folds old tool-result bodies in place and
-        reports how many tokens that freed. Expensive second: ``autocompact``
-        only summarizes+rebuilds when the history is *still* over threshold once
-        those freed tokens are subtracted (the bridge between the two scopes).
+        Builds a SOFT :class:`ReductionRequest` (target = the autocompact
+        threshold) and hands the segmented history to the :class:`ContextEngine`.
+        The engine runs the pipeline cheapest-first: the FREE fold always runs
+        opportunistically (its own count gate), the LLM summarize runs only when
+        the history is still over target, and the destructive head-drop is *not*
+        reachable under SOFT urgency. The engine also owns the PreCompact veto /
+        instruction supply and the checkpoint / PostCompact emission.
 
-        Mutates the stored history in place (folding) and/or replaces it with
-        ``[summary] + tail`` (summarize). Returns True when either pass changed
-        the history.
-
-        Safe to call every turn: each pass is gated and no-ops cheaply when its
-        trigger isn't met.
+        Replaces the backing history with the reduced one and returns True iff it
+        changed. Safe to call every turn: each strategy is gated and no-ops
+        cheaply when its trigger isn't met.
         """
         if not self._context.messages:
             return False
 
-        changed = False
-        model = self.model
-
-        # PreCompact event: a chance to veto the whole management pass (stop) or
-        # to supply/override the autocompact custom_instructions (via the folded
-        # outcome's additional_context). Emits only when a bus is wired.
-        if self._bus is not None:
-            pre = await self._bus.emit(PreCompactEvent(trigger="auto"))
-            # ``None`` when no hook layer maps PreCompact (nothing to veto/supply).
-            if pre is not None:
-                if pre.cancel:
-                    return False
-                if pre.additional_context:
-                    custom_instructions = "\n".join(pre.additional_context)
-
-        # Pass 1 — cheap, no LLM. Fold old compactable tool results in place.
-        micro = microcompact(
-            self._context.messages,
-            self.config,
-            model=model,
-            compactable=COMPACTABLE_TOOLS,
+        target = budget.autocompact_threshold(self.model)
+        request = ReductionRequest(
+            target_tokens=target,
+            urgency=Urgency.SOFT,
+            reason=ReductionReason.THRESHOLD,
         )
-        if micro.changed:
-            changed = True
-
-        # Pass 2 — expensive, LLM summarize. Skipped without an llm or when the
-        # post-fold history is still under the autocompact threshold.
-        if self._llm is None:
-            return changed
-
-        result: AutocompactResult = await autocompact(
-            self._context.messages,
-            self._llm,
-            self.config,
-            model=model,
-            tokens_freed=micro.tokens_freed,
-            consecutive_failures=self._consecutive_failures,
+        transcript = Transcript.from_messages(self._context.messages, compactable=self._compactable)
+        outcome = await self._engine.reduce(
+            transcript,
+            request,
+            trigger="auto",
             custom_instructions=custom_instructions,
         )
-        self._consecutive_failures = result.consecutive_failures
-        if result.compacted:
-            # autocompact returns a NEW list ([summary] + tail); swap it into the
-            # backing context so the rebuilt history is what gets checkpointed.
-            self._context.messages[:] = result.messages
-            changed = True
-            if self._bus is not None:
-                # CompactionCheckpointEvent: the recorder persists the rebuilt
-                # history as a replay checkpoint (Codex style) so resume starts
-                # from the latest compaction rather than replaying everything.
-                await self._bus.emit(
-                    CompactionCheckpointEvent(messages=list(result.messages), summary=result.summary or "")
-                )
-                # PostCompact event: notify that a compaction just happened
-                # (carries the summary). Best-effort; outcome is advisory.
-                await self._bus.emit(PostCompactEvent(trigger="auto", summary=result.summary or ""))
-
-        return changed
+        if not outcome.changed:
+            return False
+        # Swap the reduced history into the backing context (fold mutates the
+        # same Message objects in place; summarize rebuilds [summary] + tail).
+        self._context.messages[:] = outcome.transcript.to_messages()
+        return True
 
     def token_state(self):
         """Current token budget snapshot for the stored history (CC TokenState)."""
-        return token_budget.evaluate(
+        return budget.evaluate(
             self._context.messages,
             self.model,
             autocompact_enabled=self.config.enable_autocompact,
+            observed_tokens=self._accountant.observed(),
         )
 
     # ------------------------------------------------------------------

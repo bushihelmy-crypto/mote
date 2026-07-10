@@ -17,7 +17,7 @@ These fixtures keep both scopes fully offline and deterministic:
   read: an assistant turn carries ``metadata[TOOL_CALLS]`` (a list of
   ``{id, name, args}``), and the matching tool-result turn carries
   ``metadata[TOOL_CALL_ID]`` with its text in ``.content``.
-- ``force_autocompact_threshold`` patches ``token_budget.autocompact_threshold``
+- ``force_autocompact_threshold`` patches ``budget.autocompact_threshold``
   to a tiny value so autocompact fires on a handful of short messages instead of
   the ~167k tokens the real window math would demand.
 """
@@ -29,6 +29,12 @@ import pytest
 
 from metagpt.common.const import TOOL_CALL_ID, TOOL_CALLS
 from metagpt.common.schema import AIMessage, Message, UserMessage
+
+# Tool names the compaction tests treat as reconstructable (fold/clear-safe).
+# Production derives this from the live executor (each tool self-declares via its
+# ``reconstructable`` ClassVar); the tests inject this fixed set explicitly since
+# there is no longer a hardcoded default in the context layer.
+COMPACTABLE = frozenset({"Read", "Bash", "Grep", "Glob", "Write", "Edit"})
 
 
 class FakeLLM:
@@ -98,12 +104,12 @@ def force_autocompact_threshold(monkeypatch):
     """Make autocompact fire on tiny inputs.
 
     The real autocompact threshold is ~167k tokens (200k window minus reserves),
-    which is impractical to reach with test-sized histories. ``token_budget``'s
+    which is impractical to reach with test-sized histories. ``budget``'s
     ``evaluate`` looks up ``autocompact_threshold`` by module-level name at call
     time, so patching it here forces ``should_autocompact`` True for any
     non-trivial history while leaving the rest of the real math intact.
     """
-    from metagpt.context import token_budget
+    from metagpt.context import budget
 
-    monkeypatch.setattr(token_budget, "autocompact_threshold", lambda model: 1)
-    return token_budget
+    monkeypatch.setattr(budget, "autocompact_threshold", lambda model: 1)
+    return budget

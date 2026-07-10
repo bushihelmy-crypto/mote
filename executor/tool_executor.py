@@ -25,6 +25,7 @@ from metagpt.common.events import (
     FileMutatedEvent,
     PostToolUseEvent,
     PreToolUseEvent,
+    ToolsChangedEvent,
     span,
 )
 from metagpt.common.exception import (
@@ -40,11 +41,13 @@ from metagpt.common.exception import (
 from metagpt.common.logs import log_class, logger
 from metagpt.common.schema import (
     DEFAULT_MAX_RESULT_SIZE_CHARS,
+    PERSISTED_OUTPUT_OPEN_TAG,
     PermissionConfig,
     PermissionFacts,
     ToolResultLimitConfig,
 )
 from metagpt.executor import tool_result_limit
+from metagpt.executor.compress import compress_output
 from metagpt.executor.base_executor import BaseToolExecutor
 from metagpt.executor.mcp.universal import UniversalMCP
 from metagpt.executor.mcp_adapter import MCPToolAdapter
@@ -107,7 +110,7 @@ def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any])
     raise ToolValidationError(f"{tool_name}: {'; '.join(parts)}")
 
 
-def _failed_result(exc: Exception) -> "ToolResult":
+def _failed_result(exc: Exception, *, terminate: bool = False) -> "ToolResult":
     """Normalize a pre-flight failure into a failed ``ToolResult``.
 
     The pre-flight gates (unknown tool, hook / permission-engine deny) reject a
@@ -117,9 +120,12 @@ def _failed_result(exc: Exception) -> "ToolResult":
     Routing them through :class:`ErrorReport` here gives every tool failure —
     pre-flight or in-flight — one shape (rendered block + machine-readable
     ``error`` report on the result).
+
+    ``terminate`` marks the failure as loop-ending (a user rejection / hook veto),
+    which the react loop honours by clearing the active signal.
     """
     report = ErrorReport.from_exception(exc)
-    return ToolResult(output=render_error_block(report), success=False, error=report)
+    return ToolResult(output=render_error_block(report), success=False, error=report, terminate=terminate)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +261,49 @@ class ToolExecutor(BaseToolExecutor):
         for name in names:
             self._tools[name] = tool
 
+    async def deregister_tool(self, name: str) -> bool:
+        """Remove a bound tool by any of its names — aliases and resources together.
+
+        The inverse of registration (constructor pre-bind / register_tool_instance).
+        Resolves the instance ``name`` routes to, then removes *every* alias key in
+        ``_tools`` that routes to that **same instance** (identity, not name — so no
+        orphan alias survives), reclaims the instance's per-session resources
+        (``cleanup_session`` — the same teardown :meth:`cleanup` runs, but for this
+        one tool), and announces the change on the bus (:class:`ToolsChangedEvent`)
+        so the volatile views refresh instead of silently drifting: the per-turn
+        tool catalog drops the vanished names from its incremental frontier, and the
+        compaction pipeline refreshes its reconstructable-tool-name set.
+
+        Returns True when a tool was removed, False when ``name`` is unbound (no-op).
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return False
+        # Every alias routing to the SAME instance goes together (by identity, so
+        # aliases pointing at other tools are untouched).
+        removed = [n for n, t in self._tools.items() if t is tool]
+        for n in removed:
+            del self._tools[n]
+        # Reclaim per-session resources, mirroring cleanup() for this one instance.
+        try:
+            tool.cleanup_session(self._session_id)
+        except Exception as exc:  # noqa: BLE001 — teardown must not raise
+            logger.debug(f"ToolExecutor: cleanup_session for {name} failed: {exc}")
+        # Announce so views refresh. Pure observation (no control fold) — the live
+        # _tools map is already the source of truth; this only says it changed and
+        # carries the post-change facts consumers need (which names went away, the
+        # fresh reconstructable set) so no consumer needs a back-ref to the executor.
+        try:
+            await self._bus.observe(
+                ToolsChangedEvent(
+                    removed=removed,
+                    reconstructable=sorted(self.reconstructable_tool_names()),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — a notice never breaks the removal
+            logger.debug(f"ToolExecutor: ToolsChangedEvent for {name} not delivered: {exc}")
+        return True
+
     def _get_tool(self, name: str):
         """Resolve a tool by name. Returns the BaseTool instance, or None."""
         return self._tools.get(name)
@@ -284,12 +333,17 @@ class ToolExecutor(BaseToolExecutor):
             (persisted to disk + replaced with a ``<persisted-output>`` preview),
             unless the result carries media or the limit is disabled.
         """
+        args = kwargs or {}
+
         tool = self._get_tool(name)
         if tool is None:
             available = list(self._tools.keys())
-            return _failed_result(ToolNotFoundError(f"unknown tool '{name}'. Available: {available}"))
-
-        args = kwargs or {}
+            return await self._reject(
+                name,
+                args,
+                _failed_result(ToolNotFoundError(f"unknown tool '{name}'. Available: {available}")),
+                result_id,
+            )
 
         async with span(f"tool:{name}", attributes=args):
             # PreToolUse: the single control-plane chokepoint before execution.
@@ -322,7 +376,16 @@ class ToolExecutor(BaseToolExecutor):
                     args = outcome.updated_args
                 if outcome.behavior == "deny" or outcome.stop:
                     reason = outcome.system_message or outcome.stop_reason or "blocked before tool use"
-                    return _failed_result(ToolPermissionDeniedError(reason))
+                    # ``stop`` marks a terminal block (a real user rejection at the
+                    # approval prompt, or a hook veto) — the call fails AND the react
+                    # loop ends. A plain ``deny`` (rule/mode/policy/sandbox) only
+                    # fails this call; the loop keeps going so the model can replan.
+                    return await self._reject(
+                        name,
+                        args,
+                        _failed_result(ToolPermissionDeniedError(reason), terminate=outcome.stop),
+                        result_id,
+                    )
 
             async def _call():
                 # Validate inside the recovery loop so a strategy that repairs
@@ -335,23 +398,19 @@ class ToolExecutor(BaseToolExecutor):
 
             try:
                 # Run under the recovery loop. With an empty registry this is a
-                # plain ``await tool.call(**args)`` — typed errors re-raise and
-                # are handled by the except arms below exactly as before.
+                # plain ``await tool.call(**args)`` — a typed ``ToolError`` (a
+                # deliberate, expected failure: bad args, missing file) or an
+                # unexpected exception both re-raise here.
                 raw = await self._recovery_runner.run(_call)
-            except ToolError as e:
-                # Expected, recoverable failure the tool signalled deliberately.
-                # Not logged as an error: it is normal control flow (bad args,
-                # missing file, etc.), surfaced to the model as a failed tool
-                # result. Normalized through the shared error contract so the
-                # model sees a uniform <error> block carrying the code/recovery
-                # hint, and downstream consumers (hooks/telemetry) get structure.
-                report = ErrorReport.from_exception(e)
-                return ToolResult(output=render_error_block(report), success=False, error=report)
             except Exception as e:
-                # Unexpected failure: normalized the same way (degrades to an
-                # UNKNOWN-code report) so every tool failure has one shape.
-                report = ErrorReport.from_exception(e)
-                return ToolResult(output=render_error_block(report), success=False, error=report)
+                # Both cases normalize to the same failed <error> shape via
+                # ``_failed_result``: ``ErrorReport.from_exception`` maps the code
+                # (a typed ToolError keeps its code; an unexpected exception
+                # degrades to UNKNOWN), so every tool failure has one shape and
+                # downstream consumers (hooks/telemetry) get structure. The tool
+                # *ran*, so the failure ``_settle``s on the control plane, where a
+                # PostToolUse hook may still rewrite/annotate/block it.
+                return await self._settle(name, args, _failed_result(e), result_id)
 
             # BgTaskResult: dispatch based on explicit mode.
             if isinstance(raw, BgTaskResult):
@@ -378,56 +437,203 @@ class ToolExecutor(BaseToolExecutor):
                 else:
                     # HYBRID — immediate result + bg continues
                     output = str(raw.result)
-                return ToolResult(output=output, success=True, data=raw)
+                return await self._settle(
+                    name, args, ToolResult(output=output, success=True, data=raw), result_id
+                )
 
             # Normalize the raw return into a ToolResult. A returned ToolResult is
             # used as-is; a plain value is always treated as success — failure is
             # signalled structurally (raise ToolError above, or return
             # ToolResult(success=False)), never by sniffing the output text.
             result = ToolResult.from_tool_return(raw)
+            return await self._settle(name, args, result, result_id)
 
-            # PostToolUse event: emitted after the tool ran (and was normalized).
-            # A subscriber (the hook layer) may rewrite the output text
-            # (``updated_response``), append extra context to it, or block (mark
-            # the result failed with a reason) for the model to react to.
-            outcome = await self._bus.emit(
-                PostToolUseEvent(
-                    tool_name=name,
-                    tool_input=args,
-                    tool_response=result.output,
-                    tool_use_id=result_id,
-                )
+    def _apply_post_outcome(self, result: ToolResult, outcome) -> ToolResult:
+        """Fold a PostToolUse :class:`ControlOutcome` into the result.
+
+        A subscriber (the hook layer) may rewrite the output text
+        (``updated_response``), append extra context to it, or block (mark the
+        result failed with a reason) for the model to react to. ``None`` when no
+        control subscriber maps the event (no hook wired) — the result is
+        returned untouched.
+        """
+        if outcome is None:
+            return result
+        # An output-rewrite (truncate/redact) replaces the base text before any
+        # context is appended on top of it.
+        if outcome.updated_response is not None:
+            result.output = outcome.updated_response
+        if outcome.additional_context:
+            extra = "\n".join(outcome.additional_context)
+            result.output = f"{result.output}\n{extra}" if result.output else extra
+        if outcome.is_blocking:
+            reason = outcome.system_message or outcome.stop_reason or "blocked by PostToolUse hook"
+            result.success = False
+            result.output = (
+                f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
             )
-            # ``None`` when no control subscriber maps the event (no hook wired).
-            if outcome is not None:
-                # An output-rewrite (truncate/redact) replaces the base text before
-                # any context is appended on top of it.
-                if outcome.updated_response is not None:
-                    result.output = outcome.updated_response
-                if outcome.additional_context:
-                    extra = "\n".join(outcome.additional_context)
-                    result.output = f"{result.output}\n{extra}" if result.output else extra
-                if outcome.is_blocking:
-                    reason = outcome.system_message or outcome.stop_reason or "blocked by PostToolUse hook"
-                    result.success = False
-                    result.output = (
-                        f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
-                    )
+        return result
 
-            # After-edit notification: a successful filesystem-mutating tool
-            # emits a FileMutatedEvent carrying the written path, so any
-            # subscriber can react — the LSP service syncs the doc + collects
-            # diagnostics, the file-watcher suppresses echoing our own edit back
-            # as an external change. Observation only; best-effort.
-            if result.success and getattr(tool, "mutates_filesystem", False):
-                path = tool.permission_target(args)
-                if path:
-                    try:
-                        await self._bus.emit(FileMutatedEvent(path=path, tool=name))
-                    except Exception as exc:  # noqa: BLE001 — never break the tool call
-                        logger.debug(f"ToolExecutor: FileMutatedEvent emit for {path} failed: {exc}")
+    def _post_event(
+        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None
+    ) -> PostToolUseEvent:
+        """Build the one PostToolUse event shape, from the settled result's facts.
 
-            return self._limit_result(result, name, result_id)
+        The single place the event is constructed, so every exit — whether the
+        tool ran (:meth:`_settle`) or was rejected before running
+        (:meth:`_reject`) — ships identical structure (``success``/``error``/
+        ``media``/``file_changes``). A new fact added to the event is a one-line
+        change here that both planes inherit; the shape can never drift between them.
+        """
+        return PostToolUseEvent(
+            tool_name=name,
+            tool_input=args,
+            tool_response=result.output,
+            success=result.success,
+            error=result.error,
+            media=result.media_artifacts(),
+            file_changes=result.file_changes,
+            tool_use_id=result_id,
+        )
+
+    async def _reject(
+        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None
+    ) -> ToolResult:
+        """Close the lifecycle for a call whose tool **never ran**.
+
+        Used by the pre-execution exits (unknown tool / pre-flight hook or
+        permission deny). The PostToolUse event is fanned to **observers only**
+        (``observe``): the front-end still gets its one lifecycle-end event (the
+        row closes) but no hook control fires (CC-aligned: PostToolUse does not
+        fire when PreToolUse blocked the call). The ``terminate`` marker on the
+        failed result is preserved. Best-effort — a notice never masks the failure.
+        """
+        try:
+            await self._bus.observe(self._post_event(name, args, result, result_id))
+        except Exception as exc:  # noqa: BLE001 — never mask the failure
+            logger.debug(f"ToolExecutor: not-ran notice for {name} not delivered: {exc}")
+        return result
+
+    async def _settle(
+        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None
+    ) -> ToolResult:
+        """Close the lifecycle for a call whose tool body **ran** (success, ``raise``,
+        or BgTask).
+
+        The PostToolUse event goes on the **control plane** (``emit``), so a
+        PostToolUse hook may rewrite/annotate/block the result (CC-aligned:
+        PostToolUse hooks fire on tool errors too). Then the mutated-filesystem
+        notice, semantic compression and the size cap run over the settled result.
+        """
+        outcome = await self._bus.emit(self._post_event(name, args, result, result_id))
+        result = self._apply_post_outcome(result, outcome)
+
+        # After-edit notification: a successful filesystem-mutating tool emits a
+        # FileMutatedEvent carrying the written path, so any subscriber can react
+        # — the LSP service syncs the doc + collects diagnostics, the file-watcher
+        # suppresses echoing our own edit back as an external change. Observation
+        # only; best-effort.
+        tool = self._get_tool(name)
+        if result.success and getattr(tool, "mutates_filesystem", False):
+            path = tool.permission_target(args)
+            if path:
+                try:
+                    await self._bus.emit(FileMutatedEvent(path=path, tool=name))
+                except Exception as exc:  # noqa: BLE001 — never break the tool call
+                    logger.debug(f"ToolExecutor: FileMutatedEvent emit for {path} failed: {exc}")
+
+        # Semantic compression runs BEFORE the size cap: it structurally shrinks
+        # known verbose output (git/pytest/ruff) while stashing the full original
+        # on disk for retrieval. The cap then bounds whatever remains. Both are
+        # fail-safe and never touch ``result.success``.
+        result = self._compress_result(result, name, args)
+        return self._limit_result(result, name, result_id)
+
+    def _compress_result(self, result: ToolResult, name: str, args: dict[str, Any]) -> ToolResult:
+        """Structurally compress a shell tool's output when it is understood.
+
+        Applied only for the shell tools (Bash/Terminal, plus a Jupyter
+        ``!shell`` magic), where the LLM-issued command is known, and only when
+        :func:`compress_output` recognises the command family and produces
+        something smaller. On success the *full*
+        original output is persisted to disk (a ``-raw-`` id namespace, distinct
+        from the size-cap persistence) and a marker line naming that file is
+        prepended, so the model can ``Read`` the exact original on demand.
+
+        Fail-safe: media results, empty/already-persisted output, and the
+        config-off case are skipped; ``result.success`` is never modified so a
+        failed command's exit signal is preserved.
+        """
+        cfg = self._limit_config
+        if not cfg.enable_output_compression or not result.output:
+            return result
+        # Media goes to the model verbatim; never rewrite it.
+        if result.images or result.pdfs:
+            return result
+        # Already wrapped by the size-cap layer on a prior turn — leave it.
+        if result.output.startswith(PERSISTED_OUTPUT_OPEN_TAG):
+            return result
+
+        command = self._command_for_compression(name, args)
+        if not command:
+            return result
+
+        outcome = compress_output(
+            command,
+            result.output,
+            min_chars=cfg.compression_min_output_chars,
+            max_input_chars=cfg.compression_max_input_chars,
+        )
+        if not outcome.applied:
+            return result
+
+        # Persist the full original first, so the marker can name its path. The
+        # ``raw-`` id namespace keeps it distinct from the size-cap's own file.
+        raw_id = f"raw-{uuid.uuid4().hex}"
+        full_path = tool_result_limit._persist(result.output, raw_id, self._session_id, None)
+        location = f"; full output: {full_path}" if full_path else ""
+        marker = f"[compressed: {outcome.label}; saved {outcome.saved_chars} chars{location}]"
+        logger.debug(
+            f"ToolExecutor: compressed {name} output via {outcome.label} "
+            f"({outcome.original_chars} -> {outcome.compressed_chars} chars)"
+        )
+        result.output = f"{marker}\n{outcome.text}"
+        return result
+
+    def _command_for_compression(self, name: str, args: dict[str, Any]) -> str | None:
+        """Best-effort command line for routing a shell tool's output.
+
+        Bash carries the exact command in ``args["command"]``. Terminal drives a
+        persistent PTY; its ``args["input"]`` may be interactive keystrokes, so
+        only the first line is used as a routing hint (``command_prefix`` is
+        tolerant, and an unrecognised prefix simply skips compression).
+
+        Jupyter runs *Python code*, not shell commands, so it is only routed for
+        an IPython ``!shell`` magic on the first line (``!pytest`` / ``!git
+        diff``): the leading ``!`` is stripped and the rest treated as a command.
+        A plain-Python first line yields ``None`` — never sniffed as a command,
+        so ordinary ``print()`` output is never mistaken for pytest/lint output.
+
+        Any other tool returns ``None`` (not compressed).
+        """
+        if name == "Bash":
+            command = args.get("command")
+            return command if isinstance(command, str) else None
+        if name == "Terminal":
+            value = args.get("input")
+            if isinstance(value, str) and value.strip():
+                return value.splitlines()[0]
+            return None
+        if name in ("Jupyter", "Python"):
+            code = args.get("code")
+            if not isinstance(code, str):
+                return None
+            first = code.splitlines()[0].strip() if code.splitlines() else ""
+            # Only an IPython ``!shell`` magic is a real command; strip the ``!``.
+            if first.startswith("!"):
+                return first[1:].strip() or None
+            return None
+        return None
 
     def _limit_result(self, result: ToolResult, name: str, result_id: str | None) -> ToolResult:
         """Cap a tool result's text per the tool's declared size limit.
@@ -537,6 +743,21 @@ class ToolExecutor(BaseToolExecutor):
         """
         return self._schemas_for(None)
 
+    def reconstructable_tool_names(self) -> frozenset[str]:
+        """Names (primary + aliases) of bound tools whose results are re-derivable.
+
+        A tool self-declares this via the ``reconstructable`` ClassVar (see
+        :class:`~metagpt.executor.base_tool.BaseTool`). The compaction pipeline
+        folds/clears only these tools' result bodies, since the information is
+        recoverable (re-read the file, re-run the query). Every name a tool routes
+        under is included so the Transcript matches whichever alias the model used.
+        """
+        names: set[str] = set()
+        for name, tool in self._tools.items():
+            if getattr(tool, "reconstructable", False):
+                names.add(name)
+        return frozenset(names)
+
     def get_native_tool_specs(self, provider: str = "anthropic") -> list[dict]:
         """Return native tool-use specs for all declared tools (static + MCP).
 
@@ -576,6 +797,63 @@ class ToolExecutor(BaseToolExecutor):
         self._mcp = UniversalMCP()
         await self._mcp.initialize(server_names=mcps)
         self._mcp.register_tools(self)
+
+    async def reload_mcp(self, mcps: list[str] | None = None) -> bool:
+        """Re-initialize MCP from the current ``mcp_config.json`` (hot-reload).
+
+        The reentrant sibling of :meth:`init_mcp`, driven by the file watcher
+        when ``mcp_config.json`` changes (mirrors skill hot-reload). Tears the
+        old MCP adapters out of the ``_tools`` map by identity, drops the old
+        clients, then re-runs discovery against the freshly read config and
+        re-registers whatever is now defined. A single ``ToolsChangedEvent``
+        carries the removed names so the volatile views refresh: the per-turn
+        tool catalog drops them from its incremental frontier (so a server that
+        is still present is re-announced next turn with any new schema), and the
+        native channel simply rebuilds ``tool_specs`` on the next request.
+
+        Best-effort and non-throwing. Returns True when a reload ran, False when
+        it was a no-op (no ``mcps`` declared for this role).
+        """
+        if not mcps:
+            return False
+
+        # Snapshot the currently-bound MCP adapter names before teardown, so we
+        # can announce exactly what went away (identity-deduped like cleanup()).
+        removed: list[str] = []
+        seen_ids: set[int] = set()
+        for name, tool in self._tools.items():
+            if self._category(tool) != "mcp":
+                continue
+            removed.append(name)
+            if id(tool) not in seen_ids:
+                seen_ids.add(id(tool))
+                try:
+                    tool.cleanup_session(self._session_id)
+                except Exception as exc:  # noqa: BLE001 — teardown must not raise
+                    logger.debug(f"ToolExecutor: cleanup_session for {name} failed: {exc}")
+        for name in removed:
+            del self._tools[name]
+
+        # Drop the old MCP manager (closes its clients) and rebuild from disk.
+        if self._mcp is not None:
+            await self._mcp.cleanup_clients()
+        self._mcp = UniversalMCP()
+        await self._mcp.initialize(server_names=mcps)
+        self._mcp.register_tools(self)
+
+        # Announce the churn so volatile views refresh (same contract as
+        # deregister_tool). Report the removed names — the catalog re-announces
+        # any that re-registered; native rebuilds tool_specs regardless.
+        try:
+            await self._bus.observe(
+                ToolsChangedEvent(
+                    removed=removed,
+                    reconstructable=sorted(self.reconstructable_tool_names()),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — a notice never breaks the reload
+            logger.debug(f"ToolExecutor: ToolsChangedEvent after MCP reload not delivered: {exc}")
+        return True
 
     @property
     def mcp(self) -> UniversalMCP | None:

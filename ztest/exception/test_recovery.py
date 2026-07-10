@@ -12,6 +12,7 @@ from metagpt.common.exception import (
     RecoveryRunner,
     RetryableError,
 )
+from metagpt.common.interface.event_subscriber import ObservationSubscriber
 
 pytestmark = pytest.mark.asyncio
 
@@ -247,7 +248,7 @@ async def _always(exc):
 # ---------------------------------------------------------------------------
 
 
-class _RecordingBusSub:
+class _RecordingBusSub(ObservationSubscriber):
     """Records every RecoveryEvent seen on the bus (observation-only)."""
 
     priority = 50

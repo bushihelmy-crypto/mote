@@ -121,6 +121,10 @@ _FMT_WAITING_NODE_BLOCK = (
 # identity only (the node subject on success, plus the completed / running /
 # skipped / pending sections). No description, result, error or prompt.
 _FMT_BARE_NODE_BLOCK = "  - {node_name}"
+# Suffix appended to a ring node's success subject: it loops back to itself, so
+# this is lap N (one per batch), not a retry — the graph will continue looping
+# while work remains, then route onward.
+_FMT_SELF_LOOP_LAP = " (ring: completed lap {lap}; loops back to itself per batch, will continue while work remains)"
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +453,12 @@ def push_node_notification(
         subject_label = "node success"
         event = "completed"
         subject_text = _FMT_BARE_NODE_BLOCK.format(node_name=node_name)
+        # A ring node completes once per lap, so it emits many identical success
+        # notifications. Annotate the lap so the repetition reads as progress
+        # (walking a work list one batch at a time), not a stall or restart.
+        if graph.is_self_loop(node_name):
+            lap = run_state.get(node_name).attempts
+            subject_text += _FMT_SELF_LOOP_LAP.format(lap=lap)
 
     action_hint = ""
     if status == BgStatus.FAILED:

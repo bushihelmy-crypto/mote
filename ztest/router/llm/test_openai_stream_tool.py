@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from metagpt.router.cost import CostTracker
 from metagpt.router.llm.openai_api import OpenAILLM
 
@@ -74,7 +75,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class _StreamCapture:
+class _StreamCapture(ObservationSubscriber, SyncObserver):
     """Bus subscriber that collects streamed LLM tokens (sync delivery)."""
 
     priority = 50

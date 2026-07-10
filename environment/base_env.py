@@ -154,6 +154,18 @@ class AgentEnvironment(BaseEnvironment):
         """Default: this environment has no human channel."""
         return "Not in MGXEnv, command will not be executed."
 
+    async def ask_user_question(self, questions: Any, sent_from: Optional[Any] = None) -> Any:
+        """Default: no human channel → empty structured answers.
+
+        The production front-end is ``PortHumanChannel`` (metagpt.cli), which
+        overrides this to route to a port's ``ask_questions``. A non-CLI
+        environment returning empty answers is a deliberate decision, not an
+        oversight; MGXEnv may optionally override to walk ``get_human_input``.
+        """
+        from metagpt.common.schema import AskUserQuestionAnswers
+
+        return AskUserQuestionAnswers()
+
     async def reply_to_human(self, content: str, sent_from: Optional[Any] = None) -> str:
         """Default: this environment has no human channel."""
         return "Not in MGXEnv, command will not be executed."

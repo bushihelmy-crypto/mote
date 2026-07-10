@@ -205,6 +205,23 @@ class BgGraph:
         """
         self._llm_edges.append(_LlmEdge(from_node, prompt, mapping))
 
+    def is_self_loop(self, name: str) -> bool:
+        """True if *name* has a conditional/LLM route back to itself (a ring).
+
+        A ring node re-activates itself once per lap (e.g. ``review_batch``
+        walking a file list one batch per lap), so it emits one completion
+        notification per lap — many identical "node completed" messages are
+        normal progress, not a stall or restart. Callers use this to label such
+        completions so the repetition is not misread.
+        """
+        for ce in self._conditional_edges:
+            if ce.from_node == name and name in ce.mapping.values():
+                return True
+        for le in self._llm_edges:
+            if le.from_node == name and name in le.mapping.values():
+                return True
+        return False
+
     # --- compilation ---
 
     def compile(self) -> Callable[..., Awaitable[BgTaskResult]]:

@@ -107,6 +107,17 @@ _INVALID_REQUEST_STATE_PATTERNS = (
     "signature is invalid",
     "invalid signature",
 )
+# A relay/gateway (e.g. newapi/one-api) surfacing an UPSTREAM channel failure as
+# our HTTP status. The body carries a "bad response status code" marker + an
+# upstream request-id rather than a genuine auth/permission rejection: the gateway
+# is saying "my upstream returned a bad status", not "your key is invalid". These
+# are transient (an upstream channel hiccup fanned out to the concurrent batch),
+# so a 401/403 wearing this marker must be RETRIED, not treated as an auth failure
+# (which would trigger a no-op credential rotation and abort the turn).
+_GATEWAY_RELAY_PATTERNS = (
+    "bad_response_status_code",
+    "bad response status code",
+)
 
 
 def is_retryable(exc: BaseException | None) -> bool:
@@ -207,10 +218,15 @@ def _classify_api_status_error(exc: BaseException) -> MetaGPTError | None:
         return any(p in low for p in patterns)
 
     if status == 401:
+        # A relay gateway middling an upstream channel failure as a 401 — transient.
+        if _has(_GATEWAY_RELAY_PATTERNS):
+            return LLMOverloadedError(message, status_code=status, cause=exc)
         return LLMAuthenticationError(message, status_code=status, cause=exc)
     if status == 402:
         return LLMBillingError(message, status_code=status, cause=exc)
     if status == 403:
+        if _has(_GATEWAY_RELAY_PATTERNS):
+            return LLMOverloadedError(message, status_code=status, cause=exc)
         if _has(_BILLING_PATTERNS):
             return LLMBillingError(message, status_code=status, cause=exc)
         return LLMAuthenticationError(message, status_code=status, cause=exc)

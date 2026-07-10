@@ -157,6 +157,9 @@ class Read(BaseTool):
 
     name = "Read"
     aliases: ClassVar[list[str]] = ["Read.run", "read"]
+    # Read-only observation: the file can always be re-read, so a cleared result
+    # body is recoverable on demand.
+    reconstructable: ClassVar[bool] = True
     # Read can return large files; allow a higher cap before persisting (CC).
     max_result_size_chars: ClassVar[int] = 100_000
     description = READ_DESCRIPTION

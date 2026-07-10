@@ -19,8 +19,8 @@ ContextMode = Literal["inline", "fork"]
 class SkillDefinition(BaseModel):
     """Represents a single Skill parsed from a SKILL.md file.
 
-    The first five fields (name/description/always_apply/globs/instructions)
-    are the original schema; the rest mirror claude-code's SKILL.md frontmatter
+    The first four fields (name/description/globs/instructions) are the
+    original schema; the rest mirror claude-code's SKILL.md frontmatter
     (when_to_use / context / allowed-tools / model / effort / argument-hint /
     disable_model_invocation / paths) and all carry defaults so older skills
     keep parsing unchanged.
@@ -28,7 +28,6 @@ class SkillDefinition(BaseModel):
 
     name: str = ""
     description: str = Field(default="", max_length=1024)
-    always_apply: bool = False
     globs: list[str] = Field(default_factory=list)
     instructions: str = ""
     source_path: Path = Field(default_factory=lambda: Path())

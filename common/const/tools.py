@@ -6,6 +6,27 @@ Centralized from the individual tool modules so cross-tool behavior is defined
 in one place.
 """
 
+import sys
+
+
+def _is_wsl() -> bool:
+    """True when running under WSL (Windows Subsystem for Linux).
+
+    WSL's 9p-backed filesystem access is markedly slower than a native Linux
+    disk, so searches over Windows-mounted trees need a longer budget. Detected
+    by looking for the "microsoft"/"wsl" marker the WSL kernel exposes in
+    ``/proc/sys/kernel/osrelease``.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        with open("/proc/sys/kernel/osrelease", encoding="utf-8") as f:
+            release = f.read().lower()
+    except OSError:
+        return False
+    return "microsoft" in release or "wsl" in release
+
+
 # ---------------------------------------------------------------------------
 # Document extensions (shared by Grep + Read for consistent line numbering)
 # ---------------------------------------------------------------------------
@@ -35,7 +56,9 @@ MAX_IMAGE_DIMENSION = 2048  # Read: images whose longest edge exceeds this are
 VCS_DIRECTORIES_TO_EXCLUDE = (".git", ".svn", ".hg", ".bzr", ".jj", ".sl")
 DEFAULT_HEAD_LIMIT = 250    # default cap on grep results
 MAX_COLUMNS = 500           # match lines longer than this are truncated
-SEARCH_TIMEOUT = 20.0       # search timeout in seconds
+# Search budget: WSL's 9p filesystem is much slower over Windows-mounted trees,
+# so it gets a longer deadline (mirrors Claude Code's 60s-on-WSL / 20s default).
+SEARCH_TIMEOUT = 60.0 if _is_wsl() else 20.0  # search timeout in seconds
 
 # ---------------------------------------------------------------------------
 # Glob tool

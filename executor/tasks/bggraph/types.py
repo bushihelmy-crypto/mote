@@ -96,6 +96,12 @@ class NodeRecord:
     started_at: Optional[float] = None
     ended_at: Optional[float] = None
     last_route_key: Optional[str] = None  # last LLM/conditional route taken
+    # State fields this node wrote on its last successful run (the keys of the
+    # update dict merged into the state). The field/channel model has no static
+    # per-node output declaration, so this runtime record IS the truthful answer
+    # to "what does this node produce" — read by GetNodeState to show concrete
+    # outputs / resolve downstream consumers.
+    writes: list[str] = field(default_factory=list)
     # Auto-retries consumed / allowed on the *last* failure (engine policy), used
     # by the notification renderer. Lives here rather than monkey-patched onto the
     # failure exception so the run record is the single source of truth.
@@ -147,13 +153,17 @@ class GraphRunState:
         rec.started_at = time.time()
         rec.ended_at = None
 
-    def mark_success(self, name: str, *, route_key: Optional[str] = None) -> None:
+    def mark_success(
+        self, name: str, *, route_key: Optional[str] = None, writes: Optional[list[str]] = None
+    ) -> None:
         rec = self.get(name)
         rec.status = BgStatus.SUCCESS
         rec.ended_at = time.time()
         rec.last_error = None
         if route_key is not None:
             rec.last_route_key = route_key
+        if writes is not None:
+            rec.writes = list(writes)
 
     def mark_failed(
         self,

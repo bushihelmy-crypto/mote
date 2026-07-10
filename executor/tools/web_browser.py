@@ -46,13 +46,20 @@ class WebBrowser(BaseTool):
 
     name = "WebBrowser"
     aliases = ["browser"]
-    max_result_size_chars: ClassVar[int] = 30_000
+    # Hard opt-out of the executor's persist/truncate layer: the engine already
+    # self-bounds page text at ``TEXT_MAX_CHARS`` (10M), so we don't want the
+    # 50k default clamp persisting reads to disk. ``inf`` is the sanctioned
+    # opt-out in ``persistence_threshold`` (a plain 10M would be clamped to 50k).
+    max_result_size_chars: ClassVar[float] = float("inf")
     description = WEB_BROWSER_DESCRIPTION
     requires = (
         "get_cwd",
         "get_tool_session",
         "set_tool_session",
         "get_browser_headless",
+        "get_browser_stealth",
+        "get_browser_locale",
+        "get_browser_proxy",
         "record_browser_state",
         "take_pending_browser_restore",
         "ask_human",
@@ -71,6 +78,19 @@ class WebBrowser(BaseTool):
     # run headless, the default). Defaults to a True stub so a tool bound without
     # a Role (unit tests) launches headless.
     get_browser_headless: Callable[[], bool] = staticmethod(lambda: True)
+    # Capability accessor returning the role's ``browser_stealth`` flag (True =>
+    # apply opt-in anti-bot-detection). Defaults to a False stub so a tool bound
+    # without a Role (unit tests) launches with no fingerprint overrides.
+    get_browser_stealth: Callable[[], bool] = staticmethod(lambda: False)
+    # Capability accessor returning the role's ``browser_locale`` setting
+    # ("auto"/"en"/"zh"), selecting the stealth fingerprint's locale bundle.
+    # Defaults to an "auto" stub so a tool bound without a Role (unit tests)
+    # lets the engine infer the locale from the host env.
+    get_browser_locale: Callable[[], str] = staticmethod(lambda: "auto")
+    # Capability accessor returning the role's ``browser_proxy`` URL (empty =>
+    # direct connection). Defaults to an empty stub so a tool bound without a
+    # Role (unit tests) connects directly.
+    get_browser_proxy: Callable[[], str] = staticmethod(lambda: "")
     # Capability accessors for session-resume browser-state restore:
     #   record_browser_state — persist (urls, active, storage_state) into the
     #     rollout after an action settles (so resume can re-open the tabs).
@@ -102,11 +122,21 @@ class WebBrowser(BaseTool):
             session.kill()  # previous browser died — start fresh
         cwd = self.get_cwd() if self.get_cwd is not None else ""
         headless = self.get_browser_headless() if self.get_browser_headless is not None else True
+        stealth = self.get_browser_stealth() if self.get_browser_stealth is not None else False
+        browser_locale = self.get_browser_locale() if self.get_browser_locale is not None else "auto"
+        proxy = self.get_browser_proxy() if self.get_browser_proxy is not None else ""
         # On resume, the staged state carries the storage_state to seed the new
         # context with the logged-in session before re-opening tabs.
         pending = self.take_pending_browser_restore()
         storage_state = pending.get("storage_state") if pending else None
-        session = BrowserSession(session_key=self.session_id, cwd=cwd or None, headless=headless)
+        session = BrowserSession(
+            session_key=self.session_id,
+            cwd=cwd or None,
+            headless=headless,
+            stealth=stealth,
+            browser_locale=browser_locale,
+            proxy=proxy,
+        )
         await session.start(storage_state=storage_state)
         if pending:
             await session.restore_state(
@@ -131,6 +161,9 @@ class WebBrowser(BaseTool):
         schema: Optional[dict] = None,
         submit: str = "",
         prompt: str = "",
+        extract_links: bool = False,
+        extract_images: bool = False,
+        interactive_only: bool = False,
     ) -> Any:
         """Drive the session's persistent browser with a single *action*.
 
@@ -157,6 +190,16 @@ class WebBrowser(BaseTool):
             prompt: For ``assist`` — the instruction shown to the user describing
                 what to complete in the browser window (e.g. "scan the login QR
                 code", "enter the SMS code").
+            extract_links: For ``read`` — keep hyperlink URLs (default False drops
+                them, rendering links as plain text). Set True when you need a
+                URL to navigate to.
+            extract_images: For ``read`` — keep image src URLs (default False
+                drops images entirely). Set True when you need to inspect an
+                image src.
+            interactive_only: For ``snapshot`` — drop the interleaved prose text
+                and emit only the clickable ``[N]`` element lines, for a compact
+                controls-only view when tokens are tight (default False returns
+                the full unified tree of prose + refs).
         """
         action = (action or "").strip().lower()
 
@@ -183,6 +226,9 @@ class WebBrowser(BaseTool):
                 schema,
                 submit,
                 prompt,
+                extract_links,
+                extract_images,
+                interactive_only,
             )
         except ToolError:
             raise
@@ -209,10 +255,13 @@ class WebBrowser(BaseTool):
         schema: Optional[dict] = None,
         submit: str = "",
         prompt: str = "",
+        extract_links: bool = False,
+        extract_images: bool = False,
+        interactive_only: bool = False,
     ) -> Any:
         """Route *action* to the matching engine method, returning its result."""
         if action == "snapshot":
-            return await session.snapshot()
+            return await session.snapshot(interactive_only=interactive_only)
         if action == "navigate":
             if not url:
                 raise ToolError("Error: 'navigate' requires a url.")
@@ -258,7 +307,7 @@ class WebBrowser(BaseTool):
                 headless=self.get_browser_headless(),
             )
         if action == "read":
-            return await session.read()
+            return await session.read(extract_links=extract_links, extract_images=extract_images)
         if action == "screenshot":
             png = await session.screenshot()
             b64 = base64.b64encode(png).decode("ascii")

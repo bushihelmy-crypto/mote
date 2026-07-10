@@ -68,6 +68,19 @@ class TestRegister:
         assert second is not first
         assert second.name == "new-strong"
 
+    def test_register_invalidates_all_variants(self, router):
+        # A re-register must drop EVERY cached variant for the name — including the
+        # reducer-less COMPRESSION instance — not just the THINK one, or a stale
+        # compression instance stays pinned to the old config.
+        from metagpt.router.router import COMPRESSION_TASK
+
+        router.map_task(COMPRESSION_TASK, "strong")
+        first = router.route_for_task(COMPRESSION_TASK)
+        router.register("strong", LLMConfig(api_key="sk-test", model="new-strong"))
+        second = router.route_for_task(COMPRESSION_TASK)
+        assert second is not first
+        assert second.name == "new-strong"
+
 
 class TestIntelligentRoute:
     @pytest.mark.asyncio
@@ -110,3 +123,85 @@ class TestFallbackSupplier:
         llm = router.route(name="strong")
         assert llm._fallback_supplier is not None
         assert callable(llm._fallback_supplier)
+
+
+class TestContextReducerInjection:
+    """The COMPRESS-recovery reducer is stamped onto every built/routed LLM,
+    EXCEPT the dedicated COMPRESSION instance (built reducer-less so the
+    ContextManager's summarize reducer can't re-enter the COMPRESS loop)."""
+
+    def test_built_instance_gets_reducer(self, router):
+        sentinel = object()
+        router.context_reducer = sentinel
+        llm = router.route(name="strong")
+        assert llm.context_reducer is sentinel
+
+    def test_route_by_llm_config_gets_reducer(self, router):
+        # The main think path bypasses _build via route(llm_config=), so it must
+        # be stamped there too.
+        from metagpt.common.config.config.llm_config import LLMConfig
+
+        sentinel = object()
+        router.context_reducer = sentinel
+        llm = router.route(llm_config=LLMConfig(api_key="sk-test", model="gpt-4o"))
+        assert llm.context_reducer is sentinel
+
+    def test_default_none_when_unset(self, router):
+        llm = router.route(name="strong")
+        assert llm.context_reducer is None
+
+    def test_compression_instance_has_no_reducer(self, router):
+        # The summarize reducer runs on this instance and issues its own inner
+        # aask(); withholding the reducer breaks the _compress → summarize cycle
+        # at the injection layer (no runtime guard).
+        from metagpt.router.router import COMPRESSION_TASK
+
+        sentinel = object()
+        router.context_reducer = sentinel
+        llm = router.route_for_task(COMPRESSION_TASK)
+        assert llm.context_reducer is None
+
+    def test_compression_instance_falls_back_to_default_reducer_less(self, router):
+        # With no compression model *card* registered, the task-map entry
+        # (compress_llm) can't resolve, so the task routes to the default — but
+        # still reducer-less, so an unconfigured compression model can't recurse.
+        from metagpt.router.router import COMPRESSION_TASK
+
+        sentinel = object()
+        router.context_reducer = sentinel
+        assert router.task_map.get(COMPRESSION_TASK) not in router._cards
+        llm = router.route_for_task(COMPRESSION_TASK)
+        assert llm.context_reducer is None
+
+    def test_compression_instance_keeps_fallback_supplier(self, router):
+        # Only COMPRESS is withheld; FALLBACK/ROTATE recovery stay wired.
+        from metagpt.router.router import COMPRESSION_TASK
+
+        llm = router.route_for_task(COMPRESSION_TASK)
+        assert llm._fallback_supplier is not None
+        assert callable(llm._fallback_supplier)
+
+    def test_compression_instance_cached_separately_from_think_instance(self, router):
+        # The reducer-less compression instance must not alias the reducer-bearing
+        # instance built for the same model on the main think path.
+        from metagpt.router.router import COMPRESSION_TASK
+
+        sentinel = object()
+        router.context_reducer = sentinel
+        router.map_task(COMPRESSION_TASK, "strong")
+        compression_llm = router.route_for_task(COMPRESSION_TASK)
+        think_llm = router.route(name="strong")
+        assert compression_llm is not think_llm
+        assert compression_llm.context_reducer is None
+        assert think_llm.context_reducer is sentinel
+
+    def test_summary_instance_keeps_reducer(self, router):
+        # SUMMARY is a top-level turn-end call (not nested inside compression),
+        # so it keeps its reducer — only COMPRESSION is withheld.
+        from metagpt.router.router import SUMMARY_TASK
+
+        sentinel = object()
+        router.context_reducer = sentinel
+        router.map_task(SUMMARY_TASK, "strong")
+        llm = router.route_for_task(SUMMARY_TASK)
+        assert llm.context_reducer is sentinel

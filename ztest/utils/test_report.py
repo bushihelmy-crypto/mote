@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 import metagpt.common.utils.report as report_mod
 from metagpt.common.events import EventBus, ResourceReportEvent, set_bus
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from metagpt.common.utils.report import (
     CURRENT_ROLE,
     END_MARKER_NAME,
@@ -34,7 +35,7 @@ from metagpt.common.utils.report import (
 )
 
 
-class _Recorder:
+class _Recorder(ObservationSubscriber, SyncObserver):
     priority = 50
 
     def __init__(self):

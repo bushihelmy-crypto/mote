@@ -26,16 +26,20 @@ from __future__ import annotations
 from typing import List, Optional
 
 from metagpt.common.events import DiagnosticsEvent
+from metagpt.common.interface import ObservationSubscriber, TurnContextPriority
 
 
-class DiagnosticsBuffer:
+class DiagnosticsBuffer(ObservationSubscriber):
     """Stages DiagnosticsEvent blocks and renders them as next-turn context."""
 
     name = "lsp"
     # Render order in the turn-context bus (after git/token/compaction/tasks).
-    # The same value serves as the ObservationSubscriber dispatch priority, where it is
-    # immaterial — this handler only accumulates, returning no outcome.
-    priority: int = 40
+    # This object is dual-role (ObservationSubscriber + EphemeralContextSource)
+    # sharing one ``priority`` field: the turn-context render order is its
+    # authoritative meaning, so it keys on TurnContextPriority (not
+    # ObserverPriority). Its observer-dispatch position is immaterial — the
+    # handler only accumulates, returning no outcome.
+    priority: int = TurnContextPriority.DIAGNOSTICS
     save_to_context: bool = True
 
     def __init__(self) -> None:

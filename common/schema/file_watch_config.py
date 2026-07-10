@@ -67,6 +67,16 @@ class FileWatchConfig(BaseModel):
             "built collaborators keep their snapshot for the session."
         ),
     )
+    reload_mcp: bool = Field(
+        default=False,
+        description=(
+            "Hot-reload MCP servers when mcp_config.json changes. Auto-registers "
+            "a FileChanged handler and extends the watched roots to the MCP "
+            "config file's directory. Re-inits the executor's MCP tools in place "
+            "(tool_specs rebuild on the next request); independent of "
+            "reload_config since MCP config lives in its own file."
+        ),
+    )
 
 
 __all__ = ["FileWatchConfig"]

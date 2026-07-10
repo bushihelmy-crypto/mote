@@ -27,18 +27,23 @@ from metagpt.common.interface.child_role import (
     build_child_role,
     register_child_role_builder,
 )
+from metagpt.common.interface.context_reducer import ContextReducer
 from metagpt.common.interface.event_subscriber import (
+    DEFAULT_PRIORITY,
     DEFAULT_STAGE,
     DURABLE,
     FAIL_CLOSED,
     FAIL_OPEN,
     MIRROR,
+    BusAware,
     ControlOutcome,
     ControlStage,
     ControlSubscriber,
     DeliveryPolicy,
     FailMode,
     ObservationSubscriber,
+    ObserverPriority,
+    SyncObserver,
 )
 from metagpt.common.interface.file_snapshot import FileSnapshotStore
 from metagpt.common.interface.hook_runner import HookRunner
@@ -48,8 +53,13 @@ from metagpt.common.interface.message_activity import MessageActivity
 from metagpt.common.interface.message_sink import MessageSink
 from metagpt.common.interface.message_store import MessageStore
 from metagpt.common.interface.request_assembler import RequestAssembler
+from metagpt.common.interface.resource_loader import ResourceProvider
 from metagpt.common.interface.terminal_state import TerminalStateStore
-from metagpt.common.interface.turn_context import EphemeralContextSource
+from metagpt.common.interface.turn_context import (
+    DEFAULT_TURN_CONTEXT_PRIORITY,
+    EphemeralContextSource,
+    TurnContextPriority,
+)
 
 __all__ = [
     "MessageStore",
@@ -60,18 +70,26 @@ __all__ = [
     "MessageSink",
     "HookRunner",
     "FileSnapshotStore",
+    "ResourceProvider",
     "TerminalStateStore",
     "KernelStateStore",
     "BrowserStateStore",
     "ChildRoleBuilder",
     "build_child_role",
     "register_child_role_builder",
+    "ContextReducer",
     "EphemeralContextSource",
+    "TurnContextPriority",
+    "DEFAULT_TURN_CONTEXT_PRIORITY",
     "ControlSubscriber",
     "ControlOutcome",
     "ControlStage",
     "DEFAULT_STAGE",
+    "ObserverPriority",
+    "DEFAULT_PRIORITY",
     "ObservationSubscriber",
+    "SyncObserver",
+    "BusAware",
     "DeliveryPolicy",
     "MIRROR",
     "DURABLE",

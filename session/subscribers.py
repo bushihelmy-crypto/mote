@@ -33,7 +33,12 @@ from metagpt.common.events.types import (
     MessageAppendedEvent,
     TurnEndEvent,
 )
-from metagpt.common.interface.event_subscriber import DURABLE, DeliveryPolicy
+from metagpt.common.interface.event_subscriber import (
+    DURABLE,
+    DeliveryPolicy,
+    ObservationSubscriber,
+    ObserverPriority,
+)
 from metagpt.common.logs import log_class
 from metagpt.session.events import (
     CompactedEvent,
@@ -45,11 +50,11 @@ from metagpt.session.log import SessionLog
 
 
 @log_class(level="DEBUG", exclude={"handle"})
-class RecorderSubscriber:
+class RecorderSubscriber(ObservationSubscriber):
     """Streams bus events to a :class:`SessionLog` (the session rollout)."""
 
     #: Run after the hook subscriber so vetoes are folded before we persist.
-    priority: int = 80
+    priority: int = ObserverPriority.PERSIST
     #: Opt into durable delivery: never time-boxed, failures surfaced not dropped.
     delivery: DeliveryPolicy = DURABLE
 

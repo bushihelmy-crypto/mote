@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional, Sequence
 
-from metagpt.common.interface import EphemeralContextSource
+from metagpt.common.interface import DEFAULT_TURN_CONTEXT_PRIORITY, EphemeralContextSource
 from metagpt.common.logs import logger
 from metagpt.context.turn_context.format import wrap_system_reminder
 
@@ -42,7 +42,7 @@ class TurnContextBus:
     def __init__(self, sources: Sequence[EphemeralContextSource]) -> None:
         # Stable priority order (lower first); ties keep registration order.
         self._sources: List[EphemeralContextSource] = sorted(
-            sources, key=lambda s: getattr(s, "priority", 0)
+            sources, key=lambda s: int(getattr(s, "priority", DEFAULT_TURN_CONTEXT_PRIORITY))
         )
         # Partition by save_to_context (missing attribute => persisted).
         self._persistent: List[EphemeralContextSource] = [
@@ -51,6 +51,11 @@ class TurnContextBus:
         self._ephemeral: List[EphemeralContextSource] = [
             s for s in self._sources if not getattr(s, "save_to_context", True)
         ]
+        # Central "what did this turn inject?" view: source name -> did it emit a
+        # block on the most recent render of the bucket it belongs to. Updated by
+        # ``_render_bucket``; the single place to observe/trace turn-context
+        # activity across the (otherwise self-suppressing) sources.
+        self.last_render: dict[str, bool] = {}
 
     async def collect(self, *, cwd: Optional[str] = None) -> str:
         """Render the ephemeral (request-only) sources into one reminder block.
@@ -85,6 +90,14 @@ class TurnContextBus:
         results = await asyncio.gather(
             *(self._render_one(s, cwd) for s in sources)
         )
+        # Record the injection manifest for this bucket (merged into last_render
+        # so the two buckets share one observable view), then log a one-line
+        # trace of which feeds actually spoke this turn.
+        manifest = {getattr(s, "name", repr(s)): bool(r) for s, r in zip(sources, results)}
+        self.last_render.update(manifest)
+        emitted = [n for n, hit in manifest.items() if hit]
+        if emitted:
+            logger.debug(f"turn_context injected: {emitted}")
         return wrap_system_reminder(r for r in results if r)
 
     @staticmethod

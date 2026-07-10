@@ -35,10 +35,17 @@ from metagpt.common.events import (
     observe_event_sync,
     set_bus,
 )
-from metagpt.common.interface.event_subscriber import DURABLE, ControlStage
+from metagpt.common.interface.event_subscriber import (
+    DURABLE,
+    BusAware,
+    ControlStage,
+    ControlSubscriber,
+    ObservationSubscriber,
+    SyncObserver,
+)
 
 
-class ObserverSub:
+class ObserverSub(ObservationSubscriber):
     """An observation subscriber: records what it sees; its return is ignored."""
 
     def __init__(self, priority: int, log: list, *, tag: str = ""):
@@ -50,12 +57,17 @@ class ObserverSub:
         self._log.append((self._tag or self.priority, event.name))
 
 
-class ControlSub:
+class ControlSub(ControlSubscriber):
     """A control subscriber: folds a fixed typed outcome via ``handle_control``.
 
     Declares the event names it ``handles`` (the bus routes by name into buckets);
-    ``stage`` orders it within a shared bucket (rewrite before gate).
+    ``stage`` orders it within a shared bucket (rewrite before gate). The
+    class-level ``handles`` is a non-empty placeholder so ``__init_subclass__``
+    is satisfied; each instance overrides it via ``self.handles`` (the bus reads
+    the instance attribute, which shadows the class default).
     """
+
+    handles = (PRE_TOOL_USE,)
 
     def __init__(
         self,
@@ -77,7 +89,7 @@ class ControlSub:
         return self._outcome
 
 
-class SyncSub:
+class SyncSub(ObservationSubscriber, SyncObserver):
     def __init__(self, priority: int, log: list):
         self.priority = priority
         self._log = log
@@ -122,6 +134,35 @@ def test_equal_priority_keeps_insertion_order():
     bus.subscribe(ObserverSub(10, log, tag="second"))
     tags = [getattr(s, "_tag") for s in bus.subscribers]
     assert tags == ["first", "second"]
+
+
+def test_on_subscribed_hook_receives_bus():
+    """A producer-observer's ``on_subscribed`` is called once with the bus."""
+
+    class ProducerSub(ObservationSubscriber, BusAware):
+        priority = 50
+
+        def __init__(self):
+            self.bus = None
+
+        async def handle(self, event) -> None:
+            return None
+
+        def on_subscribed(self, bus) -> None:
+            self.bus = bus
+
+    bus = EventBus()
+    sub = ProducerSub()
+    bus.subscribe(sub)
+    assert sub.bus is bus
+
+
+def test_subscribe_without_on_subscribed_is_noop():
+    """A subscriber lacking ``on_subscribed`` subscribes fine (no attr error)."""
+    bus = EventBus()
+    obs = ObserverSub(10, [], tag="plain")
+    bus.subscribe(obs)  # must not raise
+    assert obs in bus.subscribers
 
 
 def test_unsubscribe_removes_from_either_plane():
@@ -229,7 +270,7 @@ async def test_observer_return_is_dropped_never_folded():
     only the control plane folds, by construction. With no control subscriber
     mapping the event, ``emit`` returns ``None``."""
 
-    class SneakyObserver:
+    class SneakyObserver(ObservationSubscriber):
         priority = 10
 
         async def handle(self, event):
@@ -264,7 +305,7 @@ async def test_post_tool_use_output_rewrite_threads_forward():
     seen: list = []
     provenance: list = []
 
-    class Rewriter:
+    class Rewriter(ControlSubscriber):
         handles = (POST_TOOL_USE,)
         stage = ControlStage.REWRITE
         name = "redactor"
@@ -272,7 +313,7 @@ async def test_post_tool_use_output_rewrite_threads_forward():
         async def handle_control(self, event):
             return ToolResultOutcome(updated_response="rewritten")
 
-    class Observer:
+    class Observer(ControlSubscriber):
         handles = (POST_TOOL_USE,)
         stage = ControlStage.GATE
 
@@ -301,14 +342,14 @@ async def test_output_rewrite_folds_last_wins():
     """When two subscribers both rewrite the output, the last one wins the fold
     (mirrors ``updated_args`` last-wins)."""
 
-    class First:
+    class First(ControlSubscriber):
         handles = (POST_TOOL_USE,)
         stage = ControlStage.REWRITE
 
         async def handle_control(self, event):
             return ToolResultOutcome(updated_response="first")
 
-    class Second:
+    class Second(ControlSubscriber):
         handles = (POST_TOOL_USE,)
         stage = ControlStage.GATE
 
@@ -332,7 +373,7 @@ async def test_one_bad_observer_does_not_break_stream():
     bus = EventBus()
     log: list = []
 
-    class Boom:
+    class Boom(ObservationSubscriber):
         priority = 5
 
         async def handle(self, event):
@@ -350,7 +391,7 @@ async def test_one_bad_control_subscriber_does_not_break_fold():
     bus = EventBus()
     log: list = []
 
-    class BoomControl:
+    class BoomControl(ControlSubscriber):
         handles = (PRE_TOOL_USE,)
         stage = ControlStage.REWRITE  # runs first, fails open (default)
 
@@ -380,7 +421,7 @@ async def test_one_bad_control_subscriber_does_not_break_fold():
 
 @pytest.mark.asyncio
 async def test_control_subscriber_timeout_is_skipped():
-    class Hang:
+    class Hang(ControlSubscriber):
         handles = (PRE_TOOL_USE,)
 
         async def handle_control(self, event):
@@ -398,7 +439,7 @@ async def test_control_subscriber_timeout_is_skipped():
 async def test_mirror_observer_timeout_is_dropped():
     log: list = []
 
-    class Slow:
+    class Slow(ObservationSubscriber):
         priority = 5
 
         async def handle(self, event):
@@ -419,7 +460,7 @@ async def test_mirror_observer_timeout_is_dropped():
 
 @pytest.mark.asyncio
 async def test_durable_sink_failure_is_counted_not_swallowed_silently():
-    class DurableBoom:
+    class DurableBoom(ObservationSubscriber):
         priority = 5
         delivery = DURABLE
 
@@ -439,7 +480,7 @@ async def test_durable_sink_is_not_time_boxed():
     (it is never wrapped in wait_for)."""
     done: list = []
 
-    class SlowDurable:
+    class SlowDurable(ObservationSubscriber):
         priority = 5
         delivery = DURABLE
 
@@ -489,7 +530,7 @@ def test_emit_sync_only_reaches_sync_subscribers():
 def test_emit_sync_isolates_errors():
     bus = EventBus()
 
-    class BoomSync:
+    class BoomSync(ObservationSubscriber, SyncObserver):
         priority = 5
 
         async def handle(self, event):
@@ -560,7 +601,7 @@ async def test_control_runs_in_callers_contextvar_scope():
     marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default="unset")
     seen: list = []
 
-    class ContextProbe:
+    class ContextProbe(ControlSubscriber):
         handles = (PRE_TOOL_USE,)
 
         async def handle_control(self, event):
@@ -575,3 +616,127 @@ async def test_control_runs_in_callers_contextvar_scope():
     finally:
         marker.reset(token)
     assert seen == ["in-callers-context"]
+
+
+# ---------------------------------------------------------------------------
+# Contract enforcement — "declare, don't sniff" fails loud
+# ---------------------------------------------------------------------------
+
+
+def test_control_subclass_with_empty_handles_fails_at_class_def():
+    """A control subscriber that forgets to declare ``handles`` is a routing
+    no-op — caught at class-definition time, not silently mapped to nothing."""
+    with pytest.raises(TypeError, match="handles"):
+
+        class NoHandles(ControlSubscriber):
+            handles = ()  # empty — the bus could never route to it
+
+            async def handle_control(self, event):
+                return None
+
+
+def test_fail_closed_subclass_without_on_failure_fails_at_class_def():
+    """A fail-closed gate must define ``on_failure`` so the bus can synthesize a
+    typed deny when it crashes; omitting it is caught at class-def time."""
+    from metagpt.common.interface.event_subscriber import FAIL_CLOSED
+
+    with pytest.raises(TypeError, match="on_failure"):
+
+        class BadGate(ControlSubscriber):
+            handles = (PRE_TOOL_USE,)
+            fail_mode = FAIL_CLOSED
+
+            async def handle_control(self, event):
+                return None
+
+
+def test_control_subscriber_missing_handle_control_cannot_instantiate():
+    """A control subscriber without ``handle_control`` is abstract — the missing
+    method is caught at construction, not when the bus first dispatches to it."""
+
+    class NoHandler(ControlSubscriber):
+        handles = (PRE_TOOL_USE,)
+
+    with pytest.raises(TypeError):
+        NoHandler()
+
+
+def test_observation_subscriber_missing_handle_cannot_instantiate():
+    class NoHandle(ObservationSubscriber):
+        pass
+
+    with pytest.raises(TypeError):
+        NoHandle()
+
+
+def test_sync_observer_missing_handle_sync_cannot_instantiate():
+    class NoSync(ObservationSubscriber, SyncObserver):
+        async def handle(self, event):
+            return None
+
+    with pytest.raises(TypeError):
+        NoSync()
+
+
+def test_bus_aware_missing_on_subscribed_cannot_instantiate():
+    class NoHook(ObservationSubscriber, BusAware):
+        async def handle(self, event):
+            return None
+
+    with pytest.raises(TypeError):
+        NoHook()
+
+
+def test_subscribe_non_subscriber_raises_type_error():
+    """An object that declares neither plane is rejected at ``subscribe`` — the
+    bus never guesses a plane from method names."""
+
+    class Bystander:
+        async def handle(self, event):  # right method name, no plane declared
+            return None
+
+    bus = EventBus()
+    with pytest.raises(TypeError, match="neither a ControlSubscriber"):
+        bus.subscribe(Bystander())
+
+
+@pytest.mark.asyncio
+async def test_wrong_type_outcome_is_contained_fail_open():
+    """A control subscriber that returns an outcome of the wrong type for the
+    event does NOT crash the turn — a fail-open sub's malformed outcome is
+    dropped (routed through ``fail_mode`` exactly like a handler crash)."""
+
+    class WrongType(ControlSubscriber):
+        handles = (PRE_TOOL_USE,)
+
+        async def handle_control(self, event):
+            # PreToolUse binds ToolCallOutcome; returning a ToolResultOutcome is
+            # the wrong type and must be contained, not folded.
+            return ToolResultOutcome(updated_response="nope")
+
+    bus = EventBus()
+    bus.subscribe(WrongType())
+    out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
+    assert out is None  # contained (fail-open drops it), turn survives
+
+
+@pytest.mark.asyncio
+async def test_wrong_type_outcome_is_contained_fail_closed_denies():
+    """A fail-closed gate whose (buggy) outcome is the wrong type is contained
+    per ``fail_mode`` — its ``on_failure`` typed deny folds, the turn survives."""
+    from metagpt.common.interface.event_subscriber import FAIL_CLOSED
+
+    class WrongTypeGate(ControlSubscriber):
+        handles = (PRE_TOOL_USE,)
+        fail_mode = FAIL_CLOSED
+
+        async def handle_control(self, event):
+            return ToolResultOutcome(updated_response="nope")  # wrong type
+
+        def on_failure(self, reason: str) -> ToolCallOutcome:
+            return ToolCallOutcome(behavior="deny", system_message=reason)
+
+    bus = EventBus()
+    bus.subscribe(WrongTypeGate())
+    out = await bus.emit(PreToolUseEvent(tool_name="Bash"))
+    assert out is not None and out.behavior == "deny"

@@ -1,13 +1,34 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Interactive REPL CLI for AgentFrame.
+"""metagpt.cli — the decoupled, multi-consumer display framework for AgentFrame.
 
-A top-level conversation loop: read a line from the user, run one ReAct turn
-through the :class:`AgentControl` plane, print the reply, repeat. Two-stage
-Ctrl+C (interrupt the in-flight turn vs. double-press-to-exit at the prompt)
-mirrors codex / claude-code.
+This package is the *target architecture* described in ``ARCHITECTURE.md``: the
+core only emits "what happened" (``AgentEvent`` on a per-role ``EventBus``), two
+projectors fold that single source of truth into "what a human should see"
+(``ViewEvent``) and "what a machine should receive" (``ServerNotification``), and
+any number of consumers each decide "how to deliver".
+
+Phase ① (this slice) wires the **terminal** path end-to-end:
+
+    AgentEvent ─▶ ViewProjector ─▶ ViewEvent ─▶ TerminalConsumer (rich TUI)
+
+while leaving the machine protocol (``proto/``) and multi-tenant gateway
+(``router/``) as documented stubs to be filled in later phases.
+
+It builds *on top of* — and never modifies — ``metagpt.common.events`` (the
+event spine) and ``metagpt.environment.control`` (the control plane).
 """
 
-from metagpt.cli.repl import Repl, build_repl, run_repl
+__all__ = ["build_app", "run_app"]
 
-__all__ = ["Repl", "build_repl", "run_repl"]
+
+def __getattr__(name: str):  # PEP 562 — lazy top-level re-export.
+    # ``build_app`` / ``run_app`` pull in the whole app stack (consumers, io,
+    # driver, the framework runtime). Re-export them lazily so that merely
+    # importing a leaf subpackage (e.g. ``metagpt.cli.view``) never forces that
+    # heavy subtree to import — and so each layer stays independently importable.
+    if name in ("build_app", "run_app"):
+        from metagpt.cli.app import build_app, run_app
+
+        return {"build_app": build_app, "run_app": run_app}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

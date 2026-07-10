@@ -11,7 +11,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 import re
@@ -34,8 +33,8 @@ from metagpt.common.prompt.role import (
     LANGUAGE_SECTION,
     PREFIX_TEMPLATE,
     SCRATCHPAD_SECTION,
-    SUMMARIZE_TOOL_RESULTS_SECTION,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    TASK_FINAL_OUTPUT_SECTION,
 )
 from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
 from metagpt.common.utils.role_zero_utils import get_time_info
@@ -114,20 +113,11 @@ class ThinkContext:
     role_prefix: str = ""
     team_info: str = ""
 
-    # Tools
-    tool_info: str = ""  # built-in tools (rendered JSON for ${available_commands})
-    mcp_info: str = ""  # MCP tools (rendered JSON for ${mcp_tools})
-    pipeline_info: str = ""  # pipeline tools (rendered JSON for ${pipeline_tools})
-    # Note introducing the external tool categories (MCP / pipeline). Built only
-    # for the categories actually present, and "" when neither exists — so the
-    # model is never pointed at a "# MCP Tools" / "# Pipeline Tools" section that
-    # was omitted because it was empty.
-    external_tools_note: str = ""
-
     # Environment
     env_section: str = ""
 
-    # Skills
+    # Skills — the static loading guide only (the volatile index migrated to the
+    # per-turn SkillListingContextSource).
     skills_info: str = ""
 
     # Dynamic system-prompt sections (below the cache boundary). Each is the
@@ -136,7 +126,7 @@ class ThinkContext:
     language: str = ""
     scratchpad: str = ""
     frc: str = ""
-    summarize_tool_results: str = ""
+    task_final_output: str = ""
     pipeline_section: str = ""
 
     # Protocol-specific ${placeholder} fills supplied by the active command
@@ -249,19 +239,15 @@ class PromptBuilder:
         return dict(
             role_info=PromptBuilder._section("# Basic Info", ctx.role_info),
             team_info=PromptBuilder._section("# Team", ctx.team_info),
-            available_commands=PromptBuilder._section("# Available Commands", ctx.tool_info),
-            external_tools_note=ctx.external_tools_note,
-            mcp_tools=PromptBuilder._section("# MCP Tools", ctx.mcp_info),
-            pipeline_tools=PromptBuilder._section("# Pipeline Tools", ctx.pipeline_info),
             env_section=ctx.env_section,
             skills_info=ctx.skills_info,
             memory=ctx.memory,
             language=ctx.language,
             scratchpad=ctx.scratchpad,
             frc=ctx.frc,
-            summarize_tool_results=ctx.summarize_tool_results,
+            task_final_output=ctx.task_final_output,
             pipeline_section=ctx.pipeline_section,
-            # command_guide (+ any future protocol section).
+            # command_guide + tool_usage_guide (+ any future protocol section).
             **ctx.prompt_vars,
         )
 
@@ -344,12 +330,12 @@ class PromptBuilder:
 
         ctx.working_dir = inputs.working_dir
 
-        ctx.tool_info = json.dumps(subsystems.executor.get_tool_schemas())
-        mcp_schemas = subsystems.executor.get_mcp_tool_schemas()
-        ctx.mcp_info = json.dumps(mcp_schemas) if mcp_schemas else ""
-        pipeline_schemas = subsystems.executor.get_pipeline_tool_schemas()
-        ctx.pipeline_info = json.dumps(pipeline_schemas) if pipeline_schemas else ""
-        ctx.external_tools_note = PromptBuilder._make_external_tools_note(ctx.mcp_info, ctx.pipeline_info)
+        # The volatile tool catalog (built-in / MCP / pipeline schemas) is NOT
+        # built into the system prompt. Native tool-use passes every tool via the
+        # API ``tools=`` param; XML mode delivers the catalog per-turn through the
+        # ephemeral-context bus (ToolCatalogContextSource) so a tool/MCP hot-reload
+        # never busts the cacheable prefix. The static orientation on how to call
+        # tools rides ${tool_usage_guide} (from the channel's prompt_vars) instead.
         # The static environment block (cwd / platform / model). Git working-tree
         # state used to be appended here; it now flows through the per-turn
         # ephemeral-context bus (the turn_context layer) and lands in the user
@@ -360,13 +346,13 @@ class PromptBuilder:
             working_dir=ctx.working_dir,
             project_root=inputs.project_root,
         )
-        ctx.skills_info = PromptBuilder._make_skills_info(subsystems.skill_manager, config)
+        ctx.skills_info = PromptBuilder._make_skills_guide(subsystems.skill_manager)
 
         # Dynamic sections (below the cache boundary).
         ctx.memory, ctx.memory_context = PromptBuilder._make_memory(inputs.memory_dir)
         ctx.language = PromptBuilder._make_language(inputs.language)
         ctx.scratchpad = PromptBuilder._make_scratchpad(inputs.scratchpad_dir)
-        ctx.frc, ctx.summarize_tool_results = PromptBuilder._make_compaction_sections(config)
+        ctx.frc, ctx.task_final_output = PromptBuilder._make_compaction_sections(config)
         ctx.pipeline_section = PromptBuilder._make_pipeline_section(subsystems.executor)
 
         # Per-turn ephemeral context (git / token pressure / background tasks /
@@ -439,31 +425,6 @@ class PromptBuilder:
         return await turn_context_bus.collect(cwd=cwd or None)
 
     @staticmethod
-    def _make_external_tools_note(mcp_info: str, pipeline_info: str) -> str:
-        """Introduce the external tool categories that live in their own sections.
-
-        Tailored to the categories actually present (MCP / pipeline). Returns ""
-        when neither exists, so the model is never told to look for a
-        "# MCP Tools" / "# Pipeline Tools" section that was omitted as empty.
-        """
-        has_mcp = bool(mcp_info and mcp_info.strip())
-        has_pipeline = bool(pipeline_info and pipeline_info.strip())
-        if not has_mcp and not has_pipeline:
-            return ""
-        prefix = "The commands listed in `# Available Commands` above are your built-in tools; "
-        call = " Call every command directly by name with keyword arguments, regardless of category."
-        mcp_phrase = 'external MCP tools (named `server:tool_name`, e.g. "github:get_me")'
-        warn = " MCP tools connect to external services and may fail — if one does, inform the user."
-        if has_mcp and has_pipeline:
-            body = f"{mcp_phrase} and background pipeline tools are listed in their own sections below."
-            return prefix + body + call + warn
-        if has_mcp:
-            body = f"{mcp_phrase} are listed in their own section below."
-            return prefix + body + call + warn
-        body = "background pipeline tools are listed in their own section below."
-        return prefix + body + call
-
-    @staticmethod
     def _make_language(language) -> str:
         if not language:
             return ""
@@ -477,19 +438,23 @@ class PromptBuilder:
 
     @staticmethod
     def _make_compaction_sections(config) -> tuple[str, str]:
-        """Build the # Function Result Clearing and tool-results sections.
+        """Build the compaction-gated sections: # Function Result Clearing and
+        # Task Final Output Specifications.
 
         Emitted only when adaptive (token-based) compaction is active, since
-        that is what actually clears old tool results from metagpt.context. keep_recent
-        comes from protected_recent_messages. Returns ("", "") otherwise.
+        that is what actually clears old tool results from metagpt.context. Both
+        describe compression artifacts: FRC warns the model that old results get
+        cleared (and to write down anything it needs before that happens), and
+        the final-output contract is the durable record that survives clearing.
+        keep_recent comes from protected_recent_messages. Returns ("", "")
+        otherwise.
         """
         rz = config.role_zero
-        active = getattr(rz, "enable_compressable_memory", False) and getattr(rz, "compress_type", "") == "compaction"
-        if not active:
+        if not getattr(rz, "enable_compressable_memory", False):
             return "", ""
         keep_recent = getattr(rz, "protected_recent_messages", 8)
         frc = Template(FRC_SECTION).safe_substitute(keep_recent=str(keep_recent))
-        return frc, SUMMARIZE_TOOL_RESULTS_SECTION
+        return frc, TASK_FINAL_OUTPUT_SECTION
 
     @staticmethod
     def _make_pipeline_section(executor) -> str:
@@ -528,9 +493,12 @@ class PromptBuilder:
         return "\n".join(lines)
 
     @staticmethod
-    def _make_skills_info(skill_manager, config) -> str:
+    def _make_skills_guide(skill_manager) -> str:
+        """The static Skill Loading Guide for the system prompt.
+
+        Only the guide (constant per session) lives here; the volatile Skills
+        index is delivered per-turn by SkillListingContextSource.
+        """
         if skill_manager.injector:
-            return skill_manager.injector.build_content(
-                max_tokens=config.role_zero.max_skill_tokens,
-            )
+            return skill_manager.injector.build_guide()
         return ""

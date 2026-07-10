@@ -40,7 +40,6 @@ class TestProviderWiring:
         cp = role.context_provider
         assert cp._schema is role.role_schema
         assert cp._state is role.state
-        assert cp._config is role.config
 
 
 class TestLoopContext:

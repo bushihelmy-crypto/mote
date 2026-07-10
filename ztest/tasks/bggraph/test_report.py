@@ -11,10 +11,11 @@ from __future__ import annotations
 import pytest
 
 from metagpt.common.events import EventBus, TaskProgressEvent, set_bus
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from metagpt.executor.tasks.bggraph.report import MAX_RESULT_DISPLAY_CHARS, make_progress_writer
 
 
-class _Recorder:
+class _Recorder(ObservationSubscriber, SyncObserver):
     priority = 50
 
     def __init__(self):

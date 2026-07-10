@@ -22,7 +22,8 @@ Key pieces:
   it, which the scripts deliberately avoid).
 - :class:`ScriptedRouter` — every ``route*`` entry point hands back the one
   ``ScriptedLLM`` (mirrors how ``Role`` resolves its think LLM through the
-  router). Injected onto ``role._components._router`` so nothing touches the network.
+  router). Seeded into the component graph's ``router`` slot so nothing touches
+  the network.
 - :func:`build_role` — constructs a real ``Role`` rooted at a tmp workspace,
   with the scripted router pre-seeded.
 - the ``redirect_sessions`` autouse fixture points the durable session log +
@@ -182,7 +183,7 @@ def build_role(
     role.state.project_root = working_dir
 
     llm = ScriptedLLM(turns, model=llm_model)
-    role._components._router = ScriptedRouter(llm)
+    role._components._graph.seed("router", ScriptedRouter(llm))
     # Expose the scripted LLM for assertions.
     role.scripted_llm = llm  # type: ignore[attr-defined]
     return role

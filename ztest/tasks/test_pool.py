@@ -77,13 +77,15 @@ class TestCompletionPaths:
         assert pool.get_task_info(tid).result == "(no output)"
 
     @pytest.mark.asyncio
-    async def test_result_truncated(self, pool):
+    async def test_result_delivered_in_full(self, pool):
+        # The success result is delivered untruncated so the model gets the whole
+        # output up front (and needn't poll GetNodeState to reconstruct it).
         big = "x" * (MAX_RESULT_LEN + 500)
         tid = pool.submit(lambda: echo(big), "big")
         await pool.wait_all()
         result = pool.get_task_info(tid).result
-        assert result.endswith("...(truncated)")
-        assert len(result) == MAX_RESULT_LEN + len("...(truncated)")
+        assert result == big
+        assert "truncated" not in result
 
     @pytest.mark.asyncio
     async def test_failure_records_error_report(self, pool):
@@ -316,6 +318,16 @@ class TestBuildXml:
         xml = BackgroundTaskPool._build_xml("bg_1", "cmd", "cancelled", "gone")
         assert "<result>" not in xml
 
+    def test_with_output_path(self):
+        xml = BackgroundTaskPool._build_xml(
+            "bg_1", "cmd", "success", "done", result="r", output_path="/w/.task_outputs/bg_1.output"
+        )
+        assert "<output-path>/w/.task_outputs/bg_1.output</output-path>" in xml
+
+    def test_without_output_path_omits_tag(self):
+        xml = BackgroundTaskPool._build_xml("bg_1", "cmd", "success", "done", result="r")
+        assert "<output-path>" not in xml
+
 
 class TestWaiters:
     @pytest.mark.asyncio
@@ -468,10 +480,11 @@ class TestProgressBusVisibility:
     @pytest.mark.asyncio
     async def test_report_progress_reaches_bus_subscriber(self, msg_buffer, tmp_path):
         from metagpt.common.events import EventBus, TaskProgressEvent, set_bus
+        from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
         from metagpt.executor.tasks import TaskOutputStore
         from metagpt.executor.tasks.bggraph.report import report_progress
 
-        class _Recorder:
+        class _Recorder(ObservationSubscriber, SyncObserver):
             priority = 50
 
             def __init__(self):

@@ -13,7 +13,7 @@ import pytest
 
 from metagpt.common.base import CommandChannel
 from metagpt.common.const import IMAGES, PDFS
-from metagpt.common.prompt.output import XML_COMMAND_GUIDE
+from metagpt.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
 from metagpt.parser.xml_channel import XmlCommandChannel
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
@@ -38,6 +38,13 @@ class TestContract:
         from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
 
         assert set(XmlCommandChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
+
+    def test_prompt_vars_tool_usage_guide_is_static_orientation(self):
+        # XML fills ${tool_usage_guide} with the static catalog orientation; the
+        # volatile catalog LIST itself rides the per-turn reminder, not here.
+        guide = XmlCommandChannel().prompt_vars()["tool_usage_guide"]
+        assert guide == XML_TOOL_USAGE_GUIDE
+        assert "# Using tools" in guide
 
     def test_react_result_carries_orchestration_phrasing(self):
         # XML overrides react_result with the <end></end>-era "mark finished"

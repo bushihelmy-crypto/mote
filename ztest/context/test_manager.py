@@ -22,12 +22,15 @@ import pytest
 from metagpt.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
 from metagpt.context import ContextManager
 
-from .conftest import FakeLLM, make_pairs, text_msg
+from .conftest import COMPACTABLE, FakeLLM, make_pairs, text_msg
 
 MICRO_CFG = ContextManagerConfig(
     microcompact_trigger_threshold=2,
     microcompact_keep_recent=1,
     enable_autocompact=False,
+    # Tiny test bodies fold to a handful of tokens; drop the cache-write gate so
+    # the count-driven fold still fires (the token gate is tested in test_fold).
+    microcompact_clear_at_least=0,
 )
 
 
@@ -43,6 +46,136 @@ async def test_add_and_count_and_get_all():
     await cm.add(text_msg("b"))
     assert cm.count() == 2
     assert [m.content for m in cm.get()] == ["a", "b"]
+
+
+def test_recovery_reducer_includes_summarize():
+    """The reactive (HARD) recovery reducer now escalates fold → summarize → drop
+    (summarize preserves history far better than a raw head-drop; drop is the floor)."""
+    from metagpt.context.compaction.reducers.drop import HeadDropReducer
+    from metagpt.context.compaction.reducers.fold import FoldReducer
+    from metagpt.context.compaction.reducers.summarize import SummarizeReducer
+
+    cm = ContextManager(model="gpt-4")
+    reducers = cm.recovery_reducer._pipeline._reducers
+    types = {type(r) for r in reducers}
+    assert FoldReducer in types
+    assert SummarizeReducer in types
+    assert HeadDropReducer in types
+
+
+def test_compactable_defaults_to_empty_set():
+    """With no injected set (standalone/test use), nothing is foldable. The
+    manager threads the set only into ``Transcript.from_messages`` (the single
+    place the reconstructable judgment is made); production injects the
+    executor-derived set."""
+    cm = ContextManager(model="gpt-4")
+    assert cm._compactable == frozenset()
+
+
+def test_compactable_threaded_into_transcript():
+    """An injected compactable set (e.g. derived from the live executor) is
+    stored verbatim and threaded into ``Transcript.from_messages`` so folded
+    groups get stamped ``reconstructable``."""
+    custom = frozenset({"Read", "Grep"})
+    cm = ContextManager(model="gpt-4", compactable=custom)
+    assert cm._compactable == custom
+
+
+@pytest.mark.asyncio
+async def test_tools_changed_event_refreshes_compactable():
+    """When the executor de-registers a tool it announces the fresh
+    reconstructable set on the shared bus; the manager (an observer on that same
+    bus) refreshes ``_compactable`` so compaction never keeps folding a result
+    whose tool has since gone."""
+    from metagpt.common.events import EventBus, ToolsChangedEvent
+
+    bus = EventBus()
+    cm = ContextManager(model="gpt-4", compactable=frozenset({"Read", "Write"}), bus=bus)
+    # Subscribing in __init__ means the event routes here when the bus fans out.
+    await bus.observe(ToolsChangedEvent(removed=["Write"], reconstructable=["Read"]))
+    assert cm._compactable == frozenset({"Read"})
+
+
+@pytest.mark.asyncio
+async def test_non_tools_changed_event_leaves_compactable_untouched():
+    """The manager also *emits* on the same bus; its own emissions (and any
+    unrelated event) fall through ``handle`` without disturbing the set."""
+    from metagpt.common.events import EventBus
+
+    bus = EventBus()
+    cm = ContextManager(model="gpt-4", compactable=frozenset({"Read"}), bus=bus)
+    await cm.handle(object())
+    assert cm._compactable == frozenset({"Read"})
+
+
+# ---------------------------------------------------------------------------
+# Swappable compression pipeline (rebuild_compression)
+# ---------------------------------------------------------------------------
+
+
+def test_build_compression_assembles_full_stack():
+    """Construction wires every dependent piece of the compression stack."""
+    cm = ContextManager(model="gpt-4")
+    assert cm._erase is not None
+    assert cm._fold is not None
+    assert cm._summarize is not None
+    assert cm._drop is not None
+    assert cm._engine is not None
+    assert cm._recovery_reducer is not None
+
+
+def test_rebuild_replaces_every_reducer_instance():
+    """A no-arg rebuild reconstructs the whole stack — fresh reducer objects, a
+    fresh engine and recovery reducer — so nothing stale is left behind."""
+    cm = ContextManager(model="gpt-4")
+    before = (cm._erase, cm._fold, cm._summarize, cm._drop, cm._engine, cm._recovery_reducer)
+    cm.rebuild_compression()
+    after = (cm._erase, cm._fold, cm._summarize, cm._drop, cm._engine, cm._recovery_reducer)
+    assert all(a is not b for a, b in zip(after, before))
+
+
+def test_rebuild_with_config_retunes_reducers():
+    """A retuned config threads into the freshly built reducers and is stored."""
+    new_cfg = ContextManagerConfig(microcompact_trigger_threshold=99)
+    cm = ContextManager(model="gpt-4")
+    cm.rebuild_compression(config=new_cfg)
+    assert cm.config is new_cfg
+    assert cm._fold._cfg is new_cfg
+    assert cm._summarize._cfg is new_cfg
+
+
+def test_rebuild_with_llm_rebinds_rederives_model_and_refreshes_accountant():
+    """Rebinding the LLM re-derives the model (``self.model`` reads ``llm.model``),
+    threads it into the reducers, and refreshes the token accountant."""
+    # No explicit model pin, so ``self.model`` derives from the bound llm.
+    cm = ContextManager(llm=FakeLLM(model="orig"))
+    old_accountant = cm._accountant
+    big = FakeLLM(model="big-context-model")
+    cm.rebuild_compression(llm=big)
+    assert cm.model == "big-context-model"
+    assert cm._summarize._llm is big
+    assert cm._summarize._model == "big-context-model"
+    assert cm._accountant is not old_accountant
+
+
+def test_rebuild_omitting_args_leaves_inputs_untouched():
+    """Sentinel-guarded: omitting an argument leaves that input exactly as-is."""
+    llm = FakeLLM(model="orig")
+    cfg = ContextManagerConfig()
+    cm = ContextManager(llm=llm, config=cfg)
+    cm.rebuild_compression()
+    assert cm._llm is llm
+    assert cm.config is cfg
+
+
+def test_rebuild_llm_none_is_an_explicit_value():
+    """``None`` is a meaningful llm (it disables summarize) — the sentinel keeps
+    it distinct from 'leave unchanged', so passing it actually unbinds the llm."""
+    cm = ContextManager(llm=FakeLLM(model="orig"))
+    assert cm.model == "orig"
+    cm.rebuild_compression(llm=None)
+    assert cm._llm is None
+    assert cm.model == "gpt-4"  # falls back to the generic default
 
 
 @pytest.mark.asyncio
@@ -127,7 +260,7 @@ async def test_manage_history_empty_returns_false():
 async def test_manage_history_microcompact_only():
     # No llm → only the cheap pass runs. 4 Read pairs over trigger=2 fold.
     ctx = LLMCallContext()
-    cm = ContextManager(ctx, config=MICRO_CFG, model="gpt-4")
+    cm = ContextManager(ctx, config=MICRO_CFG, model="gpt-4", compactable=COMPACTABLE)
     await cm.add_batch(make_pairs(4))
     changed = await cm.manage_history()
     assert changed is True
@@ -158,6 +291,32 @@ async def test_manage_history_runs_autocompact(force_autocompact_threshold):
     # history replaced by [summary] + tail, swapped into the backing context
     assert len(ctx.messages) == 2
     assert "compacted" in ctx.messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_manage_history_reprojects_sticky_after_compaction(force_autocompact_threshold):
+    # A wired sticky_provider re-inserts loaded bodies right after the summary
+    # when autocompact discards the head.
+    ctx = LLMCallContext()
+    cfg = ContextManagerConfig(
+        enable_microcompact=False,
+        keep_tail_messages=1,
+        keep_tail_tokens=1,
+    )
+    llm = FakeLLM(summary="<summary>compacted</summary>")
+    cm = ContextManager(
+        ctx,
+        llm=llm,
+        config=cfg,
+        model="m",
+        sticky_provider=lambda: [text_msg("STICKY SKILL BODY", role="user")],
+    )
+    await cm.add_batch([text_msg(f"turn {i} content here") for i in range(6)])
+    assert await cm.manage_history() is True
+    # [summary, sticky, tail]
+    assert len(ctx.messages) == 3
+    assert "compacted" in ctx.messages[0].content
+    assert ctx.messages[1].content == "STICKY SKILL BODY"
 
 
 @pytest.mark.asyncio

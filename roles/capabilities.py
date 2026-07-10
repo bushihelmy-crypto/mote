@@ -139,6 +139,70 @@ class RoleCapabilities:
         return report.strip()
 
     # ------------------------------------------------------------------
+    # Session-log-backed capture (before-image snapshots + persistent state)
+    # ------------------------------------------------------------------
+
+    def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
+        """Capture a before-image of a file a tool is about to overwrite.
+
+        Delegates to the session's ``file_snapshot_recorder``, which stores the
+        prior on-disk content content-addressed and appends a snapshot event to
+        the rollout log (the truth source for diff/undo). The Write/Edit/
+        NotebookEdit tools call this capability without touching the session log
+        directly. Best-effort — never raises into the tool.
+        """
+        self._role.file_snapshot_recorder.snapshot(full_path, tool=tool)
+
+    def register_resource(self, *, id: str, kind: str, content: str) -> None:
+        """Register a loaded capability body for post-compaction re-projection.
+
+        Delegates to the Role's ``resource_registry``. The Skill tool calls this
+        after rendering an inline skill body so the body is re-projected after an
+        autocompaction discards the head. Best-effort — the registry's ``load``
+        is a plain dict write and does not raise.
+        """
+        self._role.resource_registry.load(id=id, kind=kind, content=content)
+
+    def record_terminal_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
+        """Record the persistent terminal's final cwd + env diff into the rollout.
+
+        Delegates to the session's ``terminal_state_recorder``, which appends a
+        terminal-state event (last-write-wins) so a resumed session can re-seed a
+        fresh shell to this state — without re-running any user commands. The
+        Terminal tool calls this capability; best-effort, never raises.
+        """
+        self._role.terminal_state_recorder.record(cwd, env, unset, tool=tool)
+
+    def record_kernel_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
+        """Record the persistent kernel's final cwd + env diff into the rollout.
+
+        The Python sibling of :meth:`record_terminal_state`. Delegates to the
+        session's ``kernel_state_recorder`` (last-write-wins) so a resumed session
+        can re-seed a fresh kernel to this state — without re-running any user
+        code. The Python tool calls this capability; best-effort, never raises.
+        """
+        self._role.kernel_state_recorder.record(cwd, env, unset, tool=tool)
+
+    def record_browser_state(
+        self,
+        urls: list,
+        *,
+        active: int = 0,
+        storage_state: Optional[dict] = None,
+        tool: str = "",
+    ) -> None:
+        """Record the persistent browser's final tab URLs + session into the rollout.
+
+        The browser sibling of :meth:`record_terminal_state`. Delegates to the
+        session's ``browser_state_recorder`` (last-write-wins) so a resumed
+        session can re-open the same tabs seeded with the saved session — without
+        re-running any navigation/click actions. ``storage_state`` may carry
+        cookies, so capture is gated by the recorder's ``enabled`` flag. The
+        WebBrowser tool calls this capability; best-effort, never raises.
+        """
+        self._role.browser_state_recorder.record(urls, active=active, storage_state=storage_state, tool=tool)
+
+    # ------------------------------------------------------------------
     # Human I/O (only valid inside an MGXEnv)
     # ------------------------------------------------------------------
 
@@ -160,6 +224,22 @@ class RoleCapabilities:
             response += " The user has asked me to stop because I have encountered a problem."
             role.deactivate()
         return response
+
+    async def ask_user_question(self, questions):
+        """Ask the user structured multiple-choice questions; return structured answers.
+
+        The structured sibling of :meth:`ask_human` behind the ``AskUserQuestion``
+        tool. Deliberately does NOT apply ask_human's trailing 'stop' → deactivate
+        kill switch: a structured selection is not a control channel, so the stop
+        semantics stay on the plain ``ask_human`` / ``AskHuman`` path.
+        """
+        from metagpt.common.schema import AskUserQuestionAnswers
+
+        role = self._role
+        env = role.state.env
+        if env is None:
+            return AskUserQuestionAnswers()
+        return await env.ask_user_question(questions, sent_from=role.role_schema.name)
 
     async def request_approval(self, prompt: str) -> str:
         """Ask the human to approve a tool call and return their raw reply.
@@ -237,7 +317,10 @@ class RoleCapabilities:
 
         memory = role.context_manager
         messages = memory.get(role.role_schema.memory_k)
-        result = role.think_engine.result
+        # The loop publishes this turn's think result to state the moment the
+        # think task drains, so we read the assistant's final text off state
+        # rather than reaching into the (now per-turn, stateless) think engine.
+        result = role.state.last_think_result
         if not result.is_empty:
             messages = messages + [AIMessage(content=result.content)]
         messages = attach_media(messages)

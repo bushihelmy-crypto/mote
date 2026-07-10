@@ -46,6 +46,8 @@ class Glob(BaseTool):
 
     name = "Glob"
     aliases: ClassVar[list[str]] = ["Glob.run", "glob"]
+    # Read-only pattern match: results are re-derivable by re-running the glob.
+    reconstructable: ClassVar[bool] = True
     # Glob can list many paths; allow a higher cap before persisting (CC).
     max_result_size_chars: ClassVar[int] = 100_000
     description = GLOB_DESCRIPTION

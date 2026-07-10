@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from metagpt.executor.permission.classifier import SafetyAssessment, classify_command
 from metagpt.executor.permission.engine import PermissionEngine
+from metagpt.executor.permission.inspector import Inspection, ToolCallInspector
 from metagpt.executor.permission.rule_store import RuleStore
 from metagpt.executor.permission.subscriber import PermissionSubscriber
 from metagpt.common.schema.permission_types import (
@@ -30,6 +31,8 @@ from metagpt.common.schema.permission_types import (
 __all__ = [
     "PermissionEngine",
     "PermissionSubscriber",
+    "ToolCallInspector",
+    "Inspection",
     "RuleStore",
     "SafetyAssessment",
     "classify_command",

@@ -77,6 +77,34 @@ async def test_act_first_failure_skips_remaining(make_loop):
         assert "[SKIPPED]" in entry["output"]
 
 
+async def test_act_terminate_result_clears_active_signal(make_loop):
+    # A result flagged ``terminate`` (user rejected the approval prompt) trips the
+    # same kill switch the End tool uses: the loop clears the active signal so the
+    # next think step returns False and the loop stops.
+    channel = FakeChannel(commands=[_cmd("Bash", id="t1", args={"cmd": "rm -rf /"})])
+    executor = FakeExecutor(
+        results={"Bash": FakeResult(output="denied", success=False, terminate=True)}
+    )
+    b = make_loop(channel=channel, executor=executor, active=True)
+    b.loop._ctx = b.ctx
+
+    assert b.active[0] is True
+    await b.loop._step_act()
+    assert b.active[0] is False
+
+
+async def test_act_recoverable_failure_keeps_active_signal(make_loop):
+    # A plain failure (no ``terminate``) must NOT end the loop: the model can
+    # replan around it, so the active signal stays on.
+    channel = FakeChannel(commands=[_cmd("Read", id="t1")])
+    executor = FakeExecutor(results={"Read": FakeResult(output="boom", success=False)})
+    b = make_loop(channel=channel, executor=executor, active=True)
+    b.loop._ctx = b.ctx
+
+    await b.loop._step_act()
+    assert b.active[0] is True
+
+
 async def test_act_propagates_media(make_loop):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     executor = FakeExecutor(

@@ -56,17 +56,36 @@ class TestRenderComments:
 
 @pytest.mark.asyncio
 class TestFilterFindings:
-    async def test_trivial_passthrough(self, monkeypatch):
+    async def test_empty_passthrough(self, monkeypatch):
         called = {"built": False}
         monkeypatch.setattr(
             rf, "build_child_role", lambda **k: called.__setitem__("built", True)
         )
-        # 0 or 1 findings skip the agent.
+        # Only an empty list skips the agent.
         assert await rf.filter_findings([]) == []
-        one = [_find("solo")]
-        out = await rf.filter_findings(one)
-        assert [f.message for f in out] == ["solo"]
         assert not called["built"]
+
+    async def test_single_finding_goes_through_gate(self, monkeypatch):
+        # A lone finding must still hit the gate — a single comment can itself be
+        # the low-value one that should be dropped.
+        monkeypatch.setattr(rf, "build_child_role", lambda **k: object())
+
+        async def fake_run(role, prompt, *, label="review_filter"):
+            return "[]"
+
+        monkeypatch.setattr(rf, "run_child_for_text", fake_run)
+        out = await rf.filter_findings([_find("solo")], repo_dir="/repo")
+        assert out == []
+
+    async def test_single_finding_kept(self, monkeypatch):
+        monkeypatch.setattr(rf, "build_child_role", lambda **k: object())
+
+        async def fake_run(role, prompt, *, label="review_filter"):
+            return "[0]"
+
+        monkeypatch.setattr(rf, "run_child_for_text", fake_run)
+        out = await rf.filter_findings([_find("solo")], repo_dir="/repo")
+        assert [f.message for f in out] == ["solo"]
 
     async def test_keeps_subset(self, monkeypatch):
         monkeypatch.setattr(rf, "build_child_role", lambda **k: object())

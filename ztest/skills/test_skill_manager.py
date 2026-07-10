@@ -48,16 +48,18 @@ class TestEnabled:
         assert mgr.injector is not None
 
     def test_injector_builds_content(self, monkeypatch, builtin_dir):
-        write_skill(builtin_dir, "auto", description="Auto", always_apply=True, instructions="AUTO")
+        write_skill(builtin_dir, "auto", description="Auto desc", instructions="AUTO")
         _patch_builtin(monkeypatch, builtin_dir)
 
         mgr = SkillManager(["auto"])
         mgr.ensure_ready()
         content = mgr.injector.build_content()
-        # An alwaysApply skill is emitted in full under Always Active Skills
-        # (not the index, which lists only on-demand model-invocable skills).
-        assert "## Always Active Skills" in content
-        assert "AUTO" in content
+        # Skills are listed by name/description in the index; bodies load on
+        # demand via the Skill tool and are never inlined.
+        assert "## Available Skills" in content
+        assert "auto" in content
+        assert "Auto desc" in content
+        assert "AUTO" not in content
 
     def test_idempotent_when_enabled(self, monkeypatch, builtin_dir):
         write_skill(builtin_dir, "alpha")
@@ -95,15 +97,15 @@ class TestReload:
         assert mgr.pool.get_skill_count() == 1
 
     def test_reload_picks_up_new_skill_content(self, monkeypatch, builtin_dir):
-        write_skill(builtin_dir, "auto", always_apply=True, instructions="OLD")
+        write_skill(builtin_dir, "auto", description="OLD desc")
         _patch_builtin(monkeypatch, builtin_dir)
         mgr = SkillManager(["auto"])
         mgr.ensure_ready()
-        assert "OLD" in mgr.injector.build_content()
+        assert "OLD desc" in mgr.injector.build_content()
 
-        write_skill(builtin_dir, "auto", always_apply=True, instructions="NEW")  # edit on disk
+        write_skill(builtin_dir, "auto", description="NEW desc")  # edit on disk
         assert mgr.reload() is True
-        assert "NEW" in mgr.injector.build_content()
+        assert "NEW desc" in mgr.injector.build_content()
 
 
 class TestSourceDirs:

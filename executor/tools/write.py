@@ -34,6 +34,9 @@ class Write(FileMutatingTool):
 
     name = "Write"
     aliases: ClassVar[list[str]] = ["Write.run", "write"]
+    # The effect (file on disk) is durable and re-readable, so the success-message
+    # body can be cleared without losing recoverable information.
+    reconstructable: ClassVar[bool] = True
     # Success messages can echo file content; allow a higher cap (CC).
     max_result_size_chars: ClassVar[int] = 100_000
     description = WRITE_DESCRIPTION

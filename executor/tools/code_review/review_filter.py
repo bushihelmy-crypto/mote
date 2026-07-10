@@ -32,7 +32,10 @@ worth showing the author and discard the rest.
 Discard a comment if it is:
 - a false positive or speculative ("this might be slow") with no concrete issue,
 - a pure style nit a linter would already catch,
-- redundant with another comment, or
+- redundant with another comment,
+- defensive hardening for a case that cannot actually occur given how the code
+  is called (e.g. type-guarding an argument that is always a class because the
+  function is only ever used as a class decorator), or
 - too trivial to be worth the author's attention.
 
 Keep a comment if it flags a real bug, security issue, correctness/contract
@@ -90,9 +93,11 @@ async def filter_findings(
     """Self-critique *findings*, returning the kept subset (best-effort).
 
     Degrades to returning *findings* unchanged on any failure or unparseable
-    response. Skips the agent call for 0 or 1 findings (nothing to prune).
+    response. Skips the agent call only for an empty list — a lone finding still
+    goes through the gate, since a single comment can itself be the low-value one
+    that should be dropped.
     """
-    if len(findings) <= 1:
+    if not findings:
         return list(findings)
 
     role = build_child_role(

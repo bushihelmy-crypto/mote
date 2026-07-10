@@ -61,18 +61,6 @@ class ContextProvider(BaseContextProvider):
     def _state(self):
         return self._role.state
 
-    @property
-    def _config(self):
-        return self._role.config
-
-    @property
-    def _model_name(self) -> str:
-        # The configured model name, shown in the prompt's "powered by model X"
-        # line — display-only metadata. The actual per-request think LLM (which
-        # may be router-selected) is resolved by ``resolve_llm`` below, so a live
-        # LLM handle is resolved in exactly one place.
-        return getattr(self._role.config.llm, "model", "") or ""
-
     async def resolve_llm(self, messages=None):
         """Resolve the think LLM via the router (the conduit for flag + llmconfig).
 
@@ -88,10 +76,6 @@ class ContextProvider(BaseContextProvider):
     @property
     def _executor(self):
         return self._role.executor
-
-    @property
-    def _skill_manager(self):
-        return self._role.skill_manager
 
     @property
     def _channel(self):
@@ -189,15 +173,13 @@ class ContextProvider(BaseContextProvider):
         )
 
     def _think_subsystems(self) -> ThinkSubsystems:
-        """The live collaborators handed to PromptBuilder for one think()."""
-        return ThinkSubsystems(
-            config=self._config,
-            model_name=self._model_name,
-            executor=self._executor,
-            skill_manager=self._skill_manager,
-            turn_context_bus=self._role.turn_context_bus,
-            command_channel=self._channel,
-        )
+        """The live collaborators handed to PromptBuilder for one think().
+
+        Delegates to the graph's ``think_subsystems`` factory so the wiring
+        lives in exactly one place (the composition root). The provider stays a
+        pure reader: it never assembles subsystems itself.
+        """
+        return self._role._components.make_think_subsystems()
 
     def _env_desc(self) -> str:
         """The env description used in the role prefix, or "" if none."""

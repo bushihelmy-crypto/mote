@@ -91,6 +91,15 @@ class TestDenyRule:
         assert 'code="TOOL_PERMISSION_DENIED"' in res.output
         assert res.error is not None and res.error.code == "TOOL_PERMISSION_DENIED"
 
+    async def test_rule_deny_is_recoverable_not_terminal(self):
+        # A rule/mode deny fails the call but must NOT end the react loop — the
+        # model can replan around it. So ``terminate`` stays False.
+        tool = SpyTool()
+        ex = build(tool, config=PermissionConfig(deny=["Spy"]))
+        res = await ex.run_command("Spy", {"cmd": "ls"})
+        assert res.success is False
+        assert res.terminate is False
+
 
 class TestAllowRule:
     async def test_allowed_call_runs(self):
@@ -108,6 +117,16 @@ class TestInteractiveApproval:
         res = await ex.run_command("Danger", {})
         assert res.success is False
         assert role.asked, "request_approval should have been called"
+
+    async def test_user_rejection_marks_result_terminal(self):
+        # A genuine user "no" at the approval prompt ends the react loop: the
+        # failed result carries ``terminate`` so the loop clears the active signal.
+        tool = SafetyTool()
+        role = FakeRole(reply="no")
+        ex = build(tool, config=PermissionConfig(mode="default"), role=role)
+        res = await ex.run_command("Danger", {})
+        assert res.success is False
+        assert res.terminate is True
 
     async def test_ask_routed_to_role_and_approved(self):
         tool = SafetyTool()

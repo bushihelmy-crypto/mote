@@ -142,7 +142,8 @@ def _ref_for(snapshot: str, needle: str) -> "str | None":
 
     for line in snapshot.splitlines():
         if needle in line:
-            m = re.match(r"\s*\[(\d+)\]", line)
+            # Tolerate the indent + optional ``*`` is-new marker before ``[N]``.
+            m = re.match(r"\s*\*?\[(\d+)\]", line)
             if m:
                 return m.group(1)
     return None
@@ -443,6 +444,158 @@ class TestSnapshot:
             with pytest.raises(ToolError) as ei:
                 await tool.call(action="click", selector="999")
             assert "snapshot" in str(ei.value).lower()
+            await tool.call(action="close")
+
+        run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# unified page tree — interleave, click-through, ref lifecycle
+# ---------------------------------------------------------------------------
+
+# A mixed page: div layout wrapping prose text + links + an input, so the tree
+# must interleave prose lines and [N] element lines.
+_MIXED = (
+    "data:text/html,<title>Mixed</title><body>"
+    "<div><p>Welcome to the catalog.</p>"
+    "<a id='apple' href='https://example.com/apple'>Apple</a>"
+    "<p>Pick a fruit below.</p>"
+    "<input id='qty' placeholder='Quantity'>"
+    "<button id='add'>Add to cart</button></div>"
+    "</body>"
+)
+
+
+class TestUnifiedTree:
+    def test_tree_interleaves_text_and_refs(self, caprole):
+        tool = bind(WebBrowser(), caprole, session_id="b_tree_mix")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_MIXED)
+            snap = await tool.call(action="snapshot")
+            # Drop the header line (it echoes the data: URL == raw HTML source).
+            body = snap.split("\n", 1)[1] if "\n" in snap else snap
+            # Prose text is present (not only interactive elements).
+            assert "Welcome to the catalog." in body
+            assert "Pick a fruit below." in body
+            # Clickable elements carry [N] refs.
+            assert _ref_for(body, "Apple") is not None
+            assert _ref_for(body, "Add to cart") is not None
+            # A prose line comes before the button line (reading order).
+            lines = body.splitlines()
+            prose_i = next(i for i, l in enumerate(lines) if "Welcome to the catalog." in l)
+            btn_i = next(i for i, l in enumerate(lines) if "Add to cart" in l)
+            assert prose_i < btn_i
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_click_link_from_tree(self, caprole):
+        tool = bind(WebBrowser(), caprole, session_id="b_tree_click")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_INTERACTIVE)
+            snap = await tool.call(action="snapshot")
+            ref = _ref_for(snap, "Home")
+            assert ref is not None, snap
+            out = await tool.call(action="click", selector=ref)
+            assert "clicked" in out
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_interactive_only_omits_prose(self, caprole):
+        tool = bind(WebBrowser(), caprole, session_id="b_tree_io")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_MIXED)
+            snap = await tool.call(action="snapshot", interactive_only=True)
+            # Drop the header line (it echoes the data: URL == raw HTML source).
+            body = snap.split("\n", 1)[1] if "\n" in snap else snap
+            # Element refs still present.
+            assert _ref_for(body, "Add to cart") is not None
+            # Prose text dropped.
+            assert "Welcome to the catalog." not in body
+            assert "Pick a fruit below." not in body
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_navigation_invalidates_refs(self, caprole):
+        from metagpt.executor.tool_result import ToolError
+
+        tool = bind(WebBrowser(), caprole, session_id="b_tree_inval")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_INTERACTIVE)
+            snap = await tool.call(action="snapshot")
+            ref = _ref_for(snap, "Buy now")
+            assert ref is not None, snap
+            session = caprole.get_tool_session("WebBrowser")
+            # Navigate away — refs from the old page must be dropped.
+            await tool.call(action="navigate", url=_PAGE_B)
+            assert session._ref_meta == {}
+            assert session._prev_refs == set()
+            # The old [N] index no longer resolves → Tier-3 re-snapshot error.
+            with pytest.raises(ToolError) as ei:
+                await tool.call(action="click", selector=ref)
+            assert "snapshot" in str(ei.value).lower()
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_same_page_ref_stable_new_element_marked(self, caprole):
+        tool = bind(WebBrowser(), caprole, session_id="b_tree_stable")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_INTERACTIVE)
+            snap1 = await tool.call(action="snapshot")
+            ref_buy = _ref_for(snap1, "Buy now")
+            assert ref_buy is not None, snap1
+            # Inject a brand-new button into the same document.
+            await tool.call(
+                action="eval",
+                expression=(
+                    "(() => { const b = document.createElement('button');"
+                    " b.id = 'extra'; b.textContent = 'Extra'; "
+                    "document.body.appendChild(b); return true; })()"
+                ),
+            )
+            snap2 = await tool.call(action="snapshot")
+            # The pre-existing button keeps its index across re-snapshots.
+            assert _ref_for(snap2, "Buy now") == ref_buy
+            # The pre-existing button is NOT marked new the second time.
+            buy_line = next(l for l in snap2.splitlines() if "Buy now" in l)
+            assert not buy_line.lstrip().startswith("*")
+            # The freshly-injected one IS marked new.
+            extra_line = next(l for l in snap2.splitlines() if "Extra" in l)
+            assert extra_line.lstrip().startswith("*")
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_tier2_resolves_after_dom_rerender(self, caprole):
+        """Same-page re-render drops the data-agent-ref attr; Tier-2 re-queries."""
+        tool = bind(WebBrowser(), caprole, session_id="b_tree_tier2")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_INTERACTIVE)
+            snap = await tool.call(action="snapshot")
+            ref = _ref_for(snap, "Buy now")
+            assert ref is not None, snap
+            # Simulate a client-side re-render that strips our stamp but keeps
+            # the same role/name (button labelled "Buy now").
+            await tool.call(
+                action="eval",
+                expression=(
+                    "(() => { document.querySelectorAll('[data-agent-ref]')"
+                    ".forEach(e => e.removeAttribute('data-agent-ref'));"
+                    " return true; })()"
+                ),
+            )
+            # Tier-1 selector now misses, Tier-2 re-queries by role/name + re-stamps.
+            out = await tool.call(action="click", selector=ref)
+            assert "clicked" in out
             await tool.call(action="close")
 
         run(scenario())

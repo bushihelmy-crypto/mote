@@ -16,13 +16,14 @@ import pytest
 
 from metagpt.common.config.config.llm_config import LLMConfig, LLMType
 from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from metagpt.router.cost import CostTracker
 from metagpt.router.llm.anthropic_api import AnthropicLLM
 from metagpt.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
 
 
 # -- fakes ------------------------------------------------------------------
-class _StreamCapture:
+class _StreamCapture(ObservationSubscriber, SyncObserver):
     """Bus subscriber that collects streamed LLM tokens (sync delivery)."""
 
     priority = 50

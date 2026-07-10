@@ -227,7 +227,10 @@ async def _run_one_node(
     apply_updates(state, result, graph._reducers)
     completed.add(node_name)
     if run_state is not None:
-        run_state.mark_success(node_name)
+        # Record the fields this node actually wrote (the update dict's keys) —
+        # the only truthful, per-node account of what it produces under the
+        # field/channel model (there is no static output declaration).
+        run_state.mark_success(node_name, writes=sorted(result.keys()))
 
 
 # ---------------------------------------------------------------------------

@@ -29,11 +29,11 @@ from typing import Optional
 
 from metagpt.common.events.outcomes import SpawnOutcome
 from metagpt.common.events.types import PRE_AGENT_SPAWN, PreAgentSpawnEvent
-from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage
+from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
 from metagpt.environment.registry import exceeds_agent_spawn_depth_limit
 
 
-class SpawnGate:
+class SpawnGate(ControlSubscriber):
     """Deny a child spawn that would exceed the configured depth ceiling."""
 
     #: Only spawn-admission events reach this subscriber (bus routing key).

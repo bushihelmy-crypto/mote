@@ -10,25 +10,37 @@ shared event bus. ContextManager emits a ``MessageAppendedEvent`` per ``add``
 
 A spy subscriber isolates the wiring from disk; a real RecorderSubscriber over a
 temp SessionLog confirms the end-to-end append. The compaction branch is driven
-by monkeypatching ``autocompact`` so no LLM/threshold math is needed.
+by a fake summarizer LLM plus a forced-low threshold so a real summarize runs
+through the ContextEngine (no monkeypatching of module functions).
 """
 from __future__ import annotations
 
 import pytest
 
+import metagpt.context.budget as token_budget
 from metagpt.common.events import (
     CompactionCheckpointEvent,
     EventBus,
     MessageAppendedEvent,
 )
-from metagpt.common.schema import AIMessage, AutocompactResult, MicrocompactResult, UserMessage
+from metagpt.common.interface.event_subscriber import ObservationSubscriber
+from metagpt.common.schema import AIMessage, ContextManagerConfig, UserMessage
 from metagpt.context.manager import ContextManager
+
+
+class _FakeLLM:
+    def __init__(self, *, summary: str = "sum", model: str = "m"):
+        self.model = model
+        self._summary = summary
+
+    async def aask(self, msg=None, system_msgs=None, stream=True, **kwargs) -> str:
+        return self._summary
 from metagpt.session.events import COMPACTED, MESSAGE
 from metagpt.session.log import SessionLog
 from metagpt.session.subscribers import RecorderSubscriber
 
 
-class SpySubscriber:
+class SpySubscriber(ObservationSubscriber):
     """An ObservationSubscriber that records the message/compaction events it sees."""
 
     priority = 80
@@ -64,30 +76,23 @@ async def test_add_streams_each_message_to_subscriber():
 
 @pytest.mark.asyncio
 async def test_manage_history_emits_compaction(monkeypatch):
+    monkeypatch.setattr(token_budget, "autocompact_threshold", lambda model: 1)
     spy = SpySubscriber()
-    cm = ContextManager(llm=object(), bus=_bus_with(spy))  # llm just needs to be non-None
-    await cm.add(UserMessage(content="old"))
-
-    rebuilt = [UserMessage(content="[summary]"), AIMessage(content="tail")]
-
-    def fake_micro(messages, config, *, model, compactable):
-        return MicrocompactResult(messages=messages, tokens_freed=0)
-
-    async def fake_auto(messages, llm, config, *, model, tokens_freed, consecutive_failures, custom_instructions):
-        return AutocompactResult(messages=rebuilt, compacted=True, summary="a summary")
-
-    monkeypatch.setattr("metagpt.context.manager.microcompact", fake_micro)
-    monkeypatch.setattr("metagpt.context.manager.autocompact", fake_auto)
+    cfg = ContextManagerConfig(enable_microcompact=False, keep_tail_messages=1, keep_tail_tokens=1)
+    cm = ContextManager(llm=_FakeLLM(summary="a summary"), config=cfg, model="m", bus=_bus_with(spy))
+    for i in range(6):
+        await cm.add(UserMessage(content=f"turn {i} content here"))
 
     changed = await cm.manage_history()
     assert changed is True
-    # The backing history is swapped to the rebuilt list...
-    assert [m.content for m in cm.messages] == ["[summary]", "tail"]
+    # The backing history is swapped to the rebuilt [summary] + tail...
+    assert any("a summary" in (m.content or "") for m in cm.messages)
     # ...and exactly one compaction checkpoint was emitted with the summary.
     assert len(spy.compactions) == 1
     recorded_msgs, summary = spy.compactions[0]
     assert summary == "a summary"
-    assert [m.content for m in recorded_msgs] == ["[summary]", "tail"]
+    # the checkpoint carries the full rebuilt history.
+    assert [m.content for m in recorded_msgs] == [m.content for m in cm.messages]
 
 
 @pytest.mark.asyncio

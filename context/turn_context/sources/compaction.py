@@ -24,17 +24,18 @@ from __future__ import annotations
 from typing import Optional
 
 from metagpt.common.events import PostCompactEvent
+from metagpt.common.interface import ObservationSubscriber, TurnContextPriority
 
 
-class CompactionNoticeContextSource:
+class CompactionNoticeContextSource(ObservationSubscriber):
     """Renders a one-shot notice the turn after an automatic compaction."""
 
     name = "compaction"
-    # Render order in the turn-context bus: between token-pressure (20, the
-    # pre-compaction warning) and background tasks (30). The same value serves as
+    # Render order in the turn-context bus: between token-pressure (the
+    # pre-compaction warning) and background tasks. The same value serves as
     # the ObservationSubscriber dispatch priority, where it is immaterial (this handler
     # only observes — it returns no outcome).
-    priority = 25
+    priority = TurnContextPriority.COMPACTION
     save_to_context = True
 
     def __init__(self) -> None:

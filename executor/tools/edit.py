@@ -30,7 +30,7 @@ import os
 from typing import ClassVar, Optional
 
 from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
+from metagpt.executor.tool_result import FileChange, ToolError, ToolResult
 from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
 from metagpt.common.prompt.tools import EDIT_DESCRIPTION
@@ -199,6 +199,9 @@ class Edit(FileMutatingTool):
 
     name = "Edit"
     aliases: ClassVar[list[str]] = ["Edit.run", "edit", "Update", "update"]
+    # The effect (edited file) is durable and re-readable, so the success-message
+    # body can be cleared without losing recoverable information.
+    reconstructable: ClassVar[bool] = True
     # Success messages can echo a code snippet; allow a higher cap (CC).
     max_result_size_chars: ClassVar[int] = 100_000
     description = EDIT_DESCRIPTION
@@ -324,18 +327,26 @@ class Edit(FileMutatingTool):
         self._refresh_read_state(full_path)
 
         if replace_all:
-            return (
+            message = (
                 f"The file {full_path} has been updated. All {matches} "
                 f"occurrence(s) were successfully replaced."
             )
-        return f"The file {full_path} has been updated successfully."
+        else:
+            message = f"The file {full_path} has been updated successfully."
+        # Carry the change as a structured fact (old/new full content, LF-normalized
+        # — the display-agnostic form) so the view layer renders it without sniffing.
+        return ToolResult(
+            output=message,
+            file_changes=[FileChange(path=full_path, old=content, new=updated)],
+        )
 
-    def _create_file(self, file_path: str, full_path: str, content: str, existed: bool) -> str:
+    def _create_file(self, file_path: str, full_path: str, content: str, existed: bool) -> ToolResult:
         """Handle the empty-old_string create path.
 
         Valid only when the file doesn't exist, or exists but is empty/whitespace
         (mirrors CC's create-via-edit). Otherwise refuses to clobber content.
         """
+        old = ""
         if existed:
             try:
                 with open(full_path, "r", encoding="utf-8", newline="") as f:
@@ -347,6 +358,7 @@ class Edit(FileMutatingTool):
                     f"Error: cannot create new file — '{file_path}' already exists "
                     f"with content. Provide a non-empty old_string to edit it."
                 )
+            old = current.replace("\r\n", "\n")
 
         parent = os.path.dirname(full_path)
         if parent and not os.path.exists(parent):
@@ -365,5 +377,11 @@ class Edit(FileMutatingTool):
 
         self._refresh_read_state(full_path)
         verb = "updated" if existed else "created"
-        return f"The file {full_path} has been {verb} successfully."
+        # ``new`` is LF-normalized to match the update path's convention (the
+        # written bytes may carry the detected line ending, but the *fact* the
+        # view renders is the logical content).
+        return ToolResult(
+            output=f"The file {full_path} has been {verb} successfully.",
+            file_changes=[FileChange(path=full_path, old=old, new=content.replace("\r\n", "\n"))],
+        )
 

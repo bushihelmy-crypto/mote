@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import field_validator, model_validator
 
-from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.config.config.oauth_config import OAuthProviderConfig
 from metagpt.common.const import LLM_API_TIMEOUT
 from metagpt.common.exception import MissingAPIKeyError
@@ -95,9 +94,6 @@ class LLMConfig(YamlModel):
 
     # Cost Control
     calc_usage: bool = True
-
-    # Compress request messages under token limit
-    compress_type: CompressType = CompressType.NO_COMPRESS
 
     @model_validator(mode="before")
     @classmethod

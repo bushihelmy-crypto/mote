@@ -20,6 +20,7 @@ from metagpt.common.events import (
     set_bus,
     span,
 )
+from metagpt.common.interface.event_subscriber import ObservationSubscriber
 from metagpt.common.logs import bind_trace
 
 
@@ -27,7 +28,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class _Capture:
+class _Capture(ObservationSubscriber):
     priority = 50
 
     def __init__(self):

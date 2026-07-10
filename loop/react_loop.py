@@ -14,7 +14,7 @@ previously in Perception; now it's inlined here so the loop is self-contained.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from metagpt.common.base import BaseLoop, LoopContext
 from metagpt.common.base.command_channel import join_command_outputs
@@ -56,6 +56,10 @@ class ReActLoop(BaseLoop):
       - is_active / set_active: read/write the shared `active` signal (state-backed)
       - get_bg_pool: returns the current BackgroundTaskPool or None (lazy; a tool
         may create it mid-react, so we read it fresh each turn)
+      - report_think_result: publishes this turn's ThinkResult to shared state the
+        moment the think task drains, so a tool running later in the same act step
+        (e.g. ``end_session``) reads the fresh result off state rather than the
+        think-engine machinery (which is a stateless per-turn factory).
 
     The loop owns the observe step: pop from msg_buffer → filter by watch/name →
     commit to the memory store.
@@ -72,6 +76,7 @@ class ReActLoop(BaseLoop):
         is_active: Callable[[], bool],
         set_active: Callable[[bool], None],
         get_bg_pool: Callable[[], Optional["BackgroundPool"]],
+        report_think_result: Callable[[Any], None],
     ):
         self._think_engine = think_engine
         self._channel = command_channel
@@ -81,6 +86,7 @@ class ReActLoop(BaseLoop):
         self._is_active = is_active
         self._set_active = set_active
         self._get_bg_pool = get_bg_pool
+        self._report_think_result = report_think_result
 
         # The static observe + loop-control bundle. Filled at run() start from
         # context_provider.loop_context() — the loop never receives it directly.
@@ -160,6 +166,12 @@ class ReActLoop(BaseLoop):
                 cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)
             ]
 
+            # The think task has now drained (iter_commands joined it), so the
+            # result is final. Publish it to shared state *before* running any
+            # command, so a tool in the loop below (e.g. ``end_session``) reads
+            # this turn's fresh result off state rather than the engine.
+            self._report_think_result(self._think_engine.result)
+
             # Execute in order. On the first failure, stop running further commands
             # but still RECORD a result for each remaining one: native tool-use
             # requires every emitted tool_call to have a paired tool_result, so we
@@ -186,9 +198,22 @@ class ReActLoop(BaseLoop):
                     entry["images"] = result.images
                 if result.pdfs:
                     entry["pdfs"] = result.pdfs
+                # Per-result lifecycle hint (erasable/pin). Carried like media so
+                # the channel can stamp it onto the tool_result message metadata;
+                # only the native channel (which has per-result messages) uses it.
+                if result.retention:
+                    entry["retention"] = result.retention
                 executed.append(entry)
                 if not result.success:
                     failed = True
+                # A terminal block (user rejected the approval prompt, or a hook
+                # vetoed the call) ends the whole react loop, not just this call.
+                # Clear the active signal — the same kill switch the End tool trips
+                # — so the next _step_think returns False and the loop stops. Later
+                # commands are still recorded as [SKIPPED] via ``failed`` above, so
+                # native tool-use keeps every tool_call paired with a tool_result.
+                if result.terminate:
+                    self._set_active(False)
 
             outputs = join_command_outputs(executed)
 
@@ -216,6 +241,7 @@ class ReActLoop(BaseLoop):
         so there is nothing to execute and the loop stops.
         """
         content = self._think_engine.result.content or ""
+        self._report_think_result(self._think_engine.result)
         await self._channel.record_turn(self._memory, content, [])
         await self._think_engine.join()
         return AIMessage(

@@ -86,3 +86,36 @@ class AskUserQuestionInput(BaseModel):
         if len(texts) != len(set(texts)):
             raise ValueError("question texts must be unique")
         return self
+
+
+class AskUserQuestionAnswer(BaseModel):
+    """A single question's answer — selection and free text kept separate.
+
+    ``selected`` (chosen option labels) and ``free_text`` (the "Other" text) are
+    stored in distinct fields — exactly the information the old text round-trip
+    collapsed. A numeric or multi-line free-text answer can never be misread as
+    an option index or misaligned across questions.
+    """
+
+    header: str = ""
+    question: str  # association key back to the AskUserQuestionItem
+    selected: list[str] = Field(default_factory=list)  # chosen option labels
+    free_text: str = ""  # the "Other" free text (empty when none)
+
+    @property
+    def is_free_text(self) -> bool:
+        return bool(self.free_text)
+
+    @property
+    def display(self) -> str:
+        """Rebuild CC's ``"q"="a"`` answer string at the formatting boundary."""
+        parts = list(self.selected)
+        if self.free_text:
+            parts.append(self.free_text)
+        return ", ".join(parts)
+
+
+class AskUserQuestionAnswers(BaseModel):
+    """The structured answers for all questions in one AskUserQuestion call."""
+
+    answers: list[AskUserQuestionAnswer] = Field(default_factory=list)

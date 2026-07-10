@@ -20,6 +20,7 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "SystemMessage": ("messages", "SystemMessage"),
     "AIMessage": ("messages", "AIMessage"),
     "ToolMessage": ("messages", "ToolMessage"),
+    "ResourceMessage": ("messages", "ResourceMessage"),
     "LLMCallContext": ("messages", "LLMCallContext"),
     # serialization
     "BaseSerialization": ("serialization", "BaseSerialization"),
@@ -48,11 +49,11 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "AskUserQuestionOption": ("askuser", "AskUserQuestionOption"),
     "AskUserQuestionItem": ("askuser", "AskUserQuestionItem"),
     "AskUserQuestionInput": ("askuser", "AskUserQuestionInput"),
+    "AskUserQuestionAnswer": ("askuser", "AskUserQuestionAnswer"),
+    "AskUserQuestionAnswers": ("askuser", "AskUserQuestionAnswers"),
     # context
     "ContextManagerConfig": ("context", "ContextManagerConfig"),
     "TokenState": ("context", "TokenState"),
-    "MicrocompactResult": ("context", "MicrocompactResult"),
-    "AutocompactResult": ("context", "AutocompactResult"),
     # tool_config
     "DEFAULT_MAX_RESULT_SIZE_CHARS": ("tool_config", "DEFAULT_MAX_RESULT_SIZE_CHARS"),
     "BYTES_PER_TOKEN": ("tool_config", "BYTES_PER_TOKEN"),

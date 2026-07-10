@@ -4,8 +4,9 @@
 
 Focuses on the spawn-plane routing added in the unified-lifecycle migration:
 ``run_child`` funnels every leaf through ``spawn_and_run`` (so cap / lineage
-apply), degrades to ``None`` on a refused spawn or a run failure, and
-``run_child_for_text`` stays a thin shim over it for the three pipeline callers.
+apply), degrades to ``None`` only on a cap-refused spawn (AgentLimitReached),
+and lets structural failures propagate loudly. ``run_child_for_text`` stays a
+thin shim over it for the three pipeline callers.
 """
 from __future__ import annotations
 
@@ -34,15 +35,14 @@ class _LeafRole:
 
 
 # ---------------------------------------------------------------------------
-# No plane bound is a wiring bug: run_child isolates the RuntimeError to None
+# No plane bound is a wiring bug: run_child lets the RuntimeError surface loudly
+# (it no longer swallows structural failures into a fake-clean None).
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_run_child_no_plane_returns_none():
-    # spawn_and_run raises without a plane; run_child's best-effort except
-    # turns that (like any failure) into None.
+async def test_run_child_no_plane_raises():
     leaf = _LeafRole(summary="done")
-    out = await run_child(lambda _ctx: leaf, "prompt", label="plan")
-    assert out is None
+    with pytest.raises(RuntimeError):
+        await run_child(lambda _ctx: leaf, "prompt", label="plan")
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,8 @@ async def test_run_child_cap_second_leaf_degrades_to_none():
 
 
 # ---------------------------------------------------------------------------
-# Run failure is isolated to None (best-effort leaf)
+# A structural run failure propagates: run_child does NOT swallow it (per-file
+# isolation lives in the batch node's _safe_review, not here).
 # ---------------------------------------------------------------------------
 class _BoomControl:
     async def spawn_agent(self, spec):
@@ -130,7 +131,7 @@ class _BoomControl:
 
 
 @pytest.mark.asyncio
-async def test_run_child_run_failure_returns_none():
+async def test_run_child_run_failure_propagates():
     with set_control(_BoomControl()):
-        out = await run_child(lambda _c: _LeafRole(), "x", label="plan")
-    assert out is None
+        with pytest.raises(RuntimeError):
+            await run_child(lambda _c: _LeafRole(), "x", label="plan")

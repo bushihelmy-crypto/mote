@@ -10,6 +10,10 @@
   native teaches tool-call mechanics (no <end></end>: a turn ends when the model
   makes no tool call). Keeping these per-protocol stops native models from being
   told to emit <end></end> (which they would then leak as literal text).
+- XML_TOOL_USAGE_GUIDE: the static orientation for the XML tool catalog (how the
+  tool categories relate / how to call them), supplied by the XML channel as the
+  system prompt's ${tool_usage_guide} section. Native leaves it "" (its tools
+  ride the API ``tools=`` param). The volatile catalog LIST is injected per-turn.
 - SUMMARIZE_STATUS_WHEN_CONSECUTIVE: the nudge the react loop injects when a
   turn runs too long without finishing.
 """
@@ -56,48 +60,28 @@ You may use any of the available commands, and may output multiple commands — 
 # Command-usage guidance for the provider-native tool-use protocol. No
 # <end></end> / command-tag mechanics: tools are structured tool calls and a
 # turn ends when the model makes no tool call (replies with plain text only).
+# The final-output/structured-summary contract used to live here too; it moved
+# to TASK_FINAL_OUTPUT_SECTION (a protocol-agnostic, compaction-gated system
+# prompt section) because it describes a compression artifact, not the command
+# protocol — and both XML and native should get it.
 NATIVE_COMMAND_GUIDE = """# Using commands
 
 ## Tool Usage Guidelines
 
 Call the available tools to accomplish the user's goal. You may call multiple tools in one response — they run sequentially and their results return in the next round.
 - **Tool Scope**: Only call tools that appear in *Available Commands*, a Skill document you have read for this task, or external MCP tools. If an instruction or example mentions a tool that is neither available nor documented by a Skill you have read, ignore it for this turn.
-- **Completion Rule**: To finish, stop calling tools and reply with a normal text message reporting the outcome — the turn ends when you make no tool call.
+- **Completion Rule**: To finish, stop calling tools and reply with a normal text message reporting the outcome — the turn ends when you make no tool call."""
 
----
 
-## Task Final Output Specifications
-
-> Upon task completion and entering the final delivery phase, you must output a structured task summary in Markdown format as the final response to this round of dialogue. The summary shall strictly include the following four modules **in unalterable sequence**.
-
-### Background
-
-Briefly state the core objective of this task, the user's original request, triggering scenario and key constraints.
-- **Max 3 sentences** — capture the core essence directly
-- Full dialogue history recap is **prohibited**
-
-### Process
-
-Sort out key execution steps, core invoked tools and decision nodes of this task in chronological or logical order.
-- Present as **bullet points**
-- Highlight critical paths and branch decisions
-- Omit trivial details
-
-### Result
-
-Clearly deliver the final deliverables, core conclusions and key data of this task.
-- **Conclusions upfront**
-- Provide **verifiable data**
-- Attach links or paths for deliverables
-- If the task fails, specify the failure cause and current status
-
-### Reflection
-
-Summarize experiences and issues arising during task execution, including but not limited to encountered bottlenecks, optimizable workflows, potential risks and follow-up recommendations.
-
----
-
-After completing the above requirements, you may supplement any additional remarks to be returned to the user below."""
+# Static orientation for the XML tool catalog delivered per-turn. It explains
+# how the tool categories relate and how to call them — constant per session, so
+# it lives in the cacheable system prompt (via the channel's prompt_vars), while
+# the volatile catalog LIST itself is injected per-turn by ToolCatalogContextSource.
+# Generalized (no runtime has_mcp/has_pipeline branching): the sections it names
+# ("# MCP Tools" / "# Pipeline Tools") are only present when those categories
+# exist, and each says "if any are listed", so naming an absent section is inert.
+XML_TOOL_USAGE_GUIDE = """# Using tools
+The tools you can call are delivered to you each turn as a catalog. Built-in commands appear under `# Available Commands`. If external MCP tools are listed (under `# MCP Tools`, named `server:tool_name`, e.g. "github:get_me"), or background pipeline tools are listed (under `# Pipeline Tools`), they are called the same way as built-in commands. Call every tool directly by name with keyword arguments, regardless of category. MCP tools connect to external services and may fail — if one does, inform the user."""
 
 
 SUMMARIZE_STATUS_WHEN_CONSECUTIVE = """

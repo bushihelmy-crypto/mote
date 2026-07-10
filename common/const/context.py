@@ -15,7 +15,7 @@ layer means this module never imports ``executor`` (dependency points downward,
 ``context`` → ``executor``).
 
 Values are kept close to CC so behavior is comparable; where CC scales by the
-model's context window we expose helpers in ``token_budget.py`` instead of
+model's context window we expose helpers in ``budget.py`` instead of
 hard-coding.
 """
 
@@ -29,6 +29,10 @@ from __future__ import annotations
 # (CC ``TOOL_RESULT_CLEARED_MESSAGE`` / ``TIME_BASED_MC_CLEARED_MESSAGE``).
 TOOL_RESULT_CLEARED_MESSAGE: str = "[Old tool result content cleared]"
 
+# Marker prepended in place of the oldest turns the (destructive) head-drop
+# reducer irreversibly discarded when nothing cheaper could free enough room.
+HEAD_DROPPED_MESSAGE: str = "[earlier turns truncated to fit the context window]"
+
 # How many of the most-recent tool results microcompact always keeps intact
 # (CC ``KEEP_RECENT``).
 MICROCOMPACT_KEEP_RECENT: int = 5
@@ -36,6 +40,14 @@ MICROCOMPACT_KEEP_RECENT: int = 5
 # Only fold once at least this many tool results have accumulated
 # (CC cached-microcompact ``TRIGGER_THRESHOLD``).
 MICROCOMPACT_TRIGGER_THRESHOLD: int = 10
+
+# Minimum tokens a fold pass must free to be worth doing. Folding rewrites the
+# content of old messages, which changes the request prefix and forces a
+# one-time prompt-cache write (Anthropic caching is a strict prefix match); the
+# saving only pays off once amortized over later turns. So skip a fold that
+# would free less than this — never eat a cache miss for a trivial trim. Mirrors
+# Anthropic context-editing's ``clear_at_least``.
+MICROCOMPACT_CLEAR_AT_LEAST_TOKENS: int = 5_000
 
 # ---------------------------------------------------------------------------
 # History-level (autocompact — summarize & rebuild)
@@ -67,3 +79,18 @@ MODEL_CONTEXT_WINDOW_DEFAULT: int = 200_000
 # tail verbatim (the part not summarized). Mirrors CC session-memory bounds.
 AUTOCOMPACT_KEEP_TAIL_TOKENS: int = 10_000
 AUTOCOMPACT_KEEP_TAIL_MESSAGES: int = 5
+
+# ---------------------------------------------------------------------------
+# History-level (post-compact file rehydration)
+# ---------------------------------------------------------------------------
+
+# After a summarize compaction discards the head, re-read the files the session
+# most-recently touched and re-inject their *current* bytes right after the
+# summary, so the model keeps a fresh view of its working set instead of relying
+# on the summary's prose recollection (CC ``createPostCompactFileAttachments``).
+# Budgets mirror CC's file-attachment caps: at most this many files, each
+# truncated (head-kept) to PER_FILE tokens, added most-recent-first until the
+# running total would exceed the overall budget.
+POST_COMPACT_REHYDRATE_MAX_FILES: int = 5
+POST_COMPACT_REHYDRATE_MAX_TOKENS_PER_FILE: int = 10_000
+POST_COMPACT_REHYDRATE_TOKEN_BUDGET: int = 50_000
