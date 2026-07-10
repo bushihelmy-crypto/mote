@@ -23,7 +23,6 @@ from metagpt.common.agent_control import (
     spawn_and_run,
 )
 from metagpt.common.interface.child_role import build_child_role as _build_child_role
-from metagpt.common.logs import logger
 from metagpt.common.schema import UserMessage
 
 
@@ -76,22 +75,24 @@ async def run_child(
     Routes through the single spawn authority (``spawn_and_run`` resolves the
     ambient control plane), so every code-review leaf is born on the plane:
     cap / depth / lineage all apply, and a refused spawn (cap reached) degrades
-    to ``None`` exactly like a run failure. A plane is always bound in
-    production; ``spawn_and_run`` raises if none is, and this helper's
-    best-effort ``except`` turns that (like any other failure) into ``None``.
+    to ``None``. A plane is always bound in production; ``spawn_and_run`` raises
+    if none is.
 
-    Best-effort: any failure is logged and yields ``None``. The child is always
-    cleaned up (by the spawn helper / handle).
+    Deliberately does NOT swallow failures: the per-file review isolation lives
+    one level up in :func:`review_one_file` / ``_safe_review`` (a single file's
+    reviewer crashing must not sink the batch). A failure *here* is structural —
+    a wiring bug (e.g. a mis-provisioned child) that must surface loudly rather
+    than masquerade as a clean, finding-free review.
 
     Args:
         factory: Builds an unstarted child Role from a :class:`SpawnContext`.
         prompt: The user message driving the run.
-        label: Short tag (used as the child nickname + log lines on failure).
+        label: Short tag (used as the child nickname).
         ctx: Optional carrier of an explicit ``agent_control`` plane.
 
     Returns:
-        The child's terminal summary (possibly empty string), or ``None`` if the
-        spawn was refused or the run raised.
+        The child's terminal summary (possibly empty string), or ``None`` when
+        the spawn was refused by the cap (:class:`AgentLimitReached`).
     """
     spec = SpawnSpec(
         role_factory=factory,
@@ -99,11 +100,7 @@ async def run_child(
         agent_role=label,
         lifecycle=Lifecycle.EPHEMERAL,
     )
-    try:
-        return await spawn_and_run(spec, UserMessage(content=prompt), ctx=ctx)
-    except Exception as e:  # noqa: BLE001 — leaf isolation
-        logger.warning(f"code_review: {label} run failed: {e}")
-        return None
+    return await spawn_and_run(spec, UserMessage(content=prompt), ctx=ctx)
 
 
 async def run_child_for_text(role, prompt: str, *, label: str = "child") -> Optional[str]:
@@ -116,8 +113,9 @@ async def run_child_for_text(role, prompt: str, *, label: str = "child") -> Opti
     pipeline's existing monkeypatch seams stay intact.
 
     Returns:
-        ``role.state.last_end_output`` (possibly empty string), or ``None`` if
-        the spawn was refused or the run raised.
+        ``role.state.last_end_output`` (possibly empty string), or ``None`` when
+        the spawn was refused by the cap. Structural failures propagate (see
+        :func:`run_child`).
     """
     return await run_child(lambda _spawn_ctx: role, prompt, label=label)
 

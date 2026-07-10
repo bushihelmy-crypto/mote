@@ -1,9 +1,9 @@
 """Grep tool — aligned with Claude Code's Grep (GrepTool, built on ripgrep).
 
-A powerful content search tool. Prefers the ripgrep binary (`rg`) when one is
-available and falls back to a pure-Python walker otherwise, so it works even in
-environments that don't ship ripgrep. The interface and defaults mirror Claude
-Code's tool so model behavior stays familiar:
+A powerful content search tool. Like Claude Code, this shells out to the
+ripgrep binary (`rg`) for all text search — the walk happens in a separate OS
+process, so a huge tree can never block the event loop. The interface and
+defaults mirror Claude Code's tool so model behavior stays familiar:
 
 - Three output modes: ``files_with_matches`` (default), ``content``, ``count``.
 - VCS metadata dirs (.git/.svn/.hg/.bzr/.jj/.sl) are excluded automatically.
@@ -14,13 +14,25 @@ Code's tool so model behavior stays familiar:
 - ``files_with_matches`` results are sorted by mtime (most recent first), and all
   paths are relativized to the working directory to save tokens.
 
+ripgrep is a hard dependency: a static ``x86_64-linux`` build is vendored under
+``metagpt/vendor/ripgrep/`` and ``_find_ripgrep`` also probes ``PATH``. If no
+usable ``rg`` is found, a text search raises a ``ToolError`` (there is no
+in-process Python fallback — that would run on the event loop and freeze the
+caller on large trees).
+
+Rich documents (PDF/.docx/.xlsx) are handled by a separate text-extraction pass
+that ripgrep can't do. Because that pass walks the tree in-process (in a worker
+thread, with a deadline), it only runs when the query actually targets
+documents — a doc ``type``, a ``glob`` naming a document extension, or a search
+root that is itself a document file.
+
 Differences from Claude Code's tool, by design:
 - CC's ``-A/-B/-C/-n/-i`` flag names aren't valid Python identifiers, and this
   framework derives the LLM schema from the ``call()`` signature, so they are
   spelled ``after_context/before_context/context/line_numbers/case_insensitive``
   (the docstring notes the rg equivalents).
-- The pure-Python fallback does not honor .gitignore (ripgrep does); it only
-  applies the VCS/dir exclusions and glob/type filters described above.
+- The document-extraction pass does not honor .gitignore (ripgrep does); it
+  prunes VCS/heavy directories and applies the glob/type filters.
 - No ripgrep permission/ignore-pattern integration (this framework has no
   per-Role file-read ignore list to consult).
 """
@@ -29,8 +41,11 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import os
+import platform
 import re
 import shutil
+import sys
+import time
 from typing import ClassVar, Optional
 
 from metagpt.executor.base_tool import BaseTool
@@ -43,6 +58,7 @@ from metagpt.executor.dependency._document import (
 from metagpt.common.const.tools import (
     VCS_DIRECTORIES_TO_EXCLUDE,
     DEFAULT_HEAD_LIMIT,
+    DOCUMENT_EXTENSIONS,
     MAX_COLUMNS,
     SEARCH_TIMEOUT,
 )
@@ -89,21 +105,44 @@ _TYPE_EXTENSIONS: dict[str, tuple[str, ...]] = {
 # rely on the document-extraction pass (which filters by the same type).
 _DOC_ONLY_TYPES = frozenset({"pdf", "docx", "word", "xlsx", "excel"})
 
+# Heavy dependency/build directories the Python walk prunes (document pass and
+# the ripgrep-absent fallback). ripgrep honors .gitignore, so it usually skips
+# these; the Python passes do NOT read .gitignore, so without explicit pruning
+# they would descend into every node_modules/.venv (potentially millions of
+# files), taking effectively forever and blocking the caller.
+_HEAVY_DIRECTORIES_TO_EXCLUDE = frozenset({
+    "node_modules", ".venv", "venv", "site-packages",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".next", "dist", "build",
+})
+
+
+# Our own vendored ripgrep, so we don't depend on a system rg or one shipped by
+# another tool. Only x86_64-linux is checked in (see metagpt/vendor/ripgrep/);
+# other platforms fall through to a system rg on PATH.
+_VENDORED_RIPGREP = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "vendor", "ripgrep", f"{platform.machine()}-{sys.platform}", "rg",
+)
+
 
 def _find_ripgrep() -> Optional[str]:
-    """Locate a usable ripgrep binary, or None to use the Python fallback.
+    """Locate a usable ripgrep binary, or None if none is available.
 
-    Checks PATH first, then a few well-known vendored locations. A shell alias
-    (e.g. `alias rg=...`) is NOT a real binary, so shutil.which may miss it; the
-    explicit-path probe covers the vendored-by-another-tool case.
+    Probe order: system PATH -> our vendored binary -> other well-known
+    locations (including one vendored by Claude Code, kept only as a last
+    resort). A shell alias (e.g. `alias rg=...`) is NOT a real binary, so
+    shutil.which may miss it; the explicit-path probes cover that.
     """
     found = shutil.which("rg")
     if found:
         return found
     candidates = [
+        _VENDORED_RIPGREP,
         "/usr/bin/rg",
         "/usr/local/bin/rg",
         os.path.expanduser("~/.cargo/bin/rg"),
+        # Last resort: a ripgrep vendored by a globally-installed Claude Code.
         "/usr/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg",
     ]
     for path in candidates:
@@ -147,6 +186,8 @@ class Grep(BaseTool):
 
     name = "Grep"
     aliases: ClassVar[list[str]] = ["Grep.run", "grep", "search"]
+    # Read-only search: results are re-derivable by re-running the query.
+    reconstructable: ClassVar[bool] = True
     # Grep output is usually compact; cap below the default (CC).
     max_result_size_chars: ClassVar[int] = 20_000
     description = GREP_DESCRIPTION
@@ -227,23 +268,37 @@ class Grep(BaseTool):
             )
 
         rg = _find_ripgrep()
-        # A doc-only type (pdf/docx/xlsx/...) has no ripgrep --type, and matches
+        # A doc-only type (pdf/docx/xlsx/...) has no ripgrep --type and matches
         # only rich documents, so skip the ripgrep text pass entirely for it.
         doc_only = type in _DOC_ONLY_TYPES
+        # The document-extraction pass walks the tree in-process, so only run it
+        # when the query actually targets documents (rg handles everything else).
+        want_documents = doc_only or self._query_targets_documents(search_root, glob, type)
+        # Wall-clock deadline for the (synchronous) document pass. It runs in a
+        # worker thread so it never blocks the event loop, and honors this
+        # deadline so a huge tree can't run unbounded.
+        deadline = time.monotonic() + SEARCH_TIMEOUT
         try:
-            if rg is not None and not doc_only:
+            rows: list[str] = []
+            # ripgrep is the sole text-search engine (no in-process fallback).
+            if not doc_only:
+                if rg is None:
+                    raise ToolError(
+                        "Error: ripgrep (rg) is required for text search but was "
+                        "not found. Install ripgrep or ensure the vendored binary "
+                        f"is present at {_VENDORED_RIPGREP}."
+                    )
                 rows = await self._run_ripgrep(rg, search_root, pattern, glob, type,
                                                output_mode, case_insensitive, line_numbers,
                                                before_context, after_context, context, multiline)
-                # ripgrep can't read PDF/Word/Excel (binary or zipped XML), so it
-                # silently skips them. Run a separate extraction pass and merge —
-                # no overlap, since rg never matched those files.
-                rows += self._run_documents(search_root, pattern, glob, type, output_mode,
-                                            case_insensitive, line_numbers, multiline)
-            else:
-                # Python engine: handles plain text AND documents in one pass.
-                rows = self._run_python(search_root, pattern, glob, type, output_mode,
-                                        case_insensitive, line_numbers, multiline)
+            # ripgrep can't read PDF/Word/Excel (binary or zipped XML). When the
+            # query targets documents, run a separate extraction pass and merge —
+            # no overlap, since rg never matched those files. Synchronous, so
+            # offload it to a thread to keep the loop free.
+            if want_documents:
+                rows += await asyncio.to_thread(
+                    self._run_documents, search_root, pattern, glob, type, output_mode,
+                    case_insensitive, line_numbers, multiline, deadline)
         except TimeoutError:
             raise ToolError(
                 f"Error: search timed out after {SEARCH_TIMEOUT:.0f}s. Try a more "
@@ -251,10 +306,36 @@ class Grep(BaseTool):
             )
         except re.error as e:
             raise ToolError(f"Error: invalid regular expression '{pattern}': {e}")
+        except ToolError:
+            raise
         except Exception as e:  # noqa: BLE001 — surface the failure to the model
             raise ToolError(f"Error running search: {e}")
 
         return self._format(rows, search_root, output_mode, head_limit, offset)
+
+    @staticmethod
+    def _query_targets_documents(search_root: str, glob: str, type_: str) -> bool:
+        """Whether this query should trigger the (in-process) document pass.
+
+        The document pass walks the tree in Python, which is expensive, so it
+        only runs when the query actually targets rich documents:
+        - a rich-document ``type`` (pdf/docx/xlsx/word/excel), or
+        - a ``glob`` that names a document extension (``*.pdf``, ``*.{docx,xlsx}``), or
+        - a search root that is itself a document file.
+        Otherwise (the overwhelmingly common code-search case) it is skipped.
+        """
+        if type_ in _DOC_ONLY_TYPES:
+            return True
+        if os.path.isfile(search_root):
+            return _is_document(search_root)
+        # Match a bare extension (".pdf" -> "pdf") anywhere in a glob pattern so
+        # both "*.pdf" and brace groups like "*.{docx,xlsx}" are recognized.
+        hints = tuple(ext.lstrip(".") for ext in DOCUMENT_EXTENSIONS)
+        for pat in _split_glob(glob):
+            low = pat.lower()
+            if any(h in low for h in hints):
+                return True
+        return False
 
     async def _run_ripgrep(self, rg, root, pattern, glob, type_, output_mode,
                            case_insensitive, line_numbers, before_context,
@@ -318,57 +399,16 @@ class Grep(BaseTool):
             return stripped
         return lines
 
-    def _run_python(self, root, pattern, glob, type_, output_mode,
-                    case_insensitive, line_numbers, multiline) -> list[str]:
-        """Pure-Python fallback search, emitting ripgrep-shaped output lines.
-
-        files_with_matches -> "<path>"; count -> "<path>:<n>";
-        content -> "<path>:<lineno>:<text>" (or "<path>:<text>" without numbers).
-        Honors the VCS/dir exclusions, glob and type filters, but NOT .gitignore.
-        """
-        flags = re.MULTILINE
-        if case_insensitive:
-            flags |= re.IGNORECASE
-        if multiline:
-            flags |= re.DOTALL
-        regex = re.compile(pattern, flags)
-
-        globs = _split_glob(glob)
-        type_exts = _TYPE_EXTENSIONS.get(type_, ()) if type_ else ()
-        rows: list[str] = []
-
-        for file_path in self._walk_files(root):
-            if not self._file_matches_filters(file_path, root, globs, type_exts):
-                continue
-            if _is_document(file_path):
-                continue  # handled by the document-extraction pass below
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="strict") as f:
-                    data = f.read()
-            except (OSError, UnicodeDecodeError):
-                continue  # skip unreadable / binary (non-utf8) files, like rg
-
-            if multiline:
-                if regex.search(data):
-                    self._collect(rows, output_mode, file_path, data, regex,
-                                  line_numbers, multiline=True)
-            else:
-                if regex.search(data):
-                    self._collect(rows, output_mode, file_path, data, regex,
-                                  line_numbers, multiline=False)
-        rows += self._run_documents(root, pattern, glob, type_, output_mode,
-                                    case_insensitive, line_numbers, multiline)
-        return rows
-
     def _run_documents(self, root, pattern, glob, type_, output_mode,
-                       case_insensitive, line_numbers, multiline) -> list[str]:
+                       case_insensitive, line_numbers, multiline, deadline=None) -> list[str]:
         """Search rich documents (PDF/Word/Excel) by extracting their text first.
 
         Each document's extracted text is matched with the same regex and fed
         through _collect, so output is ripgrep-shaped and the existing
         sort/limit/format logic applies unchanged. Documents whose format has no
         available extractor (missing optional dep) are silently skipped, exactly
-        like ripgrep skips binaries.
+        like ripgrep skips binaries. Raises TimeoutError once ``deadline`` (a
+        time.monotonic() value) passes.
         """
         flags = re.MULTILINE
         if case_insensitive:
@@ -382,6 +422,8 @@ class Grep(BaseTool):
         rows: list[str] = []
 
         for file_path in self._walk_files(root):
+            if deadline is not None and time.monotonic() > deadline:
+                raise TimeoutError
             if not _is_document(file_path):
                 continue
             if not self._file_matches_filters(file_path, root, globs, type_exts):
@@ -396,11 +438,17 @@ class Grep(BaseTool):
 
     @staticmethod
     def _walk_files(root: str):
-        """Yield file paths under root, pruning VCS metadata directories."""
+        """Yield file paths under root, pruning VCS metadata and heavy
+        dependency/build directories (node_modules, .venv, __pycache__, ...).
+
+        The Python passes don't read .gitignore, so these are pruned explicitly;
+        otherwise a tree with many node_modules/.venv would take effectively
+        forever to walk.
+        """
         if os.path.isfile(root):
             yield root
             return
-        excluded = set(VCS_DIRECTORIES_TO_EXCLUDE)
+        excluded = set(VCS_DIRECTORIES_TO_EXCLUDE) | _HEAVY_DIRECTORIES_TO_EXCLUDE
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in excluded]
             for name in filenames:

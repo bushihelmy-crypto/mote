@@ -52,6 +52,17 @@ class SkillManager:
     def ready(self) -> bool:
         return self._ready
 
+    @property
+    def enabled(self) -> bool:
+        """Whether the skills subsystem is engaged for this role.
+
+        The single source of truth for the "skills on?" decision (the global
+        master switch OR the per-role opt-in inferred from a non-empty include
+        list), read by the executor to decide whether to expose the ``Skill``
+        bridge tool.
+        """
+        return self._enabled
+
     def _new_pool(self) -> SkillPool:
         """Build a pool over the configured source directories (or the default)."""
         if self._source_dirs is not None:

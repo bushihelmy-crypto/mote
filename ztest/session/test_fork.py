@@ -145,6 +145,7 @@ async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypa
     monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
 
     parent = Role(name="P", context=Context())
+    parent._components._wire_spine()  # wire the recorder subscriber
     await parent.context_manager.add(UserMessage(content="one"))
     await parent.context_manager.add(UserMessage(content="two"))
 

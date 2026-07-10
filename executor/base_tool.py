@@ -80,6 +80,17 @@ class BaseTool(ABC):
     # between calls.
     stateful: ClassVar[bool] = False
 
+    # Whether this tool's result is *reconstructable* — re-derivable by re-running
+    # the tool (a read-only or idempotent observation like Read/Grep/Glob, or a
+    # write whose effect is durable on disk like Write/Edit). The compaction
+    # pipeline may fold/clear a reconstructable result's body in place, since the
+    # information is recoverable from the live filesystem on demand. Tools whose
+    # result is a one-shot side effect or a user interaction that cannot be
+    # replayed (AskUserQuestion, Agent spawns, Sleep, ...) must leave this False so
+    # their bodies are preserved verbatim. Consumed by the ToolExecutor to build
+    # the per-Role compactable set the ContextManager threads into the Transcript.
+    reconstructable: ClassVar[bool] = False
+
     # --- Permission metadata (consumed by the PermissionEngine) ---
     # Coarse risk label a tool self-declares (advisory in phase 1). See
     # metagpt.common.schema.permission_types.RiskLevel.

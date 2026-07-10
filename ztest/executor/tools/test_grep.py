@@ -4,9 +4,9 @@
 
 Exercises the three output modes, glob/type filters, case-insensitivity,
 pagination, and the error guards through the public ``call`` (ripgrep is present
-in this environment, so this covers the real binary path). The pure-Python
-fallback engine and the pure helper functions are also tested directly so they
-stay covered regardless of whether ripgrep is installed.
+in this environment, so this covers the real binary path). ripgrep is a hard
+dependency now, so the "rg required" error and the on-demand document-pass
+gating are covered too, along with the pure helper functions.
 """
 from __future__ import annotations
 
@@ -117,33 +117,65 @@ class TestGuards:
             _grep(pattern="x", path=str(workspace / "nope"))
 
 
-# --- Pure-Python fallback engine (independent of ripgrep) --------------------
+# --- ripgrep hard dependency (no in-process text fallback) -------------------
 
 
-class TestPythonEngine:
-    def test_run_python_files_with_matches(self, tree):
-        rows = Grep()._run_python(
-            str(tree), "ERROR", "", "", "files_with_matches", False, True, False
-        )
-        joined = "\n".join(rows)
-        assert any("a.py:" in r for r in rows)
-        assert any("c.txt:" in r for r in rows)
-        assert "b.py" not in joined
+class TestRipgrepRequired:
+    def test_missing_rg_raises_for_text_search(self, tree, monkeypatch):
+        # With no ripgrep available, a text search must fail loudly rather than
+        # silently walking the tree in-process (the old fallback froze the loop).
+        import metagpt.executor.tools.grep as grep_mod
 
-    def test_run_python_content(self, tree):
-        rows = Grep()._run_python(
-            str(tree), "ERROR", "", "py", "content", False, True, False
-        )
-        # type=py filter excludes the .txt match.
-        assert all(".txt" not in r for r in rows)
-        assert any("return ERROR" in r for r in rows)
+        monkeypatch.setattr(grep_mod, "_find_ripgrep", lambda: None)
+        with pytest.raises(ToolError, match="is required for text search"):
+            _grep(pattern="ERROR")
 
-    def test_run_python_count(self, tree):
-        write_file(tree / "many.txt", "ERROR\nERROR\n")
-        rows = Grep()._run_python(
-            str(tree), "ERROR", "*.txt", "", "count", False, True, False
-        )
-        assert any(r.endswith(":2") for r in rows)
+    def test_doc_only_type_works_without_rg(self, workspace, monkeypatch):
+        # A doc-only type (pdf) never needs rg, so it must not raise even when
+        # ripgrep is absent — it goes straight to the document-extraction pass.
+        import metagpt.executor.tools.grep as grep_mod
+
+        monkeypatch.setattr(grep_mod, "_find_ripgrep", lambda: None)
+        out = _grep(pattern="anything", type="pdf")
+        assert out == "No files found"  # no PDFs present, but no "rg required" error
+
+
+# --- On-demand document pass gating ------------------------------------------
+
+
+class TestDocumentGating:
+    def test_plain_code_search_skips_documents(self, tree):
+        # The common case: no doc type, no doc glob -> document walk not triggered.
+        assert Grep._query_targets_documents(str(tree), "", "") is False
+
+    def test_doc_type_triggers(self, tree):
+        assert Grep._query_targets_documents(str(tree), "", "pdf") is True
+
+    def test_doc_glob_triggers(self, tree):
+        assert Grep._query_targets_documents(str(tree), "*.pdf", "") is True
+        # Brace groups are recognized via bare-extension substring matching.
+        assert Grep._query_targets_documents(str(tree), "*.{docx,xlsx}", "") is True
+
+    def test_single_document_file_triggers(self, workspace):
+        write_file(workspace / "report.pdf", "unused")
+        assert Grep._query_targets_documents(str(workspace / "report.pdf"), "", "") is True
+
+    def test_single_code_file_does_not_trigger(self, tree):
+        assert Grep._query_targets_documents(str(tree / "a.py"), "", "") is False
+
+
+# --- Vendored ripgrep binary -------------------------------------------------
+
+
+class TestVendoredRipgrep:
+    def test_vendored_binary_is_present_and_executable(self):
+        # x86_64-linux is checked in; assert it exists there so a regression in
+        # packaging is caught. On other platforms this path simply won't exist.
+        import metagpt.executor.tools.grep as grep_mod
+
+        if os.name == "posix" and "x86_64-linux" in grep_mod._VENDORED_RIPGREP:
+            assert os.path.isfile(grep_mod._VENDORED_RIPGREP)
+            assert os.access(grep_mod._VENDORED_RIPGREP, os.X_OK)
 
 
 # --- Pure helpers ------------------------------------------------------------

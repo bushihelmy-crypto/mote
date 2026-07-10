@@ -25,24 +25,36 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from metagpt.common.events import DiagnosticsEvent, FileMutatedEvent
+from metagpt.common.interface.event_subscriber import BusAware, ObservationSubscriber, ObserverPriority
 from metagpt.common.logs import logger
 from metagpt.common.schema import LspConfig
 from metagpt.roles.lsp.format import format_diagnostics
 from metagpt.roles.lsp.manager import LspServerManager
 
 
-class LspService:
+class LspService(ObservationSubscriber, BusAware):
     """LSP diagnostics for one Role session; an :class:`ObservationSubscriber`."""
 
-    # ObservationSubscriber priority: mid — runs before the file-watcher's late
-    # self-write bookkeeping (90) but its ordering vs other subscribers is
-    # immaterial (it only reacts to FileMutatedEvent).
-    priority: int = 50
+    # ObservationSubscriber priority: LIVE — runs before the file-watcher's late
+    # bookkeeping, but its ordering vs other subscribers is immaterial (it only
+    # reacts to FileMutatedEvent).
+    priority: int = ObserverPriority.LIVE
 
     def __init__(self, config: LspConfig, root_path: str, *, bus=None) -> None:
         self._manager = LspServerManager(config, root_path)
-        # The event bus to broadcast DiagnosticsEvent on. Wired by the Role when
-        # the service is subscribed; ``None`` (tests / no bus) disables emit.
+        # The event bus to broadcast DiagnosticsEvent on. Wired by the bus itself
+        # via ``on_subscribed`` when the service is subscribed (see below);
+        # ``None`` (tests wiring ``file_saved`` directly / no bus) disables emit.
+        self.bus = bus
+
+    def on_subscribed(self, bus) -> None:
+        """Bus lifecycle hook: capture the bus handle we broadcast diagnostics on.
+
+        This service is a dual-role subscriber — it *consumes* FileMutatedEvent
+        (input edge) and *produces* DiagnosticsEvent (output edge). The bus calls
+        this once on ``subscribe`` so the producer edge gets its handle without
+        the host special-casing a back-reference assignment.
+        """
         self.bus = bus
 
     async def handle(self, event) -> None:

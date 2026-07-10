@@ -85,7 +85,6 @@ class TestLoadSkillFromDir:
             builtin_dir,
             "rich",
             description="Rich skill",
-            always_apply=True,
             globs=["*.py", "*.md"],
             instructions="The instructions body.",
             extra_meta={"version": 2},
@@ -95,7 +94,6 @@ class TestLoadSkillFromDir:
         s = pool.get_all()[0]
         assert s.name == "rich"
         assert s.description == "Rich skill"
-        assert s.always_apply is True
         assert s.globs == ["*.py", "*.md"]
         assert s.instructions.strip() == "The instructions body."
         assert s.metadata["version"] == 2

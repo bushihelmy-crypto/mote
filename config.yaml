@@ -22,47 +22,15 @@
 # LLM —— 主模型（必填）
 # ----------------------------------------------------------------------------
 llm:
-  api_key: ""
-  api_type: openai
-  base_url: ""
-  model: "claude-opus-4-6"                        # 模型名 / 部署名
-  # api_version: null                    # Azure 等需要时填写
-  # pricing_plan: null                   # 成本结算计划
-
-  # 生成参数
-  max_token: 4096
-  temperature: 0.0
+  api_key: sk-QrZIL3AjCXlSMmjM5bH8q7UY7lsebiTpZttRx3eEhtxJs7TO
+  api_type: anthropic
+  base_url: https://newapi.deepwisdom.ai
+  model: "claude-opus-4-6"
+  max_token: 64000
+  temperature: 0.01
   top_p: 1.0
-  # top_k: 0
-  # repetition_penalty: 1.0
-  # presence_penalty: 0.0
-  # frequency_penalty: 0.0
-  # stop: null
-  # stream: false
-  # n: null
-  # best_of: null
-  # logprobs: null
-  # top_logprobs: null
   timeout: 600
-
-  # 网络与成本
-  # proxy: null
-  calc_usage: true                       # 是否统计 token 用量/成本
-  compress_type: ""                      # "" | post_cut_by_msg | post_cut_by_token | balanced_cut_by_token | pre_cut_by_msg | pre_cut_by_token
-
-  # OAuth（可选）：设置后用 bearer token 取代静态 api_key
-  # oauth:
-  #   provider: "openai"                 # 预设名（自动填充 token_url/scopes 等）；显式字段优先
-  #   client_id: "YOUR_CLIENT_ID"        # 必填
-  #   client_secret: "YOUR_CLIENT_SECRET"
-  #   grant_type: "client_credentials"   # client_credentials | refresh_token
-  #   token_url: "https://.../oauth/token"
-  #   refresh_token: null
-  #   scopes: []
-  #   audience: null
-  #   store_backend: "fallback"          # file | keyring | fallback
-  #   expiry_buffer_s: 300
-  #   headers_extra: {}
+  calc_usage: true
 
 # ----------------------------------------------------------------------------
 # 路由与任务级模型
@@ -81,7 +49,16 @@ enable_router: false
 # ----------------------------------------------------------------------------
 # 杂项
 # ----------------------------------------------------------------------------
-# proxy: ""                              # 全局代理（供浏览器等工具用，非 LLM）
+# 全局代理（供浏览器等工具用，非 LLM）。WebBrowser 会用它给整个会话一个出口 IP。
+# 格式：http://host:port | http://user:pass@host:port | socks5://host:port
+# （裸 host:port 按 http 处理）。留空则回退到环境变量 HTTP(S)_PROXY，再无则直连。
+# 换出口 IP 是最有效的反封锁手段（限流/验证码按 IP 信誉触发）；请让代理所在地区
+# 与下面的 browser_locale/时区一致，否则「zh-CN locale + 美国 IP」本身就是机器人特征。
+proxy: "http://192.168.88.121:7890"
+
+# 浏览器地区身份（stealth 指纹用）：auto（按主机 env 猜）| en（en-US/纽约）| zh（zh-CN/上海）。
+# 已按当前代理出口在国内配成 zh，使 locale+时区+Accept-Language 与出口 IP 一致。
+browser_locale: "zh"
 # api_key_helper: ""                     # 打印 api key 到 stdout 的 shell 命令（仅受信任层生效）
 # repair_llm_output: false               # 修复 LLM 原始输出
 
@@ -108,24 +85,15 @@ enable_router: false
 #   similarity_top_k: 5                  # 检索的长期记忆条数
 #   use_llm_ranker: false
 #
-#   # 可压缩记忆
+#   # 自适应压缩记忆（prompt-only：开关后 think-engine 发 compaction 段，实际清理由 context.compaction 执行）
 #   enable_compressable_memory: false
-#   compress_type: "compaction"          # compaction | compressable
-#   compress_k: 15                       # 压缩后保留的最新消息数
-#   compress_model_name: "gpt-4o-mini"
-#   compress_trigger_token_threshold: 0  # 0 表示不触发
-#
-#   # AdaptiveCompactionMemory
-#   max_context_tokens: 128000
-#   compression_threshold: 0.8           # 触发压缩的 token 占比
-#   target_after_compression: 0.50       # 压缩后目标 token 占比
-#   protected_recent_messages: 8
-#   min_compression_ratio: 0.08
+#   protected_recent_messages: 8         # FRC 段声明保留的最新消息数
 #
 #   # P0 Skills
-#   skills:
-#     enabled: false
-#     max_tokens: 2000
+role_zero:
+  skills:
+    enabled: true
+    max_tokens: 2000
 
 # ----------------------------------------------------------------------------
 # MCP (Model Context Protocol)
@@ -165,3 +133,46 @@ enable_router: false
 #   environment: "algo-debug"
 #   send_default_pii: true
 #   extra_data: {}
+
+# ----------------------------------------------------------------------------
+# 多模态服务 (Multimodal)
+# ----------------------------------------------------------------------------
+multimodal:
+  image_generation:
+    api_key: sk-NrKhPVUBcwjqCnK50fD34e8538424fB497BbC6Fc43303277
+    base_url: https://test-llmapi.deepwisdom.ai/v1
+    model: gpt-image-1.5
+  image_understanding:
+    api_key: sk-2hD6bHZxezKWA3ATuiR2qubQVo50ov2YiyJLJoKTFU0CEke2
+    base_url: https://newapi.deepwisdom.ai/v1
+    max_concurrency: 4
+    max_token: 8192
+    model: claude-opus-4-6
+    temperature: 0.0
+    timeout: 300
+  audio_generation:
+    api_key: sk-NrKhPVUBcwjqCnK50fD34e8538424fB497BbC6Fc43303277
+    base_url: https://test-llmapi.deepwisdom.ai/v1
+    max_concurrency: 4
+    model: eleven_v3
+  audio_transcription:
+    max_concurrency: 4
+    model: scribe_v2
+  music_generation:
+    api_key: sk-NrKhPVUBcwjqCnK50fD34e8538424fB497BbC6Fc43303277
+    base_url: https://test-llmapi.deepwisdom.ai/v1
+    model: lyria-3-pro-preview
+  pdf_understanding:
+    api_key: ""
+    base_url: ""
+    max_concurrency: 4
+    max_token: 8192
+    model: claude-sonnet-4-6
+    temperature: 0.0
+    timeout: 600
+  video_generation:
+    api_key: sk-NrKhPVUBcwjqCnK50fD34e8538424fB497BbC6Fc43303277
+    base_url: https://test-llmapi.deepwisdom.ai/v1
+    max_concurrency: 2
+    reference_guided_video_model: wan2.6-i2v
+    text_to_video_model: wan2.6-t2v

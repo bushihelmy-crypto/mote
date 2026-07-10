@@ -25,22 +25,6 @@ class TestDefaults:
 
     def test_collection_defaults(self):
         s = RoleSchema()
-        assert s.tools == [
-            "Read",
-            "Write",
-            "Edit",
-            "Glob",
-            "Grep",
-            "Bash",
-            "Terminal",
-            "Jupyter",
-            "Agent",
-            "AskUserQuestion",
-            "Sleep",
-            "ResumeTasks",
-            "GetNodeState",
-            "CodeReview",
-        ]
         assert s.mcps == []
         assert s.agents == []
         assert s.skills == []

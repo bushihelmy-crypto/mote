@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from metagpt.common.exception import ToolValidationError
+from metagpt.common.interface.event_subscriber import ObservationSubscriber
 from metagpt.common.schema import ToolResultLimitConfig
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tasks.types import BgTaskResult
@@ -246,6 +247,25 @@ class TestSchemas:
         assert specs[0]["function"]["name"] == "Add"
 
 
+class TestReconstructableNames:
+    async def test_default_tools_are_not_reconstructable(self):
+        # EchoTool/AddTool don't opt in, so the derived set is empty.
+        ex = make_executor(EchoTool(), AddTool())
+        assert ex.reconstructable_tool_names() == frozenset()
+
+    async def test_opted_in_tool_and_all_aliases_included(self):
+        class ReconTool(EchoTool):
+            name = "Recon"
+            aliases = ["recon", "Recon.run"]
+            reconstructable = True
+
+        ex = make_executor(ReconTool(), AddTool())
+        names = ex.reconstructable_tool_names()
+        # Every name the tool routes under is present; the non-opted tool is not.
+        assert names == frozenset({"Recon", "recon", "Recon.run"})
+        assert "Add" not in names
+
+
 class TestMcpFiltering:
     def _adapter(self, name="server:tool"):
         schema = {
@@ -377,7 +397,7 @@ class TestFileMutatedEmission:
     def _recorder(self):
         from metagpt.common.events import EventBus
 
-        class Recorder:
+        class Recorder(ObservationSubscriber):
             priority = 0
 
             def __init__(self):
@@ -441,6 +461,133 @@ class TestFileMutatedEmission:
         assert result.success is True
 
 
+class TestDeregisterTool:
+    """``deregister_tool`` is the inverse of registration: it removes a bound tool
+    by any of its names — every alias and the instance's session resources go
+    together — and announces the change on the bus so the volatile views refresh."""
+
+    def _recorder_bus(self):
+        from metagpt.common.events import EventBus
+
+        class Recorder(ObservationSubscriber):
+            priority = 0
+
+            def __init__(self):
+                self.events = []
+
+            async def handle(self, event):
+                self.events.append(event)
+                return None
+
+        bus = EventBus()
+        rec = Recorder()
+        bus.subscribe(rec)
+        return bus, rec
+
+    async def test_removes_tool_and_all_aliases_together(self):
+        ex = make_executor(EchoTool())
+        # Echo routes under Echo/echo/Echo.run — deregister by any single alias.
+        assert await ex.deregister_tool("echo") is True
+        # Every name is gone; a later call to any of them fails cleanly.
+        for n in ("Echo", "echo", "Echo.run"):
+            result = await ex.run_command(n, {"text": "x"})
+            assert result.success is False
+
+    async def test_unbound_name_is_noop(self):
+        ex = make_executor(EchoTool())
+        assert await ex.deregister_tool("Nope") is False
+        # The real tool is untouched.
+        assert (await ex.run_command("Echo", {"text": "y"})).output == "y"
+
+    async def test_only_the_target_instance_is_removed(self):
+        ex = make_executor(EchoTool(), AddTool())
+        await ex.deregister_tool("Echo")
+        # A sibling tool still dispatches.
+        assert (await ex.run_command("Add", {"a": 2, "b": 3})).output == "5"
+
+    async def test_schemas_drop_the_removed_tool(self):
+        ex = make_executor(EchoTool(), AddTool())
+        await ex.deregister_tool("Echo")
+        assert set(ex.get_tool_schemas()) == {"Add"}
+
+    async def test_reclaims_session_resources(self):
+        closed: list[str] = []
+
+        class StatefulTool(EchoTool):
+            name = "Stateful"
+            aliases: list[str] = []
+
+            def cleanup_session(self, session_id):
+                closed.append(session_id)
+
+        ex = make_executor(StatefulTool(), session_id="sess")
+        await ex.deregister_tool("Stateful")
+        assert closed == ["sess"]
+
+    async def test_reconstructable_set_refreshes_after_removal(self):
+        class ReconTool(EchoTool):
+            name = "Recon"
+            aliases = ["recon"]
+            reconstructable = True
+
+        ex = make_executor(ReconTool())
+        assert ex.reconstructable_tool_names() == frozenset({"Recon", "recon"})
+        await ex.deregister_tool("Recon")
+        assert ex.reconstructable_tool_names() == frozenset()
+
+    async def test_emits_tools_changed_event(self):
+        from metagpt.common.events import ToolsChangedEvent
+
+        bus, rec = self._recorder_bus()
+        ex = ToolExecutor("sess", tools=None, bus=bus)
+        tool = EchoTool()
+        tool.bind("sess")
+        ex.register_tool_instance(tool, [tool.name, *tool.aliases])
+        await ex.deregister_tool("Echo")
+
+        changed = [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
+        assert len(changed) == 1
+        # The event names every alias that went away — the tool catalog frontier
+        # reads this to stop announcing them.
+        assert set(changed[0].removed) == {"Echo", "echo", "Echo.run"}
+
+    async def test_event_carries_fresh_reconstructable_set(self):
+        # Two reconstructable tools; removing one must leave the other's names in
+        # the announced set, so a compaction consumer refreshes from the event alone.
+        from metagpt.common.events import ToolsChangedEvent
+
+        class ReconA(EchoTool):
+            name = "ReconA"
+            aliases: list[str] = []
+            reconstructable = True
+
+        class ReconB(AddTool):
+            name = "ReconB"
+            reconstructable = True
+
+        bus, rec = self._recorder_bus()
+        ex = ToolExecutor("sess", tools=None, bus=bus)
+        for t in (ReconA(), ReconB()):
+            t.bind("sess")
+            ex.register_tool_instance(t, [t.name, *getattr(t, "aliases", [])])
+        await ex.deregister_tool("ReconA")
+
+        evt = [e for e in rec.events if isinstance(e, ToolsChangedEvent)][0]
+        assert set(evt.removed) == {"ReconA"}
+        assert set(evt.reconstructable) == {"ReconB"}
+
+    async def test_noop_removal_emits_nothing(self):
+        from metagpt.common.events import ToolsChangedEvent
+
+        bus, rec = self._recorder_bus()
+        ex = ToolExecutor("sess", tools=None, bus=bus)
+        tool = EchoTool()
+        tool.bind("sess")
+        ex.register_tool_instance(tool, [tool.name])
+        await ex.deregister_tool("Nope")
+        assert not [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
+
+
 class TestRecoveryWiring:
     """``run_command`` runs the tool under the generic ``RecoveryRunner``.
 
@@ -501,3 +648,130 @@ class TestRecoveryWiring:
         assert result.output == "recovered"
         assert tool.calls == 2  # initial failure + one recovered retry
         assert len(recovered) == 1
+
+
+class _FakeMcp:
+    """A stand-in for ``UniversalMCP`` that registers a fixed adapter set.
+
+    ``reload_mcp`` news up ``UniversalMCP()`` then calls ``initialize`` (which we
+    make a no-op) and ``register_tools(executor)``. This fake registers one MCP
+    adapter per configured tool name so a reload is fully observable without ever
+    touching a real MCP server. ``cleanup_clients`` records that teardown ran.
+    """
+
+    #: The tool names the *next* ``UniversalMCP()`` instance will register. Set
+    #: by the test before each reload to model a changed ``mcp_config.json``.
+    next_tools: list[str] = []
+    #: How many instances had ``cleanup_clients`` awaited (teardown count).
+    cleanups: int = 0
+
+    def __init__(self):
+        self._tools = list(_FakeMcp.next_tools)
+
+    async def initialize(self, server_names=None, servers=None):
+        return None
+
+    def register_tools(self, executor):
+        for name in self._tools:
+            schema = {
+                "name": name,
+                "description": "an mcp tool",
+                "parameters": {"type": "object", "properties": {}},
+            }
+            executor.register_tool_instance(MCPToolAdapter(mcp=None, tool_name=name, schema=schema), [name])
+
+    async def cleanup_clients(self):
+        _FakeMcp.cleanups += 1
+
+
+class TestReloadMcp:
+    """``reload_mcp`` is the reentrant sibling of ``init_mcp``, driven by the file
+    watcher when ``mcp_config.json`` changes. It tears the old MCP adapters out by
+    identity, rebuilds from the freshly read config, and announces the churn on the
+    bus so the volatile views refresh. The native channel just rebuilds tool_specs."""
+
+    def _patch(self, monkeypatch, tools):
+        from metagpt.executor import tool_executor as te
+
+        _FakeMcp.next_tools = list(tools)
+        _FakeMcp.cleanups = 0
+        monkeypatch.setattr(te, "UniversalMCP", _FakeMcp)
+
+    def _recorder_bus(self):
+        from metagpt.common.events import EventBus
+        from metagpt.common.interface.event_subscriber import ObservationSubscriber
+
+        class Recorder(ObservationSubscriber):
+            priority = 0
+
+            def __init__(self):
+                self.events = []
+
+            async def handle(self, event):
+                self.events.append(event)
+                return None
+
+        bus = EventBus()
+        rec = Recorder()
+        bus.subscribe(rec)
+        return bus, rec
+
+    async def test_noop_when_no_mcps_declared(self, monkeypatch):
+        self._patch(monkeypatch, ["server:a"])
+        ex = make_executor(EchoTool())
+        assert await ex.reload_mcp(None) is False
+        assert await ex.reload_mcp([]) is False
+        # No MCP adapters were ever wired.
+        assert ex.get_mcp_tool_schemas() == {}
+
+    async def test_reload_registers_current_config(self, monkeypatch):
+        self._patch(monkeypatch, ["server:a", "server:b"])
+        ex = make_executor(EchoTool())
+        assert await ex.reload_mcp(["server"]) is True
+        assert set(ex.get_mcp_tool_schemas()) == {"server:a", "server:b"}
+        # Built-in tools are untouched by an MCP reload.
+        assert "Echo" in ex.get_tool_schemas()
+
+    async def test_reload_swaps_old_adapters_out(self, monkeypatch):
+        # First reload wires {a, b}; a second reload models a changed config
+        # where b is gone and c is added — the stale adapter must not survive.
+        self._patch(monkeypatch, ["server:a", "server:b"])
+        ex = make_executor(EchoTool())
+        await ex.reload_mcp(["server"])
+
+        _FakeMcp.next_tools = ["server:a", "server:c"]
+        await ex.reload_mcp(["server"])
+        assert set(ex.get_mcp_tool_schemas()) == {"server:a", "server:c"}
+
+    async def test_reload_tears_down_old_manager(self, monkeypatch):
+        self._patch(monkeypatch, ["server:a"])
+        ex = make_executor(EchoTool())
+        await ex.reload_mcp(["server"])  # first: no prior manager to clean up
+        assert _FakeMcp.cleanups == 0
+        await ex.reload_mcp(["server"])  # second: the first manager is dropped
+        assert _FakeMcp.cleanups == 1
+
+    async def test_emits_tools_changed_event_with_removed(self, monkeypatch):
+        from metagpt.common.events import ToolsChangedEvent
+
+        self._patch(monkeypatch, ["server:a", "server:b"])
+        bus, rec = self._recorder_bus()
+        ex = ToolExecutor("sess", tools=None, bus=bus)
+        await ex.reload_mcp(["server"])  # wires {a, b}, removed=[] (nothing prior)
+
+        # Second reload drops b, so its name is announced as removed.
+        _FakeMcp.next_tools = ["server:a"]
+        await ex.reload_mcp(["server"])
+
+        changed = [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
+        assert len(changed) == 2
+        assert changed[0].removed == []
+        assert set(changed[1].removed) == {"server:a", "server:b"}
+
+    async def test_reload_is_reentrant(self, monkeypatch):
+        # Running the same reload repeatedly is stable — no adapter duplication.
+        self._patch(monkeypatch, ["server:a"])
+        ex = make_executor(EchoTool())
+        for _ in range(3):
+            await ex.reload_mcp(["server"])
+        assert set(ex.get_mcp_tool_schemas()) == {"server:a"}

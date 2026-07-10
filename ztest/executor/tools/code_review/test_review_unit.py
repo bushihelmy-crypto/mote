@@ -183,7 +183,10 @@ class TestReviewOneFile:
         assert findings == []
         assert fake.cleaned
 
-    async def test_run_raises_isolated(self, monkeypatch):
+    async def test_run_failure_propagates_but_still_cleans_up(self, monkeypatch):
+        # review_one_file no longer swallows run failures: they propagate so a
+        # structural bug surfaces. Per-file isolation lives in the batch node's
+        # _safe_review, not here. The child is still torn down (handle finally).
         class _BoomRole(_FakeRole):
             async def run(self, with_message=None):
                 raise RuntimeError("llm down")
@@ -191,6 +194,6 @@ class TestReviewOneFile:
         fake = _BoomRole("[]")
         monkeypatch.setattr(ru, "_build_review_role", lambda repo_dir, psid="": fake)
         with set_control(_InlineControl()):
-            findings = await ru.review_one_file(_FILE, "/repo")
-        assert findings == []
+            with pytest.raises(RuntimeError):
+                await ru.review_one_file(_FILE, "/repo")
         assert fake.cleaned

@@ -1,14 +1,14 @@
-"""Inject Skills metadata and alwaysApply instructions into system prompts.
+"""Inject Skills index into system prompts.
 
 The steady index lists *model-invocable, non-conditional* skills only (so the
-cacheable system-prompt prefix stays stable): ``alwaysApply`` skills are emitted
-in full under "Always Active Skills", ``disable_model_invocation`` skills are
-hidden, and skills gated behind ``paths``/``globs`` are surfaced per-turn by the
-conditional-activation source (see ``turn_context``) instead of here.
+cacheable system-prompt prefix stays stable): ``disable_model_invocation``
+skills are hidden, and skills gated behind ``paths``/``globs`` are surfaced
+per-turn by the conditional-activation source (see ``turn_context``) instead of
+here. Skill bodies are never inlined into the prompt — they load on demand via
+the ``Skill`` tool.
 
 When the index would blow the token budget it degrades in three tiers
-(full description → half description → name only), mirroring claude-code; the
-full always-active bodies are preserved first.
+(full description → half description → name only), mirroring claude-code.
 """
 
 from metagpt.common.utils.prompt_sanitizer import count_tokens, sanitize
@@ -27,53 +27,74 @@ _LOADING_GUIDE = (
 
 
 class SkillInjector:
-    """Inject Skills index + alwaysApply instructions into system prompts."""
+    """Inject the Skills index into system prompts."""
 
     def __init__(self, pool: SkillPool):
         self._pool = pool
 
-    def _index_skills(self) -> list:
+    def _index_skills(self, only_names: set = None) -> list:
         """Skills eligible for the steady, model-facing index.
 
-        Excludes alwaysApply (emitted in full elsewhere), conditional
-        (path/glob-gated, surfaced per-turn) and human-only skills.
+        Excludes conditional (path/glob-gated, surfaced per-turn) and
+        human-only skills. When ``only_names`` is given, the result is further
+        restricted to skills whose name is in that set (order preserved) — used
+        by the per-turn listing source to render only the newly-added skills.
         """
-        return [
+        skills = [
             s
             for s in self._pool.get_all()
-            if not s.always_apply
-            and not s.is_conditional
-            and not s.disable_model_invocation
+            if not s.is_conditional and not s.disable_model_invocation
         ]
+        if only_names is not None:
+            skills = [s for s in skills if s.name in only_names]
+        return skills
 
-    def build_content(self, max_tokens: int = 2000) -> str:
-        """Build Skills injection content without appending to a prompt.
+    def build_guide(self) -> str:
+        """The static Skill Loading Guide — belongs in the cacheable system prompt.
+
+        Constant per session (it merely explains how to invoke the ``Skill``
+        tool), so it stays in the prompt prefix rather than being re-sent every
+        turn. Empty string when no skills are available.
+        """
+        if self._pool.get_skill_count() == 0:
+            return ""
+        return _LOADING_GUIDE
+
+    def build_index(self, max_tokens: int = 2000, only_names: set = None) -> str:
+        """The volatile ``## Available Skills`` index block (no loading guide).
+
+        Delivered per-turn by :class:`SkillListingContextSource` (never the
+        cacheable prompt) because skills hot-reload. Degrades across three tiers
+        to fit ``max_tokens``.
+
+        Args:
+            max_tokens: Max tokens for the index (degrades to fit).
+            only_names: When given, render only skills whose name is in this set
+                (incremental delta rendering for the listing source).
 
         Returns:
-            Skills content string, or empty string if no skills available.
+            The index block, or empty string when there is nothing to show.
         """
         if self._pool.get_skill_count() == 0:
             return ""
 
-        # 1. alwaysApply Skills (full body — preserved before degrading the index)
-        always_section = self._build_always_active()
-        # 2. Loading guide (fixed)
-        guide = _LOADING_GUIDE
+        index_skills = self._index_skills(only_names)
+        if not index_skills:
+            return ""
+        index_block = self._build_index_within_budget(index_skills, max_tokens)
+        if not index_block:
+            return ""
+        return f"## Available Skills\n{sanitize(index_block)}"
 
-        fixed_parts = [p for p in (always_section, guide) if p]
-        fixed_tokens = count_tokens("\n\n".join(fixed_parts)) if fixed_parts else 0
-        index_budget = max(0, max_tokens - fixed_tokens)
+    def build_content(self, max_tokens: int = 2000) -> str:
+        """Index + loading guide, joined — the full injectable block.
 
-        # 3. Skills index — degrade across three tiers to fit the budget.
-        index_skills = self._index_skills()
-        index_block = self._build_index_within_budget(index_skills, index_budget)
-
-        parts = []
-        if index_block:
-            parts.append(f"## Available Skills\n{sanitize(index_block)}")
-        if always_section:
-            parts.append(always_section)
-        parts.append(guide)
+        Convenience composition of :meth:`build_index` and :meth:`build_guide`,
+        kept for :meth:`inject` and standalone rendering. The steady runtime
+        splits these two across the system prompt (guide) and the per-turn
+        reminder (index) instead.
+        """
+        parts = [p for p in (self.build_index(max_tokens), self.build_guide()) if p]
         return "\n\n".join(parts)
 
     def inject(self, system_prompt: str, max_tokens: int = 2000) -> str:
@@ -90,17 +111,6 @@ class SkillInjector:
         if not injection:
             return system_prompt
         return f"{system_prompt}\n\n{injection}"
-
-    def _build_always_active(self) -> str:
-        """Render the full bodies of alwaysApply skills (sanitized)."""
-        always_active = [s for s in self._pool.get_all() if s.always_apply]
-        if not always_active:
-            return ""
-        active_parts = ["## Always Active Skills"]
-        for skill in always_active:
-            sanitized = sanitize(skill.instructions)
-            active_parts.append(f"### {skill.name}\n{sanitized}")
-        return "\n\n".join(active_parts)
 
     def _build_index_within_budget(self, skills: list, budget: int) -> str:
         """Build the index, degrading description detail to fit ``budget``.

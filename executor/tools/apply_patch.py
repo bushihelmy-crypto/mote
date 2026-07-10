@@ -39,7 +39,7 @@ from metagpt.executor.dependency._apply_patch import (
 )
 from metagpt.executor.dependency._file_base import FileMutatingTool
 from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
+from metagpt.executor.tool_result import FileChange, ToolError, ToolResult
 from metagpt.common.prompt.tools import APPLY_PATCH_GRAMMAR
 
 
@@ -79,7 +79,7 @@ class ApplyPatch(FileMutatingTool):
     # Entry point
     # ------------------------------------------------------------------
 
-    async def call(self, *, input: str) -> str:
+    async def call(self, *, input: str) -> ToolResult:
         """Apply a structured multi-file patch.
 
         Args:
@@ -114,12 +114,18 @@ class ApplyPatch(FileMutatingTool):
         added: List[str] = []
         updated: List[Tuple[str, str]] = []  # (display, "" or "-> dest")
         deleted: List[str] = []
+        # Structured facts for the view layer — one per touched file, in patch order.
+        # ``old``/``new`` are the display-agnostic content (a creation has old="",
+        # a deletion new=""); ``path`` is where the content lives after the op
+        # (dest for a move), so a side-by-side host renders the right destination.
+        changes: List[FileChange] = []
         for plan in plans:
             op = plan["op"]
             if op == "add":
                 self._do_write(plan["full"], plan["content"], "\n")
                 self._refresh_read_state(plan["full"])
                 added.append(plan["display"])
+                changes.append(FileChange(path=plan["full"], old="", new=plan["content"]))
             elif op == "delete":
                 self._snapshot_pre_write(plan["full"])
                 try:
@@ -127,6 +133,7 @@ class ApplyPatch(FileMutatingTool):
                 except OSError as e:
                     raise ToolError(f"Error: cannot delete '{plan['display']}': {e}")
                 deleted.append(plan["display"])
+                changes.append(FileChange(path=plan["full"], old=plan["old"], new=""))
             elif op == "update":
                 self._snapshot_pre_write(plan["src"])
                 if plan["moved"]:
@@ -143,8 +150,9 @@ class ApplyPatch(FileMutatingTool):
                     self._do_write(plan["dest"], plan["content"], plan["line_ending"])
                     self._refresh_read_state(plan["dest"])
                     updated.append((plan["display"], ""))
+                changes.append(FileChange(path=plan["dest"], old=plan["old"], new=plan["content"]))
 
-        return self._summary(added, updated, deleted)
+        return ToolResult(output=self._summary(added, updated, deleted), file_changes=changes)
 
     # ------------------------------------------------------------------
     # Planning (validation) helpers — raise ToolError, never write
@@ -173,7 +181,13 @@ class ApplyPatch(FileMutatingTool):
         if not os.path.exists(full):
             raise ToolError(f"Error: cannot delete '{hunk.path}': file does not exist.")
         self._check_read_before_write(hunk.path, full, verb="deleting")
-        return {"op": "delete", "display": hunk.path, "full": full}
+        # Read the pre-delete content so the change is a structured fact (old→"").
+        try:
+            with open(full, "r", encoding="utf-8", newline="") as f:
+                old = f.read().replace("\r\n", "\n")
+        except (OSError, UnicodeDecodeError):
+            old = ""  # unreadable — record an empty before-image rather than fail
+        return {"op": "delete", "display": hunk.path, "full": full, "old": old}
 
     def _plan_update(self, hunk: UpdateFile) -> dict:
         src = self._resolve(hunk.path)
@@ -219,6 +233,7 @@ class ApplyPatch(FileMutatingTool):
             "dest": dest,
             "moved": moved,
             "move_display": move_display,
+            "old": content,
             "content": new_content,
             "line_ending": line_ending,
         }

@@ -45,15 +45,15 @@ class TestSystemPromptBoundary:
         below = R.SYSTEM_PROMPT.split(R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[1]
         for ph in (
             "${role_info}",
-            "${available_commands}",
-            "${mcp_tools}",
+            "${command_guide}",
+            "${tool_usage_guide}",
             "${memory}",
             "${language}",
             "${scratchpad}",
             "${env_section}",
             "${skills_info}",
             "${frc}",
-            "${summarize_tool_results}",
+            "${task_final_output}",
         ):
             assert ph in below, ph
 
@@ -67,9 +67,6 @@ class TestDynamicSectionPlaceholders:
 
     def test_frc_section(self):
         assert "${keep_recent}" in R.FRC_SECTION
-
-    def test_summarize_tool_results_has_no_placeholder(self):
-        assert "${" not in R.SUMMARIZE_TOOL_RESULTS_SECTION
 
 
 class TestAgentPrompts:

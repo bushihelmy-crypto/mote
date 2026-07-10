@@ -13,6 +13,8 @@ bggraph engine and snapshotted onto the task meta. Two modes:
 """
 from __future__ import annotations
 
+import json
+
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.executor.tool_result import ToolError
@@ -24,12 +26,34 @@ _MSG_NO_RUN_STATE = (
     "state (not a graph pipeline)."
 )
 _MSG_NODE_NOT_FOUND = "Node '{node_name}' not found in graph. Available: {available}"
+_MSG_UNKNOWN_FIELD = "Unknown state field(s): {fields}. Available: {available}"
+_MSG_NO_SNAPSHOT = "Task {task_id} has no state snapshot to read fields from."
+_MSG_LIST_AS_STRING = (
+    "Expected a list, got a JSON string: {value}. Pass a real array "
+    '(e.g. ["findings", "report"]), not a stringified one.'
+)
+
+# Inline previews stay short (detail view is meant to be compact); an explicit
+# ``fields=`` dump is allowed to be much larger so the model can recover a full
+# produced value (e.g. the report / findings) that a truncated notification cut.
+_INLINE_PREVIEW_LIMIT = 200
+_FIELD_DUMP_LIMIT = 8000
+
+# Sentinel distinguishing "field absent" from a legitimate ``None`` value.
+_NO_FIELD = object()
 
 
 def _as_list(val) -> list:
     if val is None:
         return []
     if isinstance(val, str):
+        # A single bare name is fine; a JSON-array-looking string means the
+        # model serialized a list arg instead of passing a real list. Reject it
+        # with a clear message rather than treating the whole "[...]" blob as one
+        # (bogus) field name.
+        s = val.strip()
+        if s.startswith("[") and s.endswith("]"):
+            raise ToolError(_MSG_LIST_AS_STRING.format(value=val))
         return [val]
     return list(val)
 
@@ -40,44 +64,90 @@ def _type_name(t) -> str:
     return getattr(t, "__name__", str(t))
 
 
+def _source_field(source: str) -> str | None:
+    """The state field a ``from`` source reads, or ``None`` when unset.
+
+    Both ``$input.<field>`` (graph input) and ``<field>`` / ``<field>.<key>``
+    (upstream-written state field) resolve to a state field on the snapshot.
+    """
+    if not source:
+        return None
+    if source.startswith("$input."):
+        return source[len("$input.") :]
+    return source.split(".")[0]
+
+
 def _format_source(source: str) -> str:
     """Render a param's ``from`` declaration in LLM-readable form."""
     if not source:
         return "(unset)"
     if source.startswith("$input."):
-        return source  # $input.x — an overridable graph input
-    return f"from '{source.split('.')[0]}' output"
+        return f"graph input '{source[len('$input.') :]}'"  # overridable via resume overrides
+    return f"state field '{source.split('.')[0]}'"
 
 
-def _consumers(graph, node_name: str) -> list[str]:
-    """Downstream params that read *node_name*'s output, e.g. ['c.in', ...].
+def _preview_value(value, *, limit: int, collapse: bool = False) -> str:
+    """Render a state value compactly, truncating long blobs.
 
-    With the field/channel state model a node writes to declared state fields,
-    not to a slot named after itself. Without an explicit output-field
-    declaration we fall back to the common ``{node_name: value}`` convention:
-    a param whose ``from`` field matches the node's name is treated as a
-    consumer. If a node writes to a differently-named field this degrades to
-    not finding the link (``[]`` for that pairing).
+    Lists/tuples are prefixed with their length so the model sees the shape even
+    when the body is truncated. *collapse* squashes newlines (for inline
+    one-line previews); the ``fields=`` dump keeps them.
     """
+    if value is None:
+        return "None"
+    prefix = f"[{len(value)} items] " if isinstance(value, (list, tuple)) else ""
+    if isinstance(value, str):
+        body = value
+    else:
+        try:
+            body = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            body = repr(value)
+    body = body.strip()
+    if collapse:
+        body = " ".join(body.split())
+    if len(body) > limit:
+        body = f"{body[:limit]}… (+{len(body) - limit} more chars)"
+    return f"{prefix}{body}"
+
+
+def _consumers(graph, written_fields: list[str]) -> list[str]:
+    """Downstream params that read any of *written_fields*, e.g. ['c.in', ...].
+
+    A node writes state fields (the keys of its update dict, recorded on the run
+    record); a consumer is any other node whose param ``from`` resolves to one of
+    those fields. This works regardless of whether a node writes a field named
+    after itself or a differently-named channel (e.g. ``load_diff`` → ``raw_diff``).
+    """
+    fields = set(written_fields)
+    if not fields:
+        return []
     out: list[str] = []
     for other_name, other_def in graph._nodes.items():
-        if other_name == node_name:
-            continue
         for pname, pinfo in other_def.params.items():
             source = pinfo.get("from", "")
-            if (
-                source
-                and not source.startswith("$input.")
-                and source.split(".")[0] == node_name
-            ):
+            if not source or source.startswith("$input."):
+                continue
+            if source.split(".")[0] in fields:
                 out.append(f"{other_name}.{pname}")
     return out
 
 
-def _record_header(rec) -> str:
+def _is_self_loop_node(graph, name: str) -> bool:
+    """Whether *name* is a ring node (routes back to itself); delegates to graph."""
+    if graph is None:
+        return False
+    return graph.is_self_loop(name)
+
+
+def _record_header(rec, *, self_loop: bool = False) -> str:
     line = rec.status.value
     if rec.attempts:
-        line += f" (attempts {rec.attempts})"
+        if self_loop:
+            # Ring node: attempts == laps around the loop, not failed retries.
+            line += f" ({rec.attempts} activations — laps, not retries)"
+        else:
+            line += f" (attempts {rec.attempts})"
     if rec.status == BgStatus.FAILED and rec.last_error:
         line += f" — error: {rec.last_error}"
     if rec.last_route_key:
@@ -91,28 +161,47 @@ class GetNodeState(BaseTool):
     aliases = ["get_node_state"]
     description = (
         "Inspect the per-node execution state of a background graph pipeline. "
-        "Omit 'nodes' for an overview: every node's status "
+        "DIAGNOSTIC only — reach for it when a task FAILED/TIMED OUT/paused or its "
+        "result looks wrong. Do NOT poll a running task: it pushes a completion "
+        "notification with the full result, so just Sleep to wait. "
+        "Omit all args for an overview: every node's status "
         "(success/failed/pending/skipped/running), attempt count and failure "
         "reason, plus which node is running now. Pass nodes=[...] to drill into "
-        "specific node(s): their description, declared inputs (name/source/type) "
-        "and output (and which downstream nodes consume it). Use it before "
-        "resume_tasks to decide which nodes to re-run, skip, or override."
+        "specific node(s): their description, declared inputs (source/type + a "
+        "preview of the current value) and outputs (the state fields the node "
+        "wrote + a preview, and which downstream nodes consume them). Pass "
+        "fields=[...] to dump the full current value of specific state fields "
+        "(e.g. findings, report, raw_diff). Use it before resume_tasks to "
+        "decide which nodes to re-run, skip, or override."
     )
     requires = ("get_bg_pool",)
 
-    async def call(self, *, task_id: str, nodes: str | list[str] | None = None) -> str:
+    async def call(
+        self,
+        *,
+        task_id: str,
+        nodes: str | list[str] | None = None,
+        fields: str | list[str] | None = None,
+    ) -> str:
         """Report the per-node state of a background graph task.
 
         Args:
             task_id: The task ID to inspect (e.g. "bg_3").
             nodes: Optional node name(s) to drill into. Omit for a status
                 overview of all nodes; pass a name or list of names to get those
-                nodes' description, inputs and output only.
+                nodes' description, inputs and outputs only.
+            fields: Optional state field name(s) to dump the full current value
+                of (e.g. ["findings", "report"]). Reads the task's state
+                snapshot; takes precedence over ``nodes``.
         """
         pool = self.get_bg_pool()
         meta = pool.get_task_info(task_id)
         if meta is None:
             raise ToolError(_MSG_UNKNOWN_TASK.format(task_id=task_id))
+
+        wanted_fields = _as_list(fields)
+        if wanted_fields:
+            return self._render_fields(task_id, meta, wanted_fields)
 
         run_state = pool.get_run_state(task_id)
         if run_state is None:
@@ -122,12 +211,13 @@ class GetNodeState(BaseTool):
                 status=meta.status.value,
             )
 
-        requested = _as_list(nodes)
-        if not requested:
-            return self._render_overview(task_id, meta, run_state)
-
         gm = meta.graph_meta
         graph = gm.graph_ref if gm else None
+
+        requested = _as_list(nodes)
+        if not requested:
+            return self._render_overview(task_id, meta, run_state, graph)
+
         if graph is not None:
             for n in requested:
                 if n not in graph._nodes:
@@ -138,18 +228,19 @@ class GetNodeState(BaseTool):
                     )
         return self._render_details(task_id, meta, run_state, graph, requested)
 
-    def _render_overview(self, task_id, meta, run_state) -> str:
+    def _render_overview(self, task_id, meta, run_state, graph=None) -> str:
         lines = [
             f"Task {task_id} ({meta.command_name}) — status: {meta.status.value}",
             "nodes:",
         ]
         for rec in run_state.records.values():
-            lines.append(f"  - {rec.name}: {_record_header(rec)}")
+            self_loop = _is_self_loop_node(graph, rec.name)
+            lines.append(f"  - {rec.name}: {_record_header(rec, self_loop=self_loop)}")
         running = run_state.running_names()
         lines.append(f"running: {', '.join(running) if running else '(none)'}")
         lines.append(
-            "tip: call GetNodeState with nodes=[...] to see a node's "
-            "description, inputs and output."
+            "tip: call GetNodeState with nodes=[...] for a node's inputs/outputs, "
+            "or fields=[...] to dump a state field's full value."
         )
         return "\n".join(lines)
 
@@ -158,7 +249,8 @@ class GetNodeState(BaseTool):
         blocks = [f"Task {task_id} ({meta.command_name}) — status: {meta.status.value}"]
         for n in requested:
             rec = run_state.get(n)
-            block = [f"Node '{n}': {_record_header(rec)}"]
+            self_loop = _is_self_loop_node(graph, n)
+            block = [f"Node '{n}': {_record_header(rec, self_loop=self_loop)}"]
             node_def = graph._nodes.get(n) if graph is not None else None
             if node_def is None:
                 blocks.append("\n".join(block))
@@ -167,24 +259,77 @@ class GetNodeState(BaseTool):
             if node_def.description:
                 block.append(f"  description: {node_def.description}")
 
-            if node_def.params:
-                block.append("  inputs:")
-                for pname, pinfo in node_def.params.items():
-                    seg = f"    - {pname}: {_format_source(pinfo.get('from', ''))}"
-                    tp = _type_name(pinfo.get("type"))
-                    if tp:
-                        seg += f" [{tp}]"
-                    desc = pinfo.get("desc", "")
-                    if desc:
-                        seg += f" — {desc}"
-                    block.append(seg)
-            else:
-                block.append("  inputs: (none declared)")
-
-            out_line = "  output: writes to state (merged into state fields)"
-            consumers = _consumers(graph, n)
-            if consumers:
-                out_line += f" — consumed by: {', '.join(consumers)}"
-            block.append(out_line)
+            self._render_inputs(block, node_def, state)
+            self._render_outputs(block, graph, rec, state)
             blocks.append("\n".join(block))
+        return "\n\n".join(blocks)
+
+    def _render_inputs(self, block, node_def, state) -> None:
+        """Append each declared input's source/type/desc + a value preview."""
+        if not node_def.params:
+            block.append("  inputs: (none declared)")
+            return
+        block.append("  inputs:")
+        for pname, pinfo in node_def.params.items():
+            seg = f"    - {pname}: {_format_source(pinfo.get('from', ''))}"
+            tp = _type_name(pinfo.get("type"))
+            if tp:
+                seg += f" [{tp}]"
+            desc = pinfo.get("desc", "")
+            if desc:
+                seg += f" — {desc}"
+            field = _source_field(pinfo.get("from", ""))
+            preview = self._field_preview(state, field)
+            if preview is not None:
+                seg += f" = {preview}"
+            block.append(seg)
+
+    def _render_outputs(self, block, graph, rec, state) -> None:
+        """Append the fields this node wrote (with previews) + their consumers."""
+        writes = list(rec.writes or [])
+        if not writes:
+            # No recorded writes: the node has not completed (pending/failed) or
+            # produced no state update. Say so rather than assert an output.
+            block.append("  output: (no state fields recorded yet — node not completed)")
+            return
+        block.append(f"  output: writes {', '.join(writes)}")
+        for field in writes:
+            preview = self._field_preview(state, field)
+            if preview is not None:
+                block.append(f"    - {field} = {preview}")
+        consumers = _consumers(graph, writes) if graph is not None else []
+        if consumers:
+            block.append(f"  consumed by: {', '.join(consumers)}")
+
+    @staticmethod
+    def _field_preview(state, field):
+        """Short inline preview of ``state.field``, or ``None`` when unavailable."""
+        if state is None or not field:
+            return None
+        value = getattr(state, field, _NO_FIELD)
+        if value is _NO_FIELD:
+            return None
+        return _preview_value(value, limit=_INLINE_PREVIEW_LIMIT, collapse=True)
+
+    def _render_fields(self, task_id, meta, requested) -> str:
+        """Dump the full current value of the requested state snapshot fields."""
+        state = meta.state_snapshot
+        if state is None:
+            return _MSG_NO_SNAPSHOT.format(task_id=task_id)
+        valid = set(getattr(type(state), "model_fields", {}) or {})
+        unknown = [f for f in requested if f not in valid and getattr(state, f, _NO_FIELD) is _NO_FIELD]
+        if unknown:
+            raise ToolError(
+                _MSG_UNKNOWN_FIELD.format(
+                    fields=", ".join(unknown),
+                    available=", ".join(sorted(valid)) or "(none declared)",
+                )
+            )
+        blocks = [f"Task {task_id} ({meta.command_name}) — state fields:"]
+        for field in requested:
+            value = getattr(state, field, _NO_FIELD)
+            if value is _NO_FIELD:
+                blocks.append(f"{field}: (not set)")
+                continue
+            blocks.append(f"{field}:\n{_preview_value(value, limit=_FIELD_DUMP_LIMIT)}")
         return "\n\n".join(blocks)

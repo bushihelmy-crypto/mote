@@ -4,7 +4,7 @@
 
 The skills subsystem is filesystem-driven: ``SkillPool`` scans a *builtin*
 directory of ``SKILL.md`` files and ``SkillInjector`` builds prompt content
-(an in-memory index + alwaysApply instructions) from the loaded pool.  The
+(an in-memory index) from the loaded pool.  The
 real builtin dir ships empty, so every test fabricates its own skill tree
 under ``tmp_path`` via ``write_skill`` and points the relevant module
 constant at it.
@@ -26,7 +26,6 @@ def write_skill(
     name: str,
     *,
     description: str = "A test skill that does a thing.",
-    always_apply: bool = False,
     globs: Optional[list[str]] = None,
     instructions: str = "Step 1. Do the thing.\nStep 2. Profit.",
     extra_meta: Optional[dict] = None,
@@ -48,8 +47,6 @@ def write_skill(
         return skill_md
 
     meta: dict = {"name": name, "description": description}
-    if always_apply:
-        meta["alwaysApply"] = always_apply
     if globs is not None:
         meta["globs"] = globs
     if extra_meta:
@@ -64,7 +61,6 @@ def make_skill_def(
     *,
     name: str = "demo-skill",
     description: str = "A demo skill.",
-    always_apply: bool = False,
     instructions: str = "Do it.",
     source_path: Optional[Path] = None,
     **kwargs,
@@ -73,7 +69,6 @@ def make_skill_def(
     return SkillDefinition(
         name=name,
         description=description,
-        always_apply=always_apply,
         instructions=instructions,
         source_path=source_path or Path(),
         **kwargs,

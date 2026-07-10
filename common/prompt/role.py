@@ -26,17 +26,21 @@ Based on the context, accomplish the user's goal using the available commands. P
 #
 # Sections BELOW the marker are ordered by cache stability, not by subsystem:
 # the criterion is whether a section's RENDERED BYTES change within a session.
-#   1. Session-fixed placeholders first (role_info, available_commands,
-#      command_guide, memory/language/scratchpad/env, frc, summarize,
+#   1. Session-fixed placeholders first (role_info, command_guide,
+#      tool_usage_guide, memory/language/scratchpad/env, frc, summarize,
 #      pipeline_section). Their values are constant per session, so they extend
-#      the cacheable prefix. The large built-in `available_commands` block sits
-#      near the front so the most bytes possible stay cached.
-#   2. Hot-reloadable / volatile sections last (team_info, mcp_tools,
-#      pipeline_tools, skills_info). When any of these changes mid-session it
-#      only invalidates this short tail, never the stable prefix. Note: the
-#      pipeline BRIEF (pipeline_section) is byte-constant so it stays in tier 1,
-#      while the pipeline TOOL list (pipeline_tools) hot-reloads so it rides the
-#      tail — same subsystem, different cache tier.
+#      the cacheable prefix. tool_usage_guide is the static orientation on how
+#      tools are called (protocol-specific, supplied by the command channel);
+#      the volatile tool CATALOG itself (built-in / MCP / pipeline schemas) is no
+#      longer in the prompt at all — it rides the per-turn reminder
+#      (ToolCatalogContextSource) so a tool/MCP hot-reload never busts the cache.
+#   2. Hot-reloadable / volatile sections last (team_info, skills_info). When any
+#      of these changes mid-session it only invalidates this short tail, never
+#      the stable prefix. Note: skills_info here is only the static Skill Loading
+#      Guide (constant per session); the volatile Skills *index* migrated to the
+#      per-turn listing source, so a skill hot-reload no longer touches this
+#      section at all. The pipeline BRIEF (pipeline_section) is byte-constant so
+#      it stays in tier 1.
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->"
 
 SYSTEM_PROMPT = """
@@ -67,9 +71,9 @@ When you hit an obstacle, do not use destructive actions as a shortcut. Identify
 
 ${role_info}
 
-${available_commands}
-
 ${command_guide}
+
+${tool_usage_guide}
 
 ${memory}
 
@@ -81,17 +85,11 @@ ${env_section}
 
 ${frc}
 
-${summarize_tool_results}
+${task_final_output}
 
 ${pipeline_section}
 
 ${team_info}
-
-${external_tools_note}
-
-${mcp_tools}
-
-${pipeline_tools}
 
 ${skills_info}
 """.replace("{boundary}", SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
@@ -126,11 +124,43 @@ FRC_SECTION = """
 Old tool results will be automatically cleared from context to free up space as the conversation grows. The ${keep_recent} most recent results are always kept. Do not assume an earlier tool result is still visible — if you need information from it later, write that information down in your own response before it is cleared.
 """
 
-# Summarize-tool-results reminder. Mirrors CC's SUMMARIZE_TOOL_RESULTS_SECTION.
-# Static text; emitted alongside compaction. No placeholders.
-SUMMARIZE_TOOL_RESULTS_SECTION = """
-# Working with tool results
-When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared from context later.
+# Structured final-delivery contract. Protocol-agnostic (both XML and native
+# get it) and compaction-gated (only emitted when adaptive compaction is on),
+# because it describes a compression artifact: when old context is cleared, the
+# final summary is the durable record of what the task accomplished. It used to
+# live inside NATIVE_COMMAND_GUIDE, which was wrong on both counts — it is not a
+# command-protocol mechanic, and XML never received it. No placeholders.
+TASK_FINAL_OUTPUT_SECTION = """
+# Task Final Output Specifications
+
+Upon task completion and entering the final delivery phase, you must output a structured task summary in Markdown format as the final response to this round of dialogue. The summary shall strictly include the following four modules **in unalterable sequence**.
+
+## Background
+
+Briefly state the core objective of this task, the user's original request, triggering scenario and key constraints.
+- **Max 3 sentences** — capture the core essence directly
+- Full dialogue history recap is **prohibited**
+
+## Process
+
+Sort out key execution steps, core invoked tools and decision nodes of this task in chronological or logical order.
+- Present as **bullet points**
+- Highlight critical paths and branch decisions
+- Omit trivial details
+
+## Result
+
+Clearly deliver the final deliverables, core conclusions and key data of this task.
+- **Conclusions upfront**
+- Provide **verifiable data**
+- Attach links or paths for deliverables
+- If the task fails, specify the failure cause and current status
+
+## Reflection
+
+Summarize experiences and issues arising during task execution, including but not limited to encountered bottlenecks, optimizable workflows, potential risks and follow-up recommendations.
+
+After completing the above requirements, you may supplement any additional remarks to be returned to the user below.
 """
 
 # Not used

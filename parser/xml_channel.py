@@ -12,7 +12,7 @@ from metagpt.common.base.command_channel import (
     _media_message,
     join_command_outputs,
 )
-from metagpt.common.prompt.output import XML_COMMAND_GUIDE
+from metagpt.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
 from metagpt.common.prompt.refs import Sym
 
 if TYPE_CHECKING:
@@ -36,9 +36,13 @@ class XmlCommandChannel(CommandChannel):
         }
 
     def prompt_vars(self) -> dict[str, str]:
-        # XML supplies the <end></end> / command-tag "# Using commands" guidance.
+        # XML supplies the <end></end> / command-tag "# Using commands" guidance,
+        # plus the static orientation for the per-turn tool catalog (how the tool
+        # categories relate / how to call them). The volatile catalog LIST itself
+        # is injected per-turn by ToolCatalogContextSource, not here.
         return {
             "command_guide": XML_COMMAND_GUIDE,
+            "tool_usage_guide": XML_TOOL_USAGE_GUIDE,
         }
 
     def tool_specs(self, executor) -> Optional[list[dict]]:

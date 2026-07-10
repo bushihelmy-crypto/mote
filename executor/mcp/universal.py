@@ -5,9 +5,9 @@ from typing import Any, Dict, List
 from fastmcp import Client
 
 from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-from metagpt.common.config.loader import load_config
 from metagpt.common.exception import ToolNotFoundError
 from metagpt.common.logs import logger
+from metagpt.executor.mcp.config_source import load_mcp_servers
 from metagpt.executor.mcp_adapter import MCPToolAdapter
 
 
@@ -43,7 +43,10 @@ class UniversalMCP:
         self.initialization_errors.clear()
 
         if servers is None:
-            all_servers = [s for s in load_config().mcp.servers if s.enabled]
+            # MCP servers are defined in their own ``mcp_config.json`` (the
+            # Claude-ecosystem shape), not the layered ``config.yaml``. Every
+            # entry present there is enabled (presence == enabled).
+            all_servers = load_mcp_servers()
             if server_names is not None:
                 servers = [s for s in all_servers if s.name in server_names]
             else:

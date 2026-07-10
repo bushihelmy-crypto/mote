@@ -26,6 +26,13 @@ class TestSleep:
         out = _sleep(tool, duration_seconds=2.5)
         assert out == "Slept for 2.5s"
 
+    def test_default_duration_is_ten_minutes(self, workspace):
+        # Duration is optional; omitting it sleeps the default 600s (10 min).
+        role = CapRole()
+        tool = bind(Sleep(), role)
+        out = _sleep(tool)
+        assert out == "Slept for 600.0s"
+
     def test_interrupted(self, workspace):
         # Script an early wake: slept 0.4s, interrupted.
         role = CapRole(wait_result=(0.4, True))

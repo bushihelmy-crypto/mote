@@ -41,18 +41,20 @@ from metagpt.common.events.types import (
     TurnStartEvent,
     UserPromptSubmitEvent,
 )
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
 from metagpt.common.logs import logger
+
 
 def _clip(text: str) -> str:
     return " ".join(str(text).split())
 
 
-class LogSubscriber:
+class LogSubscriber(ObservationSubscriber, SyncObserver):
     """Logs each semantic bus event as one concise line (observation-only)."""
 
-    #: Last (after recorder at 80) — purely cosmetic since it folds nothing, but
-    #: it reads cleanly as "log what finally happened".
-    priority: int = 90
+    #: Late (after recorder at PERSIST) — purely cosmetic since it folds nothing,
+    #: but it reads cleanly as "log what finally happened".
+    priority: int = ObserverPriority.LOG
 
     async def handle(self, event) -> None:
         # TaskProgress and agent-lifecycle ride the sync fan-out (handle_sync);

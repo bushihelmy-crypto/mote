@@ -29,9 +29,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from metagpt.common.logs import logger
 from metagpt.executor.tool_result import ToolError
@@ -48,6 +50,162 @@ _LAUNCH_TIMEOUT_S = 60.0
 # dropping the middle here.
 TEXT_MAX_CHARS = 10_000_000
 
+# --- Stealth (opt-in anti-bot-detection) -----------------------------------
+# Applied only when a session is created with ``stealth=True`` (Role opt-in via
+# ``browser_schema.browser_stealth``). Off by default: the browser stays a plain
+# headless Chromium. These measures defeat *passive* checks (the "HeadlessChrome"
+# UA, the ``navigator.webdriver`` flag, a missing Accept-Language) — they do NOT
+# solve active challenges (CAPTCHA / Cloudflare / DataDome); for those use the
+# ``assist`` action to hand the window to a human.
+#
+# A realistic desktop Chrome UA replacing Playwright's headless default (which
+# contains "HeadlessChrome" — an immediate bot tell).
+_STEALTH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+# Chromium launch flags that hide the most obvious automation signals.
+_STEALTH_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
+# Chromium bakes ``--enable-automation`` in by default; drop it so the
+# "Chrome is being controlled by automated test software" fingerprint is gone.
+_STEALTH_IGNORE_DEFAULT_ARGS = ["--enable-automation"]
+# Locale-independent context overrides (tier 1 + tier 2): a real desktop UA and
+# a fixed viewport. The locale-dependent bits (locale / timezone / Accept-
+# Language / navigator.languages) come from a ``_LOCALE_PROFILES`` bundle so they
+# stay mutually consistent — see ``_resolve_locale`` / ``_context_kwargs``.
+_STEALTH_VIEWPORT: Dict[str, int] = {"width": 1280, "height": 800}
+
+# Coherent per-locale bundles. Each keeps locale + timezone + Accept-Language +
+# navigator.languages internally consistent, so a bundle never contradicts
+# itself. The chosen bundle should also match the exit-IP region (a zh-CN locale
+# on a US IP is itself a bot tell) — this mirrors obscura's "match your proxy
+# region" guidance; without a proxy we auto-pick from the host env (see
+# ``_resolve_locale``), whose IP is the effective exit.
+_LOCALE_PROFILES: Dict[str, Dict[str, Any]] = {
+    "en": {
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "accept_language": "en-US,en;q=0.9",
+        "languages": ["en-US", "en"],
+    },
+    "zh": {
+        "locale": "zh-CN",
+        "timezone_id": "Asia/Shanghai",
+        "accept_language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "languages": ["zh-CN", "zh", "en"],
+    },
+}
+# Fallback bundle when the requested one is unknown.
+_DEFAULT_LOCALE = "en"
+
+
+def _resolve_locale(value: str) -> str:
+    """Resolve a ``browser_locale`` setting to a concrete bundle key.
+
+    ``"en"`` / ``"zh"`` pass through. ``"auto"`` (or anything unknown) infers the
+    region from the host's locale env vars (``LC_ALL`` / ``LC_CTYPE`` / ``LANG``
+    / ``LANGUAGE``): a Chinese host → ``"zh"``, else ``"en"``. Absent a proxy the
+    host is the effective exit IP, so this keeps the fingerprint region-coherent.
+    """
+    key = (value or "").strip().lower()
+    if key in _LOCALE_PROFILES:
+        return key
+    for var in ("LC_ALL", "LC_CTYPE", "LANG", "LANGUAGE"):
+        env = os.environ.get(var, "")
+        if env and "zh" in env.lower():
+            return "zh"
+    return _DEFAULT_LOCALE
+
+
+def _parse_proxy(value: str) -> Optional[Dict[str, Any]]:
+    """Parse a proxy URL string into Playwright's ``proxy`` launch dict.
+
+    Accepts a single URL string like ``http://host:port``,
+    ``http://user:pass@host:port``, or ``socks5://host:port``. A bare
+    ``host:port`` (no scheme) is treated as ``http://``. Playwright wants the
+    credentials split *out* of the server URL, so we return
+    ``{"server": "<scheme>://<host>[:<port>]", "username": ..., "password": ...}``
+    with the auth keys present only when the URL carries them. Empty/blank →
+    ``None`` (no proxy). Unparseable (no host) → ``None`` so a typo silently
+    disables the proxy rather than crashing the launch.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    parsed = urlparse(raw)
+    if not parsed.hostname:
+        return None
+    scheme = parsed.scheme or "http"
+    server = f"{scheme}://{parsed.hostname}"
+    if parsed.port:
+        server = f"{server}:{parsed.port}"
+    proxy: Dict[str, Any] = {"server": server}
+    if parsed.username:
+        proxy["username"] = parsed.username
+    if parsed.password:
+        proxy["password"] = parsed.password
+    return proxy
+
+
+# Injected into every new document *before* page scripts run (via
+# ``context.add_init_script``). Papers over the properties headless Chromium
+# leaves in an automated-looking state: the ``navigator.webdriver`` flag, an
+# empty plugins/languages list, and the missing ``window.chrome`` object. The
+# ``navigator.languages`` value is filled per-locale by ``_stealth_init_js`` so
+# it agrees with the context's ``locale`` (a mismatch is itself a fingerprint).
+_STEALTH_INIT_JS_TEMPLATE = r"""
+(() => {
+  try {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'languages', { get: () => %(languages)s });
+  } catch (e) {}
+  try {
+    if (!navigator.plugins || navigator.plugins.length === 0) {
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5],
+      });
+    }
+  } catch (e) {}
+  try {
+    if (!window.chrome) {
+      window.chrome = { runtime: {} };
+    }
+  } catch (e) {}
+  try {
+    const orig = navigator.permissions && navigator.permissions.query;
+    if (orig) {
+      navigator.permissions.query = (params) =>
+        params && params.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : orig(params);
+    }
+  } catch (e) {}
+})();
+"""
+
+
+def _stealth_init_js(locale_key: str) -> str:
+    """Build the stealth init script with the bundle's ``navigator.languages``."""
+    profile = _LOCALE_PROFILES.get(locale_key, _LOCALE_PROFILES[_DEFAULT_LOCALE])
+    return _STEALTH_INIT_JS_TEMPLATE % {"languages": json.dumps(profile["languages"])}
+
+
+# Implicit ARIA role for a bare tag (no explicit ``role=``), used by the Tier-2
+# _locate re-query to build a ``get_by_role`` locator from cached snapshot meta.
+# Only the common interactive tags need entries; anything missing falls back to
+# the cached name via ``get_by_text``.
+_IMPLICIT_ROLE = {
+    "a": "link",
+    "button": "button",
+    "select": "combobox",
+    "textarea": "textbox",
+    "summary": "button",
+}
+
 
 def _cap_text(text: str) -> str:
     """Cap *text* at :data:`TEXT_MAX_CHARS`, keeping head + tail, drop middle."""
@@ -59,19 +217,34 @@ def _cap_text(text: str) -> str:
     return f"{text[:head]}\n[... {omitted} chars omitted ...]\n{text[-tail:]}"
 
 
-# --- Injected JS ------------------------------------------------------------
-# A single page.evaluate that walks the DOM, decides which elements are
-# interactive (browser-use-style multi-layer heuristics), stamps each with a
-# ``data-agent-ref`` index attribute, and returns metadata the engine
-# serializes into the ``[N]<tag>`` snapshot the model reads. Returns
-# ``{"elements": [...]}`` where each element is
-# ``{ref, tag, role, name, type, value, inViewport}``.
+# --- Unified page tree ------------------------------------------------------
+# A single page.evaluate that walks the DOM depth-first from ``document.body``
+# and returns an *ordered* node list interleaving prose text nodes and
+# interactive elements in reading order — the unified representation the model
+# reads from ``snapshot``. This is the interactive-only listing's successor:
+# the model gets both the clickable ``[N]`` refs AND the surrounding prose that
+# tells it *what* to click, in one call, without hand-correlating two lists.
 #
-# Interactivity signals (any one qualifies): interactive tag, ARIA role,
-# on*/tabindex attributes, contenteditable, or ``cursor: pointer``.
-# Visibility: must have layout boxes (offsetParent or non-zero rect) and not
-# be display:none / visibility:hidden / opacity:0.
-_SNAPSHOT_JS = r"""
+# Design (converges browser-use ``serialize_tree`` + agent-browser AX-tree):
+#   * emitted nodes are only text nodes + interactive elements; non-interactive
+#     wrapper tags (div/span/section/…) emit nothing but recurse their children,
+#     so ``depth`` reflects *semantic* interactive nesting, not raw DOM depth;
+#   * text inside an interactive element is folded into that element's
+#     accessible ``name`` (not re-emitted as a separate text line);
+#   * **containment collapse** (paint-order approximation without CDP): a nested
+#     interactive element fully inside an already-emitted interactive ancestor
+#     that adds no distinct accessible name is skipped (e.g. an icon-<span> with
+#     ``cursor:pointer`` inside a <button>);
+#   * refs are **stable within a page**: an element keeps its existing
+#     ``data-agent-ref`` across re-snapshots; only genuinely new elements get a
+#     fresh index counted up from the current ``maxRef`` (so the ``*`` is-new
+#     marker in the serializer is meaningful).
+#
+# Returns ``{nodes: [...], viewportHeight, maxRef}`` where each node is either
+# ``{kind:"text", depth, text}`` or
+# ``{kind:"element", depth, ref, tag, role, type, name, value, placeholder,
+#    href, checked, inViewport, bbox}``.
+_TREE_JS = r"""
 () => {
   const INTERACTIVE_TAGS = new Set([
     'a','button','input','select','textarea','details','summary','option','label'
@@ -82,6 +255,9 @@ _SNAPSHOT_JS = r"""
     'menuitemradio','treeitem'
   ]);
   const EVENT_ATTRS = ['onclick','onmousedown','onmouseup','onkeydown','onkeyup'];
+  // Tags whose text content is machinery, not prose — never emit their text.
+  const SKIP_TAGS = new Set(['script','style','noscript','template','head','title']);
+  const TEXT_CAP = 200;
 
   function isVisible(el) {
     const style = window.getComputedStyle(el);
@@ -95,9 +271,8 @@ _SNAPSHOT_JS = r"""
   function isInteractive(el) {
     const tag = el.tagName.toLowerCase();
     if (INTERACTIVE_TAGS.has(tag)) {
-      // bare <a> without href / <label> are weak; still include if they have text
       if (tag === 'a' && !el.getAttribute('href') && !el.onclick) {
-        // allow if it has a click-ish role/tabindex below
+        // bare <a> without href / handler is weak; fall through to role/tabindex
       } else {
         return true;
       }
@@ -137,35 +312,104 @@ _SNAPSHOT_JS = r"""
     return '';
   }
 
-  // Clear any stale refs from a previous snapshot on this page.
-  document.querySelectorAll('[data-agent-ref]').forEach(e => e.removeAttribute('data-agent-ref'));
-
-  const out = [];
-  let idx = 0;
-  const all = document.querySelectorAll('*');
-  for (const el of all) {
-    if (!isVisible(el)) continue;
-    if (!isInteractive(el)) continue;
-    idx += 1;
-    const ref = String(idx);
-    el.setAttribute('data-agent-ref', ref);
-    const rect = el.getBoundingClientRect();
-    const inViewport = rect.bottom > 0 && rect.top < (window.innerHeight || 0)
-      && rect.right > 0 && rect.left < (window.innerWidth || 0);
-    out.push({
-      ref: ref,
-      tag: el.tagName.toLowerCase(),
-      role: (el.getAttribute('role') || '').toLowerCase(),
-      type: (el.getAttribute('type') || '').toLowerCase(),
-      name: accessibleName(el),
-      value: el.value !== undefined ? String(el.value || '') : '',
-      placeholder: el.getAttribute('placeholder') || '',
-      href: el.getAttribute('href') || '',
-      checked: (el.checked === true),
-      inViewport: inViewport,
-    });
+  function cleanText(s) {
+    // Strip zero-width / BOM chars, collapse whitespace, trim.
+    return s.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
   }
-  return { elements: out, viewportHeight: window.innerHeight || 0 };
+
+  function rectOf(el) {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+             width: r.width, height: r.height };
+  }
+
+  // Child rect fully inside ancestor rect (1px tolerance for sub-pixel layout).
+  function contained(child, anc) {
+    return child.left >= anc.left - 1 && child.top >= anc.top - 1 &&
+           child.right <= anc.right + 1 && child.bottom <= anc.bottom + 1;
+  }
+
+  // Stable numbering: keep an element's existing ref, else mint the next one.
+  let maxRef = 0;
+  document.querySelectorAll('[data-agent-ref]').forEach((e) => {
+    const v = parseInt(e.getAttribute('data-agent-ref'), 10);
+    if (!isNaN(v) && v > maxRef) maxRef = v;
+  });
+  function stamp(el) {
+    let ref = el.getAttribute('data-agent-ref');
+    if (ref === null || ref === '') {
+      maxRef += 1;
+      ref = String(maxRef);
+      el.setAttribute('data-agent-ref', ref);
+    }
+    return ref;
+  }
+
+  const vh = window.innerHeight || 0;
+  const vw = window.innerWidth || 0;
+  const nodes = [];
+
+  // DFS. ``anc`` = the nearest emitted interactive-element info {el,name,rect}
+  // (or null): while inside one, text is folded into its name (not re-emitted)
+  // and nested interactive children may be containment-collapsed.
+  function walk(node, depth, anc) {
+    if (node.nodeType === 3) {  // text node
+      if (anc) return;  // folded into the ancestor element's name
+      const t = cleanText(node.nodeValue || '');
+      if (t.length > 1) {
+        nodes.push({ kind: 'text', depth: depth, text: t.slice(0, TEXT_CAP) });
+      }
+      return;
+    }
+    if (node.nodeType !== 1) return;  // comments, etc.
+    const tag = node.tagName.toLowerCase();
+    if (SKIP_TAGS.has(tag)) return;
+    if (!isVisible(node)) return;  // skip element + its whole subtree
+
+    if (isInteractive(node)) {
+      const name = accessibleName(node);
+      const rect = rectOf(node);
+      if (anc && contained(rect, anc.rect) &&
+          (name === '' || anc.name.indexOf(name) !== -1)) {
+        // Decorative nested clickable (icon in a button, span in a link): do
+        // not emit, but keep recursing at the same depth under the ancestor.
+        for (const child of node.childNodes) walk(child, depth, anc);
+        return;
+      }
+      const ref = stamp(node);
+      const inViewport = rect.bottom > 0 && rect.top < vh &&
+                         rect.right > 0 && rect.left < vw;
+      nodes.push({
+        kind: 'element',
+        depth: depth,
+        ref: ref,
+        tag: tag,
+        role: (node.getAttribute('role') || '').toLowerCase(),
+        type: (node.getAttribute('type') || '').toLowerCase(),
+        name: name,
+        value: node.value !== undefined ? String(node.value || '') : '',
+        placeholder: node.getAttribute('placeholder') || '',
+        href: node.getAttribute('href') || '',
+        checked: (node.checked === true),
+        inViewport: inViewport,
+        bbox: [Math.round(rect.left), Math.round(rect.top),
+               Math.round(rect.width), Math.round(rect.height)],
+      });
+      const childAnc = { el: node, name: name, rect: rect };
+      for (const child of node.childNodes) walk(child, depth + 1, childAnc);
+      return;
+    }
+
+    // Non-interactive wrapper: emit nothing, recurse children at the SAME depth
+    // so indentation tracks semantic (interactive) nesting, not raw DOM depth.
+    for (const child of node.childNodes) walk(child, depth, anc);
+  }
+
+  const root = document.body;
+  if (root) {
+    for (const child of root.childNodes) walk(child, 0, null);
+  }
+  return { nodes: nodes, viewportHeight: vh, maxRef: maxRef };
 }
 """
 
@@ -201,13 +445,21 @@ _BLOCKER_JS = r"""
 """
 
 
-# --- Markdown extraction ----------------------------------------------------
-# Walk the rendered DOM and emit a clean, token-dense Markdown rendering of the
-# main content: headings, paragraphs, lists, links, code, and table rows.
-# Noise containers (script/style/nav/footer/aside/svg/header/form controls) and
-# hidden nodes are skipped. Returns a single Markdown string. Mirrors obscura's
-# markdown walker (kept deliberately small; not a full readability port).
-_MARKDOWN_JS = r"""
+# --- Clean-HTML extraction (for Markdown conversion) ------------------------
+# Return the main content as *cleaned HTML* rather than hand-building Markdown:
+# strip noise containers (script/style/nav/footer/aside/svg/header/form
+# controls) and hidden nodes, then hand the result to the ``markdownify``
+# library in Python (see :func:`_html_to_markdown`). This fixes the old
+# hand-rolled walker's "everything on one line" bug — the walker only emitted
+# newlines for a whitelist of semantic tags, so div/section-based pages (most
+# modern sites) collapsed into a single line. ``markdownify`` handles block
+# spacing for all block-level elements.
+#
+# Noise/hidden nodes are marked with a temporary attribute on the LIVE DOM (so
+# ``getComputedStyle`` visibility checks work), then the body is cloned, marked
+# nodes are removed from the clone, and the clone's ``innerHTML`` is returned.
+# The live DOM is left unchanged (markers are removed again immediately).
+_CLEAN_HTML_JS = r"""
 () => {
   const SKIP_TAGS = new Set([
     'script','style','noscript','svg','head','nav','footer','aside','header',
@@ -221,57 +473,77 @@ _MARKDOWN_JS = r"""
     if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return true;
     return false;
   }
-  function walk(node) {
-    if (node.nodeType === 3) {  // text
-      return node.nodeValue.replace(/\s+/g, ' ');
-    }
-    if (node.nodeType !== 1) return '';
-    const tag = node.tagName.toLowerCase();
-    if (SKIP_TAGS.has(tag)) return '';
-    if (isHidden(node)) return '';
-    let inner = '';
-    for (const child of node.childNodes) inner += walk(child);
-    const trimmed = inner.trim();
-    switch (tag) {
-      case 'h1': return trimmed ? '\n\n# ' + trimmed + '\n\n' : '';
-      case 'h2': return trimmed ? '\n\n## ' + trimmed + '\n\n' : '';
-      case 'h3': return trimmed ? '\n\n### ' + trimmed + '\n\n' : '';
-      case 'h4': return trimmed ? '\n\n#### ' + trimmed + '\n\n' : '';
-      case 'h5': return trimmed ? '\n\n##### ' + trimmed + '\n\n' : '';
-      case 'h6': return trimmed ? '\n\n###### ' + trimmed + '\n\n' : '';
-      case 'p': return trimmed ? '\n\n' + trimmed + '\n\n' : '';
-      case 'br': return '\n';
-      case 'hr': return '\n\n---\n\n';
-      case 'li': return trimmed ? '\n- ' + trimmed : '';
-      case 'ul': case 'ol': return '\n' + inner + '\n';
-      case 'blockquote': return trimmed ? '\n\n> ' + trimmed + '\n\n' : '';
-      case 'pre': return trimmed ? '\n\n```\n' + inner.replace(/^\n+|\n+$/g, '') + '\n```\n\n' : '';
-      case 'code': return trimmed ? '`' + trimmed + '`' : '';
-      case 'strong': case 'b': return trimmed ? '**' + trimmed + '**' : '';
-      case 'em': case 'i': return trimmed ? '*' + trimmed + '*' : '';
-      case 'a': {
-        const href = node.getAttribute('href');
-        if (trimmed && href) return '[' + trimmed + '](' + href + ')';
-        return trimmed;
-      }
-      case 'img': {
-        const alt = node.getAttribute('alt') || '';
-        const src = node.getAttribute('src') || '';
-        return alt || src ? '![' + alt + '](' + src + ')' : '';
-      }
-      case 'tr': return '\n| ' + inner.trim() + ' |';
-      case 'td': case 'th': return trimmed + ' | ';
-      case 'table': return '\n\n' + inner + '\n\n';
-      default: return inner;
+  const root = document.body || document.documentElement;
+  if (!root) return '';
+  const marked = [];
+  for (const el of root.querySelectorAll('*')) {
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_TAGS.has(tag) || isHidden(el)) {
+      el.setAttribute('data-md-drop', '1');
+      marked.push(el);
     }
   }
-  const root = document.body || document.documentElement;
-  let md = walk(root);
-  // collapse 3+ blank lines into a single blank line
-  md = md.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n');
-  return md.trim();
+  const clone = root.cloneNode(true);
+  clone.querySelectorAll('[data-md-drop]').forEach((n) => n.remove());
+  // Restore the live DOM: drop the temporary markers we added above.
+  for (const el of marked) el.removeAttribute('data-md-drop');
+  return clone.innerHTML;
 }
 """
+
+
+def _html_to_markdown(
+    html: str,
+    *,
+    extract_links: bool = False,
+    extract_images: bool = False,
+) -> Optional[str]:
+    """Convert cleaned HTML to Markdown via the ``markdownify`` library.
+
+    By default this strips the two biggest sources of ``read`` noise — images
+    and hyperlink URLs — mirroring browser-use's defaults (``extract_links`` /
+    ``extract_images`` both ``False``): ``<img>`` is dropped entirely and ``<a>``
+    renders as its plain text (no ``(https://…%E5%90%91…)`` query-string URLs).
+    The model opts back in per-call via ``extract_links`` / ``extract_images``
+    when it actually needs a URL to navigate to or an image src to inspect.
+
+    Returns ``None`` if ``markdownify`` is unavailable or conversion fails, so
+    :meth:`BrowserSession.read` can fall back to a plain-text dump.
+    """
+    try:
+        from markdownify import markdownify as _markdownify
+    except Exception:  # noqa: BLE001 — optional dependency; caller falls back
+        return None
+    # ``strip`` removes a tag's markup while keeping its text content, so
+    # stripping ``a`` turns "[headline](https://…long%20noisy%20url…)" into a
+    # bare "headline". Stripping ``img`` drops decorative images / tracking
+    # pixels outright. Only keep each when the caller opts in.
+    strip = []
+    if not extract_images:
+        strip.append("img")
+    if not extract_links:
+        strip.append("a")
+    try:
+        md = _markdownify(
+            html,
+            heading_style="ATX",  # '#' style headings
+            bullets="-",  # '-' for unordered lists
+            escape_asterisks=False,  # cleaner output (don't escape * / _)
+            escape_underscores=False,
+            escape_misc=False,  # don't escape misc chars (cleaner output)
+            autolinks=False,  # don't wrap bare URLs in <>
+            default_title=False,  # don't inject default title attrs
+            strip=strip or None,
+        )
+    except Exception:  # noqa: BLE001 — malformed HTML; caller falls back
+        return None
+    # Scrub any leftover percent-encoding (e.g. surviving link/image URLs when
+    # the caller opted in) — matches browser-use's cleanup pass.
+    md = re.sub(r"%[0-9A-Fa-f]{2}", "", md)
+    # Collapse 3+ blank lines and trailing spaces the way the old walker did.
+    md = re.sub(r"\n{3,}", "\n\n", md)
+    md = re.sub(r"[ \t]+\n", "\n", md)
+    return md.strip()
 
 
 # --- Form detection ---------------------------------------------------------
@@ -388,12 +660,13 @@ _EXTRACT_JS = r"""
 
 
 def _format_snapshot_line(el: Dict[str, Any]) -> str:
-    """Render one snapshot element as ``[N]<tag attrs>name``.
+    """Render one interactive element as ``[N]<tag attrs>name``.
 
     Mirrors browser-use's serialization: the ``[N]`` index is what the model
     passes back to ``click``/``type``; a small whitelist of attributes
     (type/placeholder/checked/href) is shown, ``class`` and other noise omitted
-    to keep the listing token-efficient.
+    to keep the listing token-efficient. Shared by the unified-tree serializer
+    (:func:`_format_tree`) so element lines render identically in both views.
     """
     ref = el.get("ref", "")
     tag = el.get("tag", "?")
@@ -419,6 +692,52 @@ def _format_snapshot_line(el: Dict[str, Any]) -> str:
     return f"[{ref}]<{tag}{attr_str}>{name}".rstrip()
 
 
+def _format_tree(
+    nodes: List[Dict[str, Any]],
+    *,
+    prev_refs: "frozenset[str] | set[str]" = frozenset(),
+    interactive_only: bool = False,
+) -> str:
+    """Serialize the unified page tree (:data:`_TREE_JS` output) to text.
+
+    Interleaves prose *text* nodes and clickable *element* lines by DOM reading
+    order, indented by each node's semantic ``depth`` (two spaces per level).
+    Element lines reuse :func:`_format_snapshot_line`; a leading ``*`` marks an
+    element whose ``ref`` is not in *prev_refs* (i.e. new since the previous
+    snapshot). ``interactive_only=True`` drops text nodes, emitting only the
+    element lines (the same tree, filtered) for token-tight situations.
+    """
+    lines: List[str] = []
+    for node in nodes:
+        kind = node.get("kind")
+        indent = "  " * int(node.get("depth", 0) or 0)
+        if kind == "text":
+            if interactive_only:
+                continue
+            text = (node.get("text") or "").strip()
+            if text:
+                lines.append(f"{indent}{text}")
+        elif kind == "element":
+            line = _format_snapshot_line(node)
+            marker = "" if node.get("ref") in prev_refs else "*"
+            lines.append(f"{indent}{marker}{line}")
+    return "\n".join(lines)
+
+
+def _ref_error(ref: str, meta: Dict[str, Dict[str, Any]]) -> str:
+    """Build the actionable "re-snapshot" error for an unresolvable ``[N]`` ref.
+
+    Pure string builder (no Playwright) so the wording is unit-testable. A ref
+    the last snapshot knew about (``ref in meta``) means the DOM changed since;
+    an unknown ref was never assigned. Either way the fix is a fresh snapshot.
+    """
+    known = ref in meta
+    hint = "the page changed since the last snapshot" if known else f"no element [{ref}] in the last snapshot"
+    return (
+        f"Error: element [{ref}] not found ({hint}). Take a fresh snapshot to get current element indices."
+    )
+
+
 class BrowserSession:
     """One persistent Playwright Chromium browser owned by a Role session.
 
@@ -433,10 +752,25 @@ class BrowserSession:
         session_key: str,
         cwd: Optional[str] = None,
         headless: bool = True,
+        stealth: bool = False,
+        browser_locale: str = "en",
+        proxy: str = "",
     ) -> None:
         self.session_key = session_key
         self.cwd = cwd
         self.headless = headless
+        # Opt-in anti-bot-detection (see the ``_STEALTH_*`` constants). Off by
+        # default: a plain headless Chromium with no fingerprint overrides.
+        self.stealth = stealth
+        # Concrete locale bundle key ("en"/"zh") for the stealth fingerprint;
+        # "auto" (or unknown) is resolved from the host env. Only consulted when
+        # ``stealth`` is on. Defaults to "en" so pure construction is deterministic.
+        self.locale = _resolve_locale(browser_locale)
+        # Optional upstream proxy (one exit IP for the whole session). Parsed to
+        # Playwright's launch ``proxy`` dict, or None when unset. Independent of
+        # stealth, but pairs with it: the proxy's region should match ``locale``/
+        # timezone so the fingerprint stays coherent with the exit IP.
+        self.proxy = _parse_proxy(proxy)
         self._cm = None  # async_playwright() context manager
         self._pw = None  # the started Playwright object
         self._browser = None  # launched Browser
@@ -445,10 +779,14 @@ class BrowserSession:
         # Index of the active tab within ``self._context.pages``.
         self._active = 0
         # Last snapshot's ref metadata: {ref(str): {tag, role, name, ...}}.
-        # Populated by snapshot(); used to give actionable errors when a ref is
-        # acted on. Stamped onto the DOM as data-agent-ref, so refs survive
-        # until the next snapshot or navigation.
+        # Populated by snapshot(); used to give actionable errors and to re-query
+        # (Tier-2 _locate) when a ref is acted on. Stamped onto the DOM as
+        # data-agent-ref, so refs survive until the next snapshot or navigation.
         self._ref_meta: Dict[str, Dict[str, Any]] = {}
+        # Refs present in the *previous* snapshot (the ``*`` is-new diff
+        # baseline). Refreshed by snapshot(), cleared by _invalidate_refs() on
+        # navigation so a new page's refs all read as new.
+        self._prev_refs: set = set()
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -468,11 +806,11 @@ class BrowserSession:
         try:
             self._cm = async_playwright()
             self._pw = await asyncio.wait_for(self._cm.start(), timeout=_LAUNCH_TIMEOUT_S)
-            self._browser = await self._pw.chromium.launch(headless=self.headless)
-            ctx_kwargs: dict = {}
-            if storage_state:
-                ctx_kwargs["storage_state"] = storage_state
-            self._context = await self._browser.new_context(**ctx_kwargs)
+            self._browser = await self._pw.chromium.launch(**self._launch_kwargs())
+            self._context = await self._browser.new_context(**self._context_kwargs(storage_state))
+            # Under stealth, run the fingerprint patches before any page script.
+            if self.stealth:
+                await self._context.add_init_script(_stealth_init_js(self.locale))
             # Start with one blank tab so the model always has a page to act on.
             await self._context.new_page()
             self._active = 0
@@ -481,6 +819,38 @@ class BrowserSession:
         except Exception as e:  # noqa: BLE001
             self.kill()
             raise ToolError(f"Error: web browser failed to start: {e}")
+
+    def _launch_kwargs(self) -> Dict[str, Any]:
+        """Chromium ``launch`` kwargs; stealth adds the anti-automation flags.
+
+        A configured proxy is attached at launch (browser-wide, one exit IP for
+        the whole session) rather than per-context, independent of stealth.
+        """
+        kwargs: Dict[str, Any] = {"headless": self.headless}
+        if self.stealth:
+            kwargs["args"] = list(_STEALTH_LAUNCH_ARGS)
+            kwargs["ignore_default_args"] = list(_STEALTH_IGNORE_DEFAULT_ARGS)
+        if self.proxy:
+            kwargs["proxy"] = dict(self.proxy)
+        return kwargs
+
+    def _context_kwargs(self, storage_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """``new_context`` kwargs; stealth adds the fingerprint overrides."""
+        kwargs: Dict[str, Any] = {}
+        if storage_state:
+            kwargs["storage_state"] = storage_state
+        if self.stealth:
+            profile = _LOCALE_PROFILES.get(self.locale, _LOCALE_PROFILES[_DEFAULT_LOCALE])
+            kwargs.update(
+                {
+                    "user_agent": _STEALTH_USER_AGENT,
+                    "viewport": dict(_STEALTH_VIEWPORT),
+                    "locale": profile["locale"],
+                    "timezone_id": profile["timezone_id"],
+                    "extra_http_headers": {"Accept-Language": profile["accept_language"]},
+                }
+            )
+        return kwargs
 
     @property
     def closed(self) -> bool:
@@ -521,10 +891,23 @@ class BrowserSession:
             return f'[data-agent-ref="{inner}"]', inner
         return t, None
 
+    def _invalidate_refs(self) -> None:
+        """Drop the snapshot ref state after a page change.
+
+        The DOM ``data-agent-ref`` attributes die naturally when the page
+        navigates (fresh document); this clears the Python-side mirrors — the
+        ``_ref_meta`` used for Tier-2 re-query / actionable errors and the
+        ``_prev_refs`` is-new diff baseline — so the next snapshot starts clean
+        and its refs all read as new.
+        """
+        self._ref_meta = {}
+        self._prev_refs = set()
+
     async def navigate(self, url: str, *, timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS) -> str:
         """Navigate the active tab to *url*; return a short status line."""
         page = self._active_page()
         await page.goto(url, timeout=timeout_ms)
+        self._invalidate_refs()
         return f"[navigated to {page.url}] {await page.title()}"
 
     async def click(self, target: str, *, timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS) -> str:
@@ -545,7 +928,14 @@ class BrowserSession:
                 f"Error: {target} is covered by <{blocker}> — dismiss/handle that "
                 f"element first, then take a fresh snapshot and retry."
             )
+        url_before = page.url
         await handle.click(timeout=timeout_ms)
+        # A click that navigated (link / submit / router) invalidates the refs:
+        # the new document's DOM has no data-agent-ref attributes. Hash-router
+        # SPA transitions that don't change the URL won't invalidate here
+        # (documented limitation) — Tier-2 role/name re-query recovers those.
+        if page.url != url_before:
+            self._invalidate_refs()
         return f"[clicked {target}] now at {page.url}"
 
     async def type_text(
@@ -572,28 +962,77 @@ class BrowserSession:
         return f"[typed into {target}]"
 
     async def _locate(self, page, selector: str, ref: Optional[str], timeout_ms: int):
-        """Return a Playwright ElementHandle for *selector*, with ref-aware errors.
+        """Return a Playwright ElementHandle for *selector*, resolving in tiers.
 
-        A missing ``[N]`` index almost always means the page changed since the
-        last snapshot (the ``data-agent-ref`` attribute was cleared/replaced), so
-        we tell the model to re-snapshot rather than emit a raw selector error.
+        Three-tier resolution for ``[N]`` refs (raw CSS selectors use Tier 1
+        only):
+
+        * **Tier 1** — wait for the stamped ``[data-agent-ref="N"]`` attribute
+          (the common case: same page, DOM intact).
+        * **Tier 2** — the ref is known (``_ref_meta``) but its attribute is gone
+          (the page re-rendered the same document, e.g. a client-side list
+          refresh): re-query from the cached role/name via ``get_by_role`` (then
+          ``get_by_text``); on a unique hit, re-stamp ``data-agent-ref`` onto it
+          and proceed.
+        * **Tier 3** — unresolvable: raise the actionable "re-snapshot" error.
         """
         try:
             handle = await page.wait_for_selector(selector, timeout=timeout_ms, state="attached")
         except Exception as e:  # noqa: BLE001
-            if ref is not None:
-                known = ref in self._ref_meta
-                hint = (
-                    "the page changed since the last snapshot" if known else f"no element [{ref}] in the last snapshot"
-                )
-                raise ToolError(
-                    f"Error: element [{ref}] not found ({hint}). Take a fresh "
-                    f"snapshot to get current element indices."
-                )
-            raise ToolError(f"Error: no element matched selector {selector!r}: {e}")
-        if handle is None:
+            handle = None
+            if ref is None:
+                raise ToolError(f"Error: no element matched selector {selector!r}: {e}")
+        if handle is not None:
+            return handle
+        if ref is None:
             raise ToolError(f"Error: no element matched {selector!r}.")
-        return handle
+        # Tier 2: ref known but attribute gone — re-query by cached role/name.
+        meta = self._ref_meta.get(ref)
+        if meta:
+            handle = await self._requery_ref(page, ref, meta, timeout_ms)
+            if handle is not None:
+                return handle
+        # Tier 3: give up with an actionable error.
+        raise ToolError(_ref_error(ref, self._ref_meta))
+
+    async def _requery_ref(self, page, ref: str, meta: Dict[str, Any], timeout_ms: int):
+        """Tier-2 re-query: relocate *ref* by its cached role/name, then re-stamp.
+
+        Returns an ElementHandle (with ``data-agent-ref`` freshly stamped back
+        onto it) on a *unique* role/name (or text) hit, else ``None`` so the
+        caller falls through to the Tier-3 error. Best-effort: any Playwright
+        failure yields ``None``.
+        """
+        name = (meta.get("name") or "").strip()
+        role = (meta.get("role") or "").strip()
+        # Playwright's implicit ARIA role for the tag when no explicit role.
+        if not role:
+            role = _IMPLICIT_ROLE.get(meta.get("tag", ""), "")
+        # Short budget: Tier-2 is a fallback, not the main path.
+        budget = min(timeout_ms, 2000)
+        candidates = []
+        try:
+            if role and name:
+                candidates.append(page.get_by_role(role, name=name, exact=True))
+            if name:
+                candidates.append(page.get_by_text(name, exact=True))
+        except Exception:  # noqa: BLE001 — locator construction is defensive
+            return None
+        for locator in candidates:
+            try:
+                if await locator.count() != 1:
+                    continue
+                handle = await locator.element_handle(timeout=budget)
+            except Exception:  # noqa: BLE001 — try the next strategy
+                continue
+            if handle is None:
+                continue
+            try:
+                await handle.evaluate("(el, r) => el.setAttribute('data-agent-ref', r)", ref)
+            except Exception:  # noqa: BLE001 — re-stamp is advisory
+                pass
+            return handle
+        return None
 
     async def _blocker(self, page, handle) -> Optional[str]:
         """Hit-test *handle*'s center; return the blocking element desc or None."""
@@ -602,58 +1041,73 @@ class BrowserSession:
         except Exception:  # noqa: BLE001 — hit-test is advisory, never fatal
             return None
 
-    async def read(self) -> str:
+    async def read(self, *, extract_links: bool = False, extract_images: bool = False) -> str:
         """Return the active tab's main content as Markdown (capped).
 
-        Walks the DOM stripping chrome (nav/footer/script/forms/…) and emits a
-        Markdown rendering of the readable content — far more agent-friendly than
-        a raw innerText dump. Falls back to body innerText (then raw HTML) if the
-        Markdown walker fails on an unusual page.
+        Extracts cleaned HTML (stripping chrome — nav/footer/script/forms/… —
+        and hidden nodes) in the page, then converts it to Markdown with the
+        ``markdownify`` library — far more agent-friendly than a raw innerText
+        dump, and (unlike the old hand-rolled walker) it lays out div/section
+        based pages across proper lines instead of collapsing to one line.
+        Falls back to body innerText (then raw HTML) if extraction or
+        conversion fails on an unusual page / when ``markdownify`` is absent.
+
+        By default images and hyperlink URLs are dropped (they dominate the
+        output on most pages — decorative images and long percent-encoded query
+        URLs). Set ``extract_links`` / ``extract_images`` to keep them when the
+        model needs a URL to navigate to or an image src to inspect.
         """
         page = self._active_page()
         header = f"[{page.url}] {await page.title()}\n"
         try:
-            md = await page.evaluate(_MARKDOWN_JS)
-        except Exception:  # noqa: BLE001 — walker may fail on exotic pages
-            md = None
-        if md and md.strip():
-            return header + _cap_text(md)
+            html = await page.evaluate(_CLEAN_HTML_JS)
+        except Exception:  # noqa: BLE001 — extraction may fail on exotic pages
+            html = None
+        if html and html.strip():
+            md = _html_to_markdown(html, extract_links=extract_links, extract_images=extract_images)
+            if md and md.strip():
+                return header + _cap_text(md)
         try:
             text = await page.inner_text("body")
         except Exception:  # noqa: BLE001 — some pages have no body yet
             text = await page.content()
         return header + _cap_text(text)
 
-    async def snapshot(self) -> str:
-        """Stamp interactive elements with ``[N]`` refs and return a text tree.
+    async def snapshot(self, *, interactive_only: bool = False) -> str:
+        """Return a unified indented tree of the page — prose + clickable refs.
 
-        Runs :data:`_SNAPSHOT_JS` on the active tab: it walks the DOM, decides
-        which elements are interactive, stamps each visible one with a
-        ``data-agent-ref`` index, and returns metadata. We serialize that into a
-        browser-use-style ``[N]<tag attrs>name`` listing the model reads, then
-        drives via ``click``/``type`` with the same ``[N]`` index. The refs are
-        stored in ``self._ref_meta`` (for actionable errors) and persist on the
-        DOM until the next snapshot or navigation.
+        Runs :data:`_TREE_JS` on the active tab: a single DFS from ``document.body``
+        that interleaves visible prose *text* and interactive *elements* in
+        reading order, stamping each interactive element with a stable
+        ``data-agent-ref`` ``[N]`` index. :func:`_format_tree` serializes that to
+        an indented listing the model reads, then drives via ``click``/``type``
+        with the same ``[N]`` index. Element refs are stored in ``self._ref_meta``
+        (for Tier-2 re-query + actionable errors) and persist on the DOM until the
+        next navigation. A leading ``*`` marks elements new since the previous
+        snapshot. ``interactive_only=True`` drops the prose for a compact
+        controls-only view of the same tree.
         """
         page = self._active_page()
         try:
-            data = await page.evaluate(_SNAPSHOT_JS)
+            data = await page.evaluate(_TREE_JS)
         except Exception as e:  # noqa: BLE001
             raise ToolError(f"Error: failed to snapshot the page: {e}")
-        elements = (data or {}).get("elements", []) or []
+        nodes = (data or {}).get("nodes", []) or []
+        elements = [n for n in nodes if n.get("kind") == "element" and n.get("ref")]
         self._ref_meta = {el["ref"]: el for el in elements}
         header = f"[{page.url}] {await page.title()}"
-        if not elements:
+        body = _format_tree(nodes, prev_refs=self._prev_refs, interactive_only=interactive_only)
+        # Refresh the is-new baseline for the next snapshot on this page.
+        self._prev_refs = set(self._ref_meta)
+        if not elements and not body.strip():
             return f"{header}\n[no interactive elements found]"
-        lines = [header]
-        offscreen = 0
-        for el in elements:
-            if not el.get("inViewport", True):
-                offscreen += 1
-            lines.append(_format_snapshot_line(el))
+        offscreen = sum(1 for el in elements if not el.get("inViewport", True))
+        parts = [header]
+        if body:
+            parts.append(body)
         if offscreen:
-            lines.append(f"[{offscreen} element(s) are off-screen; scroll to bring into view]")
-        return _cap_text("\n".join(lines))
+            parts.append(f"[{offscreen} element(s) are off-screen; scroll to bring into view]")
+        return _cap_text("\n".join(parts))
 
     async def wait(
         self,
@@ -865,6 +1319,7 @@ class BrowserSession:
         """Navigate the active tab back in history."""
         page = self._active_page()
         await page.go_back()
+        self._invalidate_refs()
         return f"[back] now at {page.url}"
 
     async def tabs(self) -> str:
@@ -883,6 +1338,9 @@ class BrowserSession:
         """Open a new tab (optionally navigating to *url*) and make it active."""
         page = await self._context.new_page()
         self._active = len(self._pages) - 1
+        # Refs belong to the tab that was active when the snapshot was taken;
+        # switching the active page (even to a fresh tab) invalidates them.
+        self._invalidate_refs()
         if url:
             await page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
             return f"[opened tab {self._active}: {page.url}]"
@@ -894,6 +1352,8 @@ class BrowserSession:
         if index < 0 or index >= len(pages):
             raise ToolError(f"Error: no tab at index {index} (have {len(pages)}).")
         self._active = index
+        # The snapshot's refs were stamped on the previously-active page.
+        self._invalidate_refs()
         return f"[switched to tab {index}: {pages[index].url}]"
 
     async def close_tab(self, index: int) -> str:
@@ -906,6 +1366,7 @@ class BrowserSession:
         remaining = len(self._pages)
         if self._active >= remaining:
             self._active = max(0, remaining - 1)
+        self._invalidate_refs()
         return f"[closed tab {index}]"
 
     # --- state capture / restore (for session resume) ----------------------

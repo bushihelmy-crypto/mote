@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 
+from metagpt.common.config.loader import load_config
 from metagpt.common.config.watcher import ConfigWatcher
 
 
@@ -48,12 +49,20 @@ def test_poll_once_detects_content_change_and_fires_callback(tmp_path):
 
 
 def test_poll_once_detects_file_deletion(tmp_path):
-    path = _write_workdir_cfg(tmp_path, "proxy: present\n")
-    watcher = ConfigWatcher(cwd=tmp_path)
+    # Baseline proxy from the ambient config stack with NO workdir override — this
+    # is whatever the higher layers (project config.yaml / env) resolve to, which
+    # is not necessarily empty.
+    baseline_proxy = load_config(tmp_path, reload=True).proxy
+
+    path = _write_workdir_cfg(tmp_path, "proxy: workdir-override\n")
+    watcher = ConfigWatcher(cwd=tmp_path)  # snapshot now includes the workdir file
     path.unlink()
     cfg = watcher.poll_once()
     assert cfg is not None
-    assert cfg.proxy == ""  # back to default once the workdir file is gone
+    # With the workdir override gone, proxy falls back to the ambient baseline
+    # (not the override we deleted).
+    assert cfg.proxy == baseline_proxy
+    assert cfg.proxy != "workdir-override"
 
 
 def test_start_stop_is_idempotent(tmp_path):

@@ -44,6 +44,18 @@ TOOL_MAX_RESULT_SIZE_CHARS: dict[str, int] = {
 # Subdirectory (under the workspace root) that holds persisted tool results.
 TOOL_RESULTS_SUBDIR = ".tool_results"
 
+# ---------------------------------------------------------------------------
+# Output-compression constants (``metagpt.executor.compress``)
+# ---------------------------------------------------------------------------
+
+# Floor below which output is never compressed — small output is not worth the
+# work and structural summaries can lose readability on tiny inputs.
+COMPRESSION_MIN_OUTPUT_CHARS: int = 2_000
+
+# Performance ceiling: output larger than this skips compression and falls back
+# to the existing head-truncation/persistence path.
+COMPRESSION_MAX_INPUT_CHARS: int = 2_000_000
+
 
 class ToolResultLimitConfig(BaseModel):
     """Knobs for per-tool result limiting (the tool-execution scope).
@@ -56,3 +68,9 @@ class ToolResultLimitConfig(BaseModel):
     persist_large_tool_results: bool = True
     default_max_result_size_chars: int = DEFAULT_MAX_RESULT_SIZE_CHARS
     preview_size_bytes: int = PREVIEW_SIZE_BYTES
+
+    # Semantic output compression (git/pytest/ruff), applied before the size
+    # cap. Fail-safe and default-on; disabling it reproduces prior behavior.
+    enable_output_compression: bool = True
+    compression_min_output_chars: int = COMPRESSION_MIN_OUTPUT_CHARS
+    compression_max_input_chars: int = COMPRESSION_MAX_INPUT_CHARS

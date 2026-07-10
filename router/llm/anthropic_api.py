@@ -16,6 +16,7 @@ back into the agnostic ``get_choice_text`` / ``get_choice_tool_calls`` contract.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Optional, Union
 
@@ -32,6 +33,7 @@ from metagpt.common.const import USE_CONFIG_TIMEOUT
 from metagpt.common.events import log_llm_stream
 from metagpt.common.exception import (
     LLMEmptyResponseError,
+    LLMTimeoutError,
     classify_llm_error,
     is_retryable,
 )
@@ -322,19 +324,36 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
     async def acompletion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, raise_if_empty: bool = True):
         return await self._achat_completion(messages, timeout=self.get_timeout(timeout), raise_if_empty=raise_if_empty)
 
+    async def _consume_stream(self, kwargs: dict) -> tuple[list[str], Any]:
+        """Open a streaming request and drain it, returning (text deltas, final Message).
+
+        Factored out so callers can bound it with ``asyncio.wait_for``. The SDK's
+        own ``timeout`` is a *per-read* deadline; Anthropic sends periodic SSE
+        ``ping`` keepalives during long generations, and each ping resets that
+        read timer — so a stream that stays connected but emits no content deltas
+        would otherwise hang here forever (observed: a request wedged ~6 min past
+        the 300 s timeout until manually interrupted). A wall-clock bound in the
+        caller is what actually caps that.
+        """
+        collected: list[str] = []
+        async with self.aclient.messages.stream(**kwargs) as stream:
+            async for text in stream.text_stream:
+                log_llm_stream(text)
+                collected.append(text)
+            final_message = await stream.get_final_message()
+        return collected, final_message
+
     async def _achat_completion_stream(
         self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, raise_if_empty: bool = True, **chat_configs
     ) -> str:
         kwargs = self._cons_kwargs(messages, timeout=self.get_timeout(timeout), **chat_configs)
-        collected: list[str] = []
-        usage = None
+        deadline = self.get_timeout(timeout)
         try:
-            async with self.aclient.messages.stream(**kwargs) as stream:
-                async for text in stream.text_stream:
-                    log_llm_stream(text)
-                    collected.append(text)
-                final_message = await stream.get_final_message()
-                usage = getattr(final_message, "usage", None)
+            collected, final_message = await asyncio.wait_for(self._consume_stream(kwargs), timeout=deadline)
+        except asyncio.TimeoutError as e:
+            # asyncio.TimeoutError is not the builtin TimeoutError before 3.11, so
+            # classify_llm_error would miss it; raise the retryable type directly.
+            raise LLMTimeoutError(f"Streaming response stalled: no completion within {deadline}s", cause=e)
         except Exception as e:
             raise classify_llm_error(e) or e
 
@@ -342,7 +361,7 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         full_reply_content = "".join(collected)
         if raise_if_empty and not full_reply_content:
             raise LLMEmptyResponseError("The LLM's response is empty.")
-        self._update_costs(usage)
+        self._update_costs(getattr(final_message, "usage", None))
         return full_reply_content
 
     async def _achat_completion_stream_tool(
@@ -357,12 +376,11 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         tool calls exactly as in the blocking path.
         """
         kwargs = self._cons_kwargs(messages, timeout=self.get_timeout(timeout), **chat_configs)
-        final_message = None
+        deadline = self.get_timeout(timeout)
         try:
-            async with self.aclient.messages.stream(**kwargs) as stream:
-                async for text in stream.text_stream:
-                    log_llm_stream(text)
-                final_message = await stream.get_final_message()
+            _, final_message = await asyncio.wait_for(self._consume_stream(kwargs), timeout=deadline)
+        except asyncio.TimeoutError as e:
+            raise LLMTimeoutError(f"Streaming response stalled: no completion within {deadline}s", cause=e)
         except Exception as e:
             raise classify_llm_error(e) or e
 

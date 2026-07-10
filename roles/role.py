@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Optional, Set
 from uuid import uuid4
@@ -31,18 +32,13 @@ from metagpt.context import ContextManager
 from metagpt.context.skills.skill_manager import SkillManager
 from metagpt.executor.tasks import BackgroundTaskPool
 from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.loop import BaseLoop, ReActLoop
 from metagpt.parser import CommandChannel
-from metagpt.roles.capabilities import RoleCapabilities
 from metagpt.roles.context_provider import ContextProvider
 from metagpt.roles.role_components import RoleComponents
 from metagpt.roles.role_schema import RoleSchema
-from metagpt.roles.role_state import RoleState, RoleStateController
+from metagpt.roles.role_state import RoleState
 from metagpt.router.router import LLMRouter
-from metagpt.session import SessionLog, fork
 from metagpt.session import list_sessions as _list
-from metagpt.session import replay
-from metagpt.think.think_engine import ThinkEngine
 
 if TYPE_CHECKING:
     from metagpt.session import (
@@ -64,7 +60,6 @@ if TYPE_CHECKING:
         "set_cwd",
         "record_file_read",
         "get_file_read_mtime",
-        "record_file_snapshot",
         "put_message",
         "publish_message",
         "tool_capabilities",
@@ -109,13 +104,6 @@ class Role(BaseRole):
 
         # Runtime state
         self.state = state if state is not None else RoleState()
-        # Behaviour over the (pure-DTO) state lives in a controller; the Role's
-        # state methods below are thin delegators onto it (the capability surface).
-        self._state_ctl = RoleStateController(self.state)
-        # Subsystem-backed tool capabilities (human I/O, sleep, end-of-session
-        # summary, skill forks, the task/skill pools) live in a holder for the
-        # same reason; the Role's capability methods below delegate onto it.
-        self._capabilities = RoleCapabilities(self)
 
         # External dependencies (injected)
         self._context = context
@@ -123,8 +111,10 @@ class Role(BaseRole):
 
         # Lazy assembly + ownership of all subsystems (router, executor, context
         # manager, event bus, session log, hook/LSP/file-watch services, the
-        # per-turn context bus, …). The Role keeps a thin property surface that
-        # delegates onto this holder; the wiring logic lives there.
+        # per-turn context bus, …) — including the two behaviour holders (the
+        # state controller and the tool-capabilities holder). The Role keeps a
+        # thin property surface that delegates onto this holder; the wiring logic
+        # lives there. Role.__init__ constructs nothing but this holder.
         self._components = RoleComponents(self)
         # Guards firing SessionStart exactly once across this Role's run() calls.
         self._session_started = False
@@ -174,6 +164,31 @@ class Role(BaseRole):
         :class:`RoleComponents`. The component properties below delegate here.
         """
         return self._components
+
+    @property
+    def _state_ctl(self):
+        """Behaviour over the (pure-DTO) RoleState — resolved through the graph.
+
+        The Role's state methods (cwd, file-read map, active signal, …) are thin
+        delegators onto this controller; it lives in the component graph like
+        every other collaborator so ``__init__`` builds nothing itself.
+        """
+        return self._components.state_ctl
+
+    @property
+    def _capabilities(self):
+        """Subsystem-backed tool capabilities (human I/O, sleep, end-of-session
+        summary, skill forks, the task/skill pools) — resolved through the graph.
+        """
+        return self._components.capabilities
+
+    @property
+    def _session_manager(self):
+        """Session resume/fork behaviour (replay history, branch a sibling) —
+        resolved through the graph. The Role keeps thin ``resume_session`` /
+        ``fork_session`` delegators onto this holder.
+        """
+        return self._components.session_manager
 
     @property
     def router(self) -> LLMRouter:
@@ -245,6 +260,10 @@ class Role(BaseRole):
         return self._components.file_snapshot_recorder
 
     @property
+    def resource_registry(self):
+        return self._components.resource_registry
+
+    @property
     def terminal_state_recorder(self) -> "TerminalStateRecorder":
         return self._components.terminal_state_recorder
 
@@ -272,9 +291,17 @@ class Role(BaseRole):
     def diagnostics_buffer(self):
         return self._components.diagnostics_buffer
 
-    @property
-    def compaction_notice(self):
-        return self._components.compaction_notice
+    def turn_context_source(self, name: str):
+        """Look up a per-turn context feed by its ``name`` (or ``None``).
+
+        A generic accessor over the single source roster, replacing the former
+        per-feed properties (``compaction_notice`` etc.): adding a feed never
+        needs a matching accessor here.
+        """
+        return next(
+            (s for s in self._components.turn_context_sources if s.name == name),
+            None,
+        )
 
     @property
     def file_watch_service(self):
@@ -292,9 +319,15 @@ class Role(BaseRole):
         """
         self._components.register_hook(event, fn, matcher)
 
-    @property
-    def think_engine(self) -> ThinkEngine:
-        return self._components.think_engine
+    def _report_think_result(self, result) -> None:
+        """Publish this turn's think result to state (used by the loop).
+
+        The loop calls this the moment the think task drains, so a tool running
+        later in the same turn (e.g. ``end_session``) reads the fresh result off
+        RoleState instead of the think-engine machinery — which lets the engine
+        be a stateless per-turn factory built by the graph's loop factory.
+        """
+        self._state_ctl.set_last_think_result(result)
 
     @property
     def command_channel(self) -> CommandChannel:
@@ -404,97 +437,6 @@ class Role(BaseRole):
         """
         self._state_ctl.set_tool_session(key, value)
 
-    def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
-        """Capture a before-image of a file a tool is about to overwrite.
-
-        Delegates to the session's :attr:`file_snapshot_recorder`, which stores
-        the prior on-disk content content-addressed and appends a snapshot event
-        to the rollout log (the truth source for diff/undo). Ownership of the
-        file-history sink lives in the Role; the Write/Edit/NotebookEdit tools
-        call this capability without ever touching the session log directly.
-        Best-effort — never raises into the tool.
-        """
-        self.file_snapshot_recorder.snapshot(full_path, tool=tool)
-
-    def record_terminal_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
-        """Record the persistent terminal's final cwd + env diff into the rollout.
-
-        Delegates to the session's :attr:`terminal_state_recorder`, which appends
-        a terminal-state event (last-write-wins) so a resumed session can re-seed
-        a fresh shell to this state — without re-running any user commands. The
-        Terminal tool calls this capability; best-effort, never raises.
-        """
-        self.terminal_state_recorder.record(cwd, env, unset, tool=tool)
-
-    def take_pending_terminal_restore(self) -> Optional[dict]:
-        """Return and clear the pending terminal-restore state ({cwd, env, unset}).
-
-        Capability surface for the Terminal tool: when it starts a fresh shell it
-        consumes the state staged by :meth:`resume_session` and re-seeds the
-        shell once. Reading clears it so the restore happens exactly once.
-        """
-        value = self._state_ctl.get_pending_terminal_restore()
-        if value is not None:
-            self._state_ctl.set_pending_terminal_restore(None)
-        return value
-
-    def record_kernel_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
-        """Record the persistent kernel's final cwd + env diff into the rollout.
-
-        The Python sibling of :meth:`record_terminal_state`. Delegates to the
-        session's :attr:`kernel_state_recorder`, which appends a kernel-state
-        event (last-write-wins) so a resumed session can re-seed a fresh kernel
-        to this state — without re-running any user code. The Python tool calls
-        this capability; best-effort, never raises.
-        """
-        self.kernel_state_recorder.record(cwd, env, unset, tool=tool)
-
-    def take_pending_kernel_restore(self) -> Optional[dict]:
-        """Return and clear the pending kernel-restore state ({cwd, env, unset}).
-
-        Capability surface for the Python tool: when it starts a fresh kernel it
-        consumes the state staged by :meth:`resume_session` and re-seeds the
-        kernel once. Reading clears it so the restore happens exactly once.
-        """
-        value = self._state_ctl.get_pending_kernel_restore()
-        if value is not None:
-            self._state_ctl.set_pending_kernel_restore(None)
-        return value
-
-    def record_browser_state(
-        self,
-        urls: list,
-        *,
-        active: int = 0,
-        storage_state: Optional[dict] = None,
-        tool: str = "",
-    ) -> None:
-        """Record the persistent browser's final tab URLs + session into the rollout.
-
-        The browser sibling of :meth:`record_terminal_state`. Delegates to the
-        session's :attr:`browser_state_recorder`, which appends a browser-state
-        event (last-write-wins) so a resumed session can re-open the same tabs
-        seeded with the saved session — without re-running any navigation/click
-        actions. The WebBrowser tool calls this capability; best-effort, never
-        raises. ``storage_state`` may carry cookies, so capture is gated by the
-        recorder's ``enabled`` flag (the role's ``record_browser_state`` schema
-        flag).
-        """
-        self.browser_state_recorder.record(urls, active=active, storage_state=storage_state, tool=tool)
-
-    def take_pending_browser_restore(self) -> Optional[dict]:
-        """Return and clear the pending browser-restore state.
-
-        Capability surface for the WebBrowser tool: when it launches a fresh
-        browser it consumes the state ({urls, active, storage_state}) staged by
-        :meth:`resume_session` and re-opens the saved tabs once. Reading clears
-        it so the restore happens exactly once.
-        """
-        value = self._state_ctl.get_pending_browser_restore()
-        if value is not None:
-            self._state_ctl.set_pending_browser_restore(None)
-        return value
-
     def get_skill_pool(self):
         """Return the live SkillPool, or None when skills are disabled.
 
@@ -531,25 +473,30 @@ class Role(BaseRole):
             "set_cwd": self.set_cwd,
             "deactivate": self.deactivate,
             "ask_human": self.ask_human,
+            "ask_user_question": self.ask_user_question,
             "get_bg_pool": self.get_bg_pool,
             "request_approval": self.request_approval,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
-            "record_file_snapshot": self.record_file_snapshot,
-            "record_terminal_state": self.record_terminal_state,
-            "take_pending_terminal_restore": self.take_pending_terminal_restore,
-            "record_kernel_state": self.record_kernel_state,
-            "take_pending_kernel_restore": self.take_pending_kernel_restore,
-            "record_browser_state": self.record_browser_state,
-            "take_pending_browser_restore": self.take_pending_browser_restore,
+            "record_file_snapshot": self._capabilities.record_file_snapshot,
+            "record_terminal_state": self._capabilities.record_terminal_state,
+            "take_pending_terminal_restore": self._state_ctl.take_pending_terminal_restore,
+            "record_kernel_state": self._capabilities.record_kernel_state,
+            "take_pending_kernel_restore": self._state_ctl.take_pending_kernel_restore,
+            "record_browser_state": self._capabilities.record_browser_state,
+            "take_pending_browser_restore": self._state_ctl.take_pending_browser_restore,
             "get_browser_headless": self.get_browser_headless,
+            "get_browser_stealth": self.get_browser_stealth,
+            "get_browser_locale": self.get_browser_locale,
+            "get_browser_proxy": self.get_browser_proxy,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
             "wait_interruptible": self.wait_interruptible,
             "get_skill_pool": self.get_skill_pool,
             "run_skill_fork": self.run_skill_fork,
+            "register_resource": self._capabilities.register_resource,
             "get_sandbox_runtime": self.get_sandbox_runtime,
         }
 
@@ -592,6 +539,59 @@ class Role(BaseRole):
         """
         return self.role_schema.browser_headless
 
+    def get_browser_stealth(self) -> bool:
+        """Return the role's ``browser_stealth`` flag (True => anti-detection).
+
+        Capability surface for the WebBrowser tool: lets the tool apply the
+        opt-in stealth measures (realistic UA, ``navigator.webdriver`` hiding,
+        launch flags) when the role opts in, without the executor layer reaching
+        into the role schema. Defaults to False (no anti-detection).
+        """
+        return self.role_schema.browser_stealth
+
+    def get_browser_locale(self) -> str:
+        """Return the browser locale/region bundle key ("auto"/"en"/"zh").
+
+        Capability surface for the WebBrowser tool: selects which coherent locale
+        bundle the stealth fingerprint uses (only when ``browser_stealth`` is on).
+        Resolution: an explicit per-role ``role_schema.browser_locale`` (anything
+        other than "auto") wins, else it falls back to the global
+        ``config.browser_locale`` from config.yaml. When both are "auto" the
+        engine infers zh vs en from the host env.
+        """
+        if self.role_schema.browser_locale != "auto":
+            return self.role_schema.browser_locale
+        configured = getattr(self.config, "browser_locale", "") or ""
+        if configured:
+            return configured
+        return "auto"
+
+    def get_browser_proxy(self) -> str:
+        """Return the browser's proxy URL (empty = direct connection).
+
+        Capability surface for the WebBrowser tool: a single proxy URL giving the
+        session one exit IP (parsed engine-side into Playwright's launch proxy
+        dict). Resolution order (first non-empty wins):
+          1. per-role ``role_schema.browser_proxy``;
+          2. global ``config.proxy`` from config.yaml (documented there as the
+             proxy "for tools such as browsers");
+          3. the ambient proxy env vars (``HTTPS_PROXY`` / ``HTTP_PROXY`` /
+             ``ALL_PROXY``, case-insensitive) — so a shell that already exports a
+             proxy routes the browser through it with no config. Playwright's
+             Chromium does not read these itself, so we forward them explicitly.
+        Defaults to "".
+        """
+        if self.role_schema.browser_proxy:
+            return self.role_schema.browser_proxy
+        configured = getattr(self.config, "proxy", "") or ""
+        if configured:
+            return configured
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            value = os.environ.get(var, "")
+            if value:
+                return value
+        return ""
+
     async def ask_human(self, question: str) -> str:
         """Ask the human user a question and return their response.
 
@@ -599,6 +599,14 @@ class Role(BaseRole):
         Capability surface; delegates to :class:`RoleCapabilities`.
         """
         return await self._capabilities.ask_human(question)
+
+    async def ask_user_question(self, questions):
+        """Ask the user structured multiple-choice questions; return structured answers.
+
+        Capability surface behind the ``AskUserQuestion`` tool; delegates to
+        :class:`RoleCapabilities`.
+        """
+        return await self._capabilities.ask_user_question(questions)
 
     async def request_approval(self, prompt: str) -> str:
         """Ask the human to approve a tool call and return their raw reply.
@@ -672,26 +680,6 @@ class Role(BaseRole):
         block = await bus.collect_to_context(cwd=self.state.working_dir or None)
         if block:
             await self.context_manager.add(UserMessage(content=block))
-
-    def _make_loop(self) -> BaseLoop:
-        """Build the react-loop strategy for one run(), injecting components.
-
-        Currently always a ReActLoop. Scatter-injects reusable components and
-        plain callables only — never `self` and never a Role-private callback.
-        The loop pulls its static LoopContext from the context_provider itself
-        (provider.loop_context()), so the Role no longer hand-builds it here.
-        Future: pick the loop class from role_schema (a registry); not yet.
-        """
-        return ReActLoop(
-            think_engine=self.think_engine,
-            command_channel=self.command_channel,
-            executor=self.executor,
-            memory=self.context_manager,
-            context_provider=self.context_provider,
-            is_active=self._is_active,
-            set_active=self._set_active,
-            get_bg_pool=self._peek_bg_pool,
-        )
 
     def _coerce_to_message(self, with_message) -> Message:
         """Normalize the run() input (str / list / Message) into one Message.
@@ -790,7 +778,7 @@ class Role(BaseRole):
                 auto_continue_budget = self.role_schema.max_auto_continue
                 rsp = None
                 while True:
-                    loop = self._make_loop()
+                    loop = self._components.make_loop()
                     try:
                         rsp = await loop.run()
                     finally:
@@ -839,77 +827,18 @@ class Role(BaseRole):
     def resume_session(self) -> bool:
         """Rebuild this role's stored history from its durable rollout log.
 
-        The rollout (truth source) is replayed into ``state.context.messages``
-        for the role's current ``session_id``. Returns False when no log exists
-        (nothing to resume). On success the cwd/project anchors are restored from
-        the session_meta and ``state.recovered`` is set.
-
-        History is assigned straight into the backing context (not via
-        ``ContextManager.add``), so the replayed messages are NOT re-recorded;
-        the recorder stays live for messages added after resume, and
-        ``SessionLog.create`` no-ops on the existing file (no duplicate meta).
+        Thin delegator onto :class:`RoleSessionManager` (which owns the replay +
+        registry/restore re-seeding). Returns False when no log exists.
         """
-
-        log = SessionLog(self.state.session_id)
-        if not log.exists():
-            return False
-
-        result = replay(log)  # replay scans via iter_raw, whose drain flushes queued writes first
-        # Assign in place so the ContextManager (which backs onto this same list)
-        # sees the rebuilt history without re-recording it.
-        self.state.context.messages[:] = result.messages
-
-        meta = result.meta or {}
-        for field_name in ("working_dir", "original_working_dir", "project_root"):
-            value = meta.get(field_name)
-            if value:
-                setattr(self.state, field_name, value)
-
-        self.state.recovered = True
-        # Stage the latest persistent-terminal state (if any) so the Terminal
-        # tool re-seeds a fresh shell to it on first use — without re-running
-        # any of the original commands.
-        if result.terminal_state:
-            self._state_ctl.set_pending_terminal_restore(result.terminal_state)
-        # Likewise stage the latest persistent-kernel state so the Python tool
-        # re-seeds a fresh kernel to it on first use (independent of the shell).
-        if result.kernel_state:
-            self._state_ctl.set_pending_kernel_restore(result.kernel_state)
-        # Likewise stage the latest persistent-browser state so the WebBrowser
-        # tool re-opens the saved tabs (seeded with the stored session) on first
-        # use — without re-running any navigation/click actions.
-        if result.browser_state:
-            self._state_ctl.set_pending_browser_restore(result.browser_state)
-        return True
+        return self._session_manager.resume()
 
     def fork_session(self) -> "Role":
         """Branch a sibling role off this session at its current history.
 
-        Seeds a brand-new ``rollout.jsonl`` from this role's session (replayed to
-        its final state) and records ``parent_session_id`` lineage on the child's
-        ``session_meta``. Returns a fresh role of the same class, sharing the
-        injected context/config, pinned to the new session and resumed onto the
-        inherited history. The two sessions are independent afterwards: mutating
-        the fork never touches this role's log.
+        Thin delegator onto :class:`RoleSessionManager`; returns a fresh role of
+        the same class resumed onto the inherited history, independent afterwards.
         """
-
-        child_id = fork(self.state.session_id)
-
-        child_state = RoleState(
-            session_id=child_id,
-            parent_session_id=self.state.session_id,
-            working_dir=self.state.working_dir,
-            original_working_dir=self.state.original_working_dir,
-            project_root=self.state.project_root,
-        )
-        forked = type(self)(
-            role_schema=self.role_schema.model_copy(deep=True),
-            state=child_state,
-            context=self._context,
-            config=self._config,
-        )
-        forked.resume_session()
-        return forked
+        return self._session_manager.fork()
 
     def _should_auto_continue(self, turn_outcome: Optional[Any], budget: int) -> bool:
         """Decide whether the run loop should force another turn.
@@ -1005,6 +934,17 @@ class Role(BaseRole):
         # Materialize the ContextManager (stored-history store + compaction
         # orchestrator), backed by RoleState.context so it survives recovery.
         _ = self.context_manager
+
+        # Wire the event spine (subscribe the roster). The ``event_bus`` getter is
+        # a pure leaf — it never wires itself — so this explicit step is the sole
+        # trigger, guaranteeing the spine is wired before the first ``emit`` below
+        # (``set_bus`` in run() bound the same leaf, mutated in place here).
+        self._components._wire_spine()
+
+        # Wire runtime edges between built collaborators (the router's COMPRESS
+        # reducer ← ContextManager). Split out of the getters so no component
+        # read mutates a sibling as a hidden side-effect.
+        self._components._wire_collaborators()
 
         self.skill_manager.ensure_ready()
         await self.executor.init_mcp(self.role_schema.mcps)

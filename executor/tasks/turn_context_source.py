@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from metagpt.common.interface import TurnContextPriority
 from metagpt.executor.tasks.attachment import TaskAttachmentGenerator, format_attachment_xml
 
 
@@ -27,7 +28,7 @@ class BackgroundTaskContextSource:
     """Renders ``<task-attachment>`` blocks for in-flight background tasks."""
 
     name = "background_tasks"
-    priority = 30
+    priority = TurnContextPriority.BACKGROUND_TASKS
     save_to_context = False  # ephemeral: in-flight task progress, never persisted
 
     def __init__(self, get_pool: Callable[[], object], store=None) -> None:

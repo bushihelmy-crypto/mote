@@ -6,22 +6,20 @@ The algorithmic logic stays in its respective module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.const.context import (
     AUTOCOMPACT_BUFFER_TOKENS as _AUTOCOMPACT_BUFFER_TOKENS,
     AUTOCOMPACT_KEEP_TAIL_MESSAGES as _AUTOCOMPACT_KEEP_TAIL_MESSAGES,
     AUTOCOMPACT_KEEP_TAIL_TOKENS as _AUTOCOMPACT_KEEP_TAIL_TOKENS,
     MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES as _MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
     MAX_OUTPUT_TOKENS_FOR_SUMMARY as _MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+    MICROCOMPACT_CLEAR_AT_LEAST_TOKENS as _MICROCOMPACT_CLEAR_AT_LEAST_TOKENS,
     MICROCOMPACT_KEEP_RECENT as _MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_THRESHOLD as _MICROCOMPACT_TRIGGER_THRESHOLD,
 )
-from metagpt.common.schema.messages import Message
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +39,10 @@ class ContextManagerConfig(BaseModel):
     enable_microcompact: bool = True
     microcompact_keep_recent: int = _MICROCOMPACT_KEEP_RECENT
     microcompact_trigger_threshold: int = _MICROCOMPACT_TRIGGER_THRESHOLD
+    # Min tokens a fold must free to be worth the prompt-cache write it forces
+    # (mirrors Anthropic context-editing's ``clear_at_least``). Below this the
+    # fold is skipped so a trivial trim never eats a cache miss.
+    microcompact_clear_at_least: int = _MICROCOMPACT_CLEAR_AT_LEAST_TOKENS
 
     # --- History-level: autocompact (summarize & rebuild) ---
     enable_autocompact: bool = True
@@ -50,13 +52,9 @@ class ContextManagerConfig(BaseModel):
     keep_tail_messages: int = _AUTOCOMPACT_KEEP_TAIL_MESSAGES
     max_consecutive_failures: int = _MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
 
-    # --- Request-level: per-call message compression ---
-    compress_type: CompressType = CompressType.NO_COMPRESS
-    request_compress_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
-
 
 # ---------------------------------------------------------------------------
-# TokenState (from context/token_budget.py)
+# TokenState (from context/budget.py)
 # ---------------------------------------------------------------------------
 
 
@@ -81,53 +79,3 @@ class TokenState:
     def should_autocompact(self) -> bool:
         """True when the stored history should be summarized & rebuilt."""
         return self.above_autocompact
-
-
-# ---------------------------------------------------------------------------
-# MicrocompactResult (from context/microcompact.py)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class MicrocompactResult:
-    """Outcome of a microcompact pass.
-
-    ``messages`` is the same list that was passed in (folding is done in place);
-    it is returned for symmetry with the other context strategies. ``changed``
-    is True only when at least one tool result was folded.
-    """
-
-    messages: list[Message]
-    tokens_freed: int = 0
-    cleared_tool_use_ids: list[str] = field(default_factory=list)
-
-    @property
-    def changed(self) -> bool:
-        return bool(self.cleared_tool_use_ids)
-
-
-# ---------------------------------------------------------------------------
-# AutocompactResult (from context/autocompact.py)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class AutocompactResult:
-    """Outcome of an autocompact attempt.
-
-    ``messages`` is the rebuilt history (``[summary] + tail``) when compaction
-    ran, otherwise the original list unchanged. ``compacted`` is False both when
-    the threshold wasn't reached and when the summarize call failed.
-    """
-
-    messages: list[Message]
-    compacted: bool = False
-    summary: Optional[str] = None
-    pre_compact_tokens: int = 0
-    post_compact_tokens: int = 0
-    consecutive_failures: int = 0
-    error: Optional[str] = None
-
-    @property
-    def changed(self) -> bool:
-        return self.compacted

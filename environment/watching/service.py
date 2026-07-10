@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from metagpt.common.events import FileMutatedEvent
-from metagpt.common.interface import HookRunner
+from metagpt.common.interface import HookRunner, ObservationSubscriber, ObserverPriority
 from metagpt.common.logs import log_class, logger
 from metagpt.environment.watching.events import FileChangeEvent
 from metagpt.environment.watching.watcher import FileWatcher
@@ -38,12 +38,13 @@ FILE_CHANGED_EVENT = "FileChanged"
 
 
 @log_class(level="DEBUG")
-class FileWatchService:
+class FileWatchService(ObservationSubscriber):
     """Owns a :class:`FileWatcher` and fires ``FileChanged`` hooks on changes."""
 
-    # ObservationSubscriber priority: late (self-write notes are pure bookkeeping with
-    # no influence to fold; they only need to land before the next poll tick).
-    priority: int = 90
+    # ObservationSubscriber priority: last (self-write notes are pure bookkeeping
+    # with no influence to fold; they only need to land before the next poll
+    # tick). BOOKKEEPING sits after the logger so the two no longer collide on 90.
+    priority: int = ObserverPriority.BOOKKEEPING
 
     def __init__(
         self,

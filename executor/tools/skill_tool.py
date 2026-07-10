@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError, ToolResult
+from metagpt.executor.tool_result import ToolError
 
 
 @register_tool
@@ -36,10 +36,11 @@ class Skill(BaseTool):
 
     name = "Skill"
     # ``get_cwd`` lets fork skills inherit the working dir; ``get_skill_pool``
-    # resolves the live skill pool; ``run_skill_fork`` spawns the isolated child.
-    requires = ("get_cwd", "get_skill_pool", "run_skill_fork")
+    # resolves the live skill pool; ``run_skill_fork`` spawns the isolated child;
+    # ``register_resource`` registers an inline body so it survives compaction.
+    requires = ("get_cwd", "get_skill_pool", "run_skill_fork", "register_resource")
 
-    async def call(self, *, name: str = "", arguments: str = "", query: str = "") -> ToolResult:
+    async def call(self, *, name: str = "", arguments: str = "", query: str = "") -> str:
         """Invoke a skill by ``name``, or search skills with ``query``.
 
         Args:
@@ -55,7 +56,7 @@ class Skill(BaseTool):
 
         # Search mode: query without a concrete name.
         if query and not name:
-            return ToolResult(output=self._search(pool, query))
+            return self._search(pool, query)
 
         name = (name or "").strip()
         if not name:
@@ -80,10 +81,29 @@ class Skill(BaseTool):
                 model=skill.model,
                 effort=skill.effort,
             )
-            return ToolResult(output=summary or "Skill finished without a summary.")
+            return summary or "Skill finished without a summary."
 
-        # Inline: the rendered body becomes the tool result.
-        return ToolResult(output=rendered)
+        # Inline: the rendered body becomes the tool result. Register it as a
+        # sticky resource so it is re-projected after the head is compacted away
+        # (the tool result itself is a Skill message, which microcompact never
+        # folds, but autocompact can still discard it with the head).
+        self._register_resource(name, rendered)
+        return rendered
+
+    def _register_resource(self, name: str, rendered: str) -> None:
+        """Register a loaded inline skill body for post-compaction re-projection.
+
+        Best-effort and non-throwing: no-op when unbound (no Role injected the
+        ``register_resource`` capability), so the tool keeps working standalone
+        and in tests.
+        """
+        register = getattr(self, "register_resource", None)
+        if register is None:
+            return
+        try:
+            register(id=name, kind="skill", content=rendered)
+        except Exception:  # never let bookkeeping break the tool result
+            pass
 
     def _render(self, skill, arguments: str) -> str:
         """Substitute the supported placeholders in the skill body.

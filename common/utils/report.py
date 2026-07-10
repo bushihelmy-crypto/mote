@@ -11,20 +11,21 @@ from aiohttp import ClientSession, UnixConnector
 from pydantic import BaseModel, Field, PrivateAttr
 
 from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
 from metagpt.common.logs import logger
 
 if typing.TYPE_CHECKING:
     from metagpt.roles.role import Role
 
 
-class _StreamQueueSubscriber:
+class _StreamQueueSubscriber(ObservationSubscriber, SyncObserver):
     """Bus subscriber that forwards streamed LLM tokens into an ``asyncio.Queue``.
 
     Registered on the active event bus while a reporter's async streaming context
     is open; ``None`` is the sentinel the reporter pushes to end the drain task.
     """
 
-    priority: int = 60
+    priority: int = ObserverPriority.STREAM
 
     def __init__(self, queue: asyncio.Queue):
         self._queue = queue
@@ -301,7 +302,7 @@ def _build_report_payload(event) -> dict:
     return data
 
 
-class ReporterSubscriber:
+class ReporterSubscriber(ObservationSubscriber, SyncObserver):
     """Bus subscriber that POSTs :class:`ResourceReportEvent`\\s to a UI endpoint.
 
     Replaces :class:`ResourceReporter`'s old direct HTTP POST. The reporter now
@@ -312,7 +313,7 @@ class ReporterSubscriber:
     subscribers are isolated). Standalone use with no bus simply never POSTs.
     """
 
-    priority: int = 70
+    priority: int = ObserverPriority.REPORT
 
     def __init__(self, callback_url: str):
         self.callback_url = callback_url

@@ -112,6 +112,8 @@ class FakeResult:
     success: bool = True
     images: list = field(default_factory=list)
     pdfs: list = field(default_factory=list)
+    terminate: bool = False
+    retention: str | None = None
 
 
 class FakeExecutor:
@@ -254,6 +256,7 @@ class LoopBundle:
     provider: FakeContextProvider
     active: list  # single-element bool holder
     bg_pool_holder: list  # single-element [FakeBgPool | None]
+    reported: list  # think results published via report_think_result
 
     @property
     def buffer(self):
@@ -289,6 +292,7 @@ def make_loop():
 
         active_holder = [active]
         bg_holder = [bg_pool]
+        reported: list = []
 
         def is_active() -> bool:
             return active_holder[0]
@@ -299,6 +303,9 @@ def make_loop():
         def get_bg_pool():
             return bg_holder[0]
 
+        def report_think_result(result) -> None:
+            reported.append(result)
+
         loop = ReActLoop(
             think_engine=think_engine,
             command_channel=channel,
@@ -308,6 +315,7 @@ def make_loop():
             is_active=is_active,
             set_active=set_active,
             get_bg_pool=get_bg_pool,
+            report_think_result=report_think_result,
         )
         return LoopBundle(
             loop=loop,
@@ -319,6 +327,7 @@ def make_loop():
             provider=provider,
             active=active_holder,
             bg_pool_holder=bg_holder,
+            reported=reported,
         )
 
     return _factory

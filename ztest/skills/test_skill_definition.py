@@ -16,7 +16,6 @@ class TestDefaults:
         s = SkillDefinition()
         assert s.name == ""
         assert s.description == ""
-        assert s.always_apply is False
         assert s.globs == []
         assert s.instructions == ""
         assert s.source_path == Path()

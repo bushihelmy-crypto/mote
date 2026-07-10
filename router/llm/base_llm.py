@@ -24,26 +24,27 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from metagpt.common.config.config.compress_msg_config import CompressType
 from metagpt.common.config.config.llm_config import LLMConfig
 from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
 from metagpt.common.events import (
     LLMErrorEvent,
     LLMRequestEvent,
     LLMResponseEvent,
+    LLMRetryEvent,
     current_span_id,
     observe_event,
+    observe_event_sync,
 )
 from metagpt.common.exception import RecoveryAction, RecoveryRunner, is_retryable
+from metagpt.common.interface import ContextReducer
 from metagpt.common.logs import current_trace_id, logger
 from metagpt.common.const.llm import MULTI_MODAL_MODELS
 from metagpt.common.schema import Message
 from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
 from metagpt.router.llm.recovery import build_llm_strategies
 from metagpt.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
-from metagpt.router.llm.request_context_builder import RequestContextBuilder
 from metagpt.common.utils.common import log_and_reraise, pdfs_within_limits, sniff_image_media_type
-from metagpt.common.utils.token_counter import count_message_tokens
+from metagpt.common.utils.token_counter import TOKEN_MAX, count_message_tokens
 from metagpt.router.cost import CostTracker, Costs, TokenUsage
 
 # Tenacity retry budget for a single LLM call (the transient-error RETRY tier).
@@ -67,7 +68,11 @@ class BaseLLM(ABC):
     model: Optional[str] = None
     max_completion_token: int = 4096
     pricing_plan: Optional[str] = None
-    _request_context_builder: Optional[RequestContextBuilder] = None
+    # Injected by the upper layer (Role, via the router) to enable COMPRESS
+    # recovery: a boundary-safe reducer that shrinks the outgoing wire payload
+    # when a context-overflow error survives the transient-retry budget. ``None``
+    # means "no reducer wired" and COMPRESS degrades to a re-raise.
+    context_reducer: Optional[ContextReducer] = None
     # Injected by the upper layer (e.g. LLMRouter) to enable FALLBACK recovery:
     # a no-arg supplier returning the next provider to fail over to, or None.
     _fallback_supplier: Optional[Callable[[], Optional["BaseLLM"]]] = None
@@ -208,12 +213,6 @@ class BaseLLM(ABC):
             return Costs.zero()
         return self.cost_manager.get_costs()
 
-    @property
-    def request_context_builder(self) -> RequestContextBuilder:
-        if self._request_context_builder is None:
-            self._request_context_builder = RequestContextBuilder(self)
-        return self._request_context_builder
-
     def _build_messages(
         self,
         msg: Union[str, list[dict[str, str]], list["Message"]],
@@ -252,12 +251,11 @@ class BaseLLM(ABC):
         stream=True,
     ) -> str:
         message = self._build_messages(msg, system_msgs, format_msgs, images, pdfs)
-        compressed_message = self.compress_messages(message, compress_type=self.config.compress_type)
 
         async def _send(llm: "BaseLLM", messages: list[dict]) -> str:
             return await llm.acompletion_text(messages, stream=stream, timeout=self.get_timeout(timeout))
 
-        return await self._run_with_recovery(_send, compressed_message)
+        return await self._run_with_recovery(_send, message)
 
     async def aask_tool(
         self,
@@ -288,7 +286,6 @@ class BaseLLM(ABC):
                 streaming tool path transparently fall back to a blocking call.
         """
         message = self._build_messages(msg, system_msgs, format_msgs, images, pdfs)
-        compressed_message = self.compress_messages(message, compress_type=self.config.compress_type)
 
         extra: dict = {}
         if tools:
@@ -312,7 +309,7 @@ class BaseLLM(ABC):
             ]
             return LLMResponse(content=content, tool_calls=tool_calls)
 
-        return await self._run_with_recovery(_send, compressed_message)
+        return await self._run_with_recovery(_send, message)
 
     def rotate_credential(self) -> bool:
         """Rotate to the next configured credential, rebuilding the client.
@@ -323,13 +320,16 @@ class BaseLLM(ABC):
         """
         return False
 
-    async def _run_with_recovery(self, send, compressed_message: list[dict]):
+    async def _run_with_recovery(self, send, message: list[dict]):
         """Run ``send(llm, messages)`` under the recovery loop — the single LLM-call chokepoint.
 
         ``send`` takes the active provider (``self`` normally, or the fallback after a
-        FALLBACK) plus the (possibly re-compressed) messages. Transient RETRY stays with
-        the tenacity ``@retry`` inside ``acompletion_text``; this loop owns the
-        "change conditions then retry" strategies:
+        FALLBACK) plus the (possibly re-compressed) messages. Transient RETRY is owned by
+        the tenacity ``@retry`` wrapping ``_call`` below (the same policy as
+        ``acompletion_text``): an ``is_retryable`` error is backed-off and re-issued in
+        place, each attempt tracing independently under a fresh ``request_id``. Only once
+        that budget is exhausted (or the error is non-transient) does it surface to this
+        loop, which owns the "change conditions then retry" strategies:
 
         - COMPRESS — re-compress on context overflow,
         - ROTATE_CREDENTIAL — advance to the next API key on the active provider,
@@ -341,15 +341,28 @@ class BaseLLM(ABC):
         """
         # Shared request state the strategy closures mutate across recovery attempts:
         # ``messages`` (re-compressed / repaired) and ``llm`` (swapped on FALLBACK).
-        state: dict[str, Any] = {"messages": compressed_message, "llm": self}
+        state: dict[str, Any] = {"messages": message, "llm": self}
 
         def _active() -> "BaseLLM":
             return state["llm"]
 
         async def _compress() -> bool:
-            state["messages"] = self.compress_messages(
-                state["messages"], compress_type=CompressType.POST_CUT_BY_TOKEN
-            )
+            # Context overflow survived the retry budget: hand the outgoing wire
+            # payload to the injected boundary-safe reducer (HARD fold→summarize→drop)
+            # and re-issue. ``None`` slot (no reducer wired) or nothing-freed → return
+            # False so the loop re-raises instead of spinning on an identical body.
+            # The reducer's summarize step issues its own inner aask(), but that
+            # runs on the router's reducer-less COMPRESSION instance (see
+            # LLMRouter._build LLMVariant.COMPRESSION), so it lands here with
+            # context_reducer=None and returns False — no re-entrant recursion.
+            reducer = self.context_reducer
+            if reducer is None:
+                return False
+            target = int(TOKEN_MAX.get(self.model, 128000) * 0.8)
+            reduced = await reducer.reduce(state["messages"], target_tokens=target)
+            if reduced is None:
+                return False
+            state["messages"] = reduced
             return True
 
         def _rotate() -> bool:
@@ -385,6 +398,44 @@ class BaseLLM(ABC):
         )
         runner = RecoveryRunner(strategies)
 
+        # The transient-RETRY tier: an ``is_retryable`` failure (transport hiccup, 5xx,
+        # rate-limit, or a relay gateway middling an upstream 401/429 as an overloaded
+        # marker) is backed-off and re-issued in place — landing on a healthy gateway
+        # channel on the next attempt rather than surfacing to the recovery loop, which
+        # has no RETRY strategy and would ``give_up``. Same policy as ``acompletion_text``
+        # so the retry budget is identical regardless of which call path (text vs native
+        # tool-use) a caller lands on. Non-transient errors (auth/billing/context/…) are
+        # passed straight through to the recovery loop's condition-changing strategies.
+        def _before_sleep(retry_state) -> None:
+            # tenacity fires this ONLY when it is about to sleep+re-issue (the
+            # error was retryable and the budget isn't exhausted) — so it maps
+            # 1:1 to CC's transient "retrying in Ns" state. The final,
+            # budget-exhausted failure raises without a ``before_sleep`` and is
+            # surfaced by the turn-level error path instead. Sync, fire-and-forget
+            # (same spine path as streaming deltas), no-op when no bus is bound.
+            outcome = getattr(retry_state, "outcome", None)
+            exc = outcome.exception() if outcome is not None else None
+            next_action = getattr(retry_state, "next_action", None)
+            observe_event_sync(
+                LLMRetryEvent(
+                    model=_active().model or "unknown",
+                    attempt=retry_state.attempt_number,
+                    max_attempts=LLM_RETRY_ATTEMPTS,
+                    delay_ms=getattr(next_action, "sleep", 0.0) * 1000.0,
+                    error_type=type(exc).__name__ if exc is not None else "",
+                    error=str(exc) if exc is not None else "",
+                    trace_id=current_trace_id() or "",
+                )
+            )
+
+        @retry(
+            stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
+            wait=wait_random_exponential(min=1, max=60),
+            after=after_log(logger, logger.level("WARNING").name),
+            retry=retry_if_exception(is_retryable),
+            retry_error_callback=log_and_reraise,
+            before_sleep=_before_sleep,
+        )
         async def _call():
             llm = _active()
             msgs = state["messages"]
@@ -634,130 +685,3 @@ class BaseLLM(ABC):
         return count_message_tokens(messages, self.model)
         # for non-OpenAI models
         # return sum([int(len(msg["content"]) * 0.5) for msg in messages])
-
-    def get_content_under_limit_token(
-        self, msg: dict, target_token_count: int, from_end: bool = True, delta: int = 2
-    ) -> dict:
-        """use binary search to truncate the content to meet the target token count
-        Args:
-            content: original content
-            target_token_count: target token count
-            from_end: whether to truncate from the end
-        Returns:
-            str: truncated content
-        """
-
-        def binary_search_truncate(text: str) -> str:
-            total_token_count = self.count_tokens([{"role": msg["role"], "content": text}])
-            if total_token_count <= target_token_count:
-                return text
-            left, right = 0, len(text)
-            while left <= right:
-                mid = (left + right) // 2
-                mid_content = text[-mid:] if from_end else text[:mid]
-                token_count = self.count_tokens([{"role": msg["role"], "content": mid_content}])
-                if target_token_count > token_count and target_token_count - token_count <= delta:
-                    return mid_content
-                elif token_count < target_token_count:
-                    left = mid + 1
-                else:
-                    right = mid - 1
-            return ""
-
-        # Handle GPT-4V case where content might be a list of dicts
-        if isinstance(msg["content"], list):
-            truncated_content = []
-            # Find the text content in the list
-            for item in msg["content"]:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text_content = item.get("text", "")
-                    truncated_content.append({"type": "text", "text": binary_search_truncate(text_content)})
-                else:
-                    truncated_content.append(item)
-            return {"role": msg["role"], "content": truncated_content}
-
-        # for normal text content
-        return {"role": msg["role"], "content": binary_search_truncate(msg["content"])}
-
-    def get_content_under_limit_token_balanced(
-        self, msg: dict, target_token_count: int, delta: int = 8, head_ratio: float = 0.5
-    ) -> dict:
-        """Truncate long content by preserving both head and tail with a middle marker."""
-        if target_token_count <= 0:
-            return {"role": msg["role"], "content": "" if not isinstance(msg["content"], list) else []}
-
-        placeholder = "\n\n...[TRUNCATED MIDDLE]...\n\n"
-
-        def balanced_truncate(text: str) -> str:
-            if not text:
-                return ""
-            probe = {"role": msg["role"], "content": text}
-            if self.count_tokens([probe]) <= target_token_count:
-                return text
-
-            placeholder_tokens = self.count_tokens([{"role": msg["role"], "content": placeholder}])
-            if placeholder_tokens >= target_token_count:
-                # Budget is too tight to even hold the truncation marker. Fall back to
-                # head-only truncation (from_end=False keeps the prefix) rather than emit
-                # a message that is just the placeholder with no real content.
-                return self.get_content_under_limit_token(
-                    {"role": msg["role"], "content": text},
-                    target_token_count=target_token_count,
-                    from_end=False,
-                    delta=delta,
-                )["content"]
-
-            left, right = 0, len(text)
-            best = ""
-            while left <= right:
-                mid = (left + right) // 2
-                head_len = max(1, int(mid * head_ratio))
-                tail_len = max(1, mid - head_len)
-                candidate = text[:head_len] + placeholder + text[-tail_len:]
-                token_count = self.count_tokens([{"role": msg["role"], "content": candidate}])
-                if token_count <= target_token_count:
-                    best = candidate
-                    if target_token_count - token_count <= delta:
-                        return candidate
-                    left = mid + 1
-                else:
-                    right = mid - 1
-
-            return best or self.get_content_under_limit_token(
-                {"role": msg["role"], "content": text},
-                target_token_count=target_token_count,
-                from_end=False,
-                delta=delta,
-            )["content"]
-
-        if isinstance(msg["content"], list):
-            truncated_content = []
-            for item in msg["content"]:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    truncated_content.append({"type": "text", "text": balanced_truncate(item.get("text", ""))})
-                else:
-                    truncated_content.append(item)
-            return {"role": msg["role"], "content": truncated_content}
-
-        return {"role": msg["role"], "content": balanced_truncate(msg["content"])}
-
-    def compress_messages(
-        self,
-        messages: list[dict],
-        compress_type: CompressType = CompressType.NO_COMPRESS,
-        max_token: int = 128000,
-        threshold: float = 0.8,
-    ) -> list[dict]:
-        """Compress messages to fit within the token limit.
-        Args:
-            messages (list[dict]): List of messages to compress.
-            compress_type (CompressType, optional): Compression strategy. Defaults to CompressType.NO_COMPRESS.
-            max_token (int, optional): Maximum token limit. Defaults to 128000. Not effective if token limit can be found in TOKEN_MAX.
-            threshold (float): Token limit threshold. Defaults to 0.8. Reserve 20% of the token limit for completion message.
-        """
-        return self.request_context_builder.build(
-            messages,
-            compress_type=compress_type,
-            max_token=max_token,
-            threshold=threshold,
-        )

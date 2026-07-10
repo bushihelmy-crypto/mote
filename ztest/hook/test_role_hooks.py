@@ -32,7 +32,9 @@ def role_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
     role = Role(name="Hooked", context=Context())
     # Replace the loop with a no-op stub so run() exercises only the hook seams.
-    monkeypatch.setattr(role, "_make_loop", lambda: _StubLoop())
+    # run() builds its loop via the graph's ``loop_factory``; seed that slot with
+    # a factory yielding the stub (the DI seam), so make_loop() returns it.
+    role._components._graph.seed("loop_factory", lambda: _StubLoop())
     return role
 
 

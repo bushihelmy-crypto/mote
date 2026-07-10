@@ -12,7 +12,7 @@ from uuid import uuid4
 from pydantic import ConfigDict, Field, PrivateAttr
 
 from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin
+from metagpt.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin, ThinkResult
 
 
 class RoleState(SerializationMixin):
@@ -45,6 +45,14 @@ class RoleState(SerializationMixin):
     latest_observed_msg: Optional[Message] = None
     recovered: bool = False
     last_end_output: str = Field(default="", exclude=True)
+    # The most recent think round's output (content + tool_calls). Published here
+    # by the loop the moment the think task drains, so a tool running later in the
+    # same turn (e.g. ``end_session`` reading the assistant's final text) reads it
+    # off state instead of reaching into the think-engine machinery — which lets
+    # the engine be a stateless per-turn factory. Runtime-only: this is transient
+    # turn output, reconstructed from the replayed message history on resume, so
+    # it never rides the durable checkpoint.
+    last_think_result: ThinkResult = Field(default_factory=ThinkResult, exclude=True)
 
     # Routing
     addresses: set[str] = set()
@@ -162,6 +170,18 @@ class RoleStateController:
         """Stage (or clear) the terminal state to restore on next shell start."""
         self._state._pending_terminal_restore = value
 
+    def take_pending_terminal_restore(self) -> Optional[dict]:
+        """Return and clear the pending terminal-restore state (consume once).
+
+        Capability surface for the Terminal tool: when it starts a fresh shell it
+        consumes the state staged by ``resume_session`` and re-seeds the shell
+        once. Reading clears it so the restore happens exactly once.
+        """
+        value = self._state._pending_terminal_restore
+        if value is not None:
+            self._state._pending_terminal_restore = None
+        return value
+
     def get_pending_kernel_restore(self) -> Optional[dict]:
         """Return the pending kernel-restore state ({cwd, env, unset}), else None."""
         return self._state._pending_kernel_restore
@@ -170,6 +190,18 @@ class RoleStateController:
         """Stage (or clear) the kernel state to restore on next kernel start."""
         self._state._pending_kernel_restore = value
 
+    def take_pending_kernel_restore(self) -> Optional[dict]:
+        """Return and clear the pending kernel-restore state (consume once).
+
+        Capability surface for the Python tool: when it starts a fresh kernel it
+        consumes the state staged by ``resume_session`` and re-seeds the kernel
+        once. Reading clears it so the restore happens exactly once.
+        """
+        value = self._state._pending_kernel_restore
+        if value is not None:
+            self._state._pending_kernel_restore = None
+        return value
+
     def get_pending_browser_restore(self) -> Optional[dict]:
         """Return the pending browser-restore state ({urls, active, storage_state}), else None."""
         return self._state._pending_browser_restore
@@ -177,6 +209,19 @@ class RoleStateController:
     def set_pending_browser_restore(self, value: Optional[dict]) -> None:
         """Stage (or clear) the browser state to restore on next browser launch."""
         self._state._pending_browser_restore = value
+
+    def take_pending_browser_restore(self) -> Optional[dict]:
+        """Return and clear the pending browser-restore state (consume once).
+
+        Capability surface for the WebBrowser tool: when it launches a fresh
+        browser it consumes the state ({urls, active, storage_state}) staged by
+        ``resume_session`` and re-opens the saved tabs once. Reading clears it so
+        the restore happens exactly once.
+        """
+        value = self._state._pending_browser_restore
+        if value is not None:
+            self._state._pending_browser_restore = None
+        return value
 
     def is_active(self) -> bool:
         """Read the react-loop active signal."""
@@ -195,6 +240,15 @@ class RoleStateController:
         if not message:
             return
         self._state.msg_buffer.push(message)
+
+    @property
+    def last_think_result(self) -> "ThinkResult":
+        """The most recent think round's output (see ``RoleState.last_think_result``)."""
+        return self._state.last_think_result
+
+    def set_last_think_result(self, result: "ThinkResult") -> None:
+        """Publish this turn's think result (called by the loop when it drains)."""
+        self._state.last_think_result = result
 
     @property
     def is_idle(self) -> bool:

@@ -1,15 +1,10 @@
-"""Context management — microcompact, autocompact.
+"""Context management — the unified reduction pipeline.
 
-Ported from Claude Code's context-management stack. This package owns the
-history-level scopes:
-
-- Microcompact: fold old tool results (cheap, no LLM).
-- Autocompact: summarize/rebuild the stored conversation when it nears the
-  context window (expensive, LLM call).
-
-The request-level scope (per-call compression before the wire request) lives in
-``metagpt.router.llm.request_context_builder`` because it is tightly coupled to
-BaseLLM.
+This package owns the history-level scopes. The mechanics live in
+``metagpt.context.compaction`` (a segmented :class:`Transcript` plus the
+cheapest-first fold → summarize → drop reducer pipeline behind a
+:class:`ContextEngine`); both the threshold-triggered (SOFT) and the reactive
+context-overflow (HARD) reductions run through that one pipeline.
 
 The tool-level scope (per-tool result-size caps + disk persistence) lives in
 ``metagpt.executor.tool_result_limit``.
@@ -20,31 +15,14 @@ stored conversation (replacing the old ``Memory`` object).
 
 from __future__ import annotations
 
-from metagpt.common.schema import (
-    AutocompactResult,
-    ContextManagerConfig,
-    MicrocompactResult,
-    TokenState,
-)
-from metagpt.common.config.config.compress_msg_config import CompressType
-from metagpt.context import prompt, token_budget
-from metagpt.context.autocompact import autocompact
+from metagpt.common.schema import ContextManagerConfig, TokenState
+from metagpt.context import budget, prompt
 from metagpt.context.manager import ContextManager
-from metagpt.context.microcompact import (
-    COMPACTABLE_TOOLS,
-    microcompact,
-)
 
 __all__ = [
     "prompt",
-    "token_budget",
+    "budget",
     "TokenState",
-    "CompressType",
     "ContextManagerConfig",
     "ContextManager",
-    "COMPACTABLE_TOOLS",
-    "MicrocompactResult",
-    "microcompact",
-    "AutocompactResult",
-    "autocompact",
 ]

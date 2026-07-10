@@ -32,10 +32,22 @@ the ``Message`` type, so it sits at the very bottom of the layering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, List, Optional
 
+from metagpt.common.events.outcomes import (
+    CompactOutcome,
+    PromptOutcome,
+    SpawnOutcome,
+    ToolCallOutcome,
+    ToolResultOutcome,
+    TurnOutcome,
+)
+from metagpt.common.events.rewrite import Rewritable, Rewrite
+from metagpt.common.interface.event_subscriber import ControlOutcome
+
 if TYPE_CHECKING:
+    from metagpt.common.exception import ErrorReport
     from metagpt.common.schema import Message, PermissionFacts
 
 # ---------------------------------------------------------------------------
@@ -52,6 +64,7 @@ LLM_STREAM_END = "llm_stream_end"
 LLM_REQUEST = "llm_request"
 LLM_RESPONSE = "llm_response"
 LLM_ERROR = "llm_error"
+LLM_RETRY = "llm_retry"
 COMPACTION_CHECKPOINT = "compaction_checkpoint"
 FILE_SNAPSHOT = "file_snapshot"
 USER_PROMPT_SUBMIT = "user_prompt_submit"
@@ -62,6 +75,7 @@ POST_COMPACT = "post_compact"
 PRE_AGENT_SPAWN = "pre_agent_spawn"
 FILE_CHANGED = "file_changed"
 FILE_MUTATED = "file_mutated"
+TOOLS_CHANGED = "tools_changed"
 DIAGNOSTICS = "diagnostics"
 RECOVERY = "recovery"
 TASK_PROGRESS = "task_progress"
@@ -73,57 +87,10 @@ SPAN_END = "span_end"
 
 # ---------------------------------------------------------------------------
 # Rewrite provenance — a control subscriber may rewrite a mutable field of a
-# control event (tool args, tool output). Each such change is recorded as an
-# immutable :class:`Rewrite` on the event itself, so a rewrite is traceable
-# from the event alone — who changed which field, from what to what. The
-# provenance rides on the event (self-describing), never in a side table that
-# could drift from the value it describes.
+# control event (tool args, tool output). :class:`Rewrite`/:class:`Rewritable`
+# live in the ``common/events/rewrite.py`` leaf (so ``outcome_type`` can bind
+# events to outcomes without a cycle); re-exported here for back-compat.
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Rewrite:
-    """One field mutation applied to a control event by a named subscriber.
-
-    ``field`` is the event attribute rewritten; ``before``/``after`` are its
-    values around the change; ``by`` is the rewriting subscriber's ``name``,
-    stamped by the bus at the single point that pairs a subscriber with the
-    event it just mutated. Immutable: a recorded rewrite is history.
-    """
-
-    field: str = ""
-    before: Any = None
-    after: Any = None
-    by: str = ""
-
-
-@dataclass
-class Rewritable:
-    """Mixin for a control event whose fields a subscriber may rewrite.
-
-    Carries the ordered provenance log and the *single* generic mutation
-    primitive :meth:`rewrite`, which reads the before-image and appends a
-    :class:`Rewrite` in one step — so a rewrite can never be applied without
-    being recorded. An event becomes rewritable by inheriting this alone; it
-    hand-rolls no per-field ``rebind_*`` method, and the one recording point
-    serves every rewritable event, present and future.
-    """
-
-    #: Ordered log of every rewrite applied as the event flowed through the
-    #: control bucket — the audit trail an observer reads off the final event.
-    rewrites: tuple[Rewrite, ...] = ()
-
-    def rewrite(self, field: str, after: Any, *, by: str = "") -> "Rewritable":
-        """Return a copy with ``field`` set to ``after`` and the change recorded.
-
-        The before-image is read here rather than supplied, so provenance is
-        captured atomically with the mutation and cannot be forged or forgotten.
-        ``by`` is the rewriting subscriber's name (the bus supplies it). Any
-        non-rewritten field (e.g. a tool-bound closure) is preserved by
-        :func:`~dataclasses.replace`.
-        """
-        record = Rewrite(field=field, before=getattr(self, field), after=after, by=by)
-        return replace(self, **{field: after}, rewrites=(*self.rewrites, record))
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +140,7 @@ class TurnEndEvent:
     token_state: Optional[dict] = None
 
     name: ClassVar[str] = TURN_END
+    outcome_type: ClassVar[type[ControlOutcome]] = TurnOutcome
 
 @dataclass
 class MessageAppendedEvent:
@@ -261,6 +229,30 @@ class LLMErrorEvent:
     name: ClassVar[str] = LLM_ERROR
 
 @dataclass
+class LLMRetryEvent:
+    """A transient LLM failure is about to be retried (fired from tenacity's
+    ``before_sleep`` hook, once per *pending* re-issue).
+
+    Purely observational — mirrors *that* the recovery loop will back-off and
+    re-issue the same request. Carries the countdown coordinates (which attempt
+    just failed, the total budget, and the chosen back-off) so a CLI can render
+    a transient "retrying in Ns" line. The final, budget-exhausted failure does
+    NOT emit this (no ``before_sleep`` fires); it surfaces via the turn-level
+    error path instead — mirroring Claude Code's transient-retry UX.
+    """
+
+    request_id: str = ""
+    model: str = ""
+    attempt: int = 0          # the attempt that just failed (tenacity attempt_number)
+    max_attempts: int = 0     # = LLM_RETRY_ATTEMPTS
+    delay_ms: float = 0.0     # tenacity's chosen next back-off duration
+    error_type: str = ""
+    error: str = ""
+    trace_id: str = ""
+
+    name: ClassVar[str] = LLM_RETRY
+
+@dataclass
 class CompactionCheckpointEvent:
     """A compaction rebuilt the history — the new history + its summary."""
 
@@ -312,6 +304,26 @@ class FileMutatedEvent:
     operation: str = "update"  # create / update / delete (best-effort)
 
     name: ClassVar[str] = FILE_MUTATED
+
+@dataclass
+class ToolsChangedEvent:
+    """The executor's bound tool set changed (a tool was de-registered).
+
+    Emitted by the :class:`ToolExecutor` when a tool is removed
+    (``deregister_tool``) so downstream views refresh instead of silently
+    drifting: the per-turn tool catalog drops the vanished names from its
+    incremental frontier (so a later re-registration is re-announced), and the
+    compaction pipeline refreshes its reconstructable-tool-name set. Purely an
+    observation — the executor's live ``_tools`` map stays the source of truth;
+    this only announces *that it changed* and carries the post-change facts a
+    consumer needs (which names went away, and the fresh reconstructable set), so
+    no consumer needs a back-reference to the executor.
+    """
+
+    removed: List[str] = field(default_factory=list)
+    reconstructable: List[str] = field(default_factory=list)
+
+    name: ClassVar[str] = TOOLS_CHANGED
 
 @dataclass
 class DiagnosticsEvent:
@@ -447,6 +459,7 @@ class UserPromptSubmitEvent:
     prompt: str = ""
 
     name: ClassVar[str] = USER_PROMPT_SUBMIT
+    outcome_type: ClassVar[type[ControlOutcome]] = PromptOutcome
 
 @dataclass
 class PreToolUseEvent(Rewritable):
@@ -478,6 +491,7 @@ class PreToolUseEvent(Rewritable):
     )
 
     name: ClassVar[str] = PRE_TOOL_USE
+    outcome_type: ClassVar[type[ControlOutcome]] = ToolCallOutcome
 
 @dataclass
 class PostToolUseEvent(Rewritable):
@@ -495,8 +509,28 @@ class PostToolUseEvent(Rewritable):
     tool_input: dict = field(default_factory=dict)
     tool_response: Any = None
     tool_use_id: Optional[str] = None
+    #: The executor's structured success fact from the ``ToolResult`` (a tool body
+    #: that raised or returned ``ToolResult(success=False)``), carried verbatim so
+    #: observers read the outcome instead of sniffing ``tool_response`` prefixes.
+    #: This is the *tool-body* outcome at emit time; a PostToolUse-hook block that
+    #: fails the call afterwards is applied by the executor post-return and is not
+    #: reflected here (see tool_executor for that separate path).
+    success: bool = True
+    #: Structured failure record on a non-success result (``ErrorReport``), mirrored
+    #: from the ``ToolResult``; ``None`` on success or for a legacy output-only fail.
+    error: Optional["ErrorReport"] = None
+    #: Structured media the tool produced (``list[ToolMedia]``: image/pdf artifacts),
+    #: mirrored from the ``ToolResult`` so the view layer folds a media block from the
+    #: fact instead of sniffing ``tool_response`` text / reverse-engineering a path.
+    media: list = field(default_factory=list)
+    #: Structured file modifications the tool made (``list[FileChange]``: path/old/new),
+    #: mirrored from the ``ToolResult`` so the view layer renders the change from the
+    #: fact — side-by-side on a rich host, a synthesized coloured diff on a text host —
+    #: instead of sniffing ``tool_response`` text for a diff shape.
+    file_changes: list = field(default_factory=list)
 
     name: ClassVar[str] = POST_TOOL_USE
+    outcome_type: ClassVar[type[ControlOutcome]] = ToolResultOutcome
 
 @dataclass
 class PreCompactEvent:
@@ -505,6 +539,7 @@ class PreCompactEvent:
     trigger: str = "auto"
 
     name: ClassVar[str] = PRE_COMPACT
+    outcome_type: ClassVar[type[ControlOutcome]] = CompactOutcome
 
 @dataclass
 class PostCompactEvent:
@@ -538,6 +573,7 @@ class PreAgentSpawnEvent:
     nickname: str = ""
 
     name: ClassVar[str] = PRE_AGENT_SPAWN
+    outcome_type: ClassVar[type[ControlOutcome]] = SpawnOutcome
 
 #: Any concrete event (all expose a ``.name`` discriminator ClassVar).
 AgentEvent = Any
@@ -555,6 +591,7 @@ __all__ = [
     "LLM_REQUEST",
     "LLM_RESPONSE",
     "LLM_ERROR",
+    "LLM_RETRY",
     "COMPACTION_CHECKPOINT",
     "FILE_SNAPSHOT",
     "USER_PROMPT_SUBMIT",
@@ -565,6 +602,7 @@ __all__ = [
     "PRE_AGENT_SPAWN",
     "FILE_CHANGED",
     "FILE_MUTATED",
+    "TOOLS_CHANGED",
     "DIAGNOSTICS",
     "RECOVERY",
     "TASK_PROGRESS",
@@ -586,10 +624,12 @@ __all__ = [
     "LLMRequestEvent",
     "LLMResponseEvent",
     "LLMErrorEvent",
+    "LLMRetryEvent",
     "CompactionCheckpointEvent",
     "FileSnapshotEvent",
     "FileChangedEvent",
     "FileMutatedEvent",
+    "ToolsChangedEvent",
     "DiagnosticsEvent",
     "RecoveryEvent",
     "TaskProgressEvent",

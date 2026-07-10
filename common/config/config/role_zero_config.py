@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field, model_validator
 
@@ -18,7 +18,7 @@ class SkillsConfig(YamlModel):
     """P0 Skills subsystem configuration."""
 
     enabled: bool = Field(default=False, description="P0 Skills master switch.")
-    max_tokens: int = Field(default=2000, description="Token limit for alwaysApply + index injection.")
+    max_tokens: int = Field(default=2000, description="Token limit for the Skills index injection.")
     # Layered source directories (precedence-as-data: bundled < user < project
     # < extra). The user/project toggles add the conventional ``~/.agent/skills``
     # and ``<cwd>/.agent/skills`` locations; ``extra_dirs`` appends arbitrary
@@ -72,31 +72,15 @@ class RoleZeroConfig(YamlModel):
     similarity_top_k: int = Field(default=5, description="The number of long-term memories to retrieve.")
     use_llm_ranker: bool = Field(default=False, description="Whether to use LLM Reranker to get better result.")
 
-    enable_compressable_memory: bool = Field(default=False, description="Whether to use compressable memory.")
-    compress_type: Literal["compaction", "compressable"] = Field(
-        default="compaction",
-        description="Compression type when enable_compressable_memory is True. "
-        "'compaction': AdaptiveCompactionMemory (token-based compression), "
-        "'compressable': CompressableMemory (message-count based compression).",
-    )
-    compress_k: int = Field(default=15, description="Number of latest messages to keep in the compressed memory.")
-    compress_model_name: str = Field(default="gpt-4o-mini", description="Model to use for compression.")
-    compress_trigger_token_threshold: int = Field(
-        default=0,
-        description="Compression will be automatically triggered if the value is exceeded. A value of 0 will be ineffective",
-    )
-
-    # AdaptiveCompactionMemory configuration
-    max_context_tokens: int = Field(default=128000, description="Max context window size in tokens (e.g., 128K).")
-    compression_threshold: float = Field(default=0.8, description="Token usage ratio to trigger compression (0.0-1.0).")
-    target_after_compression: float = Field(
-        default=0.50, description="Target token usage ratio after compression (0.0-1.0)."
-    )
+    # Adaptive (token-based) compaction. When enabled, the think-engine emits the
+    # compaction-aware prompt sections (Function Result Clearing / summarize /
+    # task-final-output) that tell the model old tool results get cleared. The
+    # actual clearing is run by ``context.compaction`` (ContextManager); these two
+    # knobs only shape the prompt. ``protected_recent_messages`` = how many recent
+    # messages the FRC section says are kept intact.
+    enable_compressable_memory: bool = Field(default=False, description="Whether to use adaptive compaction memory.")
     protected_recent_messages: int = Field(
         default=8, description="Number of recent messages to protect from compression."
-    )
-    min_compression_ratio: float = Field(
-        default=0.08, description="Min compression ratio (0.0-1.0), switch to Summary if last compression < this."
     )
 
     # P0 Skills

@@ -45,7 +45,7 @@ class TestUpdate:
             "+    return 20"
         )
         out = run(tool.call(input=patch))
-        assert "M mod.py" in out
+        assert "M mod.py" in out.output
         with open(full) as f:
             assert f.read() == "def a():\n    return 10\n\n\ndef b():\n    return 20\n"
 
@@ -77,10 +77,15 @@ class TestAdd:
         tool = _bound_tool(role)
         patch = _wrap("*** Add File: sub/new.py\n+hello\n+world")
         out = run(tool.call(input=patch))
-        assert "A sub/new.py" in out
+        assert "A sub/new.py" in out.output
         full = os.path.abspath("sub/new.py")
         with open(full) as f:
             assert f.read() == "hello\nworld\n"
+        # A structured add: empty old, the new content, at the dest path.
+        assert len(out.file_changes) == 1
+        assert out.file_changes[0].path == full
+        assert out.file_changes[0].old == ""
+        assert out.file_changes[0].new == "hello\nworld\n"
 
     def test_add_over_existing_nonempty_rejected(self, workspace, role):
         write_file("exists.py", "content\n")
@@ -98,8 +103,13 @@ class TestDelete:
         tool = _bound_tool(role)
         patch = _wrap("*** Delete File: gone.py")
         out = run(tool.call(input=patch))
-        assert "D gone.py" in out
+        assert "D gone.py" in out.output
         assert not os.path.exists(full)
+        # A structured delete: the pre-delete content as old, empty new.
+        assert len(out.file_changes) == 1
+        assert out.file_changes[0].path == full
+        assert out.file_changes[0].old == "bye\n"
+        assert out.file_changes[0].new == ""
 
     def test_delete_missing_file_rejected(self, workspace, role):
         tool = _bound_tool(role)
@@ -121,10 +131,15 @@ class TestMove:
             "+a = 2"
         )
         out = run(tool.call(input=patch))
-        assert "old.py -> new.py" in out
+        assert "old.py -> new.py" in out.output
         assert not os.path.exists(full)
         with open(os.path.abspath("new.py")) as f:
             assert f.read() == "a = 2\n"
+        # A move+update: the change is stamped at the destination path.
+        assert len(out.file_changes) == 1
+        assert out.file_changes[0].path == os.path.abspath("new.py")
+        assert out.file_changes[0].old == "a = 1\n"
+        assert out.file_changes[0].new == "a = 2\n"
 
     def test_move_dest_exists_rejected(self, workspace, role):
         full = write_file("old.py", "a = 1\n")
@@ -205,6 +220,6 @@ class TestUnbound:
         tool = bind(ApplyPatch(), None)
         patch = _wrap("*** Update File: mod.py\n-x = 1\n+x = 2")
         out = run(tool.call(input=patch))
-        assert "M mod.py" in out
+        assert "M mod.py" in out.output
         with open(os.path.abspath("mod.py")) as f:
             assert f.read() == "x = 2\n"

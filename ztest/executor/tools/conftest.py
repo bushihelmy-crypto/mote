@@ -81,9 +81,20 @@ class CapRole:
         self._pending_browser_restore: Optional[dict] = None
         # Whether the browser launches headless (WebBrowser get_browser_headless).
         self.browser_headless: bool = True
+        # Whether the browser applies opt-in stealth (WebBrowser get_browser_stealth).
+        self.browser_stealth: bool = False
+        # Which locale bundle the stealth fingerprint uses (WebBrowser get_browser_locale).
+        self.browser_locale: str = "auto"
+        # Optional proxy URL for the browser (WebBrowser get_browser_proxy).
+        self.browser_proxy: str = ""
         # Scriptable human/session behaviour.
         self.ask_reply = ask_reply
         self.ask_questions: list[str] = []  # records every prompt sent to ask_human
+        # AskUserQuestion structured channel: a callable(items) -> AskUserQuestionAnswers
+        # (or a pre-built AskUserQuestionAnswers). ``ask_question_items`` records
+        # the typed questions each call received.
+        self.ask_answers: Any = None
+        self.ask_question_items: list = []
         self.end_output = end_output
         self.end_calls = 0
         # (slept_seconds, interrupted); defaults to "slept the full duration".
@@ -140,6 +151,15 @@ class CapRole:
     def get_browser_headless(self) -> bool:
         return self.browser_headless
 
+    def get_browser_stealth(self) -> bool:
+        return self.browser_stealth
+
+    def get_browser_locale(self) -> str:
+        return self.browser_locale
+
+    def get_browser_proxy(self) -> str:
+        return self.browser_proxy
+
     # --- stateful-tool sessions (Terminal/Python live state on RoleState) ---
     def get_tool_session(self, key: str) -> Any:
         return self.tool_sessions.get(key)
@@ -154,6 +174,22 @@ class CapRole:
     async def ask_human(self, question: str) -> str:
         self.ask_questions.append(question)
         return self.ask_reply
+
+    async def ask_user_question(self, questions):
+        """Structured AskUserQuestion channel — records items, returns scripted answers.
+
+        ``ask_answers`` may be a callable(items) -> AskUserQuestionAnswers or a
+        pre-built AskUserQuestionAnswers; absent it returns empty answers.
+        """
+        from metagpt.common.schema import AskUserQuestionAnswers
+
+        self.ask_question_items.append(questions)
+        answers = self.ask_answers
+        if callable(answers):
+            return answers(questions)
+        if answers is not None:
+            return answers
+        return AskUserQuestionAnswers()
 
     async def reply_to_human(self, content: str) -> str:
         return content
@@ -187,9 +223,13 @@ class CapRole:
             "record_browser_state": self.record_browser_state,
             "take_pending_browser_restore": self.take_pending_browser_restore,
             "get_browser_headless": self.get_browser_headless,
+            "get_browser_stealth": self.get_browser_stealth,
+            "get_browser_locale": self.get_browser_locale,
+            "get_browser_proxy": self.get_browser_proxy,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
             "ask_human": self.ask_human,
+            "ask_user_question": self.ask_user_question,
             "reply_to_human": self.reply_to_human,
             "end_session": self.end_session,
             "wait_interruptible": self.wait_interruptible,
@@ -207,9 +247,64 @@ def bind(tool: BaseTool, role: Optional[CapRole] = None, session_id: str = "sess
     return tool.bind(session_id, role=role)
 
 
+# One event loop shared by every ``run()`` call for the whole test session.
+#
+# Why not a fresh loop per call (or :func:`asyncio.run`)? Playwright's Chromium
+# child is an ``asyncio.subprocess`` whose ``BaseSubprocessTransport`` is not
+# always reclaimed synchronously when a scenario ends — it lingers until a LATER
+# garbage collection. If the loop that created it has since been closed, the
+# transport's ``__del__`` calls ``loop.call_soon`` on that closed loop and raises
+# ``RuntimeError: Event loop is closed`` — a stray unraisable that flakily fails
+# whichever unrelated test the collector happened to run in. Keeping a single
+# loop open for the entire session means no transport is ever finalised against a
+# closed loop; the loop is closed once, at process exit, after a final drain.
+_SHARED_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _get_shared_loop() -> asyncio.AbstractEventLoop:
+    global _SHARED_LOOP
+    if _SHARED_LOOP is None or _SHARED_LOOP.is_closed():
+        _SHARED_LOOP = asyncio.new_event_loop()
+
+        import atexit
+        import gc
+
+        def _drain_and_close(loop: asyncio.AbstractEventLoop = _SHARED_LOOP) -> None:
+            # Reclaim any lingering transports and pump their finalisers onto the
+            # still-open loop before closing it, so nothing fires against a
+            # closed loop after the process starts tearing down.
+            try:
+                gc.collect()
+                loop.run_until_complete(asyncio.sleep(0))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+            finally:
+                loop.close()
+
+        atexit.register(_drain_and_close)
+    return _SHARED_LOOP
+
+
 def run(coro):
-    """Drive a coroutine (a tool's ``call``) to completion synchronously."""
-    return asyncio.run(coro)
+    """Drive a coroutine (a tool's ``call``) to completion synchronously.
+
+    Runs on a single session-wide event loop (see ``_get_shared_loop``) so a
+    lazily-GC'd Playwright transport never fires its finaliser against a closed
+    loop. A per-call ``gc.collect()`` + one loop turn eagerly drains finalisers
+    while the loop is live, keeping late collections quiet.
+    """
+    import gc
+
+    loop = _get_shared_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        # Drain finalisers onto the still-open shared loop each call, so lingering
+        # transports are reclaimed here rather than during a later, unrelated test.
+        gc.collect()
+        loop.run_until_complete(asyncio.sleep(0))
 
 
 # ---------------------------------------------------------------------------

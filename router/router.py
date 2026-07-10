@@ -11,6 +11,7 @@ byte-for-byte behavior compatibility with that factory.
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import TYPE_CHECKING, Callable, Optional
 
 from metagpt.common.config.config.llm_config import LLMConfig
@@ -41,6 +42,27 @@ DEFAULT_TASK_MODELS: dict[str, str] = {
 }
 
 
+class LLMVariant(Enum):
+    """A build variant of a model card — the second half of the instance cache key.
+
+    The same model name can back two differently-configured ``BaseLLM`` instances:
+
+    - ``THINK``: the main path; carries the injected ``context_reducer`` so its
+      recovery loop can shrink+re-issue an overflowing wire payload (COMPRESS).
+    - ``COMPRESSION``: the instance the ContextManager's summarize reducer runs
+      on; built reducer-less (``context_reducer=None``) so summarize's inner
+      ``aask()`` cannot re-enter ``_compress`` → summarize → forever. The cycle is
+      broken at the injection layer, no runtime guard needed.
+
+    Keying the instance cache on ``(name, variant)`` keeps these from aliasing
+    without a stringly-typed ``"name::compression"`` suffix sharing the model-name
+    namespace.
+    """
+
+    THINK = "think"
+    COMPRESSION = "compression"
+
+
 @log_class(level="DEBUG")
 class LLMRouter:
     """Routes requests to a concrete :class:`BaseLLM` via three methods.
@@ -64,8 +86,13 @@ class LLMRouter:
         self.strategy: RoutingStrategy = strategy or RuleBasedStrategy()
         self.task_map: dict[str, str] = dict(task_map or {})
         self._cards: dict[str, ModelCard] = {}
-        self._instances: dict[str, BaseLLM] = {}
+        self._instances: dict[tuple[str, LLMVariant], BaseLLM] = {}
         self._default: str = DEFAULT_MODEL_NAME
+        # Optional boundary-safe reducer the upper layer (Role's ContextManager)
+        # injects for COMPRESS recovery; stamped onto every built/routed LLM so
+        # the recovery loop can shrink+re-issue an overflowing wire payload. None
+        # (standalone/test use) => COMPRESS degrades to a re-raise.
+        self.context_reducer = None
         self._auto_register_from_config()
 
     # ------------------------------------------------------------------ setup
@@ -105,7 +132,10 @@ class LLMRouter:
             context_window=context_window,
         )
         self._cards[name] = card
-        self._instances.pop(name, None)  # invalidate any cached instance
+        # Invalidate every cached variant for this name (THINK + COMPRESSION),
+        # not just one — a re-register must not leave a stale reducer-less
+        # compression instance pinned to the old config.
+        self._instances = {k: v for k, v in self._instances.items() if k[0] != name}
         return card
 
     def map_task(self, task: str, name: str) -> None:
@@ -117,8 +147,21 @@ class LLMRouter:
         self.strategy = strategy
 
     # -------------------------------------------------------------- building
-    def _build(self, card_or_name) -> BaseLLM:
-        """Lazily build + cache the BaseLLM for a card (or named card)."""
+    def _build(self, card_or_name, *, variant: LLMVariant = LLMVariant.THINK) -> BaseLLM:
+        """Lazily build + cache the BaseLLM for a card (or named card).
+
+        ``variant`` selects the build shape (see :class:`LLMVariant`).
+        ``COMPRESSION`` builds the instance the ContextManager's summarize reducer
+        runs on: cached under its own ``(name, variant)`` key and *not* stamped
+        with ``context_reducer``. Summarize issues its own inner ``aask()``, and if
+        that instance carried the COMPRESS reducer a nested overflow would recurse
+        ``_compress`` → summarize → forever. Leaving its reducer slot ``None``
+        breaks that cycle at the injection layer (no runtime guard needed), while
+        FALLBACK/ROTATE recovery are still wired — only the COMPRESS strategy is
+        withheld. The per-variant cache key also keeps this reducer-less instance
+        from aliasing the reducer-bearing one built for the same model on the main
+        think path.
+        """
         if isinstance(card_or_name, ModelCard):
             name = card_or_name.name
             card = card_or_name
@@ -126,8 +169,9 @@ class LLMRouter:
             name = card_or_name
             card = self._cards.get(name)
 
-        if name in self._instances:
-            return self._instances[name]
+        cache_key = (name, variant)
+        if cache_key in self._instances:
+            return self._instances[cache_key]
 
         if card is None:
             raise ModelNotFoundError(
@@ -143,7 +187,11 @@ class LLMRouter:
         # Wire FALLBACK recovery: on a deterministic refusal (e.g. content policy),
         # the provider's recovery loop fails over to the next registered model.
         instance._fallback_supplier = self.make_fallback_supplier(exclude=name)
-        self._instances[name] = instance
+        # Wire COMPRESS recovery: shrink+re-issue an overflowing wire payload.
+        # Withheld for the COMPRESSION variant (see docstring) so summarize's
+        # inner aask cannot re-enter _compress.
+        instance.context_reducer = None if variant is LLMVariant.COMPRESSION else self.context_reducer
+        self._instances[cache_key] = instance
         return instance
 
     def make_fallback_supplier(self, *, exclude: Optional[str] = None) -> Callable[[], Optional[BaseLLM]]:
@@ -179,18 +227,31 @@ class LLMRouter:
         Equivalent to the old ``LLM()`` factory when given ``llm_config`` / nothing.
         """
         if llm_config is not None:
-            return self.context.llm_with_cost_manager_from_llm_config(llm_config)
+            # This branch bypasses ``_build`` (fresh, uncached instance), so the
+            # COMPRESS reducer must be stamped here too — the main think path
+            # routes per-request through here with ``role.config.llm``.
+            instance = self.context.llm_with_cost_manager_from_llm_config(llm_config)
+            instance.context_reducer = self.context_reducer
+            return instance
         if name is not None:
             return self._build(name)
         return self._build(self._default)
 
     # --------------------------------------------- method 2: task-map route
     def route_for_task(self, task: str) -> BaseLLM:
-        """Task-map routing: look up ``task`` in ``task_map``, else default."""
+        """Task-map routing: look up ``task`` in ``task_map``, else default.
+
+        The COMPRESSION task's instance is built reducer-less (the ``COMPRESSION``
+        variant) so the ContextManager's summarize reducer — which runs on it —
+        cannot re-enter the COMPRESS recovery loop. Other tasks (incl. SUMMARY, a
+        top-level turn-end call that is not nested inside compression) keep the
+        reducer so their own overflows still shrink+re-issue.
+        """
+        variant = LLMVariant.COMPRESSION if task == COMPRESSION_TASK else LLMVariant.THINK
         name = self.task_map.get(task)
         if name and name in self._cards:
-            return self._build(name)
-        return self._build(self._default)
+            return self._build(name, variant=variant)
+        return self._build(self._default, variant=variant)
 
     # ----------------------------------------- method 3: intelligent route
     def _candidate_cards(self, candidates: Optional[list[str]]) -> dict[str, ModelCard]:

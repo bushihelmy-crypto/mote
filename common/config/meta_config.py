@@ -41,6 +41,14 @@ class Config(YamlModel):
     # Global Proxy. Not used by LLM, but by other tools such as browsers.
     proxy: str = ""
 
+    # Browser locale/region bundle for the WebBrowser stealth fingerprint:
+    # "auto" (default) infers zh vs en from the host env; "en" / "zh" force a
+    # coherent locale + timezone + Accept-Language. A per-role
+    # ``role_schema.browser_locale`` (when not "auto") overrides this. Keep it
+    # consistent with the ``proxy`` exit-IP region (a zh-CN locale on a US IP is
+    # itself a bot tell).
+    browser_locale: str = "auto"
+
     # Optional shell command that prints an API key on stdout. Used to fill
     # ``llm.api_key`` at load time only when no static/env key is present
     # (precedence: env > static config > helper). Trusted layers only — the

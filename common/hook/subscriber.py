@@ -55,7 +55,7 @@ from metagpt.common.events.types import (
     USER_PROMPT_SUBMIT,
 )
 from metagpt.common.hook.types import HookOutcome
-from metagpt.common.interface.event_subscriber import ControlOutcome, ControlStage
+from metagpt.common.interface.event_subscriber import ControlOutcome, ControlStage, ControlSubscriber
 
 
 @dataclass(frozen=True)
@@ -107,6 +107,8 @@ _BINDINGS: dict[str, _HookBinding] = {
             "tool_name": e.tool_name,
             "tool_input": e.tool_input,
             "tool_response": e.tool_response,
+            "success": e.success,
+            "error": (e.error.as_dict() if e.error is not None else None),
             "tool_use_id": e.tool_use_id,
         },
         lambda ho: ToolResultOutcome(
@@ -151,7 +153,7 @@ _BINDINGS: dict[str, _HookBinding] = {
 }
 
 
-class HookSubscriber:
+class HookSubscriber(ControlSubscriber):
     """Routes control events to the wrapped :class:`HookManager`.
 
     Exposing ``handle_control`` (not ``handle``) is what places this subscriber on

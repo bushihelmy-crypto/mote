@@ -18,9 +18,11 @@ from metagpt.common.events import (
     LLMErrorEvent,
     LLMRequestEvent,
     LLMResponseEvent,
+    LLMRetryEvent,
     set_bus,
     span,
 )
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from metagpt.common.logs import bind_trace
 from metagpt.router.cost import CostTracker
 from metagpt.router.cost.usage import TokenUsage
@@ -39,13 +41,14 @@ def _make_llm() -> OpenAILLM:
     return llm
 
 
-class _Capture:
+class _Capture(ObservationSubscriber, SyncObserver):
     priority = 50
 
     def __init__(self):
         self.requests: list = []
         self.responses: list = []
         self.errors: list = []
+        self.retries: list = []
 
     async def handle(self, event):
         if isinstance(event, LLMRequestEvent):
@@ -55,6 +58,12 @@ class _Capture:
         elif isinstance(event, LLMErrorEvent):
             self.errors.append(event)
         return None
+
+    def handle_sync(self, event):
+        # ``LLMRetryEvent`` is emitted from tenacity's ``before_sleep`` via the
+        # synchronous ``observe_event_sync`` path (same as streaming deltas).
+        if isinstance(event, LLMRetryEvent):
+            self.retries.append(event)
 
 
 def _with_bus(fn):
@@ -165,3 +174,79 @@ def test_no_bus_bound_is_noop():
 
     rsp = run(llm._run_with_recovery(_send, [{"role": "user", "content": "hi"}]))
     assert rsp == "ok"
+
+
+def test_transient_error_retries_then_succeeds(monkeypatch):
+    """A retryable error (e.g. gateway-relay 401 → LLMOverloadedError) is retried
+    in place rather than surfacing. Each attempt traces independently, so a
+    success on the 2nd attempt yields 2 requests + 1 response + 1 error."""
+    # Neutralize tenacity backoff (wait -> 0) so the test is instant.
+    from tenacity.wait import wait_random_exponential
+
+    monkeypatch.setattr(wait_random_exponential, "__call__", lambda self, retry_state: 0.0, raising=True)
+
+    from metagpt.common.exception import LLMOverloadedError
+
+    llm = _make_llm()
+    calls = {"n": 0}
+
+    async def _send(active, messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise LLMOverloadedError("bad response status code 401", status_code=401)
+        return LLMResponse(content="recovered")
+
+    (rsp, cap) = _with_bus(lambda: run(llm._run_with_recovery(_send, [{"role": "user", "content": "hi"}])))
+
+    assert isinstance(rsp, LLMResponse) and rsp.content == "recovered"
+    assert calls["n"] == 2  # failed once, retried, succeeded
+    assert len(cap.requests) == 2  # one per attempt
+    assert len(cap.errors) == 1  # the first (retried) failure
+    assert len(cap.responses) == 1  # the eventual success
+    # Distinct request_ids per attempt.
+    assert cap.requests[0].request_id != cap.requests[1].request_id
+    # One LLMRetryEvent fired from before_sleep (the pending re-issue), carrying
+    # the CC-style countdown coordinates. The eventual success emits no retry.
+    assert len(cap.retries) == 1
+    retry = cap.retries[0]
+    assert retry.attempt == 1
+    assert retry.max_attempts == 6
+    assert retry.error_type == "LLMOverloadedError"
+    assert retry.delay_ms == 0.0  # backoff neutralized in this test
+    assert retry.model == "gpt-4o"
+
+
+def test_transient_error_exhausts_budget_then_reraises(monkeypatch):
+    """A persistently-transient error retries up to the budget, then re-raises
+    (surfacing to the recovery loop, which has no RETRY strategy)."""
+    from tenacity.wait import wait_random_exponential
+
+    monkeypatch.setattr(wait_random_exponential, "__call__", lambda self, retry_state: 0.0, raising=True)
+
+    from metagpt.common.exception import LLMOverloadedError
+    from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS
+
+    llm = _make_llm()
+    calls = {"n": 0}
+
+    async def _send(active, messages):
+        calls["n"] += 1
+        raise LLMOverloadedError("bad response status code 401", status_code=401)
+
+    import pytest
+
+    bus = EventBus()
+    cap = _Capture()
+    bus.subscribe(cap)
+    with set_bus(bus):
+        with pytest.raises(LLMOverloadedError):
+            run(llm._run_with_recovery(_send, [{"role": "user", "content": "hi"}]))
+
+    assert calls["n"] == LLM_RETRY_ATTEMPTS  # all attempts consumed
+    assert len(cap.errors) == LLM_RETRY_ATTEMPTS
+    assert cap.responses == []
+    # before_sleep fires only on a *pending* re-issue, so the final,
+    # budget-exhausted failure emits NO retry event (it re-raises directly).
+    # This mirrors CC: no transient "retrying" line for the terminal failure.
+    assert len(cap.retries) == LLM_RETRY_ATTEMPTS - 1
+    assert [r.attempt for r in cap.retries] == list(range(1, LLM_RETRY_ATTEMPTS))

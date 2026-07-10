@@ -26,6 +26,10 @@ from metagpt.common.const import (
     MESSAGE_ROUTE_FROM,
     MESSAGE_ROUTE_TO,
     MESSAGE_ROUTE_TO_ALL,
+    RESOURCE_ID,
+    RESOURCE_KIND,
+    RESOURCE_STICKY,
+    RETENTION,
     TOOL_CALL_ID,
     TOOL_CALLS,
 )
@@ -287,11 +291,59 @@ class ToolMessage(Message):
     because that protocol has no tool-call id and the model reads it as plain text.
     """
 
-    def __init__(self, content: str = "", *, tool_call_id: str, **kwargs):
+    def __init__(self, content: str = "", *, tool_call_id: str, retention: Optional[str] = None, **kwargs):
         kwargs.pop("role", None)
         kwargs.setdefault("cause_by", CauseBy.RUN_COMMAND)
         super().__init__(content=content, role="tool", **kwargs)
         self.metadata[TOOL_CALL_ID] = tool_call_id
+        # Optional lifecycle hint (RETENTION_* value). Stamped into metadata so it
+        # survives dump/load (the ToolMessage subclass identity is lost on replay,
+        # metadata is the truth), and the compaction layer keys off it.
+        if retention:
+            self.metadata[RETENTION] = retention
+
+
+class ResourceMessage(UserMessage):
+    """A dynamically-loaded capability body re-projected into the request.
+
+    Carries the body of a loaded resource (e.g. a Skill invoked earlier) so it
+    survives history compaction: after the head is discarded, the ResourceRegistry
+    re-projects sticky resources as these messages right after the summary.
+
+    Type-as-shell + metadata-as-truth: this subclass is only an ergonomic
+    constructor (mirroring AIMessage / ToolMessage). On the wire it is a plain
+    ``role="user"`` message, and ``Message.load`` reconstructs it via the base
+    ``Message.from_dict`` (``cls(**m)``), which loses the subclass identity. So
+    the identifying facts live in ``metadata`` (RESOURCE_ID / RESOURCE_KIND /
+    RESOURCE_STICKY) and every consumer keys off those, never ``isinstance``.
+    """
+
+    def __init__(
+        self,
+        content: str = "",
+        *,
+        resource_id: str,
+        resource_kind: str = "skill",
+        sticky: bool = True,
+        **kwargs,
+    ):
+        kwargs.pop("role", None)
+        super().__init__(content=content, **kwargs)
+        self.metadata[RESOURCE_ID] = resource_id
+        self.metadata[RESOURCE_KIND] = resource_kind
+        self.metadata[RESOURCE_STICKY] = sticky
+
+    @property
+    def resource_id(self) -> str:
+        return self.metadata.get(RESOURCE_ID, "")
+
+    @property
+    def resource_kind(self) -> str:
+        return self.metadata.get(RESOURCE_KIND, "")
+
+    @property
+    def is_sticky(self) -> bool:
+        return bool(self.metadata.get(RESOURCE_STICKY, False))
 
 
 class LLMCallContext(BaseModel):

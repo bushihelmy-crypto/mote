@@ -15,6 +15,7 @@ import sys
 import pytest
 
 from metagpt.common.events import DiagnosticsEvent, EventBus, FileMutatedEvent
+from metagpt.common.interface.event_subscriber import ObservationSubscriber
 from metagpt.common.schema import LspConfig, LspServerConfig
 from metagpt.roles.lsp.buffer import DiagnosticsBuffer
 from metagpt.roles.lsp.service import LspService
@@ -208,7 +209,7 @@ async def test_emitted_event_carries_paths(tmp_path):
 
     seen = []
 
-    class _Spy:
+    class _Spy(ObservationSubscriber):
         priority = 10
 
         async def handle(self, event):

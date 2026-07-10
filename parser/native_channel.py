@@ -44,10 +44,18 @@ class NativeToolChannel(CommandChannel):
 
     def prompt_vars(self) -> dict[str, str]:
         # Native supplies the tool-call "# Using commands" guidance; it carries no
-        # <end></end> marker the model would echo.
+        # <end></end> marker the model would echo. tool_usage_guide is empty:
+        # native tools reach the model via the API ``tools=`` param, so the system
+        # prompt needs no catalog orientation (mirrors wants_tool_catalog() False).
         return {
             "command_guide": NATIVE_COMMAND_GUIDE,
+            "tool_usage_guide": "",
         }
+
+    def wants_tool_catalog(self) -> bool:
+        # Native tools already reach the model via the API ``tools=`` param
+        # (tool_specs below), so the system prompt must NOT re-describe them.
+        return False
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return executor.get_native_tool_specs(provider=self._provider)
@@ -74,7 +82,9 @@ class NativeToolChannel(CommandChannel):
         for e in executed:
             if not e.get("id"):
                 continue
-            await memory.add(ToolMessage(content=e["output"], tool_call_id=e["id"]))
+            await memory.add(
+                ToolMessage(content=e["output"], tool_call_id=e["id"], retention=e.get("retention"))
+            )
         media = _media_message(*_collect_media(executed))
         if media is not None:
             await memory.add(media)

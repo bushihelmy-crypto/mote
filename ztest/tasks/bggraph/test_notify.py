@@ -69,6 +69,21 @@ def _build_graph() -> BgGraph:
     return g
 
 
+def _ring_graph() -> BgGraph:
+    """A ``work`` node that self-loops (mirrors code_review's review_batch)."""
+    g = BgGraph("ring", state_schema=S)
+    g.add_node("work", sync_node(lambda s: {"x": s.x}))
+    g.add_node("done", sync_node(lambda s: "ok"))
+    g.add_edge(START, "work")
+    g.add_conditional_edges(
+        "work",
+        lambda s: "loop" if s.x else "done",
+        {"loop": "work", "done": "done"},
+    )
+    g.add_edge("done", END)
+    return g
+
+
 def _run_state(g: BgGraph, **statuses: BgStatus) -> GraphRunState:
     """Build a run state for *g* with the given per-node statuses applied.
 
@@ -268,6 +283,30 @@ class TestPushNodeFailure:
         detail = collector.events[-1][2]
         assert "- tts" in detail
         assert "description:" not in detail
+
+    def test_ring_node_success_annotates_lap_not_retry(self, collector):
+        # A self-loop node emits one success notification per lap; the subject
+        # must say it is a ring lap (not a stall/retry) so repeated identical
+        # completions are not misread as the graph being stuck / restarting.
+        g = _ring_graph()
+        state = g.state_schema(x=1)
+        rs = GraphRunState.for_graph(g)
+        rs.get("work").attempts = 3  # third lap around the ring
+        push_node_notification(
+            "work", BgStatus.SUCCESS, state, g,
+            completed={"work"}, running_names=[], run_state=rs,
+        )
+        detail = collector.events[-1][2]
+        assert "- work" in detail
+        assert "ring" in detail
+        assert "lap 3" in detail
+        # A non-ring node in the same graph must NOT get the lap annotation.
+        collector.events.clear()
+        push_node_notification(
+            "done", BgStatus.SUCCESS, state, g,
+            completed={"done"}, running_names=[],
+        )
+        assert "lap" not in collector.events[-1][2]
 
     def test_node_failure_action_hint_running(self, collector):
         g = _build_graph()

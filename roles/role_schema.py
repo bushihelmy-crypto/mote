@@ -60,6 +60,14 @@ class RoleSchema(BaseModel):
     # --- Loop control ---
     max_react_loop: int = 50
     max_consecutive_react_limit: int = 10
+    # Which strategies the graph's per-turn factories build. Each is a key into a
+    # builder registry in RoleComponents: ``loop_kind`` selects the react-loop
+    # class ("react" -> the standard think→act ReActLoop) and ``think_kind`` the
+    # think engine ("default" -> ThinkEngine). Both are read by the factory at
+    # call-time (not at build-time), so a future tool can swap the strategy
+    # mid-session and the next turn's fresh instance honours the new choice.
+    loop_kind: str = "react"
+    think_kind: str = "default"
     # Auto-continue budget: max times a TurnEnd control subscriber may block the
     # "stop" to force another turn (CC Stop-hook semantics). 0 disables the seam
     # entirely — the run loop executes exactly once per call (the default).
@@ -80,7 +88,9 @@ class RoleSchema(BaseModel):
         "Sleep",
         "ResumeTasks",
         "GetNodeState",
-        "CodeReview"
+        "CodeReview",
+        "WebBrowser",
+        "Skill"
     ]
     mcps: list[str] = []
     agents: list[str] = []
@@ -151,6 +161,31 @@ class RoleSchema(BaseModel):
     # default False runs headless. A headed window is useful for watching the
     # agent browse or for sites that behave differently without a real display.
     browser_headless: bool = True
+    # When True, the persistent browser applies lightweight, opt-in anti-bot-
+    # detection on launch: a realistic desktop Chrome user-agent (replacing the
+    # "HeadlessChrome" default), en-US locale + Accept-Language, a fixed
+    # viewport/timezone, the ``--disable-blink-features=AutomationControlled``
+    # launch flag, and an init script hiding the ``navigator.webdriver`` signal.
+    # Default True (baseline hygiene: the headless default otherwise leaks a
+    # "HeadlessChrome" UA + ``navigator.webdriver=true``). Defeats only passive
+    # checks, not active challenges (CAPTCHA / Cloudflare) — set False to opt out.
+    browser_stealth: bool = True
+    # Which locale bundle the stealth fingerprint uses (only consulted when
+    # ``browser_stealth`` is on). Each bundle keeps locale + timezone +
+    # Accept-Language + navigator.languages mutually consistent; the region
+    # should match the exit IP (a zh-CN locale on a US IP is itself a bot tell).
+    #   "auto" (default) — infer zh vs en from the host's locale env vars, which
+    #     (absent a proxy) is the effective exit region.
+    #   "en" — en-US / America/New_York.  "zh" — zh-CN / Asia/Shanghai.
+    browser_locale: Literal["auto", "en", "zh"] = "auto"
+    # Optional upstream proxy for the persistent browser — a single URL string
+    # giving the whole session one exit IP: ``http://host:port``,
+    # ``http://user:pass@host:port``, or ``socks5://host:port`` (a bare
+    # ``host:port`` is treated as http). Empty (default) means a direct
+    # connection. Changing the exit IP is the highest-value anti-blocking lever
+    # (rate limits / CAPTCHAs key off IP reputation); keep the proxy's region
+    # consistent with ``browser_locale`` / timezone so the fingerprint agrees.
+    browser_proxy: str = ""
 
     # --- Memory / summary config ---
     enable_memory: bool = True

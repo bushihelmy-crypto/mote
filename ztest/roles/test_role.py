@@ -23,7 +23,6 @@ from .conftest import (
     FakeEnv,
     FakeLLM,
     FakeRouter,
-    FakeThinkEngine,
     _FakeThinkResult,
 )
 
@@ -65,17 +64,23 @@ class TestConstruction:
 
     def test_lazy_slots_start_none(self):
         r = Role(name="X")
-        for slot in (
-            "_think_engine",
-            "_executor",
-            "_skill_mgr",
-            "_bg_pool",
-            "_command_channel",
-            "_context_provider",
-            "_context_manager",
-            "_router",
+        graph = r._components._graph
+        for name in (
+            "think_engine_factory",
+            "think_subsystems_factory",
+            "loop_factory",
+            "executor",
+            "skill_manager",
+            "bg_pool",
+            "command_channel",
+            "context_provider",
+            "context_manager",
+            "router",
+            "state_ctl",
+            "capabilities",
+            "session_manager",
         ):
-            assert getattr(r._components, slot) is None
+            assert graph.is_built(name) is False
 
     def test_hash_is_identity(self):
         r = Role(name="X")
@@ -182,31 +187,46 @@ class TestProperties:
     def test_router_lazy_cached(self, role):
         first = role.router
         assert role.router is first  # cached
-        assert role._components._router is first
+        assert role._components._graph.peek("router") is first
 
 
 class TestTurnContextBus:
     def test_slot_starts_none(self):
-        assert Role(name="X")._components._turn_context_bus is None
+        assert Role(name="X")._components._graph.is_built("turn_context_bus") is False
 
     def test_lazy_built_and_cached(self, role):
         bus = role.turn_context_bus
         assert bus is not None
         assert role.turn_context_bus is bus  # cached
-        assert role._components._turn_context_bus is bus
+        assert role._components._graph.peek("turn_context_bus") is bus
 
     def test_wires_unconditional_sources(self, role):
         # No LSP config on the default fixture => the LSP feed is absent (the
         # DiagnosticsBuffer is the source, wired only when LSP is configured).
         # Background-task progress is NOT a turn-context source: it is delivered
         # via msg_buffer notifications, so no <task-attachment> feed here.
-        # The skill-activation feed is wired unconditionally (self-suppresses
-        # when skills are disabled or no touched file matches a conditional one).
-        # GitContextSource is short-circuited (cwd may be a repo root nesting
-        # another git repo, so its state would point at the wrong tree).
+        # The skill-activation and skill-listing feeds are wired unconditionally
+        # (self-suppress when skills are disabled or nothing matches).
+        # The changed-files feed is wired unconditionally too (self-suppresses
+        # when no tracked file changed on disk since it was last read).
+        # GitContextSource is wired unconditionally (self-suppresses off-repo;
+        # renders the nearest repo containing cwd).
+        # ToolCatalogContextSource is wired unconditionally (self-suppresses under
+        # native tool-use, where tools ride the API tools= param instead).
+        # CodeMapContextSource is wired unconditionally (self-suppresses with no
+        # touched files or nothing structural to say about them).
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
-        assert names == {"token", "compaction", "skill_activation"}
+        assert names == {
+            "tool_catalog",
+            "git",
+            "token",
+            "compaction",
+            "skill_activation",
+            "skill_listing",
+            "changed_files",
+            "code_map",
+        }
 
     def test_lsp_source_present_when_configured(self):
         from metagpt.common.schema import LspConfig, LspServerConfig
@@ -228,6 +248,164 @@ class TestTurnContextBus:
         priorities = [getattr(s, "priority", 0) for s in bus._sources]
         assert priorities == sorted(priorities)
 
+    def test_dual_role_sources_auto_subscribed_from_roster(self, role):
+        # The single roster drives both edges: every feed exposing ``handle``
+        # (a dual-role ObservationSubscriber) is auto-subscribed to the event
+        # bus; render-only feeds are not. This is the invariant that lets adding
+        # a feed touch exactly one list.
+        from metagpt.common.interface import ObservationSubscriber
+
+        roster = role._components.turn_context_sources
+        subscribers = _wired_subscribers(role)
+        for src in roster:
+            if isinstance(src, ObservationSubscriber):
+                assert src in subscribers, f"{src.name} (dual-role) not subscribed"
+            else:
+                assert src not in subscribers, f"{src.name} (render-only) subscribed"
+
+    def test_single_roster_shared_by_both_buses(self, role):
+        # The event-bus wiring and the turn-context bus must read the SAME
+        # roster instances (not two parallel builds), or a dual-role feed's
+        # armed state would be invisible to its renderer.
+        roster = role._components.turn_context_sources
+        assert role.turn_context_bus._sources and set(roster) == set(
+            role.turn_context_bus._sources
+        )
+
+    def test_last_render_reports_injection_manifest(self, role):
+        import asyncio
+
+        bus = role.turn_context_bus
+        asyncio.run(bus.collect_to_context(cwd=None))
+        # Every persisted source is accounted for in the manifest (True/False).
+        persisted = {s.name for s in bus._sources if getattr(s, "save_to_context", True)}
+        assert persisted <= set(bus.last_render)
+
+
+def _wired_subscribers(role) -> list:
+    """Wire the spine (as the run lifecycle does) then return the bus subscribers.
+
+    The ``event_bus`` getter is a pure leaf — an unwired spine by design — so a
+    test that inspects the roster must first perform the same explicit wiring step
+    the runtime performs in ``Role._ensure_ready``.
+    """
+    role._components._wire_spine()
+    return role.event_bus.subscribers
+
+
+class TestEventSubscriberRoster:
+    """The single declarative roster wires all subscribers (infra + dual-role)."""
+
+    def test_infra_observers_always_present(self, role):
+        # Recorder + logger are unconditional observers; both must be on the bus
+        # regardless of any opt-in layer.
+        from metagpt.common.events.log_subscriber import LogSubscriber
+        from metagpt.session.subscribers import RecorderSubscriber
+
+        subs = _wired_subscribers(role)
+        assert any(isinstance(s, RecorderSubscriber) for s in subs)
+        assert any(isinstance(s, LogSubscriber) for s in subs)
+
+    def test_optin_subscribers_absent_on_bare_role(self, role):
+        # No hook layer, no LSP, no tracing/reporter env => none of the opt-in
+        # subscribers are wired (the roster drops the ``None`` entries).
+        from metagpt.common.hook.subscriber import HookSubscriber
+        from metagpt.roles.lsp.service import LspService
+
+        subs = _wired_subscribers(role)
+        assert not any(isinstance(s, HookSubscriber) for s in subs)
+        assert not any(isinstance(s, LspService) for s in subs)
+
+    def test_hook_subscriber_wired_when_hook_layer_exists(self, role):
+        from metagpt.common.hook.subscriber import HookSubscriber
+
+        role.register_hook("Stop", lambda hook_input: None)
+        subs = _wired_subscribers(role)
+        assert any(isinstance(s, HookSubscriber) for s in subs)
+
+    def test_lsp_service_wired_and_gets_bus_backref(self):
+        # The LSP service is an observer that also *produces* DiagnosticsEvent:
+        # subscribing it must hand it the bus via ``on_subscribed`` (no host
+        # special-case), and it must land on the bus.
+        from metagpt.common.schema import LspConfig, LspServerConfig
+        from metagpt.roles.lsp.service import LspService
+        from metagpt.router.llm.context import Context
+
+        cfg = LspConfig(
+            enabled=True,
+            servers=[LspServerConfig(name="x", command=["x"], extensions=[".py"])],
+        )
+        r = Role(name="X", role_schema=RoleSchema(name="X", lsp=cfg), context=Context())
+        subs = _wired_subscribers(r)
+        lsp = next((s for s in subs if isinstance(s, LspService)), None)
+        assert lsp is not None
+        assert lsp.bus is r.event_bus
+
+    def test_event_bus_getter_is_a_pure_leaf(self, role):
+        # Reading ``event_bus`` constructs a bare spine with zero subscribers —
+        # wiring is a *separate* lifecycle step, never a getter side-effect. This
+        # is the property that keeps construction a pure DAG (no component read can
+        # transitively pull a wired bus, so no construction cycle can form).
+        bus = role.event_bus
+        assert bus.subscribers == []
+        assert role._components._spine_wired is False
+
+    def test_construction_order_independent(self):
+        # Reading ``context_manager`` first (it reads ``event_bus`` back during its
+        # own construction) must not double-build or deadlock: the build graph is a
+        # DAG (the leaf bus carries no subscribers), so access order is immaterial.
+        from metagpt.router.llm.context import Context
+
+        r = Role(name="Y", role_schema=RoleSchema(name="Y"), context=Context())
+        cm = r.context_manager  # trigger via the manager edge first
+        assert r.event_bus is r._components._graph.peek("event_bus")  # same leaf, reused
+        assert r.context_manager is cm  # same instance — not rebuilt
+
+    def test_wire_spine_is_idempotent(self, role):
+        # Wiring twice must not double-subscribe (the spine wires exactly once).
+        role._components._wire_spine()
+        before = list(role.event_bus.subscribers)
+        role._components._wire_spine()  # redundant call (e.g. a second _ensure_ready)
+        assert role.event_bus.subscribers == before
+
+    def test_context_manager_getter_does_not_wire_the_reducer(self, role):
+        # Reading ``context_manager`` is a pure build: it must NOT mutate the
+        # sibling router as a hidden side-effect. The reducer edge is a separate
+        # lifecycle step (``_wire_collaborators``), so the router stays clean
+        # until it runs.
+        _ = role.context_manager
+        assert role.router.context_reducer is None
+        assert role._components._collaborators_wired is False
+
+    def test_wire_collaborators_stamps_reducer(self, role):
+        # The explicit wiring step establishes the router ← ContextManager reducer
+        # edge (COMPRESS recovery) — the one runtime cross-reference between built
+        # collaborators.
+        role._components._wire_collaborators()
+        assert role.router.context_reducer is role.context_manager.recovery_reducer
+        assert role._components._collaborators_wired is True
+
+    def test_wire_collaborators_is_idempotent(self, role):
+        role._components._wire_collaborators()
+        first = role.router.context_reducer
+        role._components._wire_collaborators()  # redundant call
+        assert role.router.context_reducer is first
+
+    def test_summarize_llm_is_reducer_less(self, role):
+        # The safety invariant behind the no-runtime-guard design: the LLM the
+        # ContextManager's summarize reducer issues its inner aask() on MUST carry
+        # no COMPRESS reducer, or that inner overflow would recurse
+        # _compress → summarize → forever. It is the router's COMPRESSION-variant
+        # instance (route_for_task(COMPRESSION_TASK)); stamping the router's reducer
+        # afterwards must NOT leak onto it.
+        cm = role.context_manager
+        role._components._wire_collaborators()  # stamps router.context_reducer
+        summarize_llm = cm._summarize._llm
+        assert summarize_llm is cm._llm  # same instance summarize runs on
+        assert summarize_llm.context_reducer is None
+        # And it is genuinely distinct from a reducer-bearing think instance.
+        assert role.router.context_reducer is not None
+
 
 class TestRecordTurnContext:
     """_record_turn_context persists the bus's save_to_context bucket to history."""
@@ -245,7 +423,7 @@ class TestRecordTurnContext:
         import asyncio
 
         fake = self._FakeBus("<system-reminder>\ngit changed\n</system-reminder>")
-        role._components._turn_context_bus = fake
+        role._components._graph.seed("turn_context_bus", fake)
         before = role.context_manager.count()
         asyncio.run(role._record_turn_context())
         msgs = role.context_manager.get()
@@ -256,7 +434,7 @@ class TestRecordTurnContext:
     def test_empty_block_adds_nothing(self, role):
         import asyncio
 
-        role._components._turn_context_bus = self._FakeBus("")
+        role._components._graph.seed("turn_context_bus", self._FakeBus(""))
         before = role.context_manager.count()
         asyncio.run(role._record_turn_context())
         assert role.context_manager.count() == before
@@ -265,10 +443,48 @@ class TestRecordTurnContext:
         import asyncio
 
         fake = self._FakeBus("")
-        role._components._turn_context_bus = fake
+        role._components._graph.seed("turn_context_bus", fake)
         role.state.working_dir = "/some/dir"
         asyncio.run(role._record_turn_context())
         assert fake.seen_cwd == "/some/dir"
+
+
+# =============================================================================
+# Skills explicit per-role specification wiring
+# =============================================================================
+class TestSkillsWiring:
+    """A role that lists skills opts the subsystem in on its own — regardless
+    of the global master switch (``role_zero.skills.enabled``) — and loads
+    exactly the listed skills (load_by_names). The tests force the global
+    switch OFF to prove the per-role opt-in is what does the enabling."""
+
+    @staticmethod
+    def _role_with_global_off(context, **schema_kwargs):
+        r = Role(name="X", role_schema=RoleSchema(name="X", **schema_kwargs), context=context)
+        # Neutralise the ambient project config (config.yaml may enable skills
+        # globally) so the assertions isolate the per-role opt-in.
+        r.config.role_zero.skills.enabled = False
+        return r
+
+    def test_explicit_skills_enable_subsystem_with_global_off(self, context):
+        r = self._role_with_global_off(context, skills=["foo"])
+        mgr = r._components.skill_manager
+        assert mgr._enabled is True  # per-role opt-in
+        assert mgr._skills == ["foo"]  # narrows to an include filter
+
+    def test_no_skills_keeps_subsystem_disabled_by_default(self, context):
+        r = self._role_with_global_off(context, skills=[])
+        assert r._components.skill_manager._enabled is False
+
+    def test_executor_exposes_skill_tool_when_skills_listed(self, context):
+        # tools deliberately omits "Skill"; listing skills must still expose the
+        # bridge tool even with the global master switch off.
+        r = self._role_with_global_off(context, tools=["Read"], skills=["foo"])
+        assert "Skill" in r._components.executor._tools
+
+    def test_executor_omits_skill_tool_when_no_skills_and_global_off(self, context):
+        r = self._role_with_global_off(context, tools=["Read"], skills=[])
+        assert "Skill" not in r._components.executor._tools
 
 
 # =============================================================================
@@ -281,7 +497,7 @@ class TestTaskCompletionWake:
         # survive that ordering and land on the pool the builder creates.
         marker = object()
         role.set_task_completion_wake(marker)
-        assert role._components._bg_pool is None  # not built yet
+        assert role._components._graph.is_built("bg_pool") is False  # not built yet
         pool = role._components.bg_pool  # builds the pool
         assert pool is not None
         assert pool._wake is marker
@@ -293,30 +509,31 @@ class TestTaskCompletionWake:
         assert pool._wake is marker
 
     def test_pending_wake_slot_starts_none(self):
-        assert Role(name="X")._components._pending_task_completion_wake is None
+        assert Role(name="X")._components._state.pending_task_completion_wake is None
 
 
 # =============================================================================
 # Compaction-notice feed (dual-role: bus subscriber + turn_context source)
 # =============================================================================
 class TestCompactionNotice:
-    def test_slot_starts_none(self):
-        assert Role(name="X")._components._compaction_notice is None
+    def test_roster_slot_starts_none(self):
+        # No feed has a private slot anymore; the whole roster is built once.
+        assert Role(name="X")._components._graph.is_built("turn_context_sources") is False
 
-    def test_lazy_built_and_cached(self, role):
-        notice = role.compaction_notice
+    def test_lookup_by_name_and_cached(self, role):
+        notice = role.turn_context_source("compaction")
         assert notice is not None
-        assert role.compaction_notice is notice  # cached
+        assert role.turn_context_source("compaction") is notice  # cached roster
 
     def test_subscribed_to_event_bus(self, role):
-        assert role.compaction_notice in role.event_bus.subscribers
+        assert role.turn_context_source("compaction") in _wired_subscribers(role)
 
     def test_same_instance_in_both_buses(self, role):
         # The object subscribed to the event bus (input edge) must be the same
         # object rendered by the turn-context bus (output edge), else the armed
         # flag set by handle() would never be seen by render().
-        notice = role.compaction_notice
-        assert notice in role.event_bus.subscribers
+        notice = role.turn_context_source("compaction")
+        assert notice in _wired_subscribers(role)
         assert notice in role.turn_context_bus._sources
 
 
@@ -325,7 +542,7 @@ class TestCompactionNotice:
 # =============================================================================
 class TestFileWatchService:
     def test_slot_starts_none(self):
-        assert Role(name="X")._components._file_watch_service is None
+        assert Role(name="X")._components._graph.is_built("file_watch_service") is False
 
     def test_none_without_config(self, role):
         # No file_watch config => watcher disabled.
@@ -370,7 +587,7 @@ class TestFileWatchService:
     def test_cleanup_safe_when_watcher_never_built(self, role):
         # Nothing to stop — cleanup short-circuits without error.
         asyncio.run(role.cleanup())
-        assert role._components._file_watch_service is None
+        assert role._components._graph.is_built("file_watch_service") is False
 
 
 class TestFileWatchHotReload:
@@ -594,6 +811,7 @@ class TestCapabilities:
             "set_cwd",
             "deactivate",
             "ask_human",
+            "ask_user_question",
             "request_approval",
             "reply_to_human",
             "end_session",
@@ -609,10 +827,14 @@ class TestCapabilities:
             "record_browser_state",
             "take_pending_browser_restore",
             "get_browser_headless",
+            "get_browser_stealth",
+            "get_browser_locale",
+            "get_browser_proxy",
             "wait_interruptible",
             "get_bg_pool",
             "get_skill_pool",
             "run_skill_fork",
+            "register_resource",
             "get_sandbox_runtime",
         }
 
@@ -622,6 +844,64 @@ class TestCapabilities:
         assert caps["get_cwd"]() == r.get_cwd()
         # Bound methods compare equal (same instance + same function).
         assert caps["set_cwd"] == r.set_cwd
+
+
+# =============================================================================
+# Browser proxy resolution (role_schema override else global config.proxy)
+# =============================================================================
+class TestBrowserProxy:
+    @staticmethod
+    def _clear_proxy_env(monkeypatch):
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_falls_back_to_global_config_proxy(self, monkeypatch):
+        # No per-role browser_proxy -> read the global config.yaml `proxy`.
+        self._clear_proxy_env(monkeypatch)
+        r = Role(name="X")
+        r.config = types.SimpleNamespace(proxy="http://gw:8080")
+        assert r.get_browser_proxy() == "http://gw:8080"
+
+    def test_role_schema_overrides_global(self, monkeypatch):
+        self._clear_proxy_env(monkeypatch)
+        r = Role(name="X", role_schema=RoleSchema(name="X", browser_proxy="socks5://a:1"))
+        r.config = types.SimpleNamespace(proxy="http://gw:8080")
+        assert r.get_browser_proxy() == "socks5://a:1"
+
+    def test_falls_back_to_env_proxy(self, monkeypatch):
+        # Neither schema nor config set -> pick up the ambient HTTP(S)_PROXY.
+        self._clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("HTTPS_PROXY", "http://192.168.88.121:7890")
+        r = Role(name="X")
+        r.config = types.SimpleNamespace(proxy="")
+        assert r.get_browser_proxy() == "http://192.168.88.121:7890"
+
+    def test_empty_when_nothing_set(self, monkeypatch):
+        self._clear_proxy_env(monkeypatch)
+        r = Role(name="X")
+        r.config = types.SimpleNamespace(proxy="")
+        assert r.get_browser_proxy() == ""
+
+
+# =============================================================================
+# Browser locale resolution (role_schema override else global config.browser_locale)
+# =============================================================================
+class TestBrowserLocale:
+    def test_falls_back_to_global_config_locale(self):
+        # role_schema "auto" -> read the global config.yaml `browser_locale`.
+        r = Role(name="X")
+        r.config = types.SimpleNamespace(browser_locale="zh")
+        assert r.get_browser_locale() == "zh"
+
+    def test_role_schema_overrides_global(self):
+        r = Role(name="X", role_schema=RoleSchema(name="X", browser_locale="en"))
+        r.config = types.SimpleNamespace(browser_locale="zh")
+        assert r.get_browser_locale() == "en"
+
+    def test_auto_when_neither_set(self):
+        r = Role(name="X")
+        r.config = types.SimpleNamespace(browser_locale="auto")
+        assert r.get_browser_locale() == "auto"
 
     def test_active_signal_default_false(self):
         assert Role(name="X")._is_active() is False
@@ -771,8 +1051,9 @@ class TestEndSession:
     def test_no_summary_returns_empty(self):
         r = Role(name="X")
         r.role_schema.use_summary = False
-        r._components._context_manager = FakeContextManager()
-        r._components._think_engine = FakeThinkEngine()
+        r._components._graph.seed("context_manager", FakeContextManager())
+        # end_session reads this turn's result off state (published by the loop),
+        # not the think engine; the default is an empty ThinkResult.
         r._set_active(True)
         out = asyncio.run(r.end_session())
         assert out == ""
@@ -782,15 +1063,17 @@ class TestEndSession:
     def test_summary_uses_summary_task_llm(self):
         r = Role(name="X")
         r.role_schema.use_summary = True
-        r._components._context_manager = FakeContextManager()
-        r._components._think_engine = FakeThinkEngine(_FakeThinkResult(content="found bug", is_empty=False))
+        r._components._graph.seed("context_manager", FakeContextManager())
+        # The loop publishes the turn's result to state; end_session reads it here.
+        r.state.last_think_result = _FakeThinkResult(content="found bug", is_empty=False)
         fake_llm = FakeLLM(reply="THE SUMMARY")
-        r._components._router = FakeRouter(llm=fake_llm)
+        fake_router = FakeRouter(llm=fake_llm)
+        r._components._graph.seed("router", fake_router)
         out = asyncio.run(r.end_session())
         assert out == "THE SUMMARY"
         assert r.state.last_end_output == "THE SUMMARY"
         # summary peripherally routed via the dedicated SUMMARY task
-        assert "summary" in r._components._router.task_calls
+        assert "summary" in fake_router.task_calls
         assert fake_llm.aask_calls  # the summary llm was actually asked
 
 
@@ -801,7 +1084,7 @@ class TestGetMemories:
     def test_delegates_to_context_manager(self):
         r = Role(name="X")
         msgs = [Message(content="a"), Message(content="b")]
-        r._components._context_manager = FakeContextManager(msgs)
+        r._components._graph.seed("context_manager", FakeContextManager(msgs))
         assert r.get_memories() == msgs
         assert r.get_memories(k=1) == msgs[-1:]
 
@@ -884,3 +1167,74 @@ class TestAutoContinue:
 
     def test_schema_default_is_zero(self):
         assert RoleSchema().max_auto_continue == 0
+
+
+# =============================================================================
+# Full-resolution smoke test — the CI backstop for the ComponentGraph
+# =============================================================================
+class TestFullResolutionSmoke:
+    """Force every opt-in layer on, then resolve the *whole* graph.
+
+    The engine only makes construction *cycles* structurally detectable; two soft
+    gaps remain by design: (a) a ``ctx.dep("typo")`` is validated lazily — it only
+    raises ``UnknownComponentError`` when that line actually resolves, so a typo
+    buried in an opt-in branch (hook / lsp / sandbox / file-watch) lurks until the
+    layer is enabled at deploy time; (b) a cycle that only forms across two opt-in
+    branches never fires on a bare Role. This test closes both by building a Role
+    with every ``available`` predicate flipped true and then resolving *every*
+    registered spec — so a dep-name typo (``UnknownComponentError``) or a
+    cross-branch construction cycle (``ComponentCycleError``) fails in CI instead
+    of only at a customer's fully-configured deploy.
+    """
+
+    @staticmethod
+    def _fully_configured_role(context):
+        """A Role whose schema flips every opt-in ``available`` gate true."""
+        from metagpt.common.schema import (
+            FileWatchConfig,
+            HookConfig,
+            LspConfig,
+            LspServerConfig,
+            PermissionConfig,
+            SandboxRuntimeConfig,
+        )
+
+        schema = RoleSchema(
+            name="FullyLoaded",
+            # hook layer: a declared HookConfig makes _hook_available true.
+            hooks=HookConfig(),
+            # LSP layer: enabled + >=1 server makes _lsp_available true (the
+            # server is never spawned here — construction is lazy).
+            lsp=LspConfig(
+                enabled=True,
+                servers=[LspServerConfig(name="fake", command=["true"], extensions=[".py"])],
+            ),
+            # OS-level sandbox: permissions.runtime enabled makes
+            # _sandbox_available true (build_runtime is side-effect-free).
+            permissions=PermissionConfig(runtime=SandboxRuntimeConfig(enabled=True)),
+            # file-watch: enabled + the hook layer above (its FileChanged
+            # consumer) makes _build_file_watch_service return a real service.
+            file_watch=FileWatchConfig(enabled=True),
+        )
+        return Role(role_schema=schema, context=context)
+
+    def test_every_spec_resolves_without_error(self, context):
+        # The core assertion: resolving each registered component exercises its
+        # whole builder body, so a dep-name typo or a cross-branch cycle surfaces
+        # here (as UnknownComponentError / ComponentCycleError) rather than at a
+        # fully-configured deploy.
+        role = self._fully_configured_role(context)
+        graph = role._components._graph
+        for name in list(graph._specs):
+            graph.get(name)  # must not raise
+
+    def test_all_optin_layers_actually_built(self, context):
+        # Guards against the test silently passing because a gate stayed off (a
+        # None slot would skip the builder body we mean to exercise). With every
+        # layer forced on, each opt-in component must resolve to a real object.
+        role = self._fully_configured_role(context)
+        graph = role._components._graph
+        for name in list(graph._specs):
+            graph.get(name)
+        for name in ("hook_manager", "lsp_service", "diagnostics_buffer", "sandbox_runtime", "file_watch_service"):
+            assert graph.peek(name) is not None, f"opt-in layer {name!r} was not built"

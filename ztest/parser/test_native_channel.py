@@ -43,10 +43,23 @@ class TestContract:
         assert "# Using commands" in guide
         assert "<end>" not in guide
 
+    def test_command_guide_has_no_task_final_output(self):
+        # The final-delivery contract moved out of the command guide into the
+        # protocol-agnostic, compaction-gated TASK_FINAL_OUTPUT_SECTION. The
+        # command guide is now only command-protocol mechanics.
+        guide = NativeToolChannel().prompt_vars()["command_guide"]
+        assert "Task Final Output" not in guide
+
     def test_prompt_vars_covers_required_keys(self):
         from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
 
         assert set(NativeToolChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
+
+    def test_prompt_vars_tool_usage_guide_is_empty(self):
+        # Native tools reach the model via the API ``tools=`` param, so the
+        # system prompt needs no catalog orientation (mirrors wants_tool_catalog
+        # False). ${tool_usage_guide} is filled empty, not a literal placeholder.
+        assert NativeToolChannel().prompt_vars()["tool_usage_guide"] == ""
 
     def test_react_result_is_plain_outputs(self):
         # Native finishes via a plain-text reply (_finish), so the published

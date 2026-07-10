@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.events import PostCompactEvent, TurnEndEvent
+from metagpt.common.events import PostCompactEvent, SessionStartEvent, TurnEndEvent
 from metagpt.common.interface import EphemeralContextSource, ObservationSubscriber
 from metagpt.context.turn_context import (
     CompactionNoticeContextSource,
@@ -32,93 +32,111 @@ class TestProtocolConformance:
         # Dual-role: it consumes the bus event AND renders the turn-context block.
         assert isinstance(CompactionNoticeContextSource(), ObservationSubscriber)
 
+    def test_git_source_is_also_event_subscriber(self):
+        # Dual-role: it freezes the snapshot off bus events AND renders it.
+        assert isinstance(GitContextSource(), ObservationSubscriber)
+
 
 # --------------------------------------------------------------------------
-# Git
+# Git — point-in-time snapshot, armed at session-start / post-compaction.
 # --------------------------------------------------------------------------
+def _stub_git(monkeypatch, *, state, section=" - Git branch: main"):
+    """Stub collect_git_state -> *state* and render_git_section -> *section*."""
+    import metagpt.context.turn_context.sources.git as gitmod
+
+    async def fake_collect(cwd):
+        return state
+
+    monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
+    if section is not None:
+        monkeypatch.setattr(gitmod, "render_git_section", lambda s: section)
+
+
+def _session_start(cwd="/x"):
+    return SessionStartEvent(working_dir=cwd)
+
+
 class TestGitContextSource:
-    def test_none_state_returns_none(self, monkeypatch):
-        import metagpt.context.turn_context.sources.git as gitmod
+    def test_priority_and_name(self):
+        s = GitContextSource()
+        assert s.name == "git" and s.priority == 10
 
-        async def fake_collect(cwd):
-            return None
-
-        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
+    def test_silent_until_armed(self, monkeypatch):
+        # No capture event yet -> nothing to render (not a per-turn live feed).
+        _stub_git(monkeypatch, state=object())
         assert run(GitContextSource().render(cwd="/x")) is None
 
-    def test_renders_section_when_state_present(self, monkeypatch):
+    def test_session_start_freezes_and_renders_once(self, monkeypatch):
+        _stub_git(monkeypatch, state=object())
+        src = GitContextSource()
+        run(src.handle(_session_start("/repo")))
+        out = run(src.render(cwd="/x"))
+        assert out is not None and out.startswith(" - Git branch: main")
+        # Snapshot footer makes the point-in-time contract explicit.
+        assert "snapshot" in out.lower()
+        # Disarms — a second cycle with no new event is silent.
+        assert run(src.render(cwd="/x")) is None
+
+    def test_post_compact_recaptures_via_cwd_provider(self, monkeypatch):
+        _stub_git(monkeypatch, state=object())
+        src = GitContextSource(get_cwd=lambda: "/live")
+        run(src.handle(PostCompactEvent(summary="x")))
+        assert run(src.render(cwd="/x")) is not None
+        assert run(src.render(cwd="/x")) is None  # disarmed
+
+    def test_none_snapshot_is_faithful_and_disarms(self, monkeypatch):
+        # off-repo at capture time -> None is a legitimate snapshot; render nothing
+        # but still disarm (no retry, no live tracking).
+        _stub_git(monkeypatch, state=None)
+        src = GitContextSource()
+        run(src.handle(_session_start("/x")))
+        assert run(src.render(cwd="/x")) is None
+        # Not retried on the next cycle either.
+        assert run(src.render(cwd="/x")) is None
+
+    def test_empty_section_collapses_to_none(self, monkeypatch):
+        _stub_git(monkeypatch, state=object(), section="")
+        src = GitContextSource()
+        run(src.handle(_session_start("/x")))
+        assert run(src.render(cwd="/x")) is None
+
+    def test_recapture_between_renders_shows_latest(self, monkeypatch):
         import metagpt.context.turn_context.sources.git as gitmod
 
-        async def fake_collect(cwd):
-            return object()  # truthy sentinel
-
-        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
-        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
-        assert run(GitContextSource().render(cwd="/x")) == " - Git branch: main"
-
-    def test_empty_render_collapses_to_none(self, monkeypatch):
-        import metagpt.context.turn_context.sources.git as gitmod
+        sections = iter([" - Git branch: main", " - Git branch: feature"])
 
         async def fake_collect(cwd):
             return object()
 
         monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
-        monkeypatch.setattr(gitmod, "render_git_section", lambda s: "")
-        assert run(GitContextSource().render(cwd="/x")) is None
+        monkeypatch.setattr(gitmod, "render_git_section", lambda s: next(sections))
 
-    def test_priority_and_name(self):
-        s = GitContextSource()
-        assert s.name == "git" and s.priority == 10
+        src = GitContextSource(get_cwd=lambda: "/repo")
+        run(src.handle(_session_start("/repo")))
+        first = run(src.render(cwd="/x"))
+        assert first.startswith(" - Git branch: main")
+        # A compaction re-freezes the snapshot -> next render shows the new one.
+        run(src.handle(PostCompactEvent(summary="x")))
+        second = run(src.render(cwd="/x"))
+        assert second.startswith(" - Git branch: feature")
 
-    def test_unchanged_state_is_silent_after_first_render(self, monkeypatch):
-        import metagpt.context.turn_context.sources.git as gitmod
-
-        state = object()  # stable identity so `==` holds across renders
-
-        async def fake_collect(cwd):
-            return state
-
-        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
-        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
-
-        src = GitContextSource()
-        assert run(src.render(cwd="/x")) == " - Git branch: main"
-        # Same state on the next cycle -> nothing to report.
+    def test_no_cwd_provider_post_compact_is_silent(self, monkeypatch):
+        # PostCompact with no get_cwd provider -> capture(None) -> nothing.
+        _stub_git(monkeypatch, state=object())
+        src = GitContextSource()  # no get_cwd
+        run(src.handle(PostCompactEvent(summary="x")))
         assert run(src.render(cwd="/x")) is None
 
-    def test_changed_state_renders_again(self, monkeypatch):
+    def test_capture_failure_is_swallowed(self, monkeypatch):
         import metagpt.context.turn_context.sources.git as gitmod
 
-        states = [object(), object()]  # two distinct snapshots
+        async def boom(cwd):
+            raise RuntimeError("git blew up")
 
-        async def fake_collect(cwd):
-            return states.pop(0)
-
-        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
-        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
-
+        monkeypatch.setattr(gitmod, "collect_git_state", boom)
         src = GitContextSource()
-        assert run(src.render(cwd="/x")) == " - Git branch: main"
-        # A different snapshot re-renders.
-        assert run(src.render(cwd="/x")) == " - Git branch: main"
-
-    def test_leaving_repo_resets_and_re_renders(self, monkeypatch):
-        import metagpt.context.turn_context.sources.git as gitmod
-
-        state = object()
-        seq = [state, None, state]  # in repo -> out -> back in (same state)
-
-        async def fake_collect(cwd):
-            return seq.pop(0)
-
-        monkeypatch.setattr(gitmod, "collect_git_state", fake_collect)
-        monkeypatch.setattr(gitmod, "render_git_section", lambda s: " - Git branch: main")
-
-        src = GitContextSource()
-        assert run(src.render(cwd="/x")) == " - Git branch: main"
-        assert run(src.render(cwd="/x")) is None  # left the repo
-        # Re-entering re-renders even though the state object is the same.
-        assert run(src.render(cwd="/x")) == " - Git branch: main"
+        run(src.handle(_session_start("/repo")))  # must not raise
+        assert run(src.render(cwd="/x")) is None
 
 
 # --------------------------------------------------------------------------

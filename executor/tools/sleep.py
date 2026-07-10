@@ -18,14 +18,18 @@ from metagpt.executor.base_tool import BaseTool
 from metagpt.executor.tool_registry import register_tool
 from metagpt.common.utils.report import ArtifactsReporter
 
+# Long default (10 min) is fine: the sleep is interruptible, so the agent wakes
+# the instant a task completes — no need to guess a duration.
+_DEFAULT_SLEEP_SECONDS: float = 600.0
+
 
 @register_tool
 class Sleep(BaseTool):
     """Wait for a specified duration. The user can interrupt the sleep at any time.
 
-    Use this when you have nothing to do, or when you're waiting for something.
-    If a background task has not yet completed, use this tool to wait for its
-    completion notification.
+    Use this when you have nothing to do, or when you're waiting for a background
+    task — you wake the moment it completes or a message arrives. Duration is
+    optional (defaults to 10 min); prefer this over polling a task's state.
 
     CRITICAL: This tool MUST be called alone in a single response. Do NOT output
     any other command together with Sleep. Only output the Sleep command and
@@ -43,21 +47,18 @@ class Sleep(BaseTool):
     # Injected from Role by bind(): Role.wait_interruptible.
     wait_interruptible: Callable[[float], Awaitable[tuple[float, bool]]]
 
-    async def call(self, *, duration_seconds: float) -> str:
-        """Wait for a specified duration. Can be interrupted by new messages at any time.
+    async def call(self, *, duration_seconds: float = _DEFAULT_SLEEP_SECONDS) -> str:
+        """Wait for a duration, interruptible by new messages/task completion.
 
-        **CRITICAL**: This tool MUST be called alone — do NOT combine it with any
-        other command in the same response. Output ONLY the Sleep command.
+        **CRITICAL**: Call this tool ALONE — do not combine it with any other
+        command in the same response.
 
-        **Recommended duration**: 300 seconds per call. If you need to wait
-        longer, call Sleep again after waking up.
-
-        **Importance**: Generally avoid invoking this tool unless you have
-        verified no pending work remains and you have no alternative but to wait
-        for background asynchronous tasks to finish.
+        Only wait when no pending work remains. Duration is optional (defaults to
+        10 min); you wake early on any activity, so just call Sleep with no
+        arguments to wait for a background task.
 
         Args:
-            duration_seconds (float): How long to sleep in seconds. Recommended: 300.
+            duration_seconds (float): Seconds to sleep. Optional; defaults to 600.
         """
         async with ArtifactsReporter() as reporter:
             await reporter.async_report(

@@ -36,7 +36,9 @@ Review focus (in priority order):
 5. Readability / maintainability (only if material).
 
 Only comment on the CHANGED (added) lines and their immediate context. Do not
-nitpick style that a linter would catch.
+nitpick style that a linter would catch. Do not suggest defensive checks for
+inputs that cannot actually occur given how the code is called (investigate the
+call sites with your tools before flagging a missing guard).
 
 When you are done investigating, end your turn with ONLY a JSON array of
 comments (no prose around it), each shaped:
@@ -146,9 +148,11 @@ async def review_one_file(
 ) -> List[Finding]:
     """Run a child Role to review *file_diff* and return resolved findings.
 
-    Best-effort and self-contained: any failure (role error, unparseable output)
-    is logged and yields an empty findings list so one bad file never sinks the
-    batch. The child Role is always cleaned up.
+    Unparseable / empty output yields an empty findings list. Run failures are
+    NOT swallowed here — per-file isolation lives in the batch node's
+    ``_safe_review`` (so one bad file never sinks the batch) while structural
+    wiring bugs still surface. The child Role is always cleaned up by the spawn
+    handle.
     """
     role = _build_review_role(repo_dir, parent_session_id)
     diff_text = _render_file_diff(file_diff)

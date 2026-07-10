@@ -64,7 +64,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 
 - 系统提示词以 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` 分隔：**边界上方是静态可缓存前缀，绝不能放 `$placeholder` 或易变内容**。
 - 易变 / per-turn 内容（MEMORY.md、git/token/压缩通知/bg/lsp 提醒）**注入 user prompt 的 `<system-reminder>`**，经 `context/turn_context/` 的 bus。新增一类 per-turn 上下文 = 写一个实现 `EphemeralContextSource` 的源（带 `name`/`priority`/`async render`），挂到 bus，**不要**塞进系统提示词或存储历史。
-- 压缩在 `ContextManager.manage_history()`：先 `microcompact`（无 LLM 折叠旧工具结果）再 `autocompact`（LLM 摘要）。`COMPACTABLE_TOOLS` 列表决定哪些工具结果可折叠。带熔断防失败循环。
+- 压缩在 `ContextManager.manage_history()`：先 `microcompact`（无 LLM 折叠旧工具结果）再 `autocompact`（LLM 摘要）。哪些工具结果可折叠由工具自声明的 `reconstructable` ClassVar 决定（Role 从 live executor 派生注入）。带熔断防失败循环。
 
 ---
 
@@ -78,7 +78,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 
 ## 7. 事件与日志
 
-- 跨子系统通信走 `common/events/` 的 `EventBus`：control 事件（PreToolUse/UserPromptSubmit/PreCompact…）可折叠 `HookOutcome` 影响宿主；observation 事件 fire-and-forget。深层调用点用 `emit_event`/`emit_event_sync`（无 bus 时 no-op），不必手动穿线。
+- 跨子系统通信走 `common/events/` 的**两平面** `EventBus`：控制订阅者（暴露 `handle_control`，按 `handles` 路由）可折叠 typed `ControlOutcome` 影响宿主（PreToolUse/UserPromptSubmit/PreCompact…）；观察者 fire-and-forget，返回值被丢弃。深层调用点用 `observe_event`/`observe_event_sync` 发**观察**事件（无 bus 时 no-op，结构上带不了控制），不必手动穿线。
 - **不要手写 inline `logger.*`**。给关键类加 `@log_class(level="DEBUG", exclude={热路径/平凡 accessor})` 自动埋点。
 - 热路径方法（如 ContextManager 的 `get/add/...`）放进 `exclude`，否则日志会被刷爆。
 - `bind_trace(session_id)` 已在 `Role.run()` 接好，新代码无需重复绑定。

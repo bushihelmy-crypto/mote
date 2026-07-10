@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from metagpt.common.schema.messages import UserMessage
 from metagpt.common.schema.queue import MessageQueue
 from metagpt.environment.agent_path import AgentPath
@@ -248,13 +249,16 @@ def test_format_completion_notification():
 # ---------------------------------------------------------------------------
 
 
-class _CaptureSub:
+class _CaptureSub(ObservationSubscriber, SyncObserver):
     """A sync subscriber that records agent-lifecycle events off the runtime bus."""
 
     priority = 50
 
     def __init__(self):
         self.events = []
+
+    async def handle(self, event) -> None:
+        return None
 
     def handle_sync(self, event) -> None:
         from metagpt.common.events import AgentLifecycleEvent

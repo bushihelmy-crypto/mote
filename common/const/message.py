@@ -21,5 +21,33 @@ PDFS = "pdfs"
 TOOL_CALLS = "tool_calls"
 TOOL_CALL_ID = "tool_call_id"
 
+# Resource-projection metadata keys (carried in Message.metadata).
+# A "resource" is a dynamically-loaded capability body (e.g. a Skill body) that
+# must survive history compaction. These keys are the TRUTH that outlives replay:
+# Message.load reconstructs via the base Message.from_dict (cls(**m)), so the
+# ResourceMessage subclass identity is lost, but metadata is preserved. Every
+# consumer (compaction skip, post-compact re-projection, resume rebuild) keys off
+# these, never off isinstance(msg, ResourceMessage).
+# RESOURCE_ID: stable id of the loaded resource (e.g. the skill name).
+# RESOURCE_KIND: resource category ("skill", ...), for future multi-kind support.
+# RESOURCE_STICKY: True => re-project this body after compaction / never fold it.
+RESOURCE_ID = "resource_id"
+RESOURCE_KIND = "resource_kind"
+RESOURCE_STICKY = "resource_sticky"
+
+# Result-lifecycle retention (carried in Message.metadata on a tool-result message).
+# This is the model-facing counterpart to the tool author's static ``reconstructable``
+# ClassVar: a per-result hint about how compaction should treat *this specific*
+# tool_result. The channel only carries the string; the compaction layer is the
+# sole interpreter. Unknown / absent values fall back to default behavior.
+#   RETENTION_ERASABLE — this result may be dropped early even if its tool is not
+#     statically reconstructable (the model has read it and no longer needs it).
+#   RETENTION_PIN       — never fold, never drop this result during compaction.
+#   RETENTION_DEFAULT   — no hint; behave as today (drop iff reconstructable).
+RETENTION = "retention"
+RETENTION_ERASABLE = "erasable"
+RETENTION_PIN = "pin"
+RETENTION_DEFAULT = "default"
+
 # Message id
 IGNORED_MESSAGE_ID = "0"

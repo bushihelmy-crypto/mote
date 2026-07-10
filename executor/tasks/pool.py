@@ -505,7 +505,14 @@ class BackgroundTaskPool:
             reset_progress_writer(token)
 
     @staticmethod
-    def _build_xml(task_id: str, command_name: str, status: str, summary: str, result: Optional[str] = None) -> str:
+    def _build_xml(
+        task_id: str,
+        command_name: str,
+        status: str,
+        summary: str,
+        result: Optional[str] = None,
+        output_path: Optional[str] = None,
+    ) -> str:
         """Build a ``<task-notification>`` XML envelope aligned with Claude Code."""
         lines = [
             "<task-notification>",
@@ -516,6 +523,11 @@ class BackgroundTaskPool:
         ]
         if result is not None:
             lines.append(f"<result>{_escape_xml(result)}</result>")
+        # Surface the disk output path so the model can Read the full log on
+        # demand (the inline <result> is truncated). Aligned with Claude Code's
+        # "prefer Read on the task output file path" direction.
+        if output_path is not None:
+            lines.append(f"<output-path>{_escape_xml(output_path)}</output-path>")
         lines.append("</task-notification>")
         return "\n".join(lines)
 
@@ -652,11 +664,25 @@ class BackgroundTaskPool:
                             meta.run_state = raw.run_state
                 else:
                     status = BgStatus.SUCCESS
-                    result_str = str(raw) if raw is not None else "(no output)"
-                    if len(result_str) > _MAX_RESULT_LEN:
-                        result_str = result_str[:_MAX_RESULT_LEN] + "...(truncated)"
-                    result = result_str
+                    # Deliver the full result in the notification (no truncation):
+                    # a truncated result forced the model to poll GetNodeState to
+                    # piece the output back together. Handing it the whole result
+                    # up front lets it act in one shot.
+                    result = str(raw) if raw is not None else "(no output)"
                     summary = f"{command_name} completed successfully."
+                    # Snapshot the final graph state on success too (not only on
+                    # failure/timeout/pause) so GetNodeState can inspect the
+                    # produced fields — findings / report / etc. — after the fact.
+                    # The notification result is truncated; the snapshot is the
+                    # authoritative place to recover a full produced value from.
+                    meta = self._meta.get(task_id)
+                    if meta is not None and meta.graph_meta is not None:
+                        gm = meta.graph_meta
+                        if gm.run_state is not None:
+                            meta.run_state = gm.run_state
+                            meta.completed_nodes = gm.run_state.completed_names()
+                        if gm.state is not None:
+                            meta.state_snapshot = gm.state
 
         # Update task metadata.
         meta = self._meta.get(task_id)
@@ -667,7 +693,8 @@ class BackgroundTaskPool:
             meta.error = error_dict
             meta.notified = True
 
-        body = self._build_xml(task_id, command_name, status, summary, result=result)
+        output_path = meta.output_path if meta is not None else None
+        body = self._build_xml(task_id, command_name, status, summary, result=result, output_path=output_path)
 
         # Build the structured notification. This is always a whole-task
         # terminal (``_on_done`` fires exactly once, when the task ends).

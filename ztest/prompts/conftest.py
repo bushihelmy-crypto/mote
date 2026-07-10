@@ -42,15 +42,24 @@ class FakeExecutor:
 
 
 class FakeInjector:
-    """Skill injector — build_content() returns canned skills text."""
+    """Skill injector — build_content/build_index return canned text; build_guide
+    returns the static loading guide (what the system prompt now uses)."""
 
-    def __init__(self, content: str = "SKILLS_TEXT"):
+    def __init__(self, content: str = "SKILLS_TEXT", guide: str = "SKILL_GUIDE"):
         self.content = content
+        self.guide = guide
         self.max_tokens_seen = None
 
     def build_content(self, max_tokens=None):
         self.max_tokens_seen = max_tokens
         return self.content
+
+    def build_index(self, max_tokens=None, only_names=None):
+        self.max_tokens_seen = max_tokens
+        return self.content
+
+    def build_guide(self):
+        return self.guide
 
 
 class FakeSkillManager:
@@ -62,14 +71,12 @@ def make_role_zero(
     *,
     ai_capability_models=("model-a", "model-b"),
     enable_compressable_memory=False,
-    compress_type="compaction",
     protected_recent_messages=8,
     max_skill_tokens=2000,
 ):
     return SimpleNamespace(
         ai_capability_models=list(ai_capability_models),
         enable_compressable_memory=enable_compressable_memory,
-        compress_type=compress_type,
         protected_recent_messages=protected_recent_messages,
         max_skill_tokens=max_skill_tokens,
     )

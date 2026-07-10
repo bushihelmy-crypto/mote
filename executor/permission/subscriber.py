@@ -33,12 +33,12 @@ from typing import Optional
 
 from metagpt.common.events.outcomes import ToolCallOutcome
 from metagpt.common.events.types import PRE_TOOL_USE, PreToolUseEvent
-from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage
+from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
 from metagpt.common.schema.permission_types import PermissionDecision
 from metagpt.executor.permission.engine import PermissionEngine
 
 
-class PermissionSubscriber:
+class PermissionSubscriber(ControlSubscriber):
     """Routes :class:`PreToolUseEvent`\\s through the :class:`PermissionEngine`."""
 
     #: Only tool-call events reach this subscriber (bus routing key).
@@ -93,9 +93,22 @@ class PermissionSubscriber:
         ``deny``/``allow`` reach here. A deny carries its message so the executor
         surfaces the reason; an allow carries any argument narrowing the engine
         applied (``updated_args``) so it threads on through the fold.
+
+        Two flavours of deny are distinguished by the decision's ``reason.type``:
+        a genuine **user** rejection at the approval prompt (``"user"``) sets
+        ``stop`` — the human said "no", so the react loop should end rather than
+        let the model replan around it. Every other deny (rule / mode / policy /
+        sandbox / fail-closed) is a recoverable block: it fails this one call but
+        the loop keeps going so the model can choose a different action.
         """
         if decision.behavior == "deny":
-            return ToolCallOutcome(behavior="deny", system_message=decision.message)
+            stop = decision.reason.type == "user"
+            return ToolCallOutcome(
+                behavior="deny",
+                system_message=decision.message,
+                stop=stop,
+                stop_reason=decision.message if stop else "",
+            )
         return ToolCallOutcome(behavior="allow", updated_args=decision.updated_args)
 
     @staticmethod

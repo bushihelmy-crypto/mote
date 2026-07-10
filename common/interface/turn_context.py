@@ -16,7 +16,42 @@ Leaf module: imports only ``typing``.
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Optional, Protocol, runtime_checkable
+
+
+class TurnContextPriority(IntEnum):
+    """Render order of ephemeral context sources — a *named* contract.
+
+    Sources render their blocks in ascending order of this value, and the
+    ``TurnContextBus`` concatenates the survivors into one ``<system-reminder>``.
+    The order is a **relevance gradient**, not a hard dependency: it decides only
+    where each block sits within the reminder envelope, so a mis-ordered source
+    can at most read slightly out of sequence, never break a turn. Named anyway so
+    a new source picks a tier *with meaning* (a freshness warning is more urgent
+    than a skill hint) instead of guessing a non-clashing integer.
+
+    The gradient runs from *what the model should orient on first* (the tool
+    catalogue, the repo state) through *live pressures and just-happened events*
+    down to *ambient hints* (available skills):
+    """
+
+    TOOL_CATALOG = 5  # the available-commands catalogue — leads the reminder
+    GIT = 10  # working-tree branch / status / recent commits
+    TOKEN = 20  # context-budget pressure note (only when near the limit)
+    COMPACTION = 25  # a just-happened compaction's summary (one-shot)
+    CHANGED_FILES = 27  # files edited on disk since the agent last read them
+    CODE_MAP = 28  # local structure map of the touched files (defines / imports / used-by)
+    BACKGROUND_TASKS = 30  # background-task progress deltas
+    DIAGNOSTICS = 40  # LSP diagnostics accumulated since last turn
+    SKILL_LISTING = 45  # the catalogue of activatable skills
+    SKILL_ACTIVATION = 50  # a hint that a skill matches the current prompt
+
+
+#: Default render order for a source that does not declare one. Late (``SKILL_
+#: ACTIVATION``) so an undeclared source trails the curated feeds rather than
+#: pre-empting them.
+DEFAULT_TURN_CONTEXT_PRIORITY = TurnContextPriority.SKILL_ACTIVATION
 
 
 @runtime_checkable
@@ -25,8 +60,9 @@ class EphemeralContextSource(Protocol):
 
     Each source renders a self-contained text block that the bus wraps (with the
     others) into a single ``<system-reminder>``. ``name`` is a stable key
-    (logging / dedupe); ``priority`` orders the blocks within the envelope
-    (lower first).
+    (logging / dedupe); ``priority`` is a :class:`TurnContextPriority` tier
+    ordering the blocks within the envelope (lower first), read via
+    ``getattr(s, "priority", DEFAULT_TURN_CONTEXT_PRIORITY)``.
 
     ``save_to_context`` routes the source into one of the bus's two disjoint
     buckets:
@@ -54,4 +90,8 @@ class EphemeralContextSource(Protocol):
         ...
 
 
-__all__ = ["EphemeralContextSource"]
+__all__ = [
+    "EphemeralContextSource",
+    "TurnContextPriority",
+    "DEFAULT_TURN_CONTEXT_PRIORITY",
+]

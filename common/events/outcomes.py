@@ -21,8 +21,15 @@ protocol the bus drives generically:
   the change (with ``by`` = the rewriting subscriber's name, stamped by the bus)
   as provenance on the event. Only the two rewriting events (``PreToolUse`` args,
   ``PostToolUse`` output) do anything; the rest return the event unchanged — the
-  identity default lives on :class:`_ControlOutcomeBase`, so a new non-rewriting
-  outcome is inert for free.
+  identity default lives on :class:`~metagpt.common.interface.event_subscriber.ControlOutcome`,
+  so a new non-rewriting outcome is inert for free.
+
+Each outcome is a nominal subclass of
+:class:`~metagpt.common.interface.event_subscriber.ControlOutcome` (an ABC): a
+new outcome that forgets ``is_blocking``/``merge`` cannot be instantiated. The
+two rewriting outcomes assert the target is a nominal :class:`Rewritable` before
+rewriting, so a rewrite aimed at a non-rewritable event fails loud (contained by
+the bus's per-subscriber ``fail_mode``) instead of being silently dropped.
 
 Adding a new *control* event = add one outcome type here (with these three
 methods) + a subscriber declaring ``handles``/``stage``. The bus loop and every
@@ -30,7 +37,8 @@ existing subscriber are untouched — buckets are keyed by event name, so there 
 no global list to reorder and no shared struct to widen.
 
 Leaf module: imports only ``dataclasses``/``typing`` + the pure-data
-``PermissionBehavior`` Literal. It never imports the bus, hook, or any tool.
+``PermissionBehavior`` Literal + the ``ControlOutcome`` ABC and ``Rewritable``
+leaf. It never imports the bus, hook, or any tool.
 """
 
 from __future__ import annotations
@@ -38,6 +46,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from metagpt.common.events.rewrite import Rewritable
+from metagpt.common.interface.event_subscriber import ControlOutcome
 from metagpt.common.schema.permission_types import PermissionBehavior
 
 # allow/deny/ask precedence — deny beats ask beats allow beats nothing.
@@ -54,29 +64,13 @@ def _pick_last(a: Optional[str], b: Optional[str]) -> Optional[str]:
     return b if b else a
 
 
-class _ControlOutcomeBase:
-    """Shared default for the rebind axis: an outcome rewrites nothing.
-
-    ``rebind`` is identity by default — the common case (a deny, a stop, a
-    context injection mutates no event field). Only the two rewriting outcomes
-    (:class:`ToolCallOutcome`, :class:`ToolResultOutcome`) override it, so
-    "rewriting is the exception" is expressed structurally and a new outcome is
-    inert — and correct — for free. ``is_blocking``/``merge`` stay per-event:
-    they are genuinely different and intentionally not shared (no god-struct).
-    """
-
-    def rebind(self, event, *, by: str = ""):
-        """Return ``event`` unchanged — this outcome rewrote no field."""
-        return event
-
-
 # ---------------------------------------------------------------------------
 # PreToolUse — "run this tool call?"  (bucket: HookSubscriber, PermissionGate)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class ToolCallOutcome(_ControlOutcomeBase):
+class ToolCallOutcome(ControlOutcome):
     """A tool call may be denied, or have its args rewritten, before it runs.
 
     The one two-subscriber bucket: the hook (rewrite/veto) then the permission
@@ -106,12 +100,16 @@ class ToolCallOutcome(_ControlOutcomeBase):
     def rebind(self, event, *, by: str = ""):
         """Thread rewritten args forward, recording the rewrite on the event.
 
-        Delegates to the event's generic :meth:`~metagpt.common.events.types.Rewritable.rewrite`
+        Delegates to the event's generic :meth:`~metagpt.common.events.rewrite.Rewritable.rewrite`
         so the before-image and ``by`` attribution are captured with the mutation.
+        A rewrite aimed at a non-:class:`Rewritable` event fails loud (contained by
+        the bus's per-subscriber ``fail_mode``) rather than being silently dropped.
         """
-        if self.updated_args is not None and hasattr(event, "rewrite"):
-            return event.rewrite("tool_input", self.updated_args, by=by)
-        return event
+        if self.updated_args is None:
+            return event
+        if not isinstance(event, Rewritable):
+            raise TypeError(f"{type(event).__name__} is not Rewritable")
+        return event.rewrite("tool_input", self.updated_args, by=by)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +118,7 @@ class ToolCallOutcome(_ControlOutcomeBase):
 
 
 @dataclass
-class ToolResultOutcome(_ControlOutcomeBase):
+class ToolResultOutcome(ControlOutcome):
     """A finished tool's result may be rewritten, annotated, or marked blocked.
 
     ``updated_response`` replaces the output text (truncate/redact);
@@ -152,12 +150,16 @@ class ToolResultOutcome(_ControlOutcomeBase):
     def rebind(self, event, *, by: str = ""):
         """Thread the rewritten output forward, recording the rewrite on the event.
 
-        Delegates to the event's generic :meth:`~metagpt.common.events.types.Rewritable.rewrite`
+        Delegates to the event's generic :meth:`~metagpt.common.events.rewrite.Rewritable.rewrite`
         so the before-image and ``by`` attribution are captured with the mutation.
+        A rewrite aimed at a non-:class:`Rewritable` event fails loud (contained by
+        the bus's per-subscriber ``fail_mode``) rather than being silently dropped.
         """
-        if self.updated_response is not None and hasattr(event, "rewrite"):
-            return event.rewrite("tool_response", self.updated_response, by=by)
-        return event
+        if self.updated_response is None:
+            return event
+        if not isinstance(event, Rewritable):
+            raise TypeError(f"{type(event).__name__} is not Rewritable")
+        return event.rewrite("tool_response", self.updated_response, by=by)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +168,7 @@ class ToolResultOutcome(_ControlOutcomeBase):
 
 
 @dataclass
-class PromptOutcome(_ControlOutcomeBase):
+class PromptOutcome(ControlOutcome):
     """Context to prepend to the user prompt, or a stop that aborts the turn."""
 
     additional_context: list[str] = field(default_factory=list)
@@ -191,7 +193,7 @@ class PromptOutcome(_ControlOutcomeBase):
 
 
 @dataclass
-class CompactOutcome(_ControlOutcomeBase):
+class CompactOutcome(ControlOutcome):
     """Cancel the management pass, or supply custom compaction instructions."""
 
     cancel: bool = False
@@ -214,7 +216,7 @@ class CompactOutcome(_ControlOutcomeBase):
 
 
 @dataclass
-class SpawnOutcome(_ControlOutcomeBase):
+class SpawnOutcome(ControlOutcome):
     """Deny a child spawn (depth/quota/policy). ``reason`` surfaces to the caller."""
 
     denied: bool = False
@@ -237,7 +239,7 @@ class SpawnOutcome(_ControlOutcomeBase):
 
 
 @dataclass
-class TurnOutcome(_ControlOutcomeBase):
+class TurnOutcome(ControlOutcome):
     """A Stop-hook decision: ``block`` the turn end (auto-continue) + why."""
 
     block: bool = False

@@ -111,7 +111,6 @@ class SkillPool:
             skill = SkillDefinition(
                 name=meta.get("name", skill_dir.name),
                 description=meta.get("description", ""),
-                always_apply=meta.get("alwaysApply", False),
                 globs=meta.get("globs", []),
                 instructions=doc.content,
                 source_path=skill_md,

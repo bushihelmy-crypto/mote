@@ -136,7 +136,7 @@ class TestJoinSections:
 # --------------------------------------------------------------------------
 class TestBuildSystemPrompt:
     def test_substitutes_and_strips_boundary(self):
-        ctx = ThinkContext(role_info="ROLE", tool_info="[]", mcp_info="[]")
+        ctx = ThinkContext(role_info="ROLE")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
         assert "ROLE" in sys_p
         # boundary marker removed
@@ -187,11 +187,18 @@ class TestBuildTuple:
 # --------------------------------------------------------------------------
 class TestSubstitutionMaps:
     def test_system_substitutions_keys(self):
-        ctx = ThinkContext(role_info="r", tool_info="t", mcp_info="m")
+        # The volatile catalog placeholders (available_commands / mcp_tools /
+        # pipeline_tools) are gone — the catalog rides the per-turn reminder now.
+        # The static protocol sections come from ctx.prompt_vars (command_guide /
+        # tool_usage_guide), merged in via **ctx.prompt_vars.
+        ctx = ThinkContext(
+            role_info="r",
+            prompt_vars={"command_guide": "CG", "tool_usage_guide": "TUG"},
+        )
         d = PromptBuilder._system_substitutions(ctx)
         assert d["role_info"] == "# Basic Info\nr"
-        assert d["available_commands"] == "# Available Commands\nt"
-        assert d["mcp_tools"] == "# MCP Tools\nm"
+        assert d["command_guide"] == "CG"
+        assert d["tool_usage_guide"] == "TUG"
 
     def test_user_substitutions_keys(self):
         ctx = ThinkContext(working_dir="/here")
@@ -294,20 +301,15 @@ class TestMakeCompactionSections:
         cfg = make_config(enable_compressable_memory=False)
         assert PromptBuilder._make_compaction_sections(cfg) == ("", "")
 
-    def test_inactive_when_wrong_compress_type(self):
-        cfg = make_config(enable_compressable_memory=True, compress_type="post_cut_by_token")
-        assert PromptBuilder._make_compaction_sections(cfg) == ("", "")
-
-    def test_active_emits_both_sections(self):
+    def test_active_emits_all_sections(self):
         cfg = make_config(
             enable_compressable_memory=True,
-            compress_type="compaction",
             protected_recent_messages=5,
         )
-        frc, summarize = PromptBuilder._make_compaction_sections(cfg)
+        frc, final_output = PromptBuilder._make_compaction_sections(cfg)
         assert "5" in frc  # keep_recent substituted
         assert "${keep_recent}" not in frc
-        assert summarize == R.SUMMARIZE_TOOL_RESULTS_SECTION
+        assert final_output == R.TASK_FINAL_OUTPUT_SECTION
 
 
 class TestMakeEnvSection:
@@ -321,17 +323,18 @@ class TestMakeEnvSection:
         assert "Project directory: /w" in out
 
 
-class TestMakeSkillsInfo:
-    def test_no_injector_returns_empty(self):
-        cfg = make_config()
-        assert PromptBuilder._make_skills_info(FakeSkillManager(injector=None), cfg) == ""
+class TestMakeSkillsGuide:
+    """The system prompt now carries only the static Skill Loading Guide; the
+    volatile index migrated to the per-turn SkillListingContextSource
+    (see ztest/turn_context/test_skill_listing)."""
 
-    def test_with_injector_builds_content(self):
-        inj = FakeInjector(content="SKILLS")
-        cfg = make_config(max_skill_tokens=1234)
-        out = PromptBuilder._make_skills_info(FakeSkillManager(injector=inj), cfg)
-        assert out == "SKILLS"
-        assert inj.max_tokens_seen == 1234
+    def test_no_injector_returns_empty(self):
+        assert PromptBuilder._make_skills_guide(FakeSkillManager(injector=None)) == ""
+
+    def test_with_injector_returns_guide(self):
+        inj = FakeInjector(guide="SKILL_GUIDE")
+        out = PromptBuilder._make_skills_guide(FakeSkillManager(injector=inj))
+        assert out == "SKILL_GUIDE"
 
 
 # --------------------------------------------------------------------------
@@ -354,21 +357,9 @@ class TestCollectContext:
         # collect_context loads role_info from the role's desc verbatim.
         assert ctx.role_info == "I am Bob the engineer"
 
-    def test_tool_info_is_json(self):
-        executor = FakeExecutor(tools=[{"name": "Read"}], mcp_tools=[{"name": "srv:x"}])
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(executor=executor)))
-        assert ctx.tool_info == '[{"name": "Read"}]'
-        assert ctx.mcp_info == '[{"name": "srv:x"}]'
-
-    def test_pipeline_info_is_json_when_present(self):
-        executor = FakeExecutor(pipeline_tools=[{"name": "Pipe"}])
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(executor=executor)))
-        assert ctx.pipeline_info == '[{"name": "Pipe"}]'
-
-    def test_pipeline_info_empty_when_absent(self):
-        # No pipeline tools -> empty string so "# Pipeline Tools" renders nothing.
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
-        assert ctx.pipeline_info == ""
+    # The volatile tool catalog is no longer built into the system prompt /
+    # ThinkContext — it rides the per-turn ToolCatalogContextSource (XML) or the
+    # API ``tools=`` param (native). See ztest/turn_context/test_tool_catalog.py.
 
     def test_memory_populated_when_dir_set(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("idx-line", encoding="utf-8")
@@ -412,10 +403,10 @@ class TestCollectContext:
         assert ctx.reminders == ""
 
     def test_compaction_sections_active(self):
-        cfg = make_config(enable_compressable_memory=True, compress_type="compaction")
+        cfg = make_config(enable_compressable_memory=True)
         ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(config=cfg)))
         assert ctx.frc
-        assert ctx.summarize_tool_results
+        assert ctx.task_final_output
 
     def test_end_to_end_build_from_collected_context(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("mem-idx", encoding="utf-8")

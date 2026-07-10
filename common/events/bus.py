@@ -60,13 +60,13 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 
 from metagpt.common.interface.event_subscriber import (
-    DEFAULT_STAGE,
     DURABLE,
     FAIL_CLOSED,
-    FAIL_OPEN,
+    BusAware,
     ControlOutcome,
     ControlSubscriber,
     ObservationSubscriber,
+    SyncObserver,
 )
 from metagpt.common.logs import logger
 
@@ -87,26 +87,6 @@ def _insert_by(subs: list, sub, key) -> None:
             idx = i
             break
     subs.insert(idx, sub)
-
-
-def _stage_of(sub) -> int:
-    """The subscriber's intra-bucket ordering stage (default: gate — judge last)."""
-    return int(getattr(sub, "stage", DEFAULT_STAGE))
-
-
-def _priority_of(sub) -> int:
-    """An observer's fan-out ordering priority (default 0)."""
-    return getattr(sub, "priority", 0)
-
-
-def _name_of(sub) -> str:
-    """The subscriber's provenance label, stamped onto any rewrite it produces.
-
-    Falls back to the class name so a subscriber that never rewrites need not
-    declare ``name``; a rewriting subscriber declares a stable label (like
-    ``handles``/``stage``) so provenance survives a rename of the class.
-    """
-    return getattr(sub, "name", type(sub).__name__)
 
 
 class EventBus:
@@ -132,38 +112,40 @@ class EventBus:
     # -- registration -------------------------------------------------------
 
     def subscribe(self, sub) -> None:
-        """Register ``sub`` on the plane it implements.
+        """Register ``sub`` on the plane it *declares* by inheritance.
 
-        A subscriber exposing ``handle_control`` joins the control plane: it must
-        declare a non-empty ``handles`` tuple of event names, and is filed into
-        each named bucket ordered by ``ControlStage``. A fail-closed control
-        subscriber must additionally expose ``on_failure`` so the bus can
-        synthesize the correct typed deny if it crashes. Every other subscriber is
-        an observer, filed into one fan-out list ordered by ``priority``.
+        A :class:`ControlSubscriber` joins the control plane, filed into each
+        named bucket it ``handles`` ordered by ``ControlStage`` (its non-empty
+        ``handles`` and, for a fail-closed gate, its ``on_failure`` are already
+        enforced at class-definition time by ``__init_subclass__``). An
+        :class:`ObservationSubscriber` is filed into one fan-out list ordered by
+        ``priority``. Anything that is neither raises ``TypeError`` — a subscriber
+        must declare its plane.
+
+        A subscriber that is also a *producer* (it emits back onto the bus)
+        inherits :class:`BusAware`, whose ``on_subscribed(bus)`` lifecycle hook is
+        invoked once on registration, handing it its own bus handle. This
+        generalizes the observer-that-also-emits pattern (e.g. the LSP service
+        consumes FileMutated and re-emits Diagnostics) so the host need not
+        special-case a back-reference, keeping the bus a leaf (it never imports
+        the producer).
         """
-        if hasattr(sub, "handle_control"):
-            self._register_control(sub)
+        if isinstance(sub, ControlSubscriber):
+            for name in sub.handles:
+                _insert_by(self._control[name], sub, lambda s: s.stage)
+        elif isinstance(sub, ObservationSubscriber):
+            _insert_by(self._observers, sub, lambda s: s.priority)
         else:
-            _insert_by(self._observers, sub, _priority_of)
-
-    def _register_control(self, sub) -> None:
-        handles = getattr(sub, "handles", None)
-        if not handles:
-            raise ValueError(
-                f"control subscriber {type(sub).__name__} must declare a non-empty "
-                "`handles` tuple of event names"
+            raise TypeError(
+                f"{type(sub).__name__} is neither a ControlSubscriber nor an "
+                "ObservationSubscriber; a subscriber must declare its plane by inheritance"
             )
-        if getattr(sub, "fail_mode", FAIL_OPEN) == FAIL_CLOSED and not hasattr(sub, "on_failure"):
-            raise ValueError(
-                f"fail-closed control subscriber {type(sub).__name__} must expose "
-                "`on_failure(reason)` so the bus can synthesize its typed deny"
-            )
-        for name in handles:
-            _insert_by(self._control[name], sub, _stage_of)
+        if isinstance(sub, BusAware):
+            sub.on_subscribed(self)
 
     def unsubscribe(self, sub) -> None:
         """Remove ``sub`` from whichever plane holds it (safe no-op otherwise)."""
-        if hasattr(sub, "handle_control"):
+        if isinstance(sub, ControlSubscriber):
             for bucket in self._control.values():
                 try:
                     bucket.remove(sub)
@@ -221,11 +203,10 @@ class EventBus:
         capturing a file snapshot before writing). Never raises, never folds.
         """
         for sub in self._observers:
-            handler = getattr(sub, "handle_sync", None)
-            if handler is None:
+            if not isinstance(sub, SyncObserver):
                 continue
             try:
-                handler(event)
+                sub.handle_sync(event)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     f"EventBus: observer {type(sub).__name__} raised (sync) on "
@@ -253,22 +234,35 @@ class EventBus:
         for sub in self._control.get(event.name, ()):
             try:
                 out = await asyncio.wait_for(sub.handle_control(current), self._control_timeout)
+                if out is None:
+                    continue
+                # A subscriber must return the event's bound outcome type — a
+                # wrong type is a contract violation, not a silent no-op. This
+                # runs *inside* the try so it is routed through fail_mode like
+                # any handler crash (HA: a malformed outcome cannot crash the turn).
+                if not isinstance(out, event.outcome_type):
+                    raise TypeError(
+                        f"{type(sub).__name__} returned {type(out).__name__} for "
+                        f"{event.name}, expected {event.outcome_type.__name__}"
+                    )
+                # Compute every outcome operation *before* committing anything, so
+                # a bad merge / non-Rewritable rebind is contained (not a partial
+                # commit that could double-merge). ``by`` = the subscriber's name
+                # (its stable label, else the class name) — the single point that
+                # knows both the subscriber and the outcome it just produced.
+                folded = out if acc is None else acc.merge(out)
+                rebound = out.rebind(current, by=(sub.name or type(sub).__name__))
+                blocking = out.is_blocking
             except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
                 out = self._on_control_failure(sub, current, exc)
                 if out is None:
                     continue  # fail-open: dropped, chain continues
                 acc = out if acc is None else acc.merge(out)
                 break  # fail-closed: folded a deny, short-circuit
-            if out is None:
-                continue
-            acc = out if acc is None else acc.merge(out)
-            # Thread this subscriber's rewrite forward to the next one, stamping
-            # *who* rewrote it — this is the single point that knows both the
-            # subscriber and the outcome it just produced, so provenance can never
-            # be forgotten by a subscriber.
-            current = out.rebind(current, by=_name_of(sub))
+            # Atomic commit: only after all outcome ops succeeded.
+            acc, current = folded, rebound
             # A deny/stop is final — no later subscriber can un-block it.
-            if out.is_blocking:
+            if blocking:
                 break
         return acc, current
 
@@ -282,7 +276,7 @@ class EventBus:
         timed_out = isinstance(exc, asyncio.TimeoutError)
         what = f"timed out (>{self._control_timeout}s)" if timed_out else f"raised: {exc}"
         name = getattr(event, "name", "?")
-        if getattr(sub, "fail_mode", FAIL_OPEN) == FAIL_CLOSED:
+        if sub.fail_mode == FAIL_CLOSED:
             logger.error(
                 f"EventBus: control gate {type(sub).__name__} {what} on {name}; "
                 "failing closed (deny)"
@@ -301,7 +295,7 @@ class EventBus:
     async def _dispatch_observers(self, event) -> None:
         """Phase 2: fan out to observers, isolated and graded by delivery policy."""
         for sub in self._observers:
-            policy = getattr(sub, "delivery", None) or "mirror"
+            policy = sub.delivery
             try:
                 if policy == DURABLE:
                     await sub.handle(event)  # must complete; not time-boxed

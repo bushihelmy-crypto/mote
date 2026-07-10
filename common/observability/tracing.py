@@ -36,6 +36,7 @@ from metagpt.common.events.types import (
     SpanEndEvent,
     SpanStartEvent,
 )
+from metagpt.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority
 from metagpt.common.logs import logger
 
 
@@ -90,12 +91,12 @@ class TracerBackend(Protocol):
         ...
 
 
-class TracingSubscriber:
+class TracingSubscriber(ObservationSubscriber):
     """Rebuilds the trace tree from explicit IDs and drives a :class:`TracerBackend`."""
 
-    #: After the recorder (80) — purely cosmetic since it folds nothing; an
+    #: After the recorder (PERSIST) — purely cosmetic since it folds nothing; an
     #: external mirror reads cleanly as "trace what finally happened".
-    priority: int = 85
+    priority: int = ObserverPriority.TRACE
 
     def __init__(self, backend: TracerBackend, *, trace_steps: bool = False):
         self._backend = backend

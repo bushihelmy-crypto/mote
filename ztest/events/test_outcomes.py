@@ -14,12 +14,13 @@ before-image and the rewriting subscriber's ``by`` attribution as provenance.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from metagpt.common.events import (
     CompactOutcome,
     PromptOutcome,
     Rewrite,
+    Rewritable,
     SpawnOutcome,
     ToolCallOutcome,
     ToolResultOutcome,
@@ -28,26 +29,18 @@ from metagpt.common.events import (
 from metagpt.common.interface.event_subscriber import ControlOutcome
 
 
-# Minimal Rewritable-shaped event stubs: a rewrite records the before-image and
-# ``by`` attribution on ``rewrites``, exactly like the real events.
+# Minimal Rewritable event stubs: inherit the nominal :class:`Rewritable` mixin
+# (so ``rebind``'s ``isinstance(event, Rewritable)`` guard passes) and get its
+# generic ``rewrite`` — which records the before-image and ``by`` attribution on
+# ``rewrites``, exactly like the real events.
 @dataclass
-class _ArgsEvent:
-    tool_input: dict
-    rewrites: tuple = ()
-
-    def rewrite(self, field_name, after, *, by=""):
-        record = Rewrite(field=field_name, before=getattr(self, field_name), after=after, by=by)
-        return replace(self, **{field_name: after}, rewrites=(*self.rewrites, record))
+class _ArgsEvent(Rewritable):
+    tool_input: dict = None
 
 
 @dataclass
-class _RespEvent:
-    tool_response: str
-    rewrites: tuple = ()
-
-    def rewrite(self, field_name, after, *, by=""):
-        record = Rewrite(field=field_name, before=getattr(self, field_name), after=after, by=by)
-        return replace(self, **{field_name: after}, rewrites=(*self.rewrites, record))
+class _RespEvent(Rewritable):
+    tool_response: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -202,3 +195,45 @@ def test_non_rewriting_outcomes_rebind_returns_event_unchanged():
     sentinel = object()
     for out in (PromptOutcome(), CompactOutcome(), SpawnOutcome(), TurnOutcome()):
         assert out.rebind(sentinel, by="anyone") is sentinel
+
+
+# ---------------------------------------------------------------------------
+# Nominal contract enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_outcome_missing_is_blocking_and_merge_cannot_instantiate():
+    """An outcome subclass that forgets the abstract ``is_blocking``/``merge``
+    is abstract — caught at construction, not at the bus fold site."""
+    import pytest
+
+    class Incomplete(ControlOutcome):
+        pass
+
+    with pytest.raises(TypeError):
+        Incomplete()
+
+
+def test_rebind_on_non_rewritable_event_raises_when_updated_args_set():
+    """When an outcome carries a rewrite but the target event is not
+    :class:`Rewritable`, ``rebind`` fails loud rather than silently dropping the
+    rewrite (the old ``hasattr`` sniff)."""
+    import pytest
+
+    class NotRewritable:
+        tool_input = {"cmd": "x"}
+
+    out = ToolCallOutcome(updated_args={"cmd": "safe"})
+    with pytest.raises(TypeError, match="Rewritable"):
+        out.rebind(NotRewritable(), by="hook")
+
+
+def test_rebind_on_non_rewritable_event_inert_when_no_rewrite():
+    """No rewrite carried → ``rebind`` returns the event untouched even for a
+    non-Rewritable event (the guard only fires when a rewrite is present)."""
+
+    class NotRewritable:
+        tool_input = {"cmd": "x"}
+
+    ev = NotRewritable()
+    assert ToolCallOutcome().rebind(ev, by="hook") is ev

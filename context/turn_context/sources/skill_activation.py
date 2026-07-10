@@ -20,6 +20,8 @@ import fnmatch
 import os
 from typing import Callable, Optional
 
+from metagpt.common.interface import TurnContextPriority
+
 
 class SkillActivationContextSource:
     """Emits index rows for conditional skills whose paths match touched files."""
@@ -27,7 +29,7 @@ class SkillActivationContextSource:
     name = "skill_activation"
     # After git/token/compaction/bg/lsp — conditional skills are a low-urgency
     # hint, so they ride at the tail of the reminder.
-    priority = 50
+    priority = TurnContextPriority.SKILL_ACTIVATION
     save_to_context = True
 
     def __init__(
