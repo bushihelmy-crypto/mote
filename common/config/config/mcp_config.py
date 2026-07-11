@@ -1,9 +1,8 @@
 from enum import Enum
 from typing import Optional
 
-from pydantic import Field, model_validator
-
 from mote.common.utils.yaml_model import YamlModel
+from pydantic import Field, model_validator
 
 
 class MCPTransportType(str, Enum):

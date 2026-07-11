@@ -16,9 +16,6 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import Static
-from textual.worker import WorkerState
-
 from mote.cli.consumers.textual.app import MoteApp, ViewEventMessage
 from mote.cli.consumers.textual.widgets import (
     AssistantBlock,
@@ -42,6 +39,8 @@ from mote.cli.contracts.view import (
     ToolCallCompleted,
     ToolCallStarted,
 )
+from textual.widgets import Static
+from textual.worker import WorkerState
 
 
 class _FakePort:
@@ -280,9 +279,8 @@ async def test_submit_expands_multiline_paste_placeholder():
     placeholder, but ``on_input_submitted`` expands it via ``consume_value`` so the
     turn carries the real multi-line content.
     """
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     app = MoteApp()
     port = _FakePort(waiting=True)
@@ -415,7 +413,6 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
     so repeated copies looked doubled ("每行复制重复2次"); a native replace can't.
     """
     import textual.app as _ta
-
     from mote.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
@@ -440,7 +437,6 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
 async def test_non_wsl_copy_uses_osc52():
     """Off WSL (or over SSH) the portable OSC 52 base path is used."""
     import textual.app as _ta
-
     from mote.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
@@ -466,7 +462,6 @@ async def test_non_wsl_copy_uses_osc52():
 async def test_wsl_copy_falls_back_to_osc52_when_native_fails():
     """If the native write can't run (no ``powershell.exe``), OSC 52 still copies."""
     import textual.app as _ta
-
     from mote.cli.consumers.textual import app as _appmod
 
     app = MoteApp()

@@ -24,7 +24,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from mote.common.schema import ToolResultLimitConfig
 from mote.executor.base_tool import BaseTool
 from mote.executor.tasks.types import BgTaskResult

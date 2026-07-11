@@ -20,12 +20,11 @@ import pytest
 
 pytest.importorskip("rich")
 
+from mote.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
+from mote.cli.consumers.render.palette import Palette
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
-
-from mote.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
-from mote.cli.consumers.render.palette import Palette
 
 # ``Palette.BRAND`` (#d77757) emitted as a truecolor foreground SGR.
 _BRAND_SGR = "38;2;215;119;87"

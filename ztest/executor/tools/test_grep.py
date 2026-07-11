@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mote.executor.tool_result import ToolError
 from mote.executor.tools.grep import Grep, _apply_head_limit, _find_ripgrep, _split_glob
 
@@ -238,3 +237,27 @@ class TestGrepCwdResolution:
         role = CapRole(cwd=str(sub))
         out = run(bind(Grep(), role).call(pattern="NEEDLE", path="nested"))
         assert "deep.py" in out
+
+
+class TestGrepGlimpse:
+    """P2: Grep records matched .py files as code-map glimpse hints."""
+
+    def test_records_matched_py_files(self, tree):
+        role = CapRole()
+        tool = bind(Grep(), role)
+        run(tool.call(pattern="ERROR"))  # matches a.py (py) and c.txt (text)
+        assert any(p.endswith("a.py") for p in role.glimpsed)
+        assert not any(p.endswith("c.txt") for p in role.glimpsed)  # non-.py skipped
+        assert all(os.path.isabs(p) for p in role.glimpsed)
+
+    def test_records_across_output_modes(self, tree):
+        role = CapRole()
+        tool = bind(Grep(), role)
+        run(tool.call(pattern="foo", output_mode="content"))
+        assert any(p.endswith("a.py") for p in role.glimpsed)
+        assert any(p.endswith("b.py") for p in role.glimpsed)
+
+    def test_unbound_grep_does_not_raise(self, tree):
+        # No Role bound -> record_file_glimpsed absent -> the glimpse pass no-ops.
+        out = _grep(pattern="ERROR")
+        assert "a.py" in out

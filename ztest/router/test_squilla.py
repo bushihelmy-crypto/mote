@@ -13,7 +13,6 @@ model-free helpers: ``score_to_probs``, the route index/class converters,
 from __future__ import annotations
 
 import pytest
-
 from mote.router.control import build_control_targets
 from mote.router.schema import RoutingRequest
 from mote.router.squilla import (

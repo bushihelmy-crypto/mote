@@ -18,6 +18,7 @@ from __future__ import annotations
 from mote.common.schema import ContextManagerConfig, TokenState
 from mote.context import budget, prompt
 from mote.context.manager import ContextManager
+from mote.context.visibility import ContextVisibility
 
 __all__ = [
     "prompt",
@@ -25,4 +26,5 @@ __all__ = [
     "TokenState",
     "ContextManagerConfig",
     "ContextManager",
+    "ContextVisibility",
 ]

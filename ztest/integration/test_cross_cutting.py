@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mote.common.schema import PermissionConfig
 
 pytestmark = pytest.mark.asyncio

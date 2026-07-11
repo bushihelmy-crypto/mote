@@ -20,7 +20,6 @@ import asyncio
 from typing import Optional
 
 import pytest
-
 from mote.common.events import (
     POST_TOOL_USE,
     PRE_TOOL_USE,

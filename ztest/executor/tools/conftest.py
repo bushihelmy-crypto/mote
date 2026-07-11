@@ -5,7 +5,7 @@
 Everything stays fully offline and deterministic — no LLM, no network, no MCP.
 The real tools only ever touch:
 
-- the local filesystem (Read/Write/Edit/NotebookEdit/Grep/Glob/Bash), which we
+- the local filesystem (Read/Write/Edit/Grep/Glob/Bash), which we
   point at a per-test ``tmp_path`` workspace and ``chdir`` into so relative
   paths and ``os.getcwd()`` are predictable;
 - a handful of narrow Role capabilities (cwd accessors, the shared file-read
@@ -28,7 +28,6 @@ import os
 from typing import Any, Callable, Optional
 
 import pytest
-
 from mote.executor.base_tool import BaseTool
 
 # ---------------------------------------------------------------------------
@@ -53,10 +52,18 @@ class CapRole:
         end_output: str = "session ended",
         wait_result: Optional[tuple[float, bool]] = None,
         sandbox_runtime: Any = None,
+        resource_visible: Any = True,
     ) -> None:
         self._cwd = cwd or os.getcwd()
         # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
         self.read_state: dict[str, int] = {}
+        # Files glimpsed via a Grep/Glob match (P2) — recorded, un-read; feeds
+        # the code map's navigation view. Insertion order preserved.
+        self.glimpsed: list[str] = []
+        # ContextVisibility stand-in: what is_resource_visible(path) returns.
+        # A bool applies to every path; a callable(path)->bool lets a test script
+        # per-file answers (e.g. mark one file's prior read as folded away).
+        self.resource_visible = resource_visible
         # Per-Role live sessions for stateful tools (terminal/kernel), keyed by
         # tool name. Mirrors RoleState._tool_sessions — owned by this fake Role,
         # so each test's tools are isolated (no process-global leakage).
@@ -109,14 +116,26 @@ class CapRole:
     def set_cwd(self, path: str) -> None:
         self._cwd = path
 
-    # --- shared file-read state (Read records, Write/Edit/NotebookEdit enforce) ---
+    # --- shared file-read state (Read records, Write/Edit enforce) ---
     def record_file_read(self, path: str, mtime_ns: int) -> None:
         self.read_state[path] = mtime_ns
 
     def get_file_read_mtime(self, path: str) -> Optional[int]:
         return self.read_state.get(path)
 
-    # --- file-history snapshot (Write/Edit/NotebookEdit capture before-images) ---
+    # --- glimpse state (Grep/Glob record matched files for the code map) ---
+    def record_file_glimpsed(self, path: str) -> None:
+        if path not in self.glimpsed:
+            self.glimpsed.append(path)
+
+    # --- context visibility (Read consults before returning a dedup stub) ---
+    def is_resource_visible(self, path: str) -> bool:
+        vis = self.resource_visible
+        if callable(vis):
+            return bool(vis(path))
+        return bool(vis)
+
+    # --- file-history snapshot (Write/Edit capture before-images) ---
     def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
         self.snapshots.append((full_path, tool))
 
@@ -214,6 +233,8 @@ class CapRole:
             "set_cwd": self.set_cwd,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
+            "record_file_glimpsed": self.record_file_glimpsed,
+            "is_resource_visible": self.is_resource_visible,
             "record_file_snapshot": self.record_file_snapshot,
             "record_terminal_state": self.record_terminal_state,
             "take_pending_terminal_restore": self.take_pending_terminal_restore,

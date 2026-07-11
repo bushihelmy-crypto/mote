@@ -5,7 +5,6 @@
 import types
 
 import pytest
-
 from mote.common.schema.queue import MessageQueue
 from mote.environment.agent_path import AgentPath
 from mote.environment.handle import ChildAgentHandle

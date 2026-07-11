@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mote.common.schema.messages import UserMessage
 from mote.environment.mote.mote_env import MoteEnv
 

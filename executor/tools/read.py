@@ -26,7 +26,11 @@ Differences from Claude Code's tool, by design:
 - Notebooks are rendered to text (cells + outputs) rather than structured cells,
   since this framework's tool result is text + media, not arbitrary blocks.
 - Dedup state is kept per tool instance (one instance per Role/session) instead
-  of a shared readFileState, so it needs no extra Role capability.
+  of a shared readFileState. The short-circuit is gated on ContextVisibility
+  (via the ``is_resource_visible`` capability): a file whose earlier read has
+  been folded/erased from context is re-read in full rather than pointed back at
+  a cleared body, honouring the ``reconstructable`` promise that a read result is
+  always recoverable on demand.
 
 The shape (offset is 1-indexed, default 2000-line cap, per-line length cap,
 size guard, blocked device paths, empty/short-file reminders) mirrors the CC
@@ -262,14 +266,18 @@ class Read(BaseTool):
     description = READ_DESCRIPTION
     # Records each successful read into the Role's shared file-read state so the
     # Write/Edit tools can enforce read-before-overwrite; get_cwd is the stable
-    # base for resolving relative paths. Optional: when the tool is used unbound
-    # (no Role), these stay unset — recording is skipped and get_cwd falls back
-    # to the process cwd.
-    requires = ("record_file_read", "get_cwd")
+    # base for resolving relative paths; is_resource_visible lets the dedup
+    # short-circuit check whether a prior read of this file is still present in
+    # context before pointing the model back at it. Optional: when the tool is
+    # used unbound (no Role), these stay unset — recording is skipped, get_cwd
+    # falls back to the process cwd, and dedup assumes the prior read is visible.
+    requires = ("record_file_read", "get_cwd", "is_resource_visible")
 
-    # Injected from Role by bind(): Role.record_file_read, Role.get_cwd.
+    # Injected from Role by bind(): Role.record_file_read, Role.get_cwd,
+    # Role.is_resource_visible.
     record_file_read: Callable[[str, int], None]
     get_cwd: Callable[[], str]
+    is_resource_visible: Callable[[str], bool]
 
     def __init__(self) -> None:
         super().__init__()
@@ -286,6 +294,33 @@ class Read(BaseTool):
         recorder = getattr(self, "record_file_read", None)
         if recorder is not None:
             recorder(full_path, mtime_ns)
+
+    def _prior_read_visible(self, full_path: str) -> bool:
+        """Is this file's earlier read result still present in the model's context?
+
+        Consults the injected ``is_resource_visible`` capability (the
+        ContextVisibility authority). Returns True when unbound (no capability),
+        so a standalone Read keeps its simple dedup behaviour; the visibility
+        gate only tightens dedup when a real Role/context is present. A False
+        answer means compaction folded or erased the earlier result, so the
+        caller must return real content instead of the "unchanged" stub.
+        """
+        checker = getattr(self, "is_resource_visible", None)
+        if checker is None:
+            return True
+        return bool(checker(full_path))
+
+    @staticmethod
+    def _tagged(output: str, full_path: str) -> ToolResult:
+        """Wrap real read content as a ToolResult tagged with its source file.
+
+        The ``resource_path`` rides the result → the tool_result message's
+        metadata (``TOOL_RESULT_RESOURCE_PATH``), where ContextVisibility keys
+        off it to decide whether this file's latest read is still present. Only
+        real content is tagged; the dedup stub deliberately is not, so it never
+        masks (as "still present") a prior read that has since been folded.
+        """
+        return ToolResult(output=output, resource_path=full_path)
 
     async def call(
         self,
@@ -365,6 +400,7 @@ class Read(BaseTool):
         if ext in _IMAGE_EXTENSIONS:
             result = self._read_image(file_path, full_path, ext, stat.st_size, detail)
             self._mark_read(full_path, stat.st_mtime_ns)
+            result.resource_path = full_path
             return result
         # --- Rich documents (PDF/Word/Excel) ---
         # "visual" mode renders bytes to the model (PDF only); "text" mode (the
@@ -376,21 +412,26 @@ class Read(BaseTool):
                     raise ToolError(_MSG_VISUAL_PDF_ONLY.format(ext=ext))
                 result = self._read_pdf(file_path, full_path, stat.st_size)
                 self._mark_read(full_path, stat.st_mtime_ns)
+                result.resource_path = full_path
                 return result
-            out = self._read_document(file_path, full_path, offset, limit, stat)
-            self._mark_read(full_path, stat.st_mtime_ns)
-            return out
+            return self._read_document(file_path, full_path, offset, limit, stat)
         # --- Jupyter notebook: flatten to text ---
         if ext == "ipynb":
             out = self._read_notebook(file_path, full_path)
             self._mark_read(full_path, stat.st_mtime_ns)
-            return out
+            return self._tagged(out, full_path)
 
         # --- Text ---
         return self._read_text(file_path, full_path, offset, limit, stat)
 
-    def _read_text(self, file_path, full_path, offset, limit, stat) -> str:
-        """Read a text file slice and format with line numbers."""
+    def _read_text(self, file_path, full_path, offset, limit, stat) -> "str | ToolResult":
+        """Read a text file slice and format with line numbers.
+
+        Real content is returned as a ``ToolResult`` tagged with ``resource_path``
+        (so ContextVisibility can later tell whether this read is still present);
+        the dedup short-circuit returns the bare ``FILE_UNCHANGED_STUB`` string,
+        deliberately untagged so it never registers as this file's latest result.
+        """
         # Size guard only applies to whole-file reads (no explicit limit).
         if limit is None and stat.st_size > MAX_FILE_SIZE_BYTES:
             raise ToolError(_MSG_FILE_TOO_LARGE.format(size=stat.st_size, max_size=MAX_FILE_SIZE_BYTES))
@@ -398,9 +439,20 @@ class Read(BaseTool):
         # Normalize offset: callers may pass 0 or 1 to mean "from the start".
         start_line = offset if offset and offset > 0 else 1
 
-        # Dedup: same range + unchanged mtime => point the model at the prior read.
+        # Dedup: same range + unchanged mtime => the model already has this exact
+        # view — but ONLY short-circuit if that earlier result is still present
+        # in context. Compaction may have folded/erased it; pointing the model
+        # back at a cleared body would strand it with no content, so in that case
+        # fall through and return the real bytes (honouring reconstructable=True:
+        # a cleared read is recoverable on demand). Unbound (no visibility
+        # capability) assumes the prior read is still visible, preserving the
+        # standalone dedup behaviour.
         cached = self._read_state.get(full_path)
-        if cached is not None and cached == (start_line, limit, stat.st_mtime_ns):
+        if (
+            cached is not None
+            and cached == (start_line, limit, stat.st_mtime_ns)
+            and self._prior_read_visible(full_path)
+        ):
             # Still a successful "view" of the current content — keep the shared
             # file-read state fresh so a later Write isn't wrongly blocked.
             self._mark_read(full_path, stat.st_mtime_ns)
@@ -417,10 +469,13 @@ class Read(BaseTool):
         self._mark_read(full_path, stat.st_mtime_ns)
 
         if total_lines == 0:
-            return system_reminder(_MSG_EMPTY_FILE)
+            return self._tagged(system_reminder(_MSG_EMPTY_FILE), full_path)
 
         if not selected:
-            return system_reminder(_MSG_SHORTER_THAN_OFFSET.format(offset=start_line, total=total_lines))
+            return self._tagged(
+                system_reminder(_MSG_SHORTER_THAN_OFFSET.format(offset=start_line, total=total_lines)),
+                full_path,
+            )
 
         body = _add_line_numbers(selected, start_line)
         if truncated_lines:
@@ -432,15 +487,20 @@ class Read(BaseTool):
                     verb=verb,
                 )
             )
-        return body
+        return self._tagged(body, full_path)
 
-    def _read_document(self, file_path, full_path, offset, limit, stat) -> str:
+    def _read_document(self, file_path, full_path, offset, limit, stat) -> "str | ToolResult":
         """Read a rich document (PDF/Word/Excel) as extracted text, with offset.
 
         Uses the shared _document extractor + line model so the line numbering
         is identical to what Grep searches: a position Grep reports as
         ``report.pdf:42`` is exactly the line returned here for ``offset=42``.
         Output is formatted with ``cat -n`` line numbers like a text read.
+
+        Real content is returned as a ``ToolResult`` tagged with ``resource_path``
+        (mirrors ``_read_text``); the dedup short-circuit returns the bare
+        ``FILE_UNCHANGED_STUB`` string, gated on ContextVisibility so a folded
+        prior read falls through to fresh content instead of a stranded stub.
         """
         if stat.st_size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
@@ -455,9 +515,16 @@ class Read(BaseTool):
         # Normalize offset: callers may pass 0 or 1 to mean "from the start".
         start_line = offset if offset and offset > 0 else 1
 
-        # Dedup: same range + unchanged mtime => point the model at the prior read.
+        # Dedup: same range + unchanged mtime => point the model at the prior
+        # read, but ONLY when that earlier result is still present in context
+        # (see _read_text for the rationale). A folded/erased prior read falls
+        # through to fresh extraction.
         cached = self._read_state.get(full_path)
-        if cached is not None and cached == (start_line, limit, stat.st_mtime_ns):
+        if (
+            cached is not None
+            and cached == (start_line, limit, stat.st_mtime_ns)
+            and self._prior_read_visible(full_path)
+        ):
             self._mark_read(full_path, stat.st_mtime_ns)
             return FILE_UNCHANGED_STUB
 
@@ -475,10 +542,13 @@ class Read(BaseTool):
         self._mark_read(full_path, stat.st_mtime_ns)
 
         if total_lines == 0 or (total_lines == 1 and all_lines[0] == ""):
-            return system_reminder(_MSG_DOCUMENT_EMPTY)
+            return self._tagged(system_reminder(_MSG_DOCUMENT_EMPTY), full_path)
 
         if start_line > total_lines:
-            return system_reminder(_MSG_DOCUMENT_SHORTER_THAN_OFFSET.format(offset=start_line, total=total_lines))
+            return self._tagged(
+                system_reminder(_MSG_DOCUMENT_SHORTER_THAN_OFFSET.format(offset=start_line, total=total_lines)),
+                full_path,
+            )
 
         end_line = start_line + (limit if limit is not None else DEFAULT_MAX_LINES)
         selected = all_lines[start_line - 1 : end_line - 1]
@@ -501,7 +571,7 @@ class Read(BaseTool):
                     verb=verb,
                 )
             )
-        return body
+        return self._tagged(body, full_path)
 
     def _read_image(self, file_path, full_path, ext, size, detail) -> ToolResult:
         """Read an image and return it as supplemental multimodal content.

@@ -11,7 +11,6 @@ assert the rendered ``inspect.signature`` of locally-defined functions, which
 would be stringized (``'int'`` instead of ``int``) under PEP 563.
 """
 import pytest
-
 from mote.executor.agent_registry import AgentRegistry
 from mote.executor.mcp_adapter import MCPToolAdapter
 from mote.executor.tool_convert import (

@@ -31,7 +31,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-
 from mote.router.complexity import (
     TIER_THRESHOLDS,
     complexity_score,

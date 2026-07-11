@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from mote.common.base import CommandChannel
-from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS
+from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS, TOOL_RESULT_RESOURCE_PATH
 from mote.parser.native_channel import NativeToolChannel
 
 from .conftest import FakeExecutor, FakeMemory, FakeThinkEngine, collect, executed_command
@@ -247,6 +246,24 @@ class TestRecordTurn:
         executed = [{"id": "a", "name": "Read", "output": "r"}]  # no args key
         await NativeToolChannel().record_turn(memory, "t", executed)
         assert memory.messages[0].metadata[TOOL_CALLS][0]["args"] == {}
+
+    @pytest.mark.asyncio
+    async def test_resource_path_stamped_onto_tool_result_metadata(self):
+        # A reconstructable read carries resource_path -> the channel stamps it
+        # onto the tool_result message metadata for ContextVisibility to key off.
+        memory = FakeMemory()
+        executed = [executed_command(id="a", name="Read", output="content", resource_path="/f/a.txt")]
+        await NativeToolChannel().record_turn(memory, "t", executed)
+        assert memory.messages[1].metadata[TOOL_RESULT_RESOURCE_PATH] == "/f/a.txt"
+
+    @pytest.mark.asyncio
+    async def test_no_resource_path_leaves_metadata_unset(self):
+        # A result without resource_path (e.g. a dedup stub) must stay untagged,
+        # so it never registers as a file's latest visible read.
+        memory = FakeMemory()
+        executed = [executed_command(id="a", name="Read", output="unchanged")]
+        await NativeToolChannel().record_turn(memory, "t", executed)
+        assert TOOL_RESULT_RESOURCE_PATH not in memory.messages[1].metadata
 
 
 class TestRecordTurnMedia:

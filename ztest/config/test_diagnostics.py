@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.common.config.diagnostics import unknown_key_paths
 from mote.common.config.loader import load_config
 from mote.common.config.meta_config import Config

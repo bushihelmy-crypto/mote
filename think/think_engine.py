@@ -13,7 +13,7 @@ from mote.common.const import TOOL_CALLS
 from mote.common.logs import log_class
 from mote.common.schema import ThinkResult
 from mote.common.utils.report import ThoughtReporter
-from mote.common.utils.role_zero_utils import call_signature, check_duplicate_calls, check_duplicates
+from mote.common.utils.role_utils import call_signature, check_duplicate_calls, check_duplicates
 
 if TYPE_CHECKING:
     from mote.common.interface import LLMClient, MessageStore

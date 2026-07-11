@@ -19,7 +19,6 @@ Skipped entirely when Playwright / its Chromium browser is unavailable.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.text import cap_head_tail
 from mote.executor.dependency._browser import TEXT_MAX_CHARS
 from mote.executor.tools.web_browser import WebBrowser

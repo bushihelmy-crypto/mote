@@ -5,7 +5,6 @@
 import types
 
 import pytest
-
 from mote.common.const import MESSAGE_ROUTE_TO_ALL
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.queue import MessageQueue

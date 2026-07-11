@@ -5,7 +5,6 @@
 import types
 
 import pytest
-
 from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.queue import MessageQueue

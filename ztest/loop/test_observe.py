@@ -10,7 +10,6 @@ history when ``enable_memory``), commits to the memory store (all news when
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import CauseBy, Message, MessagePriority, UserMessage
 
 from .conftest import make_loop_context

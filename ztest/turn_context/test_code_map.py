@@ -712,3 +712,195 @@ def test_ref_symbol_query_capped(tmp_path):
     from mote.context.code_map import CodeMap
 
     assert len(lsp.ref_calls) <= CodeMap._MAX_REF_SYMBOLS
+
+
+# -- P1: docstring summaries in the rendered map ------------------------------
+
+
+def test_module_purpose_line_rendered(tmp_path):
+    p = _write(tmp_path, "m.py", '"""What this module is for."""\ndef foo():\n    pass\n')
+    src = CodeMapContextSource(get_touched_files=lambda: [p])
+    out = run(src.render())
+    assert "purpose: What this module is for." in out
+
+
+def test_symbol_summaries_expanded_per_line(tmp_path):
+    src_txt = (
+        '"""Mod."""\n'
+        'def foo(a):\n    """Foo does foo."""\n    pass\n\n'
+        'def bar():\n    """Bar does bar."""\n    pass\n'
+    )
+    p = _write(tmp_path, "m.py", src_txt)
+    src = CodeMapContextSource(get_touched_files=lambda: [p])
+    out = run(src.render())
+    assert "foo(a) — Foo does foo." in out
+    assert "bar() — Bar does bar." in out
+
+
+def test_undocumented_symbols_fall_back_to_compact_line(tmp_path):
+    # No docstrings anywhere -> the compact single "defines: a, b" form (no
+    # per-symbol expansion, no summaries).
+    p = _write(tmp_path, "m.py", "def foo(a):\n    pass\n\ndef bar():\n    pass\n")
+    src = CodeMapContextSource(get_touched_files=lambda: [p])
+    out = run(src.render())
+    assert "defines: foo(a), bar()" in out
+
+
+def test_docstring_edit_resurfaces_row(tmp_path):
+    p = _write(tmp_path, "m.py", '"""One."""\ndef foo():\n    """First."""\n    pass\n')
+    src = CodeMapContextSource(get_touched_files=lambda: [p])
+    assert run(src.render()) is not None  # first emit
+    assert run(src.render()) is None  # unchanged -> quiet
+
+    _write(tmp_path, "m.py", '"""Two."""\ndef foo():\n    """Second."""\n    pass\n')
+    _bump_mtime(p)
+    out = run(src.render())
+    assert out is not None
+    assert "purpose: Two." in out
+    assert "Second." in out
+
+
+# -- P2: glimpsed files fold into the map -------------------------------------
+
+
+def test_glimpsed_file_rendered_with_defines(tmp_path):
+    # A file only *glimpsed* (search hit, never read) still gets its structure
+    # surfaced so the model can decide whether to open it.
+    g = _write(tmp_path, "hit.py", '"""Search hit module."""\ndef target():\n    pass\n')
+    src = CodeMapContextSource(get_touched_files=lambda: [], get_glimpsed_files=lambda: [g])
+    out = run(src.render())
+    assert out is not None
+    assert "hit.py" in out
+    assert "target" in out
+    assert "purpose: Search hit module." in out
+
+
+def test_glimpsed_deduped_against_touched(tmp_path):
+    # A file that is both read and glimpsed appears once (read wins its slot).
+    p = _write(tmp_path, "m.py", "def foo():\n    pass\n")
+    src = CodeMapContextSource(get_touched_files=lambda: [p], get_glimpsed_files=lambda: [p])
+    out = run(src.render())
+    assert out is not None
+    assert out.count("m.py") == 1
+
+
+def test_no_files_when_both_empty(tmp_path):
+    src = CodeMapContextSource(get_touched_files=lambda: [], get_glimpsed_files=lambda: [])
+    assert run(src.render()) is None
+
+
+def test_glimpsed_provider_raise_is_swallowed(tmp_path):
+    p = _write(tmp_path, "m.py", "def foo():\n    pass\n")
+
+    def boom():
+        raise RuntimeError("nope")
+
+    src = CodeMapContextSource(get_touched_files=lambda: [p], get_glimpsed_files=boom)
+    out = run(src.render())  # touched file still renders; glimpse failure ignored
+    assert out is not None
+    assert "foo" in out
+
+
+# -- P3: opportunistic per-symbol callers of calm public symbols ---------------
+
+
+def test_surface_callers_off_by_default(tmp_path):
+    # A calm public symbol is NOT queried for callers unless the flag is on — the
+    # default keeps the extra LSP references volume opt-in.
+    api = _write(tmp_path, "api.py", "def foo(x):\n    pass\n")
+    caller = _write(tmp_path, "caller.py", "import api\n")
+    lsp = _FakeRefLspQuery([{"uri": _uri(caller)}])
+    src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "called by:" not in out
+    assert lsp.ref_calls == []  # references never issued for a calm row
+
+
+def test_surface_callers_renders_for_calm_public_symbol(tmp_path):
+    # With the flag on, a calm public symbol's real callers surface without any
+    # interface change — the reverse call direction the model otherwise lacks.
+    api = _write(tmp_path, "api.py", "def foo(x):\n    pass\n")
+    caller = _write(tmp_path, "caller.py", "import api\n")
+    lsp = _FakeRefLspQuery([{"uri": _uri(caller)}])
+    src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "interface changed" not in out  # no edit — this is the calm path
+    assert "foo called by: caller.py" in out
+    assert lsp.ref_calls  # references was actually queried
+
+
+def test_surface_callers_needs_lsp(tmp_path):
+    # Flag on but no LSP facade -> no callers path (nothing to resolve them with).
+    api = _write(tmp_path, "api.py", "def foo(x):\n    pass\n")
+    _write(tmp_path, "caller.py", "import api\n")
+    src = CodeMapContextSource(get_touched_files=lambda: [api], surface_callers=True)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "called by:" not in out
+
+
+def test_surface_callers_skips_private_and_nested(tmp_path):
+    # Only public top-level symbols are a caller's import surface; a private def
+    # and a method must not be queried for callers.
+    api = _write(tmp_path, "api.py", "def _hidden():\n    pass\n\nclass C:\n    def m(self):\n        pass\n")
+    lsp = _FakeRefLspQuery([])
+    src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    # Only the public class C is queryable; _hidden and C.m are filtered out.
+    assert lsp.ref_calls  # C was queried
+    assert len(lsp.ref_calls) == 1
+
+
+def test_surface_callers_capped(tmp_path):
+    # More than _MAX_REF_SYMBOLS public symbols -> the reference queries are capped.
+    body = "".join(f"def f{i}():\n    pass\n\n" for i in range(10))
+    api = _write(tmp_path, "api.py", body)
+    lsp = _FakeRefLspQuery([])
+    src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
+    run(src.render())
+    from mote.context.code_map import CodeMap
+
+    assert len(lsp.ref_calls) <= CodeMap._MAX_REF_SYMBOLS
+
+
+def test_surface_callers_cached_per_version(tmp_path):
+    # The (path, symbol, content_hash) cache means a re-render at the same version
+    # issues no new references call — even after a forced frontier reset.
+    api = _write(tmp_path, "api.py", "def foo():\n    pass\n")
+    caller = _write(tmp_path, "caller.py", "import api\n")
+    lsp = _FakeRefLspQuery([{"uri": _uri(caller)}])
+    src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
+    run(src.render(cwd=str(tmp_path)))
+    first = len(lsp.ref_calls)
+    assert first >= 1
+
+    run(src.handle(PostCompactEvent()))  # force re-emit (frontier reset)
+    run(src.render(cwd=str(tmp_path)))
+    assert len(lsp.ref_calls) == first  # served from cache, no new query
+
+
+def test_surfaced_caller_change_resurfaces_row(tmp_path):
+    # A newly-appearing caller changes the row's signature so it re-surfaces even
+    # though the file's own symbols/edges are unchanged.
+    api = _write(tmp_path, "api.py", "def foo():\n    pass\n")
+    a = _write(tmp_path, "a.py", "import api\n")
+    b = _write(tmp_path, "b.py", "import api\n")
+    refs = [{"uri": _uri(a)}]
+    lsp = _FakeRefLspQuery(refs)
+    src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
+    first = run(src.render(cwd=str(tmp_path)))
+    assert first is not None and "foo called by: a.py" in first
+    assert run(src.render(cwd=str(tmp_path))) is None  # unchanged -> quiet
+
+    # A new caller appears. The refs cache is keyed on content_hash, so a content
+    # edit (kept non-breaking: foo's signature is unchanged) invalidates it and
+    # forces a re-query; the surfaced-callers fold then re-surfaces the row.
+    refs.append({"uri": _uri(b)})
+    _write(tmp_path, "api.py", "# touched\ndef foo():\n    pass\n")
+    _bump_mtime(api)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "b.py" in out

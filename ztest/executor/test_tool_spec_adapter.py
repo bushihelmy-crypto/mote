@@ -11,9 +11,8 @@ from __future__ import annotations
 
 from typing import Optional, Union
 
-from pydantic import BaseModel
-
 from mote.executor.tool_spec_adapter import _json_type, _unwrap_optional, build_json_schema, to_native_tool_specs
+from pydantic import BaseModel
 
 
 class Item(BaseModel):

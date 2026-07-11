@@ -9,11 +9,10 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
-
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.const.llm import supports_vision
 from mote.common.utils.token_counter import count_message_tokens, count_string_tokens
+from pydantic import BaseModel, Field
 
 
 class ModelCard(BaseModel):

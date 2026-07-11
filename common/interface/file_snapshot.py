@@ -1,6 +1,6 @@
 """FileSnapshotStore protocol — the before-image capture slice.
 
-The narrow face the file-mutating tools (Write/Edit/NotebookEdit) use to record
+The narrow face the file-mutating tools (Write/Edit) use to record
 a *before-image* of a file just before they overwrite it, without importing the
 concrete ``session`` implementation.
 

@@ -4,7 +4,7 @@
 
 The prompts package is almost entirely pure functions over string templates,
 so the only collaborators that need faking are the four ``ThinkSubsystems``
-members PromptBuilder queries: ``config`` (only ``config.role_zero`` is read),
+members PromptBuilder queries: ``config`` (only ``config.role`` is read),
 ``llm`` (only ``llm.model``), ``executor`` (two ``get_*_tool_schemas`` calls)
 and ``skill_manager`` (its optional ``injector``). Everything else is data the
 Role would push through ``ThinkInputs``.
@@ -67,7 +67,7 @@ class FakeSkillManager:
         self.injector = injector
 
 
-def make_role_zero(
+def make_role(
     *,
     ai_capability_models=("model-a", "model-b"),
     enable_compressable_memory=False,
@@ -82,8 +82,8 @@ def make_role_zero(
     )
 
 
-def make_config(**role_zero_kwargs):
-    return SimpleNamespace(role_zero=make_role_zero(**role_zero_kwargs))
+def make_config(**role_kwargs):
+    return SimpleNamespace(role=make_role(**role_kwargs))
 
 
 @pytest.fixture

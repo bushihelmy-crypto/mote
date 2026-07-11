@@ -32,7 +32,8 @@ def _q(question, header, options, multiSelect=False):
 def _questions(*qs):
     from mote.common.schema import AskUserQuestionInput
 
-    return AskUserQuestionInput.model_validate({"questions": list(qs)})
+    # Mirror AskUserQuestion._coerce: the port receives the plain list of items.
+    return AskUserQuestionInput.model_validate({"questions": list(qs)}).questions
 
 
 class _FakeApp:

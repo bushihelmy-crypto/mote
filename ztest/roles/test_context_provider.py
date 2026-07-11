@@ -46,7 +46,6 @@ class TestLoopContext:
     def test_packs_schema_and_state(self, role):
         role.role_schema.max_react_loop = 11
         role.role_schema.max_consecutive_react_limit = 3
-        role.role_schema.memory_k = 9
         role.role_schema.tools = ["Read", "Bash"]
         role.role_schema.enable_memory = False
         role.role_schema.observe_all_msg_from_buffer = False
@@ -55,7 +54,6 @@ class TestLoopContext:
         assert isinstance(lc, LoopContext)
         assert lc.max_react_loop == 11
         assert lc.max_consecutive_react_limit == 3
-        assert lc.memory_k == 9
         assert lc.name == role.name
         assert lc.display_name == role.role_schema.display_name
         assert lc.tools == ["Read", "Bash"]

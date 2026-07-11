@@ -21,9 +21,8 @@ from __future__ import annotations
 import typing
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
-
 from mote.common.config.layers import CREDENTIAL_DENYLIST
+from pydantic import BaseModel
 
 # Substrings that mark a leaf as secret for the redacted dump.
 _SECRET_HINTS = ("key", "secret", "token", "password", "jwt")

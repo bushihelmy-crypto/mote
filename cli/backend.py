@@ -44,7 +44,6 @@ from mote.executor.agent_md_loader import register_md_agents
 from mote.executor.agent_registry import registry as agent_registry
 from mote.executor.mcp.config_source import load_mcp_servers
 from mote.executor.permission.settings_source import load_permission_rules
-from mote.executor.tool_registry import registry as tool_registry
 from mote.roles import Role
 from mote.roles.role_schema import RoleSchema
 from mote.roles.role_state import RoleState
@@ -87,20 +86,6 @@ def _discover_mcps(cwd: Optional[str] = None) -> List[str]:
     return [s.name for s in load_mcp_servers(Path(cwd) if cwd else None)]
 
 
-def _discover_tools() -> List[str]:
-    """Every built-in tool registered under ``mote.executor.tools``.
-
-    The "empty ⇒ load everything" default for tools, resolved *here* (the top-level
-    interactive role) for the same reason as :func:`_discover_mcps`: child fork-skill
-    agents get ``tools = list(allowed_tools or [])`` (see ``roles.capabilities``), so
-    an empty list there must stay "no tools" (the capability fence). Only the human's
-    top-level role opts into the full toolbox. ``discover()`` is idempotent (one
-    package scan), and every registered class binds cleanly on a top-level Role.
-    """
-    tool_registry.discover()
-    return list(tool_registry.all_tools().keys())
-
-
 def build_role(
     *,
     context: Any,
@@ -121,10 +106,12 @@ def build_role(
     "watch the workspace" conveniences a human at a REPL expects: every MCP server
     in ``mcp_config.json`` is loaded (its tools surface in the per-turn catalog),
     and a file watcher hot-reloads MCP servers *and* skills when their config
-    files change mid-session. It also mirrors the "empty ⇒ load everything"
-    default for **tools**: when no explicit ``tools`` are passed, the whole
-    registered toolbox is loaded (rather than RoleSchema's curated subset). Typed
-    agents self-configure and are left untouched.
+    files change mid-session. **Tools**, by contrast, follow RoleSchema's curated
+    default when no explicit ``tools`` are passed — so what the CLI reports (and
+    what the agent is actually wired with) is exactly the declared set, not the
+    full registered toolbox (which includes internal control verbs like
+    End/Reply/Ask that are not part of the curated surface). Typed agents
+    self-configure and are left untouched.
 
     Before any lookup, ``.mote/agents/*.md`` files (git-root walk from *cwd* plus
     ``~/.mote/agents``) are registered as spawnable agent types, so a markdown
@@ -140,10 +127,14 @@ def build_role(
     else:
         schema_kwargs: dict = {
             "name": name,
-            "tools": list(tools) if tools else _discover_tools(),
             "mcps": _discover_mcps(cwd),
             "file_watch": FileWatchConfig(enabled=True, reload_mcp=True, reload_skills=True),
         }
+        # An explicit --tools list wins; otherwise the field is left unset so the
+        # RoleSchema curated default (its declared tool surface) applies — the CLI
+        # then reports exactly that declared set, not the full registered toolbox.
+        if tools:
+            schema_kwargs["tools"] = list(tools)
         permissions = load_permission_rules(Path(cwd) if cwd else None)
         if permissions is not None:
             schema_kwargs["permissions"] = permissions
@@ -223,19 +214,21 @@ def fork_role(role: Any) -> Optional[Any]:
         return None
 
 
-def role_tool_counts(role: Any) -> Tuple[int, int]:
-    """Return ``(builtin_tool_count, mcp_server_count)`` for a role's schema.
+def role_tool_count(role: Any) -> int:
+    """Return the built-in tool count for a role's schema.
 
-    The data behind the CLI's startup "flag": how many built-in tools and MCP
-    servers this role was wired with. Read off ``role_schema`` (the declared set),
-    so it's available the moment the role is built — before the executor lazily
-    binds them. Missing schema / fields degrade to ``0`` (a fake in tests satisfies
-    it too).
+    The data behind the CLI's startup "flag": how many built-in tools this role
+    was wired with. Read off ``role_schema`` (the declared set), so it's available
+    the moment the role is built — before the executor lazily binds them. Missing
+    schema / field degrades to ``0`` (a fake in tests satisfies it too).
+
+    MCP servers are deliberately *not* counted here: they connect lazily and their
+    tools surface per-turn in the ``<system-reminder>`` catalog, so they are not
+    part of the one-time startup load the badge reports.
     """
     schema = getattr(role, "role_schema", None)
     tools = getattr(schema, "tools", None) or []
-    mcps = getattr(schema, "mcps", None) or []
-    return len(set(tools)), len(set(mcps))
+    return len(set(tools))
 
 
 def resume_role(role: Any) -> bool:
@@ -287,7 +280,7 @@ __all__ = [
     "runtime_name",
     "runtime_role",
     "fork_role",
-    "role_tool_counts",
+    "role_tool_count",
     "resume_role",
     "list_sessions",
     "turn_message",

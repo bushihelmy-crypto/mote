@@ -6,7 +6,6 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
 from mote.router.oauth.manager import OAuthManager
 from mote.router.oauth.models import OAuthToken

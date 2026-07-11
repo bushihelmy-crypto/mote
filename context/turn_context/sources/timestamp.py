@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Optional
 
 from mote.common.interface import TurnContextPriority
-from mote.common.utils.role_zero_utils import get_time_info
+from mote.common.utils.role_utils import get_time_info
 
 
 class TimestampContextSource:

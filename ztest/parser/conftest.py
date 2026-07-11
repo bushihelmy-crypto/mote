@@ -22,7 +22,6 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import pytest
-
 from mote.common.schema import Message, ThinkResult
 
 
@@ -75,6 +74,7 @@ def executed_command(
     success: bool = True,
     images: Optional[list[str]] = None,
     pdfs: Optional[list[str]] = None,
+    resource_path: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build one entry of the ``executed`` list that ``record_turn`` consumes."""
     cmd: dict[str, Any] = {
@@ -88,6 +88,8 @@ def executed_command(
         cmd["images"] = images
     if pdfs is not None:
         cmd["pdfs"] = pdfs
+    if resource_path is not None:
+        cmd["resource_path"] = resource_path
     return cmd
 
 

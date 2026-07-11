@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from mote.common.schema import PermissionConfig
 from mote.common.schema.permission_types import PermissionDecision
 from mote.executor.base_tool import BaseTool

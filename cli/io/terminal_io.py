@@ -276,8 +276,8 @@ class TerminalPort:
         from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
         out = []
-        multiq = len(questions.questions) > 1
-        for q in questions.questions:
+        multiq = len(questions) > 1
+        for q in questions:
             labels = [o.label for o in q.options]
             header = f"[{q.header}] {q.question}" if multiq else q.question
             selected, free = await self._select_structured(header, labels, q.multiSelect)

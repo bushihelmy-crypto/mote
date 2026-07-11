@@ -7,9 +7,8 @@ without importing the executor package.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 from mote.common.text import PERSISTED_OUTPUT_CLOSE, PERSISTED_OUTPUT_OPEN
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Tool-level constants (CC ``constants/toolLimits.ts``)

@@ -129,20 +129,24 @@ class SessionDriver:
             await self._teardown()
 
     def _announce_tools(self) -> None:
-        """Flag how many tools/MCP servers the session opened with (§ startup badge).
+        """Flag how many built-in tools the session opened with (§ startup badge).
 
         Rendered once on open via a ``Notice`` so it lands on every consumer
         (terminal / textual / future web) the same way, right under the banner.
         The ⚑ glyph mirrors the per-turn system-reminder flag the consumer already
         uses for injected context, so the human reads "this is framework chrome".
+
+        Only the built-in tool count belongs here: under provider-native tool-use
+        the tools are bound once at session open and shipped via the API ``tools=``
+        param, so their count is a genuine startup fact. MCP servers, by contrast,
+        connect lazily and surface their tools per-turn in the ``<system-reminder>``
+        catalog — they are not part of the one-time startup load, so counting them
+        here would misreport a load that never happened.
         """
-        builtin, mcp = backend.role_tool_counts(self._role)
-        if not builtin and not mcp:
+        builtin = backend.role_tool_count(self._role)
+        if not builtin:
             return
-        parts = [f"{builtin} 个工具"]
-        if mcp:
-            parts.append(f"{mcp} 个 MCP 服务")
-        self.notice(f"\u2691 已加载 {' · '.join(parts)}")
+        self.notice(f"\u2691 已加载 {builtin} 个工具")
 
     def _take_turn_images(self) -> list:
         """Drain the port's staged image attachments for this turn (Textual only).

@@ -20,14 +20,13 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
+from mote.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
+from mote.cli.contracts.view.events import ApprovalDecision
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, SelectionList, Static
 from textual.widgets.selection_list import Selection
-
-from mote.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
-from mote.cli.contracts.view.events import ApprovalDecision
 
 # Sentinel value for the auto-appended "Other" entry in the selection list.
 _OTHER_VALUE = -1

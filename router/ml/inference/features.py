@@ -10,7 +10,6 @@ Source: ``squilla_router/models/.../runtime_src/src/router/inference/features.py
 from __future__ import annotations
 
 import numpy as np
-
 from mote.router.ml.inference.types import FeatureBundle, InferenceRequest
 from mote.router.ml.v4_features import (
     extract_assistant_handcrafted,

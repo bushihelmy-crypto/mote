@@ -8,7 +8,6 @@ Covers binding/capability injection (the narrow allowlist), schema generation
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
 from mote.executor.base_tool import BaseTool
 

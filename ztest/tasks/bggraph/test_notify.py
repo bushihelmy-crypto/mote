@@ -10,7 +10,6 @@ contract and the ``_render_*`` / ``_resolve_param_source`` helpers.
 from __future__ import annotations
 
 import pytest
-
 from mote.executor.tasks.bggraph import END, START, BgGraph, BgStatus, GraphBatchFailureError
 from mote.executor.tasks.bggraph.notify import (
     _render_completed_nodes,

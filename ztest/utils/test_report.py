@@ -19,10 +19,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-from pydantic import BaseModel
-
 import mote.common.utils.report as report_mod
+import pytest
 from mote.common.events import EventBus, ResourceReportEvent, set_bus
 from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from mote.common.utils.report import (
@@ -33,6 +31,7 @@ from mote.common.utils.report import (
     ThoughtReporter,
     _build_report_payload,
 )
+from pydantic import BaseModel
 
 
 class _Recorder(ObservationSubscriber, SyncObserver):

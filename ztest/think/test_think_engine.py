@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.common.const import TOOL_CALLS
 from mote.common.schema import ThinkResult, UserMessage
 from mote.think.think_engine import ThinkEngine

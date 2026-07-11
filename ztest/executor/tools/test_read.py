@@ -14,7 +14,7 @@ import json
 import os
 
 import pytest
-
+from mote.common.const import TOOL_RESULT_RESOURCE_PATH
 from mote.common.const.tools import MAX_LINE_LENGTH
 from mote.executor.tool_result import ToolError, ToolResult
 from mote.executor.tools.read import FILE_UNCHANGED_STUB, Read
@@ -22,8 +22,20 @@ from mote.executor.tools.read import FILE_UNCHANGED_STUB, Read
 from .conftest import CapRole, bind, run, write_file
 
 
-def _read(tool: Read, **kwargs):
-    return run(tool.call(**kwargs))
+def _read(tool: Read, **kwargs) -> str:
+    """Drive a read and return its text output.
+
+    Read now returns real content as a ``ToolResult`` (tagged with the source
+    ``resource_path``) and the dedup stub as a bare string; the executor
+    normalizes both via :meth:`ToolResult.from_tool_return`. We mirror that here
+    and expose ``.output`` so text assertions stay simple.
+    """
+    return ToolResult.from_tool_return(run(tool.call(**kwargs))).output
+
+
+def _read_result(tool: Read, **kwargs) -> ToolResult:
+    """Like ``_read`` but return the full normalized ToolResult (media/metadata)."""
+    return ToolResult.from_tool_return(run(tool.call(**kwargs)))
 
 
 class TestReadText:
@@ -152,6 +164,45 @@ class TestReadDedup:
         # Cache cleared => not a dedup stub on the next read.
         assert _read(tool, file_path=p) != FILE_UNCHANGED_STUB
 
+    def test_visible_prior_read_still_dedups(self, workspace):
+        # Bound to a Role reporting the prior read as still present => dedup stub.
+        p = write_file(workspace / "a.txt", "one\ntwo\n")
+        role = CapRole(resource_visible=True)
+        tool = bind(Read(), role)
+        first = _read(tool, file_path=p)
+        assert "1→one" in first
+        assert _read(tool, file_path=p) == FILE_UNCHANGED_STUB
+
+    def test_folded_prior_read_rereads_real_content(self, workspace):
+        # ContextVisibility reports the earlier read as cleared/folded => the
+        # dedup short-circuit is suppressed and real content is returned again,
+        # honouring reconstructable=True (a cleared read is recoverable).
+        p = write_file(workspace / "a.txt", "one\ntwo\n")
+        role = CapRole(resource_visible=False)
+        tool = bind(Read(), role)
+        first = _read(tool, file_path=p)
+        assert "1→one" in first
+        second = _read(tool, file_path=p)
+        assert second != FILE_UNCHANGED_STUB
+        assert "1→one" in second
+
+    def test_real_content_tagged_with_resource_path(self, workspace):
+        # Real reads carry the source file as resource_path so the channel can
+        # stamp it onto the tool_result metadata for ContextVisibility.
+        p = write_file(workspace / "a.txt", "one\n")
+        result = _read_result(Read(), file_path=p)
+        assert result.resource_path == p
+
+    def test_dedup_stub_is_untagged(self, workspace):
+        # The stub must NOT carry resource_path — otherwise it would register as
+        # the file's latest result and mask a folded prior read.
+        p = write_file(workspace / "a.txt", "one\n")
+        tool = Read()
+        _read(tool, file_path=p)
+        stub = _read_result(tool, file_path=p)
+        assert stub.output == FILE_UNCHANGED_STUB
+        assert stub.resource_path is None
+
 
 class TestReadRecordsState:
     def test_read_records_into_shared_state(self, workspace):
@@ -206,7 +257,7 @@ class TestReadImage:
         p = os.path.join(str(workspace), "img.png")
         with open(p, "wb") as f:
             f.write(png)
-        result = _read(Read(), file_path=p)
+        result = _read_result(Read(), file_path=p)
         assert isinstance(result, ToolResult)
         assert result.images and isinstance(result.images[0], str)
         # A 1x1 image is within MAX_IMAGE_DIMENSION, so it's sent unchanged and
@@ -216,14 +267,13 @@ class TestReadImage:
         assert result.data["detail"] == "high"
 
     def test_large_image_is_downscaled_to_fit(self, workspace):
-        from PIL import Image
-
         from mote.common.const.tools import MAX_IMAGE_DIMENSION
+        from PIL import Image
 
         p = os.path.join(str(workspace), "big.png")
         Image.new("RGB", (4000, 2000), (123, 50, 200)).save(p)
 
-        result = _read(Read(), file_path=p)
+        result = _read_result(Read(), file_path=p)
         assert isinstance(result, ToolResult)
         out = Image.open(io.BytesIO(base64.b64decode(result.images[0])))
         # Longest edge clamped to MAX_IMAGE_DIMENSION, aspect ratio preserved.
@@ -239,7 +289,7 @@ class TestReadImage:
         with open(p, "rb") as f:
             raw = f.read()
 
-        result = _read(Read(), file_path=p, detail="original")
+        result = _read_result(Read(), file_path=p, detail="original")
         assert base64.b64decode(result.images[0]) == raw
         assert result.data["detail"] == "original"
 
@@ -251,7 +301,7 @@ class TestReadImage:
         with open(p, "rb") as f:
             raw = f.read()
 
-        result = _read(Read(), file_path=p, detail="high")
+        result = _read_result(Read(), file_path=p, detail="high")
         assert base64.b64decode(result.images[0]) == raw
 
     def test_invalid_detail_raises(self, workspace):

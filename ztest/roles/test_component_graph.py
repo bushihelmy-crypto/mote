@@ -11,7 +11,6 @@ errors.
 from __future__ import annotations
 
 import pytest
-
 from mote.roles.component_graph import (
     ComponentCycleError,
     ComponentGraph,

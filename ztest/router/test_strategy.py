@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.router.schema import RoutingRequest
 from mote.router.strategy import ComplexityStrategy, LLMJudgeStrategy, RuleBasedStrategy
 

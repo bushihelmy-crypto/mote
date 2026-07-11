@@ -18,6 +18,7 @@ directly without starting the loop.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from fnmatch import fnmatch
 from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
@@ -70,8 +71,28 @@ class FileWatcher:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
-        """Establish the baseline (no events) and start the polling loop."""
+        """Establish the baseline (no events) and start the polling loop.
+
+        Primes synchronously — fine for a small watched tree (tests, individual
+        files). Production callers running inside the event loop should prefer
+        :meth:`start_async`, whose initial walk is pushed off the loop so a large
+        tree never blocks it.
+        """
         self.prime()
+        self._runner.start()
+
+    async def start_async(self) -> None:
+        """Async start: snapshot the baseline off the event loop, then run.
+
+        The initial baseline is a recursive ``os.walk`` of every watched root.
+        When the CLI is launched *outside* a git repo the project root defaults
+        to the whole home directory, so that walk can take seconds and — if run
+        on the event loop — freezes the UI outright. Pushing the snapshot to the
+        default executor thread (the same off-loop pattern as the code-index
+        cold scan) keeps the loop responsive while the baseline is built.
+        """
+        self._state = await asyncio.get_running_loop().run_in_executor(None, self._snapshot)
+        self._primed = True
         self._runner.start()
 
     async def stop(self) -> None:
@@ -116,7 +137,7 @@ class FileWatcher:
         (or :meth:`start`, which primes) first to suppress that initial burst.
         Returns the events fired this poll.
         """
-        current = self._snapshot()
+        current = await asyncio.get_running_loop().run_in_executor(None, self._snapshot)
         events = self._diff(self._state, current)
         self._state = current
         self._primed = True

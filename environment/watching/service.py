@@ -117,6 +117,15 @@ class FileWatchService(ObservationSubscriber):
     def start(self) -> None:
         self._watcher.start()
 
+    async def start_async(self) -> None:
+        """Async start: build the watcher's baseline off the event loop.
+
+        Delegates to :meth:`FileWatcher.start_async` so the initial recursive
+        walk (potentially the whole home directory when launched outside a repo)
+        never blocks the event loop.
+        """
+        await self._watcher.start_async()
+
     async def stop(self) -> None:
         if self._bus is not None:
             try:

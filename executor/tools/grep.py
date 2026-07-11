@@ -51,6 +51,8 @@ from typing import Callable, ClassVar, Optional
 from mote.common.const.tools import (
     DEFAULT_HEAD_LIMIT,
     DOCUMENT_EXTENSIONS,
+    GLIMPSE_EXTENSIONS,
+    GLIMPSE_RECORD_LIMIT,
     MAX_COLUMNS,
     SEARCH_TIMEOUT,
     VCS_DIRECTORIES_TO_EXCLUDE,
@@ -226,11 +228,13 @@ class Grep(BaseTool):
     max_result_size_chars: ClassVar[int] = 20_000
     description = GREP_DESCRIPTION
     # get_cwd is the stable base for the default search root + output
-    # relativization. Optional: unbound (no Role) falls back to the process cwd.
-    requires = ("get_cwd",)
+    # relativization. record_file_glimpsed feeds matched files to the code map as
+    # navigation hints. Both optional: unbound (no Role) falls back / no-ops.
+    requires = ("get_cwd", "record_file_glimpsed")
 
-    # Injected from Role by bind(): Role.get_cwd.
+    # Injected from Role by bind(): Role.get_cwd, Role.record_file_glimpsed.
     get_cwd: Callable[[], str]
+    record_file_glimpsed: Callable[[str], None]
 
     def _base_cwd(self) -> str:
         """The stable base dir for default root / relativization (unbound: cwd)."""
@@ -362,7 +366,35 @@ class Grep(BaseTool):
         except Exception as e:  # noqa: BLE001 — surface the failure to the model
             raise ToolError(_MSG_SEARCH_FAILED.format(error=e))
 
+        self._record_glimpses(rows)
         return self._format(rows, search_root, output_mode, head_limit, offset)
+
+    def _record_glimpses(self, rows: list[str]) -> None:
+        """Feed the matched ``.py`` files to the code map as glimpse hints (P2).
+
+        Every row (any output mode) begins ``<abs path>:...``; the leading path
+        segment is the matched file. Records the first
+        :data:`GLIMPSE_RECORD_LIMIT` distinct ``.py`` files (result order — rows
+        already reflect the search's own ordering) so the map can surface their
+        structure to guide "which of these should I open". Unbound (no Role) →
+        the capability is absent → no-op. Best-effort: a raising sink is
+        swallowed (a navigation hint must never fail a search).
+        """
+        record = getattr(self, "record_file_glimpsed", None)
+        if record is None:
+            return
+        seen: set[str] = set()
+        for row in rows:
+            path = row.split(":", 1)[0]
+            if not path.endswith(GLIMPSE_EXTENSIONS) or path in seen:
+                continue
+            seen.add(path)
+            if len(seen) > GLIMPSE_RECORD_LIMIT:
+                break
+            try:
+                record(os.path.abspath(path))
+            except Exception:  # noqa: BLE001 — advisory; never fail the search
+                return
 
     @staticmethod
     def _query_targets_documents(search_root: str, glob: str, type_: str) -> bool:

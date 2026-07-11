@@ -25,9 +25,10 @@ from typing import Any, List
 
 from mote.cli.contracts.interface.projector import Projector
 from mote.cli.contracts.view.capabilities import Capabilities, CapabilityAdapter
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 
 
-class BaseProjector:
+class BaseProjector(ObservationSubscriber, SyncObserver):
     """Subscribes to the ``AgentEvent`` spine and routes folded events to consumers.
 
     Registers on the observation plane; implements ``handle`` (async, for the
@@ -35,6 +36,13 @@ class BaseProjector:
     ``priority`` attr orders it among observers (low = early). The concrete fold
     is injected via ``projector`` (a :class:`Projector`); there is no default so
     the base stays host-agnostic.
+
+    Inherits :class:`ObservationSubscriber` (phase-2 fan-out — it never folds a
+    control outcome) plus the :class:`SyncObserver` mixin (it also consumes the
+    ``emit_sync`` stream-delta / task-progress events). Both are *nominal* ABCs
+    the :class:`~mote.common.events.EventBus` classifies by ``isinstance``, so
+    the projector must declare its plane by inheritance or ``bus.subscribe``
+    rejects it.
     """
 
     priority: int = 50

@@ -35,13 +35,12 @@ import aiofiles
 import chardet
 import fitz
 import requests
-from PIL import Image
-from pydantic_core import to_jsonable_python
-from tenacity import RetryCallState, RetryError
-
 from mote.common.logs import logger
 from mote.common.utils.exceptions import handle_exception
 from mote.common.utils.remote import remotable
+from PIL import Image
+from pydantic_core import to_jsonable_python
+from tenacity import RetryCallState, RetryError
 
 
 class CodeParser:

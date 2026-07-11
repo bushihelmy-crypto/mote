@@ -127,7 +127,7 @@ class PortHumanChannel:
         from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
         out = []
-        for q in questions.questions:
+        for q in questions:
             labels = [o.label for o in q.options]
             reply = await self._ask_text(q.question, labels, q.multiSelect)  # -> str
             picks = [r.strip() for r in reply.split(",")] if q.multiSelect else [reply.strip()]

@@ -5,7 +5,6 @@
 import types
 
 import pytest
-
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.queue import MessageQueue
 from mote.environment.base_env import AgentEnvironment

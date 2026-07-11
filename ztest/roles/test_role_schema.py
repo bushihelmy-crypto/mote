@@ -32,7 +32,6 @@ class TestDefaults:
     def test_memory_summary_defaults(self):
         s = RoleSchema()
         assert s.enable_memory is True
-        assert s.memory_k == 30
         assert s.use_summary is True
         assert s.enable_router is False
 
@@ -88,8 +87,7 @@ class TestOverrides:
         assert "need_end_recommendations_tag" not in RoleSchema.model_fields
 
     def test_round_trip_model_dump_validate(self):
-        s = RoleSchema(name="Dee", tools=["Bash"], memory_k=5)
+        s = RoleSchema(name="Dee", tools=["Bash"])
         restored = RoleSchema.model_validate(s.model_dump())
         assert restored.name == "Dee"
         assert restored.tools == ["Bash"]
-        assert restored.memory_k == 5

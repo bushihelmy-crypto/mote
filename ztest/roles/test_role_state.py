@@ -19,10 +19,14 @@ class TestDefaults:
         assert st.watch == set()
         assert st.env is None
 
-    def test_session_id_is_unique_hex(self):
+    def test_session_id_is_unique_timestamped(self):
         a, b = RoleState(), RoleState()
         assert a.session_id != b.session_id
-        assert len(a.session_id) == 32  # uuid4().hex
+        # Format is ``{YYYYMMDDHHMMSSmmm}_{rand}`` (see session.ids.new_session_id).
+        timestamp, _, rand = a.session_id.partition("_")
+        assert timestamp.isdigit()
+        assert len(timestamp) == 17  # YYYYMMDDHHMMSS + 3-digit millis
+        assert len(rand) == 8
 
     def test_working_dirs_default_to_workspace(self):
         st = RoleState()

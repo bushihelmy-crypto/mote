@@ -1,8 +1,7 @@
 from typing import Any
 
-from pydantic import Field
-
 from mote.common.utils.yaml_model import YamlModel
+from pydantic import Field
 
 
 class SentryConfig(YamlModel):

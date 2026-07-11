@@ -99,7 +99,6 @@ class ContextProvider(BaseContextProvider):
         return LoopContext(
             max_react_loop=schema.max_react_loop,
             max_consecutive_react_limit=schema.max_consecutive_react_limit,
-            memory_k=schema.memory_k,
             name=schema.name,
             display_name=schema.display_name,
             tools=schema.tools,
@@ -119,8 +118,8 @@ class ContextProvider(BaseContextProvider):
         The request is built by the ContextManager: it runs the history-level
         compaction passes (microcompact → autocompact) over the stored history,
         then returns ``managed_history + [user_prompt]`` (the command prompt is
-        appended to the request only, never stored). This replaces the old crude
-        memory_k truncation with proper context-window management.
+        appended to the request only, never stored) — proper context-window
+        management, not a crude tail truncation.
         """
         ctx = await self._collect()
         system_prompt, user_prompt = PromptBuilder.build(self._schema.system_prompt, self._schema.cmd_prompt, ctx)

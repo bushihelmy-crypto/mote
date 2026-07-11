@@ -25,6 +25,7 @@ from mote.session.events import (
 )
 from mote.session.fork import fork
 from mote.session.history import SnapshotEntry, diff_snapshot, file_history, restore
+from mote.session.ids import new_session_id
 from mote.session.kernel_state import KernelStateRecorder
 from mote.session.listing import SessionInfo, list_sessions
 from mote.session.log import SessionLog
@@ -54,6 +55,7 @@ __all__ = [
     "SessionInfo",
     "list_sessions",
     "fork",
+    "new_session_id",
     "BlobStore",
     "FileSnapshotRecorder",
     "SnapshotEntry",

@@ -16,7 +16,6 @@ from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import pytest
-
 from mote.cli.contracts.base import BaseConsumer
 from mote.cli.contracts.view import Capabilities
 from mote.common.events.types import (

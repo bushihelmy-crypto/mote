@@ -10,7 +10,6 @@ channel directly; the think round is faked via :class:`FakeThinkEngine`.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.base import CommandChannel
 from mote.common.const import IMAGES, PDFS
 from mote.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE

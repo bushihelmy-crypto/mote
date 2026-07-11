@@ -8,7 +8,6 @@ import hashlib
 import re
 
 import pytest
-
 from mote.router.oauth.pkce import gen_code_challenge, gen_code_verifier, gen_state
 
 _UNRESERVED = re.compile(r"^[A-Za-z0-9._~-]+$")

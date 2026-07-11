@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.common.config.config.llm_config import LLMType
 from mote.router.llm.provider_catalog import (
     PROVIDER_CATALOG,

@@ -9,7 +9,6 @@ unwrapping, and the explicit ``ApplyPatchError`` diagnostics on malformed input.
 from __future__ import annotations
 
 import pytest
-
 from mote.executor.dependency._apply_patch import (
     AddFile,
     ApplyPatchError,

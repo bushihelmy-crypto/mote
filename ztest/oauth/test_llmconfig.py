@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.config.config.oauth_config import OAuthProviderConfig
 from mote.common.exception import MissingAPIKeyError
+from pydantic import ValidationError
 
 
 def _oauth() -> OAuthProviderConfig:

@@ -14,12 +14,11 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
-
 from mote.cli.consumers.textual.style import textual_css_vars
 from mote.cli.consumers.textual.widgets import AssistantBlock, StatusBar, ToolCallWidget, UserMessageRow
 from mote.cli.contracts.view import RetryStatus, ToolCallCompleted, ToolCallStarted, UsageUpdated
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 
 
 class _Harness(App):
@@ -132,9 +131,8 @@ async def test_tool_widget_group_is_selectable():
 @pytest.mark.asyncio
 async def test_unrendered_selectable_static_returns_none():
     """Before any render (no strip cache) selection extraction is a safe no-op."""
-    from textual.selection import Selection
-
     from mote.cli.consumers.textual.widgets import SelectableStatic
+    from textual.selection import Selection
 
     widget = SelectableStatic("never rendered")
     assert widget.get_selection(Selection(None, None)) is None
@@ -245,9 +243,8 @@ async def test_partial_selection_copies_only_selected_text():
 
 @pytest.mark.asyncio
 async def test_user_message_row_mounts_with_text():
-    from rich.console import Console
-
     from mote.cli.consumers.render.builders import user_message_row
+    from rich.console import Console
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(UserMessageRow("fix the bug in foo.py"))
@@ -445,9 +442,8 @@ async def test_prompt_multiline_paste_stashes_placeholder_and_expands():
     drops everything after the first line of a paste. ``PromptInput`` instead
     stages the real text behind a compact placeholder and expands it on submit.
     """
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -473,9 +469,8 @@ async def test_prompt_carriage_return_paste_is_multiline():
     deciding, so the block is stashed behind a placeholder and ``consume_value``
     yields the FULL text with proper ``\\n`` newlines (not just the first line).
     """
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -491,9 +486,8 @@ async def test_prompt_carriage_return_paste_is_multiline():
 @pytest.mark.asyncio
 async def test_prompt_singleline_paste_inserts_verbatim():
     """A single-line paste keeps Textual's default behaviour (no placeholder)."""
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -508,9 +502,8 @@ async def test_prompt_singleline_paste_inserts_verbatim():
 @pytest.mark.asyncio
 async def test_prompt_paste_mixed_with_typed_text_expands_inline():
     """A placeholder embedded among typed text expands in place on submit."""
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -535,9 +528,8 @@ async def test_prompt_base_paste_handler_is_prevented():
     paste leaves ONLY the placeholder (no leaked first line) and the event was
     marked prevented.
     """
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -558,9 +550,8 @@ async def test_prompt_dropped_file_path_is_cleaned(tmp_path):
     Terminals report a drop as a shell-escaped/quoted absolute path; ``_on_paste``
     recognises an existing path and strips the escapes so the agent can read it.
     """
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     dropped = tmp_path / "a file (1).txt"
     dropped.write_text("hi", encoding="utf-8")
@@ -581,9 +572,8 @@ async def test_prompt_dropped_file_path_is_cleaned(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_nonexistent_path_falls_through_to_text(tmp_path):
     """A slash-leading string that isn't an existing file stays ordinary text."""
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -596,9 +586,8 @@ async def test_prompt_nonexistent_path_falls_through_to_text(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_escape_clears_field():
     """A single Esc empties the prompt and drops any staged paste text."""
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -628,9 +617,8 @@ async def test_prompt_dropped_image_is_staged_as_token(tmp_path):
     behind an ``[image #n: name]`` token so ``consume_images`` can attach it to
     the turn while the visible field stays a one-liner.
     """
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -654,9 +642,8 @@ async def test_prompt_dropped_image_is_staged_as_token(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_consume_images_drops_removed_tokens(tmp_path):
     """An image whose token was deleted from the field is not sent."""
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -673,9 +660,8 @@ async def test_prompt_consume_images_drops_removed_tokens(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_dropped_nonimage_file_stays_a_path(tmp_path):
     """A dropped non-image file is still inserted as a (cleaned) path, not staged."""
-    from textual.events import Paste
-
     from mote.cli.consumers.textual.widgets import PromptInput
+    from textual.events import Paste
 
     doc = tmp_path / "notes.txt"
     doc.write_text("hi", encoding="utf-8")
@@ -804,10 +790,9 @@ async def test_conversation_compacted_row_renders_marker():
 @pytest.mark.asyncio
 async def test_error_row_linkifies_bare_url():
     """A URL in an error message becomes a clickable link span (inside the bullet_row)."""
-    from rich.console import Console
-
     from mote.cli.consumers.textual.widgets import ErrorRow
     from mote.cli.contracts.view import ErrorRaised
+    from rich.console import Console
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(ErrorRow(ErrorRaised(text="failed: https://example.com/err")))

@@ -6,7 +6,6 @@ Covers the pure helpers (file-list render, reorder, plan-object extraction) and
 from __future__ import annotations
 
 import pytest
-
 from mote.executor.tools.code_review import plan as plan_mod
 from mote.executor.tools.code_review._agent import extract_json_object
 from mote.executor.tools.code_review.parser import FileDiff, Hunk

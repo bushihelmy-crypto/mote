@@ -27,6 +27,7 @@ from mote.common.schema import AIMessage, CauseBy, Message, MessagePriority, Use
 if TYPE_CHECKING:
     from mote.common.base import BaseThinkEngine
     from mote.common.interface import BackgroundPool, MessageStore
+    from mote.context.turn_context import TurnContextBus
     from mote.executor.base_executor import BaseToolExecutor
     from mote.parser import CommandChannel
     from mote.roles.context_provider import BaseContextProvider
@@ -71,6 +72,8 @@ class ReActLoop(BaseLoop):
         set_active: Callable[[bool], None],
         get_bg_pool: Callable[[], Optional["BackgroundPool"]],
         report_think_result: Callable[[Any], None],
+        turn_context_bus: Optional["TurnContextBus"] = None,
+        get_cwd: Optional[Callable[[], str]] = None,
     ):
         self._think_engine = think_engine
         self._channel = command_channel
@@ -81,6 +84,13 @@ class ReActLoop(BaseLoop):
         self._set_active = set_active
         self._get_bg_pool = get_bg_pool
         self._report_think_result = report_think_result
+        # The persistent (save_to_context) turn-context bucket. Recorded into
+        # memory each think cycle, symmetric with the ephemeral bucket that
+        # PromptBuilder appends to the user prompt — same owner (the loop), same
+        # timing (right before think), so the two buckets never drift apart.
+        self._turn_context_bus = turn_context_bus
+        # Live cwd accessor (working_dir can move via ``cd``); ``None`` => "".
+        self._get_cwd = get_cwd
 
         # The static observe + loop-control bundle. Filled at run() start from
         # context_provider.loop_context() — the loop never receives it directly.
@@ -142,6 +152,28 @@ class ReActLoop(BaseLoop):
     # Single-step primitives (were Role._think / _act / _finish_react)
     # ------------------------------------------------------------------
 
+    async def _record_turn_context(self) -> None:
+        """Commit this cycle's persistent (save_to_context) turn-context block.
+
+        Renders the bus's persisted bucket (git status / token pressure / LSP
+        diagnostics / ... — everything not flagged ``save_to_context=False``) and,
+        when non-empty, appends it to history as a user message *before* the
+        request is assembled, so the block both survives into future turns and is
+        visible to this cycle's think. Committing it here — right before think,
+        after ``_observe`` has already committed the turn's user prompt — is what
+        keeps history (and the durable rollout) in ``prompt → turn-context``
+        order. Symmetric with the ephemeral bucket, which PromptBuilder collects
+        into the user prompt on the same cycle. Best-effort: change-gated sources
+        self-suppress, so a quiet cycle adds nothing.
+        """
+        bus = self._turn_context_bus
+        if bus is None:
+            return
+        cwd = self._get_cwd() if self._get_cwd is not None else None
+        block = await bus.collect_to_context(cwd=cwd or None)
+        if block:
+            await self._memory.add(UserMessage(content=block))
+
     async def _step_think(self) -> bool:
         """Use LLM to decide whether and what to do next.
 
@@ -150,6 +182,11 @@ class ReActLoop(BaseLoop):
         """
         if not self._is_active():
             return False
+
+        # Persist this cycle's turn-context block before building the request, so
+        # it lands in history after the user prompt (correct order) and is seen by
+        # this think. Mirrors the ephemeral bucket collected inside prepare().
+        await self._record_turn_context()
 
         async with span("think"):
             tr = await self._context_provider.prepare()
@@ -207,6 +244,11 @@ class ReActLoop(BaseLoop):
                 # only the native channel (which has per-result messages) uses it.
                 if result.retention:
                     entry["retention"] = result.retention
+                # Resource provenance of a reconstructable result (the file a Read
+                # derived from). Carried the same way; the channel stamps it onto
+                # the tool_result metadata for ContextVisibility to key off.
+                if result.resource_path:
+                    entry["resource_path"] = result.resource_path
                 executed.append(entry)
                 if not result.success:
                     failed = True
@@ -334,7 +376,12 @@ class ReActLoop(BaseLoop):
             if self._consecutive >= self._ctx.max_consecutive_react_limit:
                 if not can_ask:
                     break
-                memory = self._memory.get(k=self._ctx.memory_k)
+                # Reuse the managed history verbatim: it is kept boundary-safe
+                # (complete tool_use↔tool_result pairs) and under budget by
+                # manage_history on every think turn. A bare tail slice here used
+                # to cut through the middle of a tool group, stranding an orphan
+                # tool_result at the head → Anthropic 400.
+                memory = self._memory.get()
                 context = memory + [UserMessage(content=SUMMARIZE_STATUS_WHEN_CONSECUTIVE)]
                 llm = await self._context_provider.resolve_llm(context)
                 question = await llm.aask(context)

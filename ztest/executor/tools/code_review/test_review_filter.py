@@ -6,7 +6,6 @@ with the child-agent boundary monkeypatched (no real Role / LLM).
 from __future__ import annotations
 
 import pytest
-
 from mote.executor.tools.code_review import review_filter as rf
 from mote.executor.tools.code_review.format import Finding
 

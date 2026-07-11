@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     qualified_name TEXT NOT NULL,
     kind TEXT NOT NULL,
     start_line INTEGER NOT NULL,
-    signature TEXT NOT NULL DEFAULT ''
+    signature TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path);
 
@@ -54,9 +55,19 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target, kind);
 CREATE TABLE IF NOT EXISTS files (
     path TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
-    indexed_at INTEGER
+    indexed_at INTEGER,
+    module_summary TEXT NOT NULL DEFAULT ''
 );
 """
+
+#: Columns added after the initial schema shipped. A persisted DB from an older
+#: build lacks them, so we ADD COLUMN on open (idempotent — a missing column is
+#: added, an existing one raises OperationalError we swallow). Each carries the
+#: same DEFAULT '' as the CREATE, so old rows read back as unsummarized.
+_MIGRATIONS = (
+    ("nodes", "summary", "TEXT NOT NULL DEFAULT ''"),
+    ("files", "module_summary", "TEXT NOT NULL DEFAULT ''"),
+)
 
 
 class CodeMapStore:
@@ -69,7 +80,22 @@ class CodeMapStore:
     def __init__(self, path: str = ":memory:") -> None:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns a persisted older-build DB is missing (idempotent).
+
+        A fresh DB already has them from ``_SCHEMA``; an existing one from before
+        the summary columns shipped does not. ``ADD COLUMN`` on a column that
+        already exists raises ``OperationalError`` (duplicate column), which we
+        swallow — the desired end state (column present) is reached either way.
+        """
+        for table, column, decl in _MIGRATIONS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            except sqlite3.OperationalError:
+                pass  # column already present — nothing to do
 
     def close(self) -> None:
         self._conn.close()
@@ -88,9 +114,9 @@ class CodeMapStore:
         cur.execute("DELETE FROM edges WHERE source_file = ?", (path,))
 
         cur.executemany(
-            "INSERT INTO nodes (file_path, name, qualified_name, kind, start_line, signature) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [(path, s.name, s.qualified_name, s.kind, s.start_line, s.signature) for s in extract.symbols],
+            "INSERT INTO nodes (file_path, name, qualified_name, kind, start_line, signature, summary) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(path, s.name, s.qualified_name, s.kind, s.start_line, s.signature, s.summary) for s in extract.symbols],
         )
         cur.executemany(
             "INSERT INTO edges (source_file, target, kind, caller, line) VALUES (?, ?, 'imports', '', 0)",
@@ -103,8 +129,8 @@ class CodeMapStore:
         # The files row is the staleness anchor: content hash + parse time. An
         # INSERT-OR-REPLACE keyed on the path keeps exactly one row per file.
         cur.execute(
-            "INSERT OR REPLACE INTO files (path, content_hash, indexed_at) VALUES (?, ?, ?)",
-            (path, extract.content_hash, int(time.time())),
+            "INSERT OR REPLACE INTO files (path, content_hash, indexed_at, module_summary) VALUES (?, ?, ?, ?)",
+            (path, extract.content_hash, int(time.time()), extract.module_summary),
         )
         self._conn.commit()
 
@@ -121,11 +147,19 @@ class CodeMapStore:
     def symbols_in(self, file_path: str) -> list[Symbol]:
         """Every symbol defined in ``file_path``, ordered by definition line."""
         rows = self._conn.execute(
-            "SELECT name, qualified_name, kind, start_line, signature FROM nodes "
+            "SELECT name, qualified_name, kind, start_line, signature, summary FROM nodes "
             "WHERE file_path = ? ORDER BY start_line",
             (file_path,),
         ).fetchall()
-        return [Symbol(name=r[0], qualified_name=r[1], kind=r[2], start_line=r[3], signature=r[4]) for r in rows]
+        return [
+            Symbol(name=r[0], qualified_name=r[1], kind=r[2], start_line=r[3], signature=r[4], summary=r[5])
+            for r in rows
+        ]
+
+    def module_summary_of(self, file_path: str) -> str:
+        """The stored module-docstring summary for ``file_path`` ("" when none)."""
+        row = self._conn.execute("SELECT module_summary FROM files WHERE path = ?", (file_path,)).fetchone()
+        return row[0] if row and row[0] else ""
 
     def calls_in(self, file_path: str) -> list[CallEdge]:
         """Every intra-file call edge recorded for ``file_path``, in call order."""

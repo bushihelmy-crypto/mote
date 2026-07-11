@@ -9,7 +9,6 @@ when a ``task_id`` is supplied, also mirrors each event onto the active bus as a
 from __future__ import annotations
 
 import pytest
-
 from mote.common.events import EventBus, TaskProgressEvent, set_bus
 from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
 from mote.executor.tasks.bggraph.report import MAX_RESULT_DISPLAY_CHARS, make_progress_writer

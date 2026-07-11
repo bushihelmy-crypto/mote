@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.router.control import (
     DEFAULT_HOLD_TTL_SECONDS,
     RouterControlHold,

@@ -10,57 +10,95 @@ decoupled from the tool implementation code.
 # --- Filesystem tools ------------------------------------------------------
 
 EDIT_DESCRIPTION = (
-    "Performs exact string replacements in files. You must Read the file at "
-    "least once before editing it. The edit fails if old_string is not unique "
-    "in the file — provide more surrounding context to make it unique, or set "
-    "replace_all to replace every occurrence (useful for renaming)."
+    "Performs exact string replacements in files.\n"
+    "\n"
+    "You must use the Read tool at least once on the file before editing it — "
+    "the edit fails otherwise. Preserve the exact indentation (tabs/spaces) as "
+    "it appears in the file, but do NOT include the line-number prefix that Read "
+    "adds to its output.\n"
+    "\n"
+    "The edit fails if old_string is not unique in the file: either add more "
+    "surrounding context so the match is unique, or set replace_all=true to "
+    "change every occurrence (useful for renaming a variable across the file). "
+    "Prefer editing an existing file over rewriting it whole with Write."
 )
 
 WRITE_DESCRIPTION = (
-    "Write a file to the local filesystem. Creates the file and any missing "
-    "parent directories, or overwrites it if it already exists. Prefer editing "
-    "an existing file over rewriting it when only part changes."
+    "Writes a file to the local filesystem, creating any missing parent "
+    "directories.\n"
+    "\n"
+    "- If the file already exists, it is OVERWRITTEN; you must use the Read tool "
+    "on it first, so you are editing from its current contents rather than "
+    "clobbering changes you have not seen.\n"
+    "- ALWAYS prefer editing an existing file with the Edit tool when only part "
+    "of it changes. Only use Write to create a new file or to fully replace one.\n"
+    "- NEVER proactively create documentation (*.md) or README files unless the "
+    "user explicitly asks for them."
 )
 
 READ_DESCRIPTION = (
-    "Read a file from the local filesystem. Text files return contents with "
-    "line numbers (offset/limit select a slice); images and PDFs are shown "
-    "to the model visually; Jupyter notebooks are rendered as text."
+    "Reads a file from the local filesystem. The file_path may be absolute, or "
+    "relative to the working directory; ~ is expanded.\n"
+    "\n"
+    "- By default it reads up to 2000 lines from the start of the file. Use "
+    "offset (1-indexed start line) and limit for large files; a Grep hit "
+    "reported as path:42 is read with offset=42.\n"
+    "- Output is returned with cat -n style line numbers (a right-aligned number "
+    "then an arrow then the line). These numbers are for your reference only — "
+    "never reproduce the number+arrow prefix when quoting or editing content.\n"
+    "- Images (png/jpg/jpeg/gif/webp) and PDFs (mode='visual') are shown to you "
+    "visually; Jupyter notebooks (.ipynb) are rendered as text; rich documents "
+    "(PDF/Word/Excel) are extracted to text with line numbers by default.\n"
+    "- You may read multiple distinct files in a single turn by making several "
+    "Read calls at once; prefer this over reading them one at a time.\n"
+    "- ALWAYS use this tool to read files instead of shell commands like cat / "
+    "head / tail: it handles line numbering, large-file slicing, and media. If a "
+    "file was read and is unchanged, a short 'unchanged' note may be returned in "
+    "place of the body — that is expected."
 )
 
 # Returned in place of file contents when an already-read file is unchanged on
-# disk — prompt text, not a real read result.
+# disk — prompt text, not a real read result. Note: the referenced earlier
+# result MAY have been cleared by context folding, so the wording must not
+# promise it is still visible; it gives a recovery path when it is not.
 FILE_UNCHANGED_STUB = (
-    "File unchanged since last read. The content from the earlier Read "
-    "tool_result in this conversation is still current — refer to that "
-    "instead of re-reading."
-)
-
-NOTEBOOK_EDIT_DESCRIPTION = (
-    "Completely replaces the contents of a specific cell in a Jupyter "
-    "notebook (.ipynb file) with new source. The notebook_path must be "
-    "absolute. Use edit_mode=insert to add a new cell after the cell named "
-    "by cell_id (or at the start if omitted), and edit_mode=delete to "
-    "remove the cell named by cell_id."
+    "File unchanged on disk since your last read. If that earlier Read result "
+    "is still visible above, use it. If it has been cleared from context and "
+    "you can no longer see the content, do NOT fall back to shell cat — re-read "
+    "with an explicit offset/limit slice (any range you have not requested at "
+    "this exact same offset+limit before) to force fresh content."
 )
 
 # --- Search tools ----------------------------------------------------------
 
 GLOB_DESCRIPTION = (
-    "Fast file pattern matching tool that works with any codebase size. "
-    'Supports glob patterns like "**/*.js" or "src/**/*.ts". Returns '
-    "matching file paths sorted by modification time (most recent first). "
-    "Use this to find files by name; for content search use Grep instead."
+    "Fast file-name pattern matching that works with any codebase size.\n"
+    "\n"
+    '- Supports glob patterns like "**/*.js" or "src/**/*.ts". Returns matching '
+    "file paths sorted by modification time (most recent first), limited to the "
+    "first 100.\n"
+    "- Use this to find files BY NAME or path shape. To search file CONTENTS, "
+    "use Grep instead. To explore a deep tree with several rounds of globbing "
+    "and grepping, launch an agent to reduce round-trips.\n"
+    "- ALWAYS use this tool instead of running find / ls through Bash."
 )
 
 GREP_DESCRIPTION = (
-    "A powerful search tool built on ripgrep. Searches file CONTENTS with a "
-    "regular expression. Also searches inside rich documents — PDF (.pdf), "
-    "Word (.docx) and Excel (.xlsx) — by extracting their text first; CSV "
-    "and other plain-text files are searched directly. Filter by glob or "
-    "file type; choose output mode files_with_matches (default), content, or "
-    "count. ALWAYS use this for content search instead of running grep/rg "
-    "through the Bash tool."
+    "A powerful content search tool built on ripgrep. ALWAYS use this for "
+    "searching file contents — never run grep / rg through the Bash tool.\n"
+    "\n"
+    '- Searches file CONTENTS with full regex syntax (e.g. "log.*Error", '
+    '"function\\s+\\w+"). Plain-text files (including .csv) are searched '
+    "directly; rich documents — PDF (.pdf), Word (.docx), Excel (.xlsx) — are "
+    "searched by extracting their text first.\n"
+    '- Filter the file set with glob (e.g. "*.py", "*.{ts,tsx}") or type '
+    '(e.g. "py", "rust", "pdf"). Choose output_mode: files_with_matches '
+    "(default), content, or count.\n"
+    "- In the default mode each result is 'path:line', where line is the first "
+    "match — pass that number straight to Read's offset to jump to it. Use "
+    "content mode with context (-A/-B/-C) when you need the surrounding lines.\n"
+    "- Escape literal braces in the regex ({} is regex syntax). For patterns "
+    "that must span lines, set multiline=true."
 )
 
 # --- Execution tools -------------------------------------------------------

@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.sandbox import resources
 from mote.sandbox.resources import (
     ResourceLimits,

@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.common.const.tasks import MAX_RESULT_LEN
 from mote.common.schema import MessagePriority
 from mote.executor.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskType

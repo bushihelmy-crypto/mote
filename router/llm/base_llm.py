@@ -14,10 +14,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Mapping, Optional, Union
 from uuid import uuid4
 
-from openai import AsyncOpenAI
-from pydantic import BaseModel
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
-
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
 from mote.common.const.llm import supports_pdf_input, supports_vision
@@ -40,6 +36,9 @@ from mote.router.cost import Costs, CostTracker, TokenUsage
 from mote.router.llm.llm_response import LLMResponse, LLMToolCall
 from mote.router.llm.recovery import build_llm_strategies
 from mote.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
+from openai import AsyncOpenAI
+from pydantic import BaseModel
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 # Tenacity retry budget for a single LLM call (the transient-error RETRY tier).
 # Shared by the base ``acompletion_text`` and provider overrides so the retry
@@ -393,8 +392,8 @@ class BaseLLM(ABC):
         strategies = build_llm_strategies(
             compress=_compress,
             rotate=_rotate,
-            fallback=self._fallback_supplier,
-            on_fallback=_on_fallback,
+            fallback=self._fallback_supplier,  # pyright: ignore[reportArgumentType]  # self-identity: dir!=pkg name
+            on_fallback=_on_fallback,  # pyright: ignore[reportArgumentType]  # self-identity: dir!=pkg name
             transformers=transformers or None,
         )
         runner = RecoveryRunner(strategies)

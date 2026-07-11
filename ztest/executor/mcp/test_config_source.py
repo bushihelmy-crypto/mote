@@ -16,7 +16,6 @@ real ``.mote/mcp.json`` files on disk.
 import json
 
 import pytest
-
 from mote.common.config.config.mcp_config import MCPTransportType
 from mote.common.const import paths
 from mote.executor.mcp import config_source

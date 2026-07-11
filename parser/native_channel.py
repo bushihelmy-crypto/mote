@@ -78,7 +78,14 @@ class NativeToolChannel(CommandChannel):
         for e in executed:
             if not e.get("id"):
                 continue
-            await memory.add(ToolMessage(content=e["output"], tool_call_id=e["id"], retention=e.get("retention")))
+            await memory.add(
+                ToolMessage(
+                    content=e["output"],
+                    tool_call_id=e["id"],
+                    retention=e.get("retention"),
+                    resource_path=e.get("resource_path"),
+                )
+            )
         media = _media_message(*_collect_media(executed))
         if media is not None:
             await memory.add(media)

@@ -33,13 +33,12 @@ from __future__ import annotations
 
 import re
 
+from mote.cli.consumers.render.theme import MARKDOWN_THEME
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markdown import BlockQuote, Heading, Markdown
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
-
-from mote.cli.consumers.render.theme import MARKDOWN_THEME
 
 # Bare http(s) URL, used to autolink URLs typed as plain prose. CommonMark only
 # linkifies ``[text](url)`` / ``<url>`` — a bare URL stays literal — so we wrap

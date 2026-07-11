@@ -5,7 +5,6 @@
 import types
 
 import pytest
-
 from mote.common.agent_control import (
     Lifecycle,
     SpawnContext,

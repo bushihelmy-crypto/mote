@@ -9,7 +9,6 @@ exceed the limit. It is fail-closed so a crash denies the spawn.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.events import EventBus, LLMStreamDeltaEvent, PreAgentSpawnEvent
 from mote.common.interface.event_subscriber import FAIL_CLOSED
 from mote.environment.spawn_gate import SpawnGate

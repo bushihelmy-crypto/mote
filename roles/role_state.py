@@ -7,12 +7,11 @@ RoleState — serializable runtime snapshot for checkpoint/recovery.
 from __future__ import annotations
 
 from typing import Any, Optional
-from uuid import uuid4
-
-from pydantic import ConfigDict, Field, PrivateAttr
 
 from mote.common.const import DEFAULT_WORKSPACE_ROOT
 from mote.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin, ThinkResult
+from mote.session.ids import new_session_id
+from pydantic import ConfigDict, Field, PrivateAttr
 
 
 class RoleState(SerializationMixin):
@@ -29,7 +28,7 @@ class RoleState(SerializationMixin):
     msg_buffer: MessageQueue = Field(default_factory=MessageQueue, exclude=True)
 
     # Session
-    session_id: str = Field(default_factory=lambda: uuid4().hex)
+    session_id: str = Field(default_factory=new_session_id)
     # Fork lineage: the session_id this session was forked from (None for roots).
     # Recorded on the rollout's session_meta first line so listing can show the tree.
     parent_session_id: Optional[str] = None
@@ -76,6 +75,15 @@ class RoleState(SerializationMixin):
     # read-before-overwrite and to detect files changed since the last read.
     # Runtime-only (not part of the serialized checkpoint).
     _file_read_state: dict[str, int] = PrivateAttr(default_factory=dict)
+
+    # Files the session merely *glimpsed* — surfaced by a Grep/Glob match but not
+    # read in full. Distinct from ``_file_read_state`` (which means "body was in
+    # context, mtime tracked for read-before-write"); a glimpse carries no body,
+    # so it feeds only the code map's navigation view (defines + intent to help
+    # the model choose what to Read), never the read-before-write guard or the
+    # code map's F1 in-context suppression. An ordered set (dict for insertion
+    # order); paths are absolute. Runtime-only, like ``_file_read_state``.
+    _file_glimpsed_state: dict[str, None] = PrivateAttr(default_factory=dict)
 
     # Live, per-Role session state for stateful tools (a persistent terminal
     # shell, a Python kernel, ...), keyed by tool name -> the tool's live
@@ -160,6 +168,19 @@ class RoleStateController:
     def get_file_read_mtime(self, path: str) -> Optional[int]:
         """Return the mtime_ns recorded when `path` was last read, else None."""
         return self._state._file_read_state.get(path)
+
+    def record_file_glimpsed(self, path: str) -> None:
+        """Record that `path` surfaced in a search result (Grep/Glob), un-read.
+
+        A glimpse (no body) feeds only the code map's navigation view, so it is
+        stored separately from the read state and never affects the
+        read-before-write guard. Idempotent; insertion order is preserved.
+        """
+        self._state._file_glimpsed_state[path] = None
+
+    def get_glimpsed_files(self) -> list[str]:
+        """Absolute paths glimpsed via search this session (insertion order)."""
+        return list(self._state._file_glimpsed_state.keys())
 
     def get_tool_session(self, key: str) -> Any:
         """Return a stateful tool's live session (keyed by tool name), else None."""

@@ -98,7 +98,7 @@ python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tas
 - 改了某子系统，至少跑该子系统 + 其直接依赖方的 ztest，确认无回归。
 - 已知预存问题（非新引入）：
   - `mote/ztest/prompts/*` 因测试自身 import 路径错误（`No module named 'prompts'`）收集失败，与应用代码无关。
-  - `role_zero_utils.py` 原地 mutate 共享常量 `ASK_HUMAN_COMMAND` 会造成顺序依赖污染。
+  - `role_utils.py` 原地 mutate 共享常量 `ASK_HUMAN_COMMAND` 会造成顺序依赖污染。
   - 本机 pytest/py3.11 偶发 `INTERNALERROR AST recursion depth mismatch`，用 `--tb=short`/`--tb=no` 规避。
 - 交互式 PTY/kernel 测试：多次调用必须包在**一个 `asyncio.run`** 里（conftest 每次 `run()` 开新 loop 会孤儿化 reader/channel），每个 test 用唯一 session_id + cleanup 防 singleton 泄漏。
 

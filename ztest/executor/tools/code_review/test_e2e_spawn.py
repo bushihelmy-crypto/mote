@@ -22,11 +22,10 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 # Import the roles package so its ChildRoleBuilder registers into the
 # common-layer holder; the deep spawn path (build_child_role) requires it.
 import mote.roles  # noqa: F401
+import pytest
 from mote.common.agent_control import set_control
 from mote.environment.control import AgentControl
 from mote.environment.store import ResidencyStore

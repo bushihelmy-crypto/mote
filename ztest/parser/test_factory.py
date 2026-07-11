@@ -13,9 +13,8 @@
 """
 from __future__ import annotations
 
-import pytest
-
 import mote.parser as parser_pkg
+import pytest
 from mote.common.config.config.llm_config import LLMType
 from mote.parser import NativeToolChannel, XmlCommandChannel, infer_native_tool_provider, make_command_channel
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 import types
 
 import pytest
-
 from mote.common.agent_control import set_control
 from mote.common.exception import AgentLimitReached
 from mote.executor.tools.code_review._agent import run_child, run_child_for_text

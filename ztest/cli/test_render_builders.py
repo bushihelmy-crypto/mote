@@ -15,7 +15,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from mote.cli.consumers.render.builders import (
     _HAS_RICH,
     compaction_summary_text,

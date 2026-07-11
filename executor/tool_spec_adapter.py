@@ -23,9 +23,8 @@ import types
 import typing
 from typing import Any, Callable, Union
 
-from pydantic import BaseModel
-
 from mote.common.utils.docstring import parse_section
+from pydantic import BaseModel
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types
 # but maps to JSON Schema's "object" (not the parser's internal "map").

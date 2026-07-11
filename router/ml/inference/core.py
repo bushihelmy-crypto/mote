@@ -10,7 +10,6 @@ build_features → run_heads → fuse → postprocess pipeline.
 from __future__ import annotations
 
 import numpy as np
-
 from mote.router.ml.inference.artifacts import InferenceArtifacts
 from mote.router.ml.inference.ensemble import fuse_probabilities
 from mote.router.ml.inference.features import build_feature_bundle

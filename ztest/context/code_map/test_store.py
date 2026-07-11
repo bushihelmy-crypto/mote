@@ -6,9 +6,10 @@ from mote.context.code_map.extractor import CallEdge, FileExtract, Symbol
 from mote.context.code_map.store import CodeMapStore
 
 
-def _extract(path: str, *, symbols=None, imports=None, calls=None, content_hash="") -> FileExtract:
+def _extract(path: str, *, symbols=None, imports=None, calls=None, content_hash="", module_summary="") -> FileExtract:
     return FileExtract(
         path=path,
+        module_summary=module_summary,
         symbols=symbols or [],
         imports=imports or [],
         calls=calls or [],
@@ -179,3 +180,61 @@ def test_get_stale_paths_new_changed_unchanged_vanished():
 
     # With nothing changed, warm store re-parses nothing.
     assert store.get_stale_paths({"/a.py": "h_a", "/b.py": "h_b"}) == []
+
+
+# -- P1: summary persistence + migration --------------------------------------
+
+
+def test_symbol_summary_roundtrip():
+    store = CodeMapStore()
+    store.upsert_file(
+        _extract(
+            "/a.py",
+            symbols=[Symbol(name="f", qualified_name="f", kind="function", start_line=1, summary="Does a thing.")],
+        )
+    )
+    got = store.symbols_in("/a.py")
+    assert got[0].summary == "Does a thing."
+
+
+def test_module_summary_roundtrip():
+    store = CodeMapStore()
+    store.upsert_file(_extract("/a.py", module_summary="Module intent."))
+    assert store.module_summary_of("/a.py") == "Module intent."
+
+
+def test_module_summary_empty_for_unknown_or_undocumented():
+    store = CodeMapStore()
+    assert store.module_summary_of("/missing.py") == ""
+    store.upsert_file(_extract("/a.py"))  # no summary
+    assert store.module_summary_of("/a.py") == ""
+
+
+def test_migration_adds_columns_to_legacy_db(tmp_path):
+    # A DB created without the summary columns (an older build) is migrated on
+    # open: ADD COLUMN runs, and upsert/read of the new fields works.
+    import sqlite3
+
+    db = str(tmp_path / "legacy.db")
+    con = sqlite3.connect(db)
+    # The pre-summary shape: nodes/files without the summary columns (edges match
+    # the current schema, which is created idempotently on open).
+    con.executescript(
+        "CREATE TABLE nodes (file_path TEXT NOT NULL, name TEXT NOT NULL, "
+        "qualified_name TEXT NOT NULL, kind TEXT NOT NULL, start_line INTEGER NOT NULL, "
+        "signature TEXT NOT NULL DEFAULT '');"
+        "CREATE TABLE files (path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, indexed_at INTEGER);"
+    )
+    con.commit()
+    con.close()
+
+    store = CodeMapStore(db)  # opening runs _migrate()
+    store.upsert_file(
+        _extract(
+            "/a.py",
+            module_summary="Migrated module.",
+            symbols=[Symbol(name="f", qualified_name="f", kind="function", start_line=1, summary="Migrated sym.")],
+        )
+    )
+    assert store.module_summary_of("/a.py") == "Migrated module."
+    assert store.symbols_in("/a.py")[0].summary == "Migrated sym."

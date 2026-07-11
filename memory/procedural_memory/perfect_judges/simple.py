@@ -1,10 +1,9 @@
 """Simple perfect judge."""
 
 
-from pydantic import ConfigDict
-
 from mote.memory.procedural_memory.perfect_judges.base import BasePerfectJudge
 from mote.memory.procedural_memory.schema import MAX_SCORE, Experience
+from pydantic import ConfigDict
 
 
 class SimplePerfectJudge(BasePerfectJudge):

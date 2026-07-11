@@ -10,7 +10,6 @@ exercises the constructor's registry-prebind path using the
 from __future__ import annotations
 
 import pytest
-
 from mote.common.exception import ToolValidationError
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.schema import ToolResultLimitConfig

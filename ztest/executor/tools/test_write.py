@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mote.executor.tool_result import ToolError
 from mote.executor.tools.write import Write
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.common.scheduling import PeriodicLoop
 
 

@@ -1,8 +1,7 @@
 from typing import Any
 
-from pydantic import Field, model_validator
-
 from mote.common.utils.yaml_model import YamlModel
+from pydantic import Field, model_validator
 
 # Mapping from legacy flat config keys to (section, nested_key). Defined at
 # module level so Pydantic's private-attr machinery doesn't swallow it if
@@ -33,7 +32,7 @@ class SkillsConfig(YamlModel):
     )
 
 
-class RoleZeroConfig(YamlModel):
+class RoleConfig(YamlModel):
     ai_capability_models: list[str] = Field(
         default_factory=lambda: [
             "gpt-5.4 [gentxt] (Versatile / Multimodal / Structured Writing)",
@@ -83,6 +82,14 @@ class RoleZeroConfig(YamlModel):
 
     # P0 Skills
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+
+    # Code map (P3): opportunistically surface real per-symbol callers of calm
+    # public symbols (``foo called by: a.py``) via the LSP references facade, not
+    # only when an interface breaks. Default off — it adds LSP ``references``
+    # volume, so it is opt-in; no effect unless an LSP layer is configured.
+    code_map_surface_callers: bool = Field(
+        default=False, description="Surface per-symbol callers of calm public symbols in the code map (needs LSP)."
+    )
 
     # --- Backward-compat migration for pre-nested flat config ---
     # Older configs used flat fields (enable_skills / max_skill_tokens).

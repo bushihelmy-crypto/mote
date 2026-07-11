@@ -12,7 +12,6 @@ import time
 from typing import Optional
 
 import httpx
-
 from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
 from mote.common.logs import log_class
 from mote.router.oauth.errors import OAuthConfigError, OAuthRefreshError, classify_refresh_failure
