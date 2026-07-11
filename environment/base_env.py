@@ -25,14 +25,14 @@ from typing import Any, Dict, Optional, Set
 
 from pydantic import ConfigDict, PrivateAttr
 
-from metagpt.common.logs import logger
-from metagpt.common.schema import Message
-from metagpt.common.schema.env import BaseEnvironment
-from metagpt.environment.control import AgentControl
-from metagpt.common.exception import AgentNotFound
-from metagpt.environment.registry import AgentMetadata
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.environment.store import ResidencyStore
+from mote.common.exception import AgentNotFound
+from mote.common.logs import logger
+from mote.common.schema import Message
+from mote.common.schema.env import BaseEnvironment
+from mote.environment.control import AgentControl
+from mote.environment.registry import AgentMetadata
+from mote.environment.runtime import AgentRuntime
+from mote.environment.store import ResidencyStore
 
 
 class AgentEnvironment(BaseEnvironment):
@@ -43,7 +43,7 @@ class AgentEnvironment(BaseEnvironment):
     desc: str = ""
 
     # Runtime-only state (never serialized).
-    _control: AgentControl = PrivateAttr(default=None)
+    _control: Optional[AgentControl] = PrivateAttr(default=None)
     _roles: Dict[str, Any] = PrivateAttr(default_factory=dict)  # name -> Role
 
     def model_post_init(self, __context: Any) -> None:
@@ -55,6 +55,7 @@ class AgentEnvironment(BaseEnvironment):
     # ------------------------------------------------------------------
     @property
     def control(self) -> AgentControl:
+        assert self._control is not None, "control accessed before model_post_init"
         return self._control
 
     # ------------------------------------------------------------------
@@ -70,16 +71,16 @@ class AgentEnvironment(BaseEnvironment):
         name = self._role_name(role)
         runtime = AgentRuntime(role)
         self._roles[name] = role
-        self._control.add_agent(runtime, metadata=AgentMetadata(agent_nickname=name))
+        self.control.add_agent(runtime, metadata=AgentMetadata(agent_nickname=name))
         # Wire the explicit plane reference onto the role's context so spawn
         # sites holding it (skill forks) reach the live plane directly; turns
         # driven through the scheduler also bind it ambiently.
         ctx = getattr(role, "_context", None)
         if ctx is not None and getattr(ctx, "agent_control", None) is None:
-            ctx.agent_control = self._control
+            ctx.agent_control = self.control
         # Seed the routing index (set_env -> set_addresses will refine it).
         addresses = getattr(getattr(role, "state", None), "addresses", None) or {name}
-        self._control.comm_graph.set_addresses(role.session_id, set(addresses))
+        self.control.comm_graph.set_addresses(role.session_id, set(addresses))
         if hasattr(role, "set_env"):
             role.set_env(self)
         return role
@@ -90,7 +91,7 @@ class AgentEnvironment(BaseEnvironment):
 
     def set_addresses(self, role: Any, addresses: Set[str]) -> None:
         """Update the address→agent routing index for *role* (codex address map)."""
-        self._control.comm_graph.set_addresses(role.session_id, set(addresses or []))
+        self.control.comm_graph.set_addresses(role.session_id, set(addresses or []))
 
     # ------------------------------------------------------------------
     # Views consumed by provider.py
@@ -98,7 +99,7 @@ class AgentEnvironment(BaseEnvironment):
     @property
     def roles(self) -> Dict[str, Any]:
         """Name→Role for currently *loaded* agents (evicted ones are omitted)."""
-        live = self._control.runtimes()
+        live = self.control.runtimes()
         return {name: role for name, role in self._roles.items() if role.session_id in live}
 
     def role_names(self) -> list:
@@ -117,7 +118,7 @@ class AgentEnvironment(BaseEnvironment):
         recipients = self._resolve_recipients(message.send_to)
         for session_id in recipients:
             try:
-                self._control.send_input(session_id, message)
+                self.control.send_input(session_id, message)
             except AgentNotFound:
                 logger.warning(f"AgentEnvironment: recipient {session_id} not found; dropping message")
         return True
@@ -130,45 +131,43 @@ class AgentEnvironment(BaseEnvironment):
         residency-evicted to disk: routing to it rehydrates it transparently
         (the control plane's ``send_input`` loads it on the way in).
         """
-        return self._control.comm_graph.resolve_recipients(
-            send_to, all_ids=self._control.runtimes().keys()
-        )
+        return self.control.comm_graph.resolve_recipients(send_to, all_ids=self.control.runtimes().keys())
 
     # ------------------------------------------------------------------
     # Driving
     # ------------------------------------------------------------------
     async def run(self, k: int = 1) -> int:
         """Pump the scheduler up to *k* rounds (bounded barrier pump)."""
-        return await self._control.run(k)
+        return await self.control.run(k)
 
     def quiescent(self) -> bool:
-        return self._control.quiescent()
+        return self.control.quiescent()
 
     async def stop(self) -> None:
-        await self._control.stop()
+        await self.control.stop()
 
     # ------------------------------------------------------------------
-    # Human channel (only MGXEnv has a real one; default is "unsupported")
+    # Human channel (only MoteEnv has a real one; default is "unsupported")
     # ------------------------------------------------------------------
     async def ask_human(self, question: str, sent_from: Optional[Any] = None) -> str:
         """Default: this environment has no human channel."""
-        return "Not in MGXEnv, command will not be executed."
+        return "Not in MoteEnv, command will not be executed."
 
     async def ask_user_question(self, questions: Any, sent_from: Optional[Any] = None) -> Any:
         """Default: no human channel → empty structured answers.
 
-        The production front-end is ``PortHumanChannel`` (metagpt.cli), which
+        The production front-end is ``PortHumanChannel`` (mote.cli), which
         overrides this to route to a port's ``ask_questions``. A non-CLI
         environment returning empty answers is a deliberate decision, not an
-        oversight; MGXEnv may optionally override to walk ``get_human_input``.
+        oversight; MoteEnv may optionally override to walk ``get_human_input``.
         """
-        from metagpt.common.schema import AskUserQuestionAnswers
+        from mote.common.schema import AskUserQuestionAnswers
 
         return AskUserQuestionAnswers()
 
     async def reply_to_human(self, content: str, sent_from: Optional[Any] = None) -> str:
         """Default: this environment has no human channel."""
-        return "Not in MGXEnv, command will not be executed."
+        return "Not in MoteEnv, command will not be executed."
 
     # ------------------------------------------------------------------
     # Internals

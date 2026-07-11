@@ -4,9 +4,9 @@
 
 The control plane has three RAII-style resources that all need to release
 themselves when a ``with`` / ``async with`` block exits without an explicit
-commit: :class:`~metagpt.environment.registry.SpawnReservation`,
-:class:`~metagpt.environment.residency.ResidencySlot`, and
-:class:`~metagpt.environment.limiter.AgentExecutionGuard`. They differ only in
+commit: :class:`~mote.environment.registry.SpawnReservation`,
+:class:`~mote.environment.residency.ResidencySlot`, and
+:class:`~mote.environment.limiter.AgentExecutionGuard`. They differ only in
 *what* they release, so the four context-manager dunders are factored here and
 each subclass implements a single :meth:`_scope_exit` hook.
 """

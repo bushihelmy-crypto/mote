@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`metagpt.common.scheduling.PeriodicLoop`.
+"""Unit tests for :class:`mote.common.scheduling.PeriodicLoop`.
 
 Covers: ticking until stopped, sync and async ticks, best-effort error
 swallowing, self-stop via a ``False`` return, ``sleep_first`` ordering,
@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from metagpt.common.scheduling import PeriodicLoop
+from mote.common.scheduling import PeriodicLoop
 
 
 async def _wait_for(predicate, timeout=2.0):

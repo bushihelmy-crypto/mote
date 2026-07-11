@@ -17,21 +17,37 @@ from .parser import FileDiff
 # Source extensions worth reviewing. MVP white-list — extend as needed.
 DEFAULT_SUPPORTED_EXTS: frozenset[str] = frozenset(
     {
-        ".py", ".pyi",
+        ".py",
+        ".pyi",
         ".go",
-        ".js", ".jsx", ".mjs", ".cjs",
-        ".ts", ".tsx",
-        ".java", ".kt", ".scala",
-        ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".ts",
+        ".tsx",
+        ".java",
+        ".kt",
+        ".scala",
+        ".c",
+        ".h",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".hpp",
+        ".hh",
         ".cs",
         ".rb",
         ".rs",
         ".php",
         ".swift",
-        ".m", ".mm",
-        ".sh", ".bash",
+        ".m",
+        ".mm",
+        ".sh",
+        ".bash",
         ".sql",
-        ".vue", ".svelte",
+        ".vue",
+        ".svelte",
     }
 )
 
@@ -76,11 +92,7 @@ def _matches_any(path: str, globs: Iterable[str]) -> bool:
     base = os.path.basename(path)
     rooted = "/" + path
     for pat in globs:
-        if (
-            fnmatch.fnmatch(path, pat)
-            or fnmatch.fnmatch(base, pat)
-            or fnmatch.fnmatch(rooted, pat)
-        ):
+        if fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(base, pat) or fnmatch.fnmatch(rooted, pat):
             return True
     return False
 

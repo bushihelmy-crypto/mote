@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import END, START, BgGraph, GraphState
+from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState
 
 from .conftest import S, sync_node
 
@@ -143,9 +143,7 @@ class TestWaitingEdgeNormalization:
         join = self._join_for(g, "merge")
         assert set(join.sources) == {"a", "b", "c"}
         # The absorbed single edge a→merge is gone.
-        assert not any(
-            e.from_node == "a" and e.to_node == "merge" for e in g._edges
-        )
+        assert not any(e.from_node == "a" and e.to_node == "merge" for e in g._edges)
 
     def test_two_waiting_edges_merged(self):
         g = BgGraph("g", state_schema=S)
@@ -229,9 +227,7 @@ class TestWaitingEdgeNormalization:
 class TestParamValidation:
     def test_unknown_input_field(self):
         g = BgGraph("g", state_schema=S)
-        g.add_node(
-            "a", sync_node(lambda s: 1), params={"p": {"from": "$input.nope", "desc": "d"}}
-        )
+        g.add_node("a", sync_node(lambda s: 1), params={"p": {"from": "$input.nope", "desc": "d"}})
         g.add_edge(START, "a")
         g.add_edge("a", END)
         with pytest.raises(ValueError, match="unknown input field"):
@@ -239,9 +235,7 @@ class TestParamValidation:
 
     def test_known_input_field_ok(self):
         g = BgGraph("g", state_schema=S)
-        g.add_node(
-            "a", sync_node(lambda s: 1), params={"p": {"from": "$input.x", "desc": "d"}}
-        )
+        g.add_node("a", sync_node(lambda s: 1), params={"p": {"from": "$input.x", "desc": "d"}})
         g.add_edge(START, "a")
         g.add_edge("a", END)
         g.compile()  # no raise

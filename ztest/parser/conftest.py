@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Shared fixtures for the parser (command-channel) test suite.
 
-The two channels (:class:`~metagpt.parser.native_channel.NativeToolChannel`,
-:class:`~metagpt.parser.xml_channel.XmlCommandChannel`) only touch three
+The two channels (:class:`~mote.parser.native_channel.NativeToolChannel`,
+:class:`~mote.parser.xml_channel.XmlCommandChannel`) only touch three
 collaborators, all of which are duck-typed here so the tests stay offline:
 
 - :class:`FakeThinkEngine` exposes the slice the channels read from a finished
@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 import pytest
 
-from metagpt.common.schema import Message, ThinkResult
+from mote.common.schema import Message, ThinkResult
 
 
 class FakeThinkEngine:
@@ -105,7 +105,7 @@ class _LLMConfig:
     """
 
     def __init__(self, model=None, api_type=None, base_url=""):
-        from metagpt.common.config.config.llm_config import LLMType
+        from mote.common.config.config.llm_config import LLMType
 
         self.model = model
         self.api_type = api_type if api_type is not None else LLMType.OPENAI

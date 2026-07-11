@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""metagpt.environment — codex-style multi-agent control plane.
+"""mote.environment — codex-style multi-agent control plane.
 
 A session-scoped control plane with hierarchical agent paths, per-agent
 mailboxes with turn-atomic delivery, a concurrency limiter, and LRU residency
@@ -13,7 +13,7 @@ Faithful Python/asyncio port of ``codex-rs/core/src/agent/*``.
 
 from __future__ import annotations
 
-from metagpt.common.agent_control import (
+from mote.common.agent_control import (
     Lifecycle,
     SpawnContext,
     SpawnSpec,
@@ -22,33 +22,23 @@ from metagpt.common.agent_control import (
     set_control,
     spawn_and_run,
 )
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.base_env import AgentEnvironment
-from metagpt.environment.comms import CommGraph, CommKind
-from metagpt.environment.control import AgentControl
-from metagpt.common.exception import (
-    AgentControlError,
-    AgentLimitReached,
-    AgentNotFound,
-    AgentNotKnown,
-    AgentPathExists,
-)
-from metagpt.environment.handle import ChildAgentHandle
-from metagpt.environment.limiter import AgentExecutionLimiter
-from metagpt.environment.mailbox import (
-    DeliveryMode,
-    InterAgentCommunication,
-    Mailbox,
-)
-from metagpt.environment.mgx.mgx_env import MGXEnv
-from metagpt.environment.registry import AgentMetadata, AgentRegistry
-from metagpt.environment.residency import Residency
-from metagpt.environment.runtime import AgentRuntime, AgentStatus
-from metagpt.environment.spawn_gate import SpawnGate
-from metagpt.environment.turn_scheduler import EventDrivenScheduler
-from metagpt.environment.scheduling import CronScheduler, CronService, CronTask
-from metagpt.environment.store import ResidencyStore
-from metagpt.environment.watching import FileChangeEvent, FileWatcher, FileWatchService
+from mote.common.exception import AgentControlError, AgentLimitReached, AgentNotFound, AgentNotKnown, AgentPathExists
+from mote.environment.agent_path import AgentPath
+from mote.environment.base_env import AgentEnvironment
+from mote.environment.comms import CommGraph, CommKind
+from mote.environment.control import AgentControl
+from mote.environment.handle import ChildAgentHandle
+from mote.environment.limiter import AgentExecutionLimiter
+from mote.environment.mailbox import DeliveryMode, InterAgentCommunication, Mailbox
+from mote.environment.mote.mote_env import MoteEnv
+from mote.environment.registry import AgentMetadata, AgentRegistry
+from mote.environment.residency import Residency
+from mote.environment.runtime import AgentRuntime, AgentStatus
+from mote.environment.scheduling import CronScheduler, CronService, CronTask
+from mote.environment.spawn_gate import SpawnGate
+from mote.environment.store import ResidencyStore
+from mote.environment.turn_scheduler import EventDrivenScheduler
+from mote.environment.watching import FileChangeEvent, FileWatcher, FileWatchService
 
 __all__ = [
     "AgentControl",
@@ -78,7 +68,7 @@ __all__ = [
     "InterAgentCommunication",
     "Lifecycle",
     "Mailbox",
-    "MGXEnv",
+    "MoteEnv",
     "Residency",
     "ResidencyStore",
     "SpawnContext",

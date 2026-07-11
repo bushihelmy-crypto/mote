@@ -2,7 +2,7 @@
 Memory prompt — persistent, file-based memory system for a Role.
 
 Aligned with Claude Code's auto-memory prompt (individual mode). The memory
-module itself is not yet implemented in MetaGPT; this file prepares the prompt
+module itself is not yet implemented in Mote; this file prepares the prompt
 so the behavioral contract is ready when the storage/injection layer lands.
 
 Two-part split (mirrors Claude Code's main-session design):
@@ -17,13 +17,13 @@ Two-part split (mirrors Claude Code's main-session design):
 
 Assembly (mirrors role_zero / PromptBuilder):
     from string import Template
-    from metagpt.common.prompt.memory import (
+    from mote.common.prompt.memory import (
         MEMORY_INSTRUCTIONS, MEMORY_CONTEXT, MEMORY_EMPTY_STATE,
     )
 
     # system prompt section (static, cacheable)
     instructions = Template(MEMORY_INSTRUCTIONS).safe_substitute(
-        memory_dir="/path/to/.metagpt/memory/",
+        memory_dir="/path/to/.mote/memory/",
     )
     # user-context attachment (dynamic, per-turn)
     context = Template(MEMORY_CONTEXT).safe_substitute(
@@ -36,9 +36,7 @@ structure are derivable (via grep/git) and must NOT be saved as memories.
 """
 
 # Shown in place of MEMORY.md content when the index is still empty.
-MEMORY_EMPTY_STATE = (
-    "Your MEMORY.md is currently empty. When you save new memories, they will appear here."
-)
+MEMORY_EMPTY_STATE = "Your MEMORY.md is currently empty. When you save new memories, they will appear here."
 
 # Frontmatter every memory file carries. The name/description fields drive
 # future relevance decisions, so they must stay specific and up-to-date.

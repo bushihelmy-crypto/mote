@@ -16,11 +16,11 @@ not update during the conversation" contract and avoids both the per-turn ``git`
 subprocess cost and the false-freshness trap of a change-gated live feed.
 
 Push→pull bridge in one object (like ``CompactionNoticeContextSource``):
-- as an :class:`~metagpt.common.interface.ObservationSubscriber` it catches
+- as an :class:`~mote.common.interface.ObservationSubscriber` it catches
   :class:`SessionStartEvent` / :class:`PostCompactEvent` off the bus and *freezes*
   the snapshot **at that instant** (so the block honestly reflects the moment it
   claims, not whatever the tree looks like a turn later);
-- as an :class:`~metagpt.common.interface.EphemeralContextSource` it renders the
+- as an :class:`~mote.common.interface.EphemeralContextSource` it renders the
   frozen snapshot once on the next think() cycle, then disarms.
 
 Best-effort throughout: ``collect_git_state`` returns ``None`` off-repo / on any
@@ -34,10 +34,10 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from metagpt.common.events import PostCompactEvent, SessionStartEvent
-from metagpt.common.interface import ObservationSubscriber, TurnContextPriority
-from metagpt.common.logs import logger
-from metagpt.common.utils.git_state import collect_git_state, render_git_section
+from mote.common.events import PostCompactEvent, SessionStartEvent
+from mote.common.interface import ObservationSubscriber, TurnContextPriority
+from mote.common.logs import logger
+from mote.common.utils.git_state import collect_git_state, render_git_section
 
 # Zero-arg provider of the *current* working directory (PostCompactEvent carries
 # no cwd, so the source is handed one to resolve the tree at compaction time).

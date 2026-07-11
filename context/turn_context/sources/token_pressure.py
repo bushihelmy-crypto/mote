@@ -18,9 +18,20 @@ event-bus ↔ context-manager construction cycle).
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional, Protocol, Union
 
-from metagpt.common.interface import TurnContextPriority
+from mote.common.interface import TurnContextPriority
+
+
+class _TokenStateProvider(Protocol):
+    """The context-manager slice this source reads (duck-typed).
+
+    Structural only — reading through ``token_state()`` (not importing the
+    ``ContextManager``) keeps the source trivially fakeable in tests.
+    """
+
+    def token_state(self) -> object:
+        ...
 
 
 class TokenPressureContextSource:
@@ -28,9 +39,20 @@ class TokenPressureContextSource:
 
     name = "token"
     priority = TurnContextPriority.TOKEN
-    save_to_context = True
+    # Ephemeral (request-only): a "context filling up" nudge is a transient state
+    # signal, only meaningful on the turn it fires. Re-evaluated every cycle from
+    # the live token state, so persisting it would just leave stale warnings in
+    # history (and inflate the very budget it warns about).
+    save_to_context = False
 
-    def __init__(self, provider) -> None:
+    def __init__(
+        self,
+        provider: Union[
+            _TokenStateProvider,
+            Callable[[], Optional[_TokenStateProvider]],
+            None,
+        ],
+    ) -> None:
         # `provider` is anything with a `token_state()` -> TokenState method, or a
         # zero-arg callable returning one (resolved lazily per render), or None.
         self._provider = provider

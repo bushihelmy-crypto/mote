@@ -16,48 +16,35 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, Protocol
 from xml.sax.saxutils import escape as _escape_xml
 
-from metagpt.common.logs import log_class, logger
-from metagpt.common.schema import CauseBy, MessagePriority
-from metagpt.executor.tasks.types import (
-    BackgroundTaskNotification,
-    BgStatus,
-    GraphMeta,
-    PollFactory,
-    TaskMeta,
-    TaskType,
-)
+from mote.common.logs import log_class, logger
+from mote.common.schema import CauseBy, MessagePriority
+from mote.executor.tasks.types import BackgroundTaskNotification, BgStatus, GraphMeta, PollFactory, TaskMeta, TaskType
 
 if TYPE_CHECKING:
-    from metagpt.common.interface import MessageSink
-    from metagpt.executor.tasks.disk_output import TaskOutputStore
+    from mote.common.interface import MessageActivity, MessageSink
+    from mote.executor.tasks.disk_output import TaskOutputStore
 
-from metagpt.common.const.tasks import (
-    DEFAULT_MAX_CONCURRENCY as _DEFAULT_MAX_CONCURRENCY,
-)
-from metagpt.common.const.tasks import DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT
-from metagpt.common.const.tasks import (
-    DEFAULT_WAIT_COMPLETION_TIMEOUT as _DEFAULT_WAIT_COMPLETION_TIMEOUT,
-)
-from metagpt.common.const.tasks import MAX_RESULT_LEN as _MAX_RESULT_LEN
-from metagpt.common.const.tasks import (
-    MAX_TASK_OUTPUT_BYTES_DISPLAY as _OUTPUT_CAP_DISPLAY,
-)
-from metagpt.common.events import current_bus, set_bus
-from metagpt.common.exception import (
+    class _InboxBuffer(MessageSink, MessageActivity, Protocol):
+        """The two buffer slices the pool uses: ``push`` + ``wait_for_message``."""
+
+
+from mote.common.const.tasks import DEFAULT_MAX_CONCURRENCY as _DEFAULT_MAX_CONCURRENCY
+from mote.common.const.tasks import DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT
+from mote.common.const.tasks import DEFAULT_WAIT_COMPLETION_TIMEOUT as _DEFAULT_WAIT_COMPLETION_TIMEOUT
+from mote.common.const.tasks import MAX_RESULT_LEN as _MAX_RESULT_LEN
+from mote.common.const.tasks import MAX_TASK_OUTPUT_BYTES_DISPLAY as _OUTPUT_CAP_DISPLAY
+from mote.common.events import current_bus, set_bus
+from mote.common.exception import (
     BackgroundTaskCancelledError,
     BackgroundTaskTimeoutError,
     ErrorReport,
     render_error_block,
 )
-from metagpt.executor.tasks.bggraph.report import (
-    make_progress_writer,
-    reset_progress_writer,
-    set_progress_writer,
-)
-from metagpt.executor.tasks.bggraph.types import LlmPauseResult
+from mote.executor.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
+from mote.executor.tasks.bggraph.types import LlmPauseResult
 
 
 @log_class(
@@ -70,7 +57,7 @@ class BackgroundTaskPool:
 
     def __init__(
         self,
-        msg_buffer: "MessageSink",
+        msg_buffer: "_InboxBuffer",
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
         output_store: "Optional[TaskOutputStore]" = None,
         wake: Optional[Callable[[], None]] = None,
@@ -488,7 +475,10 @@ class BackgroundTaskPool:
         could only ever drop a progress mirror, never a control veto.
         """
 
+        # Both call sites gate on ``self._output_store is not None`` before
+        # wrapping progress, so it is always present here; narrow it.
         store = self._output_store
+        assert store is not None, "_with_progress requires an output store"
         meta = self._meta.get(task_id)
         command_name = meta.command_name if meta is not None else ""
         writer = make_progress_writer(

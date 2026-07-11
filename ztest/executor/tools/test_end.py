@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the End tool (``metagpt.executor.tools.end``).
+"""Tests for the End tool (``mote.executor.tools.end``).
 
 End is a thin trigger that delegates to the ``end_session`` Role capability
 (faked by CapRole). Covers the delegation + that the capability's return is
@@ -8,7 +8,7 @@ passed through verbatim.
 """
 from __future__ import annotations
 
-from metagpt.executor.tools.end import End
+from mote.executor.tools.end import End
 
 from .conftest import CapRole, bind, run
 

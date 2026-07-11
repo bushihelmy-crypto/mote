@@ -16,7 +16,7 @@ a previously reported problem is fixed.
 
 from __future__ import annotations
 
-from metagpt.roles.lsp.registry import Diagnostic, severity_label
+from mote.roles.lsp.registry import Diagnostic, severity_label
 
 _OPEN = "<lsp_diagnostics>"
 _CLOSE = "</lsp_diagnostics>"

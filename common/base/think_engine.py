@@ -13,10 +13,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from metagpt.common.schema import ThinkResult
+from mote.common.schema import ThinkResult
 
 if TYPE_CHECKING:
-    from metagpt.common.interface import LLMClient, MessageStore
+    from mote.common.interface import LLMClient, MessageStore
 
 
 class BaseThinkEngine(ABC):
@@ -39,11 +39,12 @@ class BaseThinkEngine(ABC):
     result: ThinkResult
 
     @abstractmethod
-    async def start(self, req, system_prompt, tool_specs=None) -> None:
+    async def start(self, req, system_prompt, tool_specs=None, *, llm: "LLMClient") -> None:
         """Launch one think round.
 
         When ``tool_specs`` is provided the native tool-use channel is used;
-        otherwise the XML text channel is used.
+        otherwise the XML text channel is used. ``llm`` is the per-request
+        resolved client the loop passes after intelligent routing selects it.
         """
 
     @abstractmethod

@@ -127,7 +127,7 @@ def _ensure_builtins_imported() -> None:
         return
     _builtins_imported = True
     try:
-        import metagpt.cli.commands.builtin  # noqa: F401 — registers on import
+        import mote.cli.commands.builtin  # noqa: F401 — registers on import
     except Exception:  # noqa: BLE001 — a broken builtin must not kill dispatch
         pass
 

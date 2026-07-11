@@ -11,8 +11,8 @@ from uuid import uuid4
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin, ThinkResult
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin, ThinkResult
 
 
 class RoleState(SerializationMixin):
@@ -33,10 +33,15 @@ class RoleState(SerializationMixin):
     # Fork lineage: the session_id this session was forked from (None for roots).
     # Recorded on the rollout's session_meta first line so listing can show the tree.
     parent_session_id: Optional[str] = None
-    # Three working-directory paths, aligned with Claude Code (cwd/originalCwd/projectRoot):
-    #   working_dir          — live cwd, follows `cd` (updated by the Bash tool each run)
-    #   original_working_dir — set at startup, fallback only; never follows `cd`
-    #   project_root         — project identity anchor (skills/context-protocol/memory); never follows `cd`
+    # Three working-directory paths (Codex-aligned: cwd is stable data, not shell
+    # state that drifts with `cd`):
+    #   working_dir          — STABLE relative-path resolution base (Bash default
+    #                          dir + the stateless file tools). Defaults to the
+    #                          startup dir; does NOT follow `cd`. set_cwd remains a
+    #                          framework API for an explicit future directory switch,
+    #                          but tools never call it automatically.
+    #   original_working_dir — set at startup, session-listing/fallback; never moves
+    #   project_root         — project identity anchor (skills/context-protocol/memory); never moves
     working_dir: str = Field(default_factory=lambda: str(DEFAULT_WORKSPACE_ROOT.resolve()))
     original_working_dir: str = Field(default_factory=lambda: str(DEFAULT_WORKSPACE_ROOT.resolve()))
     project_root: str = Field(default_factory=lambda: str(DEFAULT_WORKSPACE_ROOT.resolve()))
@@ -133,14 +138,19 @@ class RoleStateController:
         return self._state
 
     def get_cwd(self) -> str:
-        """Live working directory, falling back to the startup dir; never empty."""
+        """Stable relative-path base dir, falling back to the startup dir; never empty."""
         try:
             return self._state.working_dir or self._state.original_working_dir
         except Exception:
             return self._state.original_working_dir
 
     def set_cwd(self, path: str) -> None:
-        """Persist the live working directory (follows `cd`)."""
+        """Set the stable working directory (framework API for an explicit switch).
+
+        No longer called automatically by the Bash tool — a `cd` inside a command
+        does not drift the cwd (Codex-aligned). Retained for a deliberate future
+        directory-change entry point.
+        """
         self._state.working_dir = path
 
     def record_file_read(self, path: str, mtime_ns: int) -> None:

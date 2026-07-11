@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Shared fixtures + duck-typed fakes for the ReActLoop test suite.
 
-The loop (:class:`metagpt.loop.react_loop.ReActLoop`) is deliberately
+The loop (:class:`mote.loop.react_loop.ReActLoop`) is deliberately
 role-agnostic: it drives a handful of injected collaborators behind narrow
 interfaces and reads/writes the shared ``active`` signal via two plain
 callables. None of those collaborators need a network, so every one is
@@ -33,11 +33,10 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from metagpt.common.base import LoopContext
-from metagpt.common.schema import Message, UserMessage
-from metagpt.loop.react_loop import ReActLoop
-from metagpt.roles.context_provider.request import ThinkRequest
-
+from mote.common.base import LoopContext
+from mote.common.schema import Message, UserMessage
+from mote.loop.react_loop import ReActLoop
+from mote.roles.context_provider.request import ThinkRequest
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -173,7 +172,9 @@ class FakeContextProvider:
     per ``prepare()`` and a :class:`FakeLLM` per ``resolve_llm()``.
     """
 
-    def __init__(self, ctx: LoopContext, *, think_request: Optional[ThinkRequest] = None, llm: Optional[FakeLLM] = None):
+    def __init__(
+        self, ctx: LoopContext, *, think_request: Optional[ThinkRequest] = None, llm: Optional[FakeLLM] = None
+    ):
         self._ctx = ctx
         self._think_request = think_request or ThinkRequest(
             req=[UserMessage("hi")], system_prompt="sys", tool_specs=["spec"]
@@ -225,7 +226,7 @@ class FakeBgPool:
 
 def make_loop_context(**overrides) -> LoopContext:
     """Build a :class:`LoopContext` with sensible test defaults."""
-    from metagpt.common.schema import MessageQueue
+    from mote.common.schema import MessageQueue
 
     params: dict[str, Any] = dict(
         max_react_loop=5,

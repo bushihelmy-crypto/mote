@@ -19,11 +19,11 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.config.sources import discover_source_files
+from mote.common.config.loader import load_config
+from mote.common.config.sources import discover_source_files
 
 if TYPE_CHECKING:
-    from metagpt.common.config.meta_config import Config
+    from mote.common.config.meta_config import Config
 
 ReloadCallback = Callable[["Config"], None]
 

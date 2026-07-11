@@ -10,22 +10,18 @@ Public surface:
 """
 from __future__ import annotations
 
-from metagpt.router.oauth.client import OAuthClient
-from metagpt.router.oauth.errors import (
+from mote.router.oauth.client import OAuthClient
+from mote.router.oauth.errors import (
     OAuthConfigError,
     OAuthError,
     OAuthHTTPError,
     OAuthRefreshError,
     classify_refresh_failure,
 )
-from metagpt.router.oauth.flows import (
-    LoginCallbacks,
-    run_auth_code_flow,
-    run_device_code_flow,
-)
-from metagpt.router.oauth.manager import OAuthManager
-from metagpt.router.oauth.models import AuthMode, DeviceCodeInfo, OAuthToken, TokenClaims
-from metagpt.router.oauth.registry import PROVIDER_PRESETS, get_preset, list_presets
+from mote.router.oauth.flows import LoginCallbacks, run_auth_code_flow, run_device_code_flow
+from mote.router.oauth.manager import OAuthManager
+from mote.router.oauth.models import AuthMode, DeviceCodeInfo, OAuthToken, TokenClaims
+from mote.router.oauth.registry import PROVIDER_PRESETS, get_preset, list_presets
 
 __all__ = [
     "OAuthManager",

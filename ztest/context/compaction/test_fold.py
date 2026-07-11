@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.const import RESOURCE_STICKY, RETENTION, RETENTION_PIN
-from metagpt.common.const.context import TOOL_RESULT_CLEARED_MESSAGE
-from metagpt.common.schema import ContextManagerConfig
-from metagpt.context.compaction.reducers.fold import FoldReducer
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.const import RESOURCE_STICKY, RETENTION, RETENTION_PIN
+from mote.common.const.context import TOOL_RESULT_CLEARED_MESSAGE
+from mote.common.schema import ContextManagerConfig
+from mote.context.compaction.reducers.fold import FoldReducer
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 from ..conftest import COMPACTABLE, make_pairs, tool_call_msg, tool_result_msg
 

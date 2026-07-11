@@ -7,10 +7,10 @@ so no network/token-endpoint call happens.
 """
 from __future__ import annotations
 
-import metagpt.router.llm.credentials as cred_mod
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.config.config.oauth_config import OAuthProviderConfig
-from metagpt.router.llm.openai_api import OpenAILLM
+import mote.router.llm.credentials as cred_mod
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.config.config.oauth_config import OAuthProviderConfig
+from mote.router.llm.openai_api import OpenAILLM
 
 
 class FakeManager:

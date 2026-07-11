@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from typing import Union
 
-from metagpt.common.config.config.oauth_config import StoreBackend
-from metagpt.router.oauth.storage.base import CredentialStore
-from metagpt.router.oauth.storage.fallback_store import FallbackCredentialStore
-from metagpt.router.oauth.storage.file_store import FileCredentialStore
-from metagpt.router.oauth.storage.keyring_store import KeyringCredentialStore
+from mote.common.config.config.oauth_config import StoreBackend
+from mote.router.oauth.storage.base import CredentialStore
+from mote.router.oauth.storage.fallback_store import FallbackCredentialStore
+from mote.router.oauth.storage.file_store import FileCredentialStore
+from mote.router.oauth.storage.keyring_store import KeyringCredentialStore
 
 
 def get_store(provider: str, backend: Union[StoreBackend, str] = StoreBackend.FALLBACK) -> CredentialStore:

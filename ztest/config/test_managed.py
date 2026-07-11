@@ -3,9 +3,9 @@
 """Tests for the MANAGED admin-policy layer (highest precedence, locks below)."""
 from __future__ import annotations
 
-import metagpt.common.config.sources as sources_mod
-from metagpt.common.config.layers import ConfigLayer, ConfigLayerStack
-from metagpt.common.config.sources import ConfigSource, discover_source_files
+import mote.common.config.sources as sources_mod
+from mote.common.config.layers import ConfigLayer, ConfigLayerStack
+from mote.common.config.sources import ConfigSource, discover_source_files
 
 
 def test_managed_is_highest_precedence():

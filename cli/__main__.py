@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``python -m metagpt.cli`` — the §8 entry point (parse argv, select host, run app).
+"""``python -m mote.cli`` — the §8 entry point (parse argv, select host, run app).
 
-The §8 successor of ``metagpt.cli.__main__``: same argv surface, but instead of
-``build_repl`` it assembles the decoupled stack via :func:`metagpt.cli.app.build_app`
+The §8 successor of ``mote.cli.__main__``: same argv surface, but instead of
+``build_repl`` it assembles the decoupled stack via :func:`mote.cli.app.build_app`
 and runs the returned :class:`SessionDriver`. The ``--consumer`` flag selects the
 active consumer set (default ``terminal``); future hosts (``app-server`` over stdio,
 ``structured`` JSON-lines) plug in here without touching the spine (§8.1 phase ②/③).
@@ -11,26 +11,27 @@ active consumer set (default ``terminal``); future hosts (``app-server`` over st
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import sys
 
 sys.dont_write_bytecode = True
 
-import argparse
-import asyncio
-
-from metagpt.cli.app import build_app
+from mote.cli.app import build_app  # noqa: E402  # after dont_write_bytecode so no stray .pyc
 
 
 def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="metagpt.cli",
+        prog="mote.cli",
         description=(
-            "Interactive AgentFrame session (Ctrl+C to interrupt a turn / exit at the prompt). "
+            "Interactive Mote session (Ctrl+C to interrupt a turn / exit at the prompt). "
             "Type /help inside the session for slash commands (agents, sessions, resume, fork)."
         ),
     )
     parser.add_argument("--model", default=None, help="Override the LLM model.")
-    parser.add_argument("--tools", default=None, help="Comma-separated tool names (default Read,Write,Edit,Bash,Glob,Grep).")
+    parser.add_argument(
+        "--tools", default=None, help="Comma-separated tool names (default Read,Write,Edit,Bash,Glob,Grep)."
+    )
     parser.add_argument("--cwd", default=None, help="Working directory for the agent.")
     parser.add_argument("--name", default="Assistant", help="Agent name.")
     parser.add_argument(
@@ -56,7 +57,7 @@ def _resolve_ui(choice: str) -> str:
     """Collapse ``auto`` to a concrete host based on TTY + availability."""
     if choice != "auto":
         return choice
-    from metagpt.cli.consumers.textual import _HAS_TEXTUAL
+    from mote.cli.consumers.textual import _HAS_TEXTUAL
 
     if sys.stdin.isatty() and sys.stdout.isatty() and _HAS_TEXTUAL:
         return "textual"
@@ -69,7 +70,7 @@ def main(argv=None) -> None:
     ui = _resolve_ui(args.ui)
 
     if ui == "textual":
-        from metagpt.cli.consumers.textual.app import run_textual
+        from mote.cli.consumers.textual.app import run_textual
 
         run_textual(model=args.model, tools=tools, cwd=args.cwd, name=args.name)
         print("\nGoodbye.")

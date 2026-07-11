@@ -8,11 +8,7 @@ to ``HARD`` urgency only.
 """
 from __future__ import annotations
 
-from metagpt.context.compaction.request import (
-    ReductionReason,
-    ReductionRequest,
-    Urgency,
-)
+from mote.context.compaction.request import ReductionReason, ReductionRequest, Urgency
 
 
 def test_defaults_are_soft_threshold():

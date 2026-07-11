@@ -1,19 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.strategy (Rule / Complexity / LLMJudge strategies)."""
+"""Tests for mote.router.strategy (Rule / Complexity / LLMJudge strategies)."""
 from __future__ import annotations
 
 import pytest
 
-from metagpt.router.schema import RoutingRequest
-from metagpt.router.strategy import (
-    ComplexityStrategy,
-    LLMJudgeStrategy,
-    RuleBasedStrategy,
-)
+from mote.router.schema import RoutingRequest
+from mote.router.strategy import ComplexityStrategy, LLMJudgeStrategy, RuleBasedStrategy
 
 from .conftest import FakeLLM
-
 
 # cards fixture (cheap=0, mid=1, vision=2 [gpt-4o], strong=3) comes from conftest.
 

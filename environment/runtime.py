@@ -26,9 +26,9 @@ import asyncio
 from enum import Enum
 from typing import Any, Optional
 
-from metagpt.common.logs import log_class, logger
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.mailbox import Mailbox
+from mote.common.logs import log_class, logger
+from mote.environment.agent_path import AgentPath
+from mote.environment.mailbox import Mailbox
 
 
 class AgentStatus(str, Enum):

@@ -2,7 +2,7 @@
 
 Lives in ``common/schema`` alongside ``hook_config.py`` / ``permission_config.py``
 so ``RoleSchema`` (which declares it) can reference it without importing the LSP
-service. The service itself lives in ``metagpt.roles.lsp``; this is only the
+service. The service itself lives in ``mote.roles.lsp``; this is only the
 declarative shape: which language servers to launch, keyed by the file
 extensions they handle.
 

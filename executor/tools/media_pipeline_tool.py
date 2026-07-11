@@ -14,10 +14,10 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tasks.types import BgTaskResult
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tools.media_pipeline.graph import build_media_pipeline_graph
+from mote.executor.base_tool import BaseTool
+from mote.executor.tasks.types import BgTaskResult
+from mote.executor.tool_registry import register_tool
+from mote.executor.tools.media_pipeline.graph import build_media_pipeline_graph
 
 
 class PromoParams(BaseModel):

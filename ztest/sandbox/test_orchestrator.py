@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-from metagpt.sandbox.network import enforce, orchestrator
+from mote.sandbox.network import enforce, orchestrator
 
 
 class TestEncodeConfig:
@@ -63,7 +63,7 @@ class TestLauncherInvocation:
         argv = orchestrator.launcher_argv("TOKEN")
         assert argv[0] == sys.executable
         assert argv[1] == "-m"
-        assert argv[2] == "metagpt.sandbox.network.orchestrator"
+        assert argv[2] == "mote.sandbox.network.orchestrator"
         assert argv[-1] == "TOKEN"
 
     def test_command_is_shell_quoted_argv(self):
@@ -71,7 +71,7 @@ class TestLauncherInvocation:
         # Equivalent to the argv, joined + quoted for create_subprocess_shell.
         assert cmd.split()[-1] == "TOKEN"
         assert "-m" in cmd
-        assert "metagpt.sandbox.network.orchestrator" in cmd
+        assert "mote.sandbox.network.orchestrator" in cmd
 
 
 class TestBuildInnerArgv:
@@ -89,9 +89,7 @@ class TestBuildInnerArgv:
 
 class TestReplaceFlagValue:
     def test_replaces_token_after_flag(self):
-        out = orchestrator._replace_flag_value(
-            ["bwrap", "--info-fd", "3", "--", "true"], "--info-fd", "7"
-        )
+        out = orchestrator._replace_flag_value(["bwrap", "--info-fd", "3", "--", "true"], "--info-fd", "7")
         assert out == ["bwrap", "--info-fd", "7", "--", "true"]
 
     def test_noop_when_flag_absent(self):
@@ -132,13 +130,13 @@ class TestSoleEgressEndToEnd:
         import os
         import shlex
 
-        import metagpt
-        from metagpt.sandbox.runtime import SandboxRuntime
+        import mote
+        from mote.sandbox.runtime import SandboxRuntime
 
-        # The launcher runs ``python -m metagpt.sandbox.network.orchestrator``;
-        # it needs the repo root on PYTHONPATH (in a deployed install metagpt is
+        # The launcher runs ``python -m mote.sandbox.network.orchestrator``;
+        # it needs the repo root on PYTHONPATH (in a deployed install mote is
         # already importable, but the test runs from source).
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(metagpt.__file__)))
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(mote.__file__)))
 
         async def go():
             rt = SandboxRuntime(
@@ -156,9 +154,7 @@ class TestSoleEgressEndToEnd:
             cwd = os.getcwd()
             base = dict(os.environ)
             base["PYTHONPATH"] = repo_root + os.pathsep + base.get("PYTHONPATH", "")
-            cmd, env = await rt.wrap_command(
-                f"python3 -c {shlex.quote(code)}", cwd=cwd, env=base
-            )
+            cmd, env = await rt.wrap_command(f"python3 -c {shlex.quote(code)}", cwd=cwd, env=base)
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,

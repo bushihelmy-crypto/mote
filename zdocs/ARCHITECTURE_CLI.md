@@ -1,10 +1,10 @@
 # CLI / 展示框架架构设计
 
-> 本文是 `metagpt.cli` 的**目标架构**：一个面向未来十年的、充分解耦、可扩展、可维护的**多消费者**展示框架。它**不重造** AgentFrame 已有的事件脊柱（`common/events/`），而是在其之上补齐缺失的「投影层」与「消费层」。
+> 本文是 `mote.cli` 的**目标架构**：一个面向未来十年的、充分解耦、可扩展、可维护的**多消费者**展示框架。它**不重造** Mote 已有的事件脊柱（`common/events/`），而是在其之上补齐缺失的「投影层」与「消费层」。
 >
 > **一句话纲领**：核心只发射「发生了什么」（`AgentEvent`，**单一真相源**）；两个投影器把它折叠成「人该看什么」（`ViewEvent`）与「机器该收什么」（`ServerNotification`）；任意数量的消费者各自决定「怎么投递」。**人与机器是同一真相源的对称下游，谁都没有特权路径。**
 >
-> **诚实约定**：全文凡涉及具体行为的论断，标 ★实证（有 MetaGPT 代码直接支撑）或 ☆推断（据 codex / symphony 文档与代码形态推断，需实现期对齐）。本文是设计，不是已实现的事实。
+> **诚实约定**：全文凡涉及具体行为的论断，标 ★实证（有 Mote 代码直接支撑）或 ☆推断（据 codex / symphony 文档与代码形态推断，需实现期对齐）。本文是设计，不是已实现的事实。
 
 ---
 
@@ -49,7 +49,7 @@
 
 ### 0.3 既有的好底子：事件脊柱（不动）
 
-AgentFrame 的 `common/events/` 已经实现了多消费者解耦里**最难的那一半**，本设计完整复用、不做改动：
+Mote 的 `common/events/` 已经实现了多消费者解耦里**最难的那一半**，本设计完整复用、不做改动：
 
 | 组件 | 文件 | 提供的能力 |
 |------|------|-----------|
@@ -106,11 +106,11 @@ AgentFrame 的 `common/events/` 已经实现了多消费者解耦里**最难的�
 
 | 子包 | 轴 | 一句话职责 | 关键入口 |
 |------|----|-----------|---------|
-| `cli/common` | 共享层 | 跨宿主复用的协议契约与基类（结构化 Protocol + 可继承基类 + 人类视图契约） | `common/interface/{ports,consumer,projector}.py` · `common/base/{consumer,projector}.py` · `common/view/{events,capabilities}.py` |
-| `cli/view` | 协议·人 | `AgentEvent` → `ViewEvent` 的唯一折叠点（宿主特定的折叠）；契约本体在 `common/view` | `view/projector.py`（`ViewProjector`） |
+| `cli/contracts` | 共享层 | 跨宿主复用的协议契约与基类（结构化 Protocol + 可继承基类 + 人类视图契约） | `contracts/interface/{ports,consumer,projector}.py` · `contracts/base/{consumer,projector}.py` · `contracts/view/{events,capabilities}.py` |
+| `cli/view` | 协议·人 | `AgentEvent` → `ViewEvent` 的唯一折叠点（宿主特定的折叠）；契约本体在 `contracts/view` | `view/projector.py`（`ViewProjector`） |
 | `cli/proto` | 协议·机器 | `AgentEvent` → `ServerNotification`；机器契约（codex app-server） | `proto/projector.py` · `proto/schema.py` |
-| `cli/consumers` | 宿主 | 各消费者适配器 + 自注册表（终端/Web/飞书/机器…）；基类 `BaseConsumer` 在 `common/base` | `consumers/registry.py` |
-| `cli/io` | 输入 | 输入端口（对话式 / 广播式 / 协议式三种语义）；端口 Protocol 在 `common/interface/ports.py` | `io/terminal_io.py` |
+| `cli/consumers` | 宿主 | 各消费者适配器 + 自注册表（终端/Web/飞书/机器…）；基类 `BaseConsumer` 在 `contracts/base` | `consumers/registry.py` |
+| `cli/io` | 输入 | 输入端口（对话式 / 广播式 / 协议式三种语义）；端口 Protocol 在 `contracts/interface/ports.py` | `io/terminal_io.py` |
 | `cli/router` | 路由 | 多租户会话路由：入站 → session（公众平台必需） | `router/session_router.py` |
 | `cli/commands` | 命令 | 斜杠命令注册表（脱离循环与宿主） | `commands/registry.py` |
 | `cli/driver.py` | 编排 | 瘦循环 + **per-session 驱动权仲裁**（见 §5.2） | `driver.py` |
@@ -125,7 +125,7 @@ AgentFrame 的 `common/events/` 已经实现了多消费者解耦里**最难的�
 稳定、粗粒度、纯表现的**开放标签联合**，承载*显示意图*而非*投递方式*。新增一种 ViewEvent 永不破坏旧消费者。
 
 ```python
-# cli/common/view/events.py  — 用 pydantic（项目已用），便于导出 JSON Schema
+# cli/contracts/view/events.py  — 用 pydantic（项目已用），便于导出 JSON Schema
 class ViewEvent(BaseModel):
     kind: ClassVar[str]                                       # 判别符，对齐 AgentEvent.name
 
@@ -184,7 +184,7 @@ class AppServerProjector(BaseProjector):      # 枝：item 切分 / 关联 id / 
 本质是一个消费某协议事件的 `ObservationSubscriber`。
 
 ```python
-# cli/common/base/consumer.py
+# cli/contracts/base/consumer.py
 class Consumer(Protocol):
     capabilities: Capabilities
     async def handle(self, ev: ViewEvent | ServerNotification) -> None   # 渲染/投递，或「吃掉」
@@ -213,7 +213,7 @@ class Capabilities:
 输入侧的抽象按**入站语义**分三类，共享一个基协议。注意：这是「入站长什么样」的分类，**不是**「这个会话归谁」——后者是 §5 的驱动权问题。
 
 ```python
-# cli/common/interface/ports.py
+# cli/contracts/interface/ports.py
 
 class InputPort(Protocol):
     """公共面：把外部输入归一化成核心可驱动的输入。"""
@@ -279,7 +279,7 @@ def build_consumers(config) -> list[Consumer]:
 ## 3. 目录结构
 
 ```
-metagpt/cli/
+mote/cli/
   view/                # 协议·人
     events.py          # ViewEvent 联合（人类契约·窄腰）★
     projector.py       # AgentEvent → ViewEvent（一个 ObservationSubscriber）★
@@ -432,7 +432,7 @@ Symphony ──turn/start (RPC)──▶ ProtocolPort ──▶ SessionDriver（
 
 ## 6. 机器消费者：App-Server 协议（Symphony 兼容）
 
-> Symphony 是个**工作编排器**（Linear 看板 → 派生自治 agent → CI/PR/证据 → 安全合并），它通过 **codex app-server 协议**驱动 coding agent。让 MetaGPT 兼容它，**不是加一个前端**，而是让 MetaGPT 成为这个协议的一个 server。这正是 §1 轴二（机器协议）+ 轴三（机器宿主）的落地。
+> Symphony 是个**工作编排器**（Linear 看板 → 派生自治 agent → CI/PR/证据 → 安全合并），它通过 **codex app-server 协议**驱动 coding agent。让 Mote 兼容它，**不是加一个前端**，而是让 Mote 成为这个协议的一个 server。这正是 §1 轴二（机器协议）+ 轴三（机器宿主）的落地。
 
 ### 6.1 关键发现：thread/turn/session 语义核心里**已存在**
 
@@ -493,7 +493,7 @@ codex 有两个反向请求 `item/commandExecution/requestApproval`、`item/file
 | `AppServerProjector`（§6.3 映射实现） | ★模式确定（ViewProjector 孪生） |
 | `cli/proto/schema.py`：对齐 codex 提交的 schema（`codex-rs/app-server-protocol/schema/json/...`）| ☆唯一需逐字段核对的硬工作 |
 | auto-approve 剖面 + `AskUserQuestion→turn_failed` 兜底 | ★策略确定 |
-| 入口 `python -m metagpt.cli app-server`（stdio，无 TUI） | ★确定 |
+| 入口 `python -m mote.cli app-server`（stdio，无 TUI） | ★确定 |
 | **不需要**：改 `AgentControl` / `AgentEvent` / `ViewEvent` / 任何 §1~§5 抽象 | — |
 
 ---
@@ -577,7 +577,7 @@ class DeliveryManager:
 阶段③  加 StructuredConsumer（JSON-lines 无头）
         ──► 验证解耦是否成立的试金石（对标 codex exec --json）
 阶段④  加 proto/ + AppServerProjector + app_server 消费者（§6）
-        ──► MetaGPT 可被 Symphony 编排；验证「第二协议几乎免费」
+        ──► Mote 可被 Symphony 编排；验证「第二协议几乎免费」
 阶段⑤  上 Web / 飞书 / ACP（皆 InteractivePort）+ step 级 steer（§5.3）
         ──► 每个都是「新模块 + @register_consumer」，零核心改动
 阶段⑥  上 SessionRouter + BroadcastPort + DeliveryManager（§7）
@@ -588,7 +588,7 @@ class DeliveryManager:
 
 ---
 
-## 9. 设计原则（对齐 AgentFrame 全局约束）
+## 9. 设计原则（对齐 Mote 全局约束）
 
 1. **单一真相源**：`AgentEvent` 是唯一事实，**无人有特权路径**——人类终端不许偷读 `context.messages`，机器也一样。所有消费者一律是它的下游。这是全文第一根基。
 2. **单向数据流**：`核心 → 投影 → 消费者`，消费者永不反向 import 核心；输入经 `InputPort` 单独回流。与全局「依赖单向向下」一致。

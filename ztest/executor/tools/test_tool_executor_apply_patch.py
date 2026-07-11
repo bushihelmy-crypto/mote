@@ -13,9 +13,9 @@ import os
 
 import pytest
 
-from metagpt.common.schema import PermissionConfig
-from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.executor.tools.apply_patch import ApplyPatch
+from mote.common.schema import PermissionConfig
+from mote.executor.tool_executor import ToolExecutor
+from mote.executor.tools.apply_patch import ApplyPatch
 
 pytestmark = pytest.mark.asyncio
 

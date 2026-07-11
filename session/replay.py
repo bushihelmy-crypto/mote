@@ -26,9 +26,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-from metagpt.common.logs import log_call
-from metagpt.common.schema import Message
-from metagpt.session.events import (
+from mote.common.logs import log_call
+from mote.common.schema import Message
+from mote.session.events import (
     BrowserStateEvent,
     CompactedEvent,
     KernelStateEvent,
@@ -37,7 +37,7 @@ from metagpt.session.events import (
     TerminalStateEvent,
     parse_event,
 )
-from metagpt.session.log import SessionLog
+from mote.session.log import SessionLog
 
 
 @dataclass

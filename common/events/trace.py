@@ -25,11 +25,11 @@ from contextvars import ContextVar
 from typing import AsyncIterator, Optional
 from uuid import uuid4
 
-from metagpt.common.events.context import observe_event
-from metagpt.common.events.types import SpanEndEvent, SpanStartEvent
-from metagpt.common.logs import current_trace_id
+from mote.common.events.context import observe_event
+from mote.common.events.types import SpanEndEvent, SpanStartEvent
+from mote.common.logs import current_trace_id
 
-_CURRENT_SPAN: ContextVar[Optional[str]] = ContextVar("metagpt_current_span", default=None)
+_CURRENT_SPAN: ContextVar[Optional[str]] = ContextVar("mote_current_span", default=None)
 
 
 def current_span_id() -> Optional[str]:

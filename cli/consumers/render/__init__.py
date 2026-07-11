@@ -1,23 +1,23 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``metagpt.cli.consumers.render`` — the neutral, host-agnostic rich substrate.
+"""``mote.cli.consumers.render`` — the neutral, host-agnostic rich substrate.
 
 Both rich-based hosts read their look from here so neither depends on the other:
 
-* :mod:`~metagpt.cli.consumers.render.palette` — the single colour/glyph source
+* :mod:`~mote.cli.consumers.render.palette` — the single colour/glyph source
   (``Palette``, ``BULLET``/``BRANCH``/…, ``PROMPT_SYMBOL``). Rich-free, ANSI-free.
-* :mod:`~metagpt.cli.consumers.render.builders` — console-free ``rich`` builders
+* :mod:`~mote.cli.consumers.render.builders` — console-free ``rich`` builders
   (``render_diff``/``build_table``/``tool_started_text``/…) that turn a
   ``ViewEvent`` into a renderable with no ``Console`` and no side effects.
 
-The scrolling :class:`~metagpt.cli.consumers.terminal.consumer.TerminalConsumer`
-and the full-screen :class:`~metagpt.cli.consumers.textual.app.MetaGPTApp` (and, in
+The scrolling :class:`~mote.cli.consumers.terminal.consumer.TerminalConsumer`
+and the full-screen :class:`~mote.cli.consumers.textual.app.MoteApp` (and, in
 future, that same Textual app served over the web) all depend *downward* on this
 package; host-specific presentation (the terminal's ANSI prompt/banner, the
 textual widgets + CSS) stays in each host.
 """
 
-from metagpt.cli.consumers.render.builders import (
+from mote.cli.consumers.render.builders import (
     CONTENT_INDENT,
     RESULT_INDENT,
     USAGE_SEP,
@@ -40,8 +40,8 @@ from metagpt.cli.consumers.render.builders import (
     tool_started_text,
     user_message_row,
 )
-from metagpt.cli.consumers.render.markdown import themed_markdown
-from metagpt.cli.consumers.render.palette import (
+from mote.cli.consumers.render.markdown import themed_markdown
+from mote.cli.consumers.render.palette import (
     BRANCH,
     BULLET,
     CHECK,

@@ -1,0 +1,48 @@
+# See https://pre-commit.com for more information.
+# Offline / local setup: hooks call the tools already installed in the
+# environment (no network fetch of hook repos). Formatting is standardized on a
+# 120-char line length (see ruff.toml). ruff is not installed here, so flake8
+# provides linting instead.
+exclude: '^ztest/.*/fixtures/'
+
+repos:
+  - repo: local
+    hooks:
+      - id: isort
+        name: isort
+        entry: python -m isort
+        language: system
+        types: [python]
+        args: [--profile=black, --line-length=120]
+
+      - id: black
+        name: black
+        entry: python -m black
+        language: system
+        types: [python]
+        args: [--line-length=120]
+
+      - id: flake8
+        name: flake8
+        entry: python -m flake8
+        language: system
+        types: [python]
+        # ztest is excluded (mirrors pyright): test files carry unused-import and
+        # E402/E741 noise that isn't worth blocking commits over.
+        exclude: '^ztest/'
+        # E501 (line length) is ignored: nearly every long line is prompt body,
+        # docstring, comment, or a pydantic Field description — text content that
+        # must not be reflowed. The 120 limit stays as an editor soft guide only.
+        args: [--max-line-length=120, "--extend-ignore=E203,W503,E501"]
+
+      # Phase 0: type-check only the changed .py files (reads pyrightconfig.json
+      # for extraPaths/exclude). New code is constrained immediately; the
+      # historical 393-error backlog is cleared separately, not blocked here.
+      # ztest is excluded via pyrightconfig.json.
+      - id: pyright
+        name: pyright (changed files)
+        entry: python -m pyright
+        language: system
+        types: [python]
+        exclude: '^ztest/'
+        require_serial: true

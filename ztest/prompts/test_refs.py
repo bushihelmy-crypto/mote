@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.prompt.refs import (
+from mote.common.prompt.refs import (
     CAP_READ,
     CTL_FINISH,
     Sym,

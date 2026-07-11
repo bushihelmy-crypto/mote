@@ -2,11 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for the CronTask model + jitter config defaults."""
 
-from metagpt.environment.scheduling.task import (
-    DEFAULT_CRON_JITTER_CONFIG,
-    CronJitterConfig,
-    CronTask,
-)
+from mote.environment.scheduling.task import DEFAULT_CRON_JITTER_CONFIG, CronJitterConfig, CronTask
 
 
 def test_new_mints_8_hex_id():

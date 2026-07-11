@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.tool_executor.ToolExecutor``.
+"""Unit tests for ``mote.executor.tool_executor.ToolExecutor``.
 
 The dispatch tests inject already-bound instances via ``register_tool_instance``
 (see ``make_executor``) so they never touch the global registry. One test
@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.exception import ToolValidationError
-from metagpt.common.interface.event_subscriber import ObservationSubscriber
-from metagpt.common.schema import ToolResultLimitConfig
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tasks.types import BgTaskResult
-from metagpt.executor.mcp_adapter import MCPToolAdapter
-from metagpt.executor.tool_executor import ToolExecutor, _validate_call_args
+from mote.common.exception import ToolValidationError
+from mote.common.interface.event_subscriber import ObservationSubscriber
+from mote.common.schema import ToolResultLimitConfig
+from mote.executor.base_tool import BaseTool
+from mote.executor.mcp_adapter import MCPToolAdapter
+from mote.executor.tasks.types import BgTaskResult
+from mote.executor.tool_executor import ToolExecutor, _validate_call_args
 
 from .conftest import (
     AddTool,
@@ -99,13 +99,13 @@ class TestRunCommandArgValidation:
         result = await ex.run_command("Echo", {})  # `text` is required
         assert result.success is False
         assert "Echo" in result.output
-        assert "missing required argument(s): text" in result.output
+        assert "missing required argument: text" in result.output
 
     async def test_unexpected_arg_is_validation_failure(self):
         ex = make_executor(EchoTool())
         result = await ex.run_command("Echo", {"text": "hi", "bogus": 1})
         assert result.success is False
-        assert "unexpected argument(s): bogus" in result.output
+        assert "unexpected argument: bogus" in result.output
 
     async def test_optional_arg_omitted_still_succeeds(self):
         # Regression: AddTool's `b` has a default — omitting it must NOT trip
@@ -133,7 +133,7 @@ class TestRunCommandArgValidation:
         # Unit-level: the helper raises a typed ToolValidationError.
         with pytest.raises(ToolValidationError) as exc:
             _validate_call_args(EchoTool.call, "Echo", {})
-        assert "missing required argument(s): text" in str(exc.value)
+        assert "missing required argument: text" in str(exc.value)
 
 
 class TestRunCommandReturnNormalization:
@@ -163,7 +163,7 @@ class TestResultLimiting:
     async def test_large_output_persisted(self, tmp_path):
         big = "x" * 60_000  # over DEFAULT_MAX_RESULT_SIZE_CHARS (50k)
 
-        from metagpt.executor.base_tool import BaseTool
+        from mote.executor.base_tool import BaseTool
 
         class BigTool(BaseTool):
             name = "Big"
@@ -173,7 +173,7 @@ class TestResultLimiting:
 
         ex = make_executor(BigTool(), session_id="limit-sess")
         # Point persistence at a tmp dir via the module default base_dir.
-        import metagpt.executor.tool_result_limit as trl
+        import mote.executor.tool_result_limit as trl
 
         orig = trl.DEFAULT_WORKSPACE_ROOT
         trl.DEFAULT_WORKSPACE_ROOT = tmp_path
@@ -187,7 +187,7 @@ class TestResultLimiting:
     async def test_limiting_disabled_passes_through(self):
         big = "y" * 60_000
 
-        from metagpt.executor.base_tool import BaseTool
+        from mote.executor.base_tool import BaseTool
 
         class BigTool2(BaseTool):
             name = "Big2"
@@ -204,13 +204,13 @@ class TestResultLimiting:
 
     async def test_media_result_not_limited(self):
         # Even oversized, media results bypass persistence (sent verbatim).
-        from metagpt.executor.base_tool import BaseTool
+        from mote.executor.base_tool import BaseTool
 
         class BigMedia(BaseTool):
             name = "BigMedia"
 
             async def call(self):
-                from metagpt.executor.tool_result import ToolResult
+                from mote.executor.tool_result import ToolResult
 
                 return ToolResult(output="z" * 60_000, images=["img"])
 
@@ -300,7 +300,7 @@ class TestPipelineFiltering:
     in its own category, separate from built-in and MCP tools."""
 
     def _pipeline_tool(self, name="Pipe"):
-        from metagpt.executor.tasks.bggraph.marker import mark_pipeline_executor
+        from mote.executor.tasks.bggraph.marker import mark_pipeline_executor
 
         async def _exec(**state):  # a stand-in compiled-graph executor
             return None
@@ -339,7 +339,7 @@ class TestConstructorAndCleanup:
     async def test_constructor_prebinds_from_registry(self, restore_global_registry):
         # Register a test tool into the (snapshotted) global registry, then let
         # the constructor resolve it by name.
-        from metagpt.executor.base_tool import BaseTool
+        from mote.executor.base_tool import BaseTool
 
         class RegTool(BaseTool):
             name = "RegTool"
@@ -380,7 +380,7 @@ class TestFileMutatedEmission:
     """A successful filesystem-mutating tool emits a FileMutatedEvent on the bus."""
 
     def _writey(self):
-        from metagpt.executor.base_tool import BaseTool
+        from mote.executor.base_tool import BaseTool
 
         class WriteyTool(BaseTool):
             name = "Writey"
@@ -395,7 +395,7 @@ class TestFileMutatedEmission:
         return WriteyTool
 
     def _recorder(self):
-        from metagpt.common.events import EventBus
+        from mote.common.events import EventBus
 
         class Recorder(ObservationSubscriber):
             priority = 0
@@ -419,7 +419,7 @@ class TestFileMutatedEmission:
         return ex
 
     async def test_emits_file_mutated_on_success(self):
-        from metagpt.common.events import FileMutatedEvent
+        from mote.common.events import FileMutatedEvent
 
         bus, rec = self._recorder()
         ex = self._executor(self._writey()(), bus)
@@ -431,7 +431,7 @@ class TestFileMutatedEmission:
         assert mutated[0].tool == "Writey"
 
     async def test_no_event_when_target_empty(self):
-        from metagpt.common.events import FileMutatedEvent
+        from mote.common.events import FileMutatedEvent
 
         bus, rec = self._recorder()
         ex = self._executor(self._writey()(), bus)
@@ -441,7 +441,7 @@ class TestFileMutatedEmission:
         assert not [e for e in rec.events if isinstance(e, FileMutatedEvent)]
 
     async def test_no_event_when_tool_is_not_mutating(self):
-        from metagpt.common.events import FileMutatedEvent
+        from mote.common.events import FileMutatedEvent
 
         bus, rec = self._recorder()
         ex = ToolExecutor("sess", tools=None, bus=bus)
@@ -467,7 +467,7 @@ class TestDeregisterTool:
     together — and announces the change on the bus so the volatile views refresh."""
 
     def _recorder_bus(self):
-        from metagpt.common.events import EventBus
+        from mote.common.events import EventBus
 
         class Recorder(ObservationSubscriber):
             priority = 0
@@ -536,7 +536,7 @@ class TestDeregisterTool:
         assert ex.reconstructable_tool_names() == frozenset()
 
     async def test_emits_tools_changed_event(self):
-        from metagpt.common.events import ToolsChangedEvent
+        from mote.common.events import ToolsChangedEvent
 
         bus, rec = self._recorder_bus()
         ex = ToolExecutor("sess", tools=None, bus=bus)
@@ -554,7 +554,7 @@ class TestDeregisterTool:
     async def test_event_carries_fresh_reconstructable_set(self):
         # Two reconstructable tools; removing one must leave the other's names in
         # the announced set, so a compaction consumer refreshes from the event alone.
-        from metagpt.common.events import ToolsChangedEvent
+        from mote.common.events import ToolsChangedEvent
 
         class ReconA(EchoTool):
             name = "ReconA"
@@ -577,7 +577,7 @@ class TestDeregisterTool:
         assert set(evt.reconstructable) == {"ReconB"}
 
     async def test_noop_removal_emits_nothing(self):
-        from metagpt.common.events import ToolsChangedEvent
+        from mote.common.events import ToolsChangedEvent
 
         bus, rec = self._recorder_bus()
         ex = ToolExecutor("sess", tools=None, bus=bus)
@@ -598,10 +598,10 @@ class TestRecoveryWiring:
 
     @staticmethod
     def _flaky_tool():
-        from metagpt.common.exception import MetaGPTError, RecoveryAction
-        from metagpt.executor.base_tool import BaseTool
+        from mote.common.exception import MoteError, RecoveryAction
+        from mote.executor.base_tool import BaseTool
 
-        class _CompressError(MetaGPTError):
+        class _CompressError(MoteError):
             default_recovery = RecoveryAction.COMPRESS
 
         class FlakyTool(BaseTool):
@@ -630,7 +630,7 @@ class TestRecoveryWiring:
         assert tool.calls == 1
 
     async def test_injected_strategy_recovers(self):
-        from metagpt.common.exception import RecoveryAction
+        from mote.common.exception import RecoveryAction
 
         FlakyTool, _ = self._flaky_tool()
         tool = FlakyTool()
@@ -640,9 +640,7 @@ class TestRecoveryWiring:
             recovered.append(exc)
             return True
 
-        ex = make_executor(
-            tool, recovery_strategies={RecoveryAction.COMPRESS: compress}
-        )
+        ex = make_executor(tool, recovery_strategies={RecoveryAction.COMPRESS: compress})
         result = await ex.run_command("Flaky", {})
         assert result.success is True
         assert result.output == "recovered"
@@ -691,15 +689,15 @@ class TestReloadMcp:
     bus so the volatile views refresh. The native channel just rebuilds tool_specs."""
 
     def _patch(self, monkeypatch, tools):
-        from metagpt.executor import tool_executor as te
+        from mote.executor import tool_executor as te
 
         _FakeMcp.next_tools = list(tools)
         _FakeMcp.cleanups = 0
         monkeypatch.setattr(te, "UniversalMCP", _FakeMcp)
 
     def _recorder_bus(self):
-        from metagpt.common.events import EventBus
-        from metagpt.common.interface.event_subscriber import ObservationSubscriber
+        from mote.common.events import EventBus
+        from mote.common.interface.event_subscriber import ObservationSubscriber
 
         class Recorder(ObservationSubscriber):
             priority = 0
@@ -752,7 +750,7 @@ class TestReloadMcp:
         assert _FakeMcp.cleanups == 1
 
     async def test_emits_tools_changed_event_with_removed(self, monkeypatch):
-        from metagpt.common.events import ToolsChangedEvent
+        from mote.common.events import ToolsChangedEvent
 
         self._patch(monkeypatch, ["server:a", "server:b"])
         bus, rec = self._recorder_bus()

@@ -8,10 +8,10 @@ shell tools). ``tool_result_limit._persist`` is redirected to ``tmp_path``.
 """
 from __future__ import annotations
 
-from metagpt.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
-from metagpt.executor import tool_result_limit
-from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.executor.tool_result import ToolResult
+from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+from mote.executor import tool_result_limit
+from mote.executor.tool_executor import ToolExecutor
+from mote.executor.tool_result import ToolResult
 
 # A compressible pytest blob (routes + shrinks), well above the min floor.
 _PYTEST = (

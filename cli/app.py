@@ -16,13 +16,13 @@ import asyncio
 import os
 from typing import Any, List, Optional
 
-from metagpt.cli import backend
-from metagpt.cli.commands.registry import default_registry
-from metagpt.cli.consumers.registry import build_consumers
-from metagpt.cli.driver import SessionDriver
-from metagpt.cli.common.base import BaseProjector
-from metagpt.cli.io.terminal_io import TerminalPort
-from metagpt.cli.view.projector import ViewProjector
+from mote.cli import backend
+from mote.cli.commands.registry import default_registry
+from mote.cli.consumers.registry import build_consumers
+from mote.cli.contracts.base import BaseProjector
+from mote.cli.driver import SessionDriver
+from mote.cli.io.terminal_io import TerminalPort
+from mote.cli.view.projector import ViewProjector
 
 
 def build_app(

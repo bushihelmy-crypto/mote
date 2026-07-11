@@ -12,22 +12,14 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.events import (
-    EventBus,
-    LLMErrorEvent,
-    LLMRequestEvent,
-    LLMResponseEvent,
-    LLMRetryEvent,
-    set_bus,
-    span,
-)
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from metagpt.common.logs import bind_trace
-from metagpt.router.cost import CostTracker
-from metagpt.router.cost.usage import TokenUsage
-from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
-from metagpt.router.llm.openai_api import OpenAILLM
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.events import EventBus, LLMErrorEvent, LLMRequestEvent, LLMResponseEvent, LLMRetryEvent, set_bus, span
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.common.logs import bind_trace
+from mote.router.cost import CostTracker
+from mote.router.cost.usage import TokenUsage
+from mote.router.llm.llm_response import LLMResponse, LLMToolCall
+from mote.router.llm.openai_api import OpenAILLM
 
 
 def run(coro):
@@ -35,7 +27,9 @@ def run(coro):
 
 
 def _make_llm() -> OpenAILLM:
-    cfg = LLMConfig(api_type="openai", base_url="https://api.openai.com/v1", model="gpt-4o", api_key="sk-x", max_token=512)
+    cfg = LLMConfig(
+        api_type="openai", base_url="https://api.openai.com/v1", model="gpt-4o", api_key="sk-x", max_token=512
+    )
     llm = OpenAILLM(cfg)
     llm.cost_manager = CostTracker()
     return llm
@@ -185,7 +179,7 @@ def test_transient_error_retries_then_succeeds(monkeypatch):
 
     monkeypatch.setattr(wait_random_exponential, "__call__", lambda self, retry_state: 0.0, raising=True)
 
-    from metagpt.common.exception import LLMOverloadedError
+    from mote.common.exception import LLMOverloadedError
 
     llm = _make_llm()
     calls = {"n": 0}
@@ -223,8 +217,8 @@ def test_transient_error_exhausts_budget_then_reraises(monkeypatch):
 
     monkeypatch.setattr(wait_random_exponential, "__call__", lambda self, retry_state: 0.0, raising=True)
 
-    from metagpt.common.exception import LLMOverloadedError
-    from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS
+    from mote.common.exception import LLMOverloadedError
+    from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS
 
     llm = _make_llm()
     calls = {"n": 0}

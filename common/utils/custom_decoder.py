@@ -1,7 +1,7 @@
 import json
 import re
 from json import JSONDecodeError
-from json.decoder import _decode_uXXXX
+from json.decoder import _decode_uXXXX  # type: ignore[attr-defined]  # CPython internal, absent from typeshed
 
 NUMBER_RE = re.compile(r"(-?(?:0|[1-9]\d*))(\.\d+)?([eE][-+]?\d+)?", (re.VERBOSE | re.MULTILINE | re.DOTALL))
 
@@ -293,5 +293,5 @@ class CustomDecoder(json.JSONDecoder):
         self.parse_string = py_scanstring
         self.scan_once = py_make_scanner(self)
 
-    def decode(self, s, _w=json.decoder.WHITESPACE.match):
+    def decode(self, s, _w=json.decoder.WHITESPACE.match):  # type: ignore[attr-defined]  # CPython internal, absent from typeshed
         return super().decode(s)

@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, List, Optional
 
-from metagpt.common.events.outcomes import (
+from mote.common.events.outcomes import (
     CompactOutcome,
     PromptOutcome,
     SpawnOutcome,
@@ -43,12 +43,12 @@ from metagpt.common.events.outcomes import (
     ToolResultOutcome,
     TurnOutcome,
 )
-from metagpt.common.events.rewrite import Rewritable, Rewrite
-from metagpt.common.interface.event_subscriber import ControlOutcome
+from mote.common.events.rewrite import Rewritable, Rewrite
+from mote.common.interface.event_subscriber import ControlOutcome
 
 if TYPE_CHECKING:
-    from metagpt.common.exception import ErrorReport
-    from metagpt.common.schema import Message, PermissionFacts
+    from mote.common.exception import ErrorReport
+    from mote.common.schema import Message, PermissionFacts
 
 # ---------------------------------------------------------------------------
 # Event-name discriminators
@@ -114,6 +114,7 @@ class SessionStartEvent:
 
     name: ClassVar[str] = SESSION_START
 
+
 @dataclass
 class SessionEndEvent:
     """The session is tearing down."""
@@ -122,6 +123,7 @@ class SessionEndEvent:
 
     name: ClassVar[str] = SESSION_END
 
+
 @dataclass
 class TurnStartEvent:
     """A react turn is starting."""
@@ -129,6 +131,7 @@ class TurnStartEvent:
     turn_id: str = ""
 
     name: ClassVar[str] = TURN_START
+
 
 @dataclass
 class TurnEndEvent:
@@ -142,6 +145,7 @@ class TurnEndEvent:
     name: ClassVar[str] = TURN_END
     outcome_type: ClassVar[type[ControlOutcome]] = TurnOutcome
 
+
 @dataclass
 class MessageAppendedEvent:
     """A message was appended to the stored history."""
@@ -149,6 +153,7 @@ class MessageAppendedEvent:
     message: "Message" = None  # type: ignore[assignment]
 
     name: ClassVar[str] = MESSAGE_APPENDED
+
 
 @dataclass
 class LLMStreamDeltaEvent:
@@ -158,11 +163,13 @@ class LLMStreamDeltaEvent:
 
     name: ClassVar[str] = LLM_STREAM_DELTA
 
+
 @dataclass
 class LLMStreamEndEvent:
     """The current LLM stream finished (turn boundary for the renderer)."""
 
     name: ClassVar[str] = LLM_STREAM_END
+
 
 @dataclass
 class LLMRequestEvent:
@@ -188,12 +195,13 @@ class LLMRequestEvent:
 
     name: ClassVar[str] = LLM_REQUEST
 
+
 @dataclass
 class LLMResponseEvent:
     """A single LLM completion returned — its output, usage, cost and latency.
 
     The response half of :class:`LLMRequestEvent` (paired by ``request_id``).
-    ``usage`` is a :meth:`~metagpt.router.cost.usage.TokenUsage.to_dict` mapping
+    ``usage`` is a :meth:`~mote.router.cost.usage.TokenUsage.to_dict` mapping
     and ``cost_usd`` the per-call USD cost (from the cost tracker), so a
     subscriber can persist per-request token/cost or mirror it to an external
     observability backend without re-counting.
@@ -209,6 +217,7 @@ class LLMResponseEvent:
     trace_id: str = ""  # correlation symmetry with the request
 
     name: ClassVar[str] = LLM_RESPONSE
+
 
 @dataclass
 class LLMErrorEvent:
@@ -228,6 +237,7 @@ class LLMErrorEvent:
 
     name: ClassVar[str] = LLM_ERROR
 
+
 @dataclass
 class LLMRetryEvent:
     """A transient LLM failure is about to be retried (fired from tenacity's
@@ -243,14 +253,15 @@ class LLMRetryEvent:
 
     request_id: str = ""
     model: str = ""
-    attempt: int = 0          # the attempt that just failed (tenacity attempt_number)
-    max_attempts: int = 0     # = LLM_RETRY_ATTEMPTS
-    delay_ms: float = 0.0     # tenacity's chosen next back-off duration
+    attempt: int = 0  # the attempt that just failed (tenacity attempt_number)
+    max_attempts: int = 0  # = LLM_RETRY_ATTEMPTS
+    delay_ms: float = 0.0  # tenacity's chosen next back-off duration
     error_type: str = ""
     error: str = ""
     trace_id: str = ""
 
     name: ClassVar[str] = LLM_RETRY
+
 
 @dataclass
 class CompactionCheckpointEvent:
@@ -260,6 +271,7 @@ class CompactionCheckpointEvent:
     summary: str = ""
 
     name: ClassVar[str] = COMPACTION_CHECKPOINT
+
 
 @dataclass
 class FileSnapshotEvent:
@@ -275,6 +287,7 @@ class FileSnapshotEvent:
 
     name: ClassVar[str] = FILE_SNAPSHOT
 
+
 @dataclass
 class FileChangedEvent:
     """A watched file changed on disk (file-watcher)."""
@@ -285,6 +298,7 @@ class FileChangedEvent:
     size: int = 0
 
     name: ClassVar[str] = FILE_CHANGED
+
 
 @dataclass
 class FileMutatedEvent:
@@ -304,6 +318,7 @@ class FileMutatedEvent:
     operation: str = "update"  # create / update / delete (best-effort)
 
     name: ClassVar[str] = FILE_MUTATED
+
 
 @dataclass
 class ToolsChangedEvent:
@@ -325,6 +340,7 @@ class ToolsChangedEvent:
 
     name: ClassVar[str] = TOOLS_CHANGED
 
+
 @dataclass
 class DiagnosticsEvent:
     """Language-server diagnostics changed after a file sync.
@@ -342,6 +358,7 @@ class DiagnosticsEvent:
     paths: List[str] = field(default_factory=list)
 
     name: ClassVar[str] = DIAGNOSTICS
+
 
 @dataclass
 class RecoveryEvent:
@@ -362,6 +379,7 @@ class RecoveryEvent:
 
     name: ClassVar[str] = RECOVERY
 
+
 @dataclass
 class TaskProgressEvent:
     """A background task reported a progress line (already rendered).
@@ -377,6 +395,7 @@ class TaskProgressEvent:
     detail: str = ""  # rendered, no trailing newline
 
     name: ClassVar[str] = TASK_PROGRESS
+
 
 @dataclass
 class ResourceReportEvent:
@@ -397,6 +416,7 @@ class ResourceReportEvent:
 
     name: ClassVar[str] = RESOURCE_REPORT
 
+
 @dataclass
 class AgentLifecycleEvent:
     """An agent crossed a residency/control-plane boundary.
@@ -412,6 +432,7 @@ class AgentLifecycleEvent:
 
     name: ClassVar[str] = AGENT_LIFECYCLE
 
+
 @dataclass
 class SpanStartEvent:
     """A trace span opened (framework-native instrumentation primitive).
@@ -419,7 +440,7 @@ class SpanStartEvent:
     Carries explicit trace structure — ``span_id`` / ``parent_span_id`` /
     ``trace_id`` — so the trace tree is rebuilt downstream from these IDs, not
     from any backend's ambient context. Emitted by the ``span`` contextmanager
-    (:mod:`~metagpt.common.events.trace`). The instance field is ``label`` (the
+    (:mod:`~mote.common.events.trace`). The instance field is ``label`` (the
     human name) — ``name`` is the reserved discriminator ClassVar.
     """
 
@@ -430,6 +451,7 @@ class SpanStartEvent:
     attributes: dict = field(default_factory=dict)
 
     name: ClassVar[str] = SPAN_START
+
 
 @dataclass
 class SpanEndEvent:
@@ -461,6 +483,7 @@ class UserPromptSubmitEvent:
     name: ClassVar[str] = USER_PROMPT_SUBMIT
     outcome_type: ClassVar[type[ControlOutcome]] = PromptOutcome
 
+
 @dataclass
 class PreToolUseEvent(Rewritable):
     """A tool is about to run (a subscriber may deny / mutate args).
@@ -468,7 +491,7 @@ class PreToolUseEvent(Rewritable):
     ``resolve_facts`` is the seam that lets a permission gate run as a control
     subscriber without the bus/subscriber layer importing tools: the executor —
     which *does* own the tool — attaches a closure that derives the tool-specific
-    :class:`~metagpt.common.schema.PermissionFacts` from a given argument dict.
+    :class:`~mote.common.schema.PermissionFacts` from a given argument dict.
     A subscriber evaluates the call by calling ``resolve_facts(self.tool_input)``,
     so it always sees the facts for the *current* (possibly already-rewritten)
     args. ``None`` when no gate is wired (nothing to resolve).
@@ -486,12 +509,11 @@ class PreToolUseEvent(Rewritable):
     tool_use_id: Optional[str] = None
     #: Tool-bound, args-agnostic fact resolver (executor-supplied). Excluded from
     #: equality/repr — it is behavior, not data.
-    resolve_facts: Optional[Callable[[dict], "PermissionFacts"]] = field(
-        default=None, compare=False, repr=False
-    )
+    resolve_facts: Optional[Callable[[dict], "PermissionFacts"]] = field(default=None, compare=False, repr=False)
 
     name: ClassVar[str] = PRE_TOOL_USE
     outcome_type: ClassVar[type[ControlOutcome]] = ToolCallOutcome
+
 
 @dataclass
 class PostToolUseEvent(Rewritable):
@@ -532,6 +554,7 @@ class PostToolUseEvent(Rewritable):
     name: ClassVar[str] = POST_TOOL_USE
     outcome_type: ClassVar[type[ControlOutcome]] = ToolResultOutcome
 
+
 @dataclass
 class PreCompactEvent:
     """About to compact (a subscriber may veto or supply instructions)."""
@@ -541,6 +564,7 @@ class PreCompactEvent:
     name: ClassVar[str] = PRE_COMPACT
     outcome_type: ClassVar[type[ControlOutcome]] = CompactOutcome
 
+
 @dataclass
 class PostCompactEvent:
     """A compaction just happened (carries the summary)."""
@@ -549,6 +573,7 @@ class PostCompactEvent:
     summary: str = ""
 
     name: ClassVar[str] = POST_COMPACT
+
 
 @dataclass
 class PreAgentSpawnEvent:
@@ -560,7 +585,7 @@ class PreAgentSpawnEvent:
     effective ``max_depth`` ceiling, and the requested role/nickname. The
     depth-limit veto — previously a direct ``raise AgentLimitReached`` wedged
     into the spawn method — now runs as a control subscriber
-    (:class:`~metagpt.environment.spawn_gate.SpawnGate`, fail-closed) so it is a
+    (:class:`~mote.environment.spawn_gate.SpawnGate`, fail-closed) so it is a
     first-class, foldable, composable influence on the plane rather than hidden
     imperative glue. A ``deny`` outcome is translated back into
     :class:`AgentLimitReached` by the emitter.
@@ -574,6 +599,7 @@ class PreAgentSpawnEvent:
 
     name: ClassVar[str] = PRE_AGENT_SPAWN
     outcome_type: ClassVar[type[ControlOutcome]] = SpawnOutcome
+
 
 #: Any concrete event (all expose a ``.name`` discriminator ClassVar).
 AgentEvent = Any

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.cli.view import (
+from mote.cli.view import (
     BaseProjector,
     Capabilities,
     ConversationCompacted,
@@ -42,7 +42,6 @@ from .conftest import (
     ev_stream_end,
     ev_system_reminder,
 )
-
 
 # --------------------------------------------------------------------------
 # Pure fold: ViewProjector.project
@@ -112,10 +111,7 @@ def test_system_reminder_user_message_folds_to_summary():
     # The framework's per-turn <system-reminder> block (written to history as a
     # user message) folds to a SystemReminder carrying only the block headings.
     p = ViewProjector()
-    inner = (
-        "# Git status\nbranch main, 2 files dirty\n\n"
-        "# Files changed on disk\n- a.py\n- b.py"
-    )
+    inner = "# Git status\nbranch main, 2 files dirty\n\n" "# Files changed on disk\n- a.py\n- b.py"
     out = p.project(ev_system_reminder(inner))
     assert len(out) == 1
     assert isinstance(out[0], SystemReminder)
@@ -328,9 +324,9 @@ def test_summary_glob_counts_paths_dropping_truncation_note():
 
 def test_summary_write_created_and_updated():
     p = ViewProjector()
-    created = p.project(ev_post_tool("Write", "Created /a.py (42 line(s), 100 bytes written).", success=True))
+    created = p.project(ev_post_tool("Write", "Created /a.py (42 lines, 100 bytes written).", success=True))
     assert created[0].summary == "新建 42 行"
-    updated = p.project(ev_post_tool("Write", "Updated /a.py (3 line(s), 10 bytes written).", success=True))
+    updated = p.project(ev_post_tool("Write", "Updated /a.py (3 lines, 10 bytes written).", success=True))
     assert updated[0].summary == "更新 3 行"
 
 
@@ -418,8 +414,8 @@ def test_post_tool_media_block_from_structured_image():
     ``event.media``; the projector resolves the path and emits the block directly,
     independent of the ``tool_response`` text.
     """
-    from metagpt.cli.common.view import MediaBlock
-    from metagpt.executor.tool_result import ToolMedia
+    from mote.cli.contracts.view import MediaBlock
+    from mote.executor.tool_result import ToolMedia
 
     p = ViewProjector()
     out = p.project(
@@ -444,8 +440,8 @@ def test_post_tool_media_block_from_structured_pdf():
 
     This is the P1 gap the old sniff couldn't cover — visual PDF reads now render.
     """
-    from metagpt.cli.common.view import MediaBlock
-    from metagpt.executor.tool_result import ToolMedia
+    from mote.cli.contracts.view import MediaBlock
+    from mote.executor.tool_result import ToolMedia
 
     p = ViewProjector()
     out = p.project(
@@ -469,7 +465,7 @@ def test_post_tool_media_empty_list_emits_no_block():
     field is the structured fact ("this result carries no media") and wins over
     the legacy prefix heuristic.
     """
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
 
     p = ViewProjector()
     out = p.project(
@@ -486,8 +482,8 @@ def test_post_tool_media_empty_list_emits_no_block():
 def test_post_tool_media_ref_without_path_degrades():
     """A structured artifact with an empty ``ref`` (bytes-only, e.g. a screenshot)
     still emits a block, degrading ``alt`` to the media kind for a text host."""
-    from metagpt.cli.common.view import MediaBlock
-    from metagpt.executor.tool_result import ToolMedia
+    from mote.cli.contracts.view import MediaBlock
+    from mote.executor.tool_result import ToolMedia
 
     p = ViewProjector()
     out = p.project(
@@ -507,7 +503,7 @@ def test_post_tool_read_image_emits_media_block_legacy():
     """Legacy fallback: with no ``media`` field the ``"Read image "`` prefix sniff
     still resolves the path from ``tool_input`` and emits a block (behaviour
     unchanged for events predating the structured-media change)."""
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
 
     p = ViewProjector()
     out = p.project(
@@ -527,7 +523,7 @@ def test_post_tool_read_image_emits_media_block_legacy():
 
 def test_post_tool_read_text_emits_no_media_block():
     """A normal (non-image) ``Read`` yields only the ToolCallCompleted (legacy)."""
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
 
     p = ViewProjector()
     out = p.project(ev_post_tool("Read", "some file contents", tool_input={"file_path": "/tmp/a.txt"}))
@@ -542,8 +538,8 @@ def test_post_tool_file_diff_block_from_structured_change():
     independent of the tool_response text (which says "updated successfully", not a
     diff). The ToolCallCompleted still rides alongside.
     """
-    from metagpt.cli.common.view import FileDiffBlock
-    from metagpt.executor.tool_result import FileChange
+    from mote.cli.contracts.view import FileDiffBlock
+    from mote.executor.tool_result import FileChange
 
     p = ViewProjector()
     out = p.project(
@@ -565,8 +561,8 @@ def test_post_tool_file_diff_block_from_structured_change():
 
 def test_post_tool_multiple_file_changes_fold_to_multiple_blocks():
     """apply_patch may touch several files → one ``FileDiffBlock`` per change."""
-    from metagpt.cli.common.view import FileDiffBlock
-    from metagpt.executor.tool_result import FileChange
+    from mote.cli.contracts.view import FileDiffBlock
+    from mote.executor.tool_result import FileChange
 
     p = ViewProjector()
     out = p.project(
@@ -594,7 +590,7 @@ def test_post_tool_no_file_changes_emits_no_diff_block():
     Bash's diff-shaped text still falls to the ``_looks_like_diff`` path in the
     completed event — the structured block is only for old/new-bearing tools.
     """
-    from metagpt.cli.common.view import FileDiffBlock
+    from mote.cli.contracts.view import FileDiffBlock
 
     p = ViewProjector()
     out = p.project(ev_post_tool("Bash", "some plain output"))

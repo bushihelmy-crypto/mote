@@ -9,9 +9,9 @@ import stat
 
 import pytest
 
-from metagpt.common.hook.manager import HookManager
-from metagpt.common.hook.types import HookOutcome
-from metagpt.common.schema import HookCommandHandler, HookConfig, HookMatcherGroup
+from mote.common.hook.manager import HookManager
+from mote.common.hook.types import HookOutcome
+from mote.common.schema import HookCommandHandler, HookConfig, HookMatcherGroup
 
 
 @pytest.mark.asyncio
@@ -94,9 +94,7 @@ async def test_command_handler_json_stdout(tmp_path):
         "#!/usr/bin/env bash\nread -r line\n"
         'echo \'{"hookSpecificOutput": {"permissionDecision": "deny"}, "systemMessage": "no"}\'\n',
     )
-    cfg = HookConfig(
-        events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]}
-    )
+    cfg = HookConfig(events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]})
     mgr = HookManager(cfg, session_id="sid", get_cwd=lambda: str(tmp_path))
     out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
     assert out.behavior == "deny"
@@ -110,9 +108,7 @@ async def test_command_handler_exit_2_blocks(tmp_path):
         "deny.sh",
         "#!/usr/bin/env bash\nread -r line\necho 'denied via exit' >&2\nexit 2\n",
     )
-    cfg = HookConfig(
-        events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]}
-    )
+    cfg = HookConfig(events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]})
     mgr = HookManager(cfg)
     out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
     assert out.behavior == "deny"
@@ -126,12 +122,10 @@ async def test_command_handler_receives_payload_on_stdin(tmp_path):
         tmp_path,
         "echo.sh",
         "#!/usr/bin/env bash\nread -r line\n"
-        "name=$(python3 -c 'import sys,json; print(json.load(sys.stdin)[\"tool_name\"])' <<< \"$line\")\n"
+        'name=$(python3 -c \'import sys,json; print(json.load(sys.stdin)["tool_name"])\' <<< "$line")\n'
         'echo "{\\"additionalContext\\": \\"$name\\"}"\n',
     )
-    cfg = HookConfig(
-        events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]}
-    )
+    cfg = HookConfig(events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]})
     mgr = HookManager(cfg)
     out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
     assert out.additional_context == ["Bash"]
@@ -146,9 +140,7 @@ async def test_command_handler_matcher_group_filters(tmp_path):
     )
     cfg = HookConfig(
         events={
-            "PreToolUse": [
-                HookMatcherGroup(matcher="Write", handlers=[HookCommandHandler(command=f"bash {script}")])
-            ]
+            "PreToolUse": [HookMatcherGroup(matcher="Write", handlers=[HookCommandHandler(command=f"bash {script}")])]
         }
     )
     mgr = HookManager(cfg)

@@ -32,11 +32,12 @@ import os
 import re
 import signal
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
-from metagpt.common.logs import logger
-from metagpt.executor.tool_result import ToolError
+from mote.common.logs import logger
+from mote.common.text import cap_head_tail, count_noun, verb_agree
+from mote.executor.tool_result import ToolError
 
 # --- Constants -------------------------------------------------------------
 # Default per-action navigation timeout (ms). Playwright's own default is 30s;
@@ -50,6 +51,22 @@ _LAUNCH_TIMEOUT_S = 60.0
 # dropping the middle here.
 TEXT_MAX_CHARS = 10_000_000
 
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+_MSG_START_FAILED = "Error: web browser failed to start: {error}"
+_MSG_NO_OPEN_TABS = "Error: the browser has no open tabs."
+_MSG_NO_MATCH_SELECTOR_ERR = "Error: no element matched selector {selector!r}: {error}"
+_MSG_NO_MATCH_SELECTOR = "Error: no element matched {selector!r}."
+_MSG_SNAPSHOT_FAILED = "Error: failed to snapshot the page: {error}"
+_MSG_WAIT_NEEDS_ONE = "Error: 'wait' needs exactly one of selector or expression."
+_MSG_WAIT_TIMED_OUT = "Error: timed out after {timeout_ms}ms waiting for {target!r}{suffix}."
+_MSG_DETECT_FORMS_FAILED = "Error: failed to detect forms: {error}"
+_MSG_FILL_FORM_NEEDS_MAPPING = "Error: 'fill_form' needs a non-empty {selector: value} mapping."
+_MSG_FILL_FAILED = "Error: failed to fill {target!r}: {error}"
+_MSG_EXTRACT_NEEDS_MAPPING = "Error: 'extract' needs a non-empty {key: 'selector[@attr]'} mapping."
+_MSG_EXTRACT_FAILED = "Error: failed to extract: {error}"
+_MSG_NO_TAB_AT_INDEX = "Error: no tab at index {index} (have {count})."
+
 # --- Stealth (opt-in anti-bot-detection) -----------------------------------
 # Applied only when a session is created with ``stealth=True`` (Role opt-in via
 # ``browser_schema.browser_stealth``). Off by default: the browser stays a plain
@@ -61,8 +78,7 @@ TEXT_MAX_CHARS = 10_000_000
 # A realistic desktop Chrome UA replacing Playwright's headless default (which
 # contains "HeadlessChrome" — an immediate bot tell).
 _STEALTH_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 # Chromium launch flags that hide the most obvious automation signals.
 _STEALTH_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
@@ -205,16 +221,6 @@ _IMPLICIT_ROLE = {
     "textarea": "textbox",
     "summary": "button",
 }
-
-
-def _cap_text(text: str) -> str:
-    """Cap *text* at :data:`TEXT_MAX_CHARS`, keeping head + tail, drop middle."""
-    if len(text) <= TEXT_MAX_CHARS:
-        return text
-    head = TEXT_MAX_CHARS // 2
-    tail = TEXT_MAX_CHARS - head
-    omitted = len(text) - TEXT_MAX_CHARS
-    return f"{text[:head]}\n[... {omitted} chars omitted ...]\n{text[-tail:]}"
 
 
 # --- Unified page tree ------------------------------------------------------
@@ -733,9 +739,7 @@ def _ref_error(ref: str, meta: Dict[str, Dict[str, Any]]) -> str:
     """
     known = ref in meta
     hint = "the page changed since the last snapshot" if known else f"no element [{ref}] in the last snapshot"
-    return (
-        f"Error: element [{ref}] not found ({hint}). Take a fresh snapshot to get current element indices."
-    )
+    return f"Error: element [{ref}] not found ({hint}). Take a fresh snapshot to get current element indices."
 
 
 class BrowserSession:
@@ -818,7 +822,7 @@ class BrowserSession:
             raise
         except Exception as e:  # noqa: BLE001
             self.kill()
-            raise ToolError(f"Error: web browser failed to start: {e}")
+            raise ToolError(_MSG_START_FAILED.format(error=e))
 
     def _launch_kwargs(self) -> Dict[str, Any]:
         """Chromium ``launch`` kwargs; stealth adds the anti-automation flags.
@@ -869,7 +873,7 @@ class BrowserSession:
         """Return the active page, clamping the index to a valid tab."""
         pages = self._pages
         if not pages:
-            raise ToolError("Error: the browser has no open tabs.")
+            raise ToolError(_MSG_NO_OPEN_TABS)
         if self._active >= len(pages) or self._active < 0:
             self._active = len(pages) - 1
         return pages[self._active]
@@ -981,11 +985,11 @@ class BrowserSession:
         except Exception as e:  # noqa: BLE001
             handle = None
             if ref is None:
-                raise ToolError(f"Error: no element matched selector {selector!r}: {e}")
+                raise ToolError(_MSG_NO_MATCH_SELECTOR_ERR.format(selector=selector, error=e))
         if handle is not None:
             return handle
         if ref is None:
-            raise ToolError(f"Error: no element matched {selector!r}.")
+            raise ToolError(_MSG_NO_MATCH_SELECTOR.format(selector=selector))
         # Tier 2: ref known but attribute gone — re-query by cached role/name.
         meta = self._ref_meta.get(ref)
         if meta:
@@ -1066,12 +1070,12 @@ class BrowserSession:
         if html and html.strip():
             md = _html_to_markdown(html, extract_links=extract_links, extract_images=extract_images)
             if md and md.strip():
-                return header + _cap_text(md)
+                return header + cap_head_tail(md, TEXT_MAX_CHARS)[0]
         try:
             text = await page.inner_text("body")
         except Exception:  # noqa: BLE001 — some pages have no body yet
             text = await page.content()
-        return header + _cap_text(text)
+        return header + cap_head_tail(text, TEXT_MAX_CHARS)[0]
 
     async def snapshot(self, *, interactive_only: bool = False) -> str:
         """Return a unified indented tree of the page — prose + clickable refs.
@@ -1091,7 +1095,7 @@ class BrowserSession:
         try:
             data = await page.evaluate(_TREE_JS)
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Error: failed to snapshot the page: {e}")
+            raise ToolError(_MSG_SNAPSHOT_FAILED.format(error=e))
         nodes = (data or {}).get("nodes", []) or []
         elements = [n for n in nodes if n.get("kind") == "element" and n.get("ref")]
         self._ref_meta = {el["ref"]: el for el in elements}
@@ -1106,8 +1110,9 @@ class BrowserSession:
         if body:
             parts.append(body)
         if offscreen:
-            parts.append(f"[{offscreen} element(s) are off-screen; scroll to bring into view]")
-        return _cap_text("\n".join(parts))
+            is_are = verb_agree(offscreen, "is", "are")
+            parts.append(f"[{count_noun(offscreen, 'element')} {is_are} off-screen; scroll to bring into view]")
+        return cap_head_tail("\n".join(parts), TEXT_MAX_CHARS)[0]
 
     async def wait(
         self,
@@ -1125,13 +1130,13 @@ class BrowserSession:
         """
         page = self._active_page()
         if bool(selector) == bool(expression):
-            raise ToolError("Error: 'wait' needs exactly one of selector or expression.")
+            raise ToolError(_MSG_WAIT_NEEDS_ONE)
         if selector:
             sel, ref = self._resolve_target(selector)
             try:
                 await page.wait_for_selector(sel, timeout=timeout_ms, state="visible")
             except Exception:  # noqa: BLE001
-                raise ToolError(f"Error: timed out after {timeout_ms}ms waiting for {selector!r}.")
+                raise ToolError(_MSG_WAIT_TIMED_OUT.format(timeout_ms=timeout_ms, target=selector, suffix=""))
             return f"[{selector} appeared]"
         # expression: poll to truthy with exponential backoff.
         deadline = time.monotonic() + timeout_ms / 1000.0
@@ -1146,7 +1151,7 @@ class BrowserSession:
             await asyncio.sleep(delay)
             delay = min(delay * 2, 0.2)
         suffix = f" (last error: {last_err})" if last_err else ""
-        raise ToolError(f"Error: timed out after {timeout_ms}ms waiting for {expression!r}{suffix}.")
+        raise ToolError(_MSG_WAIT_TIMED_OUT.format(timeout_ms=timeout_ms, target=expression, suffix=suffix))
 
     async def assist(self, prompt: str, *, ask_human, headless: bool) -> str:
         """Pause automation and ask the human to supply something only they can.
@@ -1234,7 +1239,7 @@ class BrowserSession:
         try:
             data = await page.evaluate(_DETECT_FORMS_JS)
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Error: failed to detect forms: {e}")
+            raise ToolError(_MSG_DETECT_FORMS_FAILED.format(error=e))
         forms = (data or {}).get("forms", []) or []
         if not forms:
             return "[no forms found]"
@@ -1256,7 +1261,7 @@ class BrowserSession:
         all fields are filled. Mirrors obscura's fill_form. Returns a summary.
         """
         if not isinstance(fields, dict) or not fields:
-            raise ToolError("Error: 'fill_form' needs a non-empty {selector: value} mapping.")
+            raise ToolError(_MSG_FILL_FORM_NEEDS_MAPPING)
         page = self._active_page()
         filled = []
         for target, value in fields.items():
@@ -1265,9 +1270,9 @@ class BrowserSession:
             try:
                 await handle.fill(str(value), timeout=timeout_ms)
             except Exception as e:  # noqa: BLE001
-                raise ToolError(f"Error: failed to fill {target!r}: {e}")
+                raise ToolError(_MSG_FILL_FAILED.format(target=target, error=e))
             filled.append(str(target))
-        msg = f"[filled {len(filled)} field(s): {', '.join(filled)}]"
+        msg = f"[filled {count_noun(len(filled), 'field')}: {', '.join(filled)}]"
         if submit:
             sel, ref = self._resolve_target(submit)
             handle = await self._locate(page, sel, ref, timeout_ms)
@@ -1286,12 +1291,12 @@ class BrowserSession:
         object keyed by your schema keys.
         """
         if not isinstance(schema, dict) or not schema:
-            raise ToolError("Error: 'extract' needs a non-empty {key: 'selector[@attr]'} mapping.")
+            raise ToolError(_MSG_EXTRACT_NEEDS_MAPPING)
         page = self._active_page()
         try:
             data = await page.evaluate(_EXTRACT_JS, schema)
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Error: failed to extract: {e}")
+            raise ToolError(_MSG_EXTRACT_FAILED.format(error=e))
         return json.dumps(data, ensure_ascii=False, indent=2)
 
     async def screenshot(self) -> bytes:
@@ -1336,6 +1341,7 @@ class BrowserSession:
 
     async def new_tab(self, url: Optional[str] = None) -> str:
         """Open a new tab (optionally navigating to *url*) and make it active."""
+        assert self._context is not None, "browser not started"
         page = await self._context.new_page()
         self._active = len(self._pages) - 1
         # Refs belong to the tab that was active when the snapshot was taken;
@@ -1350,7 +1356,7 @@ class BrowserSession:
         """Make the tab at *index* the active one."""
         pages = self._pages
         if index < 0 or index >= len(pages):
-            raise ToolError(f"Error: no tab at index {index} (have {len(pages)}).")
+            raise ToolError(_MSG_NO_TAB_AT_INDEX.format(index=index, count=len(pages)))
         self._active = index
         # The snapshot's refs were stamped on the previously-active page.
         self._invalidate_refs()
@@ -1360,7 +1366,7 @@ class BrowserSession:
         """Close the tab at *index*, clamping the active index afterwards."""
         pages = self._pages
         if index < 0 or index >= len(pages):
-            raise ToolError(f"Error: no tab at index {index} (have {len(pages)}).")
+            raise ToolError(_MSG_NO_TAB_AT_INDEX.format(index=index, count=len(pages)))
         await pages[index].close()
         # Clamp the active index to the now-shorter tab list.
         remaining = len(self._pages)
@@ -1381,6 +1387,9 @@ class BrowserSession:
         logged-in session). Best-effort: returns ``None`` on any failure (e.g.
         the browser is already gone).
         """
+        # Best-effort: a torn-down browser has no context to capture from.
+        if self._context is None:
+            return None
         try:
             pages = self._pages
             urls = [p.url for p in pages]
@@ -1391,7 +1400,7 @@ class BrowserSession:
             except Exception as exc:  # noqa: BLE001 — storage capture is best-effort
                 logger.debug(f"Browser: storage_state capture failed: {exc}")
                 storage_state = None
-            return (urls, self._active, storage_state)
+            return (urls, self._active, cast("Optional[Dict[str, Any]]", storage_state))
         except Exception as exc:  # noqa: BLE001 — capture must not break the call
             logger.debug(f"Browser: state capture failed: {exc}")
             return None
@@ -1412,6 +1421,7 @@ class BrowserSession:
             real = [u for u in urls if u and u != "about:blank"]
             if not real:
                 return
+            assert self._context is not None, "restore_state requires a started browser"
             pages = self._pages
             for i, url in enumerate(real):
                 # Reuse the initial blank tab for the first URL, open tabs after.

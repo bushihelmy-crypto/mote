@@ -20,11 +20,10 @@ Tool-name matching supports three forms:
 from __future__ import annotations
 
 from fnmatch import fnmatch
-
 from typing import Optional
 
-from metagpt.executor.permission.command_parse import command_prefix, prefix_tokens
-from metagpt.common.schema.permission_types import PermissionBehavior, PermissionRule, RuleSource
+from mote.common.schema.permission_types import PermissionBehavior, PermissionRule, RuleSource
+from mote.executor.permission.command_parse import command_prefix, prefix_tokens
 
 # Sentinel separating an MCP server from its tool name, e.g. ``mcp__github__search``.
 _MCP_PREFIX = "mcp__"
@@ -56,7 +55,7 @@ def _tool_name_matches(rule_tool: str, tool_name: str) -> bool:
     if rule_tool == tool_name:
         return True
     # MCP namespace rule: "mcp__server" covers every "mcp__server__<tool>".
-    if rule_tool.startswith(_MCP_PREFIX) and "__" not in rule_tool[len(_MCP_PREFIX):]:
+    if rule_tool.startswith(_MCP_PREFIX) and "__" not in rule_tool[len(_MCP_PREFIX) :]:
         return tool_name.startswith(rule_tool + "__")
     # Glob form, e.g. "mcp__server__*" or "Bash*".
     if any(ch in rule_tool for ch in "*?[") and fnmatch(tool_name, rule_tool):

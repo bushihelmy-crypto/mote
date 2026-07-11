@@ -1,13 +1,13 @@
 from pydantic import Field
 
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.utils.yaml_model import YamlModel
 
 
 class LangfuseConfig(YamlModel):
     """Configuration for Langfuse LLM observability tracing.
 
     Disabled by default; langfuse is an optional dependency only imported when
-    enabled. See metagpt.common.observability.langfuse_integration.
+    enabled. See mote.common.observability.langfuse_integration.
     """
 
     enabled: bool = Field(default=False, description="Enable Langfuse tracing")

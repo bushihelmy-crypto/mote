@@ -8,8 +8,8 @@ take effect on the next read (the dynamic-cap contract the runtime relies on).
 """
 from __future__ import annotations
 
-from metagpt.common.schema import SandboxRuntimeConfig
-from metagpt.executor.permission.sandbox.resource_guard import ResourceGuard
+from mote.common.schema import SandboxRuntimeConfig
+from mote.executor.permission.sandbox.resource_guard import ResourceGuard
 
 
 def _cfg(**kw) -> SandboxRuntimeConfig:

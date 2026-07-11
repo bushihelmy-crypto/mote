@@ -54,10 +54,7 @@ def classify(
         return Trajectory.STABLE_HIGH
 
     diffs_deltas = [b - a for a, b in zip(diffs, diffs[1:])]
-    signs = [
-        1 if d > delta_threshold else (-1 if d < -delta_threshold else 0)
-        for d in diffs_deltas
-    ]
+    signs = [1 if d > delta_threshold else (-1 if d < -delta_threshold else 0) for d in diffs_deltas]
     nonzero = [s for s in signs if s != 0]
 
     if len(nonzero) >= 2 and all(s == 1 for s in nonzero):
@@ -65,9 +62,7 @@ def classify(
     if len(nonzero) >= 2 and all(s == -1 for s in nonzero):
         return Trajectory.DESCALATING
 
-    direction_changes = sum(
-        1 for a, b in zip(nonzero, nonzero[1:]) if a != b
-    )
+    direction_changes = sum(1 for a, b in zip(nonzero, nonzero[1:]) if a != b)
     if direction_changes >= 2:
         return Trajectory.OSCILLATING
 

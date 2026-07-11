@@ -1,13 +1,13 @@
-"""Root of the MetaGPT exception hierarchy + retryable/non-retryable markers.
+"""Root of the Mote exception hierarchy + retryable/non-retryable markers.
 
-``MetaGPTError`` is the common ancestor for every typed exception in the
+``MoteError`` is the common ancestor for every typed exception in the
 codebase. It carries a stable error ``code``, an optional ``cause`` (chained as
 ``__cause__``), and arbitrary structured ``context``, and serializes via
 ``to_dict()`` for logging / API responses.
 
 ``RetryableError`` and ``NonRetryableError`` are *marker* base classes: a
 concrete exception multiply-inherits one of them to flip the ``retryable``
-ClassVar. Because the marker precedes ``MetaGPTError`` in the MRO of the
+ClassVar. Because the marker precedes ``MoteError`` in the MRO of the
 concrete class, the marker's ``retryable`` value wins. This lets retry
 predicates (see ``handlers.is_retryable``) decide on *semantics* rather than on
 vendor-specific exception tuples.
@@ -18,7 +18,7 @@ from __future__ import annotations
 import pickle
 from typing import Any, ClassVar
 
-from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+from mote.common.exception.codes import ErrorCode, RecoveryAction
 
 
 class _SanitizedCause(Exception):
@@ -27,7 +27,7 @@ class _SanitizedCause(Exception):
     Some third-party exceptions (notably openai's ``APIStatusError``) pickle
     (``dumps``) fine but fail to ``loads`` because their ``__init__`` demands
     keyword-only args the pickle machinery never supplies. When a
-    ``MetaGPTError`` carrying such a cause is routed through loguru's
+    ``MoteError`` carrying such a cause is routed through loguru's
     ``enqueue=True`` queue (which pickles every record), the consumer side
     crashes on load. We swap the offending cause for this repr-only placeholder
     *only during pickling*; the in-process error keeps its real cause.
@@ -50,14 +50,14 @@ def _is_picklable(obj: Any) -> bool:
         return False
 
 
-def _rebuild_metagpt_error(cls: type, args: tuple, state: dict) -> "MetaGPTError":
-    """Reconstruct a pickled ``MetaGPTError`` without re-running ``__init__``.
+def _rebuild_mote_error(cls: type, args: tuple, state: dict) -> "MoteError":
+    """Reconstruct a pickled ``MoteError`` without re-running ``__init__``.
 
     Subclass ``__init__`` signatures vary (e.g. ``LLMError`` wants keyword-only
     ``status_code``), so we bypass them: build a bare instance, restore ``args``
     and ``__dict__``, then re-link ``__cause__`` (a C-slot that pickle drops).
     """
-    obj = cls.__new__(cls)
+    obj = cls.__new__(cls)  # type: ignore[call-overload]  # dynamic rebuild bypasses __init__
     obj.args = args
     obj.__dict__.update(state)
     cause = state.get("cause")
@@ -66,8 +66,8 @@ def _rebuild_metagpt_error(cls: type, args: tuple, state: dict) -> "MetaGPTError
     return obj
 
 
-class MetaGPTError(Exception):
-    """Base class for all MetaGPT errors.
+class MoteError(Exception):
+    """Base class for all Mote errors.
 
     Attributes:
         message: Human-readable description.
@@ -111,7 +111,7 @@ class MetaGPTError(Exception):
         Overridable hook so a concrete error exposes its own structured fields
         (e.g. a graph router/param/batch error surfaces the offending node,
         param types, or per-node failures) uniformly through ``to_dict`` and
-        :class:`~metagpt.common.exception.report.ErrorReport`. The default is the
+        :class:`~mote.common.exception.report.ErrorReport`. The default is the
         ``context`` mapping, so plain errors need no override.
         """
         return dict(self.context)
@@ -145,16 +145,16 @@ class MetaGPTError(Exception):
         cause = state.get("cause")
         if cause is not None and not _is_picklable(cause):
             state["cause"] = _SanitizedCause(repr(cause))
-        return (_rebuild_metagpt_error, (type(self), self.args, state))
+        return (_rebuild_mote_error, (type(self), self.args, state))
 
 
-class RetryableError(MetaGPTError):
+class RetryableError(MoteError):
     """Marker base: transient failures that may succeed on retry."""
 
     retryable: ClassVar[bool] = True
 
 
-class NonRetryableError(MetaGPTError):
+class NonRetryableError(MoteError):
     """Marker base: permanent failures that must not be retried."""
 
     retryable: ClassVar[bool] = False

@@ -10,14 +10,8 @@ from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
-from metagpt.common.prompt.role import (
-    CMD_PROMPT,
-    SUMMARY_PROMPT,
-    SUMMARY_WITH_RECOMMEND_PROMPT,
-    SYSTEM_PROMPT,
-    ROLE_INFO
-)
+from mote.common.prompt.role import CMD_PROMPT, ROLE_INFO, SUMMARY_PROMPT, SUMMARY_WITH_RECOMMEND_PROMPT, SYSTEM_PROMPT
+from mote.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
 
 
 class RoleSchema(BaseModel):
@@ -35,7 +29,7 @@ class RoleSchema(BaseModel):
     role_info: str = ROLE_INFO
     example: str = ""
     instruction: str = ""
-    
+
     # --- Prompt templates ---
     system_prompt: str = SYSTEM_PROMPT
     cmd_prompt: str = CMD_PROMPT
@@ -90,7 +84,7 @@ class RoleSchema(BaseModel):
         "GetNodeState",
         "CodeReview",
         "WebBrowser",
-        "Skill"
+        "Skill",
     ]
     mcps: list[str] = []
     agents: list[str] = []
@@ -102,7 +96,7 @@ class RoleSchema(BaseModel):
     # the user for confirmation. Set ``mode="bypass"`` (or specific allow rules)
     # to loosen this, or build a custom PermissionConfig for finer control.
     permissions: Optional[PermissionConfig] = Field(default_factory=PermissionConfig)
-    language : str = "chinese"
+    language: str = "chinese"
     # --- Hooks ---
     # Opt-in agent-lifecycle hooks (command handlers). When None (default) and
     # no callbacks are registered programmatically, no hook layer is engaged

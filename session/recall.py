@@ -14,7 +14,7 @@ It is the shared key behind two capabilities built on top of it:
 * *memory recall* — surface a specific past result on demand without keeping it
   resident in the window.
 
-Like :mod:`metagpt.session.history` this is a single forward scan of the same
+Like :mod:`mote.session.history` this is a single forward scan of the same
 ``rollout.jsonl`` the session already owns — no second index.
 """
 
@@ -22,10 +22,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.const import TOOL_CALL_ID
-from metagpt.common.schema import Message
-from metagpt.session.events import MessageEvent, parse_event
-from metagpt.session.log import SessionLog
+from mote.common.const import TOOL_CALL_ID
+from mote.common.schema import Message
+from mote.session.events import MessageEvent, parse_event
+from mote.session.log import SessionLog
 
 
 def body_for_tool_call(log: SessionLog, tool_call_id: str) -> Optional[Message]:

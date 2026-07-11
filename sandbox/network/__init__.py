@@ -1,4 +1,4 @@
-"""metagpt.sandbox.network — local egress proxy + domain/SSRF policy.
+"""mote.sandbox.network — local egress proxy + domain/SSRF policy.
 
 The OS-level sandbox's network half (P1). Two pieces:
 
@@ -23,10 +23,6 @@ env-proxy when the toolchain (slirp4netns / nft) is absent.
 """
 from __future__ import annotations
 
-from metagpt.sandbox.network.policy import (
-    NetworkPolicy,
-    is_blocked_host,
-    normalize_host,
-)
+from mote.sandbox.network.policy import NetworkPolicy, is_blocked_host, normalize_host
 
 __all__ = ["NetworkPolicy", "is_blocked_host", "normalize_host"]

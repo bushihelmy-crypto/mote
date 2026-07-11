@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from metagpt.router.ml.inference.artifacts import InferenceArtifacts
-from metagpt.router.ml.inference.ensemble import fuse_probabilities
-from metagpt.router.ml.inference.features import build_feature_bundle
-from metagpt.router.ml.inference.heads import run_heads
-from metagpt.router.ml.inference.postprocess import apply_postprocess
-from metagpt.router.ml.inference.types import InferenceRequest, InferenceResult
-from metagpt.router.ml.predictor import ROUTE_CLASSES
+from mote.router.ml.inference.artifacts import InferenceArtifacts
+from mote.router.ml.inference.ensemble import fuse_probabilities
+from mote.router.ml.inference.features import build_feature_bundle
+from mote.router.ml.inference.heads import run_heads
+from mote.router.ml.inference.postprocess import apply_postprocess
+from mote.router.ml.inference.types import InferenceRequest, InferenceResult
+from mote.router.ml.predictor import ROUTE_CLASSES
 
 
 class InferenceCore:
@@ -76,10 +76,7 @@ class InferenceCore:
         decision = self._postprocess(fused, outputs.p_aux_lgbm, request)
         return InferenceResult(
             decision=decision,
-            probabilities={
-                route_class: float(fused[idx])
-                for idx, route_class in enumerate(ROUTE_CLASSES)
-            },
+            probabilities={route_class: float(fused[idx]) for idx, route_class in enumerate(ROUTE_CLASSES)},
             aux_decision_probs=self._aux_probs_dict(outputs.p_aux_lgbm),
             intermediates={
                 "bge_channels_used": bundle.bge_channels_used,
@@ -111,8 +108,7 @@ class InferenceCore:
             self.alpha,
         )
 
-    def _postprocess(self, fused_probs: np.ndarray, aux_probs: np.ndarray | None,
-                     request: InferenceRequest):
+    def _postprocess(self, fused_probs: np.ndarray, aux_probs: np.ndarray | None, request: InferenceRequest):
         return apply_postprocess(
             fused_probs=fused_probs,
             aux_probs=self._aux_probs_dict(aux_probs),

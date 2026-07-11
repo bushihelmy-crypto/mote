@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.compress.git.GitCompressor``."""
+"""Unit tests for ``mote.executor.compress.git.GitCompressor``."""
 from __future__ import annotations
 
-from metagpt.executor.compress.git import GitCompressor
+from mote.executor.compress.git import GitCompressor
 
 STATUS = """On branch master
 Your branch is up to date with 'origin/master'.
@@ -19,7 +19,9 @@ Changes not staged for commit:
 
 Untracked files:
   (use "git add <file>..." to include in what will be committed)
-""" + "\n".join(f"\tnew_{i}.py" for i in range(30))
+""" + "\n".join(
+    f"\tnew_{i}.py" for i in range(30)
+)
 
 LOG = "\n".join(
     f"""commit {'a' * 40}{i}
@@ -34,15 +36,18 @@ Date:   Mon Jan 1 00:00:00 2026 +0000
     for i in range(10)
 )
 
-DIFF = """diff --git a/foo.py b/foo.py
+DIFF = (
+    """diff --git a/foo.py b/foo.py
 index 1234567..89abcde 100644
 --- a/foo.py
 +++ b/foo.py
 @@ -1,5 +1,7 @@
  context line
-""" + "\n".join(f"+added line {i}" for i in range(40)) + "\n" + "\n".join(
-    f"-removed line {i}" for i in range(40)
-) + """
+"""
+    + "\n".join(f"+added line {i}" for i in range(40))
+    + "\n"
+    + "\n".join(f"-removed line {i}" for i in range(40))
+    + """
 diff --git a/old.py b/new.py
 similarity index 95%
 rename from old.py
@@ -50,6 +55,7 @@ rename to new.py
 diff --git a/img.png b/img.png
 Binary files a/img.png and b/img.png differ
 """
+)
 
 
 class TestStatus:

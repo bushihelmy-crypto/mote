@@ -11,49 +11,31 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from json_repair import repair_json
 from openai import AsyncOpenAI, AsyncStream
 from openai._base_client import AsyncHttpxClientWrapper
-from openai.types import CompletionUsage
+from openai.types import CompletionUsage, Image
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
-from openai.types.chat.chat_completion_message_tool_call import (
-    ChatCompletionMessageToolCall,
-    Function,
-)
-from tenacity import (
-    after_log,
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_random_exponential,
-)
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
-from metagpt.common.const import USE_CONFIG_TIMEOUT
-from metagpt.common.events import log_llm_stream
-from metagpt.common.exception import (
-    LLMEmptyResponseError,
-    LLMResponseParseError,
-    classify_llm_error,
-    is_retryable,
-)
-from metagpt.common.logs import logger
-from metagpt.common.utils.common import CodeParser, decode_image, log_and_reraise
-from metagpt.common.utils.exceptions import handle_exception
-from metagpt.common.utils.token_counter import (
-    count_message_tokens,
-    count_string_tokens,
-    get_max_completion_tokens,
-)
-from metagpt.router.cost import CostTracker
-from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
-from metagpt.router.llm.constant import GENERAL_FUNCTION_SCHEMA
-from metagpt.router.llm.credentials import CredentialRotationMixin
-from metagpt.router.llm.llm_provider_registry import register_provider
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.common.const import USE_CONFIG_TIMEOUT
+from mote.common.events import log_llm_stream
+from mote.common.exception import LLMEmptyResponseError, LLMResponseParseError, classify_llm_error, is_retryable
+from mote.common.logs import logger
+from mote.common.utils.common import CodeParser, decode_image, log_and_reraise
+from mote.common.utils.exceptions import handle_exception
+from mote.common.utils.token_counter import count_message_tokens, count_string_tokens, get_max_completion_tokens
+from mote.router.cost import CostTracker
+from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
+from mote.router.llm.constant import GENERAL_FUNCTION_SCHEMA
+from mote.router.llm.credentials import CredentialRotationMixin
+from mote.router.llm.llm_provider_registry import register_provider
 
 # Models that reject standard chat params. Keyed by model name → the set of
 # request kwargs to drop. Data-driven so adding a model is a table edit, not a
@@ -79,6 +61,10 @@ _UNSUPPORTED_REQUEST_PARAMS: dict[str, frozenset] = {
 class OpenAILLM(CredentialRotationMixin, BaseLLM):
     """Check https://platform.openai.com/examples for examples"""
 
+    # Narrow the base class's Optional[AsyncOpenAI]: this provider always builds
+    # a client in _init_client(), so it is never None on the request paths.
+    aclient: AsyncOpenAI
+
     def __init__(self, config: LLMConfig):
         self.config = config
         self._init_client()
@@ -99,11 +85,12 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         return AsyncOpenAI(**self._make_client_kwargs())
 
     def _make_client_kwargs(self) -> dict:
+        kwargs: dict[str, Any]
         if self._oauth is not None:
             # OAuth path: inject the (proactively refreshed) bearer token as the
             # OpenAI SDK api_key and merge any provider-specific extra headers.
             kwargs = {"api_key": self._oauth.get_valid_token(), "base_url": self.config.base_url}
-            if self.config.oauth.headers_extra:
+            if self.config.oauth and self.config.oauth.headers_extra:
                 kwargs["default_headers"] = dict(self.config.oauth.headers_extra)
         else:
             kwargs = {"api_key": self._current_api_key(), "base_url": self.config.base_url}
@@ -236,13 +223,22 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         if not usage:
             usage = self._calc_usage(messages, full_text)
         self._update_costs(usage)
-        message = ChatCompletionMessage(role="assistant", content=full_text or None, tool_calls=tool_calls or None)
+        message = ChatCompletionMessage(role="assistant", content=full_text or None, tool_calls=tool_calls or None)  # type: ignore[arg-type]  # list invariance: ChatCompletionMessageToolCall is a union member
         rsp_choice = Choice(index=0, finish_reason=finish_reason or "stop", message=message)
         return ChatCompletion(
-            id="stream", choices=[rsp_choice], created=int(time.time()), model=self.model, object="chat.completion"
+            id="stream",
+            choices=[rsp_choice],
+            created=int(time.time()),
+            model=self.model or "",
+            object="chat.completion",
         )
 
     def _cons_kwargs(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **extra_kwargs) -> dict:
+        # Drop the declarative prompt-cache intent key: OpenAI-compatible providers
+        # cache prefixes automatically (no client marker), and the volatile tail
+        # naturally falls past the auto-detected divergence point — so the intent
+        # needs no translation here, only removal so the API sees canonical messages.
+        messages = self._strip_cache_intent(messages)
         kwargs = {
             "messages": messages,
             "max_tokens": self._get_max_tokens(messages),
@@ -255,10 +251,29 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
-        for param in _UNSUPPORTED_REQUEST_PARAMS.get(self.model, frozenset()):
+        for param in _UNSUPPORTED_REQUEST_PARAMS.get(self.model or "", frozenset()):
             kwargs.pop(param, None)
 
         return kwargs
+
+    @staticmethod
+    def _strip_cache_intent(messages: list[dict]) -> list[dict]:
+        """Return ``messages`` with the private ``_cache_intent`` key removed.
+
+        Copy-on-strip: only the messages that carry the key are rebuilt, so the
+        caller's list/dicts are never mutated. Absent the key (the common path)
+        the input list is returned unchanged.
+        """
+        if not isinstance(messages, list):
+            return messages
+        out = []
+        touched = False
+        for msg in messages:
+            if isinstance(msg, dict) and "_cache_intent" in msg:
+                msg = {k: v for k, v in msg.items() if k != "_cache_intent"}
+                touched = True
+            out.append(msg)
+        return out if touched else messages
 
     async def _acreate(self, **kwargs):
         """Call the OpenAI chat-completions endpoint, translating provider errors.
@@ -292,7 +307,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
-        after=after_log(logger, logger.level("WARNING").name),
+        after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),
         retry_error_callback=log_and_reraise,
     )
@@ -362,16 +377,17 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
             {'language': 'python', 'code': "print('Hello, World!')"}
         """
         message = rsp.choices[0].message
+        first_call = message.tool_calls[0] if message.tool_calls else None
         if (
-            message.tool_calls is not None
-            and message.tool_calls[0].function is not None
-            and message.tool_calls[0].function.arguments is not None
+            first_call is not None
+            and isinstance(first_call, ChatCompletionMessageToolCall)
+            and first_call.function.arguments is not None
         ):
             # reponse is code
             try:
-                return json.loads(message.tool_calls[0].function.arguments, strict=False)
+                return json.loads(first_call.function.arguments, strict=False)
             except json.decoder.JSONDecodeError:
-                return self._parse_arguments(message.tool_calls[0].function.arguments)
+                return self._parse_arguments(first_call.function.arguments)
         elif message.tool_calls is None and message.content is not None:
             # reponse is code, fix openai tools_call respond bug,
             # The response content is `code``, but it appears in the content instead of the arguments.
@@ -410,7 +426,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
                 # ApplyPatch's whole patch) sometimes produces invalid JSON —
                 # unescaped newlines/quotes or a truncated tail. Try json_repair
                 # to recover the call rather than dropping the entire argument.
-                args = self._repair_tool_arguments(raw_args)
+                args = self._repair_tool_arguments(raw_args or "")
             out.append({"id": getattr(call, "id", ""), "name": getattr(fn, "name", ""), "arguments": args})
         return out
 
@@ -467,20 +483,24 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         prompt: str,
         size: str = "1024x1024",
         quality: str = "standard",
-        model: str = None,
+        model: Optional[str] = None,
         resp_format: str = "url",
     ) -> list["Image"]:
         """image generate"""
         assert resp_format in ["url", "b64_json"]
-        if not model:
-            model = self.model
+        model = model or self.model or ""
         res = await self.aclient.images.generate(
-            model=model, prompt=prompt, size=size, quality=quality, n=1, response_format=resp_format
+            model=model,
+            prompt=prompt,
+            size=size,  # type: ignore[arg-type]  # runtime str vs SDK size Literal
+            quality=quality,  # type: ignore[arg-type]  # runtime str vs SDK quality Literal
+            n=1,
+            response_format=resp_format,  # type: ignore[arg-type]  # runtime str vs SDK response_format Literal
         )
         imgs = []
-        for item in res.data:
+        for item in res.data or []:
             img_url_or_b64 = item.url if resp_format == "url" else item.b64_json
-            imgs.append(decode_image(img_url_or_b64))
+            imgs.append(decode_image(img_url_or_b64 or ""))
         return imgs
 
     def count_tokens(self, messages: list[dict]) -> int:

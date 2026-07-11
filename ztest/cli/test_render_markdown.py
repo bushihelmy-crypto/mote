@@ -24,8 +24,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 
-from metagpt.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
-from metagpt.cli.consumers.render.palette import Palette
+from mote.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
+from mote.cli.consumers.render.palette import Palette
 
 # ``Palette.BRAND`` (#d77757) emitted as a truecolor foreground SGR.
 _BRAND_SGR = "38;2;215;119;87"
@@ -117,7 +117,7 @@ def test_theme_travels_with_the_renderable_across_hosts():
 def test_brand_markdown_registers_the_brand_heading():
     # The heading element is swapped via rich's public ``elements`` registry, not
     # a monkeypatch, so the base ``Markdown`` class stays untouched.
-    from metagpt.cli.consumers.render.markdown import BrandHeading
+    from mote.cli.consumers.render.markdown import BrandHeading
 
     assert BrandMarkdown.elements["heading_open"] is BrandHeading
     assert Markdown.elements["heading_open"] is not BrandHeading  # base untouched
@@ -130,14 +130,14 @@ _OSC8 = "\x1b]8;;"
 
 
 def test_linkify_markdown_wraps_a_bare_url_as_an_autolink():
-    from metagpt.cli.consumers.render.markdown import linkify_markdown
+    from mote.cli.consumers.render.markdown import linkify_markdown
 
     out = linkify_markdown("see https://example.com for more")
     assert "<https://example.com>" in out
 
 
 def test_linkify_markdown_leaves_existing_markdown_link_untouched():
-    from metagpt.cli.consumers.render.markdown import linkify_markdown
+    from mote.cli.consumers.render.markdown import linkify_markdown
 
     src = "click [here](https://example.com) now"
     # The inline URL inside a ``[t](u)`` link must not get double-wrapped.
@@ -145,21 +145,21 @@ def test_linkify_markdown_leaves_existing_markdown_link_untouched():
 
 
 def test_linkify_markdown_leaves_existing_autolink_untouched():
-    from metagpt.cli.consumers.render.markdown import linkify_markdown
+    from mote.cli.consumers.render.markdown import linkify_markdown
 
     src = "at <https://example.com> already"
     assert linkify_markdown(src) == src
 
 
 def test_linkify_markdown_skips_urls_inside_inline_code():
-    from metagpt.cli.consumers.render.markdown import linkify_markdown
+    from mote.cli.consumers.render.markdown import linkify_markdown
 
     src = "run `curl https://example.com` here"
     assert linkify_markdown(src) == src
 
 
 def test_linkify_markdown_skips_urls_inside_fenced_code():
-    from metagpt.cli.consumers.render.markdown import linkify_markdown
+    from mote.cli.consumers.render.markdown import linkify_markdown
 
     src = "```\ncurl https://example.com\n```"
     assert linkify_markdown(src) == src

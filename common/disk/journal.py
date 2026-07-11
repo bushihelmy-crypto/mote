@@ -5,7 +5,7 @@ session rollout: a single file you append text lines to and later scan back,
 tolerating partial/corrupt trailing lines. The session keeps its event
 (de)serialization (``to_line``/``parse_line``); Journal only knows about *lines*.
 
-Writes go through the shared :class:`~metagpt.common.disk.writer.DiskWriter`
+Writes go through the shared :class:`~mote.common.disk.writer.DiskWriter`
 (keyed by the journal's path) so appends to one journal are FIFO-ordered and a
 ``drain()`` barrier flushes them. ``create_if_absent`` is idempotent: it writes
 the first line only when the file does not yet exist, so restart/resume never
@@ -19,8 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator, Union
 
-import metagpt.common.disk.disk_io as disk_io
-from metagpt.common.disk.writer import get_disk_writer
+import mote.common.disk.disk_io as disk_io
+from mote.common.disk.writer import get_disk_writer
 
 PathLike = Union[str, Path]
 

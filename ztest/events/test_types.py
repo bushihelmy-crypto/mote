@@ -3,12 +3,12 @@
 """Tests for the three observation events added to unify the parallel paths:
 
 ``RecoveryEvent`` / ``TaskProgressEvent`` / ``ResourceReportEvent`` — their
-discriminators, default fields, and re-export from ``metagpt.common.events``.
+discriminators, default fields, and re-export from ``mote.common.events``.
 """
 from __future__ import annotations
 
-import metagpt.common.events as ev
-from metagpt.common.events.types import (
+import mote.common.events as ev
+from mote.common.events.types import (
     RECOVERY,
     RESOURCE_REPORT,
     TASK_PROGRESS,

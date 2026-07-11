@@ -7,7 +7,7 @@ type instead of one god-struct whose fields are meaningful only per-event. A
 The type makes the contract explicit and unforgeable: a spawn gate structurally
 *cannot* set ``updated_response`` because ``SpawnOutcome`` has no such field.
 
-Every outcome satisfies the :class:`~metagpt.common.interface.event_subscriber.ControlOutcome`
+Every outcome satisfies the :class:`~mote.common.interface.event_subscriber.ControlOutcome`
 protocol the bus drives generically:
 
 * ``is_blocking`` — the outcome short-circuits the rest of the bucket (a deny/stop
@@ -21,11 +21,11 @@ protocol the bus drives generically:
   the change (with ``by`` = the rewriting subscriber's name, stamped by the bus)
   as provenance on the event. Only the two rewriting events (``PreToolUse`` args,
   ``PostToolUse`` output) do anything; the rest return the event unchanged — the
-  identity default lives on :class:`~metagpt.common.interface.event_subscriber.ControlOutcome`,
+  identity default lives on :class:`~mote.common.interface.event_subscriber.ControlOutcome`,
   so a new non-rewriting outcome is inert for free.
 
 Each outcome is a nominal subclass of
-:class:`~metagpt.common.interface.event_subscriber.ControlOutcome` (an ABC): a
+:class:`~mote.common.interface.event_subscriber.ControlOutcome` (an ABC): a
 new outcome that forgets ``is_blocking``/``merge`` cannot be instantiated. The
 two rewriting outcomes assert the target is a nominal :class:`Rewritable` before
 rewriting, so a rewrite aimed at a non-rewritable event fails loud (contained by
@@ -46,9 +46,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from metagpt.common.events.rewrite import Rewritable
-from metagpt.common.interface.event_subscriber import ControlOutcome
-from metagpt.common.schema.permission_types import PermissionBehavior
+from mote.common.events.rewrite import Rewritable
+from mote.common.interface.event_subscriber import ControlOutcome
+from mote.common.schema.permission_types import PermissionBehavior
 
 # allow/deny/ask precedence — deny beats ask beats allow beats nothing.
 _BEHAVIOR_RANK = {"deny": 3, "ask": 2, "allow": 1}
@@ -100,7 +100,7 @@ class ToolCallOutcome(ControlOutcome):
     def rebind(self, event, *, by: str = ""):
         """Thread rewritten args forward, recording the rewrite on the event.
 
-        Delegates to the event's generic :meth:`~metagpt.common.events.rewrite.Rewritable.rewrite`
+        Delegates to the event's generic :meth:`~mote.common.events.rewrite.Rewritable.rewrite`
         so the before-image and ``by`` attribution are captured with the mutation.
         A rewrite aimed at a non-:class:`Rewritable` event fails loud (contained by
         the bus's per-subscriber ``fail_mode``) rather than being silently dropped.
@@ -138,9 +138,7 @@ class ToolResultOutcome(ControlOutcome):
 
     def merge(self, other: "ToolResultOutcome") -> "ToolResultOutcome":
         return ToolResultOutcome(
-            updated_response=(
-                other.updated_response if other.updated_response is not None else self.updated_response
-            ),
+            updated_response=(other.updated_response if other.updated_response is not None else self.updated_response),
             additional_context=[*self.additional_context, *other.additional_context],
             blocked=self.blocked or other.blocked,
             system_message=_pick_last(self.system_message, other.system_message) or "",
@@ -150,7 +148,7 @@ class ToolResultOutcome(ControlOutcome):
     def rebind(self, event, *, by: str = ""):
         """Thread the rewritten output forward, recording the rewrite on the event.
 
-        Delegates to the event's generic :meth:`~metagpt.common.events.rewrite.Rewritable.rewrite`
+        Delegates to the event's generic :meth:`~mote.common.events.rewrite.Rewritable.rewrite`
         so the before-image and ``by`` attribution are captured with the mutation.
         A rewrite aimed at a non-:class:`Rewritable` event fails loud (contained by
         the bus's per-subscriber ``fail_mode``) rather than being silently dropped.

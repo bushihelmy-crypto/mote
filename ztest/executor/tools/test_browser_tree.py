@@ -10,7 +10,7 @@ in ``test_web_browser.py`` cover the JS DOM walk end-to-end.
 """
 from __future__ import annotations
 
-from metagpt.executor.dependency._browser import _format_tree, _ref_error
+from mote.executor.dependency._browser import _format_tree, _ref_error
 
 
 def _text(depth: int, text: str) -> dict:

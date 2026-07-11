@@ -19,9 +19,17 @@ rows live in the prompt, never the full bodies.
 
 from __future__ import annotations
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise/return site).
+_MSG_NO_SKILLS = "No skills are available in this session."
+_MSG_NAME_OR_QUERY_REQUIRED = 'Provide a skill "name" to invoke, or a "query" to search for one.'
+_MSG_UNKNOWN_SKILL = "Unknown skill '{name}'. Available: {available}"
+_MSG_HUMAN_ONLY = "Skill '{name}' is human-invocable only."
+_MSG_NO_MATCH = "No skills match '{query}'."
 
 
 @register_tool
@@ -52,7 +60,7 @@ class Skill(BaseTool):
         """
         pool = self.get_skill_pool()  # type: ignore[attr-defined]
         if pool is None or pool.get_skill_count() == 0:
-            raise ToolError("No skills are available in this session.")
+            raise ToolError(_MSG_NO_SKILLS)
 
         # Search mode: query without a concrete name.
         if query and not name:
@@ -60,16 +68,14 @@ class Skill(BaseTool):
 
         name = (name or "").strip()
         if not name:
-            raise ToolError(
-                'Provide a skill "name" to invoke, or a "query" to search for one.'
-            )
+            raise ToolError(_MSG_NAME_OR_QUERY_REQUIRED)
 
         skill = pool.get(name)
         if skill is None:
             available = ", ".join(sorted(s.name for s in pool.get_all())) or "(none)"
-            raise ToolError(f"Unknown skill '{name}'. Available: {available}")
+            raise ToolError(_MSG_UNKNOWN_SKILL.format(name=name, available=available))
         if skill.disable_model_invocation:
-            raise ToolError(f"Skill '{name}' is human-invocable only.")
+            raise ToolError(_MSG_HUMAN_ONLY.format(name=name))
 
         rendered = self._render(skill, arguments)
 
@@ -137,7 +143,7 @@ class Skill(BaseTool):
                 matches.append(s)
 
         if not matches:
-            return f"No skills match '{query}'."
+            return _MSG_NO_MATCH.format(query=query)
 
         lines = [f"Skills matching '{query}':", ""]
         for s in matches:

@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Literal, Optional
 
-from metagpt.common.schema.permission_types import PermissionBehavior
+from mote.common.schema.permission_types import PermissionBehavior
 
 # ---------------------------------------------------------------------------
 # Enumerations (Literals — no runtime enum machinery)

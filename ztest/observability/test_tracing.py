@@ -13,14 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.events.types import (
-    LLMErrorEvent,
-    LLMRequestEvent,
-    LLMResponseEvent,
-    SpanEndEvent,
-    SpanStartEvent,
-)
-from metagpt.common.observability.tracing import TracingSubscriber
+from mote.common.events.types import LLMErrorEvent, LLMRequestEvent, LLMResponseEvent, SpanEndEvent, SpanStartEvent
+from mote.common.observability.tracing import TracingSubscriber
 
 
 def run(coro):
@@ -104,7 +98,9 @@ def test_generation_nests_under_started_span():
 
     run(
         sub.handle(
-            LLMResponseEvent(request_id="r1", model="gpt-4o", content="hello", usage={"t": 1}, cost_usd=0.01, latency_ms=5.0)
+            LLMResponseEvent(
+                request_id="r1", model="gpt-4o", content="hello", usage={"t": 1}, cost_usd=0.01, latency_ms=5.0
+            )
         )
     )
     assert gen.ended is True

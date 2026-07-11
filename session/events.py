@@ -6,7 +6,7 @@ Each line of a ``rollout.jsonl`` is one JSON object::
 
 The event set is a small tagged union (Codex ``RolloutItem`` style). Most events
 are funneled through the unified event bus and persisted by
-:class:`~metagpt.session.subscribers.RecorderSubscriber`:
+:class:`~mote.session.subscribers.RecorderSubscriber`:
 
 * ``message`` / ``compacted`` originate from the context layer
   (``ContextManager`` emits ``MessageAppendedEvent`` / ``CompactionCheckpointEvent``).
@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from metagpt.common.schema import Message
+from mote.common.schema import Message
 
 
 def _dataclass_kwargs(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -38,6 +38,7 @@ def _dataclass_kwargs(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     names = {f.name for f in fields(cls)}
     return {k: v for k, v in payload.items() if k in names}
+
 
 #: Bump when the persisted event shape changes incompatibly (drives migration).
 SCHEMA_VERSION = 1
@@ -147,9 +148,7 @@ class CompactedEvent:
     def from_payload(cls, payload: Dict[str, Any]) -> "CompactedEvent":
         # Drop any unloadable message in the checkpoint (forgiving read).
         messages = [
-            m
-            for m in (_payload_to_message(item) for item in payload.get("replacement_history", []))
-            if m is not None
+            m for m in (_payload_to_message(item) for item in payload.get("replacement_history", [])) if m is not None
         ]
         return cls(messages=messages, summary=payload.get("summary", ""))
 
@@ -238,7 +237,7 @@ class LLMCallEvent:
     Persisted per LLM call so a rollout carries per-request token/cost without
     duplicating the prompt/completion (those already land as ``message`` records
     and as the live ``MessageAppendedEvent`` stream). Purely telemetry: ignored
-    by :func:`~metagpt.session.replay.replay` (not part of the history rebuild).
+    by :func:`~mote.session.replay.replay` (not part of the history rebuild).
     """
 
     request_id: str = ""
@@ -445,7 +444,7 @@ def parse_event(record: Dict[str, Any]) -> Optional[SessionEvent]:
     """
     if not isinstance(record, dict):
         return None
-    cls = _EVENT_TYPES.get(record.get("type"))
+    cls = _EVENT_TYPES.get(record.get("type") or "")
     if cls is None:
         return None
     try:

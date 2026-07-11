@@ -15,7 +15,7 @@ the ``msg_buffer`` (``exclude=True`` on RoleState) and the per-runtime
 (``session/rollout.jsonl``) is the single truth source for history; it is written
 incrementally every turn. So materialize *strips* ``state.context.messages`` from
 ``role_dump`` (when a rollout exists), and rehydrate refills it via
-:func:`metagpt.session.replay`. This eliminates the old double-write of the full
+:func:`mote.session.replay`. This eliminates the old double-write of the full
 message history into the residency record.
 
 ``MessageQueue.dump()`` is **async**, so :meth:`materialize` is async.
@@ -30,14 +30,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from metagpt.common.base import BaseRole
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.disk import atomic_write, get_disk_writer
-from metagpt.common.logs import logger
-from metagpt.common.schema import MessageQueue
-from metagpt.environment.mailbox import Mailbox
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.session import SessionLog, replay
+from mote.common.base import BaseRole
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.disk import atomic_write, get_disk_writer
+from mote.common.logs import logger
+from mote.common.schema import MessageQueue
+from mote.environment.mailbox import Mailbox
+from mote.environment.runtime import AgentRuntime
+from mote.session import SessionLog, replay
 
 
 @dataclass

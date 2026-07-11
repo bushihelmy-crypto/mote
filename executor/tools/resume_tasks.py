@@ -11,12 +11,15 @@ parameter overrides (**kwargs applied to the graph state).
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tasks.types import BgStatus
+from mote.executor.base_tool import BaseTool
+from mote.executor.tasks.types import BgStatus
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+if TYPE_CHECKING:
+    from mote.executor.tasks import BackgroundTaskPool
 
 # Messages aligned with the design doc (§9)
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
@@ -88,6 +91,9 @@ class ResumeTasks(BaseTool):
         "the 'params' section shown in failure/routing notifications)."
     )
     requires = ("get_bg_pool",)
+
+    # Injected from Role by bind(): Role.get_bg_pool.
+    get_bg_pool: Callable[[], "BackgroundTaskPool"]
 
     async def call(
         self,
@@ -165,17 +171,11 @@ class ResumeTasks(BaseTool):
             available = list(graph._nodes.keys())
             for n in from_nodes + skip_nodes:
                 if n not in graph._nodes:
-                    raise ToolError(
-                        _MSG_NODE_NOT_FOUND.format(node_name=n, available=available)
-                    )
+                    raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=available))
 
         # Feasibility: a re-run node needs its declared input sources satisfied.
         if from_nodes and graph is not None:
-            completed = (
-                run_state.completed_names()
-                if run_state is not None
-                else set(meta.completed_nodes)
-            )
+            completed = run_state.completed_names() if run_state is not None else set(meta.completed_nodes)
             missing = _missing_upstreams(graph, from_nodes, skip_nodes, completed)
             if missing:
                 detail = "; ".join(f"'{n}' (needs {ups})" for n, ups in missing.items())
@@ -187,25 +187,20 @@ class ResumeTasks(BaseTool):
                 state=state, skip_nodes=skip_nodes, from_nodes=from_nodes, run_state=run_state
             )
         elif skip_nodes and graph and state:
-            bg_result = graph.resume_skip(
-                state=state, skip_nodes=skip_nodes, run_state=run_state
-            )
+            bg_result = graph.resume_skip(state=state, skip_nodes=skip_nodes, run_state=run_state)
         elif from_nodes and graph and state:
-            bg_result = graph.resume(
-                state=state, from_nodes=from_nodes, run_state=run_state
-            )
+            bg_result = graph.resume(state=state, from_nodes=from_nodes, run_state=run_state)
         elif gm and gm.factory and gm.initial_params is not None:
             # Full restart from scratch using the original factory
             merged_params = {**gm.initial_params, **(overrides or {})}
             bg_result = await gm.factory(**merged_params)
         else:
-            raise ToolError(
-                f"Task {task_id} has no graph or factory — cannot resume."
-            )
+            raise ToolError(f"Task {task_id} has no graph or factory — cannot resume.")
 
         # Resubmit the poll coroutine under the same task_id. Pass the fresh
         # graph_meta so the pool re-snapshots its run_state (the object the new
         # driver mutates) onto the task meta for the next resume / query.
+        assert bg_result.poll_factory is not None, "resumed task must yield a poll factory"
         pool.resubmit(task_id, bg_result.poll_factory, graph_meta=bg_result.graph_meta)
 
         return _MSG_RESUMED.format(task_id=task_id)

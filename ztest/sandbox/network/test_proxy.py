@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.sandbox.network.policy import NetworkPolicy
-from metagpt.sandbox.network.proxy import EgressProxy
+from mote.sandbox.network.policy import NetworkPolicy
+from mote.sandbox.network.proxy import EgressProxy
 
 
 class _AllowHosts(NetworkPolicy):
@@ -59,11 +59,7 @@ async def _http_get_via_proxy(proxy_port: int, host: str, upstream_port: int):
     """Send an absolute-form GET through the proxy; return (status_line, body)."""
     reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
     target = f"http://{host}:{upstream_port}/"
-    writer.write(
-        f"GET {target} HTTP/1.1\r\n".encode()
-        + f"Host: {host}\r\n".encode()
-        + b"Connection: close\r\n\r\n"
-    )
+    writer.write(f"GET {target} HTTP/1.1\r\n".encode() + f"Host: {host}\r\n".encode() + b"Connection: close\r\n\r\n")
     await writer.drain()
     data = await reader.read(-1)
     writer.close()
@@ -216,7 +212,7 @@ def test_proxy_dials_pinned_ip_end_to_end(monkeypatch):
     with the SSRF table neutralised for this test, the proxy must pin to that IP
     and reach the upstream — proving the dial uses the pinned address.
     """
-    import metagpt.sandbox.network.proxy as proxy_mod
+    import mote.sandbox.network.proxy as proxy_mod
 
     async def scenario():
         upstream, up_port = await _start_fake_upstream()

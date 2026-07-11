@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from metagpt.memory.procedural_memory.serializers.base import BaseSerializer
+from mote.memory.procedural_memory.serializers.base import BaseSerializer
 
 
 class SimpleSerializer(BaseSerializer):

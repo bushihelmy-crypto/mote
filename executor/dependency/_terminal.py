@@ -35,10 +35,31 @@ import os
 import re
 import signal
 import uuid
-from typing import Optional
+from typing import Optional, Protocol
 
-from metagpt.common.logs import logger
-from metagpt.executor.tool_result import ToolError
+from mote.common.logs import logger
+from mote.common.text import Elision, ElisionStrategy, ElisionUnit
+from mote.executor.dependency._session_state import diff_env_state
+from mote.executor.tool_result import ToolError
+
+
+class _SandboxRuntime(Protocol):
+    """The one method this module calls on the sandbox runtime (duck-typed).
+
+    Structural only — keeps ``executor.dependency`` from importing the sandbox
+    layer; any object exposing ``wrap_exec`` satisfies it.
+    """
+
+    async def wrap_exec(
+        self,
+        argv: list[str],
+        *,
+        cwd: Optional[str] = ...,
+        env: Optional[dict[str, str]] = ...,
+        extra_writable: Optional[list[str]] = ...,
+    ) -> tuple[list[str], dict[str, str]]:
+        ...
+
 
 # --- Constants -------------------------------------------------------------
 # Default yield window: how long a call waits for output before yielding.
@@ -49,6 +70,11 @@ MAX_YIELD_MS = 60_000
 OUTPUT_MAX_BYTES = 1024 * 1024
 # Ctrl-C (ETX).
 INTERRUPT = "\x03"
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place.
+_MSG_NOT_RUNNING = "Error: terminal is not running."
+_MSG_CLOSED = "Error: terminal is closed."
 
 _READ_CHUNK = 65_536
 # How long start() waits for the shell's first prompt marker (ready signal).
@@ -137,7 +163,10 @@ class HeadTailBuffer:
     def render(self) -> bytes:
         if self.omitted == 0:
             return bytes(self._head + self._tail)
-        marker = f"\n[... {self.omitted} bytes omitted ...]\n".encode()
+        el = Elision(
+            ElisionUnit.BYTES, self.omitted, len(self._head) + self.omitted + len(self._tail), ElisionStrategy.HEAD_TAIL
+        )
+        marker = f"\n{el.render_for_model()}\n".encode()
         return bytes(self._head) + marker + bytes(self._tail)
 
     def reset(self) -> None:
@@ -168,7 +197,9 @@ class TerminalSession:
     the window and reports whether we are back at a prompt (with the exit code).
     """
 
-    def __init__(self, *, session_key: str, cwd: Optional[str], sandbox_runtime: Optional[object] = None) -> None:
+    def __init__(
+        self, *, session_key: str, cwd: Optional[str], sandbox_runtime: Optional[_SandboxRuntime] = None
+    ) -> None:
         self.session_key = session_key
         self.cwd = cwd
         # Optional OS-level sandbox runtime. When set, start() wraps the shell's
@@ -328,11 +359,11 @@ class TerminalSession:
 
     def _write(self, data: bytes) -> None:
         if self._master_fd is None:
-            raise ToolError("Error: terminal is not running.")
+            raise ToolError(_MSG_NOT_RUNNING)
         try:
             os.write(self._master_fd, data)
         except OSError:
-            raise ToolError("Error: terminal is closed.")
+            raise ToolError(_MSG_CLOSED)
 
     async def feed(self, text: str, yield_ms: int) -> tuple[str, Optional[int], bool, bool]:
         """Type *text* into the terminal (a trailing newline is added if absent),
@@ -410,18 +441,7 @@ class TerminalSession:
         out of both. Best-effort: returns ``None`` on any failure or when the
         shell is not idle at a prompt (a foreground program holds the terminal).
         """
-        probed = await self._probe_env()
-        if probed is None:
-            return None
-        cwd, env = probed
-        diff: dict[str, str] = {}
-        for key, value in env.items():
-            if key in _ENV_NOISE_KEYS:
-                continue
-            if self._baseline_env.get(key) != value:
-                diff[key] = value
-        unset = [key for key in self._baseline_env if key not in env and key not in _ENV_NOISE_KEYS]
-        return (cwd, diff, unset)
+        return diff_env_state(await self._probe_env(), self._baseline_env, _ENV_NOISE_KEYS)
 
     async def restore_state(self, cwd: str, env: dict[str, str], unset: list[str]) -> None:
         """Re-seed a fresh shell to a saved ``(cwd, env, unset)`` state.

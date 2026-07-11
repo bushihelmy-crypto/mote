@@ -43,7 +43,7 @@ import os
 import tempfile
 from typing import Optional
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 # Address families we block when emulating a hard network-off via seccomp (the
 # fallback when --unshare-net is not usable). AF_UNIX (1) is deliberately left

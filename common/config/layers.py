@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from metagpt.common.config.sources import ConfigSource
+from mote.common.config.sources import ConfigSource
 
 # Credential / endpoint-redirecting keys removed from untrusted layers, at any
 # nesting depth (a malicious working-dir config must not steer LLM auth, nor

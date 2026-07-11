@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.events`` — event schema + line serde.
+"""Tests for ``mote.session.events`` — event schema + line serde.
 
 Covers: each event serializes to a ``{type, ts, payload}`` line; message
 payloads round-trip back through ``Message.load``; compaction carries the full
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 
-from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.session.events import (
+from mote.common.schema import AIMessage, UserMessage
+from mote.session.events import (
     COMPACTED,
     MESSAGE,
     SCHEMA_VERSION,
@@ -45,7 +45,7 @@ def test_session_meta_event_line():
 
 
 def test_message_event_roundtrips_through_message_load():
-    from metagpt.common.schema import Message
+    from mote.common.schema import Message
 
     msg = UserMessage(content="hello world")
     record = _roundtrip(MessageEvent(message=msg))
@@ -80,15 +80,9 @@ def test_parse_line_is_forgiving():
 
 
 def test_terminal_state_event_roundtrips():
-    from metagpt.session.events import (
-        TERMINAL_STATE,
-        TerminalStateEvent,
-        parse_event,
-    )
+    from mote.session.events import TERMINAL_STATE, TerminalStateEvent, parse_event
 
-    ev = TerminalStateEvent(
-        cwd="/tmp/work", env={"FOO": "bar", "BAZ": "qux"}, unset=["OLD"], tool="Terminal"
-    )
+    ev = TerminalStateEvent(cwd="/tmp/work", env={"FOO": "bar", "BAZ": "qux"}, unset=["OLD"], tool="Terminal")
     record = _roundtrip(ev)
     assert record["type"] == TERMINAL_STATE
     assert record["payload"]["cwd"] == "/tmp/work"
@@ -104,15 +98,9 @@ def test_terminal_state_event_roundtrips():
 
 
 def test_kernel_state_event_roundtrips():
-    from metagpt.session.events import (
-        KERNEL_STATE,
-        KernelStateEvent,
-        parse_event,
-    )
+    from mote.session.events import KERNEL_STATE, KernelStateEvent, parse_event
 
-    ev = KernelStateEvent(
-        cwd="/tmp/work", env={"FOO": "bar", "BAZ": "qux"}, unset=["OLD"], tool="Jupyter"
-    )
+    ev = KernelStateEvent(cwd="/tmp/work", env={"FOO": "bar", "BAZ": "qux"}, unset=["OLD"], tool="Jupyter")
     record = _roundtrip(ev)
     assert record["type"] == KERNEL_STATE
     assert record["payload"]["cwd"] == "/tmp/work"
@@ -125,4 +113,3 @@ def test_kernel_state_event_roundtrips():
     assert rebuilt.env == {"FOO": "bar", "BAZ": "qux"}
     assert rebuilt.unset == ["OLD"]
     assert rebuilt.tool == "Jupyter"
-

@@ -7,20 +7,21 @@ the same provider" recovery family (ported conceptually from hermes-agent's
 ``conversation_compression.try_shrink_image_parts_in_messages`` /
 ``run_agent._try_strip_image_parts_from_tool_messages``). Each is keyed by the
 :class:`RecoveryAction` it serves and matches the
-:data:`~metagpt.router.llm.recovery.MessageTransformer` contract::
+:data:`~mote.router.llm.recovery.MessageTransformer` contract::
 
-    async (messages: list[dict], exc: MetaGPTError) -> Optional[list[dict]]
+    async (messages: list[dict], exc: MoteError) -> Optional[list[dict]]
 
 Return the repaired messages (the runner retries with them) or ``None`` when the
 transformer can't make progress (the runner re-raises rather than burning a retry
 on an unchanged payload).
 
-This module depends only on ``common.exception`` + logs (no ``base_llm`` import),
-so wiring ``BaseLLM._message_transformers = DEFAULT_MESSAGE_TRANSFORMERS`` forms no
-cycle. Pillow is a soft dependency: if it's missing, ``shrink_image`` degrades to
+This module depends only on ``common`` (exception + logs + the data-URL codec in
+``common.utils.common``), never ``base_llm``, so wiring
+``BaseLLM._message_transformers = DEFAULT_MESSAGE_TRANSFORMERS`` forms no cycle.
+Pillow is a soft dependency: if it's missing, ``shrink_image`` degrades to
 ``None`` (re-raise) instead of crashing.
 
-MetaGPT wire-format reminders (see ``BaseLLM._user_msg_with_media`` /
+Mote wire-format reminders (see ``BaseLLM._user_msg_with_media`` /
 ``Message.to_dict``):
 
 - image part: ``{"type": "image_url", "image_url": {"url": "data:image/...;base64,..."}}``
@@ -32,13 +33,14 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.exception import RecoveryAction
+from mote.common.exception import RecoveryAction
+from mote.common.logs import logger
+from mote.common.utils.common import parse_data_url
 
 if TYPE_CHECKING:
-    from metagpt.common.exception import MetaGPTError
+    from mote.common.exception import MoteError
 
 # 4 MB target leaves comfortable headroom under Anthropic's hard 5 MB per-image
 # ceiling once the data-URL header + JSON escaping overhead is accounted for.
@@ -56,16 +58,20 @@ _CANONICAL_MESSAGE_KEYS = frozenset({"role", "content", "name", "tool_calls", "t
 
 # ── SHRINK_IMAGE ─────────────────────────────────────────────────────────────
 
+
 def _shrink_data_url(url: str, *, target_bytes: int = _IMAGE_TARGET_BYTES) -> Optional[str]:
     """Re-encode a ``data:image/...;base64,...`` URL under ``target_bytes``.
 
     Returns a smaller data URL, or ``None`` when the URL isn't an oversized data
     image, Pillow is unavailable, or shrinking can't bring it under the target.
     """
-    if not isinstance(url, str) or not url.startswith("data:"):
-        return None
-    if len(url) <= target_bytes:
-        return None  # this image isn't the oversized one
+    if not isinstance(url, str) or len(url) <= target_bytes:
+        return None  # not a string, or this image isn't the oversized one
+
+    parsed = parse_data_url(url)
+    if parsed is None:
+        return None  # not a data URL
+    declared, data = parsed
 
     try:
         from PIL import Image
@@ -73,12 +79,9 @@ def _shrink_data_url(url: str, *, target_bytes: int = _IMAGE_TARGET_BYTES) -> Op
         logger.warning(f"shrink_image: Pillow unavailable — {exc}")
         return None
 
-    header, _, data = url.partition(",")
-    mime = "image/jpeg"
-    if header.startswith("data:"):
-        mime_part = header[len("data:"):].split(";", 1)[0].strip()
-        if mime_part.startswith("image/"):
-            mime = mime_part
+    # Only an ``image/*`` declaration drives PIL's format choice; anything else
+    # (or a bare ``data:``) falls back to JPEG.
+    mime = declared if declared.startswith("image/") else "image/jpeg"
     try:
         raw = base64.b64decode(data)
         img = Image.open(io.BytesIO(raw))
@@ -102,11 +105,11 @@ def _shrink_data_url(url: str, *, target_bytes: int = _IMAGE_TARGET_BYTES) -> Op
                 new_h = max(int(img.height * 0.5), 64)
                 if (new_w, new_h) == prev_dims:
                     break
-                img = img.resize((new_w, new_h), Image.LANCZOS)
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 prev_dims = (new_w, new_h)
             for quality in quality_steps:
                 buf = io.BytesIO()
-                save_kwargs = {"format": pil_format}
+                save_kwargs: dict[str, Any] = {"format": pil_format}
                 if quality is not None:
                     save_kwargs["quality"] = quality
                 img.save(buf, **save_kwargs)
@@ -120,7 +123,7 @@ def _shrink_data_url(url: str, *, target_bytes: int = _IMAGE_TARGET_BYTES) -> Op
     return None  # couldn't get under the target
 
 
-async def shrink_image(messages: list[dict], exc: "MetaGPTError") -> Optional[list[dict]]:
+async def shrink_image(messages: list[dict], exc: "MoteError") -> Optional[list[dict]]:
     """Re-encode oversized native image parts smaller (recovery for SHRINK_IMAGE).
 
     Mutates ``messages`` in place. Returns ``messages`` only when every
@@ -168,7 +171,8 @@ async def shrink_image(messages: list[dict], exc: "MetaGPTError") -> Optional[li
 
 # ── DOWNGRADE_TOOL_CONTENT ───────────────────────────────────────────────────
 
-async def downgrade_tool_content(messages: list[dict], exc: "MetaGPTError") -> Optional[list[dict]]:
+
+async def downgrade_tool_content(messages: list[dict], exc: "MoteError") -> Optional[list[dict]]:
     """Downgrade list-type tool messages to plain text (recovery for DOWNGRADE_TOOL_CONTENT).
 
     Some OpenAI-compatible providers require a tool message's ``content`` to be a
@@ -220,7 +224,8 @@ async def downgrade_tool_content(messages: list[dict], exc: "MetaGPTError") -> O
 
 # ── STRIP_REQUEST_STATE ──────────────────────────────────────────────────────
 
-async def strip_request_state(messages: list[dict], exc: "MetaGPTError") -> Optional[list[dict]]:
+
+async def strip_request_state(messages: list[dict], exc: "MoteError") -> Optional[list[dict]]:
     """Strip opaque request state a provider can't replay (recovery for STRIP_REQUEST_STATE).
 
     Removes provider-specific artifacts that trigger "invalid signature" /
@@ -245,11 +250,7 @@ async def strip_request_state(messages: list[dict], exc: "MetaGPTError") -> Opti
         # Drop opaque content parts (thinking / reasoning) from list content.
         content = msg.get("content")
         if isinstance(content, list):
-            kept = [
-                part
-                for part in content
-                if not (isinstance(part, dict) and part.get("type") in _OPAQUE_PART_TYPES)
-            ]
+            kept = [part for part in content if not (isinstance(part, dict) and part.get("type") in _OPAQUE_PART_TYPES)]
             if len(kept) != len(content):
                 msg["content"] = kept
                 changed = True

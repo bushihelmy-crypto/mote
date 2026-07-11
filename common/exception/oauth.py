@@ -1,9 +1,9 @@
-"""OAuth / credential tier exceptions (``metagpt.router.oauth``).
+"""OAuth / credential tier exceptions (``mote.router.oauth``).
 
 The OAuth subsystem talks to a token endpoint and classifies refresh failures as
 permanently broken (re-auth required) or transient. The refresh-failure
 classification logic (``classify_refresh_failure`` + the unrecoverable error-code
-set) stays in ``metagpt.router.oauth.errors`` as OAuth-domain logic; only the
+set) stays in ``mote.router.oauth.errors`` as OAuth-domain logic; only the
 exception *types* are unified here.
 
 ``OAuthRefreshError.recoverable`` is a *per-instance* flag decided at runtime by
@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from typing import ClassVar, Optional
 
-from metagpt.common.exception.base import MetaGPTError, NonRetryableError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import MoteError, NonRetryableError
+from mote.common.exception.codes import ErrorCode
 
 
-class OAuthError(MetaGPTError):
+class OAuthError(MoteError):
     """Base for all OAuth failures."""
 
     default_code: ClassVar[ErrorCode] = ErrorCode.OAUTH

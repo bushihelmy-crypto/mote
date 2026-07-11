@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.context.prompt`` — the compaction prompt builders.
+"""Tests for ``mote.context.prompt`` — the compaction prompt builders.
 
 Covers the two summarization prompts (full vs partial/up_to, plus custom-
 instruction appending and the no-tools preamble/trailer), ``format_compact_summary``
@@ -11,7 +11,7 @@ branches).
 """
 from __future__ import annotations
 
-from metagpt.context import prompt
+from mote.context import prompt
 
 
 def test_compact_prompt_has_preamble_body_trailer():
@@ -103,9 +103,7 @@ def test_user_summary_message_recent_preserved_branch():
 
 
 def test_user_summary_message_suppress_branch():
-    msg = prompt.get_compact_user_summary_message(
-        "<summary>S</summary>", suppress_follow_up_questions=True
-    )
+    msg = prompt.get_compact_user_summary_message("<summary>S</summary>", suppress_follow_up_questions=True)
     assert "without asking" in msg
     assert "Resume directly" in msg
 

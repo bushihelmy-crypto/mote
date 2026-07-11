@@ -27,12 +27,38 @@ from __future__ import annotations
 import base64
 from typing import Any, Awaitable, Callable, ClassVar, Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.prompt.tools import WEB_BROWSER_DESCRIPTION
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.dependency._browser import BrowserSession
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError, ToolResult
+from mote.common.logs import logger
+from mote.common.prompt.tools import WEB_BROWSER_DESCRIPTION
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._browser import BrowserSession
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError, ToolResult
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+_MSG_BROWSER_FAILED = "Error running web browser: {error}"
+_MSG_NAVIGATE_REQUIRES_URL = "Error: 'navigate' requires a url."
+_MSG_CLICK_REQUIRES_SELECTOR = (
+    "Error: 'click' requires a selector (an element index from the " "latest snapshot like '5', or a CSS selector)."
+)
+_MSG_TYPE_REQUIRES_SELECTOR = (
+    "Error: 'type' requires a selector (an element index from the " "latest snapshot like '5', or a CSS selector)."
+)
+_MSG_WAIT_REQUIRES = "Error: 'wait' requires a selector or an expression to wait for."
+_MSG_FILL_FORM_REQUIRES = "Error: 'fill_form' requires a 'fields' mapping of {selector_or_index: value}."
+_MSG_EXTRACT_REQUIRES = "Error: 'extract' requires a 'schema' mapping of {key: 'selector[@attr]'}."
+_MSG_ASSIST_REQUIRES = (
+    "Error: 'assist' requires a 'prompt' describing what the user "
+    "should complete in the browser window (e.g. 'scan the login "
+    "QR code', 'enter the SMS code')."
+)
+_MSG_EVAL_REQUIRES = "Error: 'eval' requires an expression."
+_MSG_UNKNOWN_ACTION = (
+    "Error: unknown browser action '{action}'. Use snapshot | navigate | "
+    "click | type | wait | detect_forms | fill_form | extract | assist | "
+    "read | screenshot | eval | back | tabs | new_tab | switch_tab | "
+    "close_tab | close."
+)
 
 
 async def _noop_ask(_question: str) -> str:
@@ -233,7 +259,7 @@ class WebBrowser(BaseTool):
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Error running web browser: {e}")
+            raise ToolError(_MSG_BROWSER_FAILED.format(error=e))
 
         # After the action settles, snapshot the browsing state for resume.
         # Best-effort; never breaks the call. Skipped for the ``screenshot``
@@ -264,43 +290,33 @@ class WebBrowser(BaseTool):
             return await session.snapshot(interactive_only=interactive_only)
         if action == "navigate":
             if not url:
-                raise ToolError("Error: 'navigate' requires a url.")
+                raise ToolError(_MSG_NAVIGATE_REQUIRES_URL)
             return await session.navigate(url)
         if action == "click":
             if not selector:
-                raise ToolError(
-                    "Error: 'click' requires a selector (an element index from the "
-                    "latest snapshot like '5', or a CSS selector)."
-                )
+                raise ToolError(_MSG_CLICK_REQUIRES_SELECTOR)
             return await session.click(selector)
         if action == "type":
             if not selector:
-                raise ToolError(
-                    "Error: 'type' requires a selector (an element index from the "
-                    "latest snapshot like '5', or a CSS selector)."
-                )
+                raise ToolError(_MSG_TYPE_REQUIRES_SELECTOR)
             return await session.type_text(selector, text, clear=clear)
         if action == "wait":
             if not selector and not expression:
-                raise ToolError("Error: 'wait' requires a selector or an expression to wait for.")
+                raise ToolError(_MSG_WAIT_REQUIRES)
             return await session.wait(selector=selector, expression=expression)
         if action == "detect_forms":
             return await session.detect_forms()
         if action == "fill_form":
             if not fields:
-                raise ToolError("Error: 'fill_form' requires a 'fields' mapping of " "{selector_or_index: value}.")
+                raise ToolError(_MSG_FILL_FORM_REQUIRES)
             return await session.fill_form(fields, submit=submit)
         if action == "extract":
             if not schema:
-                raise ToolError("Error: 'extract' requires a 'schema' mapping of " "{key: 'selector[@attr]'}.")
+                raise ToolError(_MSG_EXTRACT_REQUIRES)
             return await session.extract(schema)
         if action == "assist":
             if not prompt:
-                raise ToolError(
-                    "Error: 'assist' requires a 'prompt' describing what the user "
-                    "should complete in the browser window (e.g. 'scan the login "
-                    "QR code', 'enter the SMS code')."
-                )
+                raise ToolError(_MSG_ASSIST_REQUIRES)
             return await session.assist(
                 prompt,
                 ask_human=self.ask_human,
@@ -318,7 +334,7 @@ class WebBrowser(BaseTool):
             )
         if action == "eval":
             if not expression:
-                raise ToolError("Error: 'eval' requires an expression.")
+                raise ToolError(_MSG_EVAL_REQUIRES)
             return await session.eval_js(expression)
         if action == "back":
             return await session.back()
@@ -330,12 +346,7 @@ class WebBrowser(BaseTool):
             return session.switch_tab(index)
         if action == "close_tab":
             return await session.close_tab(index)
-        raise ToolError(
-            f"Error: unknown browser action '{action}'. Use snapshot | navigate | "
-            f"click | type | wait | detect_forms | fill_form | extract | assist | "
-            f"read | screenshot | eval | back | tabs | new_tab | switch_tab | "
-            f"close_tab | close."
-        )
+        raise ToolError(_MSG_UNKNOWN_ACTION.format(action=action))
 
     async def _record_state(self, session: BrowserSession) -> None:
         """Snapshot the browsing state into the rollout (best-effort)."""

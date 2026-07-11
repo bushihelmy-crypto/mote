@@ -23,12 +23,12 @@ fresh view of the files it was editing, not just the summary's paraphrase.
 
 from __future__ import annotations
 
-import metagpt.context.prompt as compact_prompt
-from metagpt.common.logs import logger
-from metagpt.common.schema import ContextManagerConfig, Message, UserMessage
-from metagpt.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+import mote.context.prompt as compact_prompt
+from mote.common.logs import logger
+from mote.common.schema import ContextManagerConfig, Message, UserMessage
+from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 
 def _summary_message(summary: str, *, recent_preserved: bool) -> UserMessage:

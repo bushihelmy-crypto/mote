@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``backend`` — the single binding seam onto the metagpt engine (Ports & Adapters).
+"""``backend`` — the single binding seam onto the mote engine (Ports & Adapters).
 
-This is the **only** module in ``metagpt.cli`` that imports metagpt's concrete
+This is the **only** module in ``mote.cli`` that imports mote's concrete
 engine classes (Role / Runtime / Control / Context / Schema / State /
 UserMessage / …). Everything else in the CLI (``app.py`` / ``driver.py``) reaches
 the engine exclusively through the module-level functions here.
@@ -30,22 +30,25 @@ building a parallel type system.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from metagpt.common.config.loader import load_config as _load_config
-from metagpt.common.const import IMAGES
-from metagpt.common.schema import UserMessage
-from metagpt.common.schema.file_watch_config import FileWatchConfig
-from metagpt.common.utils.git_state import find_git_root
-from metagpt.environment.control import AgentControl
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.executor.agent_registry import registry as agent_registry
-from metagpt.executor.mcp.config_source import load_mcp_servers
-from metagpt.executor.tool_registry import registry as tool_registry
-from metagpt.roles import Role
-from metagpt.roles.role_schema import RoleSchema
-from metagpt.roles.role_state import RoleState
-from metagpt.router.llm.context import Context
+from mote.common.config.loader import load_config as _load_config
+from mote.common.const import IMAGES
+from mote.common.schema import UserMessage
+from mote.common.schema.file_watch_config import FileWatchConfig
+from mote.common.utils.git_state import find_git_root
+from mote.environment.control import AgentControl
+from mote.environment.runtime import AgentRuntime
+from mote.executor.agent_md_loader import register_md_agents
+from mote.executor.agent_registry import registry as agent_registry
+from mote.executor.mcp.config_source import load_mcp_servers
+from mote.executor.permission.settings_source import load_permission_rules
+from mote.executor.tool_registry import registry as tool_registry
+from mote.roles import Role
+from mote.roles.role_schema import RoleSchema
+from mote.roles.role_state import RoleState
+from mote.router.llm.context import Context
 
 
 # ======================================================================
@@ -70,21 +73,22 @@ def _apply_cwd(role: Any, cwd: Optional[str]) -> None:
     role.state.project_root = find_git_root(cwd) or cwd
 
 
-def _discover_mcps() -> List[str]:
-    """Every MCP server declared in ``mcp_config.json`` (empty when unconfigured).
+def _discover_mcps(cwd: Optional[str] = None) -> List[str]:
+    """Every MCP server declared in ``.mote/mcp.json`` (empty when unconfigured).
 
     Mirrors the skill subsystem's "empty include list ⇒ load everything" default,
     but resolved *here* (the top-level interactive role) rather than in the engine
     so child agents — whose schema deliberately clears ``mcps`` (see
-    ``roles.capabilities``) — keep their MCP-less isolation. A missing / empty /
+    ``roles.capabilities``) — keep their MCP-less isolation. Discovery walks from
+    *cwd* up to the git root (plus ``~/.mote/mcp.json``); a missing / empty /
     malformed file yields ``[]``, so MCP simply stays off until the user drops a
     server block into the file (a change the file watcher then hot-reloads).
     """
-    return [s.name for s in load_mcp_servers()]
+    return [s.name for s in load_mcp_servers(Path(cwd) if cwd else None)]
 
 
 def _discover_tools() -> List[str]:
-    """Every built-in tool registered under ``metagpt.executor.tools``.
+    """Every built-in tool registered under ``mote.executor.tools``.
 
     The "empty ⇒ load everything" default for tools, resolved *here* (the top-level
     interactive role) for the same reason as :func:`_discover_mcps`: child fork-skill
@@ -121,7 +125,12 @@ def build_role(
     default for **tools**: when no explicit ``tools`` are passed, the whole
     registered toolbox is loaded (rather than RoleSchema's curated subset). Typed
     agents self-configure and are left untouched.
+
+    Before any lookup, ``.mote/agents/*.md`` files (git-root walk from *cwd* plus
+    ``~/.mote/agents``) are registered as spawnable agent types, so a markdown
+    agent resolves for a typed spawn and surfaces in the Agent tool's catalog.
     """
+    register_md_agents(Path(cwd) if cwd else None)
     if agent_type:
         agent_registry.discover()
         cls = agent_registry.get(agent_type)
@@ -132,9 +141,12 @@ def build_role(
         schema_kwargs: dict = {
             "name": name,
             "tools": list(tools) if tools else _discover_tools(),
-            "mcps": _discover_mcps(),
+            "mcps": _discover_mcps(cwd),
             "file_watch": FileWatchConfig(enabled=True, reload_mcp=True, reload_skills=True),
         }
+        permissions = load_permission_rules(Path(cwd) if cwd else None)
+        if permissions is not None:
+            schema_kwargs["permissions"] = permissions
         schema = RoleSchema(**schema_kwargs)
         state = RoleState(session_id=session_id) if session_id else RoleState()
         role = Role(name=name, role_schema=schema, state=state, context=context)
@@ -244,12 +256,15 @@ def turn_message(text: str, image_b64s: Optional[List[str]] = None) -> Any:
     return msg
 
 
-def list_agent_types() -> List[Tuple[str, str]]:
+def list_agent_types(cwd: Optional[str] = None) -> List[Tuple[str, str]]:
     """List registered agent types as ``[(name, description), ...]``.
 
-    Forward-looking: the engine's ``metagpt.roles.agents`` package may be empty
-    today, so this can return ``[]`` — the CLI degrades gracefully.
+    Forward-looking: the engine's ``mote.roles.agents`` package may be empty
+    today, so this can return ``[]`` — the CLI degrades gracefully. Markdown
+    agents under ``.mote/agents`` (git-root walk from *cwd* + ``~/.mote/agents``)
+    are registered first so they appear alongside any Python agent types.
     """
+    register_md_agents(Path(cwd) if cwd else None)
     agent_registry.discover()
     out: List[Tuple[str, str]] = []
     for name, cls in agent_registry.all_agents().items():

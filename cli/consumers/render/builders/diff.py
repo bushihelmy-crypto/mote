@@ -16,8 +16,8 @@ import re
 from difflib import SequenceMatcher, unified_diff
 from typing import List, Tuple
 
-from metagpt.cli.consumers.render.builders._rich import Text
-from metagpt.cli.consumers.render.palette import Palette
+from mote.cli.consumers.render.builders._rich import Text
+from mote.cli.consumers.render.palette import Palette
 
 # Cap the filled-bar width so a single very long line can't force absurd padding
 # on every other bar (rich still folds anything past the console width anyway).
@@ -153,9 +153,7 @@ def render_file_change(old: str, new: str, path: str = "") -> "Text":
     old_lines = old.splitlines()
     new_lines = new.splitlines()
     label = path or "file"
-    diff_lines = list(
-        unified_diff(old_lines, new_lines, fromfile=label, tofile=label, lineterm="")
-    )
+    diff_lines = list(unified_diff(old_lines, new_lines, fromfile=label, tofile=label, lineterm=""))
     rows = _parse_diff_rows(diff_lines)
     _pair_word_level(rows)
     return _render_rows(rows)

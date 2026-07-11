@@ -1,0 +1,29 @@
+{
+  "//": "Phase 0 baseline config. See zdocs/pyright-zero-debt-plan.md.",
+  "//include": "This dir IS the `mote` package (setup.py maps package_dir={mote: .}).",
+  "//extraPaths": "'..' lets pyright resolve `mote.*` self-imports via the parent dir.",
+  "//pythonVersion": "Tracks the actual dev/runtime env (3.11), not the >=3.9 floor in setup.py; 3.9 surfaces ~93 extra 3.10+ syntax errors -- revisit when the 3.9-support question is settled.",
+  "include": ["."],
+  "exclude": [
+    "ztest",
+    "zdocs",
+    "build",
+    "dist",
+    "**/__pycache__",
+    "**/*.egg-info"
+  ],
+  "extraPaths": [".."],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.11",
+
+  "//optional-deps": "Not installed on purpose; ignore their missing imports. manager.py guards the optional `rag` module behind try/except ImportError -- kept as an optional-feature placeholder, not cleaned.",
+  "ignore": [
+    "common/observability/langfuse_backend.py",
+    "common/observability/langfuse_integration.py",
+    "router/ml/v4_features.py",
+    "memory/procedural_memory/manager.py"
+  ],
+
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "warning"
+}

@@ -22,10 +22,10 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-import metagpt.common.utils.report as report_mod
-from metagpt.common.events import EventBus, ResourceReportEvent, set_bus
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from metagpt.common.utils.report import (
+import mote.common.utils.report as report_mod
+from mote.common.events import EventBus, ResourceReportEvent, set_bus
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.common.utils.report import (
     CURRENT_ROLE,
     END_MARKER_NAME,
     BlockType,
@@ -68,7 +68,7 @@ def _legacy_payload(reporter, value, name, extra):
 
 
 def test_payload_matches_legacy_for_basemodel(monkeypatch):
-    monkeypatch.setattr(os, "environ", {**os.environ, "METAGPT_ROLE": "dev"})
+    monkeypatch.setattr(os, "environ", {**os.environ, "MOTE_ROLE": "dev"})
     reporter = ThoughtReporter()
     value = _Val(a=7)
     event = ResourceReportEvent(
@@ -99,7 +99,14 @@ def test_payload_normalizes_pathlib_and_carries_extra():
     data = _build_report_payload(event)
     assert data["value"] == "/tmp/x"
     assert data["extra"] == {"k": "v"}
-    assert data == {"block": "Docs", "uuid": "u", "value": "/tmp/x", "name": "content", "role": "r", "extra": {"k": "v"}}
+    assert data == {
+        "block": "Docs",
+        "uuid": "u",
+        "value": "/tmp/x",
+        "name": "content",
+        "role": "r",
+        "extra": {"k": "v"},
+    }
 
 
 # ---------------------------------------------------------------------------

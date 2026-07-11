@@ -3,7 +3,7 @@
 """``SessionRouter`` — inbound → session routing for multi-tenant gateways (§7.2).
 
 A documented phase-② stub. The single-session spine (§1–§6) assumes one
-:class:`~metagpt.cli.driver.SessionDriver`; a public-platform gateway fans a flood
+:class:`~mote.cli.driver.SessionDriver`; a public-platform gateway fans a flood
 of inbound messages out to *per-user* sessions. ``SessionRouter`` sits upstream of
 the driver: a pluggable ``key_fn`` maps each inbound message to a routing key
 (openid / handle / email-thread id), the first message from a new key lazily

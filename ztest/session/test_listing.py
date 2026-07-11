@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.listing`` — lite session discovery.
+"""Tests for ``mote.session.listing`` — lite session discovery.
 
 Covers: empty/missing base; sessions sorted newest-first by mtime; meta + first
 message preview from the head; latest meta_update (title/last_prompt) from the
@@ -10,19 +10,15 @@ from __future__ import annotations
 
 import os
 
-from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
-from metagpt.session.listing import list_sessions
-from metagpt.session.log import SessionLog
+from mote.common.schema import AIMessage, UserMessage
+from mote.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
+from mote.session.listing import list_sessions
+from mote.session.log import SessionLog
 
 
 def _make(tmp_path, sid, *, working_dir="/w", project_root="/p", model="gpt-4", first=None):
     log = SessionLog(sid, base_dir=str(tmp_path))
-    log.create(
-        SessionMetaEvent(
-            session_id=sid, working_dir=working_dir, project_root=project_root, model=model
-        )
-    )
+    log.create(SessionMetaEvent(session_id=sid, working_dir=working_dir, project_root=project_root, model=model))
     if first is not None:
         log.append(MessageEvent(message=UserMessage(content=first)))
     return log
@@ -87,7 +83,7 @@ def test_dir_without_rollout_skipped(tmp_path):
 
 
 def test_role_classmethod_delegates(tmp_path):
-    from metagpt.roles import Role
+    from mote.roles import Role
 
     _make(tmp_path, "s1", first="hi")
     infos = Role.list_sessions(str(tmp_path))

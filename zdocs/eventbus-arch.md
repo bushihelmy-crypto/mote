@@ -196,7 +196,7 @@ async def _dispatch_observers(self, event) -> None:
 ### 4. contextvar「全局登记」：深层调用点免穿参（`context.py`）
 
 ```python
-_ACTIVE_BUS: ContextVar[Optional[EventBus]] = ContextVar("metagpt_event_bus", default=None)
+_ACTIVE_BUS: ContextVar[Optional[EventBus]] = ContextVar("mote_event_bus", default=None)
 
 @contextmanager
 def set_bus(bus):                 # Role.run() 一开始 with set_bus(self.event_bus)
@@ -215,7 +215,7 @@ async def observe_event(event):   # 深层「只观察」入口——结构上�
 
 ```python
 def log_llm_stream(msg):          # provider 在 async for chunk 循环里同步调
-    from metagpt.common.events import LLMStreamDeltaEvent, observe_event_sync
+    from mote.common.events import LLMStreamDeltaEvent, observe_event_sync
     observe_event_sync(LLMStreamDeltaEvent(token=msg))   # 不 await，扔了就走
 ```
 ```python
@@ -242,7 +242,7 @@ class RecorderSubscriber:
             self._log.append(CompactedEvent(...))
         elif isinstance(event, TurnEndEvent):
             self._log.append(TurnContextEvent(...))
-            from metagpt.common.disk import get_disk_writer
+            from mote.common.disk import get_disk_writer
             await get_disk_writer().drain()  # ★每轮结束确认落盘（崩溃最多丢进行中一轮）
 ```
 
@@ -258,7 +258,7 @@ def _build_event_bus(self):
     if tracing_enabled():
         bus.subscribe(TracingSubscriber(LangfuseBackend(), ...))
     bus.subscribe(self.compaction_notice)
-    if METAGPT_REPORTER_DEFAULT_URL:
+    if MOTE_REPORTER_DEFAULT_URL:
         bus.subscribe(ReporterSubscriber(...))
     if (lsp := self.lsp_service) is not None:              # opt-in
         lsp.bus = bus; bus.subscribe(lsp)

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.context.skills.skill_injector.SkillInjector."""
+"""Tests for mote.context.skills.skill_injector.SkillInjector."""
 from __future__ import annotations
 
-from metagpt.context.skills.skill_injector import SkillInjector
-from metagpt.context.skills.skill_pool import SkillPool
+from mote.context.skills.skill_injector import SkillInjector
+from mote.context.skills.skill_pool import SkillPool
 
 from .conftest import make_skill_def, write_skill
 
@@ -109,9 +109,7 @@ class TestIndexDegradation:
     def _big_desc_pool(self, builtin_dir, n=5):
         pool = SkillPool(builtin_dir=builtin_dir)
         for i in range(n):
-            pool._skills[f"s{i}"] = make_skill_def(
-                name=f"s{i}", description="word " * 60, instructions="body"
-            )
+            pool._skills[f"s{i}"] = make_skill_def(name=f"s{i}", description="word " * 60, instructions="body")
         return pool
 
     def test_tier0_full_description_when_budget_ample(self, builtin_dir):
@@ -147,9 +145,7 @@ class TestConditionalAndHiddenExcluded:
         assert "cond" not in text
 
     def test_disable_model_invocation_excluded(self, builtin_dir):
-        write_skill(
-            builtin_dir, "hidden", description="Hidden", extra_meta={"disable_model_invocation": True}
-        )
+        write_skill(builtin_dir, "hidden", description="Hidden", extra_meta={"disable_model_invocation": True})
         write_skill(builtin_dir, "shown", description="Shown skill")
         injector = SkillInjector(pool=_pool(builtin_dir, ["hidden", "shown"]))
         text = injector.build_content(max_tokens=5000)

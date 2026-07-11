@@ -1,7 +1,7 @@
 """LspService — an event-spine subscriber that both consumes and produces.
 
 The single object the Role lazily builds (gated on ``role_schema.lsp.enabled``)
-and subscribes to the shared :class:`~metagpt.common.events.EventBus`. It wires
+and subscribes to the shared :class:`~mote.common.events.EventBus`. It wires
 the manager (lazy server launch + routing) to the agent's file-mutation signal
 on the **input** side and broadcasts diagnostics on the **output** side:
 
@@ -10,7 +10,7 @@ on the **input** side and broadcasts diagnostics on the **output** side:
   then emit a :class:`DiagnosticsEvent` carrying any *changed* set;
 - ``shutdown()`` : tear down all servers (called on session cleanup by the Role).
 
-It is an :class:`~metagpt.common.interface.ObservationSubscriber` on both edges: the
+It is an :class:`~mote.common.interface.ObservationSubscriber` on both edges: the
 executor no longer pokes it directly (it emits a ``FileMutatedEvent`` this
 service subscribes to), and the diagnostics it produces ride the bus as a
 ``DiagnosticsEvent`` (the :class:`DiagnosticsBuffer` accumulates them for
@@ -24,12 +24,12 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from metagpt.common.events import DiagnosticsEvent, FileMutatedEvent
-from metagpt.common.interface.event_subscriber import BusAware, ObservationSubscriber, ObserverPriority
-from metagpt.common.logs import logger
-from metagpt.common.schema import LspConfig
-from metagpt.roles.lsp.format import format_diagnostics
-from metagpt.roles.lsp.manager import LspServerManager
+from mote.common.events import DiagnosticsEvent, FileMutatedEvent
+from mote.common.interface.event_subscriber import BusAware, ObservationSubscriber, ObserverPriority
+from mote.common.logs import logger
+from mote.common.schema import LspConfig
+from mote.roles.lsp.format import format_diagnostics
+from mote.roles.lsp.manager import LspServerManager
 
 
 class LspService(ObservationSubscriber, BusAware):
@@ -106,6 +106,30 @@ class LspService(ObservationSubscriber, BusAware):
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"LspService: drain_diagnostics failed: {exc}")
             return ""
+
+    async def document_symbols(self, path: str) -> list:
+        """The file's symbol table via LSP (Layer B; ``[]`` on any failure)."""
+        try:
+            return await self._manager.document_symbols(path)
+        except Exception as exc:  # noqa: BLE001 — best-effort query
+            logger.debug(f"LspService: document_symbols for {path} failed: {exc}")
+            return []
+
+    async def definition(self, path: str, line: int, character: int) -> list:
+        """Definition sites for the symbol at a position (``[]`` on any failure)."""
+        try:
+            return await self._manager.definition(path, line, character)
+        except Exception as exc:  # noqa: BLE001 — best-effort query
+            logger.debug(f"LspService: definition for {path} failed: {exc}")
+            return []
+
+    async def references(self, path: str, line: int, character: int) -> list:
+        """Reference (call) sites for the symbol at a position (``[]`` on any failure)."""
+        try:
+            return await self._manager.references(path, line, character)
+        except Exception as exc:  # noqa: BLE001 — best-effort query
+            logger.debug(f"LspService: references for {path} failed: {exc}")
+            return []
 
     async def shutdown(self) -> None:
         """Tear down all managed language servers."""

@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the PROFILE overlay layer (``~/.agentframe/<name>.config.yaml``)."""
+"""Tests for the PROFILE overlay layer (``~/.mote/<name>.config.yaml``)."""
 from __future__ import annotations
 
-import metagpt.common.config.sources as sources_mod
-from metagpt.common.config.loader import build_layer_stack
-from metagpt.common.config.sources import ConfigSource, discover_source_files
+import mote.common.config.sources as sources_mod
+from mote.common.config.loader import build_layer_stack
+from mote.common.config.sources import ConfigSource, discover_source_files
 
 
 def _point_user_dir_at(tmp_path, monkeypatch):
@@ -45,7 +45,7 @@ def test_profile_is_below_env_and_cli(tmp_path, monkeypatch):
     (tmp_path / "work.config.yaml").write_text("proxy: from-profile\n")
     stack = build_layer_stack(
         profile="work",
-        env={"AGENTFRAME_PROXY": "from-env"},
+        env={"MOTE_PROXY": "from-env"},
         cli_overrides=["proxy=from-cli"],
     )
     # ENV (50) and CLI_FLAG (60) both outrank PROFILE (40)
@@ -56,8 +56,8 @@ def test_profile_is_below_env_and_cli(tmp_path, monkeypatch):
 def test_profile_selected_via_env_var(tmp_path, monkeypatch):
     _point_user_dir_at(tmp_path, monkeypatch)
     (tmp_path / "work.config.yaml").write_text("proxy: env-selected-profile\n")
-    # No explicit profile arg; AGENTFRAME_PROFILE picks it.
-    stack = build_layer_stack(env={"AGENTFRAME_PROFILE": "work"})
+    # No explicit profile arg; MOTE_PROFILE picks it.
+    stack = build_layer_stack(env={"MOTE_PROFILE": "work"})
     assert stack.effective().get("proxy") == "env-selected-profile"
 
 

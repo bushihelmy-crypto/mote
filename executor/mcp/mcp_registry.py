@@ -13,18 +13,15 @@ import inspect
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from mcp.types import Tool as MCPTool
 from pydantic import BaseModel
 
-from metagpt.common.const import TOOL_SCHEMA_PATH
-from metagpt.common.logs import logger
-from metagpt.executor.tool_convert import (
-    convert_code_to_tool_schema,
-    convert_code_to_tool_schema_ast,
-)
-from metagpt.executor.mcp.tool_data_type import Tool, ToolSchema
+from mote.common.const import TOOL_SCHEMA_PATH
+from mote.common.logs import logger
+from mote.executor.mcp.tool_data_type import Tool, ToolSchema
+from mote.executor.tool_convert import convert_code_to_tool_schema, convert_code_to_tool_schema_ast
 
 
 class ToolRegistry(BaseModel):
@@ -36,18 +33,18 @@ class ToolRegistry(BaseModel):
         self,
         tool_name: str,
         tool_path: str,
-        schemas: dict = None,
+        schemas: Optional[dict] = None,
         schema_path: str = "",
         tool_code: str = "",
-        tags: list[str] = None,
+        tags: Optional[list[str]] = None,
         tool_source_object=None,  # can be any classes or functions
-        include_functions: list[str] = None,
+        include_functions: Optional[list[str]] = None,
         verbose: bool = False,
     ):
         if self.has_tool(tool_name):
             return
 
-        schema_path = schema_path or TOOL_SCHEMA_PATH / f"{tool_name}.yml"
+        schema_path = schema_path or str(TOOL_SCHEMA_PATH / f"{tool_name}.yml")
 
         if not schemas:
             schemas = make_schema(tool_source_object, include_functions, schema_path)
@@ -74,13 +71,13 @@ class ToolRegistry(BaseModel):
             return
 
         schema = {"description": tool.description, "parameters": tool.inputSchema}
-        tool = Tool(name=tool.name, schemas=schema, path="")
-        self.tools[tool.name] = tool
+        registered = Tool(name=tool.name, schemas=schema, path="")
+        self.tools[tool.name] = registered
 
-    def has_tool(self, key: str) -> Tool:
+    def has_tool(self, key: str) -> bool:
         return key in self.tools
 
-    def get_tool(self, key) -> Tool:
+    def get_tool(self, key) -> Optional[Tool]:
         return self.tools.get(key)
 
     def get_tools_by_tag(self, key) -> dict[str, Tool]:
@@ -174,9 +171,9 @@ TOOL_REGISTRY = MCP_REGISTRY = ToolRegistry()
 
 
 def register_tool(
-    tags: list[str] = None,
+    tags: Optional[list[str]] = None,
     schema_path: str = "",
-    aliases: dict[str, str] = None,
+    aliases: Optional[dict[str, str]] = None,
     session_aware: bool = False,
     instantiable: bool = True,
     **kwargs,
@@ -195,9 +192,9 @@ def register_tool(
     def decorator(cls):
         # Get the file path where the function / class is defined and the source code
         file_path = inspect.getfile(cls)
-        if "metagpt" in file_path:
-            # split to handle ../metagpt/metagpt/tools/... where only metapgt/tools/... is needed
-            file_path = "metagpt" + file_path.split("metagpt")[-1]
+        if "mote" in file_path:
+            # split to handle ../mote/mote/tools/... where only metapgt/tools/... is needed
+            file_path = "mote" + file_path.split("mote")[-1]
         source_code = ""
         with contextlib.suppress(OSError):
             source_code = inspect.getsource(cls)
@@ -250,6 +247,8 @@ def validate_tool_names(tools: list[str]) -> dict[str, Tool]:
                 class_tool_name = key.split(":")[0]
                 method_names = key.split(":")[1].split(",")
                 class_tool = TOOL_REGISTRY.get_tool(class_tool_name)
+                if class_tool is None:
+                    continue
 
                 methods_filtered = {}
                 for method_name in method_names:

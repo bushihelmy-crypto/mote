@@ -1,5 +1,9 @@
 # Builtin Skills (test-only, not shipped in repo)
-metagpt/skills/builtin/*/SKILL.md
+mote/skills/builtin/*/SKILL.md
+
+# Machine-local permission overlay (Claude-style .local marker; never committed)
+.mote/settings.local.json
+**/.mote/settings.local.json
 
 ### Python template
 
@@ -30,7 +34,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-metagpt/tools/schemas/
+mote/tools/schemas/
 examples/data/search_kb/*.json
 
 # PyInstaller
@@ -172,9 +176,8 @@ examples/index_store.json
 .chroma_exp_data
 .role_memory_data
 *~$*
-workspace/*
 tmp
-metagpt/roles/idea_agent.py
+mote/roles/idea_agent.py
 .aider*
 *.bak
 *.bk
@@ -183,7 +186,7 @@ metagpt/roles/idea_agent.py
 output
 tmp.png
 .dependencies.json
-tests/metagpt/utils/file_repo_git
+tests/mote/utils/file_repo_git
 tests/data/rsp_cache_new.json
 *.tmp
 *.png
@@ -200,5 +203,5 @@ cov.xml
 tests/data/requirements/*.jpg
 template/
 .instance_storage/
-mgx_template/
+mote_template/
 CLAUDE.md

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Background-task constants — output caps, stall detection, attachment limits.
 
-Centralized from metagpt/tasks/ sub-modules.
+Centralized from mote/tasks/ sub-modules.
 """
 
 # ---------------------------------------------------------------------------
@@ -26,12 +26,12 @@ DEFAULT_WAIT_COMPLETION_TIMEOUT = 600.0  # 10 minutes
 # ---------------------------------------------------------------------------
 # Stall detector (stall_detector.py)
 # ---------------------------------------------------------------------------
-STALL_CHECK_INTERVAL = 5.0   # seconds between output-size checks
-STALL_THRESHOLD = 45.0       # seconds without output growth -> suspected stall
-STALL_TAIL_BYTES = 1024      # bytes to read for pattern matching
+STALL_CHECK_INTERVAL = 5.0  # seconds between output-size checks
+STALL_THRESHOLD = 45.0  # seconds without output growth -> suspected stall
+STALL_TAIL_BYTES = 1024  # bytes to read for pattern matching
 
 # ---------------------------------------------------------------------------
 # Attachment generator (attachment.py)
 # ---------------------------------------------------------------------------
-DELTA_MAX_BYTES = 32768       # max bytes per incremental read
+DELTA_MAX_BYTES = 32768  # max bytes per incremental read
 DELTA_SUMMARY_MAX_CHARS = 8000  # max chars kept in delta_summary

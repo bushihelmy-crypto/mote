@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Grep tool (``metagpt.executor.tools.grep``).
+"""Tests for the Grep tool (``mote.executor.tools.grep``).
 
 Exercises the three output modes, glob/type filters, case-insensitivity,
 pagination, and the error guards through the public ``call`` (ripgrep is present
@@ -14,10 +14,10 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.grep import Grep, _apply_head_limit, _split_glob, _find_ripgrep
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.grep import Grep, _apply_head_limit, _find_ripgrep, _split_glob
 
-from .conftest import run, write_file
+from .conftest import CapRole, bind, run, write_file
 
 
 def _grep(**kwargs):
@@ -124,7 +124,7 @@ class TestRipgrepRequired:
     def test_missing_rg_raises_for_text_search(self, tree, monkeypatch):
         # With no ripgrep available, a text search must fail loudly rather than
         # silently walking the tree in-process (the old fallback froze the loop).
-        import metagpt.executor.tools.grep as grep_mod
+        import mote.executor.tools.grep as grep_mod
 
         monkeypatch.setattr(grep_mod, "_find_ripgrep", lambda: None)
         with pytest.raises(ToolError, match="is required for text search"):
@@ -133,7 +133,7 @@ class TestRipgrepRequired:
     def test_doc_only_type_works_without_rg(self, workspace, monkeypatch):
         # A doc-only type (pdf) never needs rg, so it must not raise even when
         # ripgrep is absent — it goes straight to the document-extraction pass.
-        import metagpt.executor.tools.grep as grep_mod
+        import mote.executor.tools.grep as grep_mod
 
         monkeypatch.setattr(grep_mod, "_find_ripgrep", lambda: None)
         out = _grep(pattern="anything", type="pdf")
@@ -171,7 +171,7 @@ class TestVendoredRipgrep:
     def test_vendored_binary_is_present_and_executable(self):
         # x86_64-linux is checked in; assert it exists there so a regression in
         # packaging is caught. On other platforms this path simply won't exist.
-        import metagpt.executor.tools.grep as grep_mod
+        import mote.executor.tools.grep as grep_mod
 
         if os.name == "posix" and "x86_64-linux" in grep_mod._VENDORED_RIPGREP:
             assert os.path.isfile(grep_mod._VENDORED_RIPGREP)
@@ -215,3 +215,26 @@ class TestHelpers:
         # Just exercise the probe; either a path or None is acceptable.
         rg = _find_ripgrep()
         assert rg is None or isinstance(rg, str)
+
+
+class TestGrepCwdResolution:
+    def test_default_root_is_role_cwd(self, tmp_path, workspace):
+        # A bound Grep with no `path` searches the ROLE's stable cwd, not the
+        # process cwd (the workspace fixture chdir'd into `workspace`).
+        sub = tmp_path / "role_dir"
+        sub.mkdir()
+        write_file(sub / "role.py", "TARGET here\n")
+        write_file(workspace / "process.py", "TARGET here\n")
+        role = CapRole(cwd=str(sub))
+        out = run(bind(Grep(), role).call(pattern="TARGET"))
+        assert "role.py" in out
+        assert "process.py" not in out
+
+    def test_relative_path_resolves_against_role_cwd(self, tmp_path):
+        sub = tmp_path / "role_dir"
+        nested = sub / "nested"
+        nested.mkdir(parents=True)
+        write_file(nested / "deep.py", "NEEDLE\n")
+        role = CapRole(cwd=str(sub))
+        out = run(bind(Grep(), role).call(pattern="NEEDLE", path="nested"))
+        assert "deep.py" in out

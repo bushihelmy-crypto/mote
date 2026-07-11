@@ -24,7 +24,9 @@ EDITOR_READ_MARKER = "Command Editor.read executed:"
 # trailing `\s+(block_)?content=` matches — so paths containing spaces (e.g.
 # `/Users/foo/My Drive/x.py`) are absorbed correctly, whether quoted or bare.
 _SINGLE_SEGMENT_PATTERNS = [
-    re.compile(r"^Command Editor\.read executed:\s*file_path=(?P<path>.+?)\s+block_content=(?P<content>.*)$", re.DOTALL),
+    re.compile(
+        r"^Command Editor\.read executed:\s*file_path=(?P<path>.+?)\s+block_content=(?P<content>.*)$", re.DOTALL
+    ),
     re.compile(r"^Command Editor\.read executed:\s*path=(?P<path>.+?)\s+content=(?P<content>.*)$", re.DOTALL),
 ]
 

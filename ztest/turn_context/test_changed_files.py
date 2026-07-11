@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import os
 
-from metagpt.common.interface import EphemeralContextSource
-from metagpt.context.turn_context import ChangedFilesContextSource
+from mote.common.interface import EphemeralContextSource
+from mote.context.turn_context import ChangedFilesContextSource
 
 
 def run(coro):

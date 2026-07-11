@@ -1,23 +1,20 @@
 from __future__ import annotations
 
-from typing import AsyncGenerator, Union
+from contextlib import AbstractAsyncContextManager
+from typing import Any
 
 from mcp import ClientSession, types
 from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 from mcp.types import Tool as MCPTool
 from tenacity import after_log, retry, stop_after_delay, wait_random_exponential
 
-from metagpt.common.config.config.mcp_config import MCPServerConfig
-from metagpt.common.logs import logger
-from metagpt.executor.mcp.client.exceptions import (
-    NonRetryableToolError,
-    handle_exception_group,
-    retry_if_retryable_error,
-)
-from metagpt.executor.mcp.client.utils import format_method_name
-from metagpt.common.utils.async_helper import run_coroutine_sync
-from metagpt.common.utils.common import log_time
-from metagpt.common.utils.sentry import capture_errors
+from mote.common.config.config.mcp_config import MCPServerConfig
+from mote.common.logs import logger
+from mote.common.utils.async_helper import run_coroutine_sync
+from mote.common.utils.common import log_time
+from mote.common.utils.sentry import capture_errors
+from mote.executor.mcp.client.exceptions import NonRetryableToolError, handle_exception_group, retry_if_retryable_error
+from mote.executor.mcp.client.utils import format_method_name
 
 
 class EnhancedClientSession(ClientSession):
@@ -43,7 +40,7 @@ class MCPBaseClient:
     @retry(
         wait=wait_random_exponential(min=0.5, max=5),
         stop=stop_after_delay(600),
-        after=after_log(logger, logger.level("WARNING").name),
+        after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_retryable_error,
     )
     @handle_exception_group
@@ -58,11 +55,11 @@ class MCPBaseClient:
     @retry(
         wait=wait_random_exponential(min=0.5, max=5),
         stop=stop_after_delay(600),
-        after=after_log(logger, logger.level("WARNING").name),
+        after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_retryable_error,
     )
     @handle_exception_group
-    async def call_tool(self, name: str, arguments: dict | None = None, meta: dict | None = None) -> any:
+    async def call_tool(self, name: str, arguments: dict | None = None, meta: dict | None = None) -> Any:
         async with self.get_session() as session:
             session: EnhancedClientSession
             result = await session.call_tool(name, arguments, _meta=meta)
@@ -71,7 +68,7 @@ class MCPBaseClient:
     def call_tool_sync(self, name: str, arguments: dict | None = None, meta: dict | None = None) -> str:
         return run_coroutine_sync(self.call_tool(name, arguments, meta))
 
-    async def get_session(self) -> AsyncGenerator[EnhancedClientSession, None]:
+    def get_session(self) -> AbstractAsyncContextManager[EnhancedClientSession]:
         """Get a session for interacting with the MCP service.
 
         This method should be implemented by derived classes to provide the specific session.
@@ -89,7 +86,7 @@ class MCPBaseClient:
         """Implement this method to cleanup resources."""
         ...
 
-    def _process_tool_result(self, result: CallToolResult, name: str, arguments: dict) -> any:
+    def _process_tool_result(self, result: CallToolResult, name: str, arguments: dict | None) -> Any:
         """Process tool call result and extract appropriate data
 
         Args:
@@ -103,7 +100,7 @@ class MCPBaseClient:
         # Handle error case
         if result.isError:
             error_msg = "Unknown error"
-            if result.content and hasattr(result.content[0], "text"):
+            if result.content and isinstance(result.content[0], TextContent):
                 error_msg = result.content[0].text
 
             # If one tool fails, it should stop early, especially when multiple tools need to be run.
@@ -124,9 +121,9 @@ class MCPBaseClient:
         # Handle single content item
         return self._extract_content_value(result.content[0])
 
-    def _extract_content_value(self, content: Union[TextContent, ImageContent, EmbeddedResource]) -> any:
+    def _extract_content_value(self, content: types.ContentBlock) -> Any:
         """Extract and convert content value based on its type"""
-        if content.type == "text":
+        if isinstance(content, TextContent):
             text_value = content.text
 
             # Attempt to convert to boolean
@@ -138,14 +135,14 @@ class MCPBaseClient:
             # Keep as string
             return text_value
 
-        if content.type == "image":
+        if isinstance(content, ImageContent):
             return content.data
 
-        if content.type == "resource":
+        if isinstance(content, EmbeddedResource):
             resource = content.resource
-            if hasattr(resource, "text"):
+            if isinstance(resource, types.TextResourceContents):
                 return resource.text
-            if hasattr(resource, "blob"):
+            if isinstance(resource, types.BlobResourceContents):
                 return resource.blob
 
         return "Unparseable content"

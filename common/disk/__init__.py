@@ -12,11 +12,13 @@ Three minimal, composable layers beneath the event-bus spine:
   DiskWriter (generalizes the session rollout's append pattern).
 """
 
-from metagpt.common.disk import disk_io
-from metagpt.common.disk.disk_io import (
+from mote.common.disk import disk_io
+from mote.common.disk.disk_io import (
     append_line,
     atomic_write,
     file_size,
+    mtime_ns,
+    mtime_seconds,
     read_range,
     read_tail,
     remove_file,
@@ -24,13 +26,8 @@ from metagpt.common.disk.disk_io import (
     write_bytes,
     write_capped,
 )
-from metagpt.common.disk.journal import Journal
-from metagpt.common.disk.writer import (
-    DiskWriter,
-    drain_blocking,
-    get_disk_writer,
-    set_disk_writer,
-)
+from mote.common.disk.journal import Journal
+from mote.common.disk.writer import DiskWriter, drain_blocking, get_disk_writer, set_disk_writer
 
 __all__ = [
     "disk_io",
@@ -41,6 +38,8 @@ __all__ = [
     "read_range",
     "read_tail",
     "file_size",
+    "mtime_ns",
+    "mtime_seconds",
     "truncate_file",
     "remove_file",
     "DiskWriter",

@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import CauseBy, UserMessage
+from mote.common.schema import CauseBy, UserMessage
 
-from .conftest import FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine, FakeBgPool
+from .conftest import FakeBgPool, FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
 
 pytestmark = pytest.mark.asyncio
 
@@ -149,9 +149,7 @@ async def test_run_waits_on_pending_background_tasks(make_loop):
     channel = FakeChannel(commands=[{"id": "t1", "command_name": "End", "args": {}}])
     executor = _DeactExecutor("End")
     bg = FakeBgPool(pending=1)
-    b = make_loop(
-        channel=channel, executor=executor, bg_pool=bg, max_react_loop=9, max_consecutive_react_limit=99
-    )
+    b = make_loop(channel=channel, executor=executor, bg_pool=bg, max_react_loop=9, max_consecutive_react_limit=99)
     executor.holder = b.active
     _news(b)
 

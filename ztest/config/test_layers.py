@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.config.layers`` — the merge engine.
+"""Tests for ``mote.common.config.layers`` — the merge engine.
 
 Covers deep_merge (dict recurse / scalar override / list union+dedupe / type
 mismatch), credential stripping, and the layer stack's precedence ordering and
@@ -8,14 +8,8 @@ provenance map.
 """
 from __future__ import annotations
 
-from metagpt.common.config.layers import (
-    CREDENTIAL_DENYLIST,
-    ConfigLayer,
-    ConfigLayerStack,
-    deep_merge,
-    strip_sensitive,
-)
-from metagpt.common.config.sources import ConfigSource
+from mote.common.config.layers import CREDENTIAL_DENYLIST, ConfigLayer, ConfigLayerStack, deep_merge, strip_sensitive
+from mote.common.config.sources import ConfigSource
 
 
 def test_deep_merge_recurses_dicts_and_overrides_scalars():

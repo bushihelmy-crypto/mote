@@ -10,25 +10,25 @@
 import asyncio
 import functools
 import traceback
-from typing import Any, Callable, Tuple, Type, TypeVar, Union
+from typing import Any, Callable, Optional, Tuple, Type, TypeVar, Union
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 ReturnType = TypeVar("ReturnType")
 
 
 def handle_exception(
-    _func: Callable[..., ReturnType] = None,
+    _func: Optional[Callable[..., ReturnType]] = None,
     *,
     exception_type: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception,
     exception_msg: str = "",
     default_return: Any = None,
-) -> Callable[..., ReturnType]:
+) -> Callable[..., Any]:
     """handle exception, return default value"""
 
-    def decorator(func: Callable[..., ReturnType]) -> Callable[..., ReturnType]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> ReturnType:
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
             except exception_type as e:
@@ -40,7 +40,7 @@ def handle_exception(
                 return default_return
 
         @functools.wraps(func)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> ReturnType:
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return func(*args, **kwargs)
             except exception_type as e:

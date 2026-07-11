@@ -19,12 +19,12 @@ erase: the tag, not the tool's re-derivability, is the authority for deletion.
 
 from __future__ import annotations
 
-from metagpt.common.const import RETENTION, RETENTION_ERASABLE, TOOL_CALL_ID
-from metagpt.common.schema import ContextManagerConfig, Message
-from metagpt.common.utils.token_counter import count_string_tokens
-from metagpt.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import SegmentKind, Transcript
+from mote.common.const import RETENTION, RETENTION_ERASABLE, TOOL_CALL_ID
+from mote.common.schema import ContextManagerConfig, Message
+from mote.common.utils.token_counter import count_string_tokens
+from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import SegmentKind, Transcript
 
 
 class EraseReducer:

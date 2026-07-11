@@ -19,15 +19,11 @@ from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Optional
 
-from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.prompt.memory import (
-    MEMORY_CONTEXT,
-    MEMORY_EMPTY_STATE,
-    MEMORY_INSTRUCTIONS,
-)
-from metagpt.common.prompt.refs import assert_no_symbols
-from metagpt.common.prompt.role import (
+from mote.common.base.command_channel import PROMPT_VAR_KEYS
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
+from mote.common.prompt.refs import assert_no_symbols
+from mote.common.prompt.role import (
     CONSTRAINT_TEMPLATE,
     FRC_SECTION,
     LANGUAGE_SECTION,
@@ -36,8 +32,7 @@ from metagpt.common.prompt.role import (
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     TASK_FINAL_OUTPUT_SECTION,
 )
-from metagpt.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
-from metagpt.common.utils.role_zero_utils import get_time_info
+from mote.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
 
 
 @dataclass
@@ -65,7 +60,12 @@ class ThinkInputs:
     env_desc: str = ""
     other_role_names: str = ""
     team_info: str = ""
+    # Live cwd (follows `cd`) — feeds the per-turn ephemeral SR, never the
+    # cacheable system prompt.
     working_dir: str = ""
+    # Startup cwd (never follows `cd`) — the stable dir the system prompt's
+    # environment block cites, so a mid-session `cd` can't bust the prefix cache.
+    original_working_dir: str = ""
     project_root: Any = None
     memory_dir: Any = None
     language: Optional[str] = None
@@ -169,7 +169,7 @@ class PromptBuilder:
 
     @staticmethod
     def build(system_tpl: str, cmd_tpl: str, ctx: ThinkContext) -> tuple[str, str]:
-        """Assemble system_prompt and user_prompt from metagpt.context."""
+        """Assemble system_prompt and user_prompt from mote.context."""
         system_prompt = PromptBuilder._build_system_prompt(system_tpl, ctx)
         user_prompt = PromptBuilder._build_user_prompt(cmd_tpl, ctx)
         # Final step: lower protocol symbols (``⟦...⟧``) to the active channel's
@@ -253,10 +253,17 @@ class PromptBuilder:
 
     @staticmethod
     def _user_substitutions(ctx: ThinkContext) -> dict:
-        """Map ThinkContext fields to the command template's $placeholders."""
-        return dict(
-            current_state=f"current directory: {ctx.working_dir}\n{get_time_info()}",
-        )
+        """Map ThinkContext fields to the command template's $placeholders.
+
+        ``current_state`` is intentionally empty: the wall-clock time it used to
+        carry now rides the per-turn ``<system-reminder>`` (TimestampContextSource)
+        instead of being hand-spliced onto the request tail. The cwd is not
+        re-surfaced per turn at all — it is a stable base cited once in the system
+        prompt's env block (see ``_make_env_section``). Consolidating the volatile
+        content into the structured reminder envelope keeps this template stable
+        and puts all ephemeral tail content in one place.
+        """
+        return dict(current_state="")
 
     @staticmethod
     def _build_system_prompt(system_tpl: str, ctx: ThinkContext) -> str:
@@ -281,17 +288,19 @@ class PromptBuilder:
 
     @staticmethod
     def _build_user_prompt(cmd_tpl: str, ctx: ThinkContext) -> str:
+        # The base template is empty by default (the old "# Current State" block
+        # moved to per-turn reminder sources), but a custom cmd_prompt is still
+        # substituted so role-specific templates keep working.
         rendered = Template(cmd_tpl).safe_substitute(PromptBuilder._user_substitutions(ctx))
-        # MEMORY.md is injected via user context (not the system prompt) so a
-        # changing index never busts the cacheable system-prompt prefix.
-        if ctx.memory_context:
-            rendered = f"{ctx.memory_context}\n\n{rendered}"
-        # Proactive framework reminders (the "secretary" hook) — appended as
-        # per-turn user context, same rationale as memory_context. Empty until a
-        # reminder strategy fills ctx.reminders (see _make_reminders).
-        if ctx.reminders:
-            rendered = f"{rendered}\n\n{ctx.reminders}"
-        return rendered
+        # Assemble the trailing user prompt from its parts, blank-line separated,
+        # dropping any that are empty so an empty base template leaves no stray
+        # whitespace:
+        #   - MEMORY.md (memory_context): injected via user context, not the system
+        #     prompt, so a changing index never busts the cacheable system prefix;
+        #   - the rendered base template (usually empty);
+        #   - the per-turn <system-reminder> envelope (reminders).
+        parts = [p for p in (ctx.memory_context, rendered.strip(), ctx.reminders) if p]
+        return "\n\n".join(parts)
 
     @staticmethod
     def join_sections(sections: list[str | None]) -> str:
@@ -341,10 +350,14 @@ class PromptBuilder:
         # ephemeral-context bus (the turn_context layer) and lands in the user
         # prompt's <system-reminder>, so volatile git state never touches this
         # cacheable section.
+        # The env block cites the *startup* cwd (``original_working_dir``). This is
+        # the model's sole cwd anchor: working_dir is a stable relative-path base
+        # equal to it (Codex-aligned — never drifts with ``cd``), so there is no
+        # separate per-turn cwd reminder to keep in sync, and nothing can bust this
+        # cacheable prefix.
         ctx.env_section = PromptBuilder._make_env_section(
             subsystems.model_name,
-            working_dir=ctx.working_dir,
-            project_root=inputs.project_root,
+            working_dir=inputs.original_working_dir or ctx.working_dir,
         )
         ctx.skills_info = PromptBuilder._make_skills_guide(subsystems.skill_manager)
 
@@ -442,7 +455,7 @@ class PromptBuilder:
         # Task Final Output Specifications.
 
         Emitted only when adaptive (token-based) compaction is active, since
-        that is what actually clears old tool results from metagpt.context. Both
+        that is what actually clears old tool results from mote.context. Both
         describe compression artifacts: FRC warns the model that old results get
         cleared (and to write down anything it needs before that happens), and
         the final-output contract is the durable record that survives clearing.
@@ -477,9 +490,8 @@ class PromptBuilder:
         return BACKGROUND_PIPELINE_SECTION
 
     @staticmethod
-    def _make_env_section(model_name: str, working_dir: str = "", project_root=None) -> str:
+    def _make_env_section(model_name: str, working_dir: str = "") -> str:
         cwd = working_dir or str(DEFAULT_WORKSPACE_ROOT)
-        str(project_root) if project_root else str(DEFAULT_WORKSPACE_ROOT)
         lines = [
             "# Environment",
             "You have been invoked in the following environment:",

@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._terminal import HeadTailBuffer
-from metagpt.executor.tools.terminal import Terminal
-from metagpt.executor.tool_result import ToolError
+from mote.executor.dependency._terminal import HeadTailBuffer
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.terminal import Terminal
 
 from .conftest import CapRole, bind, run
 
@@ -288,10 +288,9 @@ class TestStateCaptureRestore:
         async def scenario():
             session = await tool._ensure_session()
             await session.restore_state("", {"INJ": "$(echo pwned)"}, [])
-            out = await tool.call(input="echo \"$INJ\"", yield_time_ms=2000)
+            out = await tool.call(input='echo "$INJ"', yield_time_ms=2000)
             assert "$(echo pwned)" in out
             assert "pwned" not in out.replace("$(echo pwned)", "")
             tool.cleanup_session("t_quote")
 
         run(scenario())
-

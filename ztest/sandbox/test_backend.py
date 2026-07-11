@@ -12,10 +12,10 @@ import os
 
 import pytest
 
-from metagpt.sandbox.backend import NullBackend, SandboxPolicy
-from metagpt.sandbox.bwrap import BwrapBackend
-from metagpt.sandbox.detect import detect_backend
-from metagpt.sandbox.violations import SandboxViolation, parse_violations
+from mote.sandbox.backend import NullBackend, SandboxPolicy
+from mote.sandbox.bwrap import BwrapBackend
+from mote.sandbox.detect import detect_backend
+from mote.sandbox.violations import SandboxViolation, parse_violations
 
 
 class TestDetectBackend:
@@ -59,7 +59,7 @@ class TestBwrapArgv:
         assert argv[i + 1] == "/" and argv[i + 2] == "/"
         # Inner command is after the terminating "--".
         sep = argv.index("--")
-        assert argv[sep + 1:] == ["/bin/sh", "-c", "echo hi"]
+        assert argv[sep + 1 :] == ["/bin/sh", "-c", "echo hi"]
 
     def test_writable_root_bind(self, tmp_path):
         backend = BwrapBackend()
@@ -94,9 +94,7 @@ class TestBwrapArgv:
     def test_unshare_net_optional(self, tmp_path):
         backend = BwrapBackend()
         off = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)]), ["true"])
-        on = BwrapBackend().build_argv(
-            SandboxPolicy(writable_roots=[str(tmp_path)], unshare_net=True), ["true"]
-        )
+        on = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)], unshare_net=True), ["true"])
         assert "--unshare-net" not in off
         assert "--unshare-net" in on
 
@@ -123,9 +121,7 @@ class TestBwrapArgv:
         assert ro_root < dev_i
 
     def test_seccomp_fd_emitted(self, tmp_path):
-        argv = BwrapBackend().build_argv(
-            SandboxPolicy(writable_roots=[str(tmp_path)], seccomp_fd=9), ["true"]
-        )
+        argv = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)], seccomp_fd=9), ["true"])
         assert "--seccomp" in argv
         assert argv[argv.index("--seccomp") + 1] == "9"
 
@@ -135,9 +131,7 @@ class TestBwrapArgv:
 
     def test_cap_net_admin_optional(self, tmp_path):
         off = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)]), ["true"])
-        on = BwrapBackend().build_argv(
-            SandboxPolicy(writable_roots=[str(tmp_path)], cap_net_admin=True), ["true"]
-        )
+        on = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)], cap_net_admin=True), ["true"])
         assert "--cap-add" not in off
         joined_on = " ".join(on)
         assert "--cap-add CAP_NET_ADMIN" in joined_on
@@ -157,9 +151,7 @@ class TestBwrapArgv:
 
     def test_uid_root_optional(self, tmp_path):
         off = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)]), ["true"])
-        on = BwrapBackend().build_argv(
-            SandboxPolicy(writable_roots=[str(tmp_path)], uid_root=True), ["true"]
-        )
+        on = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)], uid_root=True), ["true"])
         assert "--uid" not in off
         joined_on = " ".join(on)
         assert "--uid 0 --gid 0" in joined_on
@@ -174,9 +166,7 @@ class TestBwrapArgv:
         assert argv.index("--uid") < argv.index("--cap-add")
 
     def test_info_fd_emitted(self, tmp_path):
-        argv = BwrapBackend().build_argv(
-            SandboxPolicy(writable_roots=[str(tmp_path)], info_fd=3), ["true"]
-        )
+        argv = BwrapBackend().build_argv(SandboxPolicy(writable_roots=[str(tmp_path)], info_fd=3), ["true"])
         assert "--info-fd" in argv
         assert argv[argv.index("--info-fd") + 1] == "3"
 

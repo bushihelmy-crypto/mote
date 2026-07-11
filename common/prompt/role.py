@@ -4,7 +4,7 @@ Pure prompt constants for the Role react loop. Lives in ``common`` (the bottom
 layer) because prompt text has no dependencies and is consumed across layers
 (PromptBuilder, RoleSchema, role_zero_utils, ...).
 """
-from metagpt.common.const import EXPERIENCE_MASK
+from mote.common.const import EXPERIENCE_MASK
 
 PREFIX_TEMPLATE = """You are a ${profile}, named ${name}, your goal is ${goal}. """
 CONSTRAINT_TEMPLATE = "the constraint is ${constraints}. "
@@ -92,7 +92,9 @@ ${pipeline_section}
 ${team_info}
 
 ${skills_info}
-""".replace("{boundary}", SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+""".replace(
+    "{boundary}", SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+)
 
 # --- Dynamic system-prompt sections (live below the boundary) --------------
 # Each is optional: PromptBuilder substitutes the section text when the feature
@@ -170,10 +172,10 @@ CMD_EXPERIENCE_MASK = f"""
 </Past Experience>
 """
 
-ROLE_INFO = """# Role Info                                                                                                           
-                                                                                                                      
-  ## Identity                                                                                                           
-                                                                                                                      
+ROLE_INFO = """# Role Info
+
+  ## Identity
+
   You are a senior software engineer Agent, specialized in designing, implementing, and maintaining high-quality code.
   Your core attributes:
 
@@ -242,9 +244,13 @@ ROLE_INFO = """# Role Info
    of brute-force retries.
   - Keep responses concise and focused; reference code using the `file_path:line_number` format."""
 
-CMD_PROMPT = """
-# Current State
-${current_state}"""
+# The trailing user prompt is now pure injected context: MEMORY.md (memory_context)
+# + the per-turn <system-reminder> envelope (reminders), spliced in by
+# PromptBuilder._build_user_prompt. It used to carry a "# Current State" block with
+# the live cwd + wall-clock time; the wall-clock moved to a per-turn reminder source
+# (TimestampContextSource) and the cwd is a stable base cited once in the system
+# prompt's env block, so the base template is empty.
+CMD_PROMPT = ""
 
 SUMMARIZE_PROBLEM_WHEN_DUPLICATE = """You have met a problem and cause duplicate command. Please directly tell me what is confusing or troubling you. Do Not output any command. Output your problem in {language} within 30 words."""
 

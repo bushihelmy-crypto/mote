@@ -5,13 +5,13 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.config.meta_config import Config
-from metagpt.common.config.config.exp_pool_config import ExperiencePoolRetrievalType
-from metagpt.memory.procedural_memory.schema import DEFAULT_SIMILARITY_TOP_K, Experience, QueryType
-from metagpt.common.utils.exceptions import handle_exception
+from mote.common.config.config.exp_pool_config import ExperiencePoolRetrievalType
+from mote.common.config.meta_config import Config
+from mote.common.utils.exceptions import handle_exception
+from mote.memory.procedural_memory.schema import DEFAULT_SIMILARITY_TOP_K, Experience, QueryType
 
 if TYPE_CHECKING:
-    from metagpt.common.rag.engines import SimpleEngine
+    from mote.common.rag.engines import SimpleEngine
 
 
 class ExperienceManager(BaseModel):
@@ -154,8 +154,8 @@ class ExperienceManager(BaseModel):
         """
 
         try:
-            from metagpt.common.rag.engines import SimpleEngine
-            from metagpt.common.rag.schema import BM25IndexConfig, BM25RetrieverConfig
+            from mote.common.rag.engines import SimpleEngine
+            from mote.common.rag.schema import BM25IndexConfig, BM25RetrieverConfig
         except ImportError:
             raise ImportError("To use the experience pool, you need to install the rag module.")
 
@@ -194,8 +194,8 @@ class ExperienceManager(BaseModel):
         """
 
         try:
-            from metagpt.common.rag.engines import SimpleEngine
-            from metagpt.common.rag.schema import ChromaRetrieverConfig
+            from mote.common.rag.engines import SimpleEngine
+            from mote.common.rag.schema import ChromaRetrieverConfig
         except ImportError:
             raise ImportError("To use the experience pool, you need to install the rag module.")
 
@@ -222,7 +222,7 @@ class ExperienceManager(BaseModel):
             list: A list of `LLMRankerConfig` instances or an empty list.
         """
 
-        from metagpt.common.rag.schema import LLMRankerConfig
+        from mote.common.rag.schema import LLMRankerConfig
 
         return [LLMRankerConfig(top_n=DEFAULT_SIMILARITY_TOP_K)] if self.config.exp_pool.use_llm_ranker else []
 

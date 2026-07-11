@@ -13,13 +13,9 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.const import TOOL_CALL_ID, TOOL_CALLS
-from metagpt.context.compaction.recovery import (
-    RecoveryContextReducer,
-    _message_to_wire,
-    _wire_to_message,
-)
-from metagpt.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.common.const import TOOL_CALL_ID, TOOL_CALLS
+from mote.context.compaction.recovery import RecoveryContextReducer, _message_to_wire, _wire_to_message
+from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 
 
 def _run(coro):
@@ -58,9 +54,7 @@ def test_wire_to_message_tool_call_parses_function_envelope():
     d = {
         "role": "assistant",
         "content": "calling",
-        "tool_calls": [
-            {"id": "c1", "type": "function", "function": {"name": "Read", "arguments": '{"path":"x"}'}}
-        ],
+        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Read", "arguments": '{"path":"x"}'}}],
     }
     m = _wire_to_message(d)
     calls = m.metadata[TOOL_CALLS]
@@ -99,7 +93,7 @@ def test_reduce_empty_returns_none():
 
 
 def test_reduce_runs_hard_reactive_request():
-    from metagpt.context.compaction.request import ReductionReason, Urgency
+    from mote.context.compaction.request import ReductionReason, Urgency
 
     rec = RecordingReducer(ReducerCost.FREE)
     reducer = RecoveryContextReducer([rec], model="gpt-4")
@@ -119,7 +113,7 @@ def test_reduce_returns_none_when_nothing_changed():
 
 
 def test_reduce_emits_wire_dicts_when_changed():
-    from metagpt.context.compaction.transcript import Transcript
+    from mote.context.compaction.transcript import Transcript
 
     smaller = Transcript.from_messages([_wire_to_message({"role": "user", "content": "x"})])
     rec = RecordingReducer(ReducerCost.DESTRUCTIVE, new_transcript=smaller)
@@ -137,11 +131,11 @@ def test_reduce_emits_wire_dicts_when_changed():
 # fold → summarize → drop escalation (the real reducers)
 # ---------------------------------------------------------------------------
 
-from metagpt.common.const.context import HEAD_DROPPED_MESSAGE  # noqa: E402
-from metagpt.common.schema import ContextManagerConfig  # noqa: E402
-from metagpt.context.compaction.reducers.drop import HeadDropReducer  # noqa: E402
-from metagpt.context.compaction.reducers.fold import FoldReducer  # noqa: E402
-from metagpt.context.compaction.reducers.summarize import SummarizeReducer  # noqa: E402
+from mote.common.const.context import HEAD_DROPPED_MESSAGE  # noqa: E402
+from mote.common.schema import ContextManagerConfig  # noqa: E402
+from mote.context.compaction.reducers.drop import HeadDropReducer  # noqa: E402
+from mote.context.compaction.reducers.fold import FoldReducer  # noqa: E402
+from mote.context.compaction.reducers.summarize import SummarizeReducer  # noqa: E402
 
 from ..conftest import FakeLLM, text_msg  # noqa: E402
 

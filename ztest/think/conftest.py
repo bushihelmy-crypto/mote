@@ -4,9 +4,9 @@
 
 The fixtures keep ``ThinkEngine._run`` fully offline and deterministic:
 
-- :class:`FakeLLM` is a duck-typed :class:`~metagpt.common.interface.LLMClient`.
+- :class:`FakeLLM` is a duck-typed :class:`~mote.common.interface.LLMClient`.
   ``aask`` returns the next queued reply (or a constant); ``aask_tool`` returns a
-  pre-built :class:`~metagpt.router.llm.llm_response.LLMResponse`. Both record
+  pre-built :class:`~mote.router.llm.llm_response.LLMResponse`. Both record
   their calls so tests can assert which channel fired.
 - :class:`FakeMemory` is a tiny in-memory :class:`MessageStore`; tests seed it
   with history so the dedup checks have something to compare against.
@@ -20,9 +20,9 @@ from typing import Optional
 
 import pytest
 
-from metagpt.common.const import TOOL_CALLS
-from metagpt.common.schema import Message, UserMessage
-from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
+from mote.common.const import TOOL_CALLS
+from mote.common.schema import Message, UserMessage
+from mote.router.llm.llm_response import LLMResponse, LLMToolCall
 
 
 class FakeLLM:
@@ -52,9 +52,7 @@ class FakeLLM:
         return self._reply
 
     async def aask_tool(self, msg, system_msgs=None, tools=None, **kwargs) -> LLMResponse:
-        self.aask_tool_calls.append(
-            {"msg": msg, "system_msgs": system_msgs, "tools": tools, "kwargs": kwargs}
-        )
+        self.aask_tool_calls.append({"msg": msg, "system_msgs": system_msgs, "tools": tools, "kwargs": kwargs})
         return self._tool_response or LLMResponse()
 
     def format_msg(self, messages):
@@ -112,7 +110,7 @@ class FakeReporter:
 def patch_reporter(monkeypatch):
     """Replace ThoughtReporter so _run never opens a stream / posts a callback."""
     FakeReporter.instances.clear()
-    monkeypatch.setattr("metagpt.think.think_engine.ThoughtReporter", FakeReporter)
+    monkeypatch.setattr("mote.think.think_engine.ThoughtReporter", FakeReporter)
     return FakeReporter
 
 

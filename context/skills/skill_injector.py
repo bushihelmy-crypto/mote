@@ -11,8 +11,10 @@ When the index would blow the token budget it degrades in three tiers
 (full description → half description → name only), mirroring claude-code.
 """
 
-from metagpt.common.utils.prompt_sanitizer import count_tokens, sanitize
-from metagpt.context.skills.skill_pool import SkillPool
+from typing import Optional
+
+from mote.common.utils.prompt_sanitizer import count_tokens, sanitize
+from mote.context.skills.skill_pool import SkillPool
 
 _LOADING_GUIDE = (
     "## Skill Loading Guide\n"
@@ -32,7 +34,7 @@ class SkillInjector:
     def __init__(self, pool: SkillPool):
         self._pool = pool
 
-    def _index_skills(self, only_names: set = None) -> list:
+    def _index_skills(self, only_names: Optional[set] = None) -> list:
         """Skills eligible for the steady, model-facing index.
 
         Excludes conditional (path/glob-gated, surfaced per-turn) and
@@ -40,11 +42,7 @@ class SkillInjector:
         restricted to skills whose name is in that set (order preserved) — used
         by the per-turn listing source to render only the newly-added skills.
         """
-        skills = [
-            s
-            for s in self._pool.get_all()
-            if not s.is_conditional and not s.disable_model_invocation
-        ]
+        skills = [s for s in self._pool.get_all() if not s.is_conditional and not s.disable_model_invocation]
         if only_names is not None:
             skills = [s for s in skills if s.name in only_names]
         return skills
@@ -60,7 +58,7 @@ class SkillInjector:
             return ""
         return _LOADING_GUIDE
 
-    def build_index(self, max_tokens: int = 2000, only_names: set = None) -> str:
+    def build_index(self, max_tokens: int = 2000, only_names: Optional[set] = None) -> str:
         """The volatile ``## Available Skills`` index block (no loading guide).
 
         Delivered per-turn by :class:`SkillListingContextSource` (never the
@@ -129,7 +127,7 @@ class SkillInjector:
                 return block
         return self._build_index(skills, 2)
 
-    def _build_index(self, skills: list = None, tier: int = 0) -> str:
+    def _build_index(self, skills: Optional[list] = None, tier: int = 0) -> str:
         """Build the Skills index in-memory from the pool.
 
         ``tier`` controls verbosity: 0 = full description (+ argument hint),
@@ -174,4 +172,4 @@ class SkillInjector:
             desc = desc[:half].rstrip() + "…"
         return desc
 
-    # sanitize and count_tokens are provided by metagpt.common.utils.prompt_sanitizer
+    # sanitize and count_tokens are provided by mote.common.utils.prompt_sanitizer

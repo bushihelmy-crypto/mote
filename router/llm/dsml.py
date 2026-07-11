@@ -96,9 +96,7 @@ def parse_dsml_tool_calls(content: str) -> Tuple[list[dict], str]:
                 name = invoke.group("name")
                 args: dict = {}
                 for param in _PARAM_RE.finditer(invoke.group("body")):
-                    args[param.group("name")] = _coerce_value(
-                        param.group("value"), param.group("string")
-                    )
+                    args[param.group("name")] = _coerce_value(param.group("value"), param.group("string"))
                 tool_calls.append({"id": None, "name": name, "arguments": args})
     except Exception:  # noqa: BLE001 — never let salvage crash the turn
         return [], content

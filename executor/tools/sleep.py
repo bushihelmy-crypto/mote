@@ -14,13 +14,19 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, ClassVar
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.common.utils.report import ArtifactsReporter
+from mote.common.utils.report import ArtifactsReporter
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_registry import register_tool
 
 # Long default (10 min) is fine: the sleep is interruptible, so the agent wakes
 # the instant a task completes — no need to guess a duration.
 _DEFAULT_SLEEP_SECONDS: float = 600.0
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the return site).
+_MSG_SLEEPING = "Waiting for background tasks to complete. You can send a " "message to interrupt at any time."
+_MSG_INTERRUPTED = "Sleep interrupted after {seconds}s"
+_MSG_SLEPT = "Slept for {seconds}s"
 
 
 @register_tool
@@ -66,10 +72,7 @@ class Sleep(BaseTool):
                     "status": "sleeping",
                     "artifact_type": "sleep",
                     "duration_seconds": duration_seconds,
-                    "message": (
-                        "Waiting for background tasks to complete. You can send a "
-                        "message to interrupt at any time."
-                    ),
+                    "message": _MSG_SLEEPING,
                 },
                 "object",
             )
@@ -77,5 +80,5 @@ class Sleep(BaseTool):
         slept_seconds, interrupted = await self.wait_interruptible(duration_seconds)
 
         if interrupted:
-            return f"Sleep interrupted after {slept_seconds}s"
-        return f"Slept for {slept_seconds}s"
+            return _MSG_INTERRUPTED.format(seconds=slept_seconds)
+        return _MSG_SLEPT.format(seconds=slept_seconds)

@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from typing import List, Sequence, Set
 
-from metagpt.cli.consumers.render.palette import PROMPT_SYMBOL
-from metagpt.cli.consumers.terminal.style import ansi_fg
+from mote.cli.consumers.render.palette import PROMPT_SYMBOL
+from mote.cli.consumers.terminal.style import ansi_fg
 
 _DIM = "\x1b[90m"  # bright-black — dim inactive numbers / shortcut hints
 _RESET = "\x1b[0m"

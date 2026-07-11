@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import os
 
-from metagpt.environment.watching.events import CREATED, DELETED, MODIFIED, FileChangeEvent
-from metagpt.environment.watching.watcher import FileWatcher
+from mote.environment.watching.events import CREATED, DELETED, MODIFIED, FileChangeEvent
+from mote.environment.watching.watcher import FileWatcher
 
 
 def _collect():

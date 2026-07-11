@@ -20,7 +20,7 @@ passthrough (the command runs unsandboxed, with a warning logged).
 
 Policy source: the runtime does NOT compute writable roots itself. A
 ``policy_provider`` callable (wired by the adapter) returns a fresh
-:class:`~metagpt.sandbox.backend.SandboxPolicy` per call, derived from the live
+:class:`~mote.sandbox.backend.SandboxPolicy` per call, derived from the live
 ``SandboxGuard`` + ``SandboxRuntimeConfig`` — so a session-granted writable root
 takes effect on the next command without rebuilding the runtime.
 """
@@ -30,35 +30,25 @@ import os
 import shlex
 from typing import Callable, Optional
 
-from metagpt.common.logs import logger
-from metagpt.sandbox.backend import NullBackend, SandboxBackend, SandboxPolicy
-from metagpt.sandbox.bwrap import BwrapBackend
-from metagpt.sandbox.detect import detect_backend
-from metagpt.sandbox.hardening import harden_env, hardening_prelude
-from metagpt.sandbox.network.enforce import (
-    TUN_DEVICE,
-    build_inner_prelude,
-    enforcement_available,
-    proxy_url_in_netns,
-)
-from metagpt.sandbox.network.netns import block_all_network_env, inject_proxy_env
-from metagpt.sandbox.network.orchestrator import (
-    build_inner_argv,
-    encode_config,
-    launcher_argv,
-    launcher_command,
-)
-from metagpt.sandbox.network.policy import NetworkPolicy
-from metagpt.sandbox.network.proxy import EgressProxy
-from metagpt.sandbox.resources import (
+from mote.common.logs import logger
+from mote.sandbox.backend import NullBackend, SandboxBackend, SandboxPolicy
+from mote.sandbox.bwrap import BwrapBackend
+from mote.sandbox.detect import detect_backend
+from mote.sandbox.hardening import harden_env, hardening_prelude
+from mote.sandbox.network.enforce import TUN_DEVICE, build_inner_prelude, enforcement_available, proxy_url_in_netns
+from mote.sandbox.network.netns import block_all_network_env, inject_proxy_env
+from mote.sandbox.network.orchestrator import build_inner_argv, encode_config, launcher_argv, launcher_command
+from mote.sandbox.network.policy import NetworkPolicy
+from mote.sandbox.network.proxy import EgressProxy
+from mote.sandbox.resources import (
     ResourceLimits,
     cgroup_limits_available,
     cpu_controller_delegated,
     rlimit_prelude,
     systemd_run_prefix,
 )
-from metagpt.sandbox.seccomp import build_hardening_filter, seccomp_available
-from metagpt.sandbox.violations import SandboxViolation, parse_violations
+from mote.sandbox.seccomp import build_hardening_filter, seccomp_available
+from mote.sandbox.violations import SandboxViolation, parse_violations
 
 # The shell used to run the hardening prelude + inner command inside the sandbox.
 _INNER_SHELL = "/bin/sh"
@@ -562,7 +552,7 @@ class SandboxRuntime:
             and not isinstance(self._backend, NullBackend)
         )
         if rlimit or seccomp_redirect:
-            redirect = f" {policy.seccomp_fd}<{shlex.quote(self._seccomp_bpf_path)}" if seccomp_redirect else ""
+            redirect = f" {policy.seccomp_fd}<{shlex.quote(self._seccomp_bpf_path or '')}" if seccomp_redirect else ""
             prefix = f"{rlimit}; " if rlimit else ""
             shim = f'{prefix}exec "$@"{redirect}'
             wrapped = [_INNER_SHELL, "-c", shim, "sbx", *wrapped]

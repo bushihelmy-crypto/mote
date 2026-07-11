@@ -18,17 +18,11 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
-from metagpt.common.events import (
-    EventBus,
-    FileMutatedEvent,
-    PostToolUseEvent,
-    PreToolUseEvent,
-    ToolsChangedEvent,
-    span,
-)
-from metagpt.common.exception import (
+from mote.common.events import EventBus, FileMutatedEvent, PostToolUseEvent, PreToolUseEvent, ToolsChangedEvent, span
+from mote.common.events.outcomes import ToolCallOutcome
+from mote.common.exception import (
     ErrorReport,
     RecoveryAction,
     RecoveryRunner,
@@ -38,30 +32,37 @@ from metagpt.common.exception import (
     ToolValidationError,
     render_error_block,
 )
-from metagpt.common.logs import log_class, logger
-from metagpt.common.schema import (
+from mote.common.logs import log_class, logger
+from mote.common.schema import (
     DEFAULT_MAX_RESULT_SIZE_CHARS,
     PERSISTED_OUTPUT_OPEN_TAG,
     PermissionConfig,
     PermissionFacts,
     ToolResultLimitConfig,
 )
-from metagpt.executor import tool_result_limit
-from metagpt.executor.compress import compress_output
-from metagpt.executor.base_executor import BaseToolExecutor
-from metagpt.executor.mcp.universal import UniversalMCP
-from metagpt.executor.mcp_adapter import MCPToolAdapter
-from metagpt.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
-from metagpt.executor.permission.sandbox import SandboxGuard
-from metagpt.executor.tasks.bggraph.marker import is_pipeline_tool
-from metagpt.executor.tasks.types import BgTaskMode, BgTaskResult
-from metagpt.executor.tool_registry import registry as tool_registry
-from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.tool_spec_adapter import to_native_tool_specs
+from mote.common.text import plural
+from mote.executor import tool_result_limit
+from mote.executor.base_executor import BaseToolExecutor
+from mote.executor.compress import compress_output
+from mote.executor.mcp.universal import UniversalMCP
+from mote.executor.mcp_adapter import MCPToolAdapter
+from mote.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
+from mote.executor.permission.sandbox import SandboxGuard
+from mote.executor.tasks.bggraph.marker import is_pipeline_tool
+from mote.executor.tasks.types import BgTaskMode, BgTaskResult
+from mote.executor.tool_registry import registry as tool_registry
+from mote.executor.tool_result import ToolResult
+from mote.executor.tool_spec_adapter import to_native_tool_specs
 
 # Signature params that are framework plumbing, never LLM-facing arguments.
 # (``*args``/``**kwargs`` are detected by parameter *kind*, not by name.)
 _NON_ARG_PARAMS = frozenset({"self", "cls"})
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the return site).
+_MSG_BG_SUBMITTED = (
+    "Background task '{name}' submitted{task_ref}. " "Running asynchronously — you will be notified when it completes."
+)
 
 
 def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any]) -> None:
@@ -104,9 +105,9 @@ def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any])
 
     parts: list[str] = []
     if missing:
-        parts.append(f"missing required argument(s): {', '.join(missing)}")
+        parts.append(f"missing required {plural('argument', len(missing))}: {', '.join(missing)}")
     if unexpected:
-        parts.append(f"unexpected argument(s): {', '.join(unexpected)}")
+        parts.append(f"unexpected {plural('argument', len(unexpected))}: {', '.join(unexpected)}")
     raise ToolValidationError(f"{tool_name}: {'; '.join(parts)}")
 
 
@@ -372,6 +373,8 @@ class ToolExecutor(BaseToolExecutor):
             )
             # ``None`` when no control subscriber maps the event (no hook, no gate).
             if outcome is not None:
+                # A PreToolUseEvent always folds a ToolCallOutcome (or None).
+                outcome = cast("ToolCallOutcome", outcome)
                 if outcome.updated_args is not None:
                     args = outcome.updated_args
                 if outcome.behavior == "deny" or outcome.stop:
@@ -430,16 +433,11 @@ class ToolExecutor(BaseToolExecutor):
                     output = str(raw.result) if raw.result is not None else ""
                 elif raw.mode == BgTaskMode.BACKGROUND:
                     task_ref = f" (task_id: {task_id})" if task_id is not None else ""
-                    output = (
-                        f"Background task '{raw.command_name or name}' submitted{task_ref}. "
-                        "Running asynchronously — you will be notified when it completes."
-                    )
+                    output = _MSG_BG_SUBMITTED.format(name=raw.command_name or name, task_ref=task_ref)
                 else:
                     # HYBRID — immediate result + bg continues
                     output = str(raw.result)
-                return await self._settle(
-                    name, args, ToolResult(output=output, success=True, data=raw), result_id
-                )
+                return await self._settle(name, args, ToolResult(output=output, success=True, data=raw), result_id)
 
             # Normalize the raw return into a ToolResult. A returned ToolResult is
             # used as-is; a plain value is always treated as success — failure is
@@ -469,9 +467,7 @@ class ToolExecutor(BaseToolExecutor):
         if outcome.is_blocking:
             reason = outcome.system_message or outcome.stop_reason or "blocked by PostToolUse hook"
             result.success = False
-            result.output = (
-                f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
-            )
+            result.output = f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
         return result
 
     def _post_event(
@@ -496,9 +492,7 @@ class ToolExecutor(BaseToolExecutor):
             tool_use_id=result_id,
         )
 
-    async def _reject(
-        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None
-    ) -> ToolResult:
+    async def _reject(self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None) -> ToolResult:
         """Close the lifecycle for a call whose tool **never ran**.
 
         Used by the pre-execution exits (unknown tool / pre-flight hook or
@@ -514,9 +508,7 @@ class ToolExecutor(BaseToolExecutor):
             logger.debug(f"ToolExecutor: not-ran notice for {name} not delivered: {exc}")
         return result
 
-    async def _settle(
-        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None
-    ) -> ToolResult:
+    async def _settle(self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None) -> ToolResult:
         """Close the lifecycle for a call whose tool body **ran** (success, ``raise``,
         or BgTask).
 
@@ -534,7 +526,7 @@ class ToolExecutor(BaseToolExecutor):
         # suppresses echoing our own edit back as an external change. Observation
         # only; best-effort.
         tool = self._get_tool(name)
-        if result.success and getattr(tool, "mutates_filesystem", False):
+        if result.success and tool is not None and getattr(tool, "mutates_filesystem", False):
             path = tool.permission_target(args)
             if path:
                 try:
@@ -747,7 +739,7 @@ class ToolExecutor(BaseToolExecutor):
         """Names (primary + aliases) of bound tools whose results are re-derivable.
 
         A tool self-declares this via the ``reconstructable`` ClassVar (see
-        :class:`~metagpt.executor.base_tool.BaseTool`). The compaction pipeline
+        :class:`~mote.executor.base_tool.BaseTool`). The compaction pipeline
         folds/clears only these tools' result bodies, since the information is
         recoverable (re-read the file, re-run the query). Every name a tool routes
         under is included so the Transcript matches whichever alias the model used.

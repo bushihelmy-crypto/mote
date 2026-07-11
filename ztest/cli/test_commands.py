@@ -15,11 +15,7 @@ from typing import Any, List, Optional, Tuple
 
 import pytest
 
-from metagpt.cli.commands.registry import (
-    Command,
-    CommandRegistry,
-    default_registry,
-)
+from mote.cli.commands.registry import Command, CommandRegistry, default_registry
 
 
 class FakeCtx:

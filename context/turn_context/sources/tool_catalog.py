@@ -18,16 +18,16 @@ The first turn emits the full catalog; every later turn emits only the
 re-announced (the model simply stops seeing them; a stale attempt fails cleanly).
 
 Push→pull bridge in one object (like ``CompactionNoticeContextSource``):
-- as an :class:`~metagpt.common.interface.ObservationSubscriber` it catches
-  :class:`~metagpt.common.events.PostCompactEvent` off the bus and resets the
+- as an :class:`~mote.common.interface.ObservationSubscriber` it catches
+  :class:`~mote.common.events.PostCompactEvent` off the bus and resets the
   incremental frontier, so the turn after a compaction re-sends the *full*
   catalog (the earlier full listing was condensed away with the rest of the
   pre-compaction history); it also catches
-  :class:`~metagpt.common.events.ToolsChangedEvent` and drops the vanished names
+  :class:`~mote.common.events.ToolsChangedEvent` and drops the vanished names
   from the frontier, so a tool that is de-registered and later re-registered is
   re-announced (rather than silently withheld because its name still sat in
   ``_sent_names``);
-- as an :class:`~metagpt.common.interface.EphemeralContextSource` it renders the
+- as an :class:`~mote.common.interface.EphemeralContextSource` it renders the
   catalog once per think() cycle.
 
 Duck-typed (mirrors :class:`SkillListingContextSource`): it holds callables so
@@ -37,10 +37,34 @@ the low ``context`` layer never imports the executor or the command channel.
 from __future__ import annotations
 
 import json
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 
-from metagpt.common.events import PostCompactEvent, ToolsChangedEvent
-from metagpt.common.interface import ObservationSubscriber, TurnContextPriority
+from mote.common.events import PostCompactEvent, ToolsChangedEvent
+from mote.common.interface import ObservationSubscriber, TurnContextPriority
+
+
+class _CatalogExecutor(Protocol):
+    """The tool-schema slice this source reads off the executor (duck-typed).
+
+    Structural only — keeps the low ``context`` layer from importing the executor;
+    any object exposing these three schema getters satisfies it.
+    """
+
+    def get_tool_schemas(self) -> Optional[dict]:
+        ...
+
+    def get_mcp_tool_schemas(self) -> Optional[dict]:
+        ...
+
+    def get_pipeline_tool_schemas(self) -> Optional[dict]:
+        ...
+
+
+class _CatalogChannel(Protocol):
+    """The command-channel slice this source consults (duck-typed)."""
+
+    def wants_tool_catalog(self) -> bool:
+        ...
 
 
 class ToolCatalogContextSource(ObservationSubscriber):
@@ -56,8 +80,8 @@ class ToolCatalogContextSource(ObservationSubscriber):
 
     def __init__(
         self,
-        get_executor: Callable[[], object],
-        get_channel: Callable[[], object],
+        get_executor: Callable[[], Optional[_CatalogExecutor]],
+        get_channel: Callable[[], Optional[_CatalogChannel]],
     ) -> None:
         self._get_executor = get_executor
         self._get_channel = get_channel

@@ -1,7 +1,7 @@
 """Stateless disk read/write primitives shared across the codebase.
 
 These are the low-level file operations factored out of
-``metagpt/tasks/disk_output.py`` so that other modules (e.g. the
+``mote/tasks/disk_output.py`` so that other modules (e.g. the
 context-manager's tool-result persistence) can reuse the exact same
 seek/read/write logic instead of re-implementing it.
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 PathLike = Union[str, Path]
 
@@ -24,6 +24,31 @@ def file_size(path: PathLike) -> int:
     """Return the file's size in bytes, or 0 if it does not exist."""
     p = Path(path)
     return p.stat().st_size if p.exists() else 0
+
+
+def mtime_ns(path: PathLike) -> Optional[int]:
+    """Return the file's mtime in integer nanoseconds, or ``None`` if unreadable.
+
+    The freshness primitive for lazy re-parse / change detection: a missing or
+    unstat-able path yields ``None`` (treated as "changed") rather than raising.
+    """
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def mtime_seconds(path: PathLike) -> Optional[float]:
+    """Return the file's mtime in float seconds, or ``None`` if unreadable.
+
+    Seconds-unit sibling of :func:`mtime_ns`: for durable-store staleness checks
+    that compare against a previously-cached ``st_mtime`` (seconds). Same
+    ``None``-on-``OSError`` contract — a missing file is "no known mtime", not a raise.
+    """
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 def read_range(path: PathLike, offset: int, length: int) -> bytes:

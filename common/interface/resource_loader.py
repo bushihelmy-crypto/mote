@@ -11,7 +11,7 @@ capability (``register_resource``) that the tool receives via injection; the too
 only depends on this structural face, so no upward import is introduced.
 
 Like the other ``common.interface`` Protocols (e.g.
-:class:`~metagpt.common.interface.FileSnapshotStore`), this is a leaf module that
+:class:`~mote.common.interface.FileSnapshotStore`), this is a leaf module that
 only needs ``typing``, importable from anywhere without risking a cycle.
 """
 

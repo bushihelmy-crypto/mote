@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from metagpt.executor.base_tool import BaseTool
+from mote.executor.base_tool import BaseTool
 
 
 class MCPToolAdapter(BaseTool):
     """Adapt one discovered MCP tool to the BaseTool interface."""
+
+    # Unlike a normal tool, the name is only known after MCP discovery, so it is
+    # a per-instance value that shadows BaseTool's ClassVar default.
+    name: str  # type: ignore[misc]  # deliberate instance override of the ClassVar
 
     def __init__(self, mcp, tool_name: str, schema: dict) -> None:
         super().__init__()
@@ -41,4 +45,3 @@ class MCPToolAdapter(BaseTool):
             "description": self._schema.get("description", ""),
             "input_schema": self._schema.get("parameters") or {"type": "object", "properties": {}},
         }
-

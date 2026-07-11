@@ -23,7 +23,7 @@ import asyncio
 import json
 from typing import Callable, Optional
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 # Notification dispatch: (method, params) -> None. Sync; the endpoint never
 # awaits it (handlers stage work, they don't block the read loop).

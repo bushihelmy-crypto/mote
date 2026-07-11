@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.terminal_state`` — the terminal-state recorder.
+"""Tests for ``mote.session.terminal_state`` — the terminal-state recorder.
 
 Covers: a record appends a ``terminal_state`` event to the shared rollout log
 (cwd + env diff + unset); the ``enabled`` gate suppresses recording; recording
@@ -8,10 +8,10 @@ is best-effort and conforms to the ``TerminalStateStore`` protocol.
 """
 from __future__ import annotations
 
-from metagpt.common.interface import TerminalStateStore
-from metagpt.session.events import TERMINAL_STATE
-from metagpt.session.log import SessionLog
-from metagpt.session.terminal_state import TerminalStateRecorder
+from mote.common.interface import TerminalStateStore
+from mote.session.events import TERMINAL_STATE
+from mote.session.log import SessionLog
+from mote.session.terminal_state import TerminalStateRecorder
 
 
 def _recorder(tmp_path, **kw):

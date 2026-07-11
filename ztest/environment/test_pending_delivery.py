@@ -6,10 +6,10 @@ import asyncio
 
 import pytest
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.mailbox import CommKind, DeliveryMode, InterAgentCommunication
-from metagpt.environment.pending_delivery import PendingDelivery, PendingDeliveryQueue
+from mote.common.schema.messages import UserMessage
+from mote.environment.agent_path import AgentPath
+from mote.environment.mailbox import CommKind, DeliveryMode, InterAgentCommunication
+from mote.environment.pending_delivery import PendingDelivery, PendingDeliveryQueue
 
 
 def test_park_then_take_all_fifo():

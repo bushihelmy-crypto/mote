@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures for the real-tool test suite (``metagpt.executor.tools``).
+"""Shared fixtures for the real-tool test suite (``mote.executor.tools``).
 
 Everything stays fully offline and deterministic — no LLM, no network, no MCP.
 The real tools only ever touch:
@@ -29,8 +29,7 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from metagpt.executor.base_tool import BaseTool
-
+from mote.executor.base_tool import BaseTool
 
 # ---------------------------------------------------------------------------
 # Fake Role publishing a capability allowlist
@@ -181,7 +180,7 @@ class CapRole:
         ``ask_answers`` may be a callable(items) -> AskUserQuestionAnswers or a
         pre-built AskUserQuestionAnswers; absent it returns empty answers.
         """
-        from metagpt.common.schema import AskUserQuestionAnswers
+        from mote.common.schema import AskUserQuestionAnswers
 
         self.ask_question_items.append(questions)
         answers = self.ask_answers

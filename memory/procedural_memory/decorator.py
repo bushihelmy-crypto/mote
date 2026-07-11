@@ -2,28 +2,19 @@
 
 import asyncio
 import functools
-from typing import Any, Callable, Coroutine, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.utils.async_helper import run_coroutine_sync
-from metagpt.common.utils.exceptions import handle_exception
-from metagpt.memory.procedural_memory.context_builders import (
-    BaseContextBuilder,
-    SimpleContextBuilder,
-)
-from metagpt.memory.procedural_memory.manager import ExperienceManager, get_exp_manager
-from metagpt.memory.procedural_memory.perfect_judges import (
-    BasePerfectJudge,
-    SimplePerfectJudge,
-)
-from metagpt.memory.procedural_memory.schema import Experience, Metric, QueryType, Score
-from metagpt.memory.procedural_memory.scorers import BaseScorer, SimpleScorer
-from metagpt.memory.procedural_memory.serializers import (
-    BaseSerializer,
-    SimpleSerializer,
-)
+from mote.common.config.loader import load_config
+from mote.common.utils.async_helper import run_coroutine_sync
+from mote.common.utils.exceptions import handle_exception
+from mote.memory.procedural_memory.context_builders import BaseContextBuilder, SimpleContextBuilder
+from mote.memory.procedural_memory.manager import ExperienceManager, get_exp_manager
+from mote.memory.procedural_memory.perfect_judges import BasePerfectJudge, SimplePerfectJudge
+from mote.memory.procedural_memory.schema import Experience, Metric, QueryType, Score
+from mote.memory.procedural_memory.scorers import BaseScorer, SimpleScorer
+from mote.memory.procedural_memory.serializers import BaseSerializer, SimpleSerializer
 
 ReturnType = TypeVar("ReturnType")
 
@@ -59,9 +50,9 @@ def exp_cache(
         tag: An optional tag for the experience. Default to `ClassName.method_name` or `function_name`.
     """
 
-    def decorator(func: Callable[..., ReturnType]) -> Callable[..., ReturnType]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        async def get_or_create(args: Any, kwargs: Any) -> ReturnType:
+        async def get_or_create(args: Any, kwargs: Any) -> Any:
             config = load_config()
 
             if not config.exp_pool.enabled:
@@ -112,11 +103,11 @@ class ExpCacheHandler(BaseModel):
     serializer: Optional[BaseSerializer] = None
     tag: Optional[str] = None
 
-    _exps: list[Experience] = None
+    _exps: list[Experience] = []
     _req: str = ""
     _resp: str = ""
     _raw_resp: Any = None
-    _score: Score = None
+    _score: Optional[Score] = None
 
     @model_validator(mode="after")
     def initialize(self):
@@ -141,11 +132,14 @@ class ExpCacheHandler(BaseModel):
     async def fetch_experiences(self):
         """Fetch experiences by query_type."""
 
+        assert self.exp_manager is not None, "initialize() populates exp_manager"
         self._exps = await self.exp_manager.query_exps(self._req, query_type=self.query_type, tag=self.tag)
 
     async def get_one_perfect_exp(self) -> Optional[Any]:
         """Get a potentially perfect experience, and resolve resp."""
 
+        assert self.exp_perfect_judge is not None, "initialize() populates exp_perfect_judge"
+        assert self.serializer is not None, "initialize() populates serializer"
         for exp in self._exps:
             if await self.exp_perfect_judge.is_perfect_exp(exp, self._req, *self.args, **self.kwargs):
                 return self.serializer.deserialize_resp(exp.resp)
@@ -156,6 +150,7 @@ class ExpCacheHandler(BaseModel):
         """Execute the function, and save resp."""
 
         self._raw_resp = await self._execute_function()
+        assert self.serializer is not None, "initialize() populates serializer"
         self._resp = self.serializer.serialize_resp(self._raw_resp)
 
     @handle_exception
@@ -172,17 +167,19 @@ class ExpCacheHandler(BaseModel):
     async def evaluate_experience(self):
         """Evaluate the experience, and save the score."""
 
+        assert self.exp_scorer is not None, "initialize() populates exp_scorer"
         self._score = await self.exp_scorer.evaluate(self._req, self._resp)
 
     def save_experience(self):
         """Save the new experience."""
 
-        exp = Experience(req=self._req, resp=self._resp, tag=self.tag, metric=Metric(score=self._score))
+        exp = Experience(req=self._req, resp=self._resp, tag=self.tag or "", metric=Metric(score=self._score))
+        assert self.exp_manager is not None, "initialize() populates exp_manager"
         self.exp_manager.create_exp(exp)
         self._log_exp(exp)
 
     @staticmethod
-    def choose_wrapper(func, wrapped_func: Coroutine):
+    def choose_wrapper(func, wrapped_func: Callable):
         """Choose how to run wrapped_func based on whether the function is asynchronous."""
 
         async def async_wrapper(*args, **kwargs):
@@ -210,6 +207,7 @@ class ExpCacheHandler(BaseModel):
         return self.func.__name__
 
     async def _build_context(self) -> str:
+        assert self.context_builder is not None, "initialize() populates context_builder"
         self.context_builder.exps = self._exps
 
         return await self.context_builder.build(self.kwargs["req"])

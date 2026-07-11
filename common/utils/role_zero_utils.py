@@ -4,16 +4,11 @@ import json
 from datetime import datetime
 from typing import Optional, Tuple
 
-from metagpt.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
-from metagpt.common.prompt.role import (
-    SUMMARIZE_PROBLEM_WHEN_DUPLICATE,
-)
-from metagpt.common.schema import Message, UserMessage
-from metagpt.common.utils.common import (
-    extract_and_encode_images,
-    extract_and_encode_pdfs,
-)
-from metagpt.common.utils.stream_xml import LexerState, PythonObjectParser
+from mote.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
+from mote.common.prompt.role import SUMMARIZE_PROBLEM_WHEN_DUPLICATE
+from mote.common.schema import Message, UserMessage
+from mote.common.utils.common import extract_and_encode_images, extract_and_encode_pdfs
+from mote.common.utils.stream_xml import LexerState, PythonObjectParser
 
 
 def attach_media(memory: list[Message], k: int = 3) -> list[Message]:
@@ -105,10 +100,7 @@ def call_signature(command_calls: Optional[list[dict]]) -> str:
     (``command_name``) and the recorded TOOL_CALLS metadata (``name``).
     """
     return json.dumps(
-        [
-            {"name": c.get("command_name") or c.get("name"), "args": c.get("args") or {}}
-            for c in (command_calls or [])
-        ],
+        [{"name": c.get("command_name") or c.get("name"), "args": c.get("args") or {}} for c in (command_calls or [])],
         sort_keys=True,
         ensure_ascii=False,
     )

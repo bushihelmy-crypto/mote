@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.control (router-control holds + target resolution)."""
+"""Tests for mote.router.control (router-control holds + target resolution)."""
 from __future__ import annotations
 
 import pytest
 
-from metagpt.router.control import (
+from mote.router.control import (
     DEFAULT_HOLD_TTL_SECONDS,
     RouterControlHold,
     RouterControlHoldStore,
@@ -57,8 +57,12 @@ class TestResolveControlTarget:
 class TestRouterControlHoldExpiry:
     def _hold(self, **kw):
         defaults = dict(
-            name="strong", tier=3, target_id="model:strong", evidence="",
-            started_at_monotonic=100.0, last_activity_at_monotonic=100.0,
+            name="strong",
+            tier=3,
+            target_id="model:strong",
+            evidence="",
+            started_at_monotonic=100.0,
+            last_activity_at_monotonic=100.0,
         )
         defaults.update(kw)
         return RouterControlHold(**defaults)

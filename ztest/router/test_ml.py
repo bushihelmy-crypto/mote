@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the metagpt.router.ml package (model-free pieces + graceful fallback).
+"""Tests for the mote.router.ml package (model-free pieces + graceful fallback).
 
 The heavy trained bundle (LightGBM / ONNX / sklearn) is NOT vendored, so these
 tests exercise only the deterministic, import-safe layers: trajectory
@@ -13,13 +13,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from metagpt.router.ml.config import (
-    MODEL_BUNDLE_NAME,
-    default_model_dir,
-    load_runtime_config,
-)
-from metagpt.router.ml.engine import SquillaMLEngine
-from metagpt.router.ml.features import (
+from mote.router.ml.config import MODEL_BUNDLE_NAME, default_model_dir, load_runtime_config
+from mote.router.ml.engine import SquillaMLEngine
+from mote.router.ml.features import (
     CONTEXT_DIMS,
     HANDCRAFTED_DIMS,
     HIST_DIMS,
@@ -28,10 +24,10 @@ from metagpt.router.ml.features import (
     extract_handcrafted,
     extract_hist_features,
 )
-from metagpt.router.ml.flags import RoutingFlags, compute_flags
-from metagpt.router.ml.inference.postprocess import apply_postprocess
-from metagpt.router.ml.inference.types import InferenceRequest
-from metagpt.router.ml.predictor import (
+from mote.router.ml.flags import RoutingFlags, compute_flags
+from mote.router.ml.inference.postprocess import apply_postprocess
+from mote.router.ml.inference.types import InferenceRequest
+from mote.router.ml.predictor import (
     ROUTE_CLASSES,
     _apply_flag_overrides,
     _apply_margin_upgrade,
@@ -39,7 +35,7 @@ from metagpt.router.ml.predictor import (
     _prompt_hint_locale,
     _select_model,
 )
-from metagpt.router.ml.trajectory import Trajectory, TurnDecision, classify
+from mote.router.ml.trajectory import Trajectory, TurnDecision, classify
 
 
 @pytest.fixture(scope="module")
@@ -48,8 +44,9 @@ def config() -> dict:
 
 
 def _turn(idx, route_class, difficulty=1.0, margin=0.5):
-    return TurnDecision(turn_index=idx, route_class=route_class, difficulty=difficulty,
-                        margin=margin, top1_label=route_class)
+    return TurnDecision(
+        turn_index=idx, route_class=route_class, difficulty=difficulty, margin=margin, top1_label=route_class
+    )
 
 
 def _flags(**kw) -> RoutingFlags:
@@ -235,8 +232,11 @@ class TestEngineFallback:
     def test_predict_returns_none_when_unavailable(self, tmp_path):
         engine = SquillaMLEngine(model_dir=tmp_path / "no-bundle")
         req = InferenceRequest(
-            current_user_text="x", history_user_texts=[], prev_assistant_text=None,
-            prev_assistant_usage=None, prev_route_decisions=[],
+            current_user_text="x",
+            history_user_texts=[],
+            prev_assistant_text=None,
+            prev_assistant_usage=None,
+            prev_route_decisions=[],
         )
         assert engine.predict(req) is None
 

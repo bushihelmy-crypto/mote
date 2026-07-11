@@ -37,7 +37,7 @@ from typing import List, Optional, Union
 
 # ``ApplyPatchError`` lives in the unified exception package; re-exported here so
 # existing ``from ...parser import ApplyPatchError`` call sites keep working.
-from metagpt.common.exception import ApplyPatchError
+from mote.common.exception import ApplyPatchError
 
 # --- Markers (byte-for-byte the codex constants) ---
 BEGIN_PATCH_MARKER = "*** Begin Patch"
@@ -59,6 +59,13 @@ _UNEXPECTED_UPDATE_LINE = (
     "Unexpected line found in update hunk: '${line}'. Every line should start "
     "with ' ' (context line), '+' (added line), or '-' (removed line)"
 )
+# Fixed (non-interpolated) parse-error sentences, hoisted so each duplicated
+# message lives in one place. Interpolated variants stay as ``Template`` above.
+_MSG_MUST_BEGIN = "The first line of the patch must be '*** Begin Patch'"
+_MSG_MUST_END = "The last line of the patch must be '*** End Patch'"
+_MSG_EMPTY_UPDATE_HUNK = "Update hunk does not contain any lines"
+_MSG_EMPTY_UPDATE_FILE_HUNK = "Update file hunk for path '${path}' is empty"
+_MSG_EXPECTED_CONTEXT_MARKER = "Expected update hunk to start with a @@ context marker, got: '${line}'"
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +159,7 @@ class _StreamingPatchParser:
                 self._process_line(line)
 
         if self._mode != _ENDED_PATCH:
-            raise ApplyPatchError(
-                "The last line of the patch must be '*** End Patch'"
-            )
+            raise ApplyPatchError(_MSG_MUST_END)
         return self._hunks
 
     # -- helpers --
@@ -167,19 +172,15 @@ class _StreamingPatchParser:
             return
         if not last.chunks and self._mode == _UPDATE_FILE:
             raise ApplyPatchError(
-                f"Update file hunk for path '{last.path}' is empty",
+                Template(_MSG_EMPTY_UPDATE_FILE_HUNK).safe_substitute(path=last.path),
                 self._update_hunk_line_number,
             )
         if last.chunks:
             chunk = last.chunks[-1]
             if not chunk.old_lines and not chunk.new_lines:
                 if line == END_PATCH_MARKER:
-                    raise ApplyPatchError(
-                        "Update hunk does not contain any lines", self._line_number
-                    )
-                raise ApplyPatchError(
-                    Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number
-                )
+                    raise ApplyPatchError(_MSG_EMPTY_UPDATE_HUNK, self._line_number)
+                raise ApplyPatchError(Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number)
 
     def _handle_hunk_headers_and_end_patch(self, trimmed: str) -> bool:
         if trimmed == END_PATCH_MARKER:
@@ -188,17 +189,17 @@ class _StreamingPatchParser:
             return True
         if trimmed.startswith(ADD_FILE_MARKER):
             self._ensure_update_hunk_is_not_empty(trimmed)
-            self._hunks.append(AddFile(path=trimmed[len(ADD_FILE_MARKER):], contents=""))
+            self._hunks.append(AddFile(path=trimmed[len(ADD_FILE_MARKER) :], contents=""))
             self._mode = _ADD_FILE
             return True
         if trimmed.startswith(DELETE_FILE_MARKER):
             self._ensure_update_hunk_is_not_empty(trimmed)
-            self._hunks.append(DeleteFile(path=trimmed[len(DELETE_FILE_MARKER):]))
+            self._hunks.append(DeleteFile(path=trimmed[len(DELETE_FILE_MARKER) :]))
             self._mode = _DELETE_FILE
             return True
         if trimmed.startswith(UPDATE_FILE_MARKER):
             self._ensure_update_hunk_is_not_empty(trimmed)
-            self._hunks.append(UpdateFile(path=trimmed[len(UPDATE_FILE_MARKER):]))
+            self._hunks.append(UpdateFile(path=trimmed[len(UPDATE_FILE_MARKER) :]))
             self._mode = _UPDATE_FILE
             self._update_hunk_line_number = self._line_number
             return True
@@ -210,16 +211,12 @@ class _StreamingPatchParser:
             if trimmed == BEGIN_PATCH_MARKER:
                 self._mode = _STARTED_PATCH
                 return
-            raise ApplyPatchError(
-                "The first line of the patch must be '*** Begin Patch'"
-            )
+            raise ApplyPatchError(_MSG_MUST_BEGIN)
 
         if self._mode == _STARTED_PATCH:
             if self._handle_hunk_headers_and_end_patch(trimmed):
                 return
-            raise ApplyPatchError(
-                Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number
-            )
+            raise ApplyPatchError(Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number)
 
         if self._mode == _ADD_FILE:
             if self._handle_hunk_headers_and_end_patch(trimmed):
@@ -229,16 +226,12 @@ class _StreamingPatchParser:
                 if isinstance(last, AddFile):
                     last.contents += line[1:] + "\n"
                     return
-            raise ApplyPatchError(
-                Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number
-            )
+            raise ApplyPatchError(Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number)
 
         if self._mode == _DELETE_FILE:
             if self._handle_hunk_headers_and_end_patch(trimmed):
                 return
-            raise ApplyPatchError(
-                Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number
-            )
+            raise ApplyPatchError(Template(_INVALID_HUNK_HEADER).safe_substitute(got=trimmed), self._line_number)
 
         if self._mode == _UPDATE_FILE:
             self._process_update_line(line)
@@ -247,9 +240,7 @@ class _StreamingPatchParser:
         # _ENDED_PATCH
         if trimmed == "":
             return
-        raise ApplyPatchError(
-            "The last line of the patch must be '*** End Patch'"
-        )
+        raise ApplyPatchError(_MSG_MUST_END)
 
     def _process_update_line(self, line: str) -> None:
         update_line = line.rstrip()
@@ -267,43 +258,34 @@ class _StreamingPatchParser:
         if chunks and chunks[-1].is_end_of_file:
             if update_line == "":
                 return
-            if update_line != EMPTY_CHANGE_CONTEXT_MARKER and not update_line.startswith(
-                CHANGE_CONTEXT_MARKER
-            ):
+            if update_line != EMPTY_CHANGE_CONTEXT_MARKER and not update_line.startswith(CHANGE_CONTEXT_MARKER):
                 raise ApplyPatchError(
-                    f"Expected update hunk to start with a @@ context marker, got: '{line}'",
+                    Template(_MSG_EXPECTED_CONTEXT_MARKER).safe_substitute(line=line),
                     self._line_number,
                 )
 
         # Move destination (only valid before any chunk and only once).
         if not chunks and last.move_path is None and update_line.startswith(MOVE_TO_MARKER):
-            last.move_path = update_line[len(MOVE_TO_MARKER):]
+            last.move_path = update_line[len(MOVE_TO_MARKER) :]
             return
 
         # A @@ marker immediately after an empty chunk is invalid.
         if (
-            update_line == EMPTY_CHANGE_CONTEXT_MARKER
-            or update_line.startswith(CHANGE_CONTEXT_MARKER)
+            update_line == EMPTY_CHANGE_CONTEXT_MARKER or update_line.startswith(CHANGE_CONTEXT_MARKER)
         ) and last_chunk_empty():
-            raise ApplyPatchError(
-                Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number
-            )
+            raise ApplyPatchError(Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number)
 
         if update_line == EMPTY_CHANGE_CONTEXT_MARKER:
             chunks.append(UpdateFileChunk(change_context=None))
             return
 
         if update_line.startswith(CHANGE_CONTEXT_MARKER):
-            chunks.append(
-                UpdateFileChunk(change_context=update_line[len(CHANGE_CONTEXT_MARKER):])
-            )
+            chunks.append(UpdateFileChunk(change_context=update_line[len(CHANGE_CONTEXT_MARKER) :]))
             return
 
         if update_line == EOF_MARKER:
             if last_chunk_empty():
-                raise ApplyPatchError(
-                    "Update hunk does not contain any lines", self._line_number
-                )
+                raise ApplyPatchError(_MSG_EMPTY_UPDATE_HUNK, self._line_number)
             if chunks:
                 chunks[-1].is_end_of_file = True
             return
@@ -337,13 +319,11 @@ class _StreamingPatchParser:
 
         if chunks and (chunks[-1].old_lines or chunks[-1].new_lines):
             raise ApplyPatchError(
-                f"Expected update hunk to start with a @@ context marker, got: '{line}'",
+                Template(_MSG_EXPECTED_CONTEXT_MARKER).safe_substitute(line=line),
                 self._line_number,
             )
 
-        raise ApplyPatchError(
-            Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number
-        )
+        raise ApplyPatchError(Template(_UNEXPECTED_UPDATE_LINE).safe_substitute(line=line), self._line_number)
 
 
 # ---------------------------------------------------------------------------
@@ -357,8 +337,8 @@ def _check_start_and_end_lines_strict(lines: List[str]) -> None:
     if first == BEGIN_PATCH_MARKER and last == END_PATCH_MARKER:
         return
     if first != BEGIN_PATCH_MARKER:
-        raise ApplyPatchError("The first line of the patch must be '*** Begin Patch'")
-    raise ApplyPatchError("The last line of the patch must be '*** End Patch'")
+        raise ApplyPatchError(_MSG_MUST_BEGIN)
+    raise ApplyPatchError(_MSG_MUST_END)
 
 
 def _check_patch_boundaries_lenient(lines: List[str]) -> List[str]:
@@ -367,11 +347,7 @@ def _check_patch_boundaries_lenient(lines: List[str]) -> List[str]:
         _check_start_and_end_lines_strict(lines)
         return lines
     except ApplyPatchError as strict_error:
-        if (
-            len(lines) >= 4
-            and lines[0] in ("<<EOF", "<<'EOF'", '<<"EOF"')
-            and lines[-1].endswith("EOF")
-        ):
+        if len(lines) >= 4 and lines[0] in ("<<EOF", "<<'EOF'", '<<"EOF"') and lines[-1].endswith("EOF"):
             inner = lines[1:-1]
             _check_start_and_end_lines_strict(inner)
             return inner

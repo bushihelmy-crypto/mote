@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.tool_registry.ToolRegistry``.
+"""Unit tests for ``mote.executor.tool_registry.ToolRegistry``.
 
 Uses the ``fresh_registry`` fixture (an isolated instance built via ``__new__``)
 so the process-wide singleton is never mutated.
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.base_tool import BaseTool
+from mote.executor.base_tool import BaseTool
 
 
 def _tool(name: str = "", aliases=None):

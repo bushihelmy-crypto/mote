@@ -3,7 +3,7 @@
 Lives in ``common/schema`` alongside ``tool_config.py`` so both ``RoleSchema``
 (which declares it) and ``ToolExecutor`` (which enforces it) can reference it
 without importing the executor package. The enforcement logic stays in
-``metagpt.executor.permission``.
+``mote.executor.permission``.
 
 Backward compatibility: a Role with ``permissions=None`` (the default) keeps the
 old behavior — tools run with no approval layer. The engine is only engaged when
@@ -16,8 +16,8 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 # Single source of truth for the approval-mode Literal (pure-data, no executor dep).
-from metagpt.common.schema.permission_types import PermissionMode
-from metagpt.common.schema.sandbox_runtime_config import SandboxRuntimeConfig
+from mote.common.schema.permission_types import PermissionMode
+from mote.common.schema.sandbox_runtime_config import SandboxRuntimeConfig
 
 # Sandbox axis — ORTHOGONAL to the approval mode above. The mode decides whether
 # to ask the user; the sandbox decides the filesystem/network boundary a tool

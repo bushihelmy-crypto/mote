@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Bash tool (``metagpt.executor.tools.bash``).
+"""Tests for the Bash tool (``mote.executor.tools.bash``).
 
 Drives the REAL subprocess path (aexecute) in the per-test workspace. Covers
-stdout capture, stderr capture, exit-code annotation, cwd persistence across
-calls via the get_cwd/set_cwd capabilities (a ``cd`` survives), the empty-command
-guard, and the ``_split_probe`` pure helper in isolation.
+stdout capture, stderr capture, exit-code annotation, the stable-cwd model
+(a ``cd`` does NOT persist — Codex-aligned), per-call ``workdir`` scoping, and
+the empty-command guard.
 """
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.bash import Bash, _CWD_MARKER
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.bash import Bash
 
 from .conftest import CapRole, bind, run
 
@@ -68,16 +68,16 @@ class TestBashCwd:
         out = _bash(tool, command="pwd")
         assert os.path.realpath(out) == os.path.realpath(str(sub))
 
-    def test_cd_persists_via_set_cwd(self, workspace):
+    def test_cd_does_not_persist(self, workspace):
         sub = workspace / "deep"
         sub.mkdir()
         tool, role = _ready(workspace)
         _bash(tool, command="cd deep")
-        # The probe captured the new directory and wrote it back through set_cwd.
-        assert os.path.realpath(role.get_cwd()) == os.path.realpath(str(sub))
-        # A follow-up command now runs from the persisted directory.
+        # A `cd` inside the command does NOT drift the session's cwd (Codex model).
+        assert os.path.realpath(role.get_cwd()) == os.path.realpath(str(workspace))
+        # A follow-up command still runs from the stable base dir, not `deep`.
         out = _bash(tool, command="pwd")
-        assert os.path.realpath(out) == os.path.realpath(str(sub))
+        assert os.path.realpath(out) == os.path.realpath(str(workspace))
 
     def test_invalid_cwd_falls_back(self, workspace):
         role = CapRole(cwd=str(workspace / "does-not-exist"))
@@ -136,36 +136,15 @@ class TestBashWorkdir:
         with pytest.raises(ToolError, match="workdir does not exist"):
             _bash(tool, command="pwd", workdir="nope")
 
-
-# --- Pure-helper unit tests --------------------------------------------------
-
-
-class TestSplitProbe:
-    def test_splits_output_code_and_cwd(self):
-        stdout = f"line1\nline2\n{_CWD_MARKER}0:/home/user\n"
-        output, rc, cwd = Bash._split_probe(stdout)
-        assert output == "line1\nline2"
-        assert rc == 0
-        assert cwd == "/home/user"
-
-    def test_nonzero_code_parsed(self):
-        stdout = f"oops\n{_CWD_MARKER}7:/tmp\n"
-        output, rc, cwd = Bash._split_probe(stdout)
-        assert output == "oops"
-        assert rc == 7
-        assert cwd == "/tmp"
-
-    def test_missing_marker_returns_raw(self):
-        output, rc, cwd = Bash._split_probe("raw output, no probe")
-        assert output == "raw output, no probe"
-        assert rc == 0
-        assert cwd == ""
-
-    def test_empty_stdout(self):
-        assert Bash._split_probe("") == ("", 0, "")
-
-    def test_bad_code_defaults_zero(self):
-        stdout = f"x\n{_CWD_MARKER}notanint:/p\n"
-        output, rc, cwd = Bash._split_probe(stdout)
-        assert rc == 0
-        assert cwd == "/p"
+    def test_workdir_scopes_one_call(self, workspace):
+        sub = workspace / "scoped"
+        sub.mkdir()
+        tool, role = _ready(workspace)
+        # The scoped call runs in the subdirectory...
+        out = _bash(tool, command="pwd", workdir="scoped")
+        assert os.path.realpath(out) == os.path.realpath(str(sub))
+        # ...but the next call (no workdir) is back in the stable base dir.
+        out2 = _bash(tool, command="pwd")
+        assert os.path.realpath(out2) == os.path.realpath(str(workspace))
+        # And the session's cwd never moved.
+        assert os.path.realpath(role.get_cwd()) == os.path.realpath(str(workspace))

@@ -3,7 +3,7 @@
 Mirrors ``BaseTool``'s pattern (``name`` / ``description`` / ``call()`` with
 auto-extracted metadata from docstrings) but does NOT share an inheritance
 hierarchy. Both classes share the leaf-level parsing utilities from
-``metagpt.common.utils.docstring``.
+``mote.common.utils.docstring``.
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Optional, get_type_hints
 
-from metagpt.common.utils.docstring import first_line, parse_section
-from metagpt.executor.tasks.bggraph.types import GraphState, Stage
-from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
+from mote.common.utils.docstring import first_line, parse_section
+from mote.executor.tasks.bggraph.types import GraphState, Stage
+from mote.executor.tool_spec_adapter import annotation_to_json_schema
 
 # ---------------------------------------------------------------------------
 # Param source marker
@@ -167,7 +167,7 @@ class BaseNode(ABC):
         derived from ``get_params()`` types and descriptions. Params without a
         declared type map to ``{"type": "string"}`` (permissive fallback).
 
-        Reuses :func:`~metagpt.executor.tool_spec_adapter.annotation_to_json_schema`
+        Reuses :func:`~mote.executor.tool_spec_adapter.annotation_to_json_schema`
         so the type mapping is consistent with the tool system.
         """
 

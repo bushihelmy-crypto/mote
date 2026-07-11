@@ -19,7 +19,7 @@ tool's output. Keeping it here means the dependency points downward
 ``ContextManagerConfig`` composes :class:`ToolResultLimitConfig` and re-exports
 these constants.
 
-Disk writes go through :mod:`metagpt.common.disk.disk_io` so this shares the exact
+Disk writes go through :mod:`mote.common.disk.disk_io` so this shares the exact
 read/write primitives with ``tasks/disk_output.py`` (per the project decision
 to factor common disk I/O into one place).
 """
@@ -29,41 +29,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Union
 
-from metagpt.common.schema import (
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.disk import disk_io
+from mote.common.logs import logger
+from mote.common.schema import (
     DEFAULT_MAX_RESULT_SIZE_CHARS,
     PERSISTED_OUTPUT_CLOSE_TAG,
     PERSISTED_OUTPUT_OPEN_TAG,
     PREVIEW_SIZE_BYTES,
     TOOL_RESULTS_SUBDIR,
 )
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.logs import logger
-from metagpt.common.disk import disk_io
+from mote.common.text import cap_head, format_file_size
 
 PathLike = Union[str, Path]
-
-
-def _one_decimal(value: float) -> str:
-    """``value.toFixed(1)`` with a trailing ``.0`` stripped (CC formatting)."""
-    return f"{value:.1f}".removesuffix(".0")
-
-
-def format_file_size(size_in_bytes: int) -> str:
-    """Human-readable byte size, matching CC ``formatFileSize``.
-
-    Bytes below 1 KB, else KB / MB / GB with one decimal (trailing ``.0``
-    stripped) so the persisted-output message reads like CC's.
-    """
-    kb = size_in_bytes / 1024
-    if kb < 1:
-        return f"{size_in_bytes} bytes"
-    if kb < 1024:
-        return f"{_one_decimal(kb)}KB"
-    mb = kb / 1024
-    if mb < 1024:
-        return f"{_one_decimal(mb)}MB"
-    gb = mb / 1024
-    return f"{_one_decimal(gb)}GB"
 
 
 def persistence_threshold(declared_max_result_size_chars: int) -> int:
@@ -141,8 +119,11 @@ def _truncate_with_notice(output: str, threshold: int) -> str:
     appends how much was dropped, so the model knows the result is incomplete.
     """
     preview, _ = generate_preview(output, threshold)
-    dropped = len(output) - len(preview)
-    return f"{preview}\n\n[output truncated: {format_file_size(dropped)} omitted of {format_file_size(len(output))} total]"
+    _, el = cap_head(output, len(preview))
+    if el is None:
+        return preview
+    marker = el.render_for_model(noun="", format_count=format_file_size, with_total=True)
+    return f"{preview}\n\n{marker}"
 
 
 def enforce_tool_result_limit(

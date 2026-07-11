@@ -17,21 +17,16 @@ pytest.importorskip("textual")
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 
-from metagpt.cli.common.view import RetryStatus, ToolCallCompleted, ToolCallStarted, UsageUpdated
-from metagpt.cli.consumers.textual.style import textual_css_vars
-from metagpt.cli.consumers.textual.widgets import (
-    AssistantBlock,
-    StatusBar,
-    ToolCallWidget,
-    UserMessageRow,
-)
+from mote.cli.consumers.textual.style import textual_css_vars
+from mote.cli.consumers.textual.widgets import AssistantBlock, StatusBar, ToolCallWidget, UserMessageRow
+from mote.cli.contracts.view import RetryStatus, ToolCallCompleted, ToolCallStarted, UsageUpdated
 
 
 class _Harness(App):
     """Minimal host that mounts arbitrary widgets into a scroll region.
 
     Provides the same custom CSS variables (``$brand`` / ``$dim`` / …) the real
-    :class:`MetaGPTApp` injects, so widgets whose ``DEFAULT_CSS`` references them
+    :class:`MoteApp` injects, so widgets whose ``DEFAULT_CSS`` references them
     (``StatusBar``, ``PromptInput``) parse when mounted here.
     """
 
@@ -139,7 +134,7 @@ async def test_unrendered_selectable_static_returns_none():
     """Before any render (no strip cache) selection extraction is a safe no-op."""
     from textual.selection import Selection
 
-    from metagpt.cli.consumers.textual.widgets import SelectableStatic
+    from mote.cli.consumers.textual.widgets import SelectableStatic
 
     widget = SelectableStatic("never rendered")
     assert widget.get_selection(Selection(None, None)) is None
@@ -223,9 +218,7 @@ async def test_partial_selection_highlights_only_selected_span():
         block.screen.selections = {block: Selection(Offset(2, 0), Offset(5, 0))}
         await pilot.pause()
         strip = block.render_line(0)
-        highlighted_cells = [
-            seg.style.bgcolor == sel_bg for seg in strip for _ in range(seg.cell_length)
-        ]
+        highlighted_cells = [seg.style.bgcolor == sel_bg for seg in strip for _ in range(seg.cell_length)]
         assert any(highlighted_cells)  # something is highlighted
         assert not all(highlighted_cells)  # but NOT the whole line
         # The highlight band is exactly the 3 selected cells [2, 5).
@@ -254,7 +247,7 @@ async def test_partial_selection_copies_only_selected_text():
 async def test_user_message_row_mounts_with_text():
     from rich.console import Console
 
-    from metagpt.cli.consumers.render.builders import user_message_row
+    from mote.cli.consumers.render.builders import user_message_row
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(UserMessageRow("fix the bug in foo.py"))
@@ -289,9 +282,7 @@ async def test_status_bar_derives_total_from_in_out():
 async def test_status_bar_set_retry_shows_countdown():
     async with _Harness().run_test() as pilot:
         bar = await pilot.app.add(StatusBar())
-        bar.set_retry(
-            RetryStatus(attempt=2, max_attempts=6, delay_ms=3000.0, error_type="LLMOverloadedError")
-        )
+        bar.set_retry(RetryStatus(attempt=2, max_attempts=6, delay_ms=3000.0, error_type="LLMOverloadedError"))
         assert bar.retry_msg
         assert bar.retry_secs == pytest.approx(3.0)
         rendered = bar.render().plain
@@ -361,7 +352,7 @@ async def test_status_bar_idle_resets_elapsed():
 
 
 def test_format_tok_compacts_counts():
-    from metagpt.cli.consumers.textual.widgets import _format_tok
+    from mote.cli.consumers.textual.widgets import _format_tok
 
     assert _format_tok(840) == "840"
     assert _format_tok(3400) == "3.4k"
@@ -376,7 +367,7 @@ def test_format_tok_compacts_counts():
 @pytest.mark.asyncio
 async def test_status_bar_thinking_shows_reasoning_label():
     """A reasoning stream flips the bar to the distinct ``✻ 思考中`` state."""
-    from metagpt.cli.consumers.render.palette import COMPACT
+    from mote.cli.consumers.render.palette import COMPACT
 
     async with _Harness().run_test() as pilot:
         bar = await pilot.app.add(StatusBar())
@@ -456,7 +447,7 @@ async def test_prompt_multiline_paste_stashes_placeholder_and_expands():
     """
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -484,7 +475,7 @@ async def test_prompt_carriage_return_paste_is_multiline():
     """
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -502,7 +493,7 @@ async def test_prompt_singleline_paste_inserts_verbatim():
     """A single-line paste keeps Textual's default behaviour (no placeholder)."""
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -519,7 +510,7 @@ async def test_prompt_paste_mixed_with_typed_text_expands_inline():
     """A placeholder embedded among typed text expands in place on submit."""
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -546,7 +537,7 @@ async def test_prompt_base_paste_handler_is_prevented():
     """
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -569,7 +560,7 @@ async def test_prompt_dropped_file_path_is_cleaned(tmp_path):
     """
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     dropped = tmp_path / "a file (1).txt"
     dropped.write_text("hi", encoding="utf-8")
@@ -592,7 +583,7 @@ async def test_prompt_nonexistent_path_falls_through_to_text(tmp_path):
     """A slash-leading string that isn't an existing file stays ordinary text."""
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -607,7 +598,7 @@ async def test_prompt_escape_clears_field():
     """A single Esc empties the prompt and drops any staged paste text."""
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -639,7 +630,7 @@ async def test_prompt_dropped_image_is_staged_as_token(tmp_path):
     """
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -665,7 +656,7 @@ async def test_prompt_consume_images_drops_removed_tokens(tmp_path):
     """An image whose token was deleted from the field is not sent."""
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -684,7 +675,7 @@ async def test_prompt_dropped_nonimage_file_stays_a_path(tmp_path):
     """A dropped non-image file is still inserted as a (cleaned) path, not staged."""
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     doc = tmp_path / "notes.txt"
     doc.write_text("hi", encoding="utf-8")
@@ -701,8 +692,8 @@ async def test_prompt_dropped_nonimage_file_stays_a_path(tmp_path):
 @pytest.mark.asyncio
 async def test_media_row_renders_inline_image(tmp_path):
     """``MediaRow`` paints an image inline when the ref is a readable image file."""
-    from metagpt.cli.common.view import MediaBlock
-    from metagpt.cli.consumers.textual.widgets import MediaRow
+    from mote.cli.consumers.textual.widgets import MediaRow
+    from mote.cli.contracts.view import MediaBlock
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -718,8 +709,8 @@ async def test_media_row_renders_inline_image(tmp_path):
 @pytest.mark.asyncio
 async def test_media_row_missing_image_degrades_to_caption():
     """A non-existent image ref degrades to the reference caption (no crash)."""
-    from metagpt.cli.common.view import MediaBlock
-    from metagpt.cli.consumers.textual.widgets import MediaRow
+    from mote.cli.consumers.textual.widgets import MediaRow
+    from mote.cli.contracts.view import MediaBlock
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(MediaRow(MediaBlock(media_kind="image", ref="/no/such.png")))
@@ -730,13 +721,11 @@ async def test_media_row_missing_image_degrades_to_caption():
 @pytest.mark.asyncio
 async def test_file_diff_row_renders_caption_and_diff():
     """``FileDiffRow`` builds a caption naming the file + the synthesized diff."""
-    from metagpt.cli.common.view import FileDiffBlock
-    from metagpt.cli.consumers.textual.widgets import FileDiffRow
+    from mote.cli.consumers.textual.widgets import FileDiffRow
+    from mote.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
-        row = await pilot.app.add(
-            FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n"))
-        )
+        row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")))
         from rich.console import Group
 
         content = row._Static__content
@@ -750,13 +739,11 @@ async def test_file_diff_row_renders_caption_and_diff():
 @pytest.mark.asyncio
 async def test_file_diff_row_caption_verb_for_creation():
     """A creation (empty old) labels the caption ``(created)``."""
-    from metagpt.cli.common.view import FileDiffBlock
-    from metagpt.cli.consumers.textual.widgets import FileDiffRow
+    from mote.cli.consumers.textual.widgets import FileDiffRow
+    from mote.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
-        row = await pilot.app.add(
-            FileDiffRow(FileDiffBlock(path="/tmp/new.py", old="", new="hi\n"))
-        )
+        row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/new.py", old="", new="hi\n")))
         caption = row._Static__content.renderables[0]
         assert "(created)" in caption.plain
 
@@ -777,8 +764,8 @@ def _has_link_span(text, url: str) -> bool:
 @pytest.mark.asyncio
 async def test_notice_row_linkifies_bare_url():
     """A URL in a system notice becomes a clickable link span."""
-    from metagpt.cli.common.view import Notice
-    from metagpt.cli.consumers.textual.widgets import NoticeRow
+    from mote.cli.consumers.textual.widgets import NoticeRow
+    from mote.cli.contracts.view import Notice
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(NoticeRow(Notice(text="see https://example.com now", level="info")))
@@ -788,9 +775,9 @@ async def test_notice_row_linkifies_bare_url():
 @pytest.mark.asyncio
 async def test_system_reminder_row_renders_note_glyph():
     """A SystemReminder renders as a dim ⚑ note carrying the summary text."""
-    from metagpt.cli.common.view import SystemReminder
-    from metagpt.cli.consumers.textual.style import NOTE
-    from metagpt.cli.consumers.textual.widgets import SystemReminderRow
+    from mote.cli.consumers.textual.style import NOTE
+    from mote.cli.consumers.textual.widgets import SystemReminderRow
+    from mote.cli.contracts.view import SystemReminder
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(SystemReminderRow(SystemReminder(text="Git status · Files changed")))
@@ -802,14 +789,12 @@ async def test_system_reminder_row_renders_note_glyph():
 @pytest.mark.asyncio
 async def test_conversation_compacted_row_renders_marker():
     """A ConversationCompacted renders the dim ✻ boundary with the retained count."""
-    from metagpt.cli.common.view import ConversationCompacted
-    from metagpt.cli.consumers.textual.style import COMPACT
-    from metagpt.cli.consumers.textual.widgets import ConversationCompactedRow
+    from mote.cli.consumers.textual.style import COMPACT
+    from mote.cli.consumers.textual.widgets import ConversationCompactedRow
+    from mote.cli.contracts.view import ConversationCompacted
 
     async with _Harness().run_test() as pilot:
-        row = await pilot.app.add(
-            ConversationCompactedRow(ConversationCompacted(summary="recap", message_count=5))
-        )
+        row = await pilot.app.add(ConversationCompactedRow(ConversationCompacted(summary="recap", message_count=5)))
         plain = row._Static__content.plain
         assert COMPACT in plain
         assert "对话已压缩" in plain
@@ -821,8 +806,8 @@ async def test_error_row_linkifies_bare_url():
     """A URL in an error message becomes a clickable link span (inside the bullet_row)."""
     from rich.console import Console
 
-    from metagpt.cli.common.view import ErrorRaised
-    from metagpt.cli.consumers.textual.widgets import ErrorRow
+    from mote.cli.consumers.textual.widgets import ErrorRow
+    from mote.cli.contracts.view import ErrorRaised
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(ErrorRow(ErrorRaised(text="failed: https://example.com/err")))
@@ -879,8 +864,15 @@ async def test_plain_click_on_link_does_not_open_url():
         pilot.app.open_url = lambda url, **kw: opened.append(url)
         # A real Click (ctrl=False) so the base handler can run without raising.
         event = Click(
-            widget=block, x=0, y=0, delta_x=0, delta_y=0, button=1,
-            shift=False, meta=False, ctrl=False,
+            widget=block,
+            x=0,
+            y=0,
+            delta_x=0,
+            delta_y=0,
+            button=1,
+            shift=False,
+            meta=False,
+            ctrl=False,
             style=Style(link="https://example.com"),
         )
         await block._on_click(event)

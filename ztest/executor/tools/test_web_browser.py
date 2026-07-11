@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._browser import _cap_text
-from metagpt.executor.tools.web_browser import WebBrowser
+from mote.common.text import cap_head_tail
+from mote.executor.dependency._browser import TEXT_MAX_CHARS
+from mote.executor.tools.web_browser import WebBrowser
 
 from .conftest import CapRole, bind, run
 
@@ -51,17 +52,12 @@ def _chromium_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _chromium_available(), reason="Playwright Chromium not available"
-)
+pytestmark = pytest.mark.skipif(not _chromium_available(), reason="Playwright Chromium not available")
 
 # A couple of offline pages.
 _PAGE_A = "data:text/html,<title>Alpha</title><body><h1>Alpha</h1><p>hello world</p></body>"
 _PAGE_B = "data:text/html,<title>Beta</title><body><p>second page</p></body>"
-_FORM = (
-    "data:text/html,<title>Form</title><body>"
-    "<input id='q' value=''><button id='go'>Go</button></body>"
-)
+_FORM = "data:text/html,<title>Form</title><body>" "<input id='q' value=''><button id='go'>Go</button></body>"
 
 # A page with several interactive elements for snapshot/ref tests.
 _INTERACTIVE = (
@@ -276,7 +272,7 @@ class TestTabs:
 
 class TestErrorsLifecycle:
     def test_unknown_action_errors(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_unknown")
 
@@ -288,7 +284,7 @@ class TestErrorsLifecycle:
         run(scenario())
 
     def test_navigate_requires_url(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_nourl")
 
@@ -406,9 +402,7 @@ class TestSnapshot:
             ref = _ref_for(snap, "Search products")
             assert ref is not None, snap
             await tool.call(action="type", selector=ref, text="laptop")
-            val = await tool.call(
-                action="eval", expression="document.getElementById('search').value"
-            )
+            val = await tool.call(action="eval", expression="document.getElementById('search').value")
             assert "laptop" in val
             await tool.call(action="close")
 
@@ -424,16 +418,14 @@ class TestSnapshot:
             ref = _ref_for(snap, "Search products")
             assert ref is not None, snap
             await tool.call(action="type", selector=f"[{ref}]", text="phone")
-            val = await tool.call(
-                action="eval", expression="document.getElementById('search').value"
-            )
+            val = await tool.call(action="eval", expression="document.getElementById('search').value")
             assert "phone" in val
             await tool.call(action="close")
 
         run(scenario())
 
     def test_stale_index_gives_actionable_error(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_stale")
 
@@ -522,7 +514,7 @@ class TestUnifiedTree:
         run(scenario())
 
     def test_navigation_invalidates_refs(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_tree_inval")
 
@@ -608,7 +600,7 @@ class TestUnifiedTree:
 
 class TestBlocker:
     def test_click_through_overlay_errors(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_overlay")
 
@@ -666,9 +658,7 @@ class TestWait:
             out = await tool.call(action="wait", expression="window.__done === true")
             assert "true" in out.lower()
             # The late element is now present.
-            val = await tool.call(
-                action="eval", expression="document.getElementById('late').textContent"
-            )
+            val = await tool.call(action="eval", expression="document.getElementById('late').textContent")
             assert "ready" in val
             await tool.call(action="close")
 
@@ -686,7 +676,7 @@ class TestWait:
         run(scenario())
 
     def test_wait_requires_one_of(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_wait_none")
 
@@ -726,12 +716,8 @@ class TestForms:
             )
             assert "filled 2" in out
             # Values landed in the DOM.
-            u = await tool.call(
-                action="eval", expression="document.getElementById('user').value"
-            )
-            p = await tool.call(
-                action="eval", expression="document.getElementById('pass').value"
-            )
+            u = await tool.call(action="eval", expression="document.getElementById('user').value")
+            p = await tool.call(action="eval", expression="document.getElementById('pass').value")
             assert "alice" in u
             assert "s3cr3t" in p
             await tool.call(action="close")
@@ -739,7 +725,7 @@ class TestForms:
         run(scenario())
 
     def test_fill_form_requires_fields(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_fill_empty")
 
@@ -761,9 +747,9 @@ class TestExtract:
             out = await tool.call(
                 action="extract",
                 schema={
-                    "title": "#hd",            # single → scalar text
-                    "items": "a.item",         # multiple → list of text
-                    "links": "a.item@href",    # multiple → list of attr
+                    "title": "#hd",  # single → scalar text
+                    "items": "a.item",  # multiple → list of text
+                    "links": "a.item@href",  # multiple → list of attr
                 },
             )
             import json
@@ -790,7 +776,7 @@ class TestExtract:
         run(scenario())
 
     def test_extract_requires_schema(self, caprole):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_extract_empty")
 
@@ -809,9 +795,7 @@ class TestEvalJson:
 
         async def scenario():
             await tool.call(action="navigate", url=_PAGE_A)
-            out = await tool.call(
-                action="eval", expression="({a: 1, b: [2, 3], c: 'x'})"
-            )
+            out = await tool.call(action="eval", expression="({a: 1, b: [2, 3], c: 'x'})")
             import json
 
             data = json.loads(out)
@@ -906,13 +890,11 @@ class TestAssist:
 
 
 def test_cap_text_under_limit_unchanged():
-    assert _cap_text("short") == "short"
+    assert cap_head_tail("short", TEXT_MAX_CHARS)[0] == "short"
 
 
 def test_cap_text_over_limit_truncates():
-    from metagpt.executor.dependency._browser import TEXT_MAX_CHARS
-
     big = "x" * (TEXT_MAX_CHARS + 100)
-    out = _cap_text(big)
+    out = cap_head_tail(big, TEXT_MAX_CHARS)[0]
     assert "omitted" in out
     assert len(out) < len(big)

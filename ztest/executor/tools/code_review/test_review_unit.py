@@ -9,10 +9,9 @@ import types
 
 import pytest
 
-from metagpt.common.agent_control import SpawnContext, set_control
-from metagpt.executor.tools.code_review import review_unit as ru
-from metagpt.executor.tools.code_review.parser import FileDiff, Hunk
-
+from mote.common.agent_control import SpawnContext, set_control
+from mote.executor.tools.code_review import review_unit as ru
+from mote.executor.tools.code_review.parser import FileDiff, Hunk
 
 _FILE = FileDiff(
     path="x.py",
@@ -34,7 +33,7 @@ class TestExtractJson:
         assert ru._extract_json_array('[{"a": 1}]') == [{"a": 1}]
 
     def test_fenced_json(self):
-        text = "Here you go:\n```json\n[{\"a\": 1}]\n```\nthanks"
+        text = 'Here you go:\n```json\n[{"a": 1}]\n```\nthanks'
         assert ru._extract_json_array(text) == [{"a": 1}]
 
     def test_fenced_plain(self):
@@ -58,9 +57,7 @@ class TestExtractJson:
 
 class TestCommentsToFindings:
     def test_resolves_line(self):
-        comments = [
-            {"existing_code": "    danger()", "severity": "critical", "message": "bad"}
-        ]
+        comments = [{"existing_code": "    danger()", "severity": "critical", "message": "bad"}]
         findings = ru._comments_to_findings(comments, _FILE)
         assert len(findings) == 1
         f = findings[0]
@@ -70,9 +67,7 @@ class TestCommentsToFindings:
         assert (f.start_line, f.end_line) == (2, 2)
 
     def test_unresolved_keeps_none(self):
-        comments = [
-            {"existing_code": "nonexistent", "severity": "info", "message": "hmm"}
-        ]
+        comments = [{"existing_code": "nonexistent", "severity": "info", "message": "hmm"}]
         findings = ru._comments_to_findings(comments, _FILE)
         assert findings[0].start_line is None
 
@@ -106,9 +101,7 @@ class TestRenderRelated:
             hunks=[Hunk(new_start=1, lines=[(1, "+danger()")])],
             related=["x_test.py"],
         )
-        prompt = ru._USER_PROMPT_TEMPLATE.format(
-            path=f.path, diff="...", related=ru._render_related(f)
-        )
+        prompt = ru._USER_PROMPT_TEMPLATE.format(path=f.path, diff="...", related=ru._render_related(f))
         assert "x_test.py" in prompt
 
 

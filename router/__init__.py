@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Router package — LLM routing system (replaces the old LLM factory)."""
-from metagpt.router.complexity import (
+from mote.router.complexity import (
     ComplexitySignals,
     ContextSignals,
     RoutingRule,
@@ -11,35 +11,15 @@ from metagpt.router.complexity import (
     score_to_tier,
     signals_from_messages,
 )
-from metagpt.router.control import (
-    RouterControlHold,
-    RouterControlHoldStore,
-    RouterControlTarget,
-)
-from metagpt.router.flags import RoutingFlags, compute_flags
-from metagpt.router.llm.base_llm import BaseLLM
-from metagpt.router.ml import (
-    SquillaMLEngine,
-    apply_postprocess,
-    default_model_dir,
-    load_runtime_config,
-)
-from metagpt.router.ml.predictor import ROUTE_CLASSES
-from metagpt.router.router import LLM, LLMRouter
-from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
-from metagpt.router.squilla import (
-    RoutingHistoryStore,
-    SquillaConfig,
-    SquillaStrategy,
-    detect_complaint,
-    score_to_probs,
-)
-from metagpt.router.strategy import (
-    ComplexityStrategy,
-    LLMJudgeStrategy,
-    RoutingStrategy,
-    RuleBasedStrategy,
-)
+from mote.router.control import RouterControlHold, RouterControlHoldStore, RouterControlTarget
+from mote.router.flags import RoutingFlags, compute_flags
+from mote.router.llm.base_llm import BaseLLM
+from mote.router.ml import SquillaMLEngine, apply_postprocess, default_model_dir, load_runtime_config
+from mote.router.ml.predictor import ROUTE_CLASSES
+from mote.router.router import LLM, LLMRouter
+from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
+from mote.router.squilla import RoutingHistoryStore, SquillaConfig, SquillaStrategy, detect_complaint, score_to_probs
+from mote.router.strategy import ComplexityStrategy, LLMJudgeStrategy, RoutingStrategy, RuleBasedStrategy
 
 __all__ = [
     "LLM",

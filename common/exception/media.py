@@ -1,11 +1,11 @@
-"""Media-generation tier exceptions (``metagpt.executor.tools.media_pipeline``).
+"""Media-generation tier exceptions (``mote.executor.tools.media_pipeline``).
 
 The upstream async-task media API (image / audio / music / video) returns a
 ``status`` field that is either ``completed`` or ``failed``. A ``failed`` task
 rarely carries a useful reason — most are transient backend hiccups (queue
 overload, a flaky GPU worker, a timed-out render) that succeed on a fresh
 re-submission. The historical code raised a bare ``RuntimeError`` for every
-failure, which :func:`~metagpt.common.exception.handlers.is_retryable`
+failure, which :func:`~mote.common.exception.handlers.is_retryable`
 classifies as **permanent** → the bggraph engine aborts a node with ``attempt=0``
 and never re-submits.
 
@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from typing import ClassVar, Optional
 
-from metagpt.common.exception.base import RetryableError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import RetryableError
+from mote.common.exception.codes import ErrorCode
 
 # Upstream error codes that are permanent — retrying cannot succeed, so fail
 # fast. Everything NOT in this set is treated as transient and retried. Keep the
@@ -152,9 +152,5 @@ def classify_media_failure(
     Returns :class:`PermanentMediaGenerationError` when the code/message is
     explicitly permanent, else the retryable :class:`MediaGenerationError`.
     """
-    cls = (
-        PermanentMediaGenerationError
-        if is_permanent_media_failure(code, message)
-        else MediaGenerationError
-    )
+    cls = PermanentMediaGenerationError if is_permanent_media_failure(code, message) else MediaGenerationError
     return cls(message, task_id=task_id, upstream_code=code)

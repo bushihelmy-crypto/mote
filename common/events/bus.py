@@ -39,7 +39,7 @@ actually needs instead of forcing one policy on both:
       never silently swallowed — because a missing rollout record is data loss.
 
 ``emit`` runs both phases and returns the folded outcome (an
-:class:`~metagpt.common.interface.event_subscriber.ControlOutcome`, or ``None``
+:class:`~mote.common.interface.event_subscriber.ControlOutcome`, or ``None``
 when no control subscriber maps the event). ``observe`` runs phase 2 only (the
 transport for fire-and-forget observation events raised from deep call sites via
 the active-bus contextvar — it structurally cannot carry control, so losing the
@@ -59,7 +59,7 @@ import asyncio
 from collections import defaultdict
 from typing import Dict, List, Optional
 
-from metagpt.common.interface.event_subscriber import (
+from mote.common.interface.event_subscriber import (
     DURABLE,
     FAIL_CLOSED,
     BusAware,
@@ -68,7 +68,7 @@ from metagpt.common.interface.event_subscriber import (
     ObservationSubscriber,
     SyncObserver,
 )
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 #: Per-subscriber wall-clock budgets (circuit breakers, not tight SLAs). A
 #: handler exceeding these is abandoned with a warning so one wedged subscriber
@@ -209,8 +209,7 @@ class EventBus:
                 sub.handle_sync(event)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    f"EventBus: observer {type(sub).__name__} raised (sync) on "
-                    f"{getattr(event, 'name', '?')}: {exc}"
+                    f"EventBus: observer {type(sub).__name__} raised (sync) on " f"{getattr(event, 'name', '?')}: {exc}"
                 )
 
     # -- internals ----------------------------------------------------------
@@ -277,19 +276,13 @@ class EventBus:
         what = f"timed out (>{self._control_timeout}s)" if timed_out else f"raised: {exc}"
         name = getattr(event, "name", "?")
         if sub.fail_mode == FAIL_CLOSED:
-            logger.error(
-                f"EventBus: control gate {type(sub).__name__} {what} on {name}; "
-                "failing closed (deny)"
-            )
+            logger.error(f"EventBus: control gate {type(sub).__name__} {what} on {name}; " "failing closed (deny)")
             reason = (
                 f"{type(sub).__name__} could not evaluate the request "
                 f"({'timeout' if timed_out else 'error'}); denied for safety."
             )
             return sub.on_failure(reason)
-        logger.warning(
-            f"EventBus: control subscriber {type(sub).__name__} {what} on {name}; "
-            "treating as no-outcome"
-        )
+        logger.warning(f"EventBus: control subscriber {type(sub).__name__} {what} on {name}; " "treating as no-outcome")
         return None
 
     async def _dispatch_observers(self, event) -> None:
@@ -323,8 +316,7 @@ class EventBus:
                     )
                 else:
                     logger.warning(
-                        f"EventBus: mirror {type(sub).__name__} raised on "
-                        f"{getattr(event, 'name', '?')}: {exc}"
+                        f"EventBus: mirror {type(sub).__name__} raised on " f"{getattr(event, 'name', '?')}: {exc}"
                     )
 
 

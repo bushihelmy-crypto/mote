@@ -1,7 +1,7 @@
-"""Stable error codes for the MetaGPT exception hierarchy.
+"""Stable error codes for the Mote exception hierarchy.
 
 Each concrete exception declares a ``default_code`` from this enum so that
-serialized errors (``MetaGPTError.to_dict``) carry a stable, machine-readable
+serialized errors (``MoteError.to_dict``) carry a stable, machine-readable
 identifier independent of the human-readable message or the class name.
 """
 
@@ -49,11 +49,11 @@ class ErrorCode(StrEnum):
     TOOL_RETRYABLE = "TOOL_RETRYABLE"
     TOOL_APPLY_PATCH = "TOOL_APPLY_PATCH"
 
-    # Media generation tier (metagpt.executor.tools.media_pipeline)
+    # Media generation tier (mote.executor.tools.media_pipeline)
     MEDIA_GENERATION_RETRYABLE = "MEDIA_GENERATION_RETRYABLE"
     MEDIA_GENERATION_PERMANENT = "MEDIA_GENERATION_PERMANENT"
 
-    # Graph execution tier (metagpt.executor.bggraph)
+    # Graph execution tier (mote.executor.bggraph)
     GRAPH_ROUTER = "GRAPH_ROUTER"
     GRAPH_RECURSION = "GRAPH_RECURSION"
     GRAPH_BATCH_FAILURE = "GRAPH_BATCH_FAILURE"
@@ -61,11 +61,11 @@ class ErrorCode(StrEnum):
     GRAPH_NODE_RETRY_EXHAUSTED = "GRAPH_NODE_RETRY_EXHAUSTED"
     GRAPH_PARAM_TYPE_ERROR = "GRAPH_PARAM_TYPE_ERROR"
 
-    # Background-task tier (metagpt.executor.tasks.pool — whole-task outcomes)
+    # Background-task tier (mote.executor.tasks.pool — whole-task outcomes)
     BG_TASK_TIMEOUT = "BG_TASK_TIMEOUT"
     BG_TASK_CANCELLED = "BG_TASK_CANCELLED"
 
-    # OAuth / credential tier (metagpt.router.oauth)
+    # OAuth / credential tier (mote.router.oauth)
     OAUTH = "OAUTH"
     OAUTH_CONFIG = "OAUTH_CONFIG"
     OAUTH_HTTP = "OAUTH_HTTP"
@@ -81,7 +81,7 @@ class ErrorCode(StrEnum):
     # Agent / role tier
     AGENT_CONTEXT_NOT_SET = "AGENT_CONTEXT_NOT_SET"
 
-    # Agent control-plane tier (metagpt.environment)
+    # Agent control-plane tier (mote.environment)
     AGENT_CONTROL = "AGENT_CONTROL"
     AGENT_LIMIT_REACHED = "AGENT_LIMIT_REACHED"
     AGENT_NOT_FOUND = "AGENT_NOT_FOUND"
@@ -95,7 +95,7 @@ class ErrorCode(StrEnum):
 class RecoveryAction(StrEnum):
     """Suggested recovery for an error — a *hint* for the retry/failover loop.
 
-    ``MetaGPTError.recovery`` derives a sensible default from ``retryable`` (RETRY
+    ``MoteError.recovery`` derives a sensible default from ``retryable`` (RETRY
     vs ABORT); concrete exceptions override ``default_recovery`` when a more
     specific action applies (e.g. context overflow → COMPRESS, auth/billing →
     ROTATE_CREDENTIAL).

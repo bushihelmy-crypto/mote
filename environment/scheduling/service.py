@@ -19,15 +19,15 @@ from __future__ import annotations
 import time
 from typing import Callable, List, Optional
 
-from metagpt.common.logs import log_class, logger
-from metagpt.common.schema import UserMessage
-from metagpt.environment.control import AgentControl
-from metagpt.environment.mailbox import DeliveryMode
-from metagpt.environment.scheduling.cron import _next_cron_run_ms, parse_cron_expression
-from metagpt.environment.scheduling.lock import SchedulerLock
-from metagpt.environment.scheduling.scheduler import CronScheduler
-from metagpt.environment.scheduling.store import CronTaskStore
-from metagpt.environment.scheduling.task import CronJitterConfig, CronTask
+from mote.common.logs import log_class, logger
+from mote.common.schema import UserMessage
+from mote.environment.control import AgentControl
+from mote.environment.mailbox import DeliveryMode
+from mote.environment.scheduling.cron import _next_cron_run_ms, parse_cron_expression
+from mote.environment.scheduling.lock import SchedulerLock
+from mote.environment.scheduling.scheduler import CronScheduler
+from mote.environment.scheduling.store import CronTaskStore
+from mote.environment.scheduling.task import CronJitterConfig, CronTask
 
 #: Upper bound on concurrent scheduled tasks (upstream MAX_JOBS).
 MAX_CRON_TASKS = 50

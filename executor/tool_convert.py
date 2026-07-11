@@ -1,16 +1,18 @@
 import ast
 import inspect
+from typing import Optional
 
-from metagpt.common.utils.parse_docstring import GoogleDocstringParser, remove_spaces
+from mote.common.utils.parse_docstring import GoogleDocstringParser, remove_spaces
 
 PARSER = GoogleDocstringParser
 
 
-def convert_code_to_tool_schema(obj, include: list[str] = None) -> dict:
+def convert_code_to_tool_schema(obj, include: Optional[list[str]] = None) -> dict:
     """Converts an object (function or class) to a tool schema by inspecting the object"""
-    docstring = inspect.getdoc(obj)
+    docstring = inspect.getdoc(obj) or ""
     # assert docstring, "no docstring found for the objects, skip registering"
 
+    schema: dict = {}
     if inspect.isclass(obj):
         schema = {"type": "class", "description": remove_spaces(docstring), "methods": {}}
         for name, method in inspect.getmembers(obj, inspect.isfunction):
@@ -20,7 +22,7 @@ def convert_code_to_tool_schema(obj, include: list[str] = None) -> dict:
                 continue
             # method_doc = inspect.getdoc(method)
             method_doc = get_class_method_docstring(obj, name)
-            schema["methods"][name] = function_docstring_to_schema(method, method_doc)
+            schema["methods"][name] = function_docstring_to_schema(method, method_doc or "")
 
     elif inspect.isfunction(obj):
         schema = function_docstring_to_schema(obj, docstring)
@@ -28,8 +30,8 @@ def convert_code_to_tool_schema(obj, include: list[str] = None) -> dict:
     return schema
 
 
-def convert_code_to_tool_schema_ast(code: str) -> list[dict]:
-    """Converts a code string to a list of tool schemas by parsing the code with AST"""
+def convert_code_to_tool_schema_ast(code: str) -> dict[str, dict]:
+    """Converts a code string to a ``{tool_name: schema}`` map by parsing with AST"""
 
     visitor = CodeVisitor(code)
     parsed_code = ast.parse(code)
@@ -90,7 +92,7 @@ class CodeVisitor(ast.NodeVisitor):
             ):
                 func_schemas = self._get_function_schemas(body_node)
                 class_schemas["methods"].update({body_node.name: func_schemas})
-        class_schemas["code"] = ast.get_source_segment(self.source_code, node)
+        class_schemas["code"] = ast.get_source_segment(self.source_code, node) or ""
         self.tool_schemas[node.name] = class_schemas
 
     def visit_FunctionDef(self, node):
@@ -103,11 +105,11 @@ class CodeVisitor(ast.NodeVisitor):
         if node.name.startswith("_"):
             return
         function_schemas = self._get_function_schemas(node)
-        function_schemas["code"] = ast.get_source_segment(self.source_code, node)
+        function_schemas["code"] = ast.get_source_segment(self.source_code, node) or ""
         self.tool_schemas[node.name] = function_schemas
 
     def _get_function_schemas(self, node):
-        docstring = remove_spaces(ast.get_docstring(node))
+        docstring = remove_spaces(ast.get_docstring(node) or "")
         overall_desc, param_desc = PARSER.parse(docstring)
         return {
             "type": "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function",

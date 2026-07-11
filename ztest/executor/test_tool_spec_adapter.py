@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.tool_spec_adapter``.
+"""Unit tests for ``mote.executor.tool_spec_adapter``.
 
 Builds JSON Schema from a ``call()`` signature + docstring and wraps it into the
 provider envelope. Note ``from __future__ import annotations`` stringizes
@@ -13,12 +13,7 @@ from typing import Optional, Union
 
 from pydantic import BaseModel
 
-from metagpt.executor.tool_spec_adapter import (
-    _json_type,
-    _unwrap_optional,
-    build_json_schema,
-    to_native_tool_specs,
-)
+from mote.executor.tool_spec_adapter import _json_type, _unwrap_optional, build_json_schema, to_native_tool_specs
 
 
 class Item(BaseModel):

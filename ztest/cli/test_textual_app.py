@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``MetaGPTApp`` — the host wiring under an ``App.run_test`` pilot (§A/B/C).
+"""``MoteApp`` — the host wiring under an ``App.run_test`` pilot (§A/B/C).
 
 Covers the three integration seams: (C) a posted ``ViewEventMessage`` mutates the
 transcript on the UI thread via the single ``on_view_event_message`` choke; (B) a
@@ -19,19 +19,8 @@ pytest.importorskip("textual")
 from textual.widgets import Static
 from textual.worker import WorkerState
 
-from metagpt.cli.common.view import (
-    ConversationCompacted,
-    ErrorRaised,
-    MessageBlockCompleted,
-    MessageBlockDelta,
-    Notice,
-    ReasoningDelta,
-    RetryStatus,
-    ToolCallCompleted,
-    ToolCallStarted,
-)
-from metagpt.cli.consumers.textual.app import MetaGPTApp, ViewEventMessage
-from metagpt.cli.consumers.textual.widgets import (
+from mote.cli.consumers.textual.app import MoteApp, ViewEventMessage
+from mote.cli.consumers.textual.widgets import (
     AssistantBlock,
     CompactionSummaryRow,
     ConversationCompactedRow,
@@ -41,6 +30,17 @@ from metagpt.cli.consumers.textual.widgets import (
     ToolCallWidget,
     ToolGroupWidget,
     UserMessageRow,
+)
+from mote.cli.contracts.view import (
+    ConversationCompacted,
+    ErrorRaised,
+    MessageBlockCompleted,
+    MessageBlockDelta,
+    Notice,
+    ReasoningDelta,
+    RetryStatus,
+    ToolCallCompleted,
+    ToolCallStarted,
 )
 
 
@@ -74,7 +74,7 @@ class _FakePort:
 
 @pytest.mark.asyncio
 async def test_delta_event_opens_assistant_block():
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(MessageBlockDelta(text="Hello")))
         await pilot.pause()
@@ -85,7 +85,7 @@ async def test_delta_event_opens_assistant_block():
 
 @pytest.mark.asyncio
 async def test_completed_nonstreamed_mounts_fresh_block():
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="# Done", streamed=False)))
         await pilot.pause()
@@ -96,7 +96,7 @@ async def test_completed_nonstreamed_mounts_fresh_block():
 
 @pytest.mark.asyncio
 async def test_tool_started_then_completed_correlates_one_widget():
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         # A non-collapsible tool (Bash) mounts a standalone ToolCallWidget; a
         # search/read tool would coalesce into a ToolGroupWidget instead.
@@ -105,9 +105,7 @@ async def test_tool_started_then_completed_correlates_one_widget():
         widgets = app.query(ToolCallWidget)
         assert len(widgets) == 1
         assert widgets.first()._completed is None
-        app.post_message(
-            ViewEventMessage(ToolCallCompleted(tool_name="Bash", tool_use_id="tu-1", summary="ok"))
-        )
+        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Bash", tool_use_id="tu-1", summary="ok")))
         await pilot.pause()
         # Still ONE widget — completion folds into the correlated started widget.
         widgets = app.query(ToolCallWidget)
@@ -119,7 +117,7 @@ async def test_tool_started_then_completed_correlates_one_widget():
 @pytest.mark.asyncio
 async def test_consecutive_search_read_coalesce_into_one_group():
     """Read+Grep+Glob in a row → ONE ToolGroupWidget, zero standalone widgets."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="t1")))
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2")))
@@ -144,7 +142,7 @@ async def test_consecutive_search_read_coalesce_into_one_group():
 @pytest.mark.asyncio
 async def test_noncollapsible_tool_flushes_group_and_mounts_standalone():
     """A Write after a search/read run breaks the group and mounts standalone."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="t1")))
         await pilot.pause()
@@ -159,7 +157,7 @@ async def test_noncollapsible_tool_flushes_group_and_mounts_standalone():
 @pytest.mark.asyncio
 async def test_assistant_text_breaks_group_so_next_tool_starts_new_group():
     """Assistant text between runs breaks the group; the next tool opens a NEW one."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="t1")))
         await pilot.pause()
@@ -177,7 +175,7 @@ async def test_assistant_text_breaks_group_so_next_tool_starts_new_group():
 @pytest.mark.asyncio
 async def test_ctrl_o_toggles_tool_group_expansion():
     """``ctrl+o`` flips the global state and honours it for later groups."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="t1")))
         await pilot.pause()
@@ -196,7 +194,7 @@ async def test_ctrl_o_toggles_tool_group_expansion():
 
 @pytest.mark.asyncio
 async def test_notice_and_error_mount_rows():
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(Notice(text="hi", level="info")))
         app.post_message(ViewEventMessage(ErrorRaised(text="boom")))
@@ -207,7 +205,7 @@ async def test_notice_and_error_mount_rows():
 
 @pytest.mark.asyncio
 async def test_retry_status_updates_statusbar_not_transcript():
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(
             ViewEventMessage(RetryStatus(attempt=2, max_attempts=6, delay_ms=2000.0, error_type="LLMOverloadedError"))
@@ -222,7 +220,7 @@ async def test_retry_status_updates_statusbar_not_transcript():
 
 @pytest.mark.asyncio
 async def test_next_event_clears_retry_statusbar():
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(RetryStatus(attempt=1, max_attempts=6, delay_ms=1000.0)))
         await pilot.pause()
@@ -237,7 +235,7 @@ async def test_next_event_clears_retry_statusbar():
 @pytest.mark.asyncio
 async def test_reasoning_delta_flips_statusbar_to_thinking():
     """A reasoning stream sets the ``✻ 思考中`` thinking flag on the status bar."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ReasoningDelta(text="pondering")))
         await pilot.pause()
@@ -249,7 +247,7 @@ async def test_reasoning_delta_flips_statusbar_to_thinking():
 @pytest.mark.asyncio
 async def test_non_reasoning_event_clears_thinking():
     """A visible-content event (assistant text) ends the thinking state."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ReasoningDelta(text="pondering")))
         await pilot.pause()
@@ -262,7 +260,7 @@ async def test_non_reasoning_event_clears_thinking():
 
 @pytest.mark.asyncio
 async def test_submit_while_waiting_feeds_turn():
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=True)
     app.attach(None, port)
     async with app.run_test() as pilot:
@@ -284,9 +282,9 @@ async def test_submit_expands_multiline_paste_placeholder():
     """
     from textual.events import Paste
 
-    from metagpt.cli.consumers.textual.widgets import PromptInput
+    from mote.cli.consumers.textual.widgets import PromptInput
 
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=True)
     app.attach(None, port)
     async with app.run_test() as pilot:
@@ -301,7 +299,7 @@ async def test_submit_expands_multiline_paste_placeholder():
 
 @pytest.mark.asyncio
 async def test_submit_mid_turn_steers():
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=False)
     app.attach(None, port)
     async with app.run_test() as pilot:
@@ -316,7 +314,7 @@ async def test_submit_mid_turn_steers():
 @pytest.mark.asyncio
 async def test_action_interrupt_midturn_signals_port():
     """Ctrl+C during a turn (not waiting) interrupts and never arms an exit."""
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=False)
     app.attach(None, port)
     async with app.run_test():
@@ -329,7 +327,7 @@ async def test_action_interrupt_midturn_signals_port():
 @pytest.mark.asyncio
 async def test_ctrl_c_copies_selection_when_present():
     """Ctrl+C with a transcript selection copies it and never interrupts/arms."""
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=True)
     app.attach(None, port)
     async with app.run_test():
@@ -351,7 +349,7 @@ def _mouse_down(button: int):
 @pytest.mark.asyncio
 async def test_text_selected_caches_selection():
     """``on_text_selected`` caches the completed selection for a later right-click."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test():
         app.screen.get_selected_text = lambda: "drag result"  # type: ignore[assignment]
         app.on_text_selected(SimpleNamespace())
@@ -361,7 +359,7 @@ async def test_text_selected_caches_selection():
 @pytest.mark.asyncio
 async def test_right_click_copies_cached_selection():
     """A right-click with no live selection copies the cached one."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test():
         copied: list = []
         app.copy_to_clipboard = lambda text: copied.append(text)  # type: ignore[assignment]
@@ -374,7 +372,7 @@ async def test_right_click_copies_cached_selection():
 @pytest.mark.asyncio
 async def test_right_click_prefers_live_selection():
     """A live selection wins over the cached one on right-click."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test():
         copied: list = []
         app.copy_to_clipboard = lambda text: copied.append(text)  # type: ignore[assignment]
@@ -387,7 +385,7 @@ async def test_right_click_prefers_live_selection():
 @pytest.mark.asyncio
 async def test_left_click_does_not_copy():
     """A left-click (button 1) never copies — only the right button does."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test():
         copied: list = []
         app.copy_to_clipboard = lambda text: copied.append(text)  # type: ignore[assignment]
@@ -400,7 +398,7 @@ async def test_left_click_does_not_copy():
 @pytest.mark.asyncio
 async def test_right_click_without_selection_is_noop():
     """A right-click with neither live nor cached selection copies nothing."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test():
         copied: list = []
         app.copy_to_clipboard = lambda text: copied.append(text)  # type: ignore[assignment]
@@ -417,9 +415,10 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
     so repeated copies looked doubled ("每行复制重复2次"); a native replace can't.
     """
     import textual.app as _ta
-    from metagpt.cli.consumers.textual import app as _appmod
 
-    app = MetaGPTApp()
+    from mote.cli.consumers.textual import app as _appmod
+
+    app = MoteApp()
     async with app.run_test():
         osc52: list = []
         native: list = []
@@ -441,9 +440,10 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
 async def test_non_wsl_copy_uses_osc52():
     """Off WSL (or over SSH) the portable OSC 52 base path is used."""
     import textual.app as _ta
-    from metagpt.cli.consumers.textual import app as _appmod
 
-    app = MetaGPTApp()
+    from mote.cli.consumers.textual import app as _appmod
+
+    app = MoteApp()
     async with app.run_test():
         osc52: list = []
         native: list = []
@@ -457,7 +457,6 @@ async def test_non_wsl_copy_uses_osc52():
             assert osc52 == ["hello"]
             assert native == []  # native path skipped when not on WSL
 
-
         finally:
             _ta.App.copy_to_clipboard = original  # type: ignore[assignment]
             _appmod.native_copy = original_native  # type: ignore[assignment]
@@ -467,9 +466,10 @@ async def test_non_wsl_copy_uses_osc52():
 async def test_wsl_copy_falls_back_to_osc52_when_native_fails():
     """If the native write can't run (no ``powershell.exe``), OSC 52 still copies."""
     import textual.app as _ta
-    from metagpt.cli.consumers.textual import app as _appmod
 
-    app = MetaGPTApp()
+    from mote.cli.consumers.textual import app as _appmod
+
+    app = MoteApp()
     async with app.run_test():
         osc52: list = []
         original = _ta.App.copy_to_clipboard
@@ -487,7 +487,7 @@ async def test_wsl_copy_falls_back_to_osc52_when_native_fails():
 
 def test_detect_wsl_clipboard_env(monkeypatch):
     """WSL env vars enable native clipboard; SSH disables it (OSC 52 forwards)."""
-    from metagpt.cli.consumers.textual.clipboard import detect_wsl_clipboard
+    from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard
 
     monkeypatch.delenv("SSH_CONNECTION", raising=False)
     monkeypatch.delenv("SSH_TTY", raising=False)
@@ -501,7 +501,7 @@ def test_detect_wsl_clipboard_env(monkeypatch):
 @pytest.mark.asyncio
 async def test_action_interrupt_idle_double_press_exits():
     """Idle Ctrl+C: first press arms + hint, second consecutive press exits."""
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=True)
     app.attach(None, port)
     async with app.run_test() as pilot:
@@ -520,7 +520,7 @@ async def test_action_interrupt_idle_double_press_exits():
 @pytest.mark.asyncio
 async def test_submit_disarms_idle_exit():
     """Submitting a line between presses disarms, so a later lone press only arms."""
-    app = MetaGPTApp()
+    app = MoteApp()
     port = _FakePort(waiting=True)
     app.attach(None, port)
     async with app.run_test() as pilot:
@@ -545,7 +545,7 @@ async def test_compaction_clears_transcript_and_preserves_key_info():
     boundary marker, the engine's recap summary, and the last user prompt the
     post-compaction reply continues to answer.
     """
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         # A prior turn: the human's prompt (cached) + an assistant block + a tool.
         app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="fix the bug", role="user")))
@@ -555,9 +555,7 @@ async def test_compaction_clears_transcript_and_preserves_key_info():
         assert len(app.query(AssistantBlock)) == 1
         assert len(app.query(ToolCallWidget)) == 1
 
-        app.post_message(
-            ViewEventMessage(ConversationCompacted(summary="recap of prior work", message_count=5))
-        )
+        app.post_message(ViewEventMessage(ConversationCompacted(summary="recap of prior work", message_count=5)))
         await pilot.pause()
 
         # Stale pre-compaction rows are gone.
@@ -575,7 +573,7 @@ async def test_compaction_clears_transcript_and_preserves_key_info():
 @pytest.mark.asyncio
 async def test_compaction_without_summary_or_prompt_mounts_only_marker():
     """With no recap and no prior prompt, only the ✻ boundary row is re-rendered."""
-    app = MetaGPTApp()
+    app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ConversationCompacted(summary="", message_count=0)))
         await pilot.pause()
@@ -585,7 +583,7 @@ async def test_compaction_without_summary_or_prompt_mounts_only_marker():
 
 
 def test_worker_finished_exits_app():
-    app = MetaGPTApp()
+    app = MoteApp()
     calls: list = []
     app.exit = lambda *a, **k: calls.append(True)  # type: ignore[assignment]
     sentinel = object()

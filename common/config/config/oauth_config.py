@@ -4,7 +4,7 @@
 
 Lives beside ``llm_config.py`` (not under ``router/``) so ``LLMConfig`` can
 reference ``OAuthProviderConfig`` without a ``common -> router`` import cycle.
-The OAuth *runtime* (clients, manager, storage) lives in ``metagpt.router.oauth``.
+The OAuth *runtime* (clients, manager, storage) lives in ``mote.router.oauth``.
 
 This is opt-in: a provider only authenticates with OAuth when ``LLMConfig.oauth``
 is set. When ``None``, the static ``api_key`` path is used unchanged.
@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field, model_validator
 
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.utils.yaml_model import YamlModel
 
 
 class GrantType(str, Enum):
@@ -127,9 +127,11 @@ class OAuthProviderConfig(YamlModel):
 
     def resolved_token_url(self) -> str:
         """Return ``token_url``, honoring the env override hook when present."""
+        # ``_require_token_url`` validator guarantees token_url is set.
+        token_url = self.token_url or ""
         if self.token_url_env_override:
-            return os.environ.get(self.token_url_env_override) or self.token_url
-        return self.token_url
+            return os.environ.get(self.token_url_env_override) or token_url
+        return token_url
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +161,7 @@ PROVIDER_PRESETS: Dict[str, dict] = {
         "grant_type": GrantType.REFRESH_TOKEN.value,
         "scopes": ["openid", "profile", "email", "offline_access"],
         "headers_extra": {},
-        "token_url_env_override": "METAGPT_OAUTH_OPENAI_TOKEN_URL",
+        "token_url_env_override": "MOTE_OAUTH_OPENAI_TOKEN_URL",
     },
     "anthropic": {
         "issuer": "https://platform.claude.com",
@@ -169,7 +171,7 @@ PROVIDER_PRESETS: Dict[str, dict] = {
         "scopes": ["user:profile", "user:inference"],
         # Claude's OAuth bearer requires this beta opt-in header.
         "headers_extra": {"anthropic-beta": "oauth-2025-04-20"},
-        "token_url_env_override": "METAGPT_OAUTH_ANTHROPIC_TOKEN_URL",
+        "token_url_env_override": "MOTE_OAUTH_ANTHROPIC_TOKEN_URL",
     },
     # GitHub Copilot logs in via the OAuth 2.0 device flow (RFC 8628): no
     # loopback redirect, the user enters a code at a verification URL.
@@ -180,7 +182,7 @@ PROVIDER_PRESETS: Dict[str, dict] = {
         "grant_type": GrantType.DEVICE_CODE.value,
         "scopes": ["read:user"],
         "headers_extra": {},
-        "token_url_env_override": "METAGPT_OAUTH_GITHUB_COPILOT_TOKEN_URL",
+        "token_url_env_override": "MOTE_OAUTH_GITHUB_COPILOT_TOKEN_URL",
     },
 }
 

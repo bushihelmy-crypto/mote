@@ -15,9 +15,9 @@ replayed history for RESOURCE_STICKY messages (see Role.resume_session).
 """
 from __future__ import annotations
 
-from metagpt.common.resource.unit import ResourceUnit
-from metagpt.common.schema import ResourceMessage
-from metagpt.common.utils.prompt_sanitizer import count_tokens, truncate_to_tokens
+from mote.common.resource.unit import ResourceUnit
+from mote.common.schema import ResourceMessage
+from mote.common.utils.prompt_sanitizer import count_tokens, truncate_to_tokens
 
 # cc budget constants (src/services/compact.ts:133-134): each re-projected unit
 # is truncated (head-kept) to at most PER_UNIT tokens; units are added

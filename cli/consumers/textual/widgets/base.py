@@ -82,9 +82,7 @@ class SelectableStatic(Static):
         char_x = 0
         for seg in strip:
             base = seg.style or RichStyle()
-            segments.append(
-                Segment(seg.text, base + RichStyle.from_meta({"offset": (char_x, y)}), seg.control)
-            )
+            segments.append(Segment(seg.text, base + RichStyle.from_meta({"offset": (char_x, y)}), seg.control))
             char_x += len(seg.text)
         return Strip(segments, strip.cell_length)
 

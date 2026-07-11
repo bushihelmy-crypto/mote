@@ -1,6 +1,6 @@
 """File-history queries — diff / restore over the session's before-images (Phase 2).
 
-Phase 1 captures a :class:`~metagpt.session.events.FileSnapshotEvent` (plus
+Phase 1 captures a :class:`~mote.session.events.FileSnapshotEvent` (plus
 a content-addressed blob) just before every file-mutating tool overwrites a file.
 This module turns that append-only record into the read side: list a file's
 history, diff a stored before-image against what is on disk now, and restore a
@@ -8,7 +8,7 @@ file back to one of its captured states.
 
 Everything is a forward scan of the same ``rollout.jsonl`` the session already
 owns — no second index. The blob bytes come from the session's
-:class:`~metagpt.session.snapshot.BlobStore`, rooted next to the log.
+:class:`~mote.session.snapshot.BlobStore`, rooted next to the log.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from metagpt.session.events import FileSnapshotEvent, parse_event
-from metagpt.session.log import SessionLog
-from metagpt.session.snapshot import make_blob_store
+from mote.session.events import FileSnapshotEvent, parse_event
+from mote.session.log import SessionLog
+from mote.session.snapshot import make_blob_store
 
 
 @dataclass

@@ -24,10 +24,11 @@ layer never imports the Role.
 
 from __future__ import annotations
 
-import os
 from typing import Callable, Optional
 
-from metagpt.common.interface import TurnContextPriority
+from mote.common.disk import mtime_ns
+from mote.common.interface import TurnContextPriority
+from mote.common.text import display_path
 
 # A zero-arg callable returning a snapshot of the session's file-read state:
 # ``{absolute_path: mtime_ns_when_last_read}``. Matches ``RoleState._file_read_state``.
@@ -42,7 +43,11 @@ class ChangedFilesContextSource:
     # warning is mid-urgency — more actionable than skill hints, less than a
     # just-happened compaction.
     priority = TurnContextPriority.CHANGED_FILES
-    save_to_context = True
+    # Ephemeral (request-only): a "re-read this stale file" warning is a one-shot
+    # nudge (change-gated: announced once per detected revision). Once the model
+    # has been told, persisting it adds nothing — the freshness fact is only
+    # actionable on the turn it surfaces.
+    save_to_context = False
 
     def __init__(self, get_read_state: ReadStateProvider) -> None:
         self._get_read_state = get_read_state
@@ -57,7 +62,7 @@ class ChangedFilesContextSource:
 
         changed: list[str] = []
         for path, read_mtime in read_state.items():
-            current = self._current_mtime(path)
+            current = mtime_ns(path)
             if current is None or current == read_mtime:
                 continue  # gone/unreadable or unchanged since we read it
             if self._reported.get(path) == current:
@@ -74,24 +79,8 @@ class ChangedFilesContextSource:
             "cached view is stale. Re-read before relying on their contents:",
             "",
         ]
-        lines.extend(f"- {self._display(p, cwd)}" for p in changed)
+        lines.extend(f"- {display_path(p, cwd)}" for p in changed)
         return "\n".join(lines)
-
-    @staticmethod
-    def _current_mtime(path: str) -> Optional[int]:
-        try:
-            return os.stat(path).st_mtime_ns
-        except OSError:
-            return None
-
-    @staticmethod
-    def _display(path: str, cwd: Optional[str]) -> str:
-        if cwd:
-            try:
-                return os.path.relpath(path, cwd)
-            except ValueError:  # different drive on Windows
-                return path
-        return path
 
 
 __all__ = ["ChangedFilesContextSource", "ReadStateProvider"]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :mod:`metagpt.tasks.stall_detector`.
+"""Unit tests for :mod:`mote.tasks.stall_detector`.
 
 Covers the interactive-prompt regex (``_matches_interactive_prompt``), the
 watcher bookkeeping (``start_watching`` idempotence / ``stop_watching`` /
@@ -16,8 +16,8 @@ import asyncio
 
 import pytest
 
-from metagpt.executor.tasks import BgStatus, TaskMeta, StallDetector
-from metagpt.executor.tasks.stall_detector import _matches_interactive_prompt
+from mote.executor.tasks import BgStatus, StallDetector, TaskMeta
+from mote.executor.tasks.stall_detector import _matches_interactive_prompt
 
 
 class FakePool:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.roles.role.Role (construction, serialization, properties,
+"""Tests for mote.roles.role.Role (construction, serialization, properties,
 capabilities, messaging, and the async human/sleep helpers)."""
 from __future__ import annotations
 
@@ -10,21 +10,15 @@ import types
 
 import pytest
 
-from metagpt.common.agent_control import set_control
-from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
-from metagpt.common.exception import RoleContextNotSetError
-from metagpt.common.schema import AIMessage, Message
-from metagpt.common.utils.common import any_to_str
-from metagpt.roles import Role, RoleSchema, RoleState
-from metagpt.roles.role_components import _dedupe_tools
+from mote.common.agent_control import set_control
+from mote.common.const import MESSAGE_ROUTE_TO_SELF
+from mote.common.exception import RoleContextNotSetError
+from mote.common.schema import AIMessage, Message
+from mote.common.utils.common import any_to_str
+from mote.roles import Role, RoleSchema, RoleState
+from mote.roles.role_components import _dedupe_tools
 
-from .conftest import (
-    FakeContextManager,
-    FakeEnv,
-    FakeLLM,
-    FakeRouter,
-    _FakeThinkResult,
-)
+from .conftest import FakeContextManager, FakeEnv, FakeLLM, FakeRouter, _FakeThinkResult
 
 
 # =============================================================================
@@ -124,7 +118,7 @@ class TestSerialization:
     def test_dump_shape(self):
         r = Role(name="Alice", goal="ship")
         data = r.dump()
-        assert data["__module_class_name"] == "metagpt.roles.role.Role"
+        assert data["__module_class_name"] == "mote.roles.role.Role"
         assert data["role_schema"]["name"] == "Alice"
         assert data["role_schema"]["goal"] == "ship"
         assert "state" in data
@@ -215,11 +209,16 @@ class TestTurnContextBus:
         # native tool-use, where tools ride the API tools= param instead).
         # CodeMapContextSource is wired unconditionally (self-suppresses with no
         # touched files or nothing structural to say about them).
+        # There is NO per-turn cwd feed: working_dir is a stable base equal to the
+        # startup dir the system prompt's env block already cites, so a reminder
+        # would just repeat cacheable content. The timestamp feed (per-turn
+        # wall-clock) is wired unconditionally in the structured reminder envelope.
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
         assert names == {
             "tool_catalog",
             "git",
+            "timestamp",
             "token",
             "compaction",
             "skill_activation",
@@ -229,8 +228,8 @@ class TestTurnContextBus:
         }
 
     def test_lsp_source_present_when_configured(self):
-        from metagpt.common.schema import LspConfig, LspServerConfig
-        from metagpt.router.llm.context import Context
+        from mote.common.schema import LspConfig, LspServerConfig
+        from mote.router.llm.context import Context
 
         cfg = LspConfig(
             enabled=True,
@@ -253,7 +252,7 @@ class TestTurnContextBus:
         # (a dual-role ObservationSubscriber) is auto-subscribed to the event
         # bus; render-only feeds are not. This is the invariant that lets adding
         # a feed touch exactly one list.
-        from metagpt.common.interface import ObservationSubscriber
+        from mote.common.interface import ObservationSubscriber
 
         roster = role._components.turn_context_sources
         subscribers = _wired_subscribers(role)
@@ -268,9 +267,7 @@ class TestTurnContextBus:
         # roster instances (not two parallel builds), or a dual-role feed's
         # armed state would be invisible to its renderer.
         roster = role._components.turn_context_sources
-        assert role.turn_context_bus._sources and set(roster) == set(
-            role.turn_context_bus._sources
-        )
+        assert role.turn_context_bus._sources and set(roster) == set(role.turn_context_bus._sources)
 
     def test_last_render_reports_injection_manifest(self, role):
         import asyncio
@@ -299,8 +296,8 @@ class TestEventSubscriberRoster:
     def test_infra_observers_always_present(self, role):
         # Recorder + logger are unconditional observers; both must be on the bus
         # regardless of any opt-in layer.
-        from metagpt.common.events.log_subscriber import LogSubscriber
-        from metagpt.session.subscribers import RecorderSubscriber
+        from mote.common.events.log_subscriber import LogSubscriber
+        from mote.session.subscribers import RecorderSubscriber
 
         subs = _wired_subscribers(role)
         assert any(isinstance(s, RecorderSubscriber) for s in subs)
@@ -309,15 +306,15 @@ class TestEventSubscriberRoster:
     def test_optin_subscribers_absent_on_bare_role(self, role):
         # No hook layer, no LSP, no tracing/reporter env => none of the opt-in
         # subscribers are wired (the roster drops the ``None`` entries).
-        from metagpt.common.hook.subscriber import HookSubscriber
-        from metagpt.roles.lsp.service import LspService
+        from mote.common.hook.subscriber import HookSubscriber
+        from mote.roles.lsp.service import LspService
 
         subs = _wired_subscribers(role)
         assert not any(isinstance(s, HookSubscriber) for s in subs)
         assert not any(isinstance(s, LspService) for s in subs)
 
     def test_hook_subscriber_wired_when_hook_layer_exists(self, role):
-        from metagpt.common.hook.subscriber import HookSubscriber
+        from mote.common.hook.subscriber import HookSubscriber
 
         role.register_hook("Stop", lambda hook_input: None)
         subs = _wired_subscribers(role)
@@ -327,9 +324,9 @@ class TestEventSubscriberRoster:
         # The LSP service is an observer that also *produces* DiagnosticsEvent:
         # subscribing it must hand it the bus via ``on_subscribed`` (no host
         # special-case), and it must land on the bus.
-        from metagpt.common.schema import LspConfig, LspServerConfig
-        from metagpt.roles.lsp.service import LspService
-        from metagpt.router.llm.context import Context
+        from mote.common.schema import LspConfig, LspServerConfig
+        from mote.roles.lsp.service import LspService
+        from mote.router.llm.context import Context
 
         cfg = LspConfig(
             enabled=True,
@@ -354,7 +351,7 @@ class TestEventSubscriberRoster:
         # Reading ``context_manager`` first (it reads ``event_bus`` back during its
         # own construction) must not double-build or deadlock: the build graph is a
         # DAG (the leaf bus carries no subscribers), so access order is immaterial.
-        from metagpt.router.llm.context import Context
+        from mote.router.llm.context import Context
 
         r = Role(name="Y", role_schema=RoleSchema(name="Y"), context=Context())
         cm = r.context_manager  # trigger via the manager edge first
@@ -549,7 +546,7 @@ class TestFileWatchService:
         assert role.file_watch_service is None
 
     def test_none_when_enabled_but_no_hook_layer(self, role):
-        from metagpt.common.schema import FileWatchConfig
+        from mote.common.schema import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True)
         # No hook layer (no HookConfig, no registered callback) => nothing would
@@ -557,7 +554,7 @@ class TestFileWatchService:
         assert role.file_watch_service is None
 
     def test_built_when_enabled_with_hook_layer(self, role):
-        from metagpt.common.schema import FileWatchConfig
+        from mote.common.schema import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True)
         role.register_hook("FileChanged", lambda hook_input: None)
@@ -568,7 +565,7 @@ class TestFileWatchService:
         assert svc in role.event_bus.subscribers
 
     def test_cleanup_stops_and_unsubscribes(self, role):
-        from metagpt.common.schema import FileWatchConfig
+        from mote.common.schema import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True)
         role.register_hook("FileChanged", lambda hook_input: None)
@@ -594,7 +591,7 @@ class TestFileWatchHotReload:
     """The reload_skills / reload_config flags auto-wire FileChanged handlers."""
 
     def test_reload_skills_engages_hook_and_watches_skill_dir(self, role):
-        from metagpt.common.schema import FileWatchConfig
+        from mote.common.schema import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         # No manual hook registered: the auto-registered skill handler is what
@@ -605,7 +602,7 @@ class TestFileWatchHotReload:
         assert os.path.abspath(skill_root) in svc.watcher._roots
 
     def test_skill_filechanged_fires_reload(self, role, monkeypatch):
-        from metagpt.common.schema import FileWatchConfig
+        from mote.common.schema import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         _ = role.file_watch_service  # builds + registers the handler
@@ -628,19 +625,17 @@ class TestFileWatchHotReload:
         assert calls["n"] == 1
 
     def test_reload_config_engages_hook_and_swaps_config(self, role, monkeypatch):
-        from metagpt.common.schema import FileWatchConfig
+        from mote.common.schema import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_config=True)
         svc = role.file_watch_service
         assert svc is not None  # config handler alone engaged the hook layer
 
         sentinel = object()
-        monkeypatch.setattr("metagpt.roles.role_components.load_config", lambda *a, **k: sentinel)
+        monkeypatch.setattr("mote.roles.role_components.load_config", lambda *a, **k: sentinel)
 
         async def scenario():
-            await role.hook_manager.fire(
-                "FileChanged", {"path": "/proj/metagpt/config.yaml", "change_type": "modified"}
-            )
+            await role.hook_manager.fire("FileChanged", {"path": "/proj/mote/config.yaml", "change_type": "modified"})
 
         asyncio.run(scenario())
         assert role.config is sentinel
@@ -751,7 +746,7 @@ class _InlineForkControl:
     """Minimal plane for skill-fork: builds the child via the spec factory."""
 
     async def spawn_agent(self, spec):
-        from metagpt.common.agent_control import SpawnContext
+        from mote.common.agent_control import SpawnContext
 
         return _ForkHandle(spec.role_factory(SpawnContext(parent_id=spec.parent_id)))
 
@@ -982,7 +977,7 @@ class TestHumanChannel:
 
     def test_ask_human_without_env(self):
         r = Role(name="X")
-        assert "Not in MGXEnv" in asyncio.run(r.ask_human("hello?"))
+        assert "Not in MoteEnv" in asyncio.run(r.ask_human("hello?"))
 
     def test_ask_human_returns_env_response(self):
         r = Role(name="Alice")
@@ -1008,7 +1003,7 @@ class TestHumanChannel:
 
     def test_reply_to_human_without_env(self):
         r = Role(name="X")
-        assert "Not in MGXEnv" in asyncio.run(r.reply_to_human("hi"))
+        assert "Not in MoteEnv" in asyncio.run(r.reply_to_human("hi"))
 
     def test_reply_to_human_delegates(self):
         r = Role(name="Alice")
@@ -1122,7 +1117,7 @@ class TestAutoContinue:
     max_auto_continue."""
 
     def _outcome(self, **kw):
-        from metagpt.common.events import TurnOutcome
+        from mote.common.events import TurnOutcome
 
         return TurnOutcome(**kw)
 
@@ -1190,7 +1185,7 @@ class TestFullResolutionSmoke:
     @staticmethod
     def _fully_configured_role(context):
         """A Role whose schema flips every opt-in ``available`` gate true."""
-        from metagpt.common.schema import (
+        from mote.common.schema import (
             FileWatchConfig,
             HookConfig,
             LspConfig,

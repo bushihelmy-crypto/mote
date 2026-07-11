@@ -10,7 +10,7 @@ generation update/end mapping, and the best-effort swallowing of failures.
 """
 from __future__ import annotations
 
-from metagpt.common.observability.langfuse_backend import LangfuseBackend
+from mote.common.observability.langfuse_backend import LangfuseBackend
 
 
 # -- fakes ------------------------------------------------------------------
@@ -77,7 +77,12 @@ def test_generation_child_of_span_handle():
     backend, client = _backend()
     root = backend.start_span(span_id="s1", parent_handle=None, trace_id="t", label="root", attributes={})
     gen = backend.start_generation(
-        request_id="r1", parent_handle=root, trace_id="t", model="gpt-4o", input=[{"x": 1}], metadata={"provider": "openai"}
+        request_id="r1",
+        parent_handle=root,
+        trace_id="t",
+        model="gpt-4o",
+        input=[{"x": 1}],
+        metadata={"provider": "openai"},
     )
     assert gen in root.children
     assert gen.kw["as_type"] == "generation"
@@ -87,9 +92,7 @@ def test_generation_child_of_span_handle():
 
 def test_generation_off_client_when_no_parent():
     backend, client = _backend()
-    gen = backend.start_generation(
-        request_id="r1", parent_handle=None, trace_id="t", model="m", input=[], metadata={}
-    )
+    gen = backend.start_generation(request_id="r1", parent_handle=None, trace_id="t", model="m", input=[], metadata={})
     assert gen is client.roots[0]
 
 

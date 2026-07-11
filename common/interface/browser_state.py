@@ -12,8 +12,8 @@ import the ``roles`` layer (the strict downward-only layering rule). The concret
 a Role capability (``record_browser_state``); the tool only depends on this
 structural face, so no upward import is introduced.
 
-Mirrors :class:`~metagpt.common.interface.TerminalStateStore` and
-:class:`~metagpt.common.interface.KernelStateStore`: a leaf module that only
+Mirrors :class:`~mote.common.interface.TerminalStateStore` and
+:class:`~mote.common.interface.KernelStateStore`: a leaf module that only
 needs ``typing``, importable from anywhere without risking a cycle. Kept a
 separate type (rather than reusing the terminal/kernel stores) because the
 browser restore is independent — it re-seeds a different runtime (a browser

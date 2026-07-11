@@ -11,11 +11,11 @@ two downgrades one ``ViewEvent`` stream must survive to feed heterogeneous hosts
 
 from __future__ import annotations
 
-from metagpt.cli.view import (
+from mote.cli.view import (
     STRUCTURED_CAPS,
     TERMINAL_CAPS,
-    CapabilityAdapter,
     Capabilities,
+    CapabilityAdapter,
     MessageBlockCompleted,
     MessageBlockDelta,
     MessageBlockStarted,

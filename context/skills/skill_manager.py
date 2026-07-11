@@ -10,9 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.logs import log_class
-from metagpt.context.skills.skill_injector import SkillInjector
-from metagpt.context.skills.skill_pool import SkillPool
+from mote.common.logs import log_class
+from mote.context.skills.skill_injector import SkillInjector
+from mote.context.skills.skill_pool import SkillPool
 
 
 @log_class(level="DEBUG")

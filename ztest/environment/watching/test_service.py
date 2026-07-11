@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.events import EventBus, FileMutatedEvent
-from metagpt.common.hook.manager import HookManager
-from metagpt.common.hook.types import HookInput, HookOutcome
-from metagpt.environment.watching.events import CREATED, MODIFIED
-from metagpt.environment.watching.service import FILE_CHANGED_EVENT, FileWatchService
+from mote.common.events import EventBus, FileMutatedEvent
+from mote.common.hook.manager import HookManager
+from mote.common.hook.types import HookInput, HookOutcome
+from mote.environment.watching.events import CREATED, MODIFIED
+from mote.environment.watching.service import FILE_CHANGED_EVENT, FileWatchService
 
 
 class FakeHookRunner:

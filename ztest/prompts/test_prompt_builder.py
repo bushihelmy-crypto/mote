@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.think.prompt_builder — PromptBuilder + ThinkContext.
+"""Tests for mote.think.prompt_builder — PromptBuilder + ThinkContext.
 
 PromptBuilder is a stateless assembler: every method is a pure function over
 ThinkInputs / ThinkContext / the four subsystems. The tests cover the identity
@@ -15,14 +15,9 @@ import asyncio
 
 import pytest
 
-from metagpt.common import prompt as R
-from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
-from metagpt.think.prompt_builder import (
-    PromptBuilder,
-    ThinkContext,
-    ThinkInputs,
-    ThinkSubsystems,
-)
+from mote.common import prompt as R
+from mote.common.base.command_channel import PROMPT_VAR_KEYS
+from mote.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems
 
 from .conftest import FakeExecutor, FakeInjector, FakeSkillManager, make_config
 
@@ -79,9 +74,7 @@ class TestBuildRolePrefix:
         assert "be terse" in out
 
     def test_appends_env_clause(self):
-        ti = ThinkInputs(
-            profile="E", name="B", goal="g", env_desc="the office", other_role_names="Carol"
-        )
+        ti = ThinkInputs(profile="E", name="B", goal="g", env_desc="the office", other_role_names="Carol")
         out = PromptBuilder.build_role_prefix(ti)
         assert "the office" in out
         assert "Carol" in out
@@ -107,15 +100,11 @@ class TestBuildRoleInfo:
 # --------------------------------------------------------------------------
 class TestPickSummaryPrompt:
     def test_picks_recommend_when_needed(self):
-        out = PromptBuilder.pick_summary_prompt(
-            summary_prompt="plain", recommend_prompt="rec", need_recommend=True
-        )
+        out = PromptBuilder.pick_summary_prompt(summary_prompt="plain", recommend_prompt="rec", need_recommend=True)
         assert out == "rec"
 
     def test_picks_plain_otherwise(self):
-        out = PromptBuilder.pick_summary_prompt(
-            summary_prompt="plain", recommend_prompt="rec", need_recommend=False
-        )
+        out = PromptBuilder.pick_summary_prompt(summary_prompt="plain", recommend_prompt="rec", need_recommend=False)
         assert out == "plain"
 
 
@@ -152,10 +141,15 @@ class TestBuildSystemPrompt:
 
 
 class TestBuildUserPrompt:
-    def test_substitutes_current_state(self):
+    def test_empty_base_yields_empty_when_no_context(self):
+        # cwd + timestamp moved off the tail into per-turn reminder sources and the
+        # base template is now empty, so with no memory/reminders the tail is empty
+        # — no dangling "# Current State" header, no "current directory" line.
         ctx = ThinkContext(working_dir="/work")
         out = PromptBuilder._build_user_prompt(R.CMD_PROMPT, ctx)
-        assert "current directory: /work" in out
+        assert out == ""
+        assert "current directory" not in out
+        assert "Current State" not in out
 
     def test_prepends_memory_context(self):
         ctx = ThinkContext(working_dir="/w", memory_context="# MEMORY.md\nidx")
@@ -179,7 +173,7 @@ class TestBuildTuple:
         ctx = ThinkContext(role_info="ROLE", working_dir="/w")
         sys_p, usr_p = PromptBuilder.build(R.SYSTEM_PROMPT, R.CMD_PROMPT, ctx)
         assert "ROLE" in sys_p
-        assert "current directory: /w" in usr_p
+        assert isinstance(usr_p, str)
 
 
 # --------------------------------------------------------------------------
@@ -201,9 +195,10 @@ class TestSubstitutionMaps:
         assert d["tool_usage_guide"] == "TUG"
 
     def test_user_substitutions_keys(self):
+        # current_state is now empty: cwd + time moved to per-turn reminder sources.
         ctx = ThinkContext(working_dir="/here")
         d = PromptBuilder._user_substitutions(ctx)
-        assert d["current_state"].startswith("current directory: /here")
+        assert d["current_state"] == ""
 
 
 # --------------------------------------------------------------------------
@@ -221,7 +216,7 @@ class TestMakeMemory:
         assert "- [A](a.md) — hook" in context
 
     def test_missing_index_uses_empty_state(self, tmp_path):
-        from metagpt.common.prompt.memory import MEMORY_EMPTY_STATE
+        from mote.common.prompt.memory import MEMORY_EMPTY_STATE
 
         instructions, context = PromptBuilder._make_memory(tmp_path)
         assert instructions  # still produces instructions
@@ -319,7 +314,7 @@ class TestMakeEnvSection:
         assert "# Environment" in out
 
     def test_renders_project_directory(self):
-        out = PromptBuilder._make_env_section("m", working_dir="/w", project_root="/proj")
+        out = PromptBuilder._make_env_section("m", working_dir="/w")
         assert "Project directory: /w" in out
 
 
@@ -418,4 +413,6 @@ class TestCollectContext:
         assert "I am Bob" in sys_p
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in sys_p
         assert usr_p.startswith("# MEMORY.md")
-        assert "current directory: /work" in usr_p
+        # cwd no longer rides the tail; the env block in the system prompt carries
+        # the startup dir (the stable base), with no per-turn cwd reminder.
+        assert "current directory" not in usr_p

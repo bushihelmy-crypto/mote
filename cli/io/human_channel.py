@@ -5,7 +5,7 @@
 ``Role.ask_human`` (the capability behind the ``AskUserQuestion`` tool) delegates
 to ``state.env.ask_human(...)``. This is the §8 successor of the old
 ``_ConsoleHumanChannel``: instead of hard-wiring the REPL console, it routes to
-any :class:`~metagpt.cli.common.interface.ports.InputPort` (terminal / Web / IM share the same
+any :class:`~mote.cli.contracts.interface.ports.InputPort` (terminal / Web / IM share the same
 ``ask`` contract, §2.5), so the human channel is uniform across platforms.
 
 The single-agent driver has no multi-role environment, so address registration
@@ -20,7 +20,7 @@ import re
 from typing import Any, Optional
 
 # The PermissionEngine renders approval questions with these markers (see
-# ``metagpt/executor/permission/prompts.py``) and then routes the *free-text*
+# ``mote/executor/permission/prompts.py``) and then routes the *free-text*
 # reply back through ``request_approval`` → ``ask_human``. We intercept those
 # prompts here and drive the port's structured ``decide_approval`` selector
 # instead of a raw text input, mapping the choice back to a reply the engine's
@@ -124,7 +124,7 @@ class PortHumanChannel:
         is no ``\\n\\n`` block splitting and no line-position pairing: bug #1 / #2
         cannot recur even on this path.
         """
-        from metagpt.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
         out = []
         for q in questions.questions:
@@ -133,11 +133,7 @@ class PortHumanChannel:
             picks = [r.strip() for r in reply.split(",")] if q.multiSelect else [reply.strip()]
             selected = [p for p in picks if p in labels]
             free = "" if selected == picks else reply.strip()
-            out.append(
-                AskUserQuestionAnswer(
-                    header=q.header, question=q.question, selected=selected, free_text=free
-                )
-            )
+            out.append(AskUserQuestionAnswer(header=q.header, question=q.question, selected=selected, free_text=free))
         return AskUserQuestionAnswers(answers=out)
 
     async def _ask_text(self, question: str, labels: list, multi: bool) -> str:

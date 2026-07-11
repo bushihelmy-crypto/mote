@@ -12,9 +12,9 @@ model *type* passed in by the caller, so it never imports the loader or the
 - :func:`unknown_key_paths` — walk a merged dict against the model schema and
   report dotted paths that no field accepts (recursing into nested models). Used
   by the loader for strict mode (``load_config(..., strict=True)`` raises
-  :class:`~metagpt.common.exception.UnknownConfigKeysError`).
+  :class:`~mote.common.exception.UnknownConfigKeysError`).
 - redaction helpers (:func:`_is_secret`, :func:`_render_value`) — shared with the
-  reporting/CLI layer in :mod:`.report` (``python -m metagpt.common.config.report``).
+  reporting/CLI layer in :mod:`.report` (``python -m mote.common.config.report``).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from metagpt.common.config.layers import CREDENTIAL_DENYLIST
+from mote.common.config.layers import CREDENTIAL_DENYLIST
 
 # Substrings that mark a leaf as secret for the redacted dump.
 _SECRET_HINTS = ("key", "secret", "token", "password", "jwt")

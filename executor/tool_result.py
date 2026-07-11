@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from metagpt.common.const.tools import ERROR_PREFIX  # noqa: F401 (re-export for backward compat)
+from mote.common.const.tools import ERROR_PREFIX  # noqa: F401 (re-export for backward compat)
 
 # ToolError now lives in the global exception system; re-exported here so the
-# hundreds of ``from metagpt.executor.tool_result import ToolError`` /
+# hundreds of ``from mote.executor.tool_result import ToolError`` /
 # ``raise ToolError(...)`` call sites are unchanged and auto-upgraded to typed.
-from metagpt.common.exception import ErrorReport, ToolError  # noqa: F401 (re-export for backward compat)
+from mote.common.exception import ErrorReport, ToolError  # noqa: F401 (re-export for backward compat)
 
 
 @dataclass
@@ -128,5 +128,3 @@ class ToolResult:
             return raw
         output = str(raw) if raw is not None else ""
         return cls(output=output, success=True)
-
-

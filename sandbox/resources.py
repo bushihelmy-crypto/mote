@@ -83,11 +83,7 @@ class ResourceLimits:
         ``memory_max`` (capping swap with no RSS cap is meaningless), so an
         otherwise-empty limit set is treated as a no-op.
         """
-        return (
-            self.memory_max is None
-            and self.cpu_quota is None
-            and self.pids_max is None
-        )
+        return self.memory_max is None and self.cpu_quota is None and self.pids_max is None
 
 
 def cgroup_limits_available() -> bool:
@@ -225,9 +221,7 @@ def _cgroup2_mounted() -> bool:
     ``cgroup.controllers`` exists only on a cgroup v2 (unified) hierarchy, so its
     presence at the root is a cheap, reliable v2 signal (v1 has no such file).
     """
-    return os.path.isdir(_CGROUP_ROOT) and os.path.exists(
-        os.path.join(_CGROUP_ROOT, "cgroup.controllers")
-    )
+    return os.path.isdir(_CGROUP_ROOT) and os.path.exists(os.path.join(_CGROUP_ROOT, "cgroup.controllers"))
 
 
 def _user_manager_reachable() -> bool:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._apply_patch import (
+from mote.executor.dependency._apply_patch import (
     AddFile,
     ApplyPatchError,
     DeleteFile,
@@ -53,13 +53,7 @@ class TestDeleteFile:
 
 class TestUpdateFile:
     def test_update_with_context_and_change(self):
-        patch = _wrap(
-            "*** Update File: edit.py\n"
-            "@@ def f():\n"
-            " a = 1\n"
-            "-    b = 2\n"
-            "+    b = 3"
-        )
+        patch = _wrap("*** Update File: edit.py\n" "@@ def f():\n" " a = 1\n" "-    b = 2\n" "+    b = 3")
         hunks = parse_patch(patch)
         assert len(hunks) == 1
         upd = hunks[0]
@@ -78,27 +72,12 @@ class TestUpdateFile:
         assert upd.chunks[0].change_context is None
 
     def test_end_of_file_marker(self):
-        patch = _wrap(
-            "*** Update File: edit.py\n"
-            " last context\n"
-            "+appended\n"
-            "*** End of File"
-        )
+        patch = _wrap("*** Update File: edit.py\n" " last context\n" "+appended\n" "*** End of File")
         upd = parse_patch(patch)[0]
         assert upd.chunks[0].is_end_of_file is True
 
     def test_multiple_chunks(self):
-        patch = _wrap(
-            "*** Update File: edit.py\n"
-            "@@ first\n"
-            " a\n"
-            "-b\n"
-            "+B\n"
-            "@@ second\n"
-            " x\n"
-            "-y\n"
-            "+Y\n"
-        )
+        patch = _wrap("*** Update File: edit.py\n" "@@ first\n" " a\n" "-b\n" "+B\n" "@@ second\n" " x\n" "-y\n" "+Y\n")
         upd = parse_patch(patch)[0]
         assert len(upd.chunks) == 2
         assert upd.chunks[0].change_context == "first"
@@ -107,14 +86,7 @@ class TestUpdateFile:
 
 class TestMove:
     def test_update_with_move(self):
-        patch = _wrap(
-            "*** Update File: old.py\n"
-            "*** Move to: new.py\n"
-            "@@ ctx\n"
-            " a\n"
-            "-b\n"
-            "+c\n"
-        )
+        patch = _wrap("*** Update File: old.py\n" "*** Move to: new.py\n" "@@ ctx\n" " a\n" "-b\n" "+c\n")
         upd = parse_patch(patch)[0]
         assert isinstance(upd, UpdateFile)
         assert upd.path == "old.py"
@@ -147,41 +119,21 @@ class TestMultiHunk:
         ]
 
     def test_affected_paths_uses_move_destination(self):
-        patch = _wrap(
-            "*** Update File: old.py\n"
-            "*** Move to: new.py\n"
-            "@@ ctx\n"
-            " a\n"
-            "-b\n"
-            "+c\n"
-        )
+        patch = _wrap("*** Update File: old.py\n" "*** Move to: new.py\n" "@@ ctx\n" " a\n" "-b\n" "+c\n")
         hunks = parse_patch(patch)
         assert affected_paths(hunks) == [("new.py", "move")]
 
 
 class TestLenientHeredoc:
     def test_heredoc_wrapper_stripped(self):
-        patch = (
-            "<<EOF\n"
-            "*** Begin Patch\n"
-            "*** Add File: foo.py\n"
-            "+hi\n"
-            "*** End Patch\n"
-            "EOF"
-        )
+        patch = "<<EOF\n" "*** Begin Patch\n" "*** Add File: foo.py\n" "+hi\n" "*** End Patch\n" "EOF"
         hunks = parse_patch(patch)
         assert len(hunks) == 1
         assert isinstance(hunks[0], AddFile)
         assert hunks[0].path == "foo.py"
 
     def test_quoted_heredoc_wrapper_stripped(self):
-        patch = (
-            "<<'EOF'\n"
-            "*** Begin Patch\n"
-            "*** Delete File: gone.py\n"
-            "*** End Patch\n"
-            "EOF"
-        )
+        patch = "<<'EOF'\n" "*** Begin Patch\n" "*** Delete File: gone.py\n" "*** End Patch\n" "EOF"
         hunks = parse_patch(patch)
         assert isinstance(hunks[0], DeleteFile)
 

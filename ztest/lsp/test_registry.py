@@ -1,14 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.lsp.registry`` — dedup + volume-limited diagnostics."""
+"""Tests for ``mote.roles.lsp.registry`` — dedup + volume-limited diagnostics."""
 from __future__ import annotations
 
-from metagpt.roles.lsp.registry import (
-    Diagnostic,
-    DiagnosticRegistry,
-    parse_diagnostic,
-    severity_label,
-)
+from mote.roles.lsp.registry import Diagnostic, DiagnosticRegistry, parse_diagnostic, severity_label
 
 
 def _d(line=0, msg="boom", sev=1):

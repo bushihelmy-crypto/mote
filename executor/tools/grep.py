@@ -15,7 +15,7 @@ defaults mirror Claude Code's tool so model behavior stays familiar:
   paths are relativized to the working directory to save tokens.
 
 ripgrep is a hard dependency: a static ``x86_64-linux`` build is vendored under
-``metagpt/vendor/ripgrep/`` and ``_find_ripgrep`` also probes ``PATH``. If no
+``mote/vendor/ripgrep/`` and ``_find_ripgrep`` also probes ``PATH``. If no
 usable ``rg`` is found, a text search raises a ``ToolError`` (there is no
 in-process Python fallback — that would run on the event loop and freeze the
 caller on large trees).
@@ -46,23 +46,44 @@ import re
 import shutil
 import sys
 import time
-from typing import ClassVar, Optional
+from typing import Callable, ClassVar, Optional
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.dependency._document import (
-    extract_document_text as _extract_document_text,
-    is_document as _is_document,
-)
-from metagpt.common.const.tools import (
-    VCS_DIRECTORIES_TO_EXCLUDE,
+from mote.common.const.tools import (
     DEFAULT_HEAD_LIMIT,
     DOCUMENT_EXTENSIONS,
     MAX_COLUMNS,
     SEARCH_TIMEOUT,
+    VCS_DIRECTORIES_TO_EXCLUDE,
 )
-from metagpt.common.prompt.tools import GREP_DESCRIPTION
+from mote.common.prompt.tools import GREP_DESCRIPTION
+from mote.common.text import count_noun, display_path, plural
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._document import extract_document_text as _extract_document_text
+from mote.executor.dependency._document import is_document as _is_document
+from mote.executor.dependency._paths import base_cwd, resolve_path
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise/return site).
+# Structural fragments (path:lineno rows, pagination suffixes) stay inline.
+_MSG_PATTERN_REQUIRED = "Error: 'pattern' argument is required."
+_MSG_INVALID_OUTPUT_MODE = (
+    "Error: invalid output_mode '{output_mode}'. Must be one of " "'files_with_matches', 'content', 'count'."
+)
+_MSG_PATH_NOT_FOUND = (
+    "Error: path does not exist: {path}. The path should be absolute or "
+    "relative to the working directory ({base_cwd})."
+)
+_MSG_RIPGREP_MISSING = (
+    "Error: ripgrep (rg) is required for text search but was not found. "
+    "Install ripgrep or ensure the vendored binary is present at {vendored}."
+)
+_MSG_SEARCH_TIMEOUT = "Error: search timed out after {seconds:.0f}s. Try a more specific path or pattern."
+_MSG_INVALID_REGEX = "Error: invalid regular expression '{pattern}': {error}"
+_MSG_SEARCH_FAILED = "Error running search: {error}"
+_MSG_NO_FILES = "No files found"
+_MSG_NO_MATCHES = "No matches found"
 
 # Minimal `rg --type` name -> file extension map for the Python fallback.
 # ripgrep itself knows hundreds of types; this covers the common ones the
@@ -110,19 +131,32 @@ _DOC_ONLY_TYPES = frozenset({"pdf", "docx", "word", "xlsx", "excel"})
 # these; the Python passes do NOT read .gitignore, so without explicit pruning
 # they would descend into every node_modules/.venv (potentially millions of
 # files), taking effectively forever and blocking the caller.
-_HEAVY_DIRECTORIES_TO_EXCLUDE = frozenset({
-    "node_modules", ".venv", "venv", "site-packages",
-    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    ".next", "dist", "build",
-})
+_HEAVY_DIRECTORIES_TO_EXCLUDE = frozenset(
+    {
+        "node_modules",
+        ".venv",
+        "venv",
+        "site-packages",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".next",
+        "dist",
+        "build",
+    }
+)
 
 
 # Our own vendored ripgrep, so we don't depend on a system rg or one shipped by
-# another tool. Only x86_64-linux is checked in (see metagpt/vendor/ripgrep/);
+# another tool. Only x86_64-linux is checked in (see mote/vendor/ripgrep/);
 # other platforms fall through to a system rg on PATH.
 _VENDORED_RIPGREP = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "vendor", "ripgrep", f"{platform.machine()}-{sys.platform}", "rg",
+    "vendor",
+    "ripgrep",
+    f"{platform.machine()}-{sys.platform}",
+    "rg",
 )
 
 
@@ -175,7 +209,7 @@ def _apply_head_limit(items: list, limit: Optional[int], offset: int) -> tuple[l
     if limit == 0:
         return items[offset:], None
     effective = DEFAULT_HEAD_LIMIT if limit is None else limit
-    sliced = items[offset:offset + effective]
+    sliced = items[offset : offset + effective]
     truncated = (len(items) - offset) > effective
     return sliced, (effective if truncated else None)
 
@@ -191,6 +225,16 @@ class Grep(BaseTool):
     # Grep output is usually compact; cap below the default (CC).
     max_result_size_chars: ClassVar[int] = 20_000
     description = GREP_DESCRIPTION
+    # get_cwd is the stable base for the default search root + output
+    # relativization. Optional: unbound (no Role) falls back to the process cwd.
+    requires = ("get_cwd",)
+
+    # Injected from Role by bind(): Role.get_cwd.
+    get_cwd: Callable[[], str]
+
+    def _base_cwd(self) -> str:
+        """The stable base dir for default root / relativization (unbound: cwd)."""
+        return base_cwd(getattr(self, "get_cwd", None))
 
     async def call(
         self,
@@ -252,20 +296,14 @@ class Grep(BaseTool):
                 pagination. Default 0.
         """
         if not pattern or not pattern.strip():
-            raise ToolError("Error: 'pattern' argument is required.")
+            raise ToolError(_MSG_PATTERN_REQUIRED)
         if output_mode not in ("files_with_matches", "content", "count"):
-            raise ToolError(
-                f"Error: invalid output_mode '{output_mode}'. Must be one of "
-                f"'files_with_matches', 'content', 'count'."
-            )
+            raise ToolError(_MSG_INVALID_OUTPUT_MODE.format(output_mode=output_mode))
 
-        search_root = os.path.abspath(os.path.expanduser(path.strip())) if path.strip() else os.getcwd()
+        base_cwd = self._base_cwd()
+        search_root = resolve_path(getattr(self, "get_cwd", None), path.strip()) if path.strip() else base_cwd
         if not os.path.exists(search_root):
-            raise ToolError(
-                f"Error: path does not exist: {path}. The path should be "
-                f"absolute or relative to the current working directory "
-                f"({os.getcwd()})."
-            )
+            raise ToolError(_MSG_PATH_NOT_FOUND.format(path=path, base_cwd=base_cwd))
 
         rg = _find_ripgrep()
         # A doc-only type (pdf/docx/xlsx/...) has no ripgrep --type and matches
@@ -283,33 +321,46 @@ class Grep(BaseTool):
             # ripgrep is the sole text-search engine (no in-process fallback).
             if not doc_only:
                 if rg is None:
-                    raise ToolError(
-                        "Error: ripgrep (rg) is required for text search but was "
-                        "not found. Install ripgrep or ensure the vendored binary "
-                        f"is present at {_VENDORED_RIPGREP}."
-                    )
-                rows = await self._run_ripgrep(rg, search_root, pattern, glob, type,
-                                               output_mode, case_insensitive, line_numbers,
-                                               before_context, after_context, context, multiline)
+                    raise ToolError(_MSG_RIPGREP_MISSING.format(vendored=_VENDORED_RIPGREP))
+                rows = await self._run_ripgrep(
+                    rg,
+                    search_root,
+                    pattern,
+                    glob,
+                    type,
+                    output_mode,
+                    case_insensitive,
+                    line_numbers,
+                    before_context,
+                    after_context,
+                    context,
+                    multiline,
+                )
             # ripgrep can't read PDF/Word/Excel (binary or zipped XML). When the
             # query targets documents, run a separate extraction pass and merge —
             # no overlap, since rg never matched those files. Synchronous, so
             # offload it to a thread to keep the loop free.
             if want_documents:
                 rows += await asyncio.to_thread(
-                    self._run_documents, search_root, pattern, glob, type, output_mode,
-                    case_insensitive, line_numbers, multiline, deadline)
+                    self._run_documents,
+                    search_root,
+                    pattern,
+                    glob,
+                    type,
+                    output_mode,
+                    case_insensitive,
+                    line_numbers,
+                    multiline,
+                    deadline,
+                )
         except TimeoutError:
-            raise ToolError(
-                f"Error: search timed out after {SEARCH_TIMEOUT:.0f}s. Try a more "
-                f"specific path or pattern."
-            )
+            raise ToolError(_MSG_SEARCH_TIMEOUT.format(seconds=SEARCH_TIMEOUT))
         except re.error as e:
-            raise ToolError(f"Error: invalid regular expression '{pattern}': {e}")
+            raise ToolError(_MSG_INVALID_REGEX.format(pattern=pattern, error=e))
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001 — surface the failure to the model
-            raise ToolError(f"Error running search: {e}")
+            raise ToolError(_MSG_SEARCH_FAILED.format(error=e))
 
         return self._format(rows, search_root, output_mode, head_limit, offset)
 
@@ -337,9 +388,21 @@ class Grep(BaseTool):
                 return True
         return False
 
-    async def _run_ripgrep(self, rg, root, pattern, glob, type_, output_mode,
-                           case_insensitive, line_numbers, before_context,
-                           after_context, context, multiline) -> list[str]:
+    async def _run_ripgrep(
+        self,
+        rg,
+        root,
+        pattern,
+        glob,
+        type_,
+        output_mode,
+        case_insensitive,
+        line_numbers,
+        before_context,
+        after_context,
+        context,
+        multiline,
+    ) -> list[str]:
         """Run the ripgrep binary and return its stdout lines (no trailing CR).
 
         Exit code 0 = matches, 1 = no matches (both fine); anything else raises.
@@ -399,8 +462,9 @@ class Grep(BaseTool):
             return stripped
         return lines
 
-    def _run_documents(self, root, pattern, glob, type_, output_mode,
-                       case_insensitive, line_numbers, multiline, deadline=None) -> list[str]:
+    def _run_documents(
+        self, root, pattern, glob, type_, output_mode, case_insensitive, line_numbers, multiline, deadline=None
+    ) -> list[str]:
         """Search rich documents (PDF/Word/Excel) by extracting their text first.
 
         Each document's extracted text is matched with the same regex and fed
@@ -432,8 +496,7 @@ class Grep(BaseTool):
             if not data:
                 continue
             if regex.search(data):
-                self._collect(rows, output_mode, file_path, data, regex,
-                              line_numbers, multiline=multiline)
+                self._collect(rows, output_mode, file_path, data, regex, line_numbers, multiline=multiline)
         return rows
 
     @staticmethod
@@ -522,12 +585,9 @@ class Grep(BaseTool):
         ordered = sorted(parsed, key=lambda pl: (-mtime(pl[0]), pl[0]))
         limited, applied = _apply_head_limit(ordered, head_limit, offset)
         if not limited:
-            return "No files found"
-        lines = [
-            f"{self._rel(path, root)}:{lineno}" if lineno else self._rel(path, root)
-            for path, lineno in limited
-        ]
-        header = f"Found {len(lines)} file{'s' if len(lines) != 1 else ''}{self._pagination(applied, offset)}"
+            return _MSG_NO_FILES
+        lines = [f"{self._rel(path, root)}:{lineno}" if lineno else self._rel(path, root) for path, lineno in limited]
+        header = f"Found {count_noun(len(lines), 'file')}{self._pagination(applied, offset)}"
         return header + "\n" + "\n".join(lines)
 
     def _format_count(self, rows, root, head_limit, offset) -> str:
@@ -545,11 +605,10 @@ class Grep(BaseTool):
             total += count
             files += 1
             out_lines.append(f"{self._rel(head, root)}:{count}")
-        body = "\n".join(out_lines) if out_lines else "No matches found"
+        body = "\n".join(out_lines) if out_lines else _MSG_NO_MATCHES
         summary = (
-            f"\n\nFound {total} total "
-            f"{'occurrence' if total == 1 else 'occurrences'} across "
-            f"{files} {'file' if files == 1 else 'files'}"
+            f"\n\nFound {total} total {plural('occurrence', total)} across "
+            f"{count_noun(files, 'file')}"
             f"{self._pagination(applied, offset)}"
         )
         return body + summary
@@ -557,7 +616,7 @@ class Grep(BaseTool):
     def _format_content(self, rows, root, head_limit, offset) -> str:
         limited, applied = _apply_head_limit(rows, head_limit, offset)
         if not limited:
-            return "No matches found"
+            return _MSG_NO_MATCHES
         out = []
         for line in limited:
             # Lines are "<abs path>:<rest>"; relativize the path prefix only.
@@ -570,13 +629,9 @@ class Grep(BaseTool):
         pag = self._pagination(applied, offset)
         return body + (f"\n\n[Showing results with pagination ={pag.lstrip(' ')}]" if pag else "")
 
-    @staticmethod
-    def _rel(abs_path: str, root: str) -> str:
-        """Relativize a path against cwd to save tokens; fall back to abs path."""
-        try:
-            return os.path.relpath(abs_path, os.getcwd())
-        except ValueError:
-            return abs_path
+    def _rel(self, abs_path: str, root: str) -> str:
+        """Relativize a path against the stable cwd to save tokens; fall back to abs."""
+        return display_path(abs_path, self._base_cwd())
 
     @staticmethod
     def _pagination(applied_limit, offset) -> str:

@@ -17,7 +17,7 @@ import asyncio
 import inspect
 from typing import Awaitable, Callable, Optional, Union
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 #: A tick callback. May be sync or async. Returning ``False`` stops the loop;
 #: any other value (including ``None``) keeps it running.

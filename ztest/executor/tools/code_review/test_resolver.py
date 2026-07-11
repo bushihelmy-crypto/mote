@@ -1,8 +1,8 @@
 """Unit tests for the comment resolver (code_review/resolver.py)."""
 from __future__ import annotations
 
-from metagpt.executor.tools.code_review.parser import FileDiff, Hunk
-from metagpt.executor.tools.code_review.resolver import resolve_comment
+from mote.executor.tools.code_review.parser import FileDiff, Hunk
+from mote.executor.tools.code_review.resolver import resolve_comment
 
 
 def _file_with_lines(lines):
@@ -42,11 +42,7 @@ class TestMultiLine:
         assert span == (12, 13)
 
     def test_full_block(self):
-        snippet = (
-            "    token = req.get('token')\n"
-            "    if token == 'admin':\n"
-            "        grant_access()"
-        )
+        snippet = "    token = req.get('token')\n" "    if token == 'admin':\n" "        grant_access()"
         span = resolve_comment(snippet, _FILE)
         assert span == (11, 13)
 

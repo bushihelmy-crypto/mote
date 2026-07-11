@@ -1,6 +1,5 @@
-from contextlib import asynccontextmanager
 import json
-from pydantic_core import to_jsonable_python
+from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import timedelta
 from typing import Any, AsyncGenerator
@@ -9,17 +8,21 @@ from urllib.parse import urljoin, urlparse
 import anyio
 import httpx
 import mcp.types as types
-from mcp.shared.message import SessionMessage
 from anyio.abc import TaskStatus
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from httpx_sse import aconnect_sse
+from mcp.shared.message import SessionMessage
+from pydantic_core import to_jsonable_python
 
-from metagpt.executor.mcp.client.base import EnhancedClientSession, MCPBaseClient
-from metagpt.common.logs import logger
-from metagpt.common.utils.pydantic_compat import model_dump, model_dump_json, model_validate_json
+from mote.common.logs import logger
+from mote.common.utils.pydantic_compat import model_dump, model_dump_json, model_validate_json
+from mote.executor.mcp.client.base import EnhancedClientSession, MCPBaseClient
 
 
 def _serialize_message(message: Any) -> Any:
+    # Try each serialization path in order of preference; a failure just falls
+    # through to the next candidate (the broad excepts are deliberate — any
+    # serializer that raises is simply not applicable to this message shape).
     if hasattr(message, "message") and isinstance(getattr(message, "message", None), types.JSONRPCMessage):
         try:
             return json.loads(model_dump_json(message.message, by_alias=True, exclude_none=True))
@@ -48,15 +51,10 @@ def _serialize_message(message: Any) -> Any:
             pass
     if hasattr(message, "dict"):
         try:
-            return message.dict()
-        except Exception:
-            pass
-    if hasattr(message, "dict"):
-        try:
             return message.dict(by_alias=True, exclude_none=True)
         except TypeError:
             return message.dict()
-    if is_dataclass(message):
+    if is_dataclass(message) and not isinstance(message, type):
         return asdict(message)
     return message
 
@@ -163,10 +161,10 @@ class MCPSSEClient(MCPBaseClient):
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[EnhancedClientSession, None]:
         """Create new session to fix: 'RuntimeError: Attempted to exit cancel scope in a different task than it was entered in'"""
-        async with enhanced_sse_client(
-            self.server_config.url, sse_read_timeout=self.server_config.sse_read_timeout
-        ) as streams:
-            read_timeout_seconds = timedelta(seconds=self.server_config.tool_call_timeout)
+        url = self.server_config.url
+        assert url is not None, "SSE server config requires a url"
+        async with enhanced_sse_client(url, sse_read_timeout=self.server_config.sse_read_timeout or 60 * 5) as streams:
+            read_timeout_seconds = timedelta(seconds=self.server_config.tool_call_timeout or 60)
             async with EnhancedClientSession(*streams, read_timeout_seconds=read_timeout_seconds) as session:
                 await session.initialize()
                 yield session

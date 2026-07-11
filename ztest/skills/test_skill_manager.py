@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.context.skills.skill_manager.SkillManager.
+"""Tests for mote.context.skills.skill_manager.SkillManager.
 
 ensure_ready() builds a default SkillPool (which reads skill_pool._BUILTIN_DIR),
 so that constant is monkeypatched at the module where it is *looked up*. Skills
@@ -8,8 +8,8 @@ are read directly from the builtin dir; nothing is copied to disk.
 """
 from __future__ import annotations
 
-import metagpt.context.skills.skill_pool as sp_mod
-from metagpt.context.skills.skill_manager import SkillManager
+import mote.context.skills.skill_pool as sp_mod
+from mote.context.skills.skill_manager import SkillManager
 
 from .conftest import write_skill
 

@@ -11,7 +11,7 @@ import the ``roles`` layer (the strict downward-only layering rule). The concret
 Role capability (``record_kernel_state``); the tool only depends on this
 structural face, so no upward import is introduced.
 
-Mirrors :class:`~metagpt.common.interface.TerminalStateStore`: a leaf module that
+Mirrors :class:`~mote.common.interface.TerminalStateStore`: a leaf module that
 only needs ``typing``, importable from anywhere without risking a cycle. Kept a
 separate type (rather than reusing ``TerminalStateStore``) because the kernel and
 terminal restores are independent — they re-seed different processes via

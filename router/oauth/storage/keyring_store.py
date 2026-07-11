@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from metagpt.common.logs import logger
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.storage.base import CredentialStore
+from mote.common.logs import logger
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.storage.base import CredentialStore
 
-_SERVICE = "metagpt-oauth"
+_SERVICE = "mote-oauth"
 
 
 class KeyringCredentialStore(CredentialStore):

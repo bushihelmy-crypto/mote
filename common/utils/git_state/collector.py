@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from metagpt.common.utils.common import aexecute
+from mote.common.utils.common import aexecute
 
 # How long a collected snapshot stays fresh (seconds). The collector runs once per
 # think cycle; a small TTL coalesces bursts without showing stale state for long.
@@ -36,8 +36,8 @@ class GitState:
     """An immutable snapshot of a repository's working-tree state."""
 
     repo_root: str
-    branch: Optional[str] = None          # branch name, or None when detached
-    detached_sha: Optional[str] = None    # short sha when HEAD is detached
+    branch: Optional[str] = None  # branch name, or None when detached
+    detached_sha: Optional[str] = None  # short sha when HEAD is detached
     staged: int = 0
     unstaged: int = 0
     untracked: int = 0
@@ -81,7 +81,7 @@ def _resolve_gitfile(dotgit_file: str, base: str) -> Optional[str]:
     prefix = "gitdir:"
     if not content.startswith(prefix):
         return None
-    path = content[len(prefix):].strip()
+    path = content[len(prefix) :].strip()
     if not os.path.isabs(path):
         path = os.path.normpath(os.path.join(base, path))
     return path
@@ -109,7 +109,7 @@ def _read_branch(git_dir: str) -> tuple[Optional[str], Optional[str]]:
     if head.startswith("ref:"):
         ref = head[4:].strip()
         if ref.startswith("refs/heads/"):
-            return ref[len("refs/heads/"):], None
+            return ref[len("refs/heads/") :], None
         return ref or None, None
     # Detached HEAD: HEAD holds a raw sha.
     sha = head.strip()
@@ -124,7 +124,7 @@ async def _git(cwd: str, args: str) -> Optional[str]:
         return None
     if not result:
         return None
-    rc, stdout, _stderr = result[0], result[1], result[2]
+    rc, stdout = result[0], result[1]
     if rc != 0:
         return None
     return stdout

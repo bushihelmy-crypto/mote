@@ -9,7 +9,7 @@ Three logical channels added to the legacy v4 baseline:
   * 12-dim assistant handcrafted features (refusal/clarification/usage stats)
   * History-user concatenation helper
 
-Phase 3's 390-dim online assembly lives in ``metagpt.router.ml.inference.features``.
+Phase 3's 390-dim online assembly lives in ``mote.router.ml.inference.features``.
 The legacy 383-dim ``V4FeatureExtractor`` orchestrator is intentionally dropped —
 only the helper functions + :class:`BGEChannelExtractor` reused by the Phase-3
 inference package are kept. ``joblib`` / ``sklearn`` stay top-level imports here
@@ -23,7 +23,7 @@ import joblib
 import numpy as np
 from sklearn.decomposition import PCA
 
-from metagpt.router.ml.bge_onnx import OnnxBGE
+from mote.router.ml.bge_onnx import OnnxBGE
 
 __all__ = [
     "extract_assistant_handcrafted",

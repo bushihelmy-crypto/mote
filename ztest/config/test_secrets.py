@@ -1,18 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.config.secrets`` — api_key_helper resolution."""
+"""Tests for ``mote.common.config.secrets`` — api_key_helper resolution."""
 from __future__ import annotations
 
 import sys
 
 import pytest
 
-from metagpt.common.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
-from metagpt.common.config.secrets import (
-    clear_cache,
-    resolve_api_key,
-    run_api_key_helper,
-)
+from mote.common.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
+from mote.common.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +19,7 @@ def _fresh_cache():
 
 
 def _echo_cmd(value: str) -> str:
-    return f'{sys.executable} -c "print(\'{value}\')"'
+    return f"{sys.executable} -c \"print('{value}')\""
 
 
 def test_run_helper_returns_stripped_stdout():
@@ -35,7 +31,7 @@ def test_run_helper_empty_command_is_empty():
 
 
 def test_run_helper_nonzero_exit_is_empty():
-    assert run_api_key_helper(f"{sys.executable} -c \"import sys; sys.exit(3)\"", use_cache=False) == ""
+    assert run_api_key_helper(f'{sys.executable} -c "import sys; sys.exit(3)"', use_cache=False) == ""
 
 
 def test_resolve_fills_when_placeholder():

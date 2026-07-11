@@ -1,4 +1,4 @@
-"""metagpt.common.hook — opt-in agent-lifecycle hook subsystem.
+"""mote.common.hook — opt-in agent-lifecycle hook subsystem.
 
 A bottom-layer package (imports only stdlib + ``common``) so any layer may use
 it directly. Synthesizes the Claude Code + Codex hook engines: matcher groups,
@@ -10,15 +10,8 @@ the executor seam (``ToolExecutor.run_command``) — this package never imports
 the executor.
 """
 
-from metagpt.common.hook.manager import HookCallback, HookManager
-from metagpt.common.hook.types import (
-    EMPTY,
-    HookBehavior,
-    HookEvent,
-    HookInput,
-    HookOutcome,
-    fold,
-)
+from mote.common.hook.manager import HookCallback, HookManager
+from mote.common.hook.types import EMPTY, HookBehavior, HookEvent, HookInput, HookOutcome, fold
 
 __all__ = [
     "HookManager",

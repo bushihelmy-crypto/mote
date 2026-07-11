@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.utils.role_zero_utils import loads_xml, parse_commands2
+from mote.common.utils.role_zero_utils import loads_xml, parse_commands2
 
 PATCH = "*** Begin Patch\n*** Add File: a.py\n+x\n*** End Patch"
 
@@ -57,10 +57,7 @@ class TestLoadsXmlRepair:
 
     @pytest.mark.asyncio
     async def test_earlier_command_kept_last_truncated_recovered(self):
-        data = (
-            "<Read>\n<path>\na.py\n</path>\n</Read>\n"
-            "<ApplyPatch.run>\n<input>\n" + PATCH + "\n"
-        )
+        data = "<Read>\n<path>\na.py\n</path>\n</Read>\n" "<ApplyPatch.run>\n<input>\n" + PATCH + "\n"
         cmds, err = await loads_xml(data, {"Read", "ApplyPatch.run"})
         assert err == ""
         assert [c["command_name"] for c in cmds] == ["Read", "ApplyPatch.run"]

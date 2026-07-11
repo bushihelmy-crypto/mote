@@ -21,7 +21,7 @@ from typing import Optional
 
 import pytest
 
-from metagpt.common.events import (
+from mote.common.events import (
     POST_TOOL_USE,
     PRE_TOOL_USE,
     EventBus,
@@ -35,7 +35,7 @@ from metagpt.common.events import (
     observe_event_sync,
     set_bus,
 )
-from metagpt.common.interface.event_subscriber import (
+from mote.common.interface.event_subscriber import (
     DURABLE,
     BusAware,
     ControlStage,
@@ -504,9 +504,7 @@ async def test_durable_sink_is_not_time_boxed():
 async def test_observe_runs_observers_but_not_control():
     bus = EventBus()
     log: list = []
-    bus.subscribe(
-        ControlSub(log, handles=(PRE_TOOL_USE,), outcome=ToolCallOutcome(behavior="deny"), tag="ctrl")
-    )
+    bus.subscribe(ControlSub(log, handles=(PRE_TOOL_USE,), outcome=ToolCallOutcome(behavior="deny"), tag="ctrl"))
     bus.subscribe(ObserverSub(20, log, tag="obs"))
     await bus.observe(PreToolUseEvent(tool_name="Bash"))
     # Only the observer ran; control plane is skipped on the observation path.
@@ -638,7 +636,7 @@ def test_control_subclass_with_empty_handles_fails_at_class_def():
 def test_fail_closed_subclass_without_on_failure_fails_at_class_def():
     """A fail-closed gate must define ``on_failure`` so the bus can synthesize a
     typed deny when it crashes; omitting it is caught at class-def time."""
-    from metagpt.common.interface.event_subscriber import FAIL_CLOSED
+    from mote.common.interface.event_subscriber import FAIL_CLOSED
 
     with pytest.raises(TypeError, match="on_failure"):
 
@@ -724,7 +722,7 @@ async def test_wrong_type_outcome_is_contained_fail_open():
 async def test_wrong_type_outcome_is_contained_fail_closed_denies():
     """A fail-closed gate whose (buggy) outcome is the wrong type is contained
     per ``fail_mode`` — its ``on_failure`` typed deny folds, the turn survives."""
-    from metagpt.common.interface.event_subscriber import FAIL_CLOSED
+    from mote.common.interface.event_subscriber import FAIL_CLOSED
 
     class WrongTypeGate(ControlSubscriber):
         handles = (PRE_TOOL_USE,)

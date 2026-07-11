@@ -12,15 +12,15 @@ Phase ① ships two working human channels — ``terminal`` (rich TUI) and
 ``app_server`` to be filled in later phases (§8.1 ④⑤).
 """
 
-from metagpt.cli.common.base import BaseConsumer
-from metagpt.cli.common.interface import Consumer
-from metagpt.cli.consumers.registry import (
+from mote.cli.consumers.registry import (
     ConsumerSpec,
     build_consumer,
     build_consumers,
     register_consumer,
     registered_consumers,
 )
+from mote.cli.contracts.base import BaseConsumer
+from mote.cli.contracts.interface import Consumer
 
 __all__ = [
     "Consumer",

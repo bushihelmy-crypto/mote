@@ -28,8 +28,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from metagpt.common.hook.types import EMPTY, HookOutcome
-from metagpt.common.logs import logger
+from mote.common.hook.types import EMPTY, HookOutcome
+from mote.common.logs import logger
 
 
 def _coerce_context(value: Any) -> list[str]:

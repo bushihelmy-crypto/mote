@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from metagpt.common.const.tools import DOCUMENT_EXTENSIONS
+from mote.common.const.tools import DOCUMENT_EXTENSIONS
 
 
 def is_document(file_path: str) -> bool:
@@ -50,7 +50,7 @@ def extract_pdf_text(file_path: str) -> Optional[str]:
         parts = []
         with fitz.open(file_path) as doc:
             for page in doc:
-                parts.append(page.get_text("text"))
+                parts.append(page.get_text("text"))  # type: ignore[attr-defined]  # fitz.Page stub gap
         return "\n".join(parts)
     except ImportError:
         pass

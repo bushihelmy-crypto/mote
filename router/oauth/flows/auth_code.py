@@ -14,13 +14,13 @@ import threading
 from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from metagpt.common.config.config.oauth_config import OAuthProviderConfig
-from metagpt.common.logs import logger
-from metagpt.router.oauth.client import OAuthClient
-from metagpt.router.oauth.errors import OAuthConfigError, OAuthRefreshError
-from metagpt.router.oauth.flows.callbacks import LoginCallbacks
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.pkce import gen_code_challenge, gen_code_verifier, gen_state
+from mote.common.config.config.oauth_config import OAuthProviderConfig
+from mote.common.logs import logger
+from mote.router.oauth.client import OAuthClient
+from mote.router.oauth.errors import OAuthConfigError, OAuthRefreshError
+from mote.router.oauth.flows.callbacks import LoginCallbacks
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.pkce import gen_code_challenge, gen_code_verifier, gen_state
 
 _DEFAULT_TIMEOUT = 300.0  # seconds to wait for the browser redirect
 

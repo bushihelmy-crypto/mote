@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.permission.classifier.classify_command``.
+"""Unit tests for ``mote.executor.permission.classifier.classify_command``.
 
 Covers the three verdicts — known-safe (auto-allow), destructive (force ask),
 and unknown (defer) — plus shell composition, redirect/substitution
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.permission.classifier import classify_command
+from mote.executor.permission.classifier import classify_command
 
 
 class TestKnownSafe:

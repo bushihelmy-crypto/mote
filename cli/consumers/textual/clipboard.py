@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Pure OS clipboard helpers for the Textual host.
 
-:class:`~metagpt.cli.consumers.textual.app.MetaGPTApp` copies the transcript
+:class:`~mote.cli.consumers.textual.app.MoteApp` copies the transcript
 selection through Textual's default OSC 52 path *except* on a local WSL host,
 where it writes the Windows clipboard natively (VS Code's integrated terminal
 *appends* OSC 52 payloads instead of replacing, so repeated copies doubled). The

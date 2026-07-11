@@ -13,12 +13,8 @@ from typing import Annotated
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import GraphState
-from metagpt.executor.tasks.bggraph.channels import (
-    _is_reducer,
-    apply_updates,
-    derive_reducers,
-)
+from mote.executor.tasks.bggraph import GraphState
+from mote.executor.tasks.bggraph.channels import _is_reducer, apply_updates, derive_reducers
 
 
 class TestIsReducer:

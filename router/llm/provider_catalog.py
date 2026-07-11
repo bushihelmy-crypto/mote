@@ -3,15 +3,15 @@
 """Provider catalog: data-only brand presets for LLM configuration.
 
 The catalog now lives beside :class:`LLMConfig` in
-``metagpt.common.config.config.llm_config`` so the config validator can apply
+``mote.common.config.config.llm_config`` so the config validator can apply
 brand presets without a ``common -> router`` import cycle. This module re-exports
 those names as the router-facing surface (``router -> common`` is the correct
-dependency direction), keeping ``metagpt.router.llm.provider_catalog`` import
+dependency direction), keeping ``mote.router.llm.provider_catalog`` import
 paths stable for existing callers and tests.
 """
 from __future__ import annotations
 
-from metagpt.common.config.config.llm_config import (
+from mote.common.config.config.llm_config import (
     PROVIDER_CATALOG,
     ProviderPreset,
     apply_provider_preset,

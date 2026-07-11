@@ -18,7 +18,7 @@ guard) is added by registering another control subscriber, not by threading more
   decide" must fail safe.
 
 The gate is pure: it reads only the resolved lineage facts the
-:class:`~metagpt.common.events.types.PreAgentSpawnEvent` carries (parent path,
+:class:`~mote.common.events.types.PreAgentSpawnEvent` carries (parent path,
 child depth, effective ceiling), so it imports no runtime state. The emitter
 (``AgentControl.spawn_agent``) translates a ``deny`` outcome back into the
 ``AgentLimitReached`` its callers already expect.
@@ -27,10 +27,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.events.outcomes import SpawnOutcome
-from metagpt.common.events.types import PRE_AGENT_SPAWN, PreAgentSpawnEvent
-from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
-from metagpt.environment.registry import exceeds_agent_spawn_depth_limit
+from mote.common.events.outcomes import SpawnOutcome
+from mote.common.events.types import PRE_AGENT_SPAWN, PreAgentSpawnEvent
+from mote.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
+from mote.environment.registry import exceeds_agent_spawn_depth_limit
 
 
 class SpawnGate(ControlSubscriber):
@@ -49,9 +49,7 @@ class SpawnGate(ControlSubscriber):
         # Only spawn requests are gated; everything else is not ours to judge.
         if not isinstance(event, PreAgentSpawnEvent):
             return None
-        if event.max_depth is not None and exceeds_agent_spawn_depth_limit(
-            event.child_depth, event.max_depth
-        ):
+        if event.max_depth is not None and exceeds_agent_spawn_depth_limit(event.child_depth, event.max_depth):
             return SpawnOutcome(
                 denied=True,
                 reason=f"spawn depth limit ({event.max_depth}) reached at {event.parent_path}",

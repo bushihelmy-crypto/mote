@@ -39,15 +39,9 @@ from PIL import Image
 from pydantic_core import to_jsonable_python
 from tenacity import RetryCallState, RetryError
 
-from metagpt.common.logs import logger
-from metagpt.common.utils.exceptions import handle_exception
-from metagpt.common.utils.remote import remotable
-
-
-
-
-
-
+from mote.common.logs import logger
+from mote.common.utils.exceptions import handle_exception
+from mote.common.utils.remote import remotable
 
 
 class CodeParser:
@@ -128,16 +122,8 @@ class CodeParser:
         return tasks
 
 
-# MetaGPTError is imported for ``role_raise_decorator`` (preserve typed exceptions).
-from metagpt.common.exception import MetaGPTError  # noqa: E402
-
-
-
-
-
-
-
-
+# MoteError is imported for ``role_raise_decorator`` (preserve typed exceptions).
+from mote.common.exception import MoteError  # noqa: E402
 
 
 def get_class_name(cls) -> str:
@@ -171,22 +157,6 @@ def any_to_str_set(val) -> set:
         res.add(any_to_str(val))
 
     return res
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def read_json_file(json_file: str, encoding: str = "utf-8") -> list[Any]:
@@ -229,22 +199,14 @@ def write_json_file(json_file: str, data: Any, encoding: str = "utf-8", indent: 
         json.dump(data, fout, ensure_ascii=False, indent=indent, default=custom_default)
 
 
-
-
-
-
 def import_class(class_name: str, module_name: str) -> type:
     module = importlib.import_module(module_name)
     a_class = getattr(module, class_name)
     return a_class
 
 
-
-
-def format_trackback_info(limit: int = 2):
+def format_trackback_info(limit: Optional[int] = 2):
     return traceback.format_exc(limit=limit)
-
-
 
 
 def role_raise_decorator(func):
@@ -266,7 +228,7 @@ def role_raise_decorator(func):
                 # remove role newest observed msg to make it observed again
                 self.context_manager.delete(self.state.latest_observed_msg)
             # raise again to make it captured outside
-            if isinstance(e, MetaGPTError):
+            if isinstance(e, MoteError):
                 # Preserve typed exceptions instead of wrapping into a bare Exception.
                 raise
             if isinstance(e, RetryError):
@@ -291,39 +253,15 @@ async def aread(filename: str | Path, encoding="utf-8") -> str:
     except UnicodeDecodeError:
         async with aiofiles.open(str(filename), mode="rb") as reader:
             raw = await reader.read()
-            result = chardet.detect(raw)
-            detected_encoding = result["encoding"]
+            result = chardet.detect(raw) or {}
+            detected_encoding = result.get("encoding") or "utf-8"
             content = raw.decode(detected_encoding)
     return content
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def encode_image(image_path_or_pil: Union[Path, Image, str], encoding: str = "utf-8", resize: int = 1568) -> str:
+def encode_image(
+    image_path_or_pil: Union[Path, "Image.Image", str], encoding: str = "utf-8", resize: int = 1568
+) -> str:
     """encode image from file or PIL.Image into base64 with optional resize"""
     # Load image to PIL if it's not already a PIL Image
     if isinstance(image_path_or_pil, Image.Image):
@@ -365,7 +303,7 @@ def encode_image(image_path_or_pil: Union[Path, Image, str], encoding: str = "ut
     return base64.b64encode(bytes_data).decode(encoding)
 
 
-def decode_image(img_url_or_b64: str) -> Image:
+def decode_image(img_url_or_b64: str) -> "Image.Image":
     """decode image from url or base64 into PIL.Image"""
     if img_url_or_b64.startswith("http"):
         # image http(s) url
@@ -392,8 +330,6 @@ def extract_and_encode_images(content: str) -> list[str]:
         if os.path.exists(path):
             images.append(encode_image(path))
     return images
-
-
 
 
 def extract_pdf_paths(content: str) -> list[str]:
@@ -438,6 +374,56 @@ def sniff_image_media_type(b64_data: str) -> Optional[str]:
     if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
         return "image/webp"
     return None
+
+
+# -- data-URL codec ---------------------------------------------------------
+# The single authority for the ``data:<media_type>;base64,<data>`` wire shape
+# and the "which media type do we trust" policy, shared by every LLM provider
+# (base_llm assembly, anthropic block conversion, transformers image shrink).
+# Previously each site re-implemented the split/partition/regex and its own
+# sniff-vs-declared rule, and the rules had already drifted apart.
+
+_DATA_URL_DEFAULT_MEDIA_TYPE = "image/jpeg"
+
+
+def resolve_image_media_type(b64_data: str, declared: Optional[str] = None) -> str:
+    """Decide an image's media type: sniffed bytes win, else declared, else JPEG.
+
+    The one place the sniff-vs-declared precedence lives. A declared media type
+    is often wrong (e.g. a PNG labelled JPEG), and providers like Bedrock /
+    Anthropic reject the mismatch, so a successful magic-number sniff always
+    overrides the declaration; only when sniffing fails do we fall back to the
+    declared type, and finally to ``image/jpeg``.
+    """
+    return sniff_image_media_type(b64_data) or declared or _DATA_URL_DEFAULT_MEDIA_TYPE
+
+
+def build_data_url(b64_data: str, declared: Optional[str] = None) -> str:
+    """Wrap raw base64 image bytes into a ``data:...;base64,...`` URL.
+
+    The media type is resolved via :func:`resolve_image_media_type` (sniff wins),
+    so callers hand over the raw base64 and get a correctly-typed data URL.
+    """
+    media_type = resolve_image_media_type(b64_data, declared)
+    return f"data:{media_type};base64,{b64_data}"
+
+
+def parse_data_url(url: str) -> Optional[Tuple[str, str]]:
+    """Split a ``data:<media_type>;base64,<data>`` URL into (media_type, data).
+
+    Returns ``None`` when *url* is not a string, lacks the ``data:`` scheme, or
+    has no comma separating the header from the payload (malformed). The returned
+    media type is the *declared* one (stripped, may be ``""``); apply
+    :func:`resolve_image_media_type` on the data if a sniff-corrected type is
+    wanted. Does not decode the payload.
+    """
+    if not isinstance(url, str) or not url.startswith("data:"):
+        return None
+    header, sep, data = url.partition(",")
+    if not sep:
+        return None
+    media_type = header[len("data:") :].split(";", 1)[0].strip()
+    return media_type, data
 
 
 def pdfs_within_limits(
@@ -489,32 +475,20 @@ def pdfs_within_limits(
 
 
 def log_and_reraise(retry_state: RetryCallState):
-    logger.error(f"Retry attempts exhausted. Last exception: {retry_state.outcome.exception()}")
+    # tenacity only invokes this callback after an attempt has completed, so the
+    # outcome future is always present here; narrow away the Optional.
+    outcome = retry_state.outcome
+    assert outcome is not None, "log_and_reraise called before any attempt completed"
+    logger.error(f"Retry attempts exhausted. Last exception: {outcome.exception()}")
     logger.warning(
         """
 Recommend going to https://deepwisdom.feishu.cn/wiki/MsGnwQBjiif9c3koSJNcYaoSnu4#part-XdatdVlhEojeAfxaaEZcMV3ZniQ
 See FAQ 5.8
 """
     )
-    raise retry_state.outcome.exception()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    exc = outcome.exception()
+    assert exc is not None, "log_and_reraise invoked on a successful outcome"
+    raise exc
 
 
 def log_time(method):
@@ -547,14 +521,6 @@ def log_time(method):
         return result
 
     return timeit_wrapper_async if iscoroutinefunction(method) else timeit_wrapper
-
-
-
-
-
-
-
-
 
 
 # Conventional exit code reported for a command killed by timeout (aligns with
@@ -592,7 +558,7 @@ async def aexecute(
              4-tuple ``(return_code, stdout, stderr, timed_out)``; on timeout the
              return code is ``EXEC_TIMEOUT_EXIT_CODE`` (124).
         sandbox_runtime: Optional OS-level sandbox runtime (a
-             :class:`metagpt.sandbox.SandboxRuntime`). When supplied, the command
+             :class:`mote.sandbox.SandboxRuntime`). When supplied, the command
              is wrapped (bwrap + process hardening) and the env is amended with
              the network-proxy policy *before* spawning. None => no OS-level
              isolation (the historical behavior).
@@ -614,7 +580,7 @@ async def aexecute(
         cmd, env = await sandbox_runtime.wrap_command(cmd, cwd=working_dir, env=env)
 
     process = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=working_dir, shell=shell
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=working_dir
     )
 
     # If not waiting, return immediately
@@ -637,7 +603,7 @@ async def aexecute(
                 f"STDOUT: {stdout_str}\nSTDERR: {stderr_str}"
             )
 
-        return process.returncode, stdout_str, stderr_str
+        return process.returncode or 0, stdout_str, stderr_str
 
     except asyncio.TimeoutError:
         # Try to terminate process on timeout, and force kill process if termination fails
@@ -700,14 +666,6 @@ async def _aexecute_capture_partial(
     rc = EXEC_TIMEOUT_EXIT_CODE if timed_out else (process.returncode if process.returncode is not None else -1)
 
     if check and not timed_out and rc != 0:
-        raise RuntimeError(
-            f"Command '{cmd}' failed with return code {rc}\nSTDOUT: {stdout_str}\nSTDERR: {stderr_str}"
-        )
+        raise RuntimeError(f"Command '{cmd}' failed with return code {rc}\nSTDOUT: {stdout_str}\nSTDERR: {stderr_str}")
 
     return rc, stdout_str, stderr_str, timed_out
-
-
-
-
-
-

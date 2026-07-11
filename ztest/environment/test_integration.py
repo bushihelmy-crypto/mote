@@ -3,7 +3,7 @@
 """Integration tests for the control-plane environment.
 
 Covers the two end-to-end scenarios from the plan's Verification section:
-  * a message published into ``MGXEnv`` is delivered turn-atomically and a reply
+  * a message published into ``MoteEnv`` is delivered turn-atomically and a reply
     is routed back to the sender through the control plane;
   * residency: with capacity 1, the LRU agent is materialized to disk + evicted,
     then rehydrates transparently when a message is routed to it.
@@ -13,11 +13,11 @@ import types
 
 import pytest
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.mgx.mgx_env import MGXEnv
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.environment.store import ResidencyStore
+from mote.common.schema.messages import UserMessage
+from mote.common.schema.queue import MessageQueue
+from mote.environment.mote.mote_env import MoteEnv
+from mote.environment.runtime import AgentRuntime
+from mote.environment.store import ResidencyStore
 
 
 class ReplyingRole:
@@ -44,9 +44,7 @@ class ReplyingRole:
         drained = self.state.msg_buffer.pop_all()
         self.observed_turns.append([m.content for m in drained])
         if self._reply_to and drained:
-            self.env.publish_message(
-                UserMessage(content=f"reply from {self.name}", send_to={self._reply_to})
-            )
+            self.env.publish_message(UserMessage(content=f"reply from {self.name}", send_to={self._reply_to}))
         return "ok"
 
     def dump(self):
@@ -62,7 +60,7 @@ def _loader_for(roles_by_session):
 
 @pytest.mark.asyncio
 async def test_message_roundtrip_through_control_plane():
-    env = MGXEnv()
+    env = MoteEnv()
     worker = ReplyingRole("worker", reply_to="boss")
     boss = ReplyingRole("boss")
     env.add_role(worker)
@@ -81,7 +79,7 @@ async def test_message_roundtrip_through_control_plane():
 
 @pytest.mark.asyncio
 async def test_residency_evicts_lru_then_rehydrates(tmp_path):
-    env = MGXEnv()
+    env = MoteEnv()
     # Wire the control plane with a store + loader that returns our roles.
     roles_by_session = {}
     store = ResidencyStore(base_dir=str(tmp_path))
@@ -125,7 +123,7 @@ async def test_residency_evicts_lru_then_rehydrates(tmp_path):
 
 def test_residency_reserve_returns_runtime_type(tmp_path):
     # sanity: AgentRuntime is what add_role wraps roles in
-    env = MGXEnv()
+    env = MoteEnv()
     role = ReplyingRole("solo")
     env.add_role(role)
     rt = env.control.get_runtime(role.session_id)

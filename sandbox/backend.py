@@ -7,7 +7,7 @@ mechanism here. Two backends exist in P1:
   * :class:`NullBackend` — no isolation (passthrough). Used when no backend is
     available and ``fail_if_unavailable`` is False (graceful degrade), or when
     the backend is explicitly ``none``.
-  * :class:`~metagpt.sandbox.bwrap.BwrapBackend` — bubblewrap namespaces.
+  * :class:`~mote.sandbox.bwrap.BwrapBackend` — bubblewrap namespaces.
 
 A backend works on a :class:`SandboxPolicy` (a small, runtime-local data object,
 NOT the executor's ``SandboxConfig`` — the adapter translates one into the

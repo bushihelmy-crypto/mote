@@ -16,8 +16,8 @@ import pytest
 
 pytest.importorskip("textual")
 
-from metagpt.cli.common.view.events import ApprovalDecision
-from metagpt.cli.io.textual_io import TextualPort
+from mote.cli.contracts.view.events import ApprovalDecision
+from mote.cli.io.textual_io import TextualPort
 
 
 def _q(question, header, options, multiSelect=False):
@@ -30,7 +30,7 @@ def _q(question, header, options, multiSelect=False):
 
 
 def _questions(*qs):
-    from metagpt.common.schema import AskUserQuestionInput
+    from mote.common.schema import AskUserQuestionInput
 
     return AskUserQuestionInput.model_validate({"questions": list(qs)})
 

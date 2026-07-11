@@ -30,13 +30,11 @@ class OnnxBGE:
         self._session = None
 
     def _ensure_loaded(self):
-        if self._session is None:
+        if self._session is None or self._tokenizer is None:
             import onnxruntime as ort
             from tokenizers import Tokenizer
 
-            tokenizer = Tokenizer.from_file(
-                str(Path(self.model_dir) / "tokenizer.json")
-            )
+            tokenizer = Tokenizer.from_file(str(Path(self.model_dir) / "tokenizer.json"))
             tokenizer.enable_truncation(max_length=self.max_length)
             pad_token = "[PAD]"
             tokenizer.enable_padding(
@@ -48,6 +46,8 @@ class OnnxBGE:
                 str(Path(self.model_dir) / "model.onnx"),
                 providers=["CPUExecutionProvider"],
             )
+        # Both are populated together above; narrow away the initial-None type.
+        assert self._tokenizer is not None and self._session is not None
         return self._tokenizer, self._session
 
     def encode(
@@ -69,14 +69,10 @@ class OnnxBGE:
             encoded = tokenizer.encode_batch(batch)
             ort_inputs = {
                 "input_ids": np.asarray([enc.ids for enc in encoded], dtype=np.int64),
-                "attention_mask": np.asarray(
-                    [enc.attention_mask for enc in encoded], dtype=np.int64
-                ),
-                "token_type_ids": np.asarray(
-                    [enc.type_ids for enc in encoded], dtype=np.int64
-                ),
+                "attention_mask": np.asarray([enc.attention_mask for enc in encoded], dtype=np.int64),
+                "token_type_ids": np.asarray([enc.type_ids for enc in encoded], dtype=np.int64),
             }
-            last_hidden = session.run(None, ort_inputs)[0]
+            last_hidden = np.asarray(session.run(None, ort_inputs)[0])
             cls = last_hidden[:, 0, :]
             norms = np.linalg.norm(cls, axis=1, keepdims=True)
             outputs.append((cls / np.maximum(norms, 1e-12)).astype(np.float32))

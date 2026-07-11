@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for CostNode — the fleet cost mirror tree."""
 
-from metagpt.router.cost import CostNode, CostTracker, TokenUsage, format_cost_tree
+from mote.router.cost import CostNode, CostTracker, TokenUsage, format_cost_tree
 
 
 def _node(path, agent_id=None, parent=None):
@@ -13,9 +13,7 @@ def _node(path, agent_id=None, parent=None):
 
 
 def _record(node, total=1500, model="gpt-4o"):
-    node.tracker.add(
-        TokenUsage(input_tokens=total - 500, output_tokens=500, total_tokens=total), model
-    )
+    node.tracker.add(TokenUsage(input_tokens=total - 500, output_tokens=500, total_tokens=total), model)
 
 
 def test_single_node_self_equals_subtree():

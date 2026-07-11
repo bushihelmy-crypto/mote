@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`metagpt.parser.xml_channel.XmlCommandChannel`.
+"""Unit tests for :class:`mote.parser.xml_channel.XmlCommandChannel`.
 
 ``iter_commands`` runs the *real* XML lexer (``parse_commands2`` ->
 ``PythonObjectParser``), so the inputs here are genuine XML command blocks in
@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.base import CommandChannel
-from metagpt.common.const import IMAGES, PDFS
-from metagpt.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
-from metagpt.parser.xml_channel import XmlCommandChannel
+from mote.common.base import CommandChannel
+from mote.common.const import IMAGES, PDFS
+from mote.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
+from mote.parser.xml_channel import XmlCommandChannel
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
 
@@ -35,7 +35,7 @@ class TestContract:
         assert "<end></end>" in guide
 
     def test_prompt_vars_covers_required_keys(self):
-        from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
+        from mote.common.base.command_channel import PROMPT_VAR_KEYS
 
         assert set(XmlCommandChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
 
@@ -56,28 +56,25 @@ class TestContract:
 
 class TestJoinCommandOutputs:
     def test_joins_executed_outputs_with_blank_lines(self):
-        from metagpt.common.base.command_channel import join_command_outputs
+        from mote.common.base.command_channel import join_command_outputs
 
         executed = [{"output": "a"}, {"output": "b"}]
         assert join_command_outputs(executed) == "a\n\nb"
 
     def test_empty_yields_no_commands_notice(self):
-        from metagpt.common.base.command_channel import (
-            NO_VALID_COMMANDS,
-            join_command_outputs,
-        )
+        from mote.common.base.command_channel import NO_VALID_COMMANDS, join_command_outputs
 
         assert join_command_outputs([]) == NO_VALID_COMMANDS
 
     def test_lower_renders_ctl_finish_as_end_marker(self):
         # Under XML, the CTL_FINISH symbol materializes the <end></end> mechanic.
-        from metagpt.common.prompt.refs import CTL_FINISH
+        from mote.common.prompt.refs import CTL_FINISH
 
         out = XmlCommandChannel().lower(f"Only {CTL_FINISH} when done.")
         assert "<end></end>" in out
 
     def test_lower_renders_capability_symbols_as_dotted_names(self):
-        from metagpt.common.prompt.refs import CAP_READ
+        from mote.common.prompt.refs import CAP_READ
 
         out = XmlCommandChannel().lower(f"Use {CAP_READ} first.")
         assert "Editor.read" in out
@@ -103,12 +100,7 @@ class TestIterCommands:
 
     @pytest.mark.asyncio
     async def test_parses_multiple_commands_in_order(self):
-        rsp = (
-            "think\n"
-            + xml_command("Read", path="a.py")
-            + "\nthink more\n"
-            + xml_command("Glob", pattern="*.py")
-        )
+        rsp = "think\n" + xml_command("Read", path="a.py") + "\nthink more\n" + xml_command("Glob", pattern="*.py")
         engine = FakeThinkEngine(content=rsp)
         cmds = await collect(XmlCommandChannel(), engine, {"Read", "Glob"})
         assert [c["command_name"] for c in cmds] == ["Read", "Glob"]

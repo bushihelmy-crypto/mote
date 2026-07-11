@@ -9,10 +9,10 @@ can restore it without re-running the tool.
 """
 from __future__ import annotations
 
-from metagpt.common.schema import AIMessage, ToolMessage, UserMessage
-from metagpt.session.events import MessageEvent, SessionMetaEvent
-from metagpt.session.log import SessionLog
-from metagpt.session.recall import body_for_tool_call
+from mote.common.schema import AIMessage, ToolMessage, UserMessage
+from mote.session.events import MessageEvent, SessionMetaEvent
+from mote.session.log import SessionLog
+from mote.session.recall import body_for_tool_call
 
 
 def _log(tmp_path) -> SessionLog:

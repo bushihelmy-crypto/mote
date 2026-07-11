@@ -16,12 +16,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.executor.compress.base import Compressor
-from metagpt.executor.compress.cargo import CargoCompressor
-from metagpt.executor.compress.git import GitCompressor
-from metagpt.executor.compress.pip import PipCompressor
-from metagpt.executor.compress.pytest import PytestCompressor
-from metagpt.executor.compress.ruff import RuffCompressor
+from mote.executor.compress.base import Compressor
+from mote.executor.compress.cargo import CargoCompressor
+from mote.executor.compress.git import GitCompressor
+from mote.executor.compress.pip import PipCompressor
+from mote.executor.compress.pytest import PytestCompressor
+from mote.executor.compress.ruff import RuffCompressor
 
 # Order is not significant: prefixes are disjoint across compressors.
 _COMPRESSORS: tuple[Compressor, ...] = (

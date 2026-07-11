@@ -1,9 +1,9 @@
-"""metagpt.sandbox — OS-level sandbox runtime (the *runtime* layer).
+"""mote.sandbox — OS-level sandbox runtime (the *runtime* layer).
 
 A product-agnostic, reusable isolation capability — deliberately decoupled from
 our ``PermissionConfig`` / ``SandboxGuard`` (those live in the *adapter* layer,
-``metagpt.executor.permission.sandbox``). This package only depends on
-``metagpt.common`` (and the stdlib), mirroring the layering of the ``session``
+``mote.executor.permission.sandbox``). This package only depends on
+``mote.common`` (and the stdlib), mirroring the layering of the ``session``
 package: it can be imported from anywhere on top of ``common`` without a cycle.
 
 Threat model targets Codex-grade isolation; the architecture mirrors Claude
@@ -20,8 +20,8 @@ Public surface:
 """
 from __future__ import annotations
 
-from metagpt.sandbox.detect import detect_backend
-from metagpt.sandbox.runtime import SandboxRuntime
-from metagpt.sandbox.violations import SandboxViolation
+from mote.sandbox.detect import detect_backend
+from mote.sandbox.runtime import SandboxRuntime
+from mote.sandbox.violations import SandboxViolation
 
 __all__ = ["SandboxRuntime", "detect_backend", "SandboxViolation"]

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from metagpt.router.ml.inference.types import FeatureBundle, InferenceRequest
-from metagpt.router.ml.v4_features import (
+from mote.router.ml.inference.types import FeatureBundle, InferenceRequest
+from mote.router.ml.v4_features import (
     extract_assistant_handcrafted,
     extract_continuation_features,
     extract_reasoning_features,
@@ -25,9 +25,7 @@ def build_feature_bundle(
     v3_extractor,
     bge_extractor,
 ) -> FeatureBundle:
-    prev_assistant_text = (
-        request.prev_assistant_text if request.prev_assistant_text else None
-    )
+    prev_assistant_text = request.prev_assistant_text if request.prev_assistant_text else None
     history_text = make_history_user_text(request.history_user_texts)
     pca_192, raw_1536 = bge_extractor.transform_triplet(
         request.current_user_text,
@@ -51,18 +49,12 @@ def build_feature_bundle(
         request.prev_assistant_usage,
         request.current_user_text,
     )
-    features_390 = np.concatenate(
-        [hc, tfidf, ctx, hist, pca_192, asst, cont, reasoning]
-    ).astype(np.float32)
+    features_390 = np.concatenate([hc, tfidf, ctx, hist, pca_192, asst, cont, reasoning]).astype(np.float32)
 
     if features_390.shape != (390,):
-        raise ValueError(
-            f"feature dim mismatch: expected 390, got {features_390.shape}"
-        )
+        raise ValueError(f"feature dim mismatch: expected 390, got {features_390.shape}")
     if raw_1536.shape != (1536,):
-        raise ValueError(
-            f"raw BGE dim mismatch: expected 1536, got {raw_1536.shape}"
-        )
+        raise ValueError(f"raw BGE dim mismatch: expected 1536, got {raw_1536.shape}")
 
     bge_channels = ["user_curr", "user_hist"]
     if prev_assistant_text is not None:

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from metagpt.router.ml.trajectory import Trajectory, classify
+from mote.router.ml.trajectory import Trajectory, classify
 
 # ---------------------------------------------------------------------------
 # Channel 1: Hand-crafted features

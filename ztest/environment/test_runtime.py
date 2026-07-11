@@ -7,15 +7,10 @@ import types
 
 import pytest
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.mailbox import Mailbox
-from metagpt.environment.runtime import (
-    AgentRuntime,
-    AgentStatus,
-    FINAL_STATUSES,
-    is_final,
-)
+from mote.common.schema.messages import UserMessage
+from mote.common.schema.queue import MessageQueue
+from mote.environment.mailbox import Mailbox
+from mote.environment.runtime import FINAL_STATUSES, AgentRuntime, AgentStatus, is_final
 
 
 class FakeRole:
@@ -42,9 +37,7 @@ class FakeRole:
 
 
 def test_is_final_classifies_statuses():
-    assert FINAL_STATUSES == frozenset(
-        {AgentStatus.COMPLETED, AgentStatus.ERRORED, AgentStatus.INTERRUPTED}
-    )
+    assert FINAL_STATUSES == frozenset({AgentStatus.COMPLETED, AgentStatus.ERRORED, AgentStatus.INTERRUPTED})
     assert is_final(AgentStatus.COMPLETED)
     assert is_final(AgentStatus.ERRORED)
     assert is_final(AgentStatus.INTERRUPTED)

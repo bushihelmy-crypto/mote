@@ -17,9 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 
-from metagpt.common.events import PostCompactEvent, ToolsChangedEvent
-from metagpt.common.interface import EphemeralContextSource
-from metagpt.context.turn_context import ToolCatalogContextSource
+from mote.common.events import PostCompactEvent, ToolsChangedEvent
+from mote.common.interface import EphemeralContextSource
+from mote.context.turn_context import ToolCatalogContextSource
 
 
 def run(coro):

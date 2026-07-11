@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.logs import logger
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.storage.base import CredentialStore
-from metagpt.router.oauth.storage.file_store import FileCredentialStore
-from metagpt.router.oauth.storage.keyring_store import KeyringCredentialStore
+from mote.common.logs import logger
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.storage.base import CredentialStore
+from mote.router.oauth.storage.file_store import FileCredentialStore
+from mote.router.oauth.storage.keyring_store import KeyringCredentialStore
 
 
 class FallbackCredentialStore(CredentialStore):

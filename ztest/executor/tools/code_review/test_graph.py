@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import BgGraph, START, END
-from metagpt.executor.tools.code_review import nodes as nodes_mod
-from metagpt.executor.tools.code_review.format import Finding
-from metagpt.executor.tools.code_review.graph import build_code_review_graph
-from metagpt.executor.tools.code_review.parser import FileDiff, Hunk
-from metagpt.executor.tools.code_review.plan import ReviewPlan
+from mote.executor.tasks.bggraph import END, START, BgGraph
+from mote.executor.tools.code_review import nodes as nodes_mod
+from mote.executor.tools.code_review.format import Finding
+from mote.executor.tools.code_review.graph import build_code_review_graph
+from mote.executor.tools.code_review.parser import FileDiff, Hunk
+from mote.executor.tools.code_review.plan import ReviewPlan
 
 
 def _is_bg_task_result(obj) -> bool:
@@ -150,7 +150,7 @@ class TestRingBatch:
             report="",
         )
         assert out["report"]
-        assert "found 5 issue(s)" in out["report"]
+        assert "found 5 issues" in out["report"]
         assert "remaining" in out and out["remaining"] == []
 
     async def test_single_wave_when_batch_covers_all(self, patched):
@@ -167,7 +167,7 @@ class TestRingBatch:
             report="",
         )
         assert len(patched["reviewed"]) == 5
-        assert "found 5 issue(s)" in out["report"]
+        assert "found 5 issues" in out["report"]
 
 
 @pytest.mark.asyncio

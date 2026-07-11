@@ -31,8 +31,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from metagpt.executor.permission.command_parse import parse_segments
-from metagpt.common.schema.permission_types import RiskLevel
+from mote.common.schema.permission_types import RiskLevel
+from mote.executor.permission.command_parse import _basename, parse_segments
 
 # ---------------------------------------------------------------------------
 # Assessment result
@@ -60,14 +60,14 @@ class SafetyAssessment:
 # ---------------------------------------------------------------------------
 
 _DANGEROUS_PATTERNS: tuple[re.Pattern, ...] = (
-    re.compile(r"\brm\b.*\s-[a-z]*[rf]", re.IGNORECASE),       # rm -rf / rm -f
-    re.compile(r":\(\)\s*\{.*\|.*&\s*\}", re.IGNORECASE),       # fork bomb
-    re.compile(r"\bmkfs\.", re.IGNORECASE),                     # format filesystem
-    re.compile(r"\bdd\b.*\bof=/dev/", re.IGNORECASE),           # raw disk write
-    re.compile(r">\s*/dev/sd[a-z]", re.IGNORECASE),             # overwrite block device
+    re.compile(r"\brm\b.*\s-[a-z]*[rf]", re.IGNORECASE),  # rm -rf / rm -f
+    re.compile(r":\(\)\s*\{.*\|.*&\s*\}", re.IGNORECASE),  # fork bomb
+    re.compile(r"\bmkfs\.", re.IGNORECASE),  # format filesystem
+    re.compile(r"\bdd\b.*\bof=/dev/", re.IGNORECASE),  # raw disk write
+    re.compile(r">\s*/dev/sd[a-z]", re.IGNORECASE),  # overwrite block device
     re.compile(r"\b(shutdown|reboot|halt|poweroff)\b", re.IGNORECASE),
-    re.compile(r"\bsudo\b", re.IGNORECASE),                     # privilege escalation
-    re.compile(r"\bchmod\b.*\b777\b"),                          # world-writable
+    re.compile(r"\bsudo\b", re.IGNORECASE),  # privilege escalation
+    re.compile(r"\bchmod\b.*\b777\b"),  # world-writable
     re.compile(r"\b(curl|wget)\b.*\|\s*(sudo\s+)?(ba)?sh\b", re.IGNORECASE),  # pipe-to-shell
 )
 
@@ -80,32 +80,111 @@ _DANGEROUS_PATTERNS: tuple[re.Pattern, ...] = (
 _SAFE_COMMANDS: frozenset[str] = frozenset(
     {
         # file / text reading
-        "cat", "head", "tail", "less", "more", "tac", "nl", "fold", "sed",
-        "strings", "hexdump", "xxd", "od", "column", "look",
+        "cat",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "tac",
+        "nl",
+        "fold",
+        "sed",
+        "strings",
+        "hexdump",
+        "xxd",
+        "od",
+        "column",
+        "look",
         # listing / paths
-        "ls", "pwd", "tree", "basename", "dirname", "realpath", "readlink",
+        "ls",
+        "pwd",
+        "tree",
+        "basename",
+        "dirname",
+        "realpath",
+        "readlink",
         # searching / filtering
-        "grep", "egrep", "fgrep", "rg", "ag", "comm", "cmp", "diff", "find",
+        "grep",
+        "egrep",
+        "fgrep",
+        "rg",
+        "ag",
+        "comm",
+        "cmp",
+        "diff",
+        "find",
         # text transforms (stdout only)
-        "wc", "cut", "sort", "uniq", "tr", "rev", "paste", "seq", "expr",
+        "wc",
+        "cut",
+        "sort",
+        "uniq",
+        "tr",
+        "rev",
+        "paste",
+        "seq",
+        "expr",
         # info / environment
-        "echo", "printf", "whoami", "id", "uname", "hostname", "date", "env",
-        "printenv", "stat", "file", "df", "du", "ps", "which", "type", "groups",
-        "uptime", "free", "lscpu", "arch", "tty", "locale",
+        "echo",
+        "printf",
+        "whoami",
+        "id",
+        "uname",
+        "hostname",
+        "date",
+        "env",
+        "printenv",
+        "stat",
+        "file",
+        "df",
+        "du",
+        "ps",
+        "which",
+        "type",
+        "groups",
+        "uptime",
+        "free",
+        "lscpu",
+        "arch",
+        "tty",
+        "locale",
         # checksums (read-only)
-        "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
+        "md5sum",
+        "sha1sum",
+        "sha256sum",
+        "sha512sum",
+        "cksum",
         # trivial no-ops
-        "true", "false", "test",
+        "true",
+        "false",
+        "test",
     }
 )
 
 # git subcommands that only read repository state.
 _SAFE_GIT_SUBCOMMANDS: frozenset[str] = frozenset(
     {
-        "status", "log", "diff", "show", "describe", "rev-parse", "ls-files",
-        "ls-tree", "cat-file", "blame", "shortlog", "reflog", "show-ref",
-        "name-rev", "var", "count-objects", "grep", "whatchanged", "rev-list",
-        "for-each-ref", "merge-base", "symbolic-ref",
+        "status",
+        "log",
+        "diff",
+        "show",
+        "describe",
+        "rev-parse",
+        "ls-files",
+        "ls-tree",
+        "cat-file",
+        "blame",
+        "shortlog",
+        "reflog",
+        "show-ref",
+        "name-rev",
+        "var",
+        "count-objects",
+        "grep",
+        "whatchanged",
+        "rev-list",
+        "for-each-ref",
+        "merge-base",
+        "symbolic-ref",
     }
 )
 
@@ -152,9 +231,7 @@ def classify_command(command: str) -> SafetyAssessment:
         if not argv:
             continue
         if not _segment_is_safe(argv):
-            return SafetyAssessment(
-                False, "medium", f"'{argv[0]}' is not a known read-only command"
-            )
+            return SafetyAssessment(False, "medium", f"'{argv[0]}' is not a known read-only command")
 
     return SafetyAssessment(True, "low", "read-only command")
 
@@ -200,23 +277,31 @@ def _git_is_safe(rest: list[str]) -> bool:
     if i >= len(rest):
         return False  # bare `git` / only flags — nothing to vouch for
     sub = rest[i]
-    args = rest[i + 1:]
+    args = rest[i + 1 :]
 
     if sub == "config":
         # Reads only when an explicit get/list flag is present.
-        return any(
-            a in ("--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch")
-            for a in args
-        )
+        return any(a in ("--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch") for a in args)
     if sub in ("branch", "tag", "remote"):
         # List-style is safe; mutating flags are not.
-        mutating = {"-d", "-D", "-m", "-M", "--delete", "--move", "--force", "-f",
-                    "--add", "--rename", "--set-url", "--prune", "rename", "add",
-                    "set-url", "remove", "rm"}
+        mutating = {
+            "-d",
+            "-D",
+            "-m",
+            "-M",
+            "--delete",
+            "--move",
+            "--force",
+            "-f",
+            "--add",
+            "--rename",
+            "--set-url",
+            "--prune",
+            "rename",
+            "add",
+            "set-url",
+            "remove",
+            "rm",
+        }
         return not any(a in mutating for a in args)
     return sub in _SAFE_GIT_SUBCOMMANDS
-
-
-def _basename(path: str) -> str:
-    """Last path component, so ``/usr/bin/ls`` matches ``ls``."""
-    return path.rsplit("/", 1)[-1]

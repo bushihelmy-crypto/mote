@@ -18,7 +18,7 @@ from typing import Any, Optional
 from textual.binding import Binding
 from textual.widgets import Input
 
-from metagpt.cli.consumers.textual.style import PROMPT_SYMBOL
+from mote.cli.consumers.textual.style import PROMPT_SYMBOL
 
 
 class PromptInput(Input):

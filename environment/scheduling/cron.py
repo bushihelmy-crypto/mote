@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from metagpt.environment.scheduling.task import DEFAULT_CRON_JITTER_CONFIG, CronJitterConfig
+from mote.environment.scheduling.task import DEFAULT_CRON_JITTER_CONFIG, CronJitterConfig
 
 
 @dataclass

@@ -9,7 +9,7 @@ in ``test_orchestrator.py`` behind a toolchain ``skipif``.
 """
 from __future__ import annotations
 
-from metagpt.sandbox.network import enforce
+from mote.sandbox.network import enforce
 
 
 class TestEnforcementAvailable:
@@ -85,7 +85,7 @@ class TestInnerPrelude:
         # The double-exec must re-pass the positional params so the real argv
         # survives the capsh layer untouched.
         prelude = enforce.build_inner_prelude(7000)
-        assert "exec capsh --caps=\"\" -- -c 'exec \"$@\"' sbx \"$@\"" in prelude
+        assert 'exec capsh --caps="" -- -c \'exec "$@"\' sbx "$@"' in prelude
 
     def test_cap_drop_is_best_effort(self):
         # capsh may be absent on a minimal host — the prelude must still exec the

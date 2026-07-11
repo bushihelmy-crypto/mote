@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import os
 
-from metagpt.sandbox.backend import SandboxBackend, SandboxPolicy
-from metagpt.sandbox.detect import bwrap_available, bwrap_path
+from mote.sandbox.backend import SandboxBackend, SandboxPolicy
+from mote.sandbox.detect import bwrap_available, bwrap_path
 
 
 class BwrapBackend(SandboxBackend):
@@ -71,8 +71,10 @@ class BwrapBackend(SandboxBackend):
 
         # Fresh writable proc + dev on top of the read-only root.
         argv += [
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
         ]
 
         # Private writable scratch. Bound BEFORE the writable holes so a writable

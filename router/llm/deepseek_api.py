@@ -18,11 +18,12 @@ touched.
 """
 from __future__ import annotations
 
-from metagpt.common.config.config.llm_config import LLMType
-from metagpt.common.logs import logger
-from metagpt.router.llm.dsml import contains_dsml, parse_dsml_tool_calls
-from metagpt.router.llm.llm_provider_registry import register_provider
-from metagpt.router.llm.openai_api import OpenAILLM
+from mote.common.config.config.llm_config import LLMType
+from mote.common.logs import logger
+from mote.common.text import plural
+from mote.router.llm.dsml import contains_dsml, parse_dsml_tool_calls
+from mote.router.llm.llm_provider_registry import register_provider
+from mote.router.llm.openai_api import OpenAILLM
 
 
 @register_provider([LLMType.DEEPSEEK])
@@ -47,7 +48,7 @@ class DeepSeekLLM(OpenAILLM):
         if not salvaged:
             return calls
         logger.warning(
-            f"DeepSeek leaked {len(salvaged)} tool call(s) as DSML text; salvaged from content."
+            f"DeepSeek leaked {len(salvaged)} tool {plural('call', len(salvaged))} as DSML text; salvaged from content."
         )
         for i, call in enumerate(salvaged):
             if not call.get("id"):

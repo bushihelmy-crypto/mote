@@ -1,14 +1,19 @@
 """MCP server config source — the Claude-style ``mcpServers`` JSON file.
 
-MCP server definitions live in their *own* file (``mcp_config.json`` under the
-package source root), NOT in the layered ``config.yaml``. This is deliberate:
+MCP server definitions live in their *own* file, ``.mote/mcp.json``, discovered
+per-project by walking from the working directory up to the git root (plus a
+user-level ``~/.mote/mcp.json``) — NOT in the layered ``config.yaml``. This is
+deliberate:
 
 * **Ecosystem standard.** Claude Desktop / Cursor / Cline / VS Code all use the
   same ``{"mcpServers": {name: {...}}}`` shape, so a user can paste a community
   server block verbatim — zero translation.
-* **Hot-reload seam.** A single, well-known file is the natural thing for the
-  file watcher to observe; a change re-inits MCP without touching the rest of
-  the config (see ``executor.reload_mcp``).
+* **Per-project + user layering.** The ``<dir>/.mote/mcp.json`` walk mirrors the
+  skills subsystem (Claude-Code-aligned ``getProjectDirsUpToHome``): a closer
+  file overrides a farther one, and ``~/.mote/mcp.json`` is the lowest layer.
+* **Hot-reload seam.** A single, well-known file name is the natural thing for
+  the file watcher to observe; a change re-inits MCP without touching the rest
+  of the config (see ``executor.reload_mcp``).
 * **Map kills a validator.** The server name is the map key, so uniqueness is
   structural — the old ``MCPConfig.validate_unique_server_names`` is unneeded.
 
@@ -23,28 +28,26 @@ server list (MCP simply stays unconfigured), never an exception into wiring.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-from metagpt.common.const import SOURCE_ROOT
-from metagpt.common.logs import logger
+from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+from mote.common.const.paths import load_mote_json_section, mote_layered_files
+from mote.common.logs import logger
 
-#: The canonical MCP config file name (Claude-ecosystem convention lives under
-#: the package source root so it sits beside ``config.yaml``).
-MCP_CONFIG_FILE_NAME = "mcp_config.json"
+#: The canonical MCP config file name (Claude-ecosystem convention). Lives under
+#: each project's ``.mote/`` dir and under ``~/.mote/``.
+MCP_CONFIG_FILE_NAME = "mcp.json"
 
 
-def mcp_config_path(cwd: Optional[Path] = None) -> Path:
-    """The on-disk path of the MCP server config file.
+def mcp_config_paths(cwd: Optional[Path] = None) -> List[Path]:
+    """All MCP config files to read, low→high precedence.
 
-    Anchored at :data:`SOURCE_ROOT` (the package root's ``metagpt/`` dir) so it
-    resolves the same regardless of the process cwd — the file lives beside the
-    project ``config.yaml``. ``cwd`` is accepted for symmetry with the config
-    loaders and future per-workspace overrides; unused today.
+    ``~/.mote/mcp.json`` (user) first, then every ``<dir>/.mote/mcp.json`` found
+    walking from *cwd* up to the git root (closer-to-cwd last, so it wins). Only
+    existing files are returned; the list may be empty.
     """
-    return SOURCE_ROOT / MCP_CONFIG_FILE_NAME
+    return mote_layered_files(MCP_CONFIG_FILE_NAME, cwd)
 
 
 def _to_server_config(name: str, spec: dict) -> Optional[MCPServerConfig]:
@@ -80,43 +83,26 @@ def _to_server_config(name: str, spec: dict) -> Optional[MCPServerConfig]:
     )
 
 
-def load_mcp_servers(cwd: Optional[Path] = None) -> list[MCPServerConfig]:
-    """Load all configured MCP servers from ``mcp_config.json``.
+def load_mcp_servers(cwd: Optional[Path] = None) -> List[MCPServerConfig]:
+    """Load all configured MCP servers, merged across the ``.mote/mcp.json`` walk.
 
-    Reads the Claude-style ``{"mcpServers": {name: {...}}}`` map and adapts each
-    entry to an :class:`MCPServerConfig`. Best-effort: a missing / empty /
-    malformed file (or a bad individual entry) yields an empty list / drops that
-    entry rather than raising, so MCP just stays unconfigured.
+    Files are read low→high (``~/.mote/mcp.json`` then the git-root→cwd walk);
+    a later (closer-to-cwd) file's server of the same name overrides an earlier
+    one. Each entry is adapted from the Claude-style ``{"mcpServers": {...}}``
+    map. Best-effort throughout: bad files / entries are dropped, never raised.
     """
-    path = mcp_config_path(cwd)
-    if not path.is_file():
-        return []
+    merged: dict[str, dict] = {}
+    for path in mcp_config_paths(cwd):
+        section = load_mote_json_section(path, "mcpServers", "MCP config")
+        for name, spec in section.items():
+            merged[name] = spec  # closer file overrides farther (walk is low→high)
 
-    try:
-        raw = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        logger.warning(f"MCP config: could not read {path}: {exc}")
-        return []
-    if not raw:
-        return []
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning(f"MCP config: {path} is not valid JSON: {exc}")
-        return []
-
-    servers_map = data.get("mcpServers") if isinstance(data, dict) else None
-    if not isinstance(servers_map, dict):
-        logger.warning(f"MCP config: {path} has no 'mcpServers' object.")
-        return []
-
-    servers: list[MCPServerConfig] = []
-    for name, spec in servers_map.items():
+    servers: List[MCPServerConfig] = []
+    for name, spec in merged.items():
         cfg = _to_server_config(name, spec)
         if cfg is not None:
             servers.append(cfg)
     return servers
 
 
-__all__ = ["MCP_CONFIG_FILE_NAME", "mcp_config_path", "load_mcp_servers"]
+__all__ = ["MCP_CONFIG_FILE_NAME", "mcp_config_paths", "load_mcp_servers"]

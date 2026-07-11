@@ -17,9 +17,8 @@ from typing import Any, List, Optional
 
 import pytest
 
-from metagpt.cli.driver import SessionDriver, _format_turn_error
-from metagpt.cli.common.view import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
-
+from mote.cli.contracts.view import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
+from mote.cli.driver import SessionDriver, _format_turn_error
 
 # --------------------------------------------------------------------------
 # Fakes
@@ -145,9 +144,7 @@ def make_driver(*, agent_id: str = "sess-0001", runtimes: Optional[dict] = None,
     control = FakeControl(runtimes if runtimes is not None else {agent_id: FakeRuntime(role)})
     port = FakePort()
     projector = FakeProjector()
-    drv = SessionDriver(
-        control, agent_id, role, port=port, projector=projector, role_factory=role_factory
-    )
+    drv = SessionDriver(control, agent_id, role, port=port, projector=projector, role_factory=role_factory)
     return drv, control, port, projector
 
 
@@ -267,9 +264,7 @@ def test_resolve_ref_out_of_range_and_ambiguous_return_none():
 def test_switch_agent_success_returns_id_and_name():
     r1 = FakeRole(session_id="a1", name="One")
     r2 = FakeRole(session_id="a2", name="Two")
-    drv, _c, _p, _proj = make_driver(
-        agent_id="a1", runtimes={"a1": FakeRuntime(r1), "a2": FakeRuntime(r2)}
-    )
+    drv, _c, _p, _proj = make_driver(agent_id="a1", runtimes={"a1": FakeRuntime(r1), "a2": FakeRuntime(r2)})
     result = drv.switch_agent("Two")
     assert result == ("a2", "Two")
     assert drv.current_agent_id == "a2"
@@ -343,7 +338,7 @@ def test_spawn_agent_type_unknown_returns_none_message():
 
 
 def test_list_agent_types_delegates_to_backend(monkeypatch):
-    import metagpt.cli.driver as driver_mod
+    import mote.cli.driver as driver_mod
 
     monkeypatch.setattr(driver_mod.backend, "list_agent_types", lambda: [("Coder", "writes code")])
     drv, _c, _p, _proj = make_driver()
@@ -377,8 +372,8 @@ async def test_run_turn_sends_input_and_awaits_quiescence():
 @pytest.mark.asyncio
 async def test_run_turn_attaches_images_as_metadata_and_media_blocks():
     """Prompt-dragged images ride along as ``metadata[IMAGES]`` + a MediaBlock each."""
-    from metagpt.common.const import IMAGES
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
+    from mote.common.const import IMAGES
 
     drv, control, _p, projector = make_driver()
     images = [
@@ -398,8 +393,8 @@ async def test_run_turn_attaches_images_as_metadata_and_media_blocks():
 @pytest.mark.asyncio
 async def test_run_turn_without_images_sets_no_image_metadata():
     """A plain text turn attaches no image metadata and emits no MediaBlock."""
-    from metagpt.common.const import IMAGES
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
+    from mote.common.const import IMAGES
 
     drv, control, _p, projector = make_driver()
     await drv._run_turn("just text")

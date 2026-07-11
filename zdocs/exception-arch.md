@@ -1,6 +1,6 @@
 # Exception 架构设计
 
-> `common/exception/` 的类型化异常体系。本文记录：以 `MetaGPTError` 为根、用「可重试性 + 恢复动作」作语义元数据的设计、重试/恢复/展示三环节如何消费这些元数据、`RecoveryRunner` 在 LLM/Tool/Graph 三领域的不同用法、两个核心算法（`is_retryable`/`classify_llm_error`）、跨层分层纪律、设计规律与取舍，供后续维护参考。
+> `common/exception/` 的类型化异常体系。本文记录：以 `MoteError` 为根、用「可重试性 + 恢复动作」作语义元数据的设计、重试/恢复/展示三环节如何消费这些元数据、`RecoveryRunner` 在 LLM/Tool/Graph 三领域的不同用法、两个核心算法（`is_retryable`/`classify_llm_error`）、跨层分层纪律、设计规律与取舍，供后续维护参考。
 
 ---
 
@@ -37,7 +37,7 @@
                               │
                               ▼
             ┌────────────────────────────┐
-            │           MetaGPTError （根类）              │
+            │           MoteError （根类）              │
             │  • code: ErrorCode      稳定机器码（跨版本稳定）│
             │  • cause / __cause__    链式异常              │
             │  • context              结构化诊断字段        │
@@ -68,7 +68,7 @@
 class RetryableToolError(RetryableError, ToolError):  # RetryableError 写在前
 ```
 
-`ToolError` 继承 `NonRetryableError`（默认不重试），但把 `RetryableError` 放**前面**，靠 MRO 让 `retryable=True` 覆盖掉父类的 `False` → `recovery` 自动推导成 `RETRY`。**标记类在 MRO 中先于 `MetaGPTError`，所以标记的值赢。**
+`ToolError` 继承 `NonRetryableError`（默认不重试），但把 `RetryableError` 放**前面**，靠 MRO 让 `retryable=True` 覆盖掉父类的 `False` → `recovery` 自动推导成 `RETRY`。**标记类在 MRO 中先于 `MoteError`，所以标记的值赢。**
 
 ---
 
@@ -108,7 +108,7 @@ class RetryableToolError(RetryableError, ToolError):  # RetryableError 写在前
             GeneratorExit/CancelledError)  ─── yes ──► False
                           │ no                        (绝不重试/吞掉)
                           ▼
-            isinstance(MetaGPTError)? ──── yes ──► return exc.retryable
+            isinstance(MoteError)? ──── yes ──► return exc.retryable
                           │ no                     (自带语义)
                           ▼  厂商/stdlib 白名单兜底（未迁移异常）
             json.JSONDecodeError      ──► True (流截断瞬时)
@@ -163,7 +163,7 @@ class RetryableToolError(RetryableError, ToolError):  # RetryableError 写在前
   │    try: return await call()  ◄────────────────┐ 重试           │
   │    except Exception as exc:                     │                │
   │        action = _action_for(exc)                │                │
-  │          ├ MetaGPTError → exc.recovery          │                │
+  │          ├ MoteError → exc.recovery          │                │
   │          └ 其他 → is_retryable?RETRY:ABORT      │                │
   │                                                 │                │
   │        action == ABORT ──────────────┼──► raise (永久失败上抛)   │
@@ -278,7 +278,7 @@ class RetryableToolError(RetryableError, ToolError):  # RetryableError 写在前
               │
               ▼
    ErrorReport.from_exception(exc)
-       ├ MetaGPTError? → 贡献完整契约 code/retryable/recovery/detail
+       ├ MoteError? → 贡献完整契约 code/retryable/recovery/detail
        └ 其他异常 → 降级 UNKNOWN（retryable 复用 is_retryable）
               │
               ▼

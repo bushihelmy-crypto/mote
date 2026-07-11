@@ -12,10 +12,10 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import field_validator, model_validator
 
-from metagpt.common.config.config.oauth_config import OAuthProviderConfig
-from metagpt.common.const import LLM_API_TIMEOUT
-from metagpt.common.exception import MissingAPIKeyError
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.config.config.oauth_config import OAuthProviderConfig
+from mote.common.const import LLM_API_TIMEOUT
+from mote.common.exception import MissingAPIKeyError
+from mote.common.utils.yaml_model import YamlModel
 
 
 class LLMType(Enum):
@@ -94,6 +94,12 @@ class LLMConfig(YamlModel):
 
     # Cost Control
     calc_usage: bool = True
+
+    # Anthropic prompt caching: place ``cache_control`` breakpoints on the stable
+    # request prefixes (system / tools / conversation tail) so repeat turns are
+    # billed at cheap cache-read rates. Native-Anthropic path only; ignored by the
+    # OpenAI-compatible providers, which auto-cache and need no markers.
+    use_prompt_cache: bool = True
 
     @model_validator(mode="before")
     @classmethod

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.events import (
+from mote.common.events import (
     AgentLifecycleEvent,
     EventBus,
     LLMStreamDeltaEvent,
@@ -19,13 +19,13 @@ from metagpt.common.events import (
     observe_event_sync,
     set_bus,
 )
-from metagpt.common.events.log_subscriber import _clip
+from mote.common.events.log_subscriber import _clip
 
 
 def _capture(monkeypatch):
     """Patch the subscriber's logger; return (info_lines, debug_lines, warns)."""
     info, debug, warns = [], [], []
-    import metagpt.common.events.log_subscriber as mod
+    import mote.common.events.log_subscriber as mod
 
     monkeypatch.setattr(mod.logger, "info", lambda m: info.append(m))
     monkeypatch.setattr(mod.logger, "debug", lambda m: debug.append(m))

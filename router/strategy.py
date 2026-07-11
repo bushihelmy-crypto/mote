@@ -13,10 +13,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from metagpt.common.logs import logger
-from metagpt.router.complexity import RoutingRule, decide_tier, signals_from_messages
-from metagpt.router.llm.base_llm import BaseLLM
-from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
+from mote.common.logs import logger
+from mote.router.complexity import RoutingRule, decide_tier, signals_from_messages
+from mote.router.llm.base_llm import BaseLLM
+from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
 
 # token_estimate above this fraction of a card's context_window is "long context"
 LONG_CONTEXT_TRIGGER_TOKENS = 32000
@@ -143,16 +143,22 @@ class ComplexityStrategy(RoutingStrategy):
                 )
                 pick = self._pick_by_band(vision_cards, decision.tier)
                 return RoutingDecision(
-                    name=pick.name, confidence=decision.confidence, source="complexity",
-                    tier=decision.tier, reasons=["requires vision/pdf"] + decision.reasons,
+                    name=pick.name,
+                    confidence=decision.confidence,
+                    source="complexity",
+                    tier=decision.tier,
+                    reasons=["requires vision/pdf"] + decision.reasons,
                 )
-            return RoutingDecision(name=default, confidence=DEFAULT_CONFIDENCE, source="complexity", fallback=True,
-                                   reasons=["requires vision/pdf but no capable card"])
+            return RoutingDecision(
+                name=default,
+                confidence=DEFAULT_CONFIDENCE,
+                source="complexity",
+                fallback=True,
+                reasons=["requires vision/pdf but no capable card"],
+            )
 
         # Full-conversation signals already derived above (turns / prior failures).
-        decision = decide_tier(
-            request.prompt_text(), context=context, rules=self.rules, use_rules=self.use_rules
-        )
+        decision = decide_tier(request.prompt_text(), context=context, rules=self.rules, use_rules=self.use_rules)
         tier = decision.tier
         reasons = list(decision.reasons)
 
@@ -166,8 +172,11 @@ class ComplexityStrategy(RoutingStrategy):
 
         pick = self._pick_by_band(cards, tier)
         return RoutingDecision(
-            name=pick.name, confidence=decision.confidence, source="complexity",
-            tier=tier, reasons=reasons,
+            name=pick.name,
+            confidence=decision.confidence,
+            source="complexity",
+            tier=tier,
+            reasons=reasons,
         )
 
 

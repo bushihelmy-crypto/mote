@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import CauseBy
+from mote.common.schema import CauseBy
 
 from .conftest import FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
 
@@ -28,12 +28,8 @@ def _cmd(name, *, id=None, args=None) -> dict:
 
 
 async def test_act_executes_in_order_and_passes_result_id(make_loop):
-    channel = FakeChannel(
-        commands=[_cmd("Read", id="t1", args={"path": "a"}), _cmd("Glob", id="t2")]
-    )
-    executor = FakeExecutor(
-        results={"Read": FakeResult(output="readout"), "Glob": FakeResult(output="globout")}
-    )
+    channel = FakeChannel(commands=[_cmd("Read", id="t1", args={"path": "a"}), _cmd("Glob", id="t2")])
+    executor = FakeExecutor(results={"Read": FakeResult(output="readout"), "Glob": FakeResult(output="globout")})
     b = make_loop(channel=channel, executor=executor)
     b.loop._ctx = b.ctx
 
@@ -54,9 +50,7 @@ async def test_act_executes_in_order_and_passes_result_id(make_loop):
 
 
 async def test_act_first_failure_skips_remaining(make_loop):
-    channel = FakeChannel(
-        commands=[_cmd("Read", id="t1"), _cmd("Glob", id="t2"), _cmd("Grep", id="t3")]
-    )
+    channel = FakeChannel(commands=[_cmd("Read", id="t1"), _cmd("Glob", id="t2"), _cmd("Grep", id="t3")])
     executor = FakeExecutor(
         results={"Read": FakeResult(output="boom", success=False)},
         default=FakeResult(output="shouldnotrun"),
@@ -82,9 +76,7 @@ async def test_act_terminate_result_clears_active_signal(make_loop):
     # same kill switch the End tool uses: the loop clears the active signal so the
     # next think step returns False and the loop stops.
     channel = FakeChannel(commands=[_cmd("Bash", id="t1", args={"cmd": "rm -rf /"})])
-    executor = FakeExecutor(
-        results={"Bash": FakeResult(output="denied", success=False, terminate=True)}
-    )
+    executor = FakeExecutor(results={"Bash": FakeResult(output="denied", success=False, terminate=True)})
     b = make_loop(channel=channel, executor=executor, active=True)
     b.loop._ctx = b.ctx
 
@@ -107,9 +99,7 @@ async def test_act_recoverable_failure_keeps_active_signal(make_loop):
 
 async def test_act_propagates_media(make_loop):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
-    executor = FakeExecutor(
-        results={"Read": FakeResult(output="img", images=["b64img"], pdfs=["b64pdf"])}
-    )
+    executor = FakeExecutor(results={"Read": FakeResult(output="img", images=["b64img"], pdfs=["b64pdf"])})
     b = make_loop(channel=channel, executor=executor)
     b.loop._ctx = b.ctx
 

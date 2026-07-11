@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._kernel import _cap_text, _strip_ansi
-from metagpt.executor.tools.python import Python
+from mote.common.text import cap_head_tail
+from mote.executor.dependency._kernel import OUTPUT_MAX_CHARS, _strip_ansi
+from mote.executor.tools.python import Python
 
 from .conftest import CapRole, bind, run
 
@@ -149,7 +150,7 @@ class TestControl:
         run(scenario())
 
     def test_interrupt_without_kernel_raises(self, caprole, workspace):
-        from metagpt.executor.tool_result import ToolError
+        from mote.executor.tool_result import ToolError
 
         tool = bind(Python(), caprole, session_id="k_noint")
         with pytest.raises(ToolError):
@@ -195,14 +196,14 @@ class TestHelpers:
 
     def test_cap_text_keeps_head_tail(self):
         text = "H" * 10 + "M" * 2_000_000 + "T" * 10
-        capped = _cap_text(text)
+        capped = cap_head_tail(text, OUTPUT_MAX_CHARS)[0]
         assert "omitted" in capped
         assert capped.startswith("H")
         assert capped.endswith("T")
         assert len(capped) < len(text)
 
     def test_cap_text_short_unchanged(self):
-        assert _cap_text("short") == "short"
+        assert cap_head_tail("short", OUTPUT_MAX_CHARS)[0] == "short"
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +219,7 @@ class TestStateCaptureRestore:
         tool = bind(Python(), caprole, session_id="k_cap")
 
         async def scenario():
-            await tool.call(
-                code=(
-                    "import os\n"
-                    f"os.chdir({str(sub)!r})\n"
-                    "os.environ['CAP_FOO'] = 'cap_bar'"
-                )
-            )
+            await tool.call(code=("import os\n" f"os.chdir({str(sub)!r})\n" "os.environ['CAP_FOO'] = 'cap_bar'"))
             tool.cleanup_session("k_cap")
 
         run(scenario())
@@ -246,9 +241,7 @@ class TestStateCaptureRestore:
         async def scenario():
             session = await tool._ensure_session()
             await session.restore_state(str(sub), {"REZ_FOO": "rez_bar"}, [])
-            out = await tool.call(
-                code="import os; print(os.getcwd()); print(os.environ.get('REZ_FOO'))"
-            )
+            out = await tool.call(code="import os; print(os.getcwd()); print(os.environ.get('REZ_FOO'))")
             assert str(sub) in out
             assert "rez_bar" in out
             await tool.call(close=True)
@@ -268,9 +261,7 @@ class TestStateCaptureRestore:
 
         async def scenario():
             await tool._ensure_session()  # applies pending restore once
-            out = await tool.call(
-                code="import os; print(os.getcwd()); print(os.environ.get('PEND_FOO'))"
-            )
+            out = await tool.call(code="import os; print(os.getcwd()); print(os.environ.get('PEND_FOO'))")
             assert str(sub) in out
             assert "pend_bar" in out
             # Pending state is consumed exactly once.
@@ -288,9 +279,7 @@ class TestStateCaptureRestore:
             # repr() embeds the value as a literal — the embedded expression is
             # never evaluated.
             await session.restore_state("", {"INJ": "__import__('os').getcwd()"}, [])
-            out = await tool.call(
-                code="import os; print(repr(os.environ.get('INJ')))"
-            )
+            out = await tool.call(code="import os; print(repr(os.environ.get('INJ')))")
             assert "__import__('os').getcwd()" in out
             await tool.call(close=True)
 

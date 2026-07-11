@@ -18,15 +18,15 @@ import asyncio
 
 import pytest
 
-from metagpt.sandbox import resources
-from metagpt.sandbox.resources import (
+from mote.sandbox import resources
+from mote.sandbox.resources import (
     ResourceLimits,
     cgroup_limits_available,
     cpu_controller_delegated,
     rlimit_prelude,
     systemd_run_prefix,
 )
-from metagpt.sandbox.runtime import SandboxRuntime
+from mote.sandbox.runtime import SandboxRuntime
 
 _HAS_CGROUP = cgroup_limits_available()
 
@@ -139,9 +139,7 @@ class TestRlimitPrelude:
         assert "ulimit -u 8" in prelude
 
     def test_full_set(self):
-        prelude = rlimit_prelude(
-            ResourceLimits(memory_max="512M", pids_max=64, cpu_quota="100%")
-        )
+        prelude = rlimit_prelude(ResourceLimits(memory_max="512M", pids_max=64, cpu_quota="100%"))
         assert "ulimit -v 524288" in prelude
         assert "ulimit -u 64" in prelude
         assert "CPUQuota" not in prelude  # cpu has no ulimit form
@@ -211,9 +209,7 @@ class TestCgroupEndToEnd:
         import os
         import shlex
 
-        rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open", memory_max="64M"
-        )
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open", memory_max="64M")
         # Allocate ~512MB well over the 64M cap; the scope OOM-kills the tree.
         code = "b=bytearray(); [b.extend(bytearray(10*1024*1024)) for _ in range(50)]"
         cmd, env = _run(
@@ -233,9 +229,7 @@ class TestCgroupEndToEnd:
         import os
         import shlex
 
-        rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open", pids_max=8
-        )
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open", pids_max=8)
         # Fork far beyond the cap; with TasksMax=8 most forks fail.
         code = (
             "import os,sys\n"
@@ -291,12 +285,10 @@ class TestRlimitFallbackEndToEnd:
         import os
         import shlex
 
-        import metagpt.sandbox.runtime as rtmod
+        import mote.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: False)
-        rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open", memory_max="128M"
-        )
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open", memory_max="128M")
         # Try to allocate ~512MB well over the 128M address-space cap.
         code = "b=bytearray(); [b.extend(bytearray(10*1024*1024)) for _ in range(50)]; print('OK')"
         cmd, env = _run(

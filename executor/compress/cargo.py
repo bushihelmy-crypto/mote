@@ -2,14 +2,14 @@
 
 Placeholder so the ecosystem is registered but currently a no-op. A future
 implementation would fold ``cargo build`` / ``cargo test`` output the way
-:mod:`metagpt.executor.compress.pytest` does: keep ``error[EXXXX]`` / warning
+:mod:`mote.executor.compress.pytest` does: keep ``error[EXXXX]`` / warning
 blocks and the final ``error: could not compile`` / test summary line, drop the
 ``Compiling <crate>`` progress churn. Until then it declines every input.
 """
 
 from __future__ import annotations
 
-from metagpt.executor.compress.base import CompressionResult, unchanged
+from mote.executor.compress.base import CompressionResult, unchanged
 
 
 class CargoCompressor:

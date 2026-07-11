@@ -1,13 +1,13 @@
 # AGENTS.md — 在本代码库工作的约定
 
-本文件给在 `metagpt/` 包里写代码的人/agent。内容基于实际源码，不是规划。改动前请先读 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
+本文件给在 `mote/` 包里写代码的人/agent。内容基于实际源码，不是规划。改动前请先读 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
 
 ---
 
 ## 0. 范围
 
-- 工作目录就是 `metagpt/` 这个 Python 包（`metagpt.*`），它本身就是完整框架。
-- **`metagpt/` 之外的文件与本项目无关**，不要去读、改、参考（包括仓库根目录里任何同名的 README/ARCHITECTURE/AGENTS）。
+- 工作目录就是 `mote/` 这个 Python 包（`mote.*`），它本身就是完整框架。
+- **`mote/` 之外的文件与本项目无关**，不要去读、改、参考（包括仓库根目录里任何同名的 README/ARCHITECTURE/AGENTS）。
 
 ---
 
@@ -88,16 +88,16 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 
 ## 8. 测试
 
-- 测试在 `metagpt/ztest/<subsystem>/`（**不是** `tests/`），用 pytest。
+- 测试在 `mote/ztest/<subsystem>/`（**不是** `tests/`），用 pytest。
 - 在范围内跑：
 
 ```bash
-python -m pytest metagpt/ztest/{roles,loop,executor,think,context,skills,router,tasks,environment} -q
+python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tasks,environment} -q
 ```
 
 - 改了某子系统，至少跑该子系统 + 其直接依赖方的 ztest，确认无回归。
 - 已知预存问题（非新引入）：
-  - `metagpt/ztest/prompts/*` 因测试自身 import 路径错误（`No module named 'prompts'`）收集失败，与应用代码无关。
+  - `mote/ztest/prompts/*` 因测试自身 import 路径错误（`No module named 'prompts'`）收集失败，与应用代码无关。
   - `role_zero_utils.py` 原地 mutate 共享常量 `ASK_HUMAN_COMMAND` 会造成顺序依赖污染。
   - 本机 pytest/py3.11 偶发 `INTERNALERROR AST recursion depth mismatch`，用 `--tb=short`/`--tb=no` 规避。
 - 交互式 PTY/kernel 测试：多次调用必须包在**一个 `asyncio.run`** 里（conftest 每次 `run()` 开新 loop 会孤儿化 reader/channel），每个 test 用唯一 session_id + cleanup 防 singleton 泄漏。

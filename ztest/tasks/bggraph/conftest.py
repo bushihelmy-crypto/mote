@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures / helpers for the ``metagpt.executor.bggraph`` test suite.
+"""Shared fixtures / helpers for the ``mote.executor.bggraph`` test suite.
 
 Nodes are built with the :func:`sync_node` / :func:`gated_node` factories so a
 test can declare a graph in a couple of lines.  Everything is offline and
@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
-from metagpt.executor.tasks.bggraph import GraphState, Stage
+from mote.executor.tasks.bggraph import GraphState, Stage
 
 
 class S(GraphState):

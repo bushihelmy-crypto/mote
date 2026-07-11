@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for :mod:`metagpt.cli.backend` — the single engine-binding seam.
+"""Tests for :mod:`mote.cli.backend` — the single engine-binding seam.
 
 Two concerns: the **accessors** (pure attribute pokes — verified against
 lightweight fakes so we assert the operation, not the engine) and the
@@ -12,13 +12,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from metagpt.common.const import IMAGES
-from metagpt.executor.agent_registry import registry
-from metagpt.roles import Role
-from metagpt.roles.role_schema import RoleSchema
-
-from metagpt.cli import backend
-
+from mote.cli import backend
+from mote.common.const import IMAGES
+from mote.executor.agent_registry import registry
+from mote.roles import Role
+from mote.roles.role_schema import RoleSchema
 
 # --------------------------------------------------------------------------
 # Accessors (fakes)
@@ -129,26 +127,26 @@ def test_build_role_generic_path_smoke():
 
 
 def test_discover_mcps_empty_when_unconfigured(monkeypatch):
-    # A missing / empty mcp_config.json yields no servers (MCP stays off).
-    monkeypatch.setattr(backend, "load_mcp_servers", lambda: [])
+    # A missing / empty .mote/mcp.json yields no servers (MCP stays off).
+    monkeypatch.setattr(backend, "load_mcp_servers", lambda cwd=None: [])
     assert backend._discover_mcps() == []
 
 
 def test_discover_mcps_names_every_configured_server(monkeypatch):
-    from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+    from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 
     servers = [
         MCPServerConfig(name="fs", type=MCPTransportType.STDIO, enabled=True, command="npx"),
         MCPServerConfig(name="remote", type=MCPTransportType.SSE, enabled=True, url="https://x/sse"),
     ]
-    monkeypatch.setattr(backend, "load_mcp_servers", lambda: servers)
+    monkeypatch.setattr(backend, "load_mcp_servers", lambda cwd=None: servers)
     # Mirrors the skill "empty include ⇒ load everything" default: every declared
     # server name flows into the schema so the engine initialises them all.
     assert backend._discover_mcps() == ["fs", "remote"]
 
 
 def test_generic_role_loads_all_mcps(monkeypatch):
-    monkeypatch.setattr(backend, "load_mcp_servers", lambda: [])
+    monkeypatch.setattr(backend, "load_mcp_servers", lambda cwd=None: [])
     role = backend.build_role(context=_context(), name="Tester")
     # Empty config ⇒ empty mcps (nothing to load), but the field is populated
     # from discovery, not left at the schema default by accident.
@@ -168,7 +166,7 @@ def test_generic_role_enables_file_watch_hot_reload():
 
 def test_discover_tools_names_every_registered_tool():
     # Mirrors the mcp/skill "empty ⇒ load everything" default: discovery returns
-    # every @register_tool class under metagpt.executor.tools (a superset of the
+    # every @register_tool class under mote.executor.tools (a superset of the
     # RoleSchema curated default), deduplicated to primary names.
     names = backend._discover_tools()
     assert "Read" in names and "Bash" in names and "Skill" in names
@@ -194,7 +192,7 @@ def test_generic_role_explicit_tools_are_respected():
 
 
 def test_role_tool_counts_reports_builtin_and_mcp():
-    from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+    from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 
     servers = [MCPServerConfig(name="fs", type=MCPTransportType.STDIO, enabled=True, command="npx")]
     role = SimpleNamespace(role_schema=SimpleNamespace(tools=["Read", "Write", "Read"], mcps=["fs"]))
@@ -214,7 +212,7 @@ def test_build_role_unknown_agent_type_returns_none():
 
 
 def test_build_role_typed_path_returns_registered_instance():
-    from metagpt.common.base.agent import BaseAgent
+    from mote.common.base.agent import BaseAgent
 
     class _ThrowawayAgent(BaseAgent, Role):
         agent_name = "ThrowawayAgent"
@@ -229,7 +227,7 @@ def test_build_role_typed_path_returns_registered_instance():
 
 
 def test_list_agent_types_includes_registered():
-    from metagpt.common.base.agent import BaseAgent
+    from mote.common.base.agent import BaseAgent
 
     class _ListedAgent(BaseAgent, Role):
         agent_name = "ListedAgent"

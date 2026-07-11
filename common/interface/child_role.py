@@ -13,7 +13,7 @@ The executor calls :func:`build_child_role` through this module, so no upward
 import — at import time *or* runtime — is introduced.
 
 Like the other ``common.interface`` Protocols (e.g.
-:class:`~metagpt.common.interface.FileSnapshotStore`), this is a leaf module that
+:class:`~mote.common.interface.FileSnapshotStore`), this is a leaf module that
 imports only ``typing``, importable from anywhere without risking a cycle.
 """
 
@@ -71,7 +71,7 @@ def build_child_role(
     if _builder is None:
         raise RuntimeError(
             "build_child_role: no ChildRoleBuilder registered; import "
-            "`metagpt.roles` so its concrete builder registers itself."
+            "`mote.roles` so its concrete builder registers itself."
         )
     return _builder(
         name=name,

@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, List, Optional
 
-from metagpt.cli.common.view.events import ApprovalDecision
+from mote.cli.contracts.view.events import ApprovalDecision
 
 
 class TextualPort:
@@ -51,7 +51,7 @@ class TextualPort:
     # Binding + lifecycle (the app owns setup/teardown — these are inert)
     # ------------------------------------------------------------------
     def bind_app(self, app: Any) -> None:
-        """Attach the live :class:`MetaGPTApp` (post-construction wiring)."""
+        """Attach the live :class:`MoteApp` (post-construction wiring)."""
         self._app = app
 
     async def start(self) -> None:
@@ -114,9 +114,7 @@ class TextualPort:
     # ------------------------------------------------------------------
     # InputPort.ask / decide_approval — modal overlays (callback + Future)
     # ------------------------------------------------------------------
-    async def ask(
-        self, ctx: Any, question: str, options: Optional[List[str]] = None, multi: bool = False
-    ) -> str:
+    async def ask(self, ctx: Any, question: str, options: Optional[List[str]] = None, multi: bool = False) -> str:
         """Push a :class:`QuestionScreen` and await the typed/chosen answer.
 
         Pure free-text is the public contract (§7); ``options`` / ``multi`` remain
@@ -124,7 +122,7 @@ class TextualPort:
         with a structured ``(selected, free_text)`` tuple, which we flatten back
         to the single string this legacy shape returns.
         """
-        from metagpt.cli.consumers.textual.screens import QuestionScreen
+        from mote.cli.consumers.textual.screens import QuestionScreen
 
         result = await self._push_modal(QuestionScreen(question, options, multi))
         selected, free = self._unpack(result)
@@ -138,8 +136,8 @@ class TextualPort:
         Pushes one :class:`QuestionScreen` per question and collects the
         structured ``(selected, free_text)`` each dismisses with.
         """
-        from metagpt.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-        from metagpt.cli.consumers.textual.screens import QuestionScreen
+        from mote.cli.consumers.textual.screens import QuestionScreen
+        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
         out = []
         multiq = len(questions.questions) > 1
@@ -148,11 +146,7 @@ class TextualPort:
             header = f"[{q.header}] {q.question}" if multiq else q.question
             result = await self._push_modal(QuestionScreen(header, labels, q.multiSelect))
             selected, free = self._unpack(result)
-            out.append(
-                AskUserQuestionAnswer(
-                    header=q.header, question=q.question, selected=selected, free_text=free
-                )
-            )
+            out.append(AskUserQuestionAnswer(header=q.header, question=q.question, selected=selected, free_text=free))
         return AskUserQuestionAnswers(answers=out)
 
     @staticmethod
@@ -165,7 +159,7 @@ class TextualPort:
 
     async def decide_approval(self, ctx: Any, request: Any) -> Any:
         """Push an :class:`ApprovalScreen` and await the :class:`ApprovalDecision`."""
-        from metagpt.cli.consumers.textual.screens import ApprovalScreen
+        from mote.cli.consumers.textual.screens import ApprovalScreen
 
         approval_id = getattr(request, "approval_id", "") or ""
         result = await self._push_modal(ApprovalScreen(request))

@@ -1,13 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.permission.rule_matcher``."""
+"""Unit tests for ``mote.executor.permission.rule_matcher``."""
 from __future__ import annotations
 
-from metagpt.executor.permission.rule_matcher import (
-    parse_rule,
-    rule_matches,
-    suggest_command_rule,
-)
+from mote.executor.permission.rule_matcher import parse_rule, rule_matches, suggest_command_rule
 
 
 class TestParseRule:

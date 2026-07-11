@@ -11,7 +11,7 @@ It deliberately imports nothing from ``environment`` / ``roles``: the concrete
 (they reference ``AgentRuntime`` / the registry), while every *caller*
 (executor tools, role capabilities) only needs the duck-typed vocabulary here.
 
-Discovery mirrors :mod:`metagpt.common.events.context`: **control walks an
+Discovery mirrors :mod:`mote.common.events.context`: **control walks an
 explicit reference** (``ctx.agent_control``) first, then falls back to an
 **ambient contextvar** (:func:`current_control`) bound by the scheduler around
 each turn and inherited by child asyncio tasks via context-copy. A lost
@@ -28,13 +28,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Iterator, Optional
 
-from metagpt.common.exception import AgentLimitReached
-from metagpt.common.logs import logger
+from mote.common.exception import AgentLimitReached
+from mote.common.logs import logger
 
 # ----------------------------------------------------------------------
 # Ambient discovery (mirrors events/context.py's _ACTIVE_BUS)
 # ----------------------------------------------------------------------
-_ACTIVE_CONTROL: ContextVar[Optional[Any]] = ContextVar("metagpt_agent_control", default=None)
+_ACTIVE_CONTROL: ContextVar[Optional[Any]] = ContextVar("mote_agent_control", default=None)
 
 
 def current_control() -> Optional[Any]:
@@ -181,9 +181,7 @@ async def spawn_and_run(spec: SpawnSpec, message: Any, *, ctx: Any = None) -> Op
     try:
         handle = await control.spawn_agent(spec)
     except AgentLimitReached as exc:
-        logger.warning(
-            f"spawn_and_run: agent limit reached for '{spec.nickname or spec.agent_role or 'agent'}': {exc}"
-        )
+        logger.warning(f"spawn_and_run: agent limit reached for '{spec.nickname or spec.agent_role or 'agent'}': {exc}")
         return None
     async with handle:
         # Only reach into the spawned role when ``message`` is a builder — a

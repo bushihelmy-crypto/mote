@@ -40,22 +40,78 @@ import json
 import os
 from typing import Callable, ClassVar, Optional
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.dependency._document import (
-    document_lines,
-    extract_document_text,
-    is_document,
-)
-from metagpt.common.const.tools import (
+from mote.common.const.tools import (
     DEFAULT_MAX_LINES,
-    MAX_LINE_LENGTH,
     MAX_FILE_SIZE_BYTES,
-    MAX_MEDIA_SIZE_BYTES,
     MAX_IMAGE_DIMENSION,
+    MAX_LINE_LENGTH,
+    MAX_MEDIA_SIZE_BYTES,
 )
-from metagpt.common.prompt.tools import FILE_UNCHANGED_STUB, READ_DESCRIPTION
+from mote.common.prompt.tools import FILE_UNCHANGED_STUB, READ_DESCRIPTION
+from mote.common.text import count_noun, system_reminder, verb_agree
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._document import document_lines, extract_document_text, is_document
+from mote.executor.dependency._paths import resolve_path
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError, ToolResult
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise/return site).
+# Structural line-number assembly stays inline in the readers.
+_MSG_FILE_PATH_REQUIRED = "Error: 'file_path' argument is required."
+_MSG_INVALID_MODE = "Error: invalid mode '{mode}'. Must be 'text' or 'visual'."
+_MSG_INVALID_DETAIL = (
+    "Error: invalid detail '{detail}'. Must be 'high' (downscale to fit "
+    "{max_dim} px) or 'original' (native resolution)."
+)
+_MSG_BLOCKED_DEVICE = "Error: cannot read '{path}': this device file would block or produce " "infinite output."
+_MSG_BINARY_FILE = "Error: this tool cannot read binary files. The file appears to be a " "binary '{ext}' file."
+_MSG_FILE_NOT_EXIST = (
+    "Error: file does not exist. Note that relative paths resolve against the " "working directory {base}."
+)
+_MSG_IS_DIRECTORY = (
+    "Error: '{path}' is a directory, not a file. Use an ls command via the " "Bash tool to list a directory."
+)
+_MSG_CANNOT_STAT = "Error: cannot stat '{path}': {error}"
+_MSG_CANNOT_READ = "Error: cannot read '{path}': {error}"
+_MSG_VISUAL_PDF_ONLY = (
+    "Error: mode 'visual' is only supported for PDF files; '{ext}' documents " "can only be read as text (mode='text')."
+)
+_MSG_FILE_TOO_LARGE = (
+    "Error: file ({size} bytes) exceeds the maximum allowed size ({max_size} "
+    "bytes). Use the offset and limit parameters to read specific portions of "
+    "the file, or search for specific content instead."
+)
+_MSG_NOT_UTF8 = "Error: this tool cannot read binary files. The file '{path}' is not valid " "UTF-8 text."
+_MSG_MEDIA_TOO_LARGE = "Error: {kind} '{path}' ({size} bytes) exceeds the maximum allowed size " "({max_size} bytes)."
+_MSG_CANNOT_EXTRACT = "Error: cannot extract text from '{path}': {error}"
+_MSG_NO_EXTRACTOR = (
+    "Error: cannot read '{path}': no extractor is available for this document "
+    "type (install the optional dependency, e.g. pymupdf/pdfminer/pypdf for "
+    "PDF, python-docx for Word, openpyxl for Excel)."
+)
+_MSG_PILLOW_MISSING = (
+    "Error: cannot process image '{path}' with detail='high': Pillow is not "
+    "installed. Install Pillow or pass detail='original' to send the image at "
+    "its native resolution."
+)
+_MSG_CANNOT_PROCESS_IMAGE = (
+    "Error: cannot process image '{path}': {error}. Pass detail='original' to " "send the raw bytes without resizing."
+)
+_MSG_NOTEBOOK_INVALID_JSON = "Error: '{path}' is not a valid notebook (invalid JSON): {error}"
+_MSG_LINE_TRUNCATED_NOTE = "Note: {count} exceeded {max_len} characters and {verb} truncated."
+_MSG_EMPTY_FILE = "Warning: the file exists but the contents are empty."
+_MSG_SHORTER_THAN_OFFSET = (
+    "Warning: the file exists but is shorter than the provided offset " "({offset}). The file has {total} lines."
+)
+_MSG_DOCUMENT_EMPTY = "Warning: the document exists but no text could be extracted."
+_MSG_DOCUMENT_SHORTER_THAN_OFFSET = (
+    "Warning: the document exists but is shorter than the provided offset "
+    "({offset}). The document has {total} lines."
+)
+_MSG_NOTEBOOK_NO_CELLS = "Warning: the notebook exists but has no cells."
+_MSG_IMAGE_OUTPUT = "Read image {path} ({ext}, {size} bytes; {note}). Shown below."
+_MSG_PDF_OUTPUT = "Read PDF {path} ({size} bytes). Shown below."
 
 # Image extensions rendered as multimodal image content.
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
@@ -66,12 +122,45 @@ _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 # binary Office formats (.doc/.xls/.ppt/.pptx) have no extractor and stay blocked.
 _BINARY_EXTENSIONS = frozenset(
     {
-        "bmp", "ico", "tiff", "svg",
-        "zip", "gz", "tar", "tgz", "bz2", "xz", "7z", "rar",
-        "exe", "dll", "so", "dylib", "bin", "o", "a", "class", "pyc", "pyd",
-        "mp3", "mp4", "wav", "avi", "mov", "mkv", "flac", "ogg",
-        "woff", "woff2", "ttf", "eot", "otf",
-        "doc", "xls", "ppt", "pptx",
+        "bmp",
+        "ico",
+        "tiff",
+        "svg",
+        "zip",
+        "gz",
+        "tar",
+        "tgz",
+        "bz2",
+        "xz",
+        "7z",
+        "rar",
+        "exe",
+        "dll",
+        "so",
+        "dylib",
+        "bin",
+        "o",
+        "a",
+        "class",
+        "pyc",
+        "pyd",
+        "mp3",
+        "mp4",
+        "wav",
+        "avi",
+        "mov",
+        "mkv",
+        "flac",
+        "ogg",
+        "woff",
+        "woff2",
+        "ttf",
+        "eot",
+        "otf",
+        "doc",
+        "xls",
+        "ppt",
+        "pptx",
     }
 )
 
@@ -79,10 +168,18 @@ _BINARY_EXTENSIONS = frozenset(
 # Path-only check, no I/O. Safe devices like /dev/null are intentionally absent.
 _BLOCKED_DEVICE_PATHS = frozenset(
     {
-        "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full",
-        "/dev/stdin", "/dev/tty", "/dev/console",
-        "/dev/stdout", "/dev/stderr",
-        "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
+        "/dev/zero",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/full",
+        "/dev/stdin",
+        "/dev/tty",
+        "/dev/console",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/fd/0",
+        "/dev/fd/1",
+        "/dev/fd/2",
     }
 )
 
@@ -164,12 +261,15 @@ class Read(BaseTool):
     max_result_size_chars: ClassVar[int] = 100_000
     description = READ_DESCRIPTION
     # Records each successful read into the Role's shared file-read state so the
-    # Write/Edit tools can enforce read-before-overwrite. Optional: when the tool
-    # is used unbound (no Role), these stay unset and recording is skipped.
-    requires = ("record_file_read",)
+    # Write/Edit tools can enforce read-before-overwrite; get_cwd is the stable
+    # base for resolving relative paths. Optional: when the tool is used unbound
+    # (no Role), these stay unset — recording is skipped and get_cwd falls back
+    # to the process cwd.
+    requires = ("record_file_read", "get_cwd")
 
-    # Injected from Role by bind(): Role.record_file_read.
+    # Injected from Role by bind(): Role.record_file_read, Role.get_cwd.
     record_file_read: Callable[[str, int], None]
+    get_cwd: Callable[[], str]
 
     def __init__(self) -> None:
         super().__init__()
@@ -228,59 +328,42 @@ class Read(BaseTool):
                 files.
         """
         if not file_path or not file_path.strip():
-            raise ToolError("Error: 'file_path' argument is required.")
+            raise ToolError(_MSG_FILE_PATH_REQUIRED)
 
         if mode not in ("text", "visual"):
-            raise ToolError(
-                f"Error: invalid mode '{mode}'. Must be 'text' or 'visual'."
-            )
+            raise ToolError(_MSG_INVALID_MODE.format(mode=mode))
 
         if detail not in ("high", "original"):
-            raise ToolError(
-                f"Error: invalid detail '{detail}'. Must be 'high' (downscale to "
-                f"fit {MAX_IMAGE_DIMENSION} px) or 'original' (native resolution)."
-            )
+            raise ToolError(_MSG_INVALID_DETAIL.format(detail=detail, max_dim=MAX_IMAGE_DIMENSION))
 
-        full_path = os.path.abspath(os.path.expanduser(file_path.strip()))
+        full_path = resolve_path(getattr(self, "get_cwd", None), file_path.strip())
 
         if _is_blocked_device(full_path):
-            raise ToolError(
-                f"Error: cannot read '{file_path}': this device file would "
-                f"block or produce infinite output."
-            )
+            raise ToolError(_MSG_BLOCKED_DEVICE.format(path=file_path))
 
         ext = os.path.splitext(full_path)[1].lower().lstrip(".")
         if ext in _BINARY_EXTENSIONS:
-            raise ToolError(
-                f"Error: this tool cannot read binary files. The file appears "
-                f"to be a binary '{ext}' file."
-            )
+            raise ToolError(_MSG_BINARY_FILE.format(ext=ext))
 
         if not os.path.exists(full_path):
-            raise ToolError(
-                f"Error: file does not exist. Note that the path should be "
-                f"absolute; the current working directory is {os.getcwd()}."
-            )
+            getter = getattr(self, "get_cwd", None)
+            base = (getter() if getter is not None else None) or os.getcwd()
+            raise ToolError(_MSG_FILE_NOT_EXIST.format(base=base))
 
         if os.path.isdir(full_path):
-            raise ToolError(
-                f"Error: '{file_path}' is a directory, not a file. Use an ls "
-                f"command via the Bash tool to list a directory."
-            )
+            raise ToolError(_MSG_IS_DIRECTORY.format(path=file_path))
 
         try:
             stat = os.stat(full_path)
         except OSError as e:
-            raise ToolError(f"Error: cannot stat '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_STAT.format(path=file_path, error=e))
 
         # Each branch below raises ToolError on failure and otherwise returns a
         # successful result; record the read only once control reaches past the
         # (raising) call, so a failed read never marks the file as seen.
         # --- Image: return bytes as supplemental media ---
         if ext in _IMAGE_EXTENSIONS:
-            result = self._read_image(
-                file_path, full_path, ext, stat.st_size, detail
-            )
+            result = self._read_image(file_path, full_path, ext, stat.st_size, detail)
             self._mark_read(full_path, stat.st_mtime_ns)
             return result
         # --- Rich documents (PDF/Word/Excel) ---
@@ -290,10 +373,7 @@ class Read(BaseTool):
         if is_document(full_path):
             if mode == "visual":
                 if ext != "pdf":
-                    raise ToolError(
-                        f"Error: mode 'visual' is only supported for PDF files; "
-                        f"'{ext}' documents can only be read as text (mode='text')."
-                    )
+                    raise ToolError(_MSG_VISUAL_PDF_ONLY.format(ext=ext))
                 result = self._read_pdf(file_path, full_path, stat.st_size)
                 self._mark_read(full_path, stat.st_mtime_ns)
                 return result
@@ -313,12 +393,7 @@ class Read(BaseTool):
         """Read a text file slice and format with line numbers."""
         # Size guard only applies to whole-file reads (no explicit limit).
         if limit is None and stat.st_size > MAX_FILE_SIZE_BYTES:
-            raise ToolError(
-                f"Error: file ({stat.st_size} bytes) exceeds the maximum "
-                f"allowed size ({MAX_FILE_SIZE_BYTES} bytes). Use the offset "
-                f"and limit parameters to read specific portions of the file, "
-                f"or search for specific content instead."
-            )
+            raise ToolError(_MSG_FILE_TOO_LARGE.format(size=stat.st_size, max_size=MAX_FILE_SIZE_BYTES))
 
         # Normalize offset: callers may pass 0 or 1 to mean "from the start".
         start_line = offset if offset and offset > 0 else 1
@@ -332,35 +407,30 @@ class Read(BaseTool):
             return FILE_UNCHANGED_STUB
 
         try:
-            selected, total_lines, truncated_lines = self._read_range(
-                full_path, start_line, limit
-            )
+            selected, total_lines, truncated_lines = self._read_range(full_path, start_line, limit)
         except UnicodeDecodeError:
-            raise ToolError(
-                f"Error: this tool cannot read binary files. The file "
-                f"'{file_path}' is not valid UTF-8 text."
-            )
+            raise ToolError(_MSG_NOT_UTF8.format(path=file_path))
         except OSError as e:
-            raise ToolError(f"Error: cannot read '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_READ.format(path=file_path, error=e))
 
         self._read_state[full_path] = (start_line, limit, stat.st_mtime_ns)
         self._mark_read(full_path, stat.st_mtime_ns)
 
         if total_lines == 0:
-            return "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
+            return system_reminder(_MSG_EMPTY_FILE)
 
         if not selected:
-            return (
-                f"<system-reminder>Warning: the file exists but is shorter than "
-                f"the provided offset ({start_line}). The file has "
-                f"{total_lines} lines.</system-reminder>"
-            )
+            return system_reminder(_MSG_SHORTER_THAN_OFFSET.format(offset=start_line, total=total_lines))
 
         body = _add_line_numbers(selected, start_line)
         if truncated_lines:
-            body += (
-                f"\n\n<system-reminder>Note: {truncated_lines} line(s) exceeded "
-                f"{MAX_LINE_LENGTH} characters and were truncated.</system-reminder>"
+            verb = verb_agree(truncated_lines, "was", "were")
+            body += "\n\n" + system_reminder(
+                _MSG_LINE_TRUNCATED_NOTE.format(
+                    count=count_noun(truncated_lines, "line"),
+                    max_len=MAX_LINE_LENGTH,
+                    verb=verb,
+                )
             )
         return body
 
@@ -374,8 +444,12 @@ class Read(BaseTool):
         """
         if stat.st_size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
-                f"Error: document '{file_path}' ({stat.st_size} bytes) exceeds "
-                f"the maximum allowed size ({MAX_MEDIA_SIZE_BYTES} bytes)."
+                _MSG_MEDIA_TOO_LARGE.format(
+                    kind="document",
+                    path=file_path,
+                    size=stat.st_size,
+                    max_size=MAX_MEDIA_SIZE_BYTES,
+                )
             )
 
         # Normalize offset: callers may pass 0 or 1 to mean "from the start".
@@ -390,14 +464,9 @@ class Read(BaseTool):
         try:
             text = extract_document_text(full_path)
         except Exception as e:  # noqa: BLE001 — surface extraction failure
-            raise ToolError(f"Error: cannot extract text from '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_EXTRACT.format(path=file_path, error=e))
         if text is None:
-            raise ToolError(
-                f"Error: cannot read '{file_path}': no extractor is available "
-                f"for this document type (install the optional dependency, e.g. "
-                f"pymupdf/pdfminer/pypdf for PDF, python-docx for Word, openpyxl "
-                f"for Excel)."
-            )
+            raise ToolError(_MSG_NO_EXTRACTOR.format(path=file_path))
 
         all_lines = document_lines(text)
         total_lines = len(all_lines)
@@ -406,17 +475,13 @@ class Read(BaseTool):
         self._mark_read(full_path, stat.st_mtime_ns)
 
         if total_lines == 0 or (total_lines == 1 and all_lines[0] == ""):
-            return "<system-reminder>Warning: the document exists but no text could be extracted.</system-reminder>"
+            return system_reminder(_MSG_DOCUMENT_EMPTY)
 
         if start_line > total_lines:
-            return (
-                f"<system-reminder>Warning: the document exists but is shorter "
-                f"than the provided offset ({start_line}). The document has "
-                f"{total_lines} lines.</system-reminder>"
-            )
+            return system_reminder(_MSG_DOCUMENT_SHORTER_THAN_OFFSET.format(offset=start_line, total=total_lines))
 
         end_line = start_line + (limit if limit is not None else DEFAULT_MAX_LINES)
-        selected = all_lines[start_line - 1:end_line - 1]
+        selected = all_lines[start_line - 1 : end_line - 1]
 
         truncated_lines = 0
         capped: list[str] = []
@@ -428,9 +493,13 @@ class Read(BaseTool):
 
         body = _add_line_numbers(capped, start_line)
         if truncated_lines:
-            body += (
-                f"\n\n<system-reminder>Note: {truncated_lines} line(s) exceeded "
-                f"{MAX_LINE_LENGTH} characters and were truncated.</system-reminder>"
+            verb = verb_agree(truncated_lines, "was", "were")
+            body += "\n\n" + system_reminder(
+                _MSG_LINE_TRUNCATED_NOTE.format(
+                    count=count_noun(truncated_lines, "line"),
+                    max_len=MAX_LINE_LENGTH,
+                    verb=verb,
+                )
             )
         return body
 
@@ -444,22 +513,23 @@ class Read(BaseTool):
         """
         if size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
-                f"Error: image '{file_path}' ({size} bytes) exceeds the "
-                f"maximum allowed size ({MAX_MEDIA_SIZE_BYTES} bytes)."
+                _MSG_MEDIA_TOO_LARGE.format(
+                    kind="image",
+                    path=file_path,
+                    size=size,
+                    max_size=MAX_MEDIA_SIZE_BYTES,
+                )
             )
         try:
             with open(full_path, "rb") as f:
                 raw = f.read()
         except OSError as e:
-            raise ToolError(f"Error: cannot read '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_READ.format(path=file_path, error=e))
 
         final_bytes, note = self._prepare_image_bytes(file_path, raw, detail)
         b64 = base64.b64encode(final_bytes).decode("ascii")
         return ToolResult(
-            output=(
-                f"Read image {file_path} ({ext}, {size} bytes; {note}). "
-                f"Shown below."
-            ),
+            output=_MSG_IMAGE_OUTPUT.format(path=file_path, ext=ext, size=size, note=note),
             images=[b64],
             data={
                 "type": "image",
@@ -470,9 +540,7 @@ class Read(BaseTool):
             },
         )
 
-    def _prepare_image_bytes(
-        self, file_path: str, raw: bytes, detail: str
-    ) -> tuple[bytes, str]:
+    def _prepare_image_bytes(self, file_path: str, raw: bytes, detail: str) -> tuple[bytes, str]:
         """Return (bytes_to_send, human_note), downscaling when detail='high'.
 
         No silent fallback: when ``detail='high'`` requires Pillow and it is
@@ -485,11 +553,7 @@ class Read(BaseTool):
         try:
             from PIL import Image
         except ImportError:
-            raise ToolError(
-                f"Error: cannot process image '{file_path}' with detail='high': "
-                f"Pillow is not installed. Install Pillow or pass detail="
-                f"'original' to send the image at its native resolution."
-            )
+            raise ToolError(_MSG_PILLOW_MISSING.format(path=file_path))
 
         try:
             with Image.open(io.BytesIO(raw)) as im:
@@ -508,9 +572,7 @@ class Read(BaseTool):
                 if icc:
                     save_kwargs["icc_profile"] = icc
 
-                im.thumbnail(
-                    (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.BILINEAR
-                )
+                im.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.BILINEAR)
                 buf = io.BytesIO()
                 im.save(buf, format=fmt, **save_kwargs)
                 new_w, new_h = im.size
@@ -521,25 +583,26 @@ class Read(BaseTool):
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001 — surface any decode/encode failure
-            raise ToolError(
-                f"Error: cannot process image '{file_path}': {e}. Pass "
-                f"detail='original' to send the raw bytes without resizing."
-            )
+            raise ToolError(_MSG_CANNOT_PROCESS_IMAGE.format(path=file_path, error=e))
 
     def _read_pdf(self, file_path, full_path, size) -> ToolResult:
         """Read a PDF and return it as a supplemental document."""
         if size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
-                f"Error: PDF '{file_path}' ({size} bytes) exceeds the maximum "
-                f"allowed size ({MAX_MEDIA_SIZE_BYTES} bytes)."
+                _MSG_MEDIA_TOO_LARGE.format(
+                    kind="PDF",
+                    path=file_path,
+                    size=size,
+                    max_size=MAX_MEDIA_SIZE_BYTES,
+                )
             )
         try:
             with open(full_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("ascii")
         except OSError as e:
-            raise ToolError(f"Error: cannot read '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_READ.format(path=file_path, error=e))
         return ToolResult(
-            output=f"Read PDF {file_path} ({size} bytes). Shown below.",
+            output=_MSG_PDF_OUTPUT.format(path=file_path, size=size),
             pdfs=[b64],
             data={"type": "pdf", "path": full_path, "size": size},
         )
@@ -550,17 +613,13 @@ class Read(BaseTool):
             with open(full_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
         except (OSError, UnicodeDecodeError) as e:
-            raise ToolError(f"Error: cannot read '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_READ.format(path=file_path, error=e))
         except json.JSONDecodeError as e:
-            raise ToolError(f"Error: '{file_path}' is not a valid notebook (invalid JSON): {e}")
+            raise ToolError(_MSG_NOTEBOOK_INVALID_JSON.format(path=file_path, error=e))
 
-        return _render_notebook(nb) or (
-            "<system-reminder>Warning: the notebook exists but has no cells.</system-reminder>"
-        )
+        return _render_notebook(nb) or system_reminder(_MSG_NOTEBOOK_NO_CELLS)
 
-    def _read_range(
-        self, full_path: str, start_line: int, limit: int | None
-    ) -> tuple[list[str], int, int]:
+    def _read_range(self, full_path: str, start_line: int, limit: int | None) -> tuple[list[str], int, int]:
         """Return (selected_lines, total_line_count, truncated_line_count).
 
         Iterates the file line by line so only selected lines are retained in

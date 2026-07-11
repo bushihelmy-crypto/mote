@@ -26,12 +26,12 @@ import threading
 from collections import deque
 from typing import Awaitable, Callable, Optional
 
-from metagpt.common.events import AgentLifecycleEvent, EventBus
-from metagpt.common.logs import logger
-from metagpt.common.exception import AgentLimitReached
-from metagpt.environment._scope import ScopedExitMixin
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.environment.store import ResidencyStore
+from mote.common.events import AgentLifecycleEvent, EventBus
+from mote.common.exception import AgentLimitReached
+from mote.common.logs import logger
+from mote.environment._scope import ScopedExitMixin
+from mote.environment.runtime import AgentRuntime
+from mote.environment.store import ResidencyStore
 
 RuntimeLookup = Callable[[str], Optional[AgentRuntime]]
 RuntimeRemover = Callable[[str], Optional[Awaitable]]
@@ -126,9 +126,7 @@ class Residency:
                 continue
             await self._call_remove(candidate)
             if self._event_bus is not None:
-                self._event_bus.emit_sync(
-                    AgentLifecycleEvent(session_id=candidate, phase="evicted")
-                )
+                self._event_bus.emit_sync(AgentLifecycleEvent(session_id=candidate, phase="evicted"))
             return True
         return False
 

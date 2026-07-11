@@ -14,12 +14,12 @@ import asyncio
 
 import pytest
 
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
-from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from metagpt.router.cost import CostTracker
-from metagpt.router.llm.anthropic_api import AnthropicLLM
-from metagpt.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.common.events import EventBus, LLMStreamDeltaEvent, set_bus
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.router.cost import CostTracker
+from mote.router.llm.anthropic_api import AnthropicLLM
+from mote.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
 
 
 # -- fakes ------------------------------------------------------------------
@@ -125,6 +125,19 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def _strip_cache(obj):
+    """Deep-copy ``obj`` (message list / tool list / block) sans cache_control.
+
+    Lets conversion assertions ignore the prompt-cache markers that
+    ``_apply_cache_breakpoints`` sprinkles on the last message/tool blocks.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_cache(v) for k, v in obj.items() if k != "cache_control"}
+    if isinstance(obj, list):
+        return [_strip_cache(v) for v in obj]
+    return obj
+
+
 # -- message conversion -----------------------------------------------------
 class TestConvertMessages:
     def test_system_extracted_and_joined(self):
@@ -203,9 +216,7 @@ class TestConvertMessages:
 
     def test_empty_assistant_without_tools_is_dropped(self):
         llm = _make_llm()
-        _, conv = llm._convert_messages(
-            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": ""}]
-        )
+        _, conv = llm._convert_messages([{"role": "user", "content": "hi"}, {"role": "assistant", "content": ""}])
         assert len(conv) == 1 and conv[0]["role"] == "user"
 
 
@@ -240,6 +251,127 @@ class TestToolConversion:
         llm = _make_llm()
         spec = {"name": "B", "description": "d", "input_schema": {"type": "object"}}
         assert llm._convert_tools([spec]) == [spec]
+
+
+# -- prompt caching (Anthropic manual cache_control) ------------------------
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+class TestPromptCache:
+    def test_system_string_becomes_block_with_marker(self):
+        llm = _make_llm()
+        kw = llm._cons_kwargs([{"role": "system", "content": "guide"}, {"role": "user", "content": "hi"}])
+        # The plain system string is normalized into a single marked text block.
+        assert kw["system"] == [{"type": "text", "text": "guide", "cache_control": _EPHEMERAL}]
+
+    def test_single_message_block_marked(self):
+        # With only one message (empty history) there is no stable prefix to cache
+        # separately, so the marker falls back to the last (only) message's block.
+        llm = _make_llm()
+        kw = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        last_block = kw["messages"][-1]["content"][-1]
+        assert last_block["cache_control"] == _EPHEMERAL
+
+    def test_marker_skips_ephemeral_tail_anchors_last_durable(self):
+        # mote assembles the request as ``stored_history + [ephemeral_tail]``. The
+        # tail declares CACHE_INTENT_EPHEMERAL_TAIL (surfaced on the wire as the
+        # private ``_cache_intent`` key). The single message-level marker must skip
+        # that tagged block and anchor on the last DURABLE block — the true end of
+        # the cacheable prefix — never the volatile tail (which changes every turn).
+        llm = _make_llm()
+        kw = llm._cons_kwargs(
+            [
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": "two"},
+                {"role": "user", "content": "three", "_cache_intent": "ephemeral_tail"},
+            ]
+        )
+        markers = [
+            block
+            for msg in kw["messages"]
+            for block in msg["content"]
+            if isinstance(block, dict) and "cache_control" in block
+        ]
+        # Exactly one message-level marker, on the assistant "two" (last durable).
+        assert len(markers) == 1
+        assert kw["messages"][-2]["content"][-1]["cache_control"] == _EPHEMERAL
+        # The ephemeral tail is NOT marked...
+        assert "cache_control" not in kw["messages"][-1]["content"][-1]
+        # ...and the private routing key never reaches the wire.
+        for msg in kw["messages"]:
+            for block in msg["content"]:
+                assert "_cache_intent" not in block
+
+    def test_tail_merged_into_tool_result_turn_still_skipped(self):
+        # Native tool-use: the ephemeral tail (user text) is MERGED by
+        # ``_append_blocks`` into the same user turn that holds the tool_result
+        # block. A positional [-2] heuristic would strand the tool_result outside
+        # the cached prefix; block-level intent anchors on the tool_result instead.
+        llm = _make_llm()
+        kw = llm._cons_kwargs(
+            [
+                {"role": "user", "content": "start"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "result-body"},
+                {"role": "user", "content": "reminder", "_cache_intent": "ephemeral_tail"},
+            ]
+        )
+        # The tool_result and the ephemeral tail share the final user turn.
+        last_turn = kw["messages"][-1]["content"]
+        tool_block = next(b for b in last_turn if b.get("type") == "tool_result")
+        tail_block = next(b for b in last_turn if b.get("type") == "text")
+        # Marker anchors on the durable tool_result, not the ephemeral tail text.
+        assert tool_block["cache_control"] == _EPHEMERAL
+        assert "cache_control" not in tail_block
+        # No leaked routing key.
+        for block in last_turn:
+            assert "_cache_intent" not in block
+
+    def test_last_tool_marked(self):
+        llm = _make_llm()
+        kw = llm._cons_kwargs(
+            [{"role": "user", "content": "hi"}],
+            tools=[
+                {"name": "A", "input_schema": {"type": "object"}},
+                {"name": "B", "input_schema": {"type": "object"}},
+            ],
+        )
+        assert "cache_control" not in kw["tools"][0]
+        assert kw["tools"][-1]["cache_control"] == _EPHEMERAL
+
+    def test_at_most_three_breakpoints(self):
+        llm = _make_llm()
+        kw = llm._cons_kwargs(
+            [{"role": "system", "content": "guide"}, {"role": "user", "content": "hi"}],
+            tools=[{"name": "A", "input_schema": {"type": "object"}}],
+        )
+        count = 0
+        for block in kw["system"]:
+            count += "cache_control" in block
+        for tool in kw["tools"]:
+            count += "cache_control" in tool
+        for msg in kw["messages"]:
+            for block in msg["content"]:
+                count += isinstance(block, dict) and "cache_control" in block
+        # Anthropic allows at most 4; we place exactly 3 (system / tools / tail).
+        assert count == 3
+
+    def test_disabled_places_no_markers(self):
+        llm = _make_llm(use_prompt_cache=False)
+        kw = llm._cons_kwargs(
+            [{"role": "system", "content": "guide"}, {"role": "user", "content": "hi"}],
+            tools=[{"name": "A", "input_schema": {"type": "object"}}],
+        )
+        assert kw["system"] == "guide"  # left as a plain string, untouched
+        for msg in kw["messages"]:
+            for block in msg["content"]:
+                assert "cache_control" not in block
+        for tool in kw["tools"]:
+            assert "cache_control" not in tool
 
 
 # -- response normalization -------------------------------------------------
@@ -283,8 +415,10 @@ class TestCompletion:
         kw = fake.last_kwargs
         assert kw["model"] == "claude-opus-4-8"
         assert kw["max_tokens"] == 2048
-        assert kw["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-        assert kw["tools"] == [{"name": "A", "input_schema": {"type": "object"}}]
+        # Prompt-cache breakpoints ride the last message/tool block; ignore them
+        # here (covered by TestPromptCache) by stripping cache_control.
+        assert _strip_cache(kw["messages"]) == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        assert _strip_cache(kw["tools"]) == [{"name": "A", "input_schema": {"type": "object"}}]
         assert kw["tool_choice"] == {"type": "auto"}
         assert "raise_if_empty" not in kw
         # Cost recorded from the Anthropic usage shape.
@@ -307,7 +441,7 @@ class TestCompletion:
         llm = _make_llm()
         fake = _FakeMessages(resp=_Resp([]))
         llm.aclient = _FakeClient(fake)
-        from metagpt.common.exception import LLMEmptyResponseError
+        from mote.common.exception import LLMEmptyResponseError
 
         with pytest.raises(LLMEmptyResponseError):
             run(llm._achat_completion([{"role": "user", "content": "hi"}], raise_if_empty=True))
@@ -343,7 +477,7 @@ class TestCompletion:
         response = httpx.Response(429, request=request)
         exc = anthropic.RateLimitError("rate limited", response=response, body=None)
         llm.aclient = _FakeClient(_FakeMessages(raise_exc=exc))
-        from metagpt.common.exception import LLMRateLimitError
+        from mote.common.exception import LLMRateLimitError
 
         with pytest.raises(LLMRateLimitError):
             run(llm._achat_completion([{"role": "user", "content": "hi"}]))
@@ -394,7 +528,7 @@ class TestAutoDetection:
         assert isinstance(create_llm_instance(cfg), AnthropicLLM)
 
     def test_gateway_claude_stays_openai(self):
-        from metagpt.router.llm.openai_api import OpenAILLM
+        from mote.router.llm.openai_api import OpenAILLM
 
         cfg = LLMConfig(
             api_type="openai", base_url="https://openrouter.ai/api/v1", model="claude-3-5-sonnet", api_key="x"
@@ -413,27 +547,17 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from metagpt.common.exception import (
-            LLMAuthenticationError,
-            LLMBadRequestError,
-            classify_llm_error,
-        )
-        from metagpt.common.exception.handlers import is_retryable
+        from mote.common.exception import LLMAuthenticationError, LLMBadRequestError, classify_llm_error
+        from mote.common.exception.handlers import is_retryable
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
-        auth = anthropic.AuthenticationError(
-            "bad key", response=httpx.Response(401, request=request), body=None
-        )
+        auth = anthropic.AuthenticationError("bad key", response=httpx.Response(401, request=request), body=None)
         assert isinstance(classify_llm_error(auth), LLMAuthenticationError)
 
-        bad = anthropic.BadRequestError(
-            "bad", response=httpx.Response(400, request=request), body=None
-        )
+        bad = anthropic.BadRequestError("bad", response=httpx.Response(400, request=request), body=None)
         assert isinstance(classify_llm_error(bad), LLMBadRequestError)
 
-        overloaded = anthropic.InternalServerError(
-            "boom", response=httpx.Response(500, request=request), body=None
-        )
+        overloaded = anthropic.InternalServerError("boom", response=httpx.Response(500, request=request), body=None)
         # InternalServerError is in the transient allowlist.
         assert is_retryable(overloaded) is True

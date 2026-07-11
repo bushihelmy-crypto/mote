@@ -5,14 +5,14 @@ port's inline ``ask`` / ``decide_approval`` prompts.
 
 The full-screen TUI can't interleave a blocking ``y/n?`` prompt into the scrolling
 transcript the way the raw-stdin terminal port did; instead the
-:class:`~metagpt.cli.io.textual_io.TextualPort` pushes one of these
+:class:`~mote.cli.io.textual_io.TextualPort` pushes one of these
 :class:`~textual.screen.ModalScreen` overlays and awaits its dismissal value:
 
 * :class:`QuestionScreen` — free-form ``ask`` (``AskUserQuestion`` / ``ask_human``);
   dismisses with the answer ``str`` (a bare option number maps to that option's
   label so numbered choices work like the terminal host).
 * :class:`ApprovalScreen` — a gated-action permission round-trip; dismisses with an
-  :class:`~metagpt.cli.common.view.events.ApprovalDecision` (``y/n/a/d`` keys or
+  :class:`~mote.cli.contracts.view.events.ApprovalDecision` (``y/n/a/d`` keys or
   buttons → ``accept`` / ``reject`` / ``always_allow`` / ``always_deny``).
 """
 
@@ -26,8 +26,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, SelectionList, Static
 from textual.widgets.selection_list import Selection
 
-from metagpt.cli.common.view.events import ApprovalDecision
-from metagpt.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
+from mote.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
+from mote.cli.contracts.view.events import ApprovalDecision
 
 # Sentinel value for the auto-appended "Other" entry in the selection list.
 _OTHER_VALUE = -1
@@ -104,9 +104,7 @@ class QuestionScreen(ModalScreen[tuple]):
     }
     """
 
-    def __init__(
-        self, question: str, options: Optional[List[str]] = None, multi: bool = False
-    ) -> None:
+    def __init__(self, question: str, options: Optional[List[str]] = None, multi: bool = False) -> None:
         super().__init__()
         self._question = question or ""
         self._options = list(options) if options else []
@@ -268,7 +266,9 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
             yield Label("Do you want to proceed?", classes="a-proceed")
             with Vertical(id="buttons"):
                 yield Button(f"{PROMPT_SYMBOL} 1. Yes (y)", id="accept", variant="success")
-                yield Button(f"{PROMPT_SYMBOL} 2. Yes, and don\u2019t ask again (a)", id="always_allow", variant="primary")
+                yield Button(
+                    f"{PROMPT_SYMBOL} 2. Yes, and don\u2019t ask again (a)", id="always_allow", variant="primary"
+                )
                 yield Button(f"{PROMPT_SYMBOL} 3. No, tell me what to do (n · esc)", id="reject", variant="error")
                 yield Button(f"{PROMPT_SYMBOL} 4. No, never allow this (d)", id="always_deny", variant="warning")
             yield Label("↑↓ 选择 · Enter 确认 · Esc 取消", classes="a-foot")

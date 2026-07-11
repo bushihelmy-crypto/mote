@@ -1,6 +1,6 @@
-"""metagpt.common.schema — consolidated schema package.
+"""mote.common.schema — consolidated schema package.
 
-Re-exports all public names so ``from metagpt.common.schema import Message`` works.
+Re-exports all public names so ``from mote.common.schema import Message`` works.
 
 Uses lazy ``__getattr__`` to avoid eagerly importing all submodules at package
 init time, which prevents circular imports when submodule transitive deps import

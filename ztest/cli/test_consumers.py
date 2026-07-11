@@ -17,14 +17,9 @@ import json
 
 import pytest
 
-from metagpt.cli.consumers.structured.consumer import StructuredConsumer
-from metagpt.cli.consumers.terminal.consumer import (
-    PlainTerminalConsumer,
-    TerminalConsumer,
-    _HAS_RICH,
-)
-from metagpt.cli.io.human_channel import PortHumanChannel
-from metagpt.cli.common.view import (
+from mote.cli.consumers.structured.consumer import StructuredConsumer
+from mote.cli.consumers.terminal.consumer import _HAS_RICH, PlainTerminalConsumer, TerminalConsumer
+from mote.cli.contracts.view import (
     ConversationCompacted,
     ErrorRaised,
     MessageBlockCompleted,
@@ -35,7 +30,7 @@ from metagpt.cli.common.view import (
     ToolCallCompleted,
     ToolCallStarted,
 )
-
+from mote.cli.io.human_channel import PortHumanChannel
 
 # --------------------------------------------------------------------------
 # StructuredConsumer — one JSON line per ViewEvent
@@ -135,7 +130,7 @@ def test_plain_renders_notice_and_error():
 
 def test_plain_renders_system_reminder():
     # The injected turn-context summary prints with the ⚑ note glyph.
-    from metagpt.cli.consumers.render.palette import NOTE
+    from mote.cli.consumers.render.palette import NOTE
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -147,7 +142,7 @@ def test_plain_renders_system_reminder():
 
 def test_plain_renders_conversation_compacted():
     # A compaction boundary prints the ✻ marker + the retained-message count.
-    from metagpt.cli.consumers.render.palette import COMPACT
+    from mote.cli.consumers.render.palette import COMPACT
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -171,24 +166,18 @@ def test_plain_fold_note_shows_hidden_line_count():
     # hidden_lines > 0 (no disk ref) → "+N 行已折叠".
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
-    c.on_tool_call_completed(
-        ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=12)
-    )
+    c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=12))
     out = buf.getvalue()
     assert "+12 行已折叠" in out
 
 
 def test_plain_fold_note_shows_scissors_for_hard_truncation():
     # full_ref present → the ✂ hard-truncation marker + the disk reference.
-    from metagpt.cli.consumers.render.palette import SCISSORS
+    from mote.cli.consumers.render.palette import SCISSORS
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
-    c.on_tool_call_completed(
-        ToolCallCompleted(
-            ok=True, summary="ok", content_truncated=True, full_ref="/tmp/out.txt"
-        )
-    )
+    c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, full_ref="/tmp/out.txt"))
     out = buf.getvalue()
     assert SCISSORS in out
     assert "输出过大已截断" in out
@@ -245,9 +234,7 @@ def _live_plain(live) -> str:
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_retry_status_opens_transient_line():
     c = TerminalConsumer(console=_rich_console())
-    c.on_retry_status(
-        RetryStatus(attempt=3, max_attempts=6, delay_ms=2000.0, error_type="LLMOverloadedError")
-    )
+    c.on_retry_status(RetryStatus(attempt=3, max_attempts=6, delay_ms=2000.0, error_type="LLMOverloadedError"))
     assert c._retry_live is not None
     text = _live_plain(c._retry_live)
     assert "\u27f3" in text  # ⟳ retry glyph (not the ⚠ approval gate)
@@ -283,7 +270,7 @@ def test_terminal_retry_cleared_by_stream_delta():
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_renders_conversation_compacted():
-    from metagpt.cli.consumers.render.palette import COMPACT
+    from mote.cli.consumers.render.palette import COMPACT
 
     console = _rich_console()
     c = TerminalConsumer(console=console)
@@ -298,24 +285,18 @@ def test_terminal_renders_conversation_compacted():
 def test_terminal_fold_note_hidden_lines():
     console = _rich_console()
     c = TerminalConsumer(console=console)
-    c.on_tool_call_completed(
-        ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=9)
-    )
+    c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=9))
     out = console.file.getvalue()
     assert "+9 行已折叠" in out
 
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_fold_note_hard_truncation_shows_scissors():
-    from metagpt.cli.consumers.render.palette import SCISSORS
+    from mote.cli.consumers.render.palette import SCISSORS
 
     console = _rich_console()
     c = TerminalConsumer(console=console)
-    c.on_tool_call_completed(
-        ToolCallCompleted(
-            ok=True, summary="ok", content_truncated=True, full_ref="/tmp/big.log"
-        )
-    )
+    c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, full_ref="/tmp/big.log"))
     out = console.file.getvalue()
     assert SCISSORS in out
     assert "输出过大已截断" in out
@@ -345,7 +326,7 @@ class _FakeProtocol:
 def test_media_block_uses_native_protocol_when_present(tmp_path):
     # A detected protocol wins: the raw escape sequence is written straight to the
     # console file (bypassing rich), and the half-block path is never reached.
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
 
     pytest.importorskip("PIL")
     from PIL import Image
@@ -368,7 +349,7 @@ def test_media_block_uses_native_protocol_when_present(tmp_path):
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_media_block_falls_back_to_half_block_without_protocol(tmp_path):
     # No native protocol → the half-block renderer paints truecolor cells.
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
 
     pytest.importorskip("PIL")
     from PIL import Image
@@ -389,7 +370,7 @@ def test_media_block_falls_back_to_half_block_without_protocol(tmp_path):
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_media_block_missing_file_prints_reference_only(tmp_path):
     # A non-existent image can't render either way → only the caption line prints.
-    from metagpt.cli.common.view import MediaBlock
+    from mote.cli.contracts.view import MediaBlock
 
     console = _rich_console()
     c = TerminalConsumer(console=console)
@@ -409,7 +390,7 @@ def test_media_block_missing_file_prints_reference_only(tmp_path):
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_file_diff_block_renders_caption_and_diff():
-    from metagpt.cli.common.view import FileDiffBlock
+    from mote.cli.contracts.view import FileDiffBlock
 
     console = _rich_console()
     c = TerminalConsumer(console=console)
@@ -424,7 +405,7 @@ def test_file_diff_block_renders_caption_and_diff():
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_file_diff_block_caption_verb_reflects_create_delete():
-    from metagpt.cli.common.view import FileDiffBlock
+    from mote.cli.contracts.view import FileDiffBlock
 
     console = _rich_console()
     c = TerminalConsumer(console=console)
@@ -436,7 +417,7 @@ def test_file_diff_block_caption_verb_reflects_create_delete():
 
 
 def test_plain_file_diff_block_prints_verb_and_path():
-    from metagpt.cli.common.view import FileDiffBlock
+    from mote.cli.contracts.view import FileDiffBlock
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -468,7 +449,7 @@ class FakeApprovalPort(FakePort):
         self.decided = []
 
     async def decide_approval(self, ctx, request):
-        from metagpt.cli.common.view.events import ApprovalDecision
+        from mote.cli.contracts.view.events import ApprovalDecision
 
         self.decided.append((ctx, request))
         return ApprovalDecision(approval_id="", outcome=self._outcome)
@@ -550,7 +531,7 @@ class FakeQuestionsPort(FakePort):
         self.questions_calls = []
 
     async def ask_questions(self, ctx, questions):
-        from metagpt.common.schema import AskUserQuestionAnswers
+        from mote.common.schema import AskUserQuestionAnswers
 
         self.questions_calls.append((ctx, questions))
         return self._answers if self._answers is not None else AskUserQuestionAnswers()
@@ -566,19 +547,16 @@ def _q(question, header, options, multiSelect=False):
 
 
 def _questions(*qs):
-    from metagpt.common.schema import AskUserQuestionInput
+    from mote.common.schema import AskUserQuestionInput
 
     return AskUserQuestionInput.model_validate({"questions": list(qs)})
 
 
 def _answers(*answers):
-    from metagpt.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+    from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
     return AskUserQuestionAnswers(
-        answers=[
-            AskUserQuestionAnswer(question=q, selected=list(sel), free_text=free)
-            for q, sel, free in answers
-        ]
+        answers=[AskUserQuestionAnswer(question=q, selected=list(sel), free_text=free) for q, sel, free in answers]
     )
 
 
@@ -586,13 +564,11 @@ def _answers(*answers):
 async def test_human_channel_askuserquestion_routes_to_ask_questions():
     # A structured AskUserQuestion round-trip flows through ``ask_questions``
     # unchanged: no text rendering, the typed input goes down, answers come up.
-    from metagpt.common.schema import AskUserQuestionAnswers
+    from mote.common.schema import AskUserQuestionAnswers
 
     port = FakeQuestionsPort(answers=_answers(("Pick a color", ["Blue"], "")))
     env = PortHumanChannel(port, ctx="C")
-    result = await env.ask_user_question(
-        _questions(_q("Pick a color", "Color", [("Red", "warm"), ("Blue", "cool")]))
-    )
+    result = await env.ask_user_question(_questions(_q("Pick a color", "Color", [("Red", "warm"), ("Blue", "cool")])))
     assert isinstance(result, AskUserQuestionAnswers)
     assert result.answers[0].selected == ["Blue"]
     assert len(port.questions_calls) == 1
@@ -614,7 +590,7 @@ async def test_human_channel_askuserquestion_multiline_free_text_verbatim():
 async def test_human_channel_askuserquestion_degrades_without_ask_questions():
     # A port that predates ``ask_questions`` degrades per-question through the
     # plain ``ask``, still building STRUCTURED answers (no block-split / pairing).
-    from metagpt.common.schema import AskUserQuestionAnswers
+    from mote.common.schema import AskUserQuestionAnswers
 
     class DegradePort(FakePort):
         def __init__(self, replies):
@@ -645,7 +621,7 @@ async def test_human_channel_askuserquestion_degrades_without_ask_questions():
 @pytest.mark.asyncio
 async def test_human_channel_degrade_falls_back_to_2arg_ask():
     # A port whose ``ask`` only accepts (ctx, question) still degrades cleanly.
-    from metagpt.common.schema import AskUserQuestionAnswers
+    from mote.common.schema import AskUserQuestionAnswers
 
     port = FakePort(answer="Red")  # 2-arg ask, no options kwarg
     env = PortHumanChannel(port, ctx="C")

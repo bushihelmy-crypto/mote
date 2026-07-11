@@ -14,11 +14,7 @@ import sys
 
 import pytest
 
-from metagpt.sandbox.hardening import (
-    apply_in_child,
-    harden_env,
-    hardening_prelude,
-)
+from mote.sandbox.hardening import apply_in_child, harden_env, hardening_prelude
 
 
 class TestHardeningPrelude:
@@ -62,10 +58,10 @@ class TestHardenEnv:
 class TestApplyInChild:
     def test_child_is_non_dumpable(self):
         # Spawn a child that applies hardening then reports its rlimit. The
-        # child inherits our import path via PYTHONPATH so ``metagpt.sandbox``
+        # child inherits our import path via PYTHONPATH so ``mote.sandbox``
         # resolves regardless of cwd.
         code = (
-            "from metagpt.sandbox.hardening import apply_in_child;"
+            "from mote.sandbox.hardening import apply_in_child;"
             "apply_in_child();"
             "import resource;"
             "soft, hard = resource.getrlimit(resource.RLIMIT_CORE);"

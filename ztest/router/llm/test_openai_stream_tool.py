@@ -13,11 +13,11 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.events import EventBus, LLMStreamDeltaEvent, set_bus
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from metagpt.router.cost import CostTracker
-from metagpt.router.llm.openai_api import OpenAILLM
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.events import EventBus, LLMStreamDeltaEvent, set_bus
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.router.cost import CostTracker
+from mote.router.llm.openai_api import OpenAILLM
 
 
 # -- fakes ------------------------------------------------------------------
@@ -26,7 +26,9 @@ def _delta(content=None, tool_calls=None):
 
 
 def _tc(index, id=None, name=None, arguments=None):
-    return SimpleNamespace(index=index, id=id, type="function", function=SimpleNamespace(name=name, arguments=arguments))
+    return SimpleNamespace(
+        index=index, id=id, type="function", function=SimpleNamespace(name=name, arguments=arguments)
+    )
 
 
 def _choice(delta, finish_reason=None):
@@ -65,7 +67,9 @@ class _FakeClient:
 
 
 def _make_llm():
-    cfg = LLMConfig(api_type="openai", base_url="https://api.openai.com/v1", model="gpt-4o", api_key="sk-x", max_token=512)
+    cfg = LLMConfig(
+        api_type="openai", base_url="https://api.openai.com/v1", model="gpt-4o", api_key="sk-x", max_token=512
+    )
     llm = OpenAILLM(cfg)
     llm.cost_manager = CostTracker()
     return llm
@@ -119,9 +123,7 @@ def test_stream_tool_text_and_tool_calls():
 
     assert streamed == "Hello world\n"  # mirrored deltas + trailing newline
     assert llm.get_choice_text(rsp) == "Hello world"
-    assert llm.get_choice_tool_calls(rsp) == [
-        {"id": "call_a", "name": "Read", "arguments": {"file_path": "a.py"}}
-    ]
+    assert llm.get_choice_tool_calls(rsp) == [{"id": "call_a", "name": "Read", "arguments": {"file_path": "a.py"}}]
 
 
 def test_stream_tool_text_only():
@@ -173,7 +175,14 @@ def test_aask_tool_uses_stream_path():
     """aask_tool(stream=True, the default) routes through the streaming completion."""
     llm = _make_llm()
     chunks = [
-        _chunk([_choice(_delta(tool_calls=[_tc(0, id="c9", name="Glob", arguments='{"pattern":"*.py"}')]), finish_reason="tool_calls")]),
+        _chunk(
+            [
+                _choice(
+                    _delta(tool_calls=[_tc(0, id="c9", name="Glob", arguments='{"pattern":"*.py"}')]),
+                    finish_reason="tool_calls",
+                )
+            ]
+        ),
     ]
     llm.aclient = _FakeClient(chunks)
 

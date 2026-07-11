@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import functools
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 # NonRetryableToolError now lives in the global exception system; re-exported
 # here so existing imports/raises keep working unchanged.
-from metagpt.common.exception import NonRetryableToolError, is_retryable  # noqa: F401
+from mote.common.exception import NonRetryableToolError, is_retryable  # noqa: F401
 
 ReturnType = TypeVar("ReturnType")
 
@@ -81,7 +81,7 @@ def retry_if_retryable_error(retry_state):
     return is_retryable(meaningful)
 
 
-def handle_exception_group(func: Callable[..., ReturnType]) -> Callable[..., ReturnType]:
+def handle_exception_group(func: Callable[..., Any]) -> Callable[..., Any]:
     """Extract meaningful errors from ExceptionGroup when they occur.
 
     Only for async functions.

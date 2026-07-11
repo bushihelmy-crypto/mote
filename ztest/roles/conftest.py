@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.roles import Role
+from mote.roles import Role
 
 
 class FakeLLM:
@@ -108,7 +108,7 @@ class FakeEnv:
 @pytest.fixture
 def context():
     """A real router Context (builds offline, no network)."""
-    from metagpt.router.llm.context import Context
+    from mote.router.llm.context import Context
 
     return Context()
 

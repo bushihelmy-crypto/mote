@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Coroutine, Optional
 
-from metagpt.executor.tasks.pool import BackgroundTaskPool
-from metagpt.executor.tasks.types import BgTaskResult
+from mote.executor.tasks.pool import BackgroundTaskPool
+from mote.executor.tasks.types import BgTaskResult
 
 _DEFAULT_TASK_TIMEOUT = 600.0  # 10 minutes per task
 _DEFAULT_FOREGROUND_TIMEOUT = 30.0  # seconds before auto-backgrounding

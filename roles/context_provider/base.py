@@ -5,12 +5,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.base import LoopContext
-from metagpt.roles.context_provider.request import ThinkRequest
+from mote.common.base import LoopContext
+from mote.roles.context_provider.request import ThinkRequest
 
 if TYPE_CHECKING:
-    from metagpt.common.interface import LLMClient
-    from metagpt.common.schema import Message
+    from mote.common.interface import LLMClient
+    from mote.common.schema import Message
 
 
 class BaseContextProvider(ABC):
@@ -23,7 +23,7 @@ class BaseContextProvider(ABC):
     without the loop knowing which concrete provider is in play.
 
     Deliberately NARROW — like the ``MessageStore`` slice in
-    ``metagpt.common.interface``: this ABC exposes only ``prepare()`` (the
+    ``mote.common.interface``: this ABC exposes only ``prepare()`` (the
     dynamic, per-turn think request) and ``loop_context()`` (the static observe
     + loop-control bundle). It does NOT expose the Role. A loop typed against
     ``BaseContextProvider`` therefore cannot reach into the Role through the

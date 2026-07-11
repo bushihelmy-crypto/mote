@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.interface import EphemeralContextSource
-from metagpt.context.skills.skill_definition import SkillDefinition
-from metagpt.context.turn_context import SkillActivationContextSource
+from mote.common.interface import EphemeralContextSource
+from mote.context.skills.skill_definition import SkillDefinition
+from mote.context.turn_context import SkillActivationContextSource
 
 
 def run(coro):
@@ -57,9 +57,7 @@ class TestProtocol:
 
 class TestSilent:
     def test_none_pool_silent(self):
-        src = SkillActivationContextSource(
-            get_pool=lambda: None, get_touched_files=lambda: ["/a.py"]
-        )
+        src = SkillActivationContextSource(get_pool=lambda: None, get_touched_files=lambda: ["/a.py"])
         assert run(src.render(cwd="/")) is None
 
     def test_no_conditional_skills_silent(self):

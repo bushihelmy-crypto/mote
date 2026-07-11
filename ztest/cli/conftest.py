@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures/helpers for the metagpt.cli test suite.
+"""Shared fixtures/helpers for the mote.cli test suite.
 
 The projector folds the *core* ``AgentEvent`` spine; tests don't need the real
 event classes — they only need objects that expose the attributes the projector
@@ -17,7 +17,9 @@ from typing import Any, List, Optional
 
 import pytest
 
-from metagpt.common.events.types import (
+from mote.cli.contracts.base import BaseConsumer
+from mote.cli.contracts.view import Capabilities
+from mote.common.events.types import (
     COMPACTION_CHECKPOINT,
     LLM_ERROR,
     LLM_RETRY,
@@ -28,9 +30,6 @@ from metagpt.common.events.types import (
     PRE_TOOL_USE,
     TASK_PROGRESS,
 )
-
-from metagpt.cli.common.base import BaseConsumer
-from metagpt.cli.common.view import Capabilities
 
 
 class AgentEvt:
@@ -57,7 +56,7 @@ def ev_message(role: str, content: str) -> AgentEvt:
 def ev_system_reminder(inner: str) -> AgentEvt:
     """A user MESSAGE_APPENDED whose content is a ``<system-reminder>`` envelope.
 
-    Mirrors metagpt's turn-context bus output (the framework writes the merged
+    Mirrors mote's turn-context bus output (the framework writes the merged
     per-turn block into history as a user message wrapped in these tags).
     """
     content = f"<system-reminder>\n{inner}\n</system-reminder>"
@@ -115,7 +114,7 @@ def ev_progress(stage: str = "", status: str = "", detail: str = "") -> AgentEvt
 def ev_compaction(summary: str = "", messages: Optional[list] = None) -> AgentEvt:
     """A COMPACTION_CHECKPOINT: the engine rebuilt history + its recap ``summary``.
 
-    Mirrors metagpt's ``CompactionCheckpointEvent`` (``messages`` = the rebuilt
+    Mirrors mote's ``CompactionCheckpointEvent`` (``messages`` = the rebuilt
     history, ``summary`` = the model-generated recap) so the projector's
     compaction-boundary fold is exercised.
     """

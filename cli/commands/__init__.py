@@ -9,12 +9,7 @@
 
 from __future__ import annotations
 
-from metagpt.cli.commands.registry import (
-    Command,
-    CommandRegistry,
-    default_registry,
-    register_command,
-)
+from mote.cli.commands.registry import Command, CommandRegistry, default_registry, register_command
 
 __all__ = [
     "Command",

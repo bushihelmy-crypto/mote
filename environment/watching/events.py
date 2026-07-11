@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """File-change event schema for the watcher subsystem.
 
-A :class:`FileChangeEvent` is what :class:`~metagpt.environment.watching.watcher.FileWatcher`
+A :class:`FileChangeEvent` is what :class:`~mote.environment.watching.watcher.FileWatcher`
 emits when a watched path's ``(mtime, size)`` differs between two polls. It is a
 plain value object — the watcher core stays agnostic about who consumes it (the
 hook glue layer turns each one into a ``FileChanged`` hook fire).

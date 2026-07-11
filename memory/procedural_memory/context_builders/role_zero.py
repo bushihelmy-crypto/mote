@@ -3,8 +3,8 @@
 import copy
 from typing import Any
 
-from metagpt.common.const import EXPERIENCE_MASK
-from metagpt.memory.procedural_memory.context_builders.base import BaseContextBuilder
+from mote.common.const import EXPERIENCE_MASK
+from mote.memory.procedural_memory.context_builders.base import BaseContextBuilder
 
 
 class RoleZeroContextBuilder(BaseContextBuilder):

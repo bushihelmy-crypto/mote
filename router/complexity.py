@@ -32,20 +32,53 @@ ImpactScope = Literal["local", "module", "system-wide"]
 # --------------------------------------------------------------------- keywords
 COMPLEXITY_KEYWORDS = {
     "architecture": [
-        "architecture", "refactor", "redesign", "restructure", "reorganize",
-        "decouple", "modularize", "abstract", "pattern", "design",
+        "architecture",
+        "refactor",
+        "redesign",
+        "restructure",
+        "reorganize",
+        "decouple",
+        "modularize",
+        "abstract",
+        "pattern",
+        "design",
     ],
     "debugging": [
-        "debug", "diagnose", "root cause", "investigate", "trace", "analyze",
-        "why is", "figure out", "understand why", "not working",
+        "debug",
+        "diagnose",
+        "root cause",
+        "investigate",
+        "trace",
+        "analyze",
+        "why is",
+        "figure out",
+        "understand why",
+        "not working",
     ],
     "simple": [
-        "find", "search", "locate", "list", "show", "where is", "what is",
-        "get", "fetch", "display", "print",
+        "find",
+        "search",
+        "locate",
+        "list",
+        "show",
+        "where is",
+        "what is",
+        "get",
+        "fetch",
+        "display",
+        "print",
     ],
     "risk": [
-        "critical", "production", "urgent", "security", "breaking", "dangerous",
-        "irreversible", "data loss", "migration", "deploy",
+        "critical",
+        "production",
+        "urgent",
+        "security",
+        "breaking",
+        "dangerous",
+        "irreversible",
+        "data loss",
+        "migration",
+        "deploy",
     ],
 }
 
@@ -320,9 +353,19 @@ def extract_all_signals(prompt: str, context: Optional[ContextSignals] = None) -
 
 # conversational cues that an earlier attempt failed (→ previous_failures)
 _FAILURE_CUES = (
-    "error", "failed", "failure", "exception", "traceback",
-    "doesn't work", "does not work", "not working", "still broken",
-    "didn't work", "did not work", "try again", "retry",
+    "error",
+    "failed",
+    "failure",
+    "exception",
+    "traceback",
+    "doesn't work",
+    "does not work",
+    "not working",
+    "still broken",
+    "didn't work",
+    "did not work",
+    "try again",
+    "retry",
 )
 
 
@@ -352,14 +395,30 @@ def signals_from_messages(messages: Optional[list[dict]]) -> ContextSignals:
 TIER_THRESHOLDS = {"HIGH": 8, "MEDIUM": 4}
 
 _W_LEXICAL = {
-    "word_count_high": 2, "word_count_very_high": 1, "file_paths_multiple": 1,
-    "code_blocks_present": 1, "architecture": 3, "debugging": 2, "simple": -2,
-    "risk": 2, "question_why": 2, "question_how": 1, "implicit": 1,
+    "word_count_high": 2,
+    "word_count_very_high": 1,
+    "file_paths_multiple": 1,
+    "code_blocks_present": 1,
+    "architecture": 3,
+    "debugging": 2,
+    "simple": -2,
+    "risk": 2,
+    "question_why": 2,
+    "question_how": 1,
+    "implicit": 1,
 }
 _W_STRUCTURAL = {
-    "subtasks_many": 3, "subtasks_some": 1, "cross_file": 2, "test": 1,
-    "security": 2, "infrastructure": 1, "external": 1, "reversibility_difficult": 2,
-    "reversibility_moderate": 1, "impact_system_wide": 3, "impact_module": 1,
+    "subtasks_many": 3,
+    "subtasks_some": 1,
+    "cross_file": 2,
+    "test": 1,
+    "security": 2,
+    "infrastructure": 1,
+    "external": 1,
+    "reversibility_difficult": 2,
+    "reversibility_moderate": 1,
+    "impact_system_wide": 3,
+    "impact_module": 1,
 }
 _W_CONTEXT = {"prev_failure": 2, "prev_failure_max": 4, "deep_chain": 2, "complex_plan": 1}
 
@@ -469,27 +528,37 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
     RoutingRule(
         "architecture-system-wide",
         lambda s: s.lexical.has_architecture_keywords and s.structural.impact_scope == "system-wide",
-        "HIGH", "Architectural decisions with system-wide impact", 70,
+        "HIGH",
+        "Architectural decisions with system-wide impact",
+        70,
     ),
     RoutingRule(
         "security-domain",
         lambda s: s.structural.domain_specificity == "security",
-        "HIGH", "Security-related tasks require careful reasoning", 70,
+        "HIGH",
+        "Security-related tasks require careful reasoning",
+        70,
     ),
     RoutingRule(
         "difficult-reversibility-risk",
         lambda s: s.structural.reversibility == "difficult" and s.lexical.has_risk_keywords,
-        "HIGH", "High-risk, difficult-to-reverse changes", 70,
+        "HIGH",
+        "High-risk, difficult-to-reverse changes",
+        70,
     ),
     RoutingRule(
         "deep-debugging",
         lambda s: s.lexical.has_debugging_keywords and s.lexical.question_depth == "why",
-        "HIGH", "Root cause analysis requires deep reasoning", 65,
+        "HIGH",
+        "Root cause analysis requires deep reasoning",
+        65,
     ),
     RoutingRule(
         "complex-multi-step",
         lambda s: s.structural.estimated_subtasks > 5 and s.structural.cross_file_dependencies,
-        "HIGH", "Complex multi-step task with cross-file changes", 60,
+        "HIGH",
+        "Complex multi-step task with cross-file changes",
+        60,
     ),
     RoutingRule(
         "simple-search-query",
@@ -500,7 +569,9 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
             and not s.lexical.has_architecture_keywords
             and not s.lexical.has_debugging_keywords
         ),
-        "LOW", "Simple search or lookup task", 60,
+        "LOW",
+        "Simple search or lookup task",
+        60,
     ),
     RoutingRule(
         "short-local-change",
@@ -510,17 +581,23 @@ DEFAULT_ROUTING_RULES: list[RoutingRule] = [
             and s.structural.reversibility == "easy"
             and not s.lexical.has_risk_keywords
         ),
-        "LOW", "Short, local, easily reversible change", 55,
+        "LOW",
+        "Short, local, easily reversible change",
+        55,
     ),
     RoutingRule(
         "moderate-complexity",
         lambda s: 1 < s.structural.estimated_subtasks <= 5,
-        "MEDIUM", "Moderate complexity with multiple subtasks", 50,
+        "MEDIUM",
+        "Moderate complexity with multiple subtasks",
+        50,
     ),
     RoutingRule(
         "module-level-work",
         lambda s: s.structural.impact_scope == "module",
-        "MEDIUM", "Module-level changes", 45,
+        "MEDIUM",
+        "Module-level changes",
+        45,
     ),
 ]
 

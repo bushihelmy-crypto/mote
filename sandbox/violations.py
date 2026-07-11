@@ -51,9 +51,7 @@ def parse_violations(stderr: str) -> list[SandboxViolation]:
     violations: list[SandboxViolation] = []
 
     for m in _BWRAP_SETUP_RE.finditer(stderr):
-        violations.append(
-            SandboxViolation(kind="setup", message="sandbox setup failed", detail=m.group(1).strip())
-        )
+        violations.append(SandboxViolation(kind="setup", message="sandbox setup failed", detail=m.group(1).strip()))
 
     if not violations:
         m = _EPERM_RE.search(stderr)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`metagpt.think.think_engine.ThinkEngine`.
+"""Unit tests for :class:`mote.think.think_engine.ThinkEngine`.
 
 Covers the two completion channels (XML text via ``aask`` vs native tool-use via
 ``aask_tool``), the dedup post-processing for each channel, the async task
@@ -12,9 +12,9 @@ import asyncio
 
 import pytest
 
-from metagpt.common.const import TOOL_CALLS
-from metagpt.common.schema import ThinkResult, UserMessage
-from metagpt.think.think_engine import ThinkEngine
+from mote.common.const import TOOL_CALLS
+from mote.common.schema import ThinkResult, UserMessage
+from mote.think.think_engine import ThinkEngine
 
 from .conftest import FakeLLM, FakeMemory, FakeReporter, history_with_calls, make_tool_response
 
@@ -40,7 +40,7 @@ class TestConstruction:
         assert make_engine().done is True
 
     def test_is_basethinkengine(self):
-        from metagpt.common.base import BaseThinkEngine
+        from mote.common.base import BaseThinkEngine
 
         assert isinstance(make_engine(), BaseThinkEngine)
 
@@ -50,8 +50,7 @@ class TestXMLChannel:
     async def test_runs_and_produces_text_result(self):
         llm = FakeLLM(reply="my thought")
         engine = make_engine()
-        await engine.start(req=[{"role": "user", "content": "hi"}], system_prompt="sys",
-                           llm=llm)
+        await engine.start(req=[{"role": "user", "content": "hi"}], system_prompt="sys", llm=llm)
         await engine.join()
         assert engine.result.content == "my thought"
         # XML channel -> no structured tool calls.
@@ -94,8 +93,7 @@ class TestXMLChannel:
         mem = FakeMemory([UserMessage(content=dup) for _ in range(3)])
         llm = FakeLLM(reply=dup)
         engine = make_engine(memory=mem)
-        await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s",
-                           llm=llm)
+        await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s", llm=llm)
         await engine.join()
         # Overrides with a synthesized AskUserQuestion call (the registered tool),
         # not the unregistered ask_human (which the loop would filter out).
@@ -110,22 +108,18 @@ class TestNativeChannel:
         resp = make_tool_response(("call-1", "Read", {"path": "a.py"}), content="reading")
         llm = FakeLLM(tool_response=resp)
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s",
-                           tool_specs=[{"name": "Read"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Read"}], llm=llm)
         await engine.join()
         assert engine.result.content == "reading"
         assert engine.result.is_native is True
-        assert engine.result.tool_calls == [
-            {"id": "call-1", "command_name": "Read", "args": {"path": "a.py"}}
-        ]
+        assert engine.result.tool_calls == [{"id": "call-1", "command_name": "Read", "args": {"path": "a.py"}}]
 
     @pytest.mark.asyncio
     async def test_uses_aask_tool_with_specs(self):
         llm = FakeLLM(tool_response=make_tool_response(("1", "Glob", {})))
         engine = make_engine()
         specs = [{"name": "Glob"}]
-        await engine.start(req="REQ", system_prompt="SYS",
-                           tool_specs=specs, llm=llm)
+        await engine.start(req="REQ", system_prompt="SYS", tool_specs=specs, llm=llm)
         await engine.join()
         assert len(llm.aask_tool_calls) == 1
         assert llm.aask_tool_calls[0]["tools"] is specs
@@ -138,8 +132,7 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Bash", {"cmd": "ls"})))
         llm._tool_response.content = None
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s",
-                           tool_specs=[{"name": "Bash"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Bash"}], llm=llm)
         await engine.join()
         assert engine.result.content == ""
         assert engine.result.is_native is True
@@ -149,8 +142,7 @@ class TestNativeChannel:
         # Native channel with zero calls -> tool_calls == [] (still is_native).
         llm = FakeLLM(tool_response=make_tool_response(content="just text"))
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s",
-                           tool_specs=[{"name": "X"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "X"}], llm=llm)
         await engine.join()
         assert engine.result.tool_calls == []
         assert engine.result.is_native is True
@@ -161,12 +153,9 @@ class TestNativeChannel:
         mem = FakeMemory(history_with_calls([{"name": "Read", "args": {"path": "z"}}]))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Read", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s",
-                           tool_specs=[{"name": "Read"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Read"}], llm=llm)
         await engine.join()
-        assert engine.result.tool_calls == [
-            {"id": "1", "command_name": "Read", "args": {"path": "a"}}
-        ]
+        assert engine.result.tool_calls == [{"id": "1", "command_name": "Read", "args": {"path": "a"}}]
 
     @pytest.mark.asyncio
     async def test_hard_repeat_overrides_with_ask_human(self):
@@ -176,8 +165,9 @@ class TestNativeChannel:
         mem = FakeMemory(history_with_calls(sig, sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s",
-                           tool_specs=[{"name": "Editor"}], llm=llm)
+        await engine.start(
+            req=[{"role": "user", "content": "go"}], system_prompt="s", tool_specs=[{"name": "Editor"}], llm=llm
+        )
         await engine.join()
         assert len(engine.result.tool_calls) == 1
         override = engine.result.tool_calls[0]
@@ -188,13 +178,10 @@ class TestNativeChannel:
     async def test_sig_hist_ignores_messages_without_tool_calls(self):
         # Plain messages (no TOOL_CALLS metadata) must not count toward repeats.
         sig = [{"name": "Editor", "args": {"path": "a"}}]
-        mem = FakeMemory(
-            [UserMessage(content="noise")] * 5 + history_with_calls(sig, sig)
-        )
+        mem = FakeMemory([UserMessage(content="noise")] * 5 + history_with_calls(sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s",
-                           tool_specs=[{"name": "Editor"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Editor"}], llm=llm)
         await engine.join()
         # Only 2 matching signatures (< 3) -> no override.
         assert engine.result.tool_calls[0]["command_name"] == "Editor"
@@ -206,8 +193,7 @@ class TestNativeChannel:
         mem = FakeMemory(history_with_calls(sig, sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "end", {})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s",
-                           tool_specs=[{"name": "end"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "end"}], llm=llm)
         await engine.join()
         assert engine.result.tool_calls[0]["command_name"] == "end"
 

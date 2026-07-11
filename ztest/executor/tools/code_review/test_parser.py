@@ -1,8 +1,7 @@
 """Unit tests for the unified-diff parser (code_review/parser.py)."""
 from __future__ import annotations
 
-from metagpt.executor.tools.code_review.parser import parse_unified_diff
-
+from mote.executor.tools.code_review.parser import parse_unified_diff
 
 _MODIFIED_DIFF = """\
 diff --git a/foo.py b/foo.py

@@ -26,12 +26,10 @@ import asyncio
 from collections import deque
 from typing import Any, Optional
 
-from metagpt.common.logs import logger
-
-from metagpt.cli import backend
-from metagpt.cli.commands.registry import CommandRegistry, default_registry
-from metagpt.cli.common.base import BaseProjector
-from metagpt.cli.common.view import (
+from mote.cli import backend
+from mote.cli.commands.registry import CommandRegistry, default_registry
+from mote.cli.contracts.base import BaseProjector
+from mote.cli.contracts.view import (
     ErrorRaised,
     MediaBlock,
     MessageBlockCompleted,
@@ -40,13 +38,14 @@ from metagpt.cli.common.view import (
     SessionListShown,
     TranscriptCleared,
 )
-from metagpt.cli.io.human_channel import PortHumanChannel
+from mote.cli.io.human_channel import PortHumanChannel
+from mote.common.logs import logger
 
 
 def _format_turn_error(err: BaseException) -> str:
     """Render a turn's exception into a concise one/two-line message.
 
-    Typed ``MetaGPTError`` subclasses carry a clean ``message`` + optional
+    Typed ``MoteError`` subclasses carry a clean ``message`` + optional
     upstream ``status_code``; anything else falls back to ``Type: str(err)``.
     """
     cls = type(err).__name__
@@ -349,7 +348,9 @@ class SessionDriver:
         name = backend.runtime_name(runtime)
         return agent_id, name
 
-    def _make_role(self, *, name: str = "Assistant", session_id: Optional[str] = None, agent_type: Optional[str] = None):
+    def _make_role(
+        self, *, name: str = "Assistant", session_id: Optional[str] = None, agent_type: Optional[str] = None
+    ):
         if self._role_factory is None:
             return None
         return self._role_factory(name=name, session_id=session_id, agent_type=agent_type)

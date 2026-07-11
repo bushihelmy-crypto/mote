@@ -16,26 +16,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from metagpt.common.base import BaseLoop, LoopContext
-from metagpt.common.base.command_channel import join_command_outputs
-from metagpt.common.const.message import MESSAGE_ROUTE_TO_ALL
-from metagpt.common.events import span
-from metagpt.common.logs import log_class
-from metagpt.common.prompt.output import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
-from metagpt.common.schema import (
-    AIMessage,
-    CauseBy,
-    MessagePriority,
-    Message,
-    UserMessage,
-)
+from mote.common.base import BaseLoop, LoopContext
+from mote.common.base.command_channel import join_command_outputs
+from mote.common.const.message import MESSAGE_ROUTE_TO_ALL
+from mote.common.events import span
+from mote.common.logs import log_class
+from mote.common.prompt.output import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
+from mote.common.schema import AIMessage, CauseBy, Message, MessagePriority, UserMessage
 
 if TYPE_CHECKING:
-    from metagpt.common.interface import BackgroundPool, MessageStore
-    from metagpt.executor.base_executor import BaseToolExecutor
-    from metagpt.common.base import BaseThinkEngine
-    from metagpt.parser import CommandChannel
-    from metagpt.roles.context_provider import BaseContextProvider
+    from mote.common.base import BaseThinkEngine
+    from mote.common.interface import BackgroundPool, MessageStore
+    from mote.executor.base_executor import BaseToolExecutor
+    from mote.parser import CommandChannel
+    from mote.roles.context_provider import BaseContextProvider
 
 
 #: Placeholder react result before any action runs; overwritten on the first
@@ -97,6 +91,17 @@ class ReActLoop(BaseLoop):
         # Recovery support: tracks the last message committed by observe.
         self.latest_observed_msg: Message | None = None
 
+    @property
+    def ctx(self) -> LoopContext:
+        """The loop-control bundle, populated at the top of ``run()``.
+
+        All observe/think/act helpers run inside ``run()`` after ``_ctx`` is
+        set, so it is never None on those paths; assert to narrow the Optional
+        for type checkers (and to fail loudly on any future misuse).
+        """
+        assert self._ctx is not None, "LoopContext accessed before run() initialized it"
+        return self._ctx
+
     # ------------------------------------------------------------------
     # Observe — pull from buffer, filter, commit to memory store
     # ------------------------------------------------------------------
@@ -106,7 +111,7 @@ class ReActLoop(BaseLoop):
 
         Returns the count of new messages that passed the filter (the "news").
         """
-        ctx = self._ctx
+        ctx = self.ctx
         if ctx.msg_buffer is None:
             return 0
 
@@ -117,12 +122,9 @@ class ReActLoop(BaseLoop):
         # Dedup against already-stored history when memory is enabled.
         old_messages = [] if not ctx.enable_memory else self._memory.get()
         filtered = [
-            n for n in news_raw
-            if (
-                n.cause_by in ctx.watch
-                or ctx.name in n.send_to
-                or MESSAGE_ROUTE_TO_ALL in n.send_to
-            )
+            n
+            for n in news_raw
+            if (n.cause_by in ctx.watch or ctx.name in n.send_to or MESSAGE_ROUTE_TO_ALL in n.send_to)
             and n not in old_messages
         ]
 
@@ -154,17 +156,13 @@ class ReActLoop(BaseLoop):
             # Trigger the router only now that an LLM is actually needed, picking the
             # model from this request's messages when intelligent routing is enabled.
             llm = await self._context_provider.resolve_llm(tr.req)
-            await self._think_engine.start(
-                tr.req, tr.system_prompt, tool_specs=tr.tool_specs, llm=llm
-            )
+            await self._think_engine.start(tr.req, tr.system_prompt, tool_specs=tr.tool_specs, llm=llm)
         return True
 
     async def _step_act(self) -> Message:
         async with span("act"):
-            valid_names = set(self._ctx.tools)
-            commands = [
-                cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)
-            ]
+            valid_names = set(self.ctx.tools)
+            commands = [cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)]
 
             # The think task has now drained (iter_commands joined it), so the
             # result is final. Publish it to shared state *before* running any
@@ -180,7 +178,13 @@ class ReActLoop(BaseLoop):
             failed = False
             for cmd in commands:
                 name = cmd["command_name"]
-                entry = {"id": cmd.get("id"), "name": name, "args": cmd.get("args") or {}, "output": "", "success": True}
+                entry = {
+                    "id": cmd.get("id"),
+                    "name": name,
+                    "args": cmd.get("args") or {},
+                    "output": "",
+                    "success": True,
+                }
                 if failed:
                     entry["output"] = (
                         f"[SKIPPED] Command {name} was not executed because an earlier "
@@ -228,7 +232,7 @@ class ReActLoop(BaseLoop):
             # outputs. The channel owns that phrasing (see react_result).
             return AIMessage(
                 content=self._channel.react_result(outputs),
-                sent_from=self._ctx.name,
+                sent_from=self.ctx.name,
                 cause_by=CauseBy.RUN_COMMAND,
             )
 
@@ -246,7 +250,7 @@ class ReActLoop(BaseLoop):
         await self._think_engine.join()
         return AIMessage(
             content=content,
-            sent_from=self._ctx.name,
+            sent_from=self.ctx.name,
             cause_by=CauseBy.RUN_COMMAND,
         )
 

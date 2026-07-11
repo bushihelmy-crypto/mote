@@ -7,7 +7,7 @@ Synthesizes the three reference accounting models:
   shape, because it answers "how much did each model cost me this session".
 - **Codex** — a ``last_usage`` snapshot + context-window-remaining estimate, so
   callers can show "% of window left" without re-counting the whole history.
-- **MetaGPT (legacy ``CostManager``)** — the ``Costs`` namedtuple, ``max_budget``,
+- **Mote (legacy ``CostManager``)** — the ``Costs`` namedtuple, ``max_budget``,
   and the ``update_cost`` / ``get_costs`` / ``get_total_*`` API, kept as a
   drop-in shim so existing call sites (``base_llm``) need no behavioral change.
 
@@ -21,11 +21,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, NamedTuple, Optional
 
-from metagpt.common.const.context import MODEL_CONTEXT_WINDOW_DEFAULT
-from metagpt.common.logs import logger
-from metagpt.common.utils.token_counter import TOKEN_MAX
-from metagpt.router.cost.pricing import PricingMode, cost_of
-from metagpt.router.cost.usage import TokenUsage
+from mote.common.const.context import MODEL_CONTEXT_WINDOW_DEFAULT
+from mote.common.logs import logger
+from mote.common.utils.token_counter import TOKEN_MAX
+from mote.router.cost.pricing import PricingMode, cost_of
+from mote.router.cost.usage import TokenUsage
 
 
 class Costs(NamedTuple):

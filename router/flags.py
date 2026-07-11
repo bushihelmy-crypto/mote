@@ -19,14 +19,35 @@ from dataclasses import dataclass
 # Lifted from opensquilla router.runtime.yaml `flag_rules`.
 HIGH_RISK_KEYWORDS_ZH = ["生产", "部署", "回滚", "迁移", "删除", "客户", "法务", "财务"]
 HIGH_RISK_KEYWORDS_EN = [
-    "deploy", "rollback", "migration", "delete", "overwrite", "production", "customer-facing",
+    "deploy",
+    "rollback",
+    "migration",
+    "delete",
+    "overwrite",
+    "production",
+    "customer-facing",
 ]
 DEBUG_KEYWORDS = [
-    "error", "bug", "exception", "traceback", "failed", "root cause", "报错", "根因", "修复",
+    "error",
+    "bug",
+    "exception",
+    "traceback",
+    "failed",
+    "root cause",
+    "报错",
+    "根因",
+    "修复",
 ]
 DEBUG_PATTERNS = [r"Traceback \(most recent", r"stderr:", r"FAILED"]
 REPO_ARCH_KEYWORDS = [
-    "repo", "codebase", "monorepo", "architecture", "重构", "架构", "module", "dependency",
+    "repo",
+    "codebase",
+    "monorepo",
+    "architecture",
+    "重构",
+    "架构",
+    "module",
+    "dependency",
 ]
 STRICT_FORMAT_KEYWORDS = ["JSON", "YAML", "CSV", "schema", "只返回", "不要解释", "按格式"]
 
@@ -42,9 +63,7 @@ HEAVY_CONTEXT_TOKENS = 2000
 # --------------------------------------------------------------- detectors
 _CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
 _LOG_BLOCK_RE = re.compile(
-    r"(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}.*\n){3,}"
-    r"|"
-    r"(^\[?(INFO|WARN|ERROR|DEBUG)\]?\s.*\n){3,}",
+    r"(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}.*\n){3,}" r"|" r"(^\[?(INFO|WARN|ERROR|DEBUG)\]?\s.*\n){3,}",
     re.MULTILINE,
 )
 _FILE_PATH_RE = re.compile(

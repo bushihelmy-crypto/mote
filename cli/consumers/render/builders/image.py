@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from metagpt.cli.consumers.render.builders._rich import _HAS_RICH
+from mote.cli.consumers.render.builders._rich import _HAS_RICH
 
 _HALF_BLOCK = "\u2580"  # ▀ UPPER HALF BLOCK
 # These are sanity CAPS, not the target size: at render time the image is sized to

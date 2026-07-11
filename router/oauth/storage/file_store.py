@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""File-backed credential store at ``~/.metagpt/oauth/<provider>.json`` (0600)."""
+"""File-backed credential store at ``~/.mote/oauth/<provider>.json`` (0600)."""
 from __future__ import annotations
 
 import json
@@ -8,15 +8,16 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.const import CONFIG_ROOT
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.storage.base import CredentialStore
+from mote.common.const import CONFIG_ROOT
+from mote.common.disk import mtime_seconds
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.storage.base import CredentialStore
 
 OAUTH_DIR = CONFIG_ROOT / "oauth"
 
 
 class FileCredentialStore(CredentialStore):
-    """Stores the token as JSON in the user's ``~/.metagpt/oauth`` directory.
+    """Stores the token as JSON in the user's ``~/.mote/oauth`` directory.
 
     The file is created with ``0600`` permissions (owner read/write only) so the
     bearer/refresh tokens are not world-readable.
@@ -67,7 +68,4 @@ class FileCredentialStore(CredentialStore):
             pass
 
     def mtime(self) -> Optional[float]:
-        try:
-            return self._path.stat().st_mtime
-        except OSError:
-            return None
+        return mtime_seconds(self._path)

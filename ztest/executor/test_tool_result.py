@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.tool_result`` (ToolResult + re-exports).
+"""Unit tests for ``mote.executor.tool_result`` (ToolResult + re-exports).
 
 Pins the structural-failure contract: a plain return value is ALWAYS success;
 failure is signalled by ``raise ToolError`` or ``ToolResult(success=False)`` —
@@ -8,10 +8,10 @@ never by sniffing the output text (so a successful output may start "Error:").
 """
 from __future__ import annotations
 
-from metagpt.common.const.tools import ERROR_PREFIX
-from metagpt.common.exception import ToolError as ExceptionToolError
-from metagpt.executor.tool_result import ERROR_PREFIX as RESULT_ERROR_PREFIX
-from metagpt.executor.tool_result import FileChange, ToolError, ToolMedia, ToolResult
+from mote.common.const.tools import ERROR_PREFIX
+from mote.common.exception import ToolError as ExceptionToolError
+from mote.executor.tool_result import ERROR_PREFIX as RESULT_ERROR_PREFIX
+from mote.executor.tool_result import FileChange, ToolError, ToolMedia, ToolResult
 
 
 class TestToolResultDefaults:

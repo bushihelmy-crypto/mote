@@ -4,22 +4,18 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
-from metagpt.common.base.command_channel import (
-    CommandChannel,
-    _collect_media,
-    _media_message,
-)
-from metagpt.common.config.config.llm_config import LLMType
-from metagpt.common.logs import logger
-from metagpt.common.prompt.output import NATIVE_COMMAND_GUIDE
-from metagpt.common.prompt.refs import Sym
-from metagpt.common.schema import AIMessage, ToolMessage
-from metagpt.parser.xml_channel import XmlCommandChannel
-from metagpt.router.llm.llm_provider_registry import resolve_api_type
+from mote.common.base.command_channel import CommandChannel, _collect_media, _media_message
+from mote.common.config.config.llm_config import LLMType
+from mote.common.logs import logger
+from mote.common.prompt.output import NATIVE_COMMAND_GUIDE
+from mote.common.prompt.refs import Sym
+from mote.common.schema import AIMessage, ToolMessage
+from mote.parser.xml_channel import XmlCommandChannel
+from mote.router.llm.llm_provider_registry import resolve_api_type
 
 if TYPE_CHECKING:
-    from metagpt.common.base import BaseThinkEngine
-    from metagpt.common.interface import MessageStore
+    from mote.common.base import BaseThinkEngine
+    from mote.common.interface import MessageStore
 
 
 class NativeToolChannel(CommandChannel):
@@ -82,9 +78,7 @@ class NativeToolChannel(CommandChannel):
         for e in executed:
             if not e.get("id"):
                 continue
-            await memory.add(
-                ToolMessage(content=e["output"], tool_call_id=e["id"], retention=e.get("retention"))
-            )
+            await memory.add(ToolMessage(content=e["output"], tool_call_id=e["id"], retention=e.get("retention")))
         media = _media_message(*_collect_media(executed))
         if media is not None:
             await memory.add(media)

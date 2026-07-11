@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from metagpt.memory.procedural_memory.context_builders.base import BaseContextBuilder
+from mote.memory.procedural_memory.context_builders.base import BaseContextBuilder
 
 SIMPLE_CONTEXT_TEMPLATE = """
 ## Context

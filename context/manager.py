@@ -1,4 +1,4 @@
-"""ContextManager — the facade orchestrating MetaGPT's context-management scopes.
+"""ContextManager — the facade orchestrating Mote's context-management scopes.
 
 This is the integration point that finally wires the building blocks of this
 package into the Role react loop. It plays two roles at once:
@@ -32,30 +32,34 @@ the other way around.
 
 from __future__ import annotations
 
-import metagpt.context.budget as budget
-from metagpt.common.events import MessageAppendedEvent, ToolsChangedEvent
-from metagpt.common.interface.event_subscriber import ObservationSubscriber
-from metagpt.common.logs import log_class
-from metagpt.common.schema import (
-    ContextManagerConfig,
-    LLMCallContext,
-    Message,
-    UserMessage,
-)
-from metagpt.context.compaction import (
+from typing import TYPE_CHECKING
+
+import mote.context.budget as budget
+from mote.common.const import CACHE_INTENT, CACHE_INTENT_EPHEMERAL_TAIL
+from mote.common.events import MessageAppendedEvent, ToolsChangedEvent
+from mote.common.interface.event_subscriber import ObservationSubscriber
+from mote.common.logs import log_class
+from mote.common.schema import ContextManagerConfig, LLMCallContext
+
+if TYPE_CHECKING:
+    from mote.common.schema.messages import Message, UserMessage
+else:
+    from mote.common.schema import Message, UserMessage
+
+from mote.context.budget import TokenAccountant
+from mote.context.compaction import (
     ContextEngine,
     EraseReducer,
     FoldReducer,
     HeadDropReducer,
     RecoveryContextReducer,
+    ReductionPipeline,
     ReductionReason,
     ReductionRequest,
-    ReductionPipeline,
     SummarizeReducer,
     Transcript,
     Urgency,
 )
-from metagpt.context.budget import TokenAccountant
 
 # Sentinel distinguishing "argument omitted" from an explicit ``None`` in
 # :meth:`ContextManager.rebuild_compression` (``None`` is a meaningful llm value
@@ -207,7 +211,7 @@ class ContextManager(ObservationSubscriber):
         if llm is not _UNSET:
             self._llm = llm
             self._accountant = TokenAccountant(llm)
-        if config is not _UNSET:
+        if config is not _UNSET and config is not None:
             self.config = config
         self._build_compression()
 
@@ -362,5 +366,12 @@ class ContextManager(ObservationSubscriber):
 
         req: list[Message] = list(self._context.messages)
         if user_prompt is not None:
-            req.append(user_prompt if isinstance(user_prompt, Message) else UserMessage(content=user_prompt))
+            tail = user_prompt if isinstance(user_prompt, Message) else UserMessage(content=user_prompt)
+            # This appended tail is the per-turn command + <system-reminder> prompt:
+            # re-synthesized every turn, never stored in history, and reappearing
+            # next turn with different bytes. Declare that intent so providers never
+            # anchor a cache breakpoint on it (which would strand the next turn's
+            # prefix and force the whole history to re-write). Absence == durable.
+            tail.metadata[CACHE_INTENT] = CACHE_INTENT_EPHEMERAL_TAIL
+            req.append(tail)
         return req

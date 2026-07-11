@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures for the ``metagpt.context`` test suite.
+"""Shared fixtures for the ``mote.context`` test suite.
 
 The package owns the two *history-level* context-management scopes:
 
@@ -13,7 +13,7 @@ These fixtures keep both scopes fully offline and deterministic:
 - :class:`FakeLLM` is the duck-typed summarizer autocompact needs (``async aask``
   + a ``model`` attribute). It returns a queued / constant summary and records
   every call, and can be told to raise so the circuit-breaker path is testable.
-- The message builders produce the exact MetaGPT message shapes the algorithms
+- The message builders produce the exact Mote message shapes the algorithms
   read: an assistant turn carries ``metadata[TOOL_CALLS]`` (a list of
   ``{id, name, args}``), and the matching tool-result turn carries
   ``metadata[TOOL_CALL_ID]`` with its text in ``.content``.
@@ -27,8 +27,8 @@ from typing import Optional
 
 import pytest
 
-from metagpt.common.const import TOOL_CALL_ID, TOOL_CALLS
-from metagpt.common.schema import AIMessage, Message, UserMessage
+from mote.common.const import TOOL_CALL_ID, TOOL_CALLS
+from mote.common.schema import AIMessage, Message, UserMessage
 
 # Tool names the compaction tests treat as reconstructable (fold/clear-safe).
 # Production derives this from the live executor (each tool self-declares via its
@@ -109,7 +109,7 @@ def force_autocompact_threshold(monkeypatch):
     time, so patching it here forces ``should_autocompact`` True for any
     non-trivial history while leaving the rest of the real math intact.
     """
-    from metagpt.context import budget
+    from mote.context import budget
 
     monkeypatch.setattr(budget, "autocompact_threshold", lambda model: 1)
     return budget

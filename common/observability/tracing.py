@@ -29,15 +29,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Protocol
 
-from metagpt.common.events.types import (
-    LLMErrorEvent,
-    LLMRequestEvent,
-    LLMResponseEvent,
-    SpanEndEvent,
-    SpanStartEvent,
-)
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority
-from metagpt.common.logs import logger
+from mote.common.events.types import LLMErrorEvent, LLMRequestEvent, LLMResponseEvent, SpanEndEvent, SpanStartEvent
+from mote.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority
+from mote.common.logs import logger
 
 
 class TracerBackend(Protocol):
@@ -140,9 +134,7 @@ class TracingSubscriber(ObservationSubscriber):
         handle = self._spans.pop(event.span_id, None)
         if handle is None:
             return
-        self._backend.end_span(
-            handle, status=event.status, error=event.error, attributes=event.attributes
-        )
+        self._backend.end_span(handle, status=event.status, error=event.error, attributes=event.attributes)
 
     # ------------------------------------------------------------ generations
     def _start_generation(self, event: LLMRequestEvent) -> None:

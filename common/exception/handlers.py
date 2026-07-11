@@ -1,19 +1,19 @@
 """Retry predicate + provider-error translator + re-exported helpers.
 
 ``is_retryable`` is the single source of truth for "should this exception be
-retried?". For typed ``MetaGPTError`` it returns the ``retryable`` marker; for
+retried?". For typed ``MoteError`` it returns the ``retryable`` marker; for
 everything else it falls back to a vendor allowlist (OpenAI transport / rate
 limit / 5xx errors plus the stdlib ``ConnectionError``/``TimeoutError`` and a
 transient ``json.JSONDecodeError`` carve-out).
 
 ``classify_llm_error`` translates a raw provider/OpenAI transport or HTTP error
-into a typed :class:`~metagpt.common.exception.llm.LLMError` (status-driven, with
+into a typed :class:`~mote.common.exception.llm.LLMError` (status-driven, with
 message-pattern refinement only where the HTTP code alone is ambiguous). Applied
 at the provider call site, it lets ``is_retryable`` and any future failover loop
 work off our own typed hierarchy + ``recovery`` hints rather than re-parsing
 vendor exceptions.
 
-``handle_exception`` is re-exported from ``metagpt.common.utils.exceptions``
+``handle_exception`` is re-exported from ``mote.common.utils.exceptions``
 unchanged (kept in place to minimize churn).
 """
 
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import json
 
-from metagpt.common.exception.base import MetaGPTError
-from metagpt.common.exception.llm import (
+from mote.common.exception.base import MoteError
+from mote.common.exception.llm import (
     ContextWindowExceededError,
     LLMAuthenticationError,
     LLMBadRequestError,
@@ -38,7 +38,7 @@ from metagpt.common.exception.llm import (
     LLMServerError,
     LLMTimeoutError,
 )
-from metagpt.common.utils.exceptions import handle_exception
+from mote.common.utils.exceptions import handle_exception
 
 __all__ = ["is_retryable", "classify_llm_error", "handle_exception"]
 
@@ -134,13 +134,13 @@ def is_retryable(exc: BaseException | None) -> bool:
     if type(exc).__name__ == "CancelledError":  # asyncio.CancelledError (BaseException on 3.11+)
         return False
 
-    if isinstance(exc, MetaGPTError):
+    if isinstance(exc, MoteError):
         return exc.retryable
 
     # A JSONDecodeError subclasses ValueError but, when it bubbles up from the
     # provider layer (truncated stream, corrupted/empty body, routing-layer
     # mangling), it is a transient hiccup that usually succeeds on retry. This
-    # does NOT affect our own LLMResponseParseError (a MetaGPTError, handled
+    # does NOT affect our own LLMResponseParseError (a MoteError, handled
     # above by its non-retryable marker).
     if isinstance(exc, json.JSONDecodeError):
         return True
@@ -168,17 +168,17 @@ def is_retryable(exc: BaseException | None) -> bool:
     return False
 
 
-def classify_llm_error(exc: BaseException | None) -> MetaGPTError | None:
+def classify_llm_error(exc: BaseException | None) -> MoteError | None:
     """Translate a raw provider/OpenAI error into a typed ``LLMError``.
 
     Returns the typed exception (chaining ``exc`` as ``cause`` and recording the
     upstream ``status_code``) or ``None`` when ``exc`` is already a
-    ``MetaGPTError`` or is not a recognizable provider error — the caller then
+    ``MoteError`` or is not a recognizable provider error — the caller then
     keeps the original. Classification is HTTP-status-driven; message/code
     patterns refine only the cases where the status alone is ambiguous (402/400/
     403/404/429).
     """
-    if exc is None or isinstance(exc, MetaGPTError):
+    if exc is None or isinstance(exc, MoteError):
         return None
 
     # Stdlib transport (also covers the OpenAI transport subclasses below).
@@ -207,7 +207,7 @@ def classify_llm_error(exc: BaseException | None) -> MetaGPTError | None:
     return None
 
 
-def _classify_api_status_error(exc: BaseException) -> MetaGPTError | None:
+def _classify_api_status_error(exc: BaseException) -> MoteError | None:
     """Map an OpenAI/Anthropic ``APIError`` (with a ``status_code``) to a typed LLMError."""
     status = getattr(exc, "status_code", None)
     message = str(getattr(exc, "message", "") or exc)

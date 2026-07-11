@@ -14,17 +14,11 @@ from typing import Any
 
 import pytest
 
-from metagpt.common.exception.media import (
-    MediaGenerationError,
-    PermanentMediaGenerationError,
-)
-from metagpt.executor.tasks.bggraph import END, START, BgGraph
-from metagpt.executor.tools.media_pipeline.creators import (
-    FfmpegComposer,
-    _summarize_poll_results,
-)
-from metagpt.executor.tools.media_pipeline.graph import build_media_pipeline_graph
-from metagpt.executor.tools.media_pipeline.nodes import (
+from mote.common.exception.media import MediaGenerationError, PermanentMediaGenerationError
+from mote.executor.tasks.bggraph import END, START, BgGraph
+from mote.executor.tools.media_pipeline.creators import FfmpegComposer, _summarize_poll_results
+from mote.executor.tools.media_pipeline.graph import build_media_pipeline_graph
+from mote.executor.tools.media_pipeline.nodes import (
     _inject_image_refs,
     _ordered_local_paths,
     _parse_storyboard_response,
@@ -34,8 +28,8 @@ from metagpt.executor.tools.media_pipeline.nodes import (
     render_gate_node,
     storyboard_node,
 )
-from metagpt.executor.tools.media_pipeline.state import MediaPipelineState
-from metagpt.executor.tools.media_pipeline_tool import MediaPipeline
+from mote.executor.tools.media_pipeline.state import MediaPipelineState
+from mote.executor.tools.media_pipeline_tool import MediaPipeline
 
 
 def _is_bg_task_result(obj) -> bool:
@@ -463,7 +457,7 @@ class TestDurationWiring:
                 captured["msg"] = msg
                 return "{}"
 
-        import metagpt.executor.tools.media_pipeline.nodes as nodes_mod
+        import mote.executor.tools.media_pipeline.nodes as nodes_mod
 
         monkeypatch.setattr(nodes_mod, "LLM", lambda *a, **k: FakeLLM())
 
@@ -481,7 +475,7 @@ class TestDurationWiring:
                 captured["msg"] = msg
                 return "{}"
 
-        import metagpt.executor.tools.media_pipeline.nodes as nodes_mod
+        import mote.executor.tools.media_pipeline.nodes as nodes_mod
 
         monkeypatch.setattr(nodes_mod, "LLM", lambda *a, **k: FakeLLM())
 

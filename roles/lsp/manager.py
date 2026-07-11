@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from metagpt.common.schema import LspConfig
-from metagpt.roles.lsp.registry import DiagnosticRegistry
-from metagpt.roles.lsp.server import LspServerInstance
+from mote.common.schema import LspConfig
+from mote.roles.lsp.registry import DiagnosticRegistry
+from mote.roles.lsp.server import LspServerInstance
 
 
 class LspServerManager:
@@ -66,6 +66,27 @@ class LspServerManager:
                 return instance
             self._failed.add(name)
             return None
+
+    async def document_symbols(self, path: str) -> list:
+        """documentSymbol for *path* via its server (``[]`` when none/failed)."""
+        server = await self.server_for(path)
+        if server is None:
+            return []
+        return await server.document_symbols(path)
+
+    async def definition(self, path: str, line: int, character: int) -> list:
+        """definition at ``(line, character)`` in *path* (``[]`` when none/failed)."""
+        server = await self.server_for(path)
+        if server is None:
+            return []
+        return await server.definition(path, line, character)
+
+    async def references(self, path: str, line: int, character: int) -> list:
+        """references to the symbol at ``(line, character)`` (``[]`` when none/failed)."""
+        server = await self.server_for(path)
+        if server is None:
+            return []
+        return await server.references(path, line, character)
 
     async def shutdown(self) -> None:
         """Shut down all managed servers. Idempotent."""

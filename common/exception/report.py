@@ -1,15 +1,15 @@
 """Canonical, presentation-ready error envelope + a single LLM-facing renderer.
 
 This module is the missing *presentation contract* that ties the (previously
-unconsumed) :meth:`MetaGPTError.to_dict` serialization to every boundary that
+unconsumed) :meth:`MoteError.to_dict` serialization to every boundary that
 surfaces a failure to the model — tool results, background-task notifications,
 task attachments. The principle is **one typed error contract, rendered (not
 re-derived) at every presentation boundary**:
 
 - :meth:`ErrorReport.from_exception` *normalizes* any ``BaseException`` into a
   uniform record (generalizing the philosophy of ``handlers.classify_llm_error``
-  to be domain-agnostic): a typed :class:`MetaGPTError` contributes its
-  ``code`` / ``retryable`` / ``recovery`` / structured :meth:`~MetaGPTError.detail`,
+  to be domain-agnostic): a typed :class:`MoteError` contributes its
+  ``code`` / ``retryable`` / ``recovery`` / structured :meth:`~MoteError.detail`,
   while an un-typed exception degrades gracefully to an ``UNKNOWN`` record.
 - :func:`render_error_block` is the **single** renderer that turns a report into
   the ``<error …>`` block the LLM sees, so tool and graph failures look
@@ -27,16 +27,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from metagpt.common.exception.base import MetaGPTError
-from metagpt.common.exception.codes import ErrorCode, RecoveryAction
-from metagpt.common.exception.handlers import is_retryable
+from mote.common.exception.base import MoteError
+from mote.common.exception.codes import ErrorCode, RecoveryAction
+from mote.common.exception.handlers import is_retryable
 
 
 @dataclass(frozen=True)
 class ErrorReport:
     """Presentation-ready, serializable snapshot of a failure.
 
-    Mirrors :meth:`MetaGPTError.to_dict` but is produced for *any* exception via
+    Mirrors :meth:`MoteError.to_dict` but is produced for *any* exception via
     :meth:`from_exception`, so callers never branch on the concrete error type.
     """
 
@@ -52,15 +52,15 @@ class ErrorReport:
     def from_exception(cls, exc: BaseException) -> "ErrorReport":
         """Normalize any exception into an :class:`ErrorReport`.
 
-        A typed :class:`MetaGPTError` contributes its full contract (stable
+        A typed :class:`MoteError` contributes its full contract (stable
         ``code``, ``retryable`` marker, ``recovery`` hint, structured
-        :meth:`~MetaGPTError.detail`). An un-typed exception degrades to an
+        :meth:`~MoteError.detail`). An un-typed exception degrades to an
         ``UNKNOWN`` record whose retry classification reuses the single source of
-        truth, :func:`~metagpt.common.exception.handlers.is_retryable` — imported
+        truth, :func:`~mote.common.exception.handlers.is_retryable` — imported
         lazily so this module stays a leaf (importing it never pulls in the
         heavyweight ``handlers`` / ``common.utils`` chain).
         """
-        if isinstance(exc, MetaGPTError):
+        if isinstance(exc, MoteError):
             return cls(
                 error=type(exc).__name__,
                 code=exc.code.value,

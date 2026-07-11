@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, ConfigDict
 
-from metagpt.memory.procedural_memory.schema import Experience
+from mote.memory.procedural_memory.schema import Experience
 
 
 class BasePerfectJudge(BaseModel, ABC):

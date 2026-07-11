@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from string import Template
 
-from metagpt.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
-from metagpt.executor.agent_registry import registry as agent_registry
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.common.schema import UserMessage
-from metagpt.common.prompt.agent import AGENT_TASK_PROMPT
-from metagpt.common.prompt.tools import AGENT_DESCRIPTION
+from mote.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from mote.common.prompt.agent import AGENT_TASK_PROMPT
+from mote.common.prompt.tools import AGENT_DESCRIPTION
+from mote.common.schema import UserMessage
+from mote.executor.agent_registry import registry as agent_registry
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_registry import register_tool
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the return site).
+_MSG_PROMPT_EMPTY = "Error: 'prompt' cannot be empty."
+_MSG_UNKNOWN_AGENT = "Error: unknown agent_type '{agent_type}'. Available: {available}"
+_MSG_SPAWN_FAILED = "Error: could not spawn agent '{agent_type}' (agent limit reached)."
+_MSG_NO_SUMMARY = "Agent finished without a final summary."
+
 
 @register_tool
 class Agent(BaseTool):
@@ -35,13 +43,13 @@ class Agent(BaseTool):
         prompt = prompt.strip()
         context = context.strip()
         if not prompt:
-            return "Error: 'prompt' cannot be empty."
+            return _MSG_PROMPT_EMPTY
 
         agent_registry.discover()
         agent_cls = agent_registry.get(agent_type)
         if agent_cls is None:
             available = ", ".join(sorted(agent_registry.all_agents().keys()))
-            return f"Error: unknown agent_type '{agent_type}'. Available: {available}"
+            return _MSG_UNKNOWN_AGENT.format(agent_type=agent_type, available=available)
 
         # Agent type defines everything itself — we only pass the parent linkage.
         # The child is born through the single spawn authority (resolved via the
@@ -73,8 +81,8 @@ class Agent(BaseTool):
         )
         report = await spawn_and_run(spec, build_message)
         if report is None:
-            return f"Error: could not spawn agent '{agent_type}' (agent limit reached)."
-        return report or "Agent finished without a final summary."
+            return _MSG_SPAWN_FAILED.format(agent_type=agent_type)
+        return report or _MSG_NO_SUMMARY
 
     @classmethod
     def custom_schema(cls) -> dict | None:

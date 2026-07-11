@@ -13,11 +13,11 @@ import types
 
 import pytest
 
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.exceptions import AgentLimitReached
-from metagpt.environment.residency import Residency, ResidencySlot
-from metagpt.environment.runtime import AgentRuntime, AgentStatus
-from metagpt.environment.store import ResidencyStore
+from mote.common.schema.queue import MessageQueue
+from mote.environment.exceptions import AgentLimitReached
+from mote.environment.residency import Residency, ResidencySlot
+from mote.environment.runtime import AgentRuntime, AgentStatus
+from mote.environment.store import ResidencyStore
 
 
 class FakeRole:

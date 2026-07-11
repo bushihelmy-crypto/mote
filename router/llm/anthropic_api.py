@@ -18,37 +18,33 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
-from tenacity import (
-    after_log,
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_random_exponential,
-)
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
-from metagpt.common.const import USE_CONFIG_TIMEOUT
-from metagpt.common.events import log_llm_stream
-from metagpt.common.exception import (
-    LLMEmptyResponseError,
-    LLMTimeoutError,
-    classify_llm_error,
-    is_retryable,
-)
-from metagpt.common.logs import logger
-from metagpt.common.utils.common import log_and_reraise, sniff_image_media_type
-from metagpt.common.utils.token_counter import count_message_tokens, count_string_tokens
-from metagpt.router.cost import CostTracker, TokenUsage
-from metagpt.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
-from metagpt.router.llm.credentials import CredentialRotationMixin
-from metagpt.router.llm.llm_provider_registry import register_provider
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.common.const import USE_CONFIG_TIMEOUT
+from mote.common.events import log_llm_stream
+from mote.common.exception import LLMEmptyResponseError, LLMTimeoutError, classify_llm_error, is_retryable
+from mote.common.logs import logger
+from mote.common.utils.common import log_and_reraise, parse_data_url, resolve_image_media_type
+from mote.common.utils.token_counter import count_message_tokens, count_string_tokens
+from mote.router.cost import CostTracker, TokenUsage
+from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
+from mote.router.llm.credentials import CredentialRotationMixin
+from mote.router.llm.llm_provider_registry import register_provider
+
+if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic
 
 
 @register_provider([LLMType.ANTHROPIC])
 class AnthropicLLM(CredentialRotationMixin, BaseLLM):
     """Provider for Anthropic's native Messages API (Claude models)."""
+
+    # Narrow the base class's Optional[AsyncOpenAI]: this provider builds its own
+    # AsyncAnthropic client in _init_client() and never leaves it None.
+    aclient: "AsyncAnthropic"
 
     def __init__(self, config: LLMConfig):
         self.config = config
@@ -76,7 +72,7 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
             # OAuth path: send the bearer token via auth_token and merge any
             # provider-specific extra headers (e.g. the anthropic-beta opt-in).
             kwargs["auth_token"] = self._oauth.get_valid_token()
-            if self.config.oauth.headers_extra:
+            if self.config.oauth and self.config.oauth.headers_extra:
                 kwargs["default_headers"] = dict(self.config.oauth.headers_extra)
         else:
             kwargs["api_key"] = self._current_api_key()
@@ -144,6 +140,14 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
             # user (default): may be a plain string or a multimodal block list.
             blocks = self._user_content_to_blocks(msg.get("content"))
             if blocks:
+                # Propagate the message's declarative cache intent onto its blocks
+                # so ``_apply_cache_breakpoints`` can skip an ephemeral tail even
+                # after ``_append_blocks`` merges it into the prior user turn. The
+                # marker is a private block key stripped again before the request
+                # goes out (see ``_apply_cache_breakpoints``).
+                intent = msg.get("_cache_intent")
+                if intent:
+                    blocks = [{**b, "_cache_intent": intent} for b in blocks]
                 self._append_blocks(converted, "user", blocks)
 
         return "\n\n".join(system_parts), converted
@@ -219,18 +223,14 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         if not url:
             return None
         if url.startswith("data:"):
-            # data:<media_type>;base64,<data>
-            try:
-                header, data = url.split(",", 1)
-                media_type = header.split(";")[0][len("data:") :] or "image/jpeg"
-            except ValueError:
+            parsed = parse_data_url(url)
+            if parsed is None:
                 return None
+            declared, data = parsed
             # The declared media type is often wrong (e.g. a PNG labelled as
-            # JPEG); Anthropic rejects mismatches, so sniff the real type from
-            # the decoded bytes and prefer it when recognised.
-            sniffed = sniff_image_media_type(data)
-            if sniffed:
-                media_type = sniffed
+            # JPEG); Anthropic rejects mismatches, so resolve_image_media_type
+            # prefers the sniffed type and falls back to the declaration.
+            media_type = resolve_image_media_type(data, declared)
             return {
                 "type": "image",
                 "source": {"type": "base64", "media_type": media_type, "data": data},
@@ -302,7 +302,120 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         else:
             extra_kwargs.pop("tool_choice", None)
         kwargs.update(extra_kwargs)
+        # Place prompt-cache breakpoints last, after the wire shape is final, so
+        # they land on the actual blocks being sent (system / tools / tail).
+        self._apply_cache_breakpoints(kwargs)
         return kwargs
+
+    # -- prompt caching (Anthropic manual cache_control) --------------------
+    def _apply_cache_breakpoints(self, kwargs: dict) -> None:
+        """Mark the stable request prefixes with ``cache_control`` (Claude-only).
+
+        Unlike the OpenAI-compatible providers (automatic prefix caching, no
+        markers, no write cost), Anthropic caches only where an explicit
+        ``cache_control: {"type": "ephemeral"}`` breakpoint is placed. We mirror
+        Claude Code's strategy: at most three breakpoints, each protecting a
+        successively longer stable prefix, so one downstream change still leaves
+        the earlier prefixes hitting the cache:
+
+        1. **system** — the last system block (large, session-stable);
+        2. **tools** — the last tool schema (the catalog, stable across turns,
+           cached right after the system prefix);
+        3. **messages** — exactly one marker on the final content block of the
+           last message (the rolling conversation tail: each turn the prior
+           prefix is a cheap cache read, only the freshly-appended tail is
+           written).
+
+        Additive and safe: below the model's minimum cacheable size (~1024
+        tokens) the API silently ignores a marker, and markers never change the
+        response — only its billing. Gated by ``config.use_prompt_cache``.
+        """
+        if not getattr(self.config, "use_prompt_cache", True):
+            return
+
+        marker = {"type": "ephemeral"}
+
+        # 1) system: normalize a plain string into a single text block so the
+        #    marker has somewhere to live, then mark the last block. Built fresh
+        #    here, so an in-place stamp aliases nothing.
+        system = kwargs.get("system")
+        if isinstance(system, str) and system:
+            system = [{"type": "text", "text": system}]
+            kwargs["system"] = system
+        if isinstance(system, list) and system and isinstance(system[-1], dict):
+            last_block: dict[str, Any] = system[-1]
+            last_block["cache_control"] = dict(marker)
+
+        # 2) tools: the catalog caches after the system prefix. Mark the last
+        #    tool so a system-only change still reuses the cached tool section.
+        #    Anthropic-shaped specs pass through ``_convert_tools`` by reference,
+        #    so copy-on-mark to avoid stamping the caller's tool dict.
+        tools = kwargs.get("tools")
+        if isinstance(tools, list) and tools and isinstance(tools[-1], dict):
+            tools[-1] = {**tools[-1], "cache_control": dict(marker)}
+
+        # 3) messages: exactly one marker, on the end of the *stable* conversation
+        #    prefix — the last DURABLE block, not the final message by position.
+        #    mote's think path assembles the request as ``stored_history +
+        #    [ephemeral_tail]`` (context.manager.prepare_request): the tail is a
+        #    request-only prompt carrying per-turn content (timestamp / cwd
+        #    reminders) that changes every turn and is never stored. Anchoring on it
+        #    would write a cache entry that never hits next turn AND leave the
+        #    growing history with no breakpoint, forcing a full re-prefill each turn.
+        #    A message-position heuristic (``[-2]``) is not enough: in native
+        #    tool-use the tail is MERGED (``_append_blocks``) into the prior user
+        #    turn that also holds the tool_result blocks, so the volatile text and a
+        #    durable tool_result share one message. We therefore work at BLOCK
+        #    granularity: the tail's blocks are tagged ``_cache_intent`` (see
+        #    ``_convert_messages``); we anchor on the last block WITHOUT that tag —
+        #    the true end of the cacheable prefix — then strip every ``_cache_intent``
+        #    key so it never reaches the wire. A block may pass through by reference,
+        #    so copy-on-mark to avoid stamping the caller's dict.
+        messages = kwargs.get("messages")
+        self._mark_last_durable_block(messages, marker)
+
+    @staticmethod
+    def _mark_last_durable_block(messages: Any, marker: dict) -> None:
+        """Place the message-tail cache breakpoint on the last durable block.
+
+        Scans blocks from the end, skipping any tagged ``_cache_intent`` (the
+        per-turn ephemeral tail), and stamps ``cache_control`` on the first
+        durable block found. Finally strips all ``_cache_intent`` tags so the
+        private routing key never reaches the API. No-op on non-list content or
+        an all-ephemeral request (nothing stable to cache).
+        """
+        if not (isinstance(messages, list) and messages):
+            return
+
+        anchored = False
+        # Walk messages newest-first; within each, blocks newest-first.
+        for msg in reversed(messages):
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            for bi in range(len(content) - 1, -1, -1):
+                block = content[bi]
+                if not isinstance(block, dict):
+                    continue
+                if block.get("_cache_intent"):
+                    continue  # ephemeral tail — never anchor here
+                if not anchored:
+                    content[bi] = {**block, "cache_control": dict(marker)}
+                    anchored = True
+                break  # only the LAST durable block of a turn can be the boundary
+            if anchored:
+                break
+
+        # Strip the private routing key from every block (wire must stay canonical).
+        for msg in messages:
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            for bi, block in enumerate(content):
+                if isinstance(block, dict) and "_cache_intent" in block:
+                    stripped = dict(block)
+                    del stripped["_cache_intent"]
+                    content[bi] = stripped
 
     # -- completion calls ---------------------------------------------------
     async def _acreate(self, **kwargs):
@@ -393,7 +506,7 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
-        after=after_log(logger, logger.level("WARNING").name),
+        after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),
         retry_error_callback=log_and_reraise,
     )

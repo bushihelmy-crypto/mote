@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from metagpt.common.utils import count_string_tokens
+from mote.common.utils import count_string_tokens
 
 NAME_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 

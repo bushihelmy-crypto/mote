@@ -6,8 +6,8 @@ ordered test↔impl pair → same-stem sibling → same-dir co-change.
 """
 from __future__ import annotations
 
-from metagpt.executor.tools.code_review.bundle import attach_related
-from metagpt.executor.tools.code_review.parser import FileDiff
+from mote.executor.tools.code_review.bundle import attach_related
+from mote.executor.tools.code_review.parser import FileDiff
 
 
 def _f(path: str) -> FileDiff:

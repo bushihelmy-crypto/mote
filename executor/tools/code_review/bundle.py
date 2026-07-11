@@ -45,7 +45,7 @@ def _impl_stem(stem: str) -> str:
     """
     for pre in _TEST_PREFIXES:
         if stem.startswith(pre) and len(stem) > len(pre):
-            return stem[len(pre):]
+            return stem[len(pre) :]
     for suf in _TEST_SUFFIXES:
         if stem.endswith(suf) and len(stem) > len(suf):
             return stem[: -len(suf)]

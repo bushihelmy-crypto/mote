@@ -15,24 +15,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as _escape_xml
 
-from metagpt.common.const.tasks import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
-from metagpt.common.exception import ErrorReport, render_error_block
-from metagpt.executor.tasks.types import BgStatus
+from mote.common.const.tasks import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
+from mote.common.exception import ErrorReport, render_error_block
+from mote.common.text import format_elapsed
+from mote.executor.tasks.types import BgStatus
 
 if TYPE_CHECKING:
-    from metagpt.executor.tasks.disk_output import TaskOutputStore
-    from metagpt.executor.tasks.pool import BackgroundTaskPool
+    from mote.executor.tasks.disk_output import TaskOutputStore
+    from mote.executor.tasks.pool import BackgroundTaskPool
 
 _TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})
-
-
-def _fmt_elapsed(seconds: float) -> str:
-    """Format elapsed seconds as a human-readable string."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    minutes = int(seconds) // 60
-    secs = seconds - minutes * 60
-    return f"{minutes}m{secs:.0f}s"
 
 
 # ------------------------------------------------------------------
@@ -119,7 +111,7 @@ class TaskAttachmentGenerator:
                         task_id=tid,
                         status=meta.status,
                         command_name=meta.command_name,
-                        description=(f"{meta.command_name} is pending " f"(queued: {_fmt_elapsed(elapsed)})"),
+                        description=(f"{meta.command_name} is pending " f"(queued: {format_elapsed(elapsed)})"),
                         delta_summary=None,
                     )
                 )
@@ -144,7 +136,7 @@ class TaskAttachmentGenerator:
                         task_id=tid,
                         status=meta.status,
                         command_name=meta.command_name,
-                        description=(f"{meta.command_name} is running " f"(elapsed: {_fmt_elapsed(elapsed)})"),
+                        description=(f"{meta.command_name} is running " f"(elapsed: {format_elapsed(elapsed)})"),
                         delta_summary=delta_summary,
                     )
                 )
@@ -172,7 +164,7 @@ class TaskAttachmentGenerator:
                         task_id=tid,
                         status=meta.status,
                         command_name=meta.command_name,
-                        description=(f"{meta.command_name} {status_str} " f"(elapsed: {_fmt_elapsed(elapsed)})"),
+                        description=(f"{meta.command_name} {status_str} " f"(elapsed: {format_elapsed(elapsed)})"),
                         delta_summary=delta_summary,
                         error=meta.error,
                     )

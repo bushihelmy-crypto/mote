@@ -47,7 +47,7 @@ class Metric(BaseModel):
 
     time_cost: float = Field(default=0.000, description="Time cost, the unit is milliseconds.")
     money_cost: float = Field(default=0.000, description="Money cost, the unit is US dollars.")
-    score: Score = Field(default=None, description="Score, with value and reason.")
+    score: Optional[Score] = Field(default=None, description="Score, with value and reason.")
 
 
 class Trajectory(BaseModel):

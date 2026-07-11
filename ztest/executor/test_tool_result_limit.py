@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.tool_result_limit``.
+"""Unit tests for ``mote.executor.tool_result_limit``.
 
 Pure functions (no executor wiring): byte formatting, threshold clamping,
 preview newline-boundary truncation, and the ``enforce_tool_result_limit``
@@ -11,12 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import (
-    DEFAULT_MAX_RESULT_SIZE_CHARS,
-    PERSISTED_OUTPUT_OPEN_TAG,
-    PREVIEW_SIZE_BYTES,
-)
-from metagpt.executor.tool_result_limit import (
+from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, PREVIEW_SIZE_BYTES
+from mote.executor.tool_result_limit import (
     enforce_tool_result_limit,
     format_file_size,
     generate_preview,
@@ -108,9 +104,7 @@ class TestEnforceToolResultLimit:
     def test_persist_is_idempotent_on_already_wrapped(self, tmp_path):
         wrapped = f"{PERSISTED_OUTPUT_OPEN_TAG}\nalready persisted\n</persisted-output>" + "x" * 60_000
         # Even though it's over threshold, an already-wrapped output is left alone.
-        result = enforce_tool_result_limit(
-            wrapped, "T", result_id="r", max_result_size_chars=100, base_dir=tmp_path
-        )
+        result = enforce_tool_result_limit(wrapped, "T", result_id="r", max_result_size_chars=100, base_dir=tmp_path)
         assert result == wrapped
 
     def test_reuses_existing_file(self, tmp_path):
@@ -135,7 +129,8 @@ class TestEnforceToolResultLimit:
             base_dir=tmp_path,
         )
         assert not result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
-        assert "output truncated" in result
+        assert "omitted" in result
+        assert "total" in result
         # No file written when persistence is disabled.
         assert not (tmp_path / ".tool_results").exists()
 
@@ -146,4 +141,8 @@ class TestEnforceToolResultLimit:
         )
         # Preview slice is bounded by PREVIEW_SIZE_BYTES, far smaller than the full output.
         assert len(result) < len(big)
-        assert f"Preview (first {PREVIEW_SIZE_BYTES // 1024 if PREVIEW_SIZE_BYTES >= 1024 else PREVIEW_SIZE_BYTES}" in result or "Preview (first" in result
+        assert (
+            f"Preview (first {PREVIEW_SIZE_BYTES // 1024 if PREVIEW_SIZE_BYTES >= 1024 else PREVIEW_SIZE_BYTES}"
+            in result
+            or "Preview (first" in result
+        )

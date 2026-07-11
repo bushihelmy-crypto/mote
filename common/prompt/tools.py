@@ -48,7 +48,7 @@ NOTEBOOK_EDIT_DESCRIPTION = (
 
 GLOB_DESCRIPTION = (
     "Fast file pattern matching tool that works with any codebase size. "
-    "Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". Returns "
+    'Supports glob patterns like "**/*.js" or "src/**/*.ts". Returns '
     "matching file paths sorted by modification time (most recent first). "
     "Use this to find files by name; for content search use Grep instead."
 )
@@ -65,7 +65,9 @@ GREP_DESCRIPTION = (
 
 # --- Execution tools -------------------------------------------------------
 
-BASH_DESCRIPTION = "Execute a bash command. State (cwd) persists across calls within a session."
+BASH_DESCRIPTION = (
+    "Runs a bash command. Use the `workdir` param to run in a subdirectory; a " "`cd` does not persist across calls."
+)
 
 PYTHON_DESCRIPTION = (
     "Execute Python code in a persistent Jupyter kernel kept alive across "
@@ -172,15 +174,13 @@ AGENT_DESCRIPTION = "Spawn a typed child agent for bounded subtasks."
 
 END_DESCRIPTION = "End the current task and produce a final summary."
 
-ASK_HUMAN_DESCRIPTION = (
-    "Use this when you fail the current task or if you are unsure of the situation encountered."
-)
+ASK_HUMAN_DESCRIPTION = "Use this when you fail the current task or if you are unsure of the situation encountered."
 
 REPLY_TO_HUMAN_DESCRIPTION = "Reply to human user with the content provided."
 
 # AskUserQuestion long-form description (ported verbatim from Claude Code's
 # AskUserQuestionTool/prompt.ts). The parameter schema is defined as pydantic
-# models in metagpt.schema (AskUserQuestionInput).
+# models in mote.schema (AskUserQuestionInput).
 ASK_USER_QUESTION_PROMPT = """Use this tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions
@@ -204,7 +204,7 @@ BACKGROUND_PIPELINE_SECTION = """\
 # Background Pipelines
 
 Some commands are background pipeline tools (listed under "# Pipeline Tools"): each \
-runs a multi-step node graph asynchronously — a langgraph-style transition engine .\ 
+runs a multi-step node graph asynchronously — a langgraph-style transition engine. \
 Calling one returns immediately with a `task_id`; \
 progress and the final result are pushed to you automatically.
 

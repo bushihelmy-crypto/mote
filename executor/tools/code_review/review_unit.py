@@ -7,7 +7,7 @@ recalling surrounding context via its tools) and emit its findings as a JSON
 array in its final summary. We parse that JSON, then hand each comment's
 ``existing_code`` to the deterministic resolver to recover line numbers.
 
-Mirrors :class:`metagpt.executor.tools.agent_tool.Agent`'s spawn → run →
+Mirrors :class:`mote.executor.tools.agent_tool.Agent`'s spawn → run →
 cleanup pattern: a child Role can run with its default context/config, and its
 terminal summary is read off ``role.state.last_end_output``.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import List
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 from ._agent import build_child_role, extract_json_array, run_child_for_text
 from .format import Finding
@@ -89,8 +89,7 @@ def _render_related(file_diff: FileDiff) -> str:
 
 def _render_file_diff(file_diff: FileDiff) -> str:
     """Render a FileDiff back to a compact unified-diff text for the prompt."""
-    parts: List[str] = [f"--- a/{file_diff.old_path or file_diff.path}",
-                        f"+++ b/{file_diff.path}"]
+    parts: List[str] = [f"--- a/{file_diff.old_path or file_diff.path}", f"+++ b/{file_diff.path}"]
     for hunk in file_diff.hunks:
         parts.append(f"@@ +{hunk.new_start} @@")
         for _lineno, text in hunk.lines:
@@ -167,8 +166,6 @@ async def review_one_file(
 
     comments = _extract_json_array(output)
     if comments is None:
-        logger.warning(
-            f"code_review: could not parse review JSON for {file_diff.path}"
-        )
+        logger.warning(f"code_review: could not parse review JSON for {file_diff.path}")
         return []
     return _comments_to_findings(comments, file_diff)

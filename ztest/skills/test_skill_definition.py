@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.context.skills.skill_definition.SkillDefinition."""
+"""Tests for mote.context.skills.skill_definition.SkillDefinition."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from metagpt.context.skills.skill_definition import NAME_PATTERN, SkillDefinition
+from mote.context.skills.skill_definition import NAME_PATTERN, SkillDefinition
 
 
 class TestDefaults:
@@ -154,9 +154,7 @@ class TestExtendedFrontmatter:
 
 class TestActivationPatterns:
     def test_merges_paths_and_globs_deduped(self):
-        s = SkillDefinition(
-            name="x", description="d", paths=["a", "b"], globs=["b", "c"]
-        )
+        s = SkillDefinition(name="x", description="d", paths=["a", "b"], globs=["b", "c"])
         assert s.activation_patterns == ["a", "b", "c"]
 
     def test_empty_when_no_patterns(self):

@@ -157,7 +157,7 @@ class PythonObjectParser(BaseModel):
         idx = function_block.end()
         self._add_thinking_buf(function_block.start())
         self.rcv_buf = self.rcv_buf[idx:]
-        tokens = [("start_array", None)] if not self.functions else []
+        tokens: List[Tuple[str, Any]] = [("start_array", None)] if not self.functions else []
         function_object = FunctionObject(function_name=function_name)
         self.functions.append(function_object)
         tokens.extend(
@@ -265,7 +265,8 @@ class PythonObjectParser(BaseModel):
         if meet_end:
             value = self._strip_empty_line_postfix(value)
         if value:
-            arg_object.variable_value += value
+            current = arg_object.variable_value if isinstance(arg_object.variable_value, str) else ""
+            arg_object.variable_value = current + value
         else:
             arg_object.variable_value = value
         return meet_beginning, value

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.compress.ruff.RuffCompressor``."""
+"""Unit tests for ``mote.executor.compress.ruff.RuffCompressor``."""
 from __future__ import annotations
 
-from metagpt.executor.compress.ruff import RuffCompressor
+from mote.executor.compress.ruff import RuffCompressor
 
 OUTPUT = (
     "\n".join(f"src/mod{i}.py:{i}:1: F401 `os` imported but unused" for i in range(20))
@@ -24,8 +24,8 @@ class TestRuffCompressor:
 
     def test_grouped_counts(self):
         r = RuffCompressor().compress(OUTPUT, argv=["ruff", "check"])
-        assert "F401: 20 occurrence(s)" in r.text
-        assert "E501: 5 occurrence(s)" in r.text
+        assert "F401: 20 occurrences" in r.text
+        assert "E501: 5 occurrences" in r.text
 
     def test_first_locations_kept_and_capped(self):
         r = RuffCompressor().compress(OUTPUT, argv=["ruff", "check"])

@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Environment-variable config layer.
 
-Maps ``AGENTFRAME_*`` / ``METAGPT_*`` env vars into a nested override dict for
+Maps ``MOTE_*`` / ``MOTE_*`` env vars into a nested override dict for
 the ENV layer. ``__`` separates nesting levels while a single ``_`` stays
-within a key segment, so ``AGENTFRAME_LLM__BASE_URL=...`` becomes
+within a key segment, so ``MOTE_LLM__BASE_URL=...`` becomes
 ``{"llm": {"base_url": ...}}``. Segments are lower-cased; values are YAML-parsed
 (``true``/``8000``/...) with a string fallback.
 """
@@ -13,9 +13,9 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Mapping, Optional
 
-from metagpt.common.config.overrides import parse_override_value, set_nested
+from mote.common.config.overrides import parse_override_value, set_nested
 
-ENV_PREFIXES = ("AGENTFRAME_", "METAGPT_")
+ENV_PREFIXES = ("MOTE_",)
 
 
 def build_env_layer(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:

@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from metagpt.common.disk.writer import DiskWriter
+from mote.common.disk.writer import DiskWriter
 
 
 def _boom():

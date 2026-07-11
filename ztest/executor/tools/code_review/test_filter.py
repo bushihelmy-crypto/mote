@@ -1,15 +1,13 @@
 """Unit tests for the file filter (code_review/filter.py)."""
 from __future__ import annotations
 
-from metagpt.executor.tools.code_review.filter import should_review
-from metagpt.executor.tools.code_review.parser import FileDiff, Hunk
+from mote.executor.tools.code_review.filter import should_review
+from mote.executor.tools.code_review.parser import FileDiff, Hunk
 
 
 def _file(path, *, is_binary=False, is_deleted=False, with_hunk=True):
     hunks = [Hunk(new_start=1, lines=[(1, "+x = 1")])] if with_hunk else []
-    return FileDiff(
-        path=path, is_binary=is_binary, is_deleted=is_deleted, hunks=hunks
-    )
+    return FileDiff(path=path, is_binary=is_binary, is_deleted=is_deleted, hunks=hunks)
 
 
 class TestSupportedExts:

@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.utils.yaml_model import YamlModel
 
 # Mapping from legacy flat config keys to (section, nested_key). Defined at
 # module level so Pydantic's private-attr machinery doesn't swallow it if
@@ -20,15 +20,13 @@ class SkillsConfig(YamlModel):
     enabled: bool = Field(default=False, description="P0 Skills master switch.")
     max_tokens: int = Field(default=2000, description="Token limit for the Skills index injection.")
     # Layered source directories (precedence-as-data: bundled < user < project
-    # < extra). The user/project toggles add the conventional ``~/.agent/skills``
-    # and ``<cwd>/.agent/skills`` locations; ``extra_dirs`` appends arbitrary
-    # highest-priority directories. Same-name skills in a higher layer override
-    # lower ones.
-    include_user_dir: bool = Field(
-        default=True, description="Scan ~/.agent/skills for user-level skills."
-    )
+    # < extra). The user toggle adds ``~/.mote/skills``; the project toggle adds
+    # every ``<dir>/.mote/skills`` found walking from cwd up to the git root
+    # (Claude-Code-aligned). ``extra_dirs`` appends arbitrary highest-priority
+    # directories. Same-name skills in a higher layer override lower ones.
+    include_user_dir: bool = Field(default=True, description="Scan ~/.mote/skills for user-level skills.")
     include_project_dir: bool = Field(
-        default=True, description="Scan <cwd>/.agent/skills for project-level skills."
+        default=True, description="Scan <dir>/.mote/skills (cwd→git-root walk) for project-level skills."
     )
     extra_dirs: list[str] = Field(
         default_factory=list, description="Additional (highest-priority) skill source directories."
@@ -65,7 +63,7 @@ class RoleZeroConfig(YamlModel):
         ],
         description="Supported AI models exposed in the draft-plan prompt for AI-capability tasks.",
     )
-    
+
     enable_longterm_memory: bool = Field(default=False, description="Whether to use long-term memory.")
     longterm_memory_persist_path: str = Field(default=".role_memory_data", description="The directory to save data.")
     memory_k: int = Field(default=30, description="The capacity of short-term memory.")

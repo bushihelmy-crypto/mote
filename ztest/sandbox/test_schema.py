@@ -9,11 +9,7 @@ the lazy registration in ``common.schema`` (no eager import), and that
 """
 from __future__ import annotations
 
-from metagpt.common.schema import (
-    PermissionConfig,
-    SandboxConfig,
-    SandboxRuntimeConfig,
-)
+from mote.common.schema import PermissionConfig, SandboxConfig, SandboxRuntimeConfig
 
 
 class TestSandboxRuntimeConfig:

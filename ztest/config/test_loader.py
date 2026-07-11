@@ -1,26 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.config.loader`` — orchestration + config.yaml wiring.
+"""Tests for ``mote.common.config.loader`` — orchestration + config.yaml wiring.
 
 These exercise the real on-disk PROJECT layers (the repo's ``config/config2.yaml``
-+ ``metagpt/config.yaml``), so they assume the repo ships a usable base config.
++ ``mote/config.yaml``), so they assume the repo ships a usable base config.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from metagpt.common.config.loader import (
-    build_layer_stack,
-    get_provenance,
-    load_config,
-    load_config_with_stack,
-)
-from metagpt.common.config.overrides import ConfigOverrides
-from metagpt.common.config.sources import ConfigSource, discover_source_files
+from mote.common.config.loader import build_layer_stack, get_provenance, load_config, load_config_with_stack
+from mote.common.config.overrides import ConfigOverrides
+from mote.common.config.sources import ConfigSource, discover_source_files
 
 
-def test_metagpt_config_yaml_is_the_top_project_layer():
-    """The user file metagpt/config.yaml is the sole trusted PROJECT layer."""
+def test_mote_config_yaml_is_the_top_project_layer():
+    """The user file mote/config.yaml is the sole trusted PROJECT layer."""
     files = discover_source_files()
     project_files = [f for f in files if f.source is ConfigSource.PROJECT]
     names = [f.path.name for f in project_files]
@@ -42,7 +37,7 @@ def test_programmatic_override_deep_merges_over_disk():
 
 
 def test_untrusted_workdir_layer_is_credential_stripped(tmp_path):
-    work_cfg_dir = tmp_path / ".agentframe"
+    work_cfg_dir = tmp_path / ".mote"
     work_cfg_dir.mkdir()
     (work_cfg_dir / "config.yaml").write_text(
         "llm:\n  model: from-workdir\n  api_key: leaked\n  base_url: http://evil\n"
@@ -75,13 +70,13 @@ def test_programmatic_path_is_uncached_and_isolated(tmp_path: Path):
 
 
 def test_env_layer_overrides_disk():
-    cfg = load_config(env={"AGENTFRAME_LLM__MODEL": "from-env"})
+    cfg = load_config(env={"MOTE_LLM__MODEL": "from-env"})
     assert cfg.llm.model == "from-env"
 
 
 def test_cli_overrides_beat_env():
     cfg = load_config(
-        env={"AGENTFRAME_LLM__MODEL": "from-env"},
+        env={"MOTE_LLM__MODEL": "from-env"},
         cli_overrides=["llm.model=from-cli"],
     )
     assert cfg.llm.model == "from-cli"
@@ -89,7 +84,7 @@ def test_cli_overrides_beat_env():
 
 def test_programmatic_beats_cli_and_env():
     cfg = load_config(
-        env={"AGENTFRAME_LLM__MODEL": "from-env"},
+        env={"MOTE_LLM__MODEL": "from-env"},
         cli_overrides=["llm.model=from-cli"],
         programmatic=ConfigOverrides(model="from-prog"),
     )
@@ -98,7 +93,7 @@ def test_programmatic_beats_cli_and_env():
 
 def test_layer_precedence_ordering_in_stack():
     _, stack = load_config_with_stack(
-        env={"AGENTFRAME_PROXY": "e"},
+        env={"MOTE_PROXY": "e"},
         cli_overrides=["proxy=c"],
         programmatic={"proxy": "p"},
     )
@@ -112,5 +107,5 @@ def test_layer_precedence_ordering_in_stack():
 
 def test_explicit_env_bypasses_cache():
     a, _ = load_config_with_stack()
-    b, _ = load_config_with_stack(env={"AGENTFRAME_PROXY": "x"})
+    b, _ = load_config_with_stack(env={"MOTE_PROXY": "x"})
     assert a is not b

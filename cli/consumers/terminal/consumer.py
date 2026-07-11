@@ -29,46 +29,31 @@ import os
 import sys
 from typing import Any, Optional
 
-from metagpt.cli.common.base import BaseConsumer
-from metagpt.cli.common.view import (
-    RESULT_KIND_DIFF,
-    RESULT_KIND_TABLE,
-    TERMINAL_CAPS,
-    Capabilities,
-)
-from metagpt.cli.consumers.render.builders import (
-    CONTENT_INDENT as _CONTENT_INDENT,
-    RESULT_INDENT as _RESULT_INDENT,
-    build_table,
+from mote.cli.consumers.render.builders import CONTENT_INDENT as _CONTENT_INDENT
+from mote.cli.consumers.render.builders import RESULT_INDENT as _RESULT_INDENT
+from mote.cli.consumers.render.builders import (
     bullet_row,
     conversation_compacted_text,
-    fold_note as _fold_note,
-    format_usage_line as _format_usage_line,
-    indent as _indent_renderable,
-    linkify,
-    render_diff,
-    render_file_change,
+    file_change_caption,
+    file_change_verb,
+)
+from mote.cli.consumers.render.builders import fold_note as _fold_note
+from mote.cli.consumers.render.builders import fold_note_str as _fold_note_str
+from mote.cli.consumers.render.builders import format_usage_line as _format_usage_line
+from mote.cli.consumers.render.builders import indent as _indent_renderable
+from mote.cli.consumers.render.builders import linkify, media_caption, notice_style, render_file_change
+from mote.cli.consumers.render.builders import render_image as _render_image
+from mote.cli.consumers.render.builders import (
+    render_result_detail,
+    task_progress_text,
     tool_body_syntax,
     user_message_row,
 )
-from metagpt.cli.consumers.render.builders import render_image as _render_image
-from metagpt.cli.consumers.render.markdown import themed_markdown
-from metagpt.cli.consumers.render.terminal_image import detect_image_protocol
-from metagpt.cli.consumers.render.palette import (
-    BRANCH,
-    BULLET,
-    CHECK,
-    COMPACT,
-    CROSS,
-    MEDIA,
-    NOTE,
-    PLAY,
-    RETRY,
-    SCISSORS,
-    SKIP,
-    WARN,
-    Palette,
-)
+from mote.cli.consumers.render.markdown import themed_markdown
+from mote.cli.consumers.render.palette import BRANCH, BULLET, COMPACT, NOTE, RETRY, WARN, Palette
+from mote.cli.consumers.render.terminal_image import detect_image_protocol
+from mote.cli.contracts.base import BaseConsumer
+from mote.cli.contracts.view import TERMINAL_CAPS, Capabilities
 
 try:  # rich is optional; degrade to plain text when absent.
     from rich import box
@@ -93,6 +78,10 @@ class TerminalConsumer(BaseConsumer):
     """
 
     capabilities: Capabilities = TERMINAL_CAPS
+
+    #: Repaint cadence (Hz) for the transient ``Live`` regions (streaming markdown
+    #: tail + retry countdown) — fast enough to feel live, slow enough not to churn.
+    _LIVE_REFRESH_PER_SECOND = 12
 
     def __init__(self, console: Optional["Console"] = None):
         self._console = console if console is not None else Console()
@@ -155,9 +144,7 @@ class TerminalConsumer(BaseConsumer):
         self._end_stream()
         if ev.markdown.strip():
             self._console.print()
-            self._console.print(
-                self._bullet_row(BULLET, themed_markdown(ev.markdown), style=Palette.BRAND)
-            )
+            self._console.print(self._bullet_row(BULLET, themed_markdown(ev.markdown), style=Palette.BRAND))
         self._show_truncation(ev, spaces=_CONTENT_INDENT)
 
     def on_tool_call_started(self, ev: Any) -> None:
@@ -183,21 +170,11 @@ class TerminalConsumer(BaseConsumer):
         line.append("  " + BRANCH + " ", style=Palette.DIM)
         line.append(summary, style=style)
         self._console.print(line)
-        # Structured body (already classified by the projector) — render per kind;
-        # unknown kinds / no detail fall through to the summary line above.
-        detail = getattr(ev, "detail", None)
-        if detail:
-            kind = getattr(ev, "result_kind", None)
-            if kind == RESULT_KIND_DIFF:
-                self._console.print(self._indent(render_diff(detail), _RESULT_INDENT))
-            elif kind == RESULT_KIND_TABLE:
-                table = build_table(detail)
-                if table is not None:
-                    self._console.print(self._indent(table, _RESULT_INDENT))
-            else:
-                # Plain result preview (up to ~100 words): show it dimmed under the
-                # summary so the user reads real output before the fold note.
-                self._console.print(self._indent(linkify(detail, base_style=Palette.DIM), _RESULT_INDENT))
+        # Structured body (already classified by the projector) — the shared
+        # builder renders it per kind (diff/table/plain); unknown kinds / no
+        # detail yield nothing and fall through to the summary line above.
+        for part in render_result_detail(ev, _RESULT_INDENT):
+            self._console.print(part)
         self._show_truncation(ev, spaces=_RESULT_INDENT)
 
     def _show_truncation(self, ev: Any, *, spaces: int = _CONTENT_INDENT) -> None:
@@ -219,12 +196,7 @@ class TerminalConsumer(BaseConsumer):
         # A caption line always prints so the transcript records what was shown.
         self._end_stream()
         label = ev.media_kind or "media"
-        ref = ev.ref or ev.alt or "(no reference)"
-        caption = Text()
-        caption.append("  " + BRANCH + " ", style=Palette.DIM)
-        caption.append(f"{MEDIA} [{label}] ", style=Palette.BRAND)
-        caption.append(ref, style=Palette.DIM)
-        self._console.print(caption)
+        self._console.print(media_caption(ev))
 
         path = ev.ref or ""
         is_image = label == "image" and bool(path) and os.path.isfile(path)
@@ -243,12 +215,7 @@ class TerminalConsumer(BaseConsumer):
         old = getattr(ev, "old", "") or ""
         new = getattr(ev, "new", "") or ""
         path = getattr(ev, "path", "") or ""
-        verb = "created" if not old else ("deleted" if not new else "updated")
-        caption = Text()
-        caption.append("  " + BRANCH + " ", style=Palette.DIM)
-        caption.append(f"{path or 'file'} ", style=Palette.BRAND)
-        caption.append(f"({verb})", style=Palette.DIM)
-        self._console.print(caption)
+        self._console.print(file_change_caption(ev))
         self._console.print(self._indent(render_file_change(old, new, path), _RESULT_INDENT))
 
     def _render_native_image(self, path: str) -> bool:
@@ -295,23 +262,11 @@ class TerminalConsumer(BaseConsumer):
 
     def on_task_progress(self, ev: Any) -> None:
         self._end_stream()
-        status, stage, detail = ev.status, ev.stage or "?", ev.detail
-        symbol, style = {
-            "running": (PLAY, Palette.BRAND),
-            "success": (CHECK, Palette.SUCCESS),
-            "failed": (CROSS, Palette.ERROR),
-        }.get(status, (SKIP, Palette.WARNING))
-        line = Text()
-        line.append("  " + symbol + " ", style=style)
-        line.append(f"{stage} {status}", style=style)
-        if detail and status == "failed":
-            line.append(f": {detail}", style=Palette.DIM)
-        self._console.print(line)
+        self._console.print(task_progress_text(ev))
 
     def on_notice(self, ev: Any) -> None:
         self._end_stream()
-        style = {"warning": Palette.WARNING, "success": Palette.SUCCESS}.get(ev.level, Palette.DIM)
-        self._console.print(linkify(ev.text, base_style=style))
+        self._console.print(linkify(ev.text, base_style=notice_style(ev.level)))
 
     def on_system_reminder(self, ev: Any) -> None:
         # Framework-injected turn context, condensed to a heading summary. Render
@@ -357,7 +312,7 @@ class TerminalConsumer(BaseConsumer):
         self._retry_live = Live(
             text,
             console=self._console,
-            refresh_per_second=12,
+            refresh_per_second=self._LIVE_REFRESH_PER_SECOND,
             vertical_overflow="crop",
             transient=True,
         )
@@ -469,7 +424,7 @@ class TerminalConsumer(BaseConsumer):
             self._live = Live(
                 tail,
                 console=self._console,
-                refresh_per_second=12,
+                refresh_per_second=self._LIVE_REFRESH_PER_SECOND,
                 vertical_overflow="crop",
                 transient=True,
             )
@@ -489,9 +444,7 @@ class TerminalConsumer(BaseConsumer):
         if finalized.strip():
             self._pending = remainder
             if self._live is not None:
-                self._live.update(
-                    self._indent(themed_markdown(self._tail(remainder)), _CONTENT_INDENT)
-                )
+                self._live.update(self._indent(themed_markdown(self._tail(remainder)), _CONTENT_INDENT))
             self._commit(finalized)
         self._show_tail()
 
@@ -542,14 +495,7 @@ class PlainTerminalConsumer(BaseConsumer):
     def _show_truncation(self, ev: Any) -> None:
         if not getattr(ev, "content_truncated", False):
             return
-        full_ref = getattr(ev, "full_ref", None)
-        hidden = getattr(ev, "hidden_lines", 0) or 0
-        if full_ref:
-            self._print(f"  {SCISSORS} 输出过大已截断，完整见 {full_ref}")
-        elif hidden > 0:
-            self._print(f"  … +{hidden} 行已折叠")
-        else:
-            self._print("  … 内容已折叠")
+        self._print("  " + _fold_note_str(ev))
 
     def on_tool_call_started(self, ev: Any) -> None:
         head = f"  {ev.headline}" if ev.headline else ""
@@ -571,8 +517,7 @@ class PlainTerminalConsumer(BaseConsumer):
         old = getattr(ev, "old", "") or ""
         new = getattr(ev, "new", "") or ""
         path = getattr(ev, "path", "") or ""
-        verb = "created" if not old else ("deleted" if not new else "updated")
-        self._print(f"  [{verb}] {path or 'file'}")
+        self._print(f"  [{file_change_verb(old, new)}] {path or 'file'}")
 
     def on_approval_requested(self, ev: Any) -> None:
         action = ev.action or ev.tool_name or "action"
@@ -634,7 +579,7 @@ def build_terminal_consumer(config: Any = None):
 
 # Self-register on import (the registry imports this module).
 try:
-    from metagpt.cli.consumers.registry import register_consumer
+    from mote.cli.consumers.registry import register_consumer
 
     register_consumer("terminal", capabilities=TERMINAL_CAPS)(build_terminal_consumer)
 except Exception:  # noqa: BLE001 — registry optional during isolated import/tests

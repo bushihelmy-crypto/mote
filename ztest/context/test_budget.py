@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.context.budget`` — the window-aware threshold math.
+"""Tests for ``mote.context.budget`` — the window-aware threshold math.
 
 Covers token counting, the window/buffer/threshold helpers (incl. CC's
 window-scaled buffer tiers) and ``evaluate`` (the warning / error / autocompact /
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.const.context import (
+from mote.common.const.context import (
     AUTOCOMPACT_BUFFER_TOKENS,
     ERROR_THRESHOLD_BUFFER_TOKENS,
     MANUAL_COMPACT_BUFFER_TOKENS,
@@ -23,9 +23,9 @@ from metagpt.common.const.context import (
     MODEL_CONTEXT_WINDOW_DEFAULT,
     WARNING_THRESHOLD_BUFFER_TOKENS,
 )
-from metagpt.common.schema import TokenState, UserMessage
-from metagpt.common.utils.token_counter import TOKEN_MAX
-from metagpt.context import budget
+from mote.common.schema import TokenState, UserMessage
+from mote.common.utils.token_counter import TOKEN_MAX
+from mote.context import budget
 
 UNKNOWN_MODEL = "definitely-not-a-real-model"
 
@@ -48,8 +48,8 @@ def test_count_tokens_accepts_plain_dicts():
 
 def test_count_tokens_drops_tool_calls_envelope():
     """A native assistant turn's ``tool_calls`` list must not crash the counter."""
-    from metagpt.common.const import TOOL_CALLS
-    from metagpt.common.schema import AIMessage
+    from mote.common.const import TOOL_CALLS
+    from mote.common.schema import AIMessage
 
     m = AIMessage(content="calling")
     m.add_metadata(TOOL_CALLS, [{"id": "1", "name": "Read", "args": {"path": "x"}}])
@@ -63,17 +63,12 @@ def test_context_window_known_and_unknown():
 
 
 def test_effective_window_reserves_summary_output():
-    assert budget.effective_window(UNKNOWN_MODEL) == (
-        MODEL_CONTEXT_WINDOW_DEFAULT - MAX_OUTPUT_TOKENS_FOR_SUMMARY
-    )
+    assert budget.effective_window(UNKNOWN_MODEL) == (MODEL_CONTEXT_WINDOW_DEFAULT - MAX_OUTPUT_TOKENS_FOR_SUMMARY)
 
 
 def test_effective_window_custom_reserve_override():
     assert budget.effective_window(UNKNOWN_MODEL, summary_reserve=0) == MODEL_CONTEXT_WINDOW_DEFAULT
-    assert (
-        budget.effective_window(UNKNOWN_MODEL, summary_reserve=1000)
-        == MODEL_CONTEXT_WINDOW_DEFAULT - 1000
-    )
+    assert budget.effective_window(UNKNOWN_MODEL, summary_reserve=1000) == MODEL_CONTEXT_WINDOW_DEFAULT - 1000
 
 
 @pytest.mark.parametrize(

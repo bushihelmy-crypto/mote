@@ -1,6 +1,6 @@
-# AgentFrame
+# Mote
 
-`metagpt/`（`metagpt.*` 包）是一个**组合式、事件驱动、分层解耦**的 agent 运行框架。它把一个 agent 的运行拆成「想（think）/ 做（act）」对偶的 ReAct 循环，外接多 agent 运行时、会话持久化、统一 LLM 路由与权限沙箱，全部架在一个零反向依赖的 `common` 基础层之上。
+`mote/`（`mote.*` 包）是一个**组合式、事件驱动、分层解耦**的 agent 运行框架。它把一个 agent 的运行拆成「想（think）/ 做（act）」对偶的 ReAct 循环，外接多 agent 运行时、会话持久化、统一 LLM 路由与权限沙箱，全部架在一个零反向依赖的 `common` 基础层之上。
 
 
 ## 核心特性
@@ -20,8 +20,8 @@
 启动交互式 REPL：
 
 ```bash
-python -m metagpt.cli                 # 默认 Assistant + 默认工具集
-python -m metagpt.cli --model <name> --tools Read,Write,Edit,Bash,Glob,Grep --cwd .
+python -m mote.cli                 # 默认 Assistant + 默认工具集
+python -m mote.cli --model <name> --tools Read,Write,Edit,Bash,Glob,Grep --cwd .
 ```
 
 - Ctrl+C：turn 进行中 → 中断本轮；prompt 处双击 → 退出。Ctrl+D：退出。
@@ -56,20 +56,20 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 分层配置中心（`common/config/`，9 层优先级栈，低 → 高）：
 
 ```
-DEFAULT → SYSTEM(/etc) → USER(~/.agentframe|~/.metagpt) → PROJECT(metagpt/config.yaml)
-→ WORKDIR(<cwd>/.agentframe, 不受信→剥离凭据) → PROFILE → ENV(AGENTFRAME_/METAGPT_)
+DEFAULT → SYSTEM(/etc) → USER(~/.mote|~/.mote) → PROJECT(mote/config.yaml)
+→ WORKDIR(<cwd>/.mote, 不受信→剥离凭据) → PROFILE → ENV(MOTE_/MOTE_)
 → CLI_FLAG(-c key=value) → PROGRAMMATIC → MANAGED(锁死)
 ```
 
-dict 深合并、list 并集去重、scalar 高层胜。诊断：`python -m metagpt.common.config.diagnostics --strict`。
+dict 深合并、list 并集去重、scalar 高层胜。诊断：`python -m mote.common.config.diagnostics --strict`。
 
 ## 测试
 
 ```bash
-python -m pytest metagpt/ztest/{roles,loop,executor,think,context,skills,router,tasks,environment} -q
+python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tasks,environment} -q
 ```
 
-测试在 `metagpt/ztest/<subsystem>/`（不是 `tests/`）。
+测试在 `mote/ztest/<subsystem>/`（不是 `tests/`）。
 
 ## 进一步阅读
 

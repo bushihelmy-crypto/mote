@@ -3,19 +3,15 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.common.prompt.tools import (
-    ASK_HUMAN_DESCRIPTION,
-    ASK_USER_QUESTION_PROMPT,
-    REPLY_TO_HUMAN_DESCRIPTION,
-)
-from metagpt.common.schema import (
-    AskUserQuestionAnswers,
-    AskUserQuestionInput,
-    AskUserQuestionItem,
-)
+from mote.common.prompt.tools import ASK_HUMAN_DESCRIPTION, ASK_USER_QUESTION_PROMPT, REPLY_TO_HUMAN_DESCRIPTION
+from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput, AskUserQuestionItem
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError, ToolResult
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+_MSG_INVALID_QUESTIONS = "Error: invalid questions — {error}"
 
 
 @register_tool
@@ -120,7 +116,7 @@ class AskUserQuestion(BaseTool):
         try:
             return AskUserQuestionInput.model_validate({"questions": questions}).questions
         except Exception as e:  # noqa: BLE001 — surface a clean failure to the model
-            raise ToolError(f"Error: invalid questions — {e}")
+            raise ToolError(_MSG_INVALID_QUESTIONS.format(error=e))
 
     # --- Result formatting (verbatim CC wording) -----------------------------
 
@@ -132,4 +128,3 @@ class AskUserQuestion(BaseTool):
             + ", ".join(parts)
             + ". You can now continue with the user's answers in mind."
         )
-

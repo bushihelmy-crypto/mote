@@ -17,10 +17,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from metagpt.common.schema import Message
+from mote.common.schema import Message
 
 if TYPE_CHECKING:
-    from metagpt.common.schema import MessageQueue
+    from mote.common.schema import MessageQueue
 
 
 @dataclass
@@ -55,6 +55,11 @@ class BaseLoop(ABC):
     and return the final response Message. The Role calls run() once per react()
     and stays agnostic to which strategy is in play.
     """
+
+    # The last message the loop observed this run, propagated by the Role into
+    # RoleState for recovery (role_raise_decorator reads it). Subclasses set it
+    # during observe; the base declares it so the generic read type-checks.
+    latest_observed_msg: "Message | None" = None
 
     @abstractmethod
     async def run(self) -> Message | None:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.prompts.role — the static template/constant catalogue.
+"""Tests for mote.prompts.role — the static template/constant catalogue.
 
 These are not behaviours but contracts: the streaming parser, PromptBuilder and
 the cache-boundary split all depend on the exact placeholder names and the
@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from string import Template
 
-from metagpt.common import prompt as R
+from mote.common import prompt as R
 
 
 class TestIdentityTemplates:
@@ -101,5 +101,8 @@ class TestMiscConstants:
         out = R.JSON_REPAIR_PROMPT.format(json_data="{}", json_decode_error="boom")
         assert "boom" in out
 
-    def test_cmd_prompt_has_current_state(self):
-        assert "${current_state}" in R.CMD_PROMPT
+    def test_cmd_prompt_is_empty_base(self):
+        # The base command template is empty: the old "# Current State" block
+        # (live cwd + wall-clock time) moved to per-turn reminder sources. The
+        # trailing user prompt is assembled from memory_context + reminders.
+        assert R.CMD_PROMPT == ""

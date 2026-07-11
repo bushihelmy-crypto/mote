@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.exception import (
+from mote.common.exception import (
     ErrorReport,
     GraphBatchFailureError,
     GraphNodeRetryExhaustedError,
@@ -19,7 +19,7 @@ from metagpt.common.exception import (
     ToolError,
     render_error_block,
 )
-from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+from mote.common.exception.codes import ErrorCode, RecoveryAction
 
 
 class TestFromException:
@@ -48,9 +48,7 @@ class TestFromException:
 
     def test_cause_is_captured_as_repr(self):
         cause = ValueError("root")
-        report = ErrorReport.from_exception(
-            GraphNodeRetryExhaustedError("tts", 3, cause)
-        )
+        report = ErrorReport.from_exception(GraphNodeRetryExhaustedError("tts", 3, cause))
         assert report.code == ErrorCode.GRAPH_NODE_RETRY_EXHAUSTED.value
         assert report.detail == {"node": "tts", "attempts": 3}
         assert "root" in report.cause
@@ -78,11 +76,7 @@ class TestRenderErrorBlock:
         assert block.endswith("</error>")
 
     def test_detail_keys_rendered_indented(self):
-        block = render_error_block(
-            ErrorReport.from_exception(
-                GraphParamTypeError("tts", "text", str, int)
-            )
-        )
+        block = render_error_block(ErrorReport.from_exception(GraphParamTypeError("tts", "text", str, int)))
         assert "  node: tts" in block
         assert "  param: text" in block
         assert "  expected: str" in block
@@ -95,9 +89,7 @@ class TestRenderErrorBlock:
 
     def test_cause_line_rendered(self):
         block = render_error_block(
-            ErrorReport.from_exception(
-                GraphNodeRetryExhaustedError("tts", 2, ValueError("root"))
-            )
+            ErrorReport.from_exception(GraphNodeRetryExhaustedError("tts", 2, ValueError("root")))
         )
         assert "cause: " in block
         assert "root" in block
@@ -105,9 +97,7 @@ class TestRenderErrorBlock:
 
 class TestGraphBatchFailureDetail:
     def test_failures_expand_to_per_node_lines(self):
-        err = GraphBatchFailureError(
-            [("tts", ToolError("bad audio")), ("img", RuntimeError("oom"))]
-        )
+        err = GraphBatchFailureError([("tts", ToolError("bad audio")), ("img", RuntimeError("oom"))])
         report = ErrorReport.from_exception(err)
         failures = report.detail["failures"]
         assert [f["node"] for f in failures] == ["tts", "img"]

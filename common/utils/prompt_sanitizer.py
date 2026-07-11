@@ -6,7 +6,8 @@ prompt injection attacks and control injected content size.
 
 import re
 
-from metagpt.common.utils import count_string_tokens
+from mote.common.text import Elision, ElisionStrategy, ElisionUnit
+from mote.common.utils import count_string_tokens
 
 # Patterns that could be used for prompt injection attacks
 DANGEROUS_PATTERNS = re.compile(r"</?system>|<\|im_start\|>|<\|im_end\|>|<\|endoftext\|>", re.IGNORECASE)
@@ -34,7 +35,9 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
         cumulative += line_tokens
         result.append(line)
     truncated = "\n".join(result) if result else ""
-    return truncated + "\n\n[... truncated due to token limit]"
+    total = count_string_tokens(text, _TOKEN_MODEL)
+    el = Elision(ElisionUnit.TOKENS, max(total - cumulative, 0), total, ElisionStrategy.HEAD)
+    return truncated + "\n\n" + el.render_for_model()
 
 
 def count_tokens(text: str) -> int:

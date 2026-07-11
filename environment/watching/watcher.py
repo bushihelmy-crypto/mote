@@ -8,7 +8,7 @@ dependency-free strategy already used by :class:`ConfigWatcher` and the cron
 scheduler's hot-reload, rather than pulling in ``watchdog``/inotify.
 
 The core is intentionally control-plane-agnostic, mirroring
-:class:`~metagpt.environment.scheduling.scheduler.CronScheduler`: it just calls
+:class:`~mote.environment.scheduling.scheduler.CronScheduler`: it just calls
 an injected ``on_change(event)`` coroutine per detected change. The glue layer
 (:mod:`service`) wires that to the hook system. The async loop lifecycle
 (``start``/``stop``/``_loop``) is the same shape as the scheduler so behavior is
@@ -22,14 +22,9 @@ import os
 from fnmatch import fnmatch
 from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
-from metagpt.common.logs import log_class
-from metagpt.common.scheduling import PeriodicLoop
-from metagpt.environment.watching.events import (
-    CREATED,
-    DELETED,
-    MODIFIED,
-    FileChangeEvent,
-)
+from mote.common.logs import log_class
+from mote.common.scheduling import PeriodicLoop
+from mote.environment.watching.events import CREATED, DELETED, MODIFIED, FileChangeEvent
 
 #: A path's change-detection signature: ``(mtime_ns, size)``.
 _Sig = Tuple[int, int]
@@ -58,7 +53,8 @@ class FileWatcher:
         self._roots = [os.path.abspath(r) for r in roots]
         self._on_change = on_change
         self._ignore = list(ignore or [])
-        self._runner = PeriodicLoop(check_interval, self.poll, name="file-watcher")
+        # poll returns events; the loop ignores the value (Tick expects Optional[bool]).
+        self._runner = PeriodicLoop(check_interval, self.poll, name="file-watcher")  # type: ignore[arg-type]
 
         # Last-seen signature per absolute path (the diff baseline).
         self._state: Dict[str, _Sig] = {}
@@ -130,9 +126,7 @@ class FileWatcher:
             await self._on_change(event)
         return events
 
-    def _suppress_self_writes(
-        self, events: List[FileChangeEvent], current: Dict[str, _Sig]
-    ) -> List[FileChangeEvent]:
+    def _suppress_self_writes(self, events: List[FileChangeEvent], current: Dict[str, _Sig]) -> List[FileChangeEvent]:
         """Drop events for paths the agent just wrote (matching signatures).
 
         Compares against the fresh snapshot ``current`` rather than the event's

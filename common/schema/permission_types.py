@@ -5,7 +5,7 @@ dependency-free (only stdlib typing/dataclasses) so any layer — tools, the
 permission engine, the config schema, the hook layer — can import these as the
 single source of truth without circular imports. This mirrors how Claude Code
 isolates ``src/types/permissions.ts`` from the permission engine; the runtime
-enforcement logic stays in ``metagpt.executor.permission``.
+enforcement logic stays in ``mote.executor.permission``.
 
 Two orthogonal concepts live here:
   * **Mode** — the coarse stance toward asking the user (Claude Code semantics).

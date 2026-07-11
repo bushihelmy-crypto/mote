@@ -17,9 +17,9 @@ Privacy: ``storage_state`` may carry sensitive cookies. Capture is gated by
 ``enabled`` (the role's ``record_browser_state`` schema flag), so a role can opt
 out of writing session cookies into the rollout entirely.
 
-Mirrors :class:`~metagpt.session.terminal_state.TerminalStateRecorder` and
-:class:`~metagpt.session.kernel_state.KernelStateRecorder`: conforms to
-``metagpt.common.interface.BrowserStateStore``, shares the session's
+Mirrors :class:`~mote.session.terminal_state.TerminalStateRecorder` and
+:class:`~mote.session.kernel_state.KernelStateRecorder`: conforms to
+``mote.common.interface.BrowserStateStore``, shares the session's
 :class:`SessionLog`, is best-effort (never raises into the tool), and is gated by
 ``enabled`` (off during resume replay).
 """
@@ -28,16 +28,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from metagpt.common.logs import log_class, logger
-from metagpt.session.events import BrowserStateEvent
-from metagpt.session.log import SessionLog
+from mote.common.logs import log_class, logger
+from mote.session.events import BrowserStateEvent
+from mote.session.log import SessionLog
 
 
 @log_class(level="DEBUG", exclude={"record"})
 class BrowserStateRecorder:
     """Appends the browser's final open-tab URLs + storage to the session log.
 
-    Conforms to ``metagpt.common.interface.BrowserStateStore``. Shares the
+    Conforms to ``mote.common.interface.BrowserStateStore``. Shares the
     session's :class:`SessionLog` so the browser-state event interleaves with the
     rest of the rollout. ``enabled`` gates recording (off during resume replay,
     or per-role via the schema flag). Last-write-wins: only the most recent event

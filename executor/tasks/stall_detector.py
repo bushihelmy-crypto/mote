@@ -14,18 +14,14 @@ import asyncio
 import re
 from typing import TYPE_CHECKING
 
-from metagpt.common.schema import CauseBy
-from metagpt.common.scheduling import PeriodicLoop
-from metagpt.executor.tasks.types import BackgroundTaskNotification, BgStatus
-from metagpt.common.const.tasks import (
-    STALL_CHECK_INTERVAL,
-    STALL_THRESHOLD,
-    STALL_TAIL_BYTES,
-)
+from mote.common.const.tasks import STALL_CHECK_INTERVAL, STALL_TAIL_BYTES, STALL_THRESHOLD
+from mote.common.scheduling import PeriodicLoop
+from mote.common.schema import CauseBy
+from mote.executor.tasks.types import BackgroundTaskNotification, BgStatus
 
 if TYPE_CHECKING:
-    from metagpt.executor.tasks.pool import BackgroundTaskPool
-    from metagpt.executor.tasks.disk_output import TaskOutputStore
+    from mote.executor.tasks.disk_output import TaskOutputStore
+    from mote.executor.tasks.pool import BackgroundTaskPool
 
 # Interactive prompt patterns (aligned with Claude Code)
 _PROMPT_PATTERNS = [
@@ -40,9 +36,7 @@ _PROMPT_PATTERNS = [
 
 _PROMPT_RE = re.compile("|".join(_PROMPT_PATTERNS))
 
-_TERMINAL_STATUSES = frozenset(
-    {BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT}
-)
+_TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})
 
 
 def _matches_interactive_prompt(text: str) -> bool:

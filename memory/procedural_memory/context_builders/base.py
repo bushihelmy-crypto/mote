@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from metagpt.memory.procedural_memory.schema import Experience
+from mote.memory.procedural_memory.schema import Experience
 
 EXP_TEMPLATE = """Given the request: {req}, We can get the response: {resp}, which scored: {score}."""
 

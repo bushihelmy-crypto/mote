@@ -9,7 +9,7 @@ it declines every input.
 
 from __future__ import annotations
 
-from metagpt.executor.compress.base import CompressionResult, unchanged
+from mote.executor.compress.base import CompressionResult, unchanged
 
 
 class PipCompressor:

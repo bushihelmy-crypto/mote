@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
+
+if TYPE_CHECKING:
+    # Type-only: `common.interface` is a low layer and must not import the higher
+    # `router` layer at runtime. Guarded so the return annotation resolves for
+    # the type checker without a real dependency.
+    from mote.router.llm.llm_response import LLMResponse
 
 
 class LLMClient(Protocol):
@@ -30,6 +36,6 @@ class LLMClient(Protocol):
         system_msgs: Optional[list[str]] = None,
         tools: Optional[list[dict]] = None,
         **kwargs: Any,
-    ):
+    ) -> "LLMResponse":
         """Native tool-use call: returns text + structured tool calls."""
         ...

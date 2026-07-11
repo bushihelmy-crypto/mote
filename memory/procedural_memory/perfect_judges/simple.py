@@ -3,8 +3,8 @@
 
 from pydantic import ConfigDict
 
-from metagpt.memory.procedural_memory.perfect_judges.base import BasePerfectJudge
-from metagpt.memory.procedural_memory.schema import MAX_SCORE, Experience
+from mote.memory.procedural_memory.perfect_judges.base import BasePerfectJudge
+from mote.memory.procedural_memory.schema import MAX_SCORE, Experience
 
 
 class SimplePerfectJudge(BasePerfectJudge):

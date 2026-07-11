@@ -13,7 +13,7 @@ Only the pieces autocompact needs are ported:
 - ``get_compact_user_summary_message`` — the continued-session preface.
 
 The session-memory / partial-"from" variants and the cache/attachment plumbing
-are out of scope here (no equivalent infrastructure in MetaGPT yet).
+are out of scope here (no equivalent infrastructure in Mote yet).
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ from __future__ import annotations
 import re
 from string import Template
 
-from metagpt.common.prompt.compaction import (
-    NO_TOOLS_PREAMBLE,
-    NO_TOOLS_TRAILER,
+from mote.common.prompt.compaction import (
     _BASE_COMPACT_BODY,
     _DETAILED_ANALYSIS_INSTRUCTION_BASE,
     _PARTIAL_UP_TO_BODY,
+    NO_TOOLS_PREAMBLE,
+    NO_TOOLS_TRAILER,
 )
 
 

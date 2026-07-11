@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.permission.engine.PermissionEngine``.
+"""Unit tests for ``mote.executor.permission.engine.PermissionEngine``.
 
 Covers the 11-step decision pipeline: bypass-immune deny/ask, mode shortcuts
 (bypass / acceptEdits / plan / dontAsk), rule allows, tool self-checks, and the
@@ -13,11 +13,11 @@ import os
 
 import pytest
 
-from metagpt.common.schema import PermissionConfig, SandboxConfig
-from metagpt.executor.permission.engine import PermissionEngine
-from metagpt.executor.permission.rule_store import RuleStore
-from metagpt.executor.permission.sandbox import SandboxGuard
-from metagpt.common.schema.permission_types import PermissionDecision
+from mote.common.schema import PermissionConfig, SandboxConfig
+from mote.common.schema.permission_types import PermissionDecision
+from mote.executor.permission.engine import PermissionEngine
+from mote.executor.permission.rule_store import RuleStore
+from mote.executor.permission.sandbox import SandboxGuard
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,8 +28,10 @@ def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
     store = RuleStore.from_config(cfg)
     ask_human = None
     if reply is not None:
+
         async def ask_human(_prompt: str) -> str:  # noqa: E306
             return reply
+
     return PermissionEngine(mode=mode, store=store, ask_human=ask_human)
 
 
@@ -39,8 +41,10 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None, writable_roots=None):
     store = RuleStore.from_config(cfg)
     ask_human = None
     if reply is not None:
+
         async def ask_human(_prompt: str) -> str:  # noqa: E306
             return reply
+
     guard = SandboxGuard(
         SandboxConfig(mode="workspace-write", writable_roots=writable_roots or []),
         get_cwd=lambda: cwd,
@@ -138,9 +142,7 @@ class TestSegments:
         # A deny rule on the destructive segment blocks the whole command, even
         # though the leading segment is harmless.
         eng = engine(deny=["Bash(rm -rf*)"])
-        d = await eng.check(
-            "Bash", target="ls && rm -rf /", segments=["ls", "rm -rf /"]
-        )
+        d = await eng.check("Bash", target="ls && rm -rf /", segments=["ls", "rm -rf /"])
         assert d.behavior == "deny"
 
     async def test_compound_all_allow(self):
@@ -156,9 +158,7 @@ class TestSegments:
         # One segment allowed, the other unmatched -> defers to ask; no channel
         # => deny.
         eng = engine(allow=["Bash(git*)"], reply=None)
-        d = await eng.check(
-            "Bash", target="git status && ls", segments=["git status", "ls"]
-        )
+        d = await eng.check("Bash", target="git status && ls", segments=["git status", "ls"])
         assert d.behavior == "deny"
 
     async def test_ask_segment_prompts(self):
@@ -174,29 +174,21 @@ class TestSegments:
 class TestStickyPrefix:
     async def test_always_remembers_prefix_for_single_segment(self):
         eng = engine(reply="always")
-        d1 = await eng.check(
-            "Bash", target="git commit -m foo", segments=["git commit -m foo"]
-        )
+        d1 = await eng.check("Bash", target="git commit -m foo", segments=["git commit -m foo"])
         assert d1.behavior == "allow"
         # A variation of the same command rides the prefix rule without asking.
         eng._ask_human = None
-        d2 = await eng.check(
-            "Bash", target="git commit -m bar", segments=["git commit -m bar"]
-        )
+        d2 = await eng.check("Bash", target="git commit -m bar", segments=["git commit -m bar"])
         assert d2.behavior == "allow"
 
     async def test_prefix_does_not_overgrant_other_subcommand(self):
         eng = engine(reply="always")
-        d1 = await eng.check(
-            "Bash", target="git commit -m foo", segments=["git commit -m foo"]
-        )
+        d1 = await eng.check("Bash", target="git commit -m foo", segments=["git commit -m foo"])
         assert d1.behavior == "allow"
         # A different git subcommand is NOT covered by "git commit:*" — still asks
         # (no channel => deny).
         eng._ask_human = None
-        d2 = await eng.check(
-            "Bash", target="git push origin main", segments=["git push origin main"]
-        )
+        d2 = await eng.check("Bash", target="git push origin main", segments=["git push origin main"])
         assert d2.behavior == "deny"
 
     async def test_compound_command_uses_exact_rule_not_prefix(self):
@@ -227,9 +219,7 @@ class TestStickyPrefix:
         cfg = PermissionConfig(mode="default")
         store = RuleStore.from_config(cfg)
         eng = PermissionEngine(mode="default", store=store, ask_human=ask_human)
-        await eng.check(
-            "Bash", target="git commit -m foo", segments=["git commit -m foo"]
-        )
+        await eng.check("Bash", target="git commit -m foo", segments=["git commit -m foo"])
         assert "Bash(git commit:*)" in seen["prompt"]
 
 

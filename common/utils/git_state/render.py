@@ -6,7 +6,7 @@ changing state never busts the cacheable prefix.
 """
 from __future__ import annotations
 
-from metagpt.common.utils.git_state.collector import GitState
+from mote.common.utils.git_state.collector import GitState
 
 
 def render_git_section(state: GitState) -> str:

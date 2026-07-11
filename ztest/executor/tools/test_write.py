@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Write tool (``metagpt.executor.tools.write``).
+"""Tests for the Write tool (``mote.executor.tools.write``).
 
 Covers file creation (with parent dirs), the read-before-overwrite guard backed
 by the Role's shared file-read state, newline-style preservation, and the size /
@@ -12,10 +12,10 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.write import Write
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.write import Write
 
-from .conftest import CapRole, bind, run, write_file, mark_read
+from .conftest import CapRole, bind, mark_read, run, write_file
 
 
 def _write(tool: Write, **kwargs):
@@ -44,7 +44,7 @@ class TestCreate:
         p = str(workspace / "n.txt")
         out = _write(Write(), file_path=p, content="ab\ncd")
         # 2 lines (no trailing newline counts the last line), 5 bytes.
-        assert "2 line(s)" in out
+        assert "2 lines" in out
         assert "5 bytes" in out
 
     def test_empty_path_raises(self, workspace):
@@ -114,3 +114,20 @@ class TestNewlinePreservation:
         p = str(workspace / "lf.txt")
         _write(Write(), file_path=p, content="x\ny\n")
         assert open(p, "rb").read() == b"x\ny\n"
+
+
+class TestCwdResolution:
+    def test_relative_path_resolves_against_role_cwd(self, workspace, tmp_path):
+        # A bound Write resolves a relative path against the ROLE's stable cwd,
+        # not the process cwd (the workspace fixture chdir'd into `workspace`).
+        sub = tmp_path / "role_dir"
+        sub.mkdir()
+        role = CapRole(cwd=str(sub))
+        _write(bind(Write(), role), file_path="made.txt", content="hi\n")
+        assert os.path.isfile(sub / "made.txt")
+        assert not os.path.isfile(workspace / "made.txt")
+
+    def test_relative_path_unbound_uses_process_cwd(self, workspace):
+        # Unbound: relative paths fall back to the process cwd.
+        _write(Write(), file_path="unbound.txt", content="ok\n")
+        assert os.path.isfile(workspace / "unbound.txt")

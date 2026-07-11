@@ -9,14 +9,14 @@ Public surface:
     :func:`current_bus` / :func:`observe_event` / :func:`observe_event_sync`).
     The contextvar entrypoints are **observation-only** — control reaches the bus
     through an explicit emitter-held reference, never the ambient contextvar.
-  * The :mod:`~metagpt.common.events.types` tagged-union event dataclasses.
-  * The :mod:`~metagpt.common.events.outcomes` typed per-event control outcomes.
+  * The :mod:`~mote.common.events.types` tagged-union event dataclasses.
+  * The :mod:`~mote.common.events.outcomes` typed per-event control outcomes.
 """
 
-from metagpt.common.events.bus import EventBus
-from metagpt.common.events.context import current_bus, observe_event, observe_event_sync, set_bus
-from metagpt.common.events.log_subscriber import LogSubscriber
-from metagpt.common.events.outcomes import (
+from mote.common.events.bus import EventBus
+from mote.common.events.context import current_bus, observe_event, observe_event_sync, set_bus
+from mote.common.events.log_subscriber import LogSubscriber
+from mote.common.events.outcomes import (
     CompactOutcome,
     PromptOutcome,
     SpawnOutcome,
@@ -24,9 +24,9 @@ from metagpt.common.events.outcomes import (
     ToolResultOutcome,
     TurnOutcome,
 )
-from metagpt.common.events.stream import log_llm_stream
-from metagpt.common.events.trace import current_span_id, span
-from metagpt.common.events.types import (
+from mote.common.events.stream import log_llm_stream
+from mote.common.events.trace import current_span_id, span
+from mote.common.events.types import (
     AGENT_LIFECYCLE,
     COMPACTION_CHECKPOINT,
     DIAGNOSTICS,
@@ -34,9 +34,9 @@ from metagpt.common.events.types import (
     FILE_MUTATED,
     FILE_SNAPSHOT,
     LLM_ERROR,
-    LLM_RETRY,
     LLM_REQUEST,
     LLM_RESPONSE,
+    LLM_RETRY,
     LLM_STREAM_DELTA,
     LLM_STREAM_END,
     MESSAGE_APPENDED,
@@ -64,9 +64,9 @@ from metagpt.common.events.types import (
     FileMutatedEvent,
     FileSnapshotEvent,
     LLMErrorEvent,
-    LLMRetryEvent,
     LLMRequestEvent,
     LLMResponseEvent,
+    LLMRetryEvent,
     LLMStreamDeltaEvent,
     LLMStreamEndEvent,
     MessageAppendedEvent,

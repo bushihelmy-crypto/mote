@@ -24,10 +24,10 @@ import inspect
 import re
 from typing import Any, Awaitable, Callable, Optional, Union
 
-from metagpt.common.hook.command_handler import run_command_handler
-from metagpt.common.hook.parser import parse_callback_result
-from metagpt.common.hook.types import EMPTY, HookInput, HookOutcome, fold
-from metagpt.common.logs import log_class, logger
+from mote.common.hook.command_handler import run_command_handler
+from mote.common.hook.parser import parse_callback_result
+from mote.common.hook.types import EMPTY, HookInput, HookOutcome, fold
+from mote.common.logs import log_class, logger
 
 # A hook callback: receives the HookInput, returns None / dict / HookOutcome,
 # either synchronously or as a coroutine.

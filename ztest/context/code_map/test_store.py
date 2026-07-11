@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from metagpt.context.code_map.extractor import CallEdge, FileExtract, Symbol
-from metagpt.context.code_map.store import CodeMapStore
+from mote.context.code_map.extractor import CallEdge, FileExtract, Symbol
+from mote.context.code_map.store import CodeMapStore
 
 
-def _extract(path: str, *, symbols=None, imports=None, calls=None) -> FileExtract:
+def _extract(path: str, *, symbols=None, imports=None, calls=None, content_hash="") -> FileExtract:
     return FileExtract(
         path=path,
         symbols=symbols or [],
         imports=imports or [],
         calls=calls or [],
+        content_hash=content_hash,
     )
 
 
@@ -109,3 +110,72 @@ def test_importers_within_respects_scope_exclusion():
     store.upsert_file(_extract("/consumer.py", imports=["mod"]))
     # consumer imports mod but is NOT in scope -> not reported.
     assert store.importers_within(["mod"], ["/somethingelse.py"]) == []
+
+
+# -- Layer C: whole-repo reverse deps + files-table staleness -----------------
+
+
+def test_importers_repo_ignores_scope_returns_out_of_scope():
+    store = CodeMapStore()
+    store.upsert_file(_extract("/consumer.py", imports=["mod"]))
+    store.upsert_file(_extract("/faraway.py", imports=["mod"]))
+    store.upsert_file(_extract("/other.py", imports=["unrelated"]))
+
+    # The locality-drop assertion: every importer of "mod" comes back, with no
+    # scope filter — including files the agent never touched.
+    got = set(store.importers_repo(["mod"]))
+    assert got == {"/consumer.py", "/faraway.py"}
+
+
+def test_importers_repo_empty_targets():
+    store = CodeMapStore()
+    store.upsert_file(_extract("/consumer.py", imports=["mod"]))
+    assert store.importers_repo([]) == []
+
+
+def test_files_table_roundtrip_hash_and_indexed_paths():
+    store = CodeMapStore()
+    store.upsert_file(_extract("/a.py", imports=["os"], content_hash="h_a"))
+    store.upsert_file(_extract("/b.py", imports=["sys"], content_hash="h_b"))
+    assert set(store.all_indexed_paths()) == {"/a.py", "/b.py"}
+    assert store.indexed_hashes() == {"/a.py": "h_a", "/b.py": "h_b"}
+
+
+def test_upsert_replaces_files_hash():
+    store = CodeMapStore()
+    store.upsert_file(_extract("/a.py", content_hash="old"))
+    store.upsert_file(_extract("/a.py", content_hash="new"))
+    assert store.indexed_hashes() == {"/a.py": "new"}
+
+
+def test_delete_file_removes_all_rows():
+    store = CodeMapStore()
+    store.upsert_file(
+        _extract(
+            "/a.py",
+            symbols=[Symbol(name="f", qualified_name="f", kind="function", start_line=1)],
+            imports=["os"],
+            calls=[CallEdge(caller="f", callee="g", line=2)],
+            content_hash="h",
+        )
+    )
+    store.delete_file("/a.py")
+    assert store.symbols_in("/a.py") == []
+    assert store.imports_of("/a.py") == []
+    assert store.calls_in("/a.py") == []
+    assert store.all_indexed_paths() == []
+
+
+def test_get_stale_paths_new_changed_unchanged_vanished():
+    store = CodeMapStore()
+    store.upsert_file(_extract("/a.py", content_hash="h_a"))
+    store.upsert_file(_extract("/b.py", content_hash="h_b"))
+
+    # a unchanged, b changed, c brand new; the vanished file "/b.py" gone from
+    # current is simply absent (get_stale_paths only reports what's in current).
+    current = {"/a.py": "h_a", "/b.py": "changed", "/c.py": "h_c"}
+    stale = set(store.get_stale_paths(current))
+    assert stale == {"/b.py", "/c.py"}  # a unchanged -> skipped
+
+    # With nothing changed, warm store re-parses nothing.
+    assert store.get_stale_paths({"/a.py": "h_a", "/b.py": "h_b"}) == []

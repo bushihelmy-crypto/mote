@@ -49,5 +49,19 @@ RETENTION_ERASABLE = "erasable"
 RETENTION_PIN = "pin"
 RETENTION_DEFAULT = "default"
 
+# Prompt-cache intent (carried in Message.metadata; declarative, provider-agnostic).
+# The message declares its *caching semantics*; each provider translates the intent
+# into its own mechanism (Anthropic cache_control breakpoints / OpenAI automatic
+# prefix caching). Upper layers never touch cache_control; providers never guess
+# "which message is the volatile tail" from position.
+#   CACHE_INTENT_DURABLE        — default: may serve as a stable, cacheable prefix.
+#   CACHE_INTENT_EPHEMERAL_TAIL — a per-turn re-synthesized tail (the command +
+#     <system-reminder> prompt) that is NOT stored in history and reappears each
+#     turn with different bytes; it must never anchor a cache breakpoint, or the
+#     next turn's prefix loses its anchor and the whole history re-writes.
+CACHE_INTENT = "cache_intent"
+CACHE_INTENT_DURABLE = "durable"
+CACHE_INTENT_EPHEMERAL_TAIL = "ephemeral_tail"
+
 # Message id
 IGNORED_MESSAGE_ID = "0"

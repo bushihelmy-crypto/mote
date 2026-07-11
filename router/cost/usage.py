@@ -1,7 +1,7 @@
 """Unified token-usage accounting — a synthesis of Codex and Claude Code.
 
 ``TokenUsage`` is the single normalized record every provider's raw usage is
-mapped into before it reaches the :class:`~metagpt.router.cost.tracker.CostTracker`.
+mapped into before it reaches the :class:`~mote.router.cost.tracker.CostTracker`.
 Its field set is the *union* of what the two reference agents track:
 
 - Codex's ``TokenUsage`` (``input``/``cached_input``/``output``/``reasoning_output``/
@@ -28,7 +28,7 @@ from dataclasses import dataclass, fields
 from typing import Any, Mapping, Union
 
 
-def _get(obj: Any, key: str, default: int = 0) -> Any:
+def _get(obj: Any, key: str, default: Any = 0) -> Any:
     """Read ``key`` from a dict or an attribute off a pydantic/SDK object."""
     if obj is None:
         return default

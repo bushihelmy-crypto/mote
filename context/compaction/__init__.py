@@ -15,11 +15,10 @@ Three orthogonal concerns, cleanly separated (unlike the old flat
 
 from __future__ import annotations
 
-from metagpt.context.compaction.engine import ContextEngine
-from metagpt.context.compaction.pipeline import ReductionPipeline
-from metagpt.context.compaction.recovery import RecoveryContextReducer
-from metagpt.context.compaction.rehydrate import FileRehydrator
-from metagpt.context.compaction.reducers import (
+from mote.context.compaction.engine import ContextEngine
+from mote.context.compaction.pipeline import ReductionPipeline
+from mote.context.compaction.recovery import RecoveryContextReducer
+from mote.context.compaction.reducers import (
     EraseReducer,
     FoldReducer,
     HeadDropReducer,
@@ -28,17 +27,9 @@ from metagpt.context.compaction.reducers import (
     ReductionOutcome,
     SummarizeReducer,
 )
-from metagpt.context.compaction.request import (
-    ReductionReason,
-    ReductionRequest,
-    Urgency,
-)
-from metagpt.context.compaction.transcript import (
-    PINNED_KINDS,
-    Segment,
-    SegmentKind,
-    Transcript,
-)
+from mote.context.compaction.rehydrate import FileRehydrator
+from mote.context.compaction.request import ReductionReason, ReductionRequest, Urgency
+from mote.context.compaction.transcript import PINNED_KINDS, Segment, SegmentKind, Transcript
 
 __all__ = [
     "Transcript",

@@ -3,7 +3,7 @@
 ``ToolError`` keeps its name and semantics: it is the exception every tool
 raises to signal a recoverable failure, caught by ``ToolExecutor`` and turned
 into ``ToolResult(success=False)``. It is re-exported from
-``metagpt.executor.tool_result`` so the hundreds of existing ``raise
+``mote.executor.tool_result`` so the hundreds of existing ``raise
 ToolError(...)`` call sites are automatically upgraded to typed errors without
 edits.
 
@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import ClassVar, Optional
 
-from metagpt.common.exception.base import NonRetryableError, RetryableError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import NonRetryableError, RetryableError
+from mote.common.exception.codes import ErrorCode
 
 
 class ToolError(NonRetryableError):

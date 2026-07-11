@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.lsp.format`` — diagnostics -> context block."""
+"""Tests for ``mote.roles.lsp.format`` — diagnostics -> context block."""
 from __future__ import annotations
 
-from metagpt.roles.lsp.format import format_diagnostics
-from metagpt.roles.lsp.registry import Diagnostic
+from mote.roles.lsp.format import format_diagnostics
+from mote.roles.lsp.registry import Diagnostic
 
 
 def test_empty_is_blank():
@@ -14,8 +14,9 @@ def test_empty_is_blank():
 def test_renders_diagnostics():
     changed = {
         "a.py": [
-            Diagnostic(severity=1, line=11, character=4, message="Undefined name 'foo'",
-                       source="pyflakes", code="F821"),
+            Diagnostic(
+                severity=1, line=11, character=4, message="Undefined name 'foo'", source="pyflakes", code="F821"
+            ),
         ]
     }
     out = format_diagnostics(changed)

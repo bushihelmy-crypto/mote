@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.executor.tools.skill_tool.Skill (the bridge tool).
+"""Tests for mote.executor.tools.skill_tool.Skill (the bridge tool).
 
 The Skill tool resolves the live SkillPool (capability ``get_skill_pool``),
 renders an inline skill's body as the tool result, delegates ``context: fork``
@@ -14,9 +14,9 @@ import asyncio
 
 import pytest
 
-from metagpt.context.skills.skill_pool import SkillPool
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.skill_tool import Skill
+from mote.context.skills.skill_pool import SkillPool
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.skill_tool import Skill
 
 from .conftest import write_skill
 
@@ -68,9 +68,7 @@ class TestArgumentValidation:
         assert "alpha" in str(exc.value)
 
     def test_human_only_skill_raises(self, builtin_dir):
-        write_skill(
-            builtin_dir, "manual", extra_meta={"disable_model_invocation": True}
-        )
+        write_skill(builtin_dir, "manual", extra_meta={"disable_model_invocation": True})
         tool = _make_tool(_pool(builtin_dir, ["manual"]))
         with pytest.raises(ToolError):
             asyncio.run(tool.call(name="manual"))
@@ -177,9 +175,7 @@ class TestFork:
         assert captured == []
 
     def test_fork_empty_summary_has_fallback(self, builtin_dir):
-        write_skill(
-            builtin_dir, "runner", extra_meta={"context": "fork"}
-        )
+        write_skill(builtin_dir, "runner", extra_meta={"context": "fork"})
 
         async def fake_fork(**kwargs):
             return ""

@@ -22,24 +22,24 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple, Union
 
-from metagpt.common.config.diagnostics import unknown_key_paths
-from metagpt.common.config.env import build_env_layer
-from metagpt.common.config.layers import ConfigLayer, ConfigLayerStack, strip_sensitive
-from metagpt.common.config.meta_config import Config
-from metagpt.common.config.overrides import ConfigOverrides, parse_cli_overrides
-from metagpt.common.config.secrets import resolve_api_key
-from metagpt.common.config.sources import ConfigSource, discover_source_files
-from metagpt.common.exception import UnknownConfigKeysError
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.config.diagnostics import unknown_key_paths
+from mote.common.config.env import build_env_layer
+from mote.common.config.layers import ConfigLayer, ConfigLayerStack, strip_sensitive
+from mote.common.config.meta_config import Config
+from mote.common.config.overrides import ConfigOverrides, parse_cli_overrides
+from mote.common.config.secrets import resolve_api_key
+from mote.common.config.sources import ConfigSource, discover_source_files
+from mote.common.exception import UnknownConfigKeysError
+from mote.common.utils.yaml_model import YamlModel
 
 Programmatic = Union[Dict[str, Any], ConfigOverrides]
 
 # Env var that selects the active profile when none is passed explicitly.
-PROFILE_ENV_VAR = "AGENTFRAME_PROFILE"
+PROFILE_ENV_VAR = "MOTE_PROFILE"
 
 
 def _resolve_profile(profile: Optional[str], env: Optional[Mapping[str, str]]) -> Optional[str]:
-    """Pick the active profile: explicit arg wins, else ``AGENTFRAME_PROFILE``.
+    """Pick the active profile: explicit arg wins, else ``MOTE_PROFILE``.
 
     The env source mirrors the layer-env selection: an explicit ``env`` mapping
     is consulted when given, otherwise the process environment.
@@ -71,7 +71,7 @@ def build_layer_stack(
     """Assemble the full layer stack: disk files + env + cli flags + programmatic.
 
     With ``env=None`` the process environment is read, so the ENV layer applies
-    automatically on the default load path. ``profile`` (or ``AGENTFRAME_PROFILE``)
+    automatically on the default load path. ``profile`` (or ``MOTE_PROFILE``)
     adds the named overlay as a trusted PROFILE layer.
     """
     profile = _resolve_profile(profile, env)

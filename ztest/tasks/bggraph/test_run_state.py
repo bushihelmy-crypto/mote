@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import BgGraph, GraphState, Stage, START, END
-from metagpt.executor.tasks.bggraph.types import GraphRunState, NodeRecord
-from metagpt.executor.tasks.pool import BackgroundTaskPool
-from metagpt.executor.tasks.types import BgStatus
-from metagpt.common.schema import MessageQueue
+from mote.common.schema import MessageQueue
+from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Stage
+from mote.executor.tasks.bggraph.types import GraphRunState, NodeRecord
+from mote.executor.tasks.pool import BackgroundTaskPool
+from mote.executor.tasks.types import BgStatus
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,7 +31,9 @@ def sync_node(fn, *, field=None):
         async def submit():
             result = fn(state)
             return {field: result} if field is not None else result
+
         return Stage(submit=submit())
+
     return node
 
 
@@ -39,7 +41,9 @@ def boom_node():
     async def node(state):
         async def submit():
             raise ValueError("permanent failure")
+
         return Stage(submit=submit())
+
     return node
 
 
@@ -141,8 +145,7 @@ class TestRunStateRecording:
         executor = g.compile()
         res = await executor(x=5)
         # Submit with the engine's own graph_meta (carries the shared run_state).
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         rs = pool.get_run_state(tid)
@@ -154,8 +157,7 @@ class TestRunStateRecording:
         g = _failing_graph()
         executor = g.compile()
         res = await executor(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         meta = pool.get_task_info(tid)
@@ -175,8 +177,7 @@ class TestRunStateRecording:
         g = _failing_graph()
         executor = g.compile()
         res = await executor(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta, max_restarts=3)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta, max_restarts=3)
         await pool.wait_all()
 
         rs = pool.get_run_state(tid)
@@ -186,7 +187,8 @@ class TestRunStateRecording:
         # Fix b, resume from it; the same run_state is reused so b's prior
         # attempts are preserved and the new run adds to them.
         g._nodes["b"].fn = sync_node(lambda s: s.a + 100, field="b")
-        from metagpt.executor.tools.resume_tasks import ResumeTasks
+        from mote.executor.tools.resume_tasks import ResumeTasks
+
         tool = ResumeTasks()
         tool.get_bg_pool = lambda: pool
         await tool.call(task_id=tid, from_node="b")
@@ -226,8 +228,7 @@ class TestRouteKeyRecording:
         g = _branch_graph(threshold=10)
         executor = g.compile()
         res = await executor(x=20)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         rs = pool.get_run_state(tid)
@@ -238,8 +239,7 @@ class TestRouteKeyRecording:
         g = _branch_graph(threshold=10)
         executor = g.compile()
         res = await executor(x=3)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         rs = pool.get_run_state(tid)
@@ -249,8 +249,7 @@ class TestRouteKeyRecording:
         g = _branch_graph(threshold=10)
         executor = g.compile()
         res = await executor(x=20)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         rs = pool.get_run_state(tid)

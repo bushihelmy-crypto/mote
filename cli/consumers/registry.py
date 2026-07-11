@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from metagpt.cli.common.interface import Consumer
-from metagpt.cli.common.view import Capabilities
+from mote.cli.contracts.interface import Consumer
+from mote.cli.contracts.view import Capabilities
 
 
 @dataclass(frozen=True)
@@ -50,9 +50,7 @@ def register_consumer(
     """
 
     def _decorator(builder: Callable[[Any], Consumer]) -> Callable[[Any], Consumer]:
-        _REGISTRY[name] = ConsumerSpec(
-            name=name, builder=builder, capabilities=capabilities, validate=validate
-        )
+        _REGISTRY[name] = ConsumerSpec(name=name, builder=builder, capabilities=capabilities, validate=validate)
         return builder
 
     return _decorator
@@ -70,8 +68,8 @@ def _ensure_builtins_imported() -> None:
     raises only on *its own* import, never blocking the others.
     """
     for module in (
-        "metagpt.cli.consumers.terminal.consumer",
-        "metagpt.cli.consumers.structured.consumer",
+        "mote.cli.consumers.terminal.consumer",
+        "mote.cli.consumers.structured.consumer",
     ):
         try:
             __import__(module)
