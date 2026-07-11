@@ -15,7 +15,7 @@ Two-part split (mirrors Claude Code's main-session design):
      user context each turn (like CLAUDE.md), so a changing index never busts
      the system-prompt cache prefix. Only placeholder is ${memory_content}.
 
-Assembly (mirrors role_zero / PromptBuilder):
+Assembly (mirrors role / PromptBuilder):
     from string import Template
     from mote.common.prompt.memory import (
         MEMORY_INSTRUCTIONS, MEMORY_CONTEXT, MEMORY_EMPTY_STATE,

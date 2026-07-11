@@ -3,12 +3,11 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from mote.common.config.config.exp_pool_config import ExperiencePoolRetrievalType
 from mote.common.config.meta_config import Config
 from mote.common.utils.exceptions import handle_exception
 from mote.memory.procedural_memory.schema import DEFAULT_SIMILARITY_TOP_K, Experience, QueryType
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from mote.common.rag.engines import SimpleEngine

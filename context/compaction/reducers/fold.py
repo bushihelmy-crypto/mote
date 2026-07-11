@@ -51,21 +51,18 @@ class FoldReducer:
         self._cfg = config or ContextManagerConfig()
         self._model = model
 
-    async def reduce(self, transcript: Transcript, request: ReductionRequest) -> ReductionOutcome:
-        cfg = self._cfg
-        model = self._model
-        if not cfg.enable_microcompact:
-            return ReductionOutcome(transcript, strategy="fold")
+    @staticmethod
+    def active_results(transcript: Transcript) -> list[Message]:
+        """Foldable tool-result messages still holding real content, in order.
 
-        keep_recent = max(1, cfg.microcompact_keep_recent)
-        trigger = cfg.microcompact_trigger_threshold
+        The single authority on "which results would a fold touch": reconstructable
+        (per the segment flag stamped by ``Transcript.from_messages`` — consumed,
+        never re-computed), still carrying real content (not already folded to the
+        placeholder), and not exempted (sticky re-projected bodies / pinned
+        retentions are never folded). Both :meth:`reduce` and the pre-fold pressure
+        warning read this, so the count they reason about can never drift apart.
+        """
         placeholder = TOOL_RESULT_CLEARED_MESSAGE
-
-        # Reconstructable tool-result messages still holding real content, in
-        # order. The single source of truth for "reconstructable" is the segment
-        # flag stamped by ``Transcript.from_messages``; we consume it, never
-        # re-compute. Sticky resource bodies (re-projected loaded capabilities)
-        # are never folded — they are the very content the registry preserves.
         active: list[Message] = []
         for seg in transcript.segments:
             if seg.kind is not SegmentKind.TOOL_GROUP or not seg.reconstructable:
@@ -82,6 +79,19 @@ class FoldReducer:
                 if msg.metadata.get(RETENTION) == RETENTION_PIN:
                     continue
                 active.append(msg)
+        return active
+
+    async def reduce(self, transcript: Transcript, request: ReductionRequest) -> ReductionOutcome:
+        cfg = self._cfg
+        model = self._model
+        if not cfg.enable_microcompact:
+            return ReductionOutcome(transcript, strategy="fold")
+
+        keep_recent = max(1, cfg.microcompact_keep_recent)
+        trigger = cfg.microcompact_trigger_threshold
+        placeholder = TOOL_RESULT_CLEARED_MESSAGE
+
+        active = self.active_results(transcript)
 
         if len(active) <= trigger:
             return ReductionOutcome(transcript, strategy="fold")

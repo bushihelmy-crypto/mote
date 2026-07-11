@@ -3,7 +3,6 @@
 """Tests for AgentExecutionLimiter — ported from execution_tests.rs."""
 
 import pytest
-
 from mote.environment.exceptions import AgentLimitReached
 from mote.environment.limiter import AgentExecutionLimiter
 

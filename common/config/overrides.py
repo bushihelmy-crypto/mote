@@ -13,9 +13,8 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
-
 from mote.common.config.layers import deep_merge
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def parse_override_value(raw: str) -> Any:

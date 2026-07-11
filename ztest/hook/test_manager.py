@@ -8,7 +8,6 @@ import os
 import stat
 
 import pytest
-
 from mote.common.hook.manager import HookManager
 from mote.common.hook.types import HookOutcome
 from mote.common.schema import HookCommandHandler, HookConfig, HookMatcherGroup

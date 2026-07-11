@@ -17,7 +17,6 @@ Key facts the fixtures encode:
 from __future__ import annotations
 
 import pytest
-
 from mote.common.config.config.llm_config import LLMConfig
 from mote.router.schema import ModelCard
 

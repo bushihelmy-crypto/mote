@@ -14,13 +14,12 @@ import random
 import time
 from typing import Any, Optional
 
-from rich.text import Text
-from textual.reactive import reactive
-from textual.widgets import Static
-
 from mote.cli.consumers.render.builders import USAGE_SEP, shimmer_text, sparkline
 from mote.cli.consumers.textual.style import COMPACT, RETRY, Palette
 from mote.common.text import format_token_count as _format_tok
+from rich.text import Text
+from textual.reactive import reactive
+from textual.widgets import Static
 
 
 class StatusBar(Static):
@@ -34,8 +33,8 @@ class StatusBar(Static):
     DEFAULT_CSS = """
     StatusBar {
         height: 1;
-        background: $panel;
-        color: $dim;
+        background: $status-bg;
+        color: $status-fg;
         padding: 0 1;
     }
     """

@@ -71,7 +71,7 @@ def bg_tool(fn: Callable) -> Callable:
     for the result.
 
     The decorator sets a ``_bg_tool`` marker attribute on the wrapped
-    function.  ``RoleZero._run_command`` checks for this marker and
+    function.  ``Role._run_command`` checks for this marker and
     calls ``_run_command_in_background`` automatically — the tool
     itself runs exactly as before, unaware of background scheduling.
 

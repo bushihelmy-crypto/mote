@@ -8,7 +8,7 @@ from mote.common.logs import logger
 from mote.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
 from mote.common.prompt.refs import Sym
 from mote.common.schema import AIMessage, CauseBy, UserMessage
-from mote.common.utils.role_zero_utils import parse_commands2
+from mote.common.utils.role_utils import parse_commands2
 
 if TYPE_CHECKING:
     from mote.common.base import BaseThinkEngine

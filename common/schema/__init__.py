@@ -54,6 +54,7 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # context
     "ContextManagerConfig": ("context", "ContextManagerConfig"),
     "TokenState": ("context", "TokenState"),
+    "FoldState": ("context", "FoldState"),
     # tool_config
     "DEFAULT_MAX_RESULT_SIZE_CHARS": ("tool_config", "DEFAULT_MAX_RESULT_SIZE_CHARS"),
     "BYTES_PER_TOKEN": ("tool_config", "BYTES_PER_TOKEN"),

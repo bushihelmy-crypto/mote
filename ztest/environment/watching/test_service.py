@@ -123,6 +123,28 @@ def test_service_lifecycle(tmp_path):
     asyncio.run(scenario())
 
 
+def test_start_async_primes_off_loop_and_suppresses_initial_burst(tmp_path):
+    """``start_async`` builds the baseline off the loop, so the first poll is quiet.
+
+    Same guarantee as the sync ``start``/``prime`` path — an existing file is part
+    of the baseline, not reported as a fresh ``created`` — but the initial walk is
+    pushed to an executor thread so a large tree never blocks the event loop.
+    """
+    (tmp_path / "existing.txt").write_text("x")
+    runner = FakeHookRunner()
+    svc = FileWatchService(runner, [str(tmp_path)])
+
+    async def scenario():
+        await svc.start_async()
+        assert svc.watcher.is_running() is True
+        events = await svc.watcher.poll()  # baseline already primed => no burst
+        await svc.stop()
+        return events
+
+    assert asyncio.run(scenario()) == []
+    assert runner.calls == []
+
+
 def test_subscribes_to_bus_and_suppresses_self_write(tmp_path):
     """A FileMutatedEvent on the bus is recorded as a self-write and suppressed."""
     runner = FakeHookRunner()

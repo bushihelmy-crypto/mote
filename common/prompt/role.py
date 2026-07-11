@@ -2,7 +2,7 @@
 
 Pure prompt constants for the Role react loop. Lives in ``common`` (the bottom
 layer) because prompt text has no dependencies and is consumed across layers
-(PromptBuilder, RoleSchema, role_zero_utils, ...).
+(PromptBuilder, RoleSchema, role_utils, ...).
 """
 from mote.common.const import EXPERIENCE_MASK
 
@@ -123,46 +123,30 @@ IMPORTANT: Use the scratchpad directory `${scratchpad_dir}` for temporary files 
 # Only emitted when adaptive compaction is enabled. Placeholder: ${keep_recent}.
 FRC_SECTION = """
 # Function Result Clearing
-Old tool results will be automatically cleared from context to free up space as the conversation grows. The ${keep_recent} most recent results are always kept. Do not assume an earlier tool result is still visible — if you need information from it later, write that information down in your own response before it is cleared.
+Old tool results are cleared as the conversation grows: only the ${keep_recent} most recent are guaranteed to survive, and once cleared a re-read may not bring them back.
+
+Silence is the default between tool calls. Break it only to capture something with lasting value: a finding, a value/path/signature you'll reuse, a conclusion, a decision or change of direction. Write it in one distilled sentence as it arises — anything you don't write is lost once results clear. Never narrate routine steps or announce what you're about to look at; state what you found and what it implies, not that you're about to look.
+
+A note shares the turn with your tool calls, so capturing real value never costs a turn: don't skip a worthwhile note for fear of ending the turn, and don't fill the silence with filler when there is nothing worth keeping.
 """
 
-# Structured final-delivery contract. Protocol-agnostic (both XML and native
-# get it) and compaction-gated (only emitted when adaptive compaction is on),
-# because it describes a compression artifact: when old context is cleared, the
-# final summary is the durable record of what the task accomplished. It used to
-# live inside NATIVE_COMMAND_GUIDE, which was wrong on both counts — it is not a
-# command-protocol mechanic, and XML never received it. No placeholders.
+# Final-reply-as-compression-artifact. Protocol-agnostic (both XML and native
+# get it) and compaction-gated (only emitted when adaptive compaction is on).
+# It defines the coarsest compression grain: once a task's react loop (tool
+# calls, intermediate results, reasoning) is cleared, all that survives is the
+# user's query paired with this final reply — so the reply must be a self-
+# contained replacement for the discarded loop. Deliberately NOT a fixed
+# multi-section template: content and length scale with the task (aligns with
+# "proportional, distill don't replay"). No placeholders.
 TASK_FINAL_OUTPUT_SECTION = """
-# Task Final Output Specifications
+# Final reply — the task's durable record
+When a task finishes, its react loop (tool calls, intermediate results, reasoning) may be compressed away, leaving only this reply paired with the user's query. Write it so that [query → reply] alone conveys the outcome and lets work continue.
 
-Upon task completion and entering the final delivery phase, you must output a structured task summary in Markdown format as the final response to this round of dialogue. The summary shall strictly include the following four modules **in unalterable sequence**.
+- Lead with the outcome — what you delivered, concluded, or changed, and where. If it failed or is unfinished, say so and give the current state.
+- Carry forward only what outlives the task: the values, paths, signatures, or decisions later work needs and that exist nowhere else once the loop is cleared.
+- Scale length to the task; distill the result, don't replay the steps or restate the request.
 
-## Background
-
-Briefly state the core objective of this task, the user's original request, triggering scenario and key constraints.
-- **Max 3 sentences** — capture the core essence directly
-- Full dialogue history recap is **prohibited**
-
-## Process
-
-Sort out key execution steps, core invoked tools and decision nodes of this task in chronological or logical order.
-- Present as **bullet points**
-- Highlight critical paths and branch decisions
-- Omit trivial details
-
-## Result
-
-Clearly deliver the final deliverables, core conclusions and key data of this task.
-- **Conclusions upfront**
-- Provide **verifiable data**
-- Attach links or paths for deliverables
-- If the task fails, specify the failure cause and current status
-
-## Reflection
-
-Summarize experiences and issues arising during task execution, including but not limited to encountered bottlenecks, optimizable workflows, potential risks and follow-up recommendations.
-
-After completing the above requirements, you may supplement any additional remarks to be returned to the user below.
+Lesson learned — only when the task surfaced something genuinely reusable in FUTURE tasks (a non-obvious gotcha, a hard-won constraint, a dead end to avoid): emit it on its own line wrapped exactly as `<lesson>the takeaway</lesson>`, so it can be extracted verbatim later. Use this tag for nothing else. Most tasks have none — write no tag then, and never manufacture one.
 """
 
 # Not used

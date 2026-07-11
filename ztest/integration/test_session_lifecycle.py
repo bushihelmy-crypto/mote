@@ -46,6 +46,22 @@ async def test_run_writes_rollout(make_role, tmp_path):
     assert "message" in types
     assert "turn_context" in types
 
+    # Ordering guarantee: the user's own prompt is committed to the rollout
+    # before the per-turn <system-reminder> turn-context block (both are `message`
+    # records). The loop commits the prompt via _observe, then records the
+    # persistent turn-context right before think — so the durable log reads
+    # prompt -> turn-context, never the reverse.
+    records = list(log.iter_raw())
+    prompt_idx = next(
+        i for i, r in enumerate(records) if r["type"] == "message" and r["payload"].get("content") == "make a.txt"
+    )
+    reminder_idx = next(
+        i
+        for i, r in enumerate(records)
+        if r["type"] == "message" and str(r["payload"].get("content", "")).startswith("<system-reminder>")
+    )
+    assert prompt_idx < reminder_idx
+
 
 async def test_resume_rebuilds_history(make_role, context, tmp_path):
     target = os.path.join(str(tmp_path), "b.txt")

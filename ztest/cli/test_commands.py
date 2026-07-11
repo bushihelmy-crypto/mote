@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any, List, Optional, Tuple
 
 import pytest
-
 from mote.cli.commands.registry import Command, CommandRegistry, default_registry
 
 

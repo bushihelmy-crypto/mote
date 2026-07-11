@@ -305,7 +305,7 @@ class FileMutatedEvent:
     """A tool just successfully wrote/created/deleted a file on disk.
 
     Emitted by the :class:`ToolExecutor` right after a filesystem-mutating tool
-    (Write/Edit/NotebookEdit/...) succeeds, carrying the resolved path. Purely
+    (Write/Edit/...) succeeds, carrying the resolved path. Purely
     an observation: subscribers react (the file-watcher records it as a
     *self-write* so its next poll doesn't echo our own edit back as an external
     change; future consumers could track changed files / auto-stage). Distinct

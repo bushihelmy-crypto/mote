@@ -11,7 +11,6 @@ each injected capability maps to the right ``RecoveryAction`` with the right
 from __future__ import annotations
 
 import pytest
-
 from mote.common.exception import MoteError, RecoveryAction
 from mote.router.llm.recovery import build_llm_strategies
 

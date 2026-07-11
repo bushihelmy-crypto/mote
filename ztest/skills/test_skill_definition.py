@@ -6,9 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from mote.context.skills.skill_definition import NAME_PATTERN, SkillDefinition
+from pydantic import ValidationError
 
 
 class TestDefaults:

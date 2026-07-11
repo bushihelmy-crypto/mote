@@ -16,7 +16,6 @@ import io
 import json
 
 import pytest
-
 from mote.cli.consumers.structured.consumer import StructuredConsumer
 from mote.cli.consumers.terminal.consumer import _HAS_RICH, PlainTerminalConsumer, TerminalConsumer
 from mote.cli.contracts.view import (
@@ -549,7 +548,8 @@ def _q(question, header, options, multiSelect=False):
 def _questions(*qs):
     from mote.common.schema import AskUserQuestionInput
 
-    return AskUserQuestionInput.model_validate({"questions": list(qs)})
+    # Mirror AskUserQuestion._coerce: the channel receives the plain list of items.
+    return AskUserQuestionInput.model_validate({"questions": list(qs)}).questions
 
 
 def _answers(*answers):
@@ -574,7 +574,7 @@ async def test_human_channel_askuserquestion_routes_to_ask_questions():
     assert len(port.questions_calls) == 1
     ctx, questions = port.questions_calls[0]
     assert ctx == "C"
-    assert questions.questions[0].question == "Pick a color"
+    assert questions[0].question == "Pick a color"
 
 
 @pytest.mark.asyncio

@@ -3,9 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
-
 from mote.memory.procedural_memory.schema import Experience
+from pydantic import BaseModel, ConfigDict
 
 EXP_TEMPLATE = """Given the request: {req}, We can get the response: {resp}, which scored: {score}."""
 

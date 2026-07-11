@@ -4,9 +4,8 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
-
 from mote.common.utils import count_string_tokens
+from pydantic import BaseModel, Field, field_validator
 
 NAME_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 

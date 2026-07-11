@@ -26,7 +26,6 @@ PROFILE_FILE_SUFFIX = ".config.yaml"  # ~/.mote/<name>.config.yaml
 MANAGED_CONFIG_FILE_NAME = "managed.config.yaml"  # /etc/mote/managed.config.yaml
 
 _SYSTEM_CONFIG_DIR = Path("/etc/mote")
-_USER_CONFIG_DIR = Path.home() / ".mote"
 _WORKDIR_CONFIG_SUBDIR = ".mote"
 
 
@@ -73,7 +72,7 @@ def _existing(paths: List[Optional[Path]]) -> List[Path]:
 
 def profile_path(profile: str) -> Path:
     """The on-disk path of a named profile overlay (``~/.mote/<name>.config.yaml``)."""
-    return _USER_CONFIG_DIR / f"{profile}{PROFILE_FILE_SUFFIX}"
+    return CONFIG_ROOT / f"{profile}{PROFILE_FILE_SUFFIX}"
 
 
 def discover_source_files(cwd: Optional[Path] = None, *, profile: Optional[str] = None) -> List[SourceFile]:
@@ -100,7 +99,7 @@ def discover_source_files(cwd: Optional[Path] = None, *, profile: Optional[str] 
             files.append(SourceFile(ConfigSource.SYSTEM, p))
 
     # USER: legacy ~/.mote/config2.yaml (BC) then ~/.mote/config.yaml.
-    for p in _existing([CONFIG_ROOT / LEGACY_CONFIG_FILE_NAME, _USER_CONFIG_DIR / CONFIG_FILE_NAME]):
+    for p in _existing([CONFIG_ROOT / LEGACY_CONFIG_FILE_NAME, CONFIG_ROOT / CONFIG_FILE_NAME]):
         files.append(SourceFile(ConfigSource.USER, p))
 
     # PROJECT (trusted): the user's mote/config.yaml.

@@ -14,10 +14,9 @@ import json
 import typing
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
 
-from pydantic import BaseModel, Field, create_model, model_validator
-
 from mote.common.const import MARKDOWN_TITLE_PREFIX
 from mote.common.logs import logger
+from pydantic import BaseModel, Field, create_model, model_validator
 
 if TYPE_CHECKING:
     from mote.router import BaseLLM

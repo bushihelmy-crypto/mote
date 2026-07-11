@@ -10,8 +10,6 @@ from datetime import datetime
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, SerializeAsAny, create_model, field_serializer, field_validator
-
 from mote.common.const import (
     AGENT,
     CACHE_INTENT,
@@ -25,6 +23,7 @@ from mote.common.const import (
     RETENTION,
     TOOL_CALL_ID,
     TOOL_CALLS,
+    TOOL_RESULT_RESOURCE_PATH,
 )
 from mote.common.logs import logger
 from mote.common.schema.document import CauseBy, Resource
@@ -35,6 +34,7 @@ from mote.common.utils.serialize import (
     actionoutput_mapping_to_str,
     actionoutput_str_to_mapping,
 )
+from pydantic import BaseModel, Field, SerializeAsAny, create_model, field_serializer, field_validator
 
 if TYPE_CHECKING:
     # Type-only import: `common.schema` is a low layer and must not import the
@@ -296,7 +296,15 @@ class ToolMessage(Message):
     because that protocol has no tool-call id and the model reads it as plain text.
     """
 
-    def __init__(self, content: str = "", *, tool_call_id: str, retention: Optional[str] = None, **kwargs):
+    def __init__(
+        self,
+        content: str = "",
+        *,
+        tool_call_id: str,
+        retention: Optional[str] = None,
+        resource_path: Optional[str] = None,
+        **kwargs,
+    ):
         kwargs.pop("role", None)
         kwargs.setdefault("cause_by", CauseBy.RUN_COMMAND)
         super().__init__(content=content, role="tool", **kwargs)
@@ -306,6 +314,12 @@ class ToolMessage(Message):
         # metadata is the truth), and the compaction layer keys off it.
         if retention:
             self.metadata[RETENTION] = retention
+        # Provenance of a reconstructable result: which file this read/derived
+        # from. ContextVisibility keys off it to tell whether this file's last
+        # result is still present (real content) or has been folded/erased.
+        # Metadata-as-truth: survives dump/load like the keys above.
+        if resource_path:
+            self.metadata[TOOL_RESULT_RESOURCE_PATH] = resource_path
 
 
 class ResourceMessage(UserMessage):

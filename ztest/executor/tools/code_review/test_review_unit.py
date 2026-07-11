@@ -8,7 +8,6 @@ from __future__ import annotations
 import types
 
 import pytest
-
 from mote.common.agent_control import SpawnContext, set_control
 from mote.executor.tools.code_review import review_unit as ru
 from mote.executor.tools.code_review.parser import FileDiff, Hunk

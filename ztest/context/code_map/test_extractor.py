@@ -298,3 +298,66 @@ def test_content_hash_present_even_on_syntax_error(tmp_path):
     # A broken file still carries a stable content hash so the store's staleness
     # diff sees it as parsed-at-this-version (no perpetual re-parse).
     assert extract.content_hash != ""
+
+
+# -- P1: docstring summaries --------------------------------------------------
+
+
+def test_module_summary_first_line(tmp_path):
+    src = '"""One-line module purpose.\n\nMore detail below.\n"""\nx = 1\n'
+    path = _write(tmp_path, "docmod.py", src)
+    extract = CodeMapExtractor().extract(path)
+    assert extract.module_summary == "One-line module purpose."
+
+
+def test_module_summary_empty_when_undocumented(tmp_path):
+    path = _write(tmp_path, "nodoc.py", "x = 1\n")
+    extract = CodeMapExtractor().extract(path)
+    assert extract.module_summary == ""
+
+
+def test_symbol_summary_from_docstring(tmp_path):
+    src = 'def f():\n    """Does a thing."""\n    return 1\n'
+    path = _write(tmp_path, "fdoc.py", src)
+    sym = CodeMapExtractor().extract(path).symbols[0]
+    assert sym.summary == "Does a thing."
+
+
+def test_class_summary_from_docstring(tmp_path):
+    src = 'class C:\n    """Holds state."""\n    pass\n'
+    path = _write(tmp_path, "cdoc.py", src)
+    sym = CodeMapExtractor().extract(path).symbols[0]
+    assert sym.kind == "class"
+    assert sym.summary == "Holds state."
+
+
+def test_symbol_summary_empty_when_undocumented(tmp_path):
+    src = "def f():\n    return 1\n"
+    path = _write(tmp_path, "fnodoc.py", src)
+    sym = CodeMapExtractor().extract(path).symbols[0]
+    assert sym.summary == ""
+
+
+def test_summary_first_nonblank_line_used(tmp_path):
+    # A docstring whose content starts after a blank line: the first *meaningful*
+    # line is taken (ast.get_docstring cleans leading indentation).
+    src = 'def f():\n    """\n    Actual summary here.\n    """\n    pass\n'
+    path = _write(tmp_path, "blankdoc.py", src)
+    sym = CodeMapExtractor().extract(path).symbols[0]
+    assert sym.summary == "Actual summary here."
+
+
+def test_summary_whitespace_collapsed(tmp_path):
+    src = 'def f():\n    """Has    inner   spaces."""\n    pass\n'
+    path = _write(tmp_path, "wsdoc.py", src)
+    sym = CodeMapExtractor().extract(path).symbols[0]
+    assert sym.summary == "Has inner spaces."
+
+
+def test_summary_truncated_when_long(tmp_path):
+    long_line = "x " * 100  # far past the cap
+    src = f'def f():\n    """{long_line}"""\n    pass\n'
+    path = _write(tmp_path, "longdoc.py", src)
+    sym = CodeMapExtractor().extract(path).symbols[0]
+    assert len(sym.summary) <= CodeMapExtractor._SUMMARY_MAX_CHARS
+    assert sym.summary.endswith("…")

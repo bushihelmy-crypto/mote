@@ -2,7 +2,7 @@
 
 Aligned with Claude Code's ``framework.ts`` (``generateTaskAttachments`` /
 ``applyTaskOffsetsAndEvictions``).  This module is standalone — it does **not**
-modify ``BackgroundTaskPool``, ``RoleZero``, or the ``_observe()`` loop.
+modify ``BackgroundTaskPool``, ``Role``, or the ``_observe()`` loop.
 
 The caller invokes ``TaskAttachmentGenerator.generate()`` before each LLM
 query and decides how to consume the returned ``GenerateResult``.

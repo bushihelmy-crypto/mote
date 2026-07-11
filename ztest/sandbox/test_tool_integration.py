@@ -18,7 +18,6 @@ import os
 import sys
 
 import pytest
-
 from mote.executor.dependency._kernel import KernelSession
 from mote.executor.dependency._terminal import TerminalSession
 from mote.executor.tools.bash import Bash

@@ -9,7 +9,6 @@ one record, and ``render_error_block`` is the single renderer producing the
 from __future__ import annotations
 
 import pytest
-
 from mote.common.exception import (
     ErrorReport,
     GraphBatchFailureError,

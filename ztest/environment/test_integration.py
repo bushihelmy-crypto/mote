@@ -12,7 +12,6 @@ Covers the two end-to-end scenarios from the plan's Verification section:
 import types
 
 import pytest
-
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.queue import MessageQueue
 from mote.environment.mote.mote_env import MoteEnv

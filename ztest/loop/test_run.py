@@ -10,7 +10,6 @@ path (End tool), the background-pool wait branch, and the two post-checks
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import CauseBy, UserMessage
 
 from .conftest import FakeBgPool, FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine

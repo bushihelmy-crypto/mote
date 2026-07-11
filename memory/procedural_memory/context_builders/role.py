@@ -1,4 +1,4 @@
-"""RoleZero context builder."""
+"""Role context builder."""
 
 import copy
 from typing import Any
@@ -7,7 +7,7 @@ from mote.common.const import EXPERIENCE_MASK
 from mote.memory.procedural_memory.context_builders.base import BaseContextBuilder
 
 
-class RoleZeroContextBuilder(BaseContextBuilder):
+class RoleContextBuilder(BaseContextBuilder):
     async def build(self, req: Any) -> list[dict]:
         """Builds the role zero context string.
 

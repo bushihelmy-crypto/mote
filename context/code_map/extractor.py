@@ -46,6 +46,7 @@ class Symbol:
     kind: str  # "function" | "method" | "class"
     start_line: int  # 1-based
     signature: str = ""  # params (+ return) for funcs/methods; "" for classes
+    summary: str = ""  # docstring first line (intent), "" when undocumented
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class FileExtract:
     """Everything the extractor derived from one file."""
 
     path: str  # absolute path
+    module_summary: str = ""  # module docstring first line (intent), "" when undocumented
     symbols: list[Symbol] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)  # imported module names
     calls: list[CallEdge] = field(default_factory=list)  # intra-file symbol->symbol
@@ -132,6 +134,7 @@ class CodeMapExtractor:
             return FileExtract(path=abspath, content_hash=content_hash)
 
         extract = FileExtract(path=abspath, content_hash=content_hash)
+        extract.module_summary = self._docstring_line(tree)
         self._defined_names: set[str] = set()
         # First pass: collect symbols + the set of names defined in this file, so
         # the call pass can keep only edges whose callee is a local definition.
@@ -161,6 +164,7 @@ class CodeMapExtractor:
                         kind=kind,
                         start_line=node.lineno,
                         signature=self._signature(node),
+                        summary=self._docstring_line(node),
                     )
                 )
                 self._defined_names.add(node.name)
@@ -175,6 +179,7 @@ class CodeMapExtractor:
                         kind="class",
                         start_line=node.lineno,
                         signature="",
+                        summary=self._docstring_line(node),
                     )
                 )
                 self._defined_names.add(node.name)
@@ -373,6 +378,38 @@ class CodeMapExtractor:
         return segments
 
     # -- helpers -------------------------------------------------------------
+
+    #: Cap on a rendered docstring summary — one short line of intent, not prose.
+    _SUMMARY_MAX_CHARS = 100
+
+    @classmethod
+    def _docstring_line(cls, node) -> str:
+        """First meaningful line of *node*'s docstring, trimmed — else "".
+
+        The map's "what is this for" annotation (P1): a module / class / function
+        docstring's first non-blank line gives the symbol's *intent* without the
+        model opening the file. Best-effort — a node with no docstring (or a
+        non-doc-bearing node) yields "". Whitespace-collapsed and capped at
+        :data:`_SUMMARY_MAX_CHARS` so one verbose docstring can't bloat the block.
+        """
+        try:
+            doc = ast.get_docstring(node, clean=True)
+        except TypeError:
+            return ""  # node kind ast.get_docstring doesn't accept
+        if not doc:
+            return ""
+        first = ""
+        for line in doc.splitlines():
+            stripped = line.strip()
+            if stripped:
+                first = stripped
+                break
+        if not first:
+            return ""
+        first = " ".join(first.split())  # collapse internal whitespace runs
+        if len(first) > cls._SUMMARY_MAX_CHARS:
+            first = first[: cls._SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+        return first
 
     @staticmethod
     def _signature(node) -> str:

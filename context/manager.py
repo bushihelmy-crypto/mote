@@ -39,7 +39,7 @@ from mote.common.const import CACHE_INTENT, CACHE_INTENT_EPHEMERAL_TAIL
 from mote.common.events import MessageAppendedEvent, ToolsChangedEvent
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.logs import log_class
-from mote.common.schema import ContextManagerConfig, LLMCallContext
+from mote.common.schema import ContextManagerConfig, FoldState, LLMCallContext
 
 if TYPE_CHECKING:
     from mote.common.schema.messages import Message, UserMessage
@@ -346,6 +346,26 @@ class ContextManager(ObservationSubscriber):
             self.model,
             autocompact_enabled=self.config.enable_autocompact,
             observed_tokens=self._accountant.observed(),
+        )
+
+    def fold_state(self) -> FoldState:
+        """Current count-based fold snapshot for the stored history.
+
+        The count-based sibling of ``token_state``: how many foldable
+        reconstructable tool results are live versus the trigger at which the
+        FREE fold clears the oldest of them. Reuses the reducer's own
+        ``active_results`` count (built from the same segmented transcript the
+        fold acts on) so a pre-fold warning can never disagree with what the
+        fold will actually do.
+        """
+        active = FoldReducer.active_results(
+            Transcript.from_messages(self._context.messages, compactable=self._compactable)
+        )
+        return FoldState(
+            enabled=self.config.enable_microcompact,
+            active_count=len(active),
+            trigger=self.config.microcompact_trigger_threshold,
+            keep_recent=max(1, self.config.microcompact_keep_recent),
         )
 
     # ------------------------------------------------------------------

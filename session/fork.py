@@ -23,10 +23,10 @@ mutating it never touches the parent's log.
 from __future__ import annotations
 
 from typing import Dict, Optional, Protocol
-from uuid import uuid4
 
 from mote.common.logs import log_call
 from mote.session.events import FileSnapshotEvent, MessageEvent, SessionMetaEvent, parse_event
+from mote.session.ids import new_session_id as mint_session_id
 from mote.session.log import SessionLog
 from mote.session.replay import replay
 from mote.session.snapshot import make_blob_store
@@ -69,7 +69,7 @@ def fork(
     if not source.exists():
         raise FileNotFoundError(f"no rollout to fork for session {source_session_id!r}")
 
-    child_id = new_session_id or uuid4().hex
+    child_id = new_session_id or mint_session_id()
     child = SessionLog(child_id, base_dir=base_dir)
     if child.exists():
         raise FileExistsError(f"fork target session {child_id!r} already exists")

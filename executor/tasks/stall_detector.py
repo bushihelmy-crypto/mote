@@ -5,7 +5,7 @@ and interactive prompts that require user intervention.  Aligned with
 Claude Code's stall watchdog (``LocalShellTask.tsx``).
 
 This module is standalone — it does **not** modify ``BackgroundTaskPool``,
-``RoleZero``, or the ``_observe()`` loop.
+``Role``, or the ``_observe()`` loop.
 """
 
 from __future__ import annotations

@@ -20,8 +20,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Coroutine, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict
-
 # Graph execution exceptions are unified under the global exception package;
 # re-exported here so existing ``from .types import GraphRouterError`` (etc.)
 # call sites within the bggraph package keep working.
@@ -33,6 +31,7 @@ from mote.common.exception import (  # noqa: F401
     GraphRecursionError,
     GraphRouterError,
 )
+from pydantic import BaseModel, ConfigDict
 
 # ---------------------------------------------------------------------------
 # Sentinels / well-known node names

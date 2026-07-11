@@ -30,7 +30,7 @@ _SINGLE_SEGMENT_PATTERNS = [
     re.compile(r"^Command Editor\.read executed:\s*path=(?P<path>.+?)\s+content=(?P<content>.*)$", re.DOTALL),
 ]
 
-# A tool-output segment in role_zero `_act` ends at the next segment header:
+# A tool-output segment in role `_act` ends at the next segment header:
 # `\n\nCommand <name> executed` (next tool output) or `\n\n\n[IMPORTANT]` (skip
 # message — starts with `\n[IMPORTANT]` after the join). Requiring ` executed`
 # avoids absorbing "Command ..." strings that appear inside file content.

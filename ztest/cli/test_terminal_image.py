@@ -12,7 +12,6 @@ detection matrix + APC ``_G`` wire format and the registry's cache/fallback.
 from __future__ import annotations
 
 import pytest
-
 from mote.cli.consumers.render.terminal_image import KittyImageProtocol, detect_image_protocol
 
 

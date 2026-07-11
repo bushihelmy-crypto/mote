@@ -39,7 +39,6 @@ MAX_FILE_SIZE_BYTES = 256 * 1024  # Read: text files larger require offset/limit
 MAX_MEDIA_SIZE_BYTES = 10 * 1024 * 1024  # Read: hard cap for images/PDFs (10 MB)
 MAX_CONTENT_SIZE_BYTES = 10 * 1024 * 1024  # Write: content size cap (10 MB)
 MAX_EDIT_FILE_SIZE_BYTES = 10 * 1024 * 1024  # Edit: file size cap (10 MB)
-MAX_NOTEBOOK_SIZE_BYTES = 10 * 1024 * 1024  # NotebookEdit: notebook size cap (10 MB)
 
 # ---------------------------------------------------------------------------
 # Read tool
@@ -64,6 +63,19 @@ SEARCH_TIMEOUT = 60.0 if _is_wsl() else 20.0  # search timeout in seconds
 # Glob tool
 # ---------------------------------------------------------------------------
 GLOB_DEFAULT_LIMIT = 100  # cap on returned files
+
+# ---------------------------------------------------------------------------
+# Code-map glimpse (Grep/Glob → code map navigation hint)
+# ---------------------------------------------------------------------------
+# Cap on how many matched files a single Grep/Glob call records as "glimpsed"
+# for the code map. A search can match hundreds of files; recording them all
+# would flood the map (and its per-turn parse). Only the top-N (result order —
+# mtime-sorted, so the most recently touched) become navigation hints.
+GLIMPSE_RECORD_LIMIT = 20
+# Only these extensions are worth glimpsing: the code map parses Python, so a
+# non-.py match carries no structure to surface. Keeps the glimpse set focused
+# on files the map can actually describe.
+GLIMPSE_EXTENSIONS = (".py",)
 
 # ---------------------------------------------------------------------------
 # Error convention

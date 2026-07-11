@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.common.schema import MessageQueue
 from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Stage
 from mote.executor.tasks.pool import BackgroundTaskPool

@@ -16,7 +16,6 @@ its kernel down to free the subprocess.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.text import cap_head_tail
 from mote.executor.dependency._kernel import OUTPUT_MAX_CHARS, _strip_ansi
 from mote.executor.tools.python import Python

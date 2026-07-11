@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for truncated-XML repair in ``role_zero_utils.loads_xml``.
+"""Tests for truncated-XML repair in ``role_utils.loads_xml``.
 
 A long freeform argument (e.g. ApplyPatch's whole patch carried as the single
 ``<input>`` body) sometimes arrives truncated — the model's output is cut off
@@ -12,8 +12,7 @@ command (mirroring the native channel's ``json_repair`` fallback).
 from __future__ import annotations
 
 import pytest
-
-from mote.common.utils.role_zero_utils import loads_xml, parse_commands2
+from mote.common.utils.role_utils import loads_xml, parse_commands2
 
 PATCH = "*** Begin Patch\n*** Add File: a.py\n+x\n*** End Patch"
 

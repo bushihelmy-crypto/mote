@@ -6,7 +6,6 @@ from __future__ import annotations
 import sys
 
 import pytest
-
 from mote.common.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
 from mote.common.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
 

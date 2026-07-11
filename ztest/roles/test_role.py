@@ -9,7 +9,6 @@ import os
 import types
 
 import pytest
-
 from mote.common.agent_control import set_control
 from mote.common.const import MESSAGE_ROUTE_TO_SELF
 from mote.common.exception import RoleContextNotSetError
@@ -213,6 +212,9 @@ class TestTurnContextBus:
         # startup dir the system prompt's env block already cites, so a reminder
         # would just repeat cacheable content. The timestamp feed (per-turn
         # wall-clock) is wired unconditionally in the structured reminder envelope.
+        # The fold-pressure feed is wired unconditionally alongside token-pressure
+        # (self-suppresses until the reconstructable-result count nears the fold
+        # trigger).
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
         assert names == {
@@ -220,6 +222,7 @@ class TestTurnContextBus:
             "git",
             "timestamp",
             "token",
+            "fold",
             "compaction",
             "skill_activation",
             "skill_listing",
@@ -404,54 +407,12 @@ class TestEventSubscriberRoster:
         assert role.router.context_reducer is not None
 
 
-class TestRecordTurnContext:
-    """_record_turn_context persists the bus's save_to_context bucket to history."""
-
-    class _FakeBus:
-        def __init__(self, block):
-            self._block = block
-            self.seen_cwd = "unset"
-
-        async def collect_to_context(self, *, cwd=None):
-            self.seen_cwd = cwd
-            return self._block
-
-    def test_non_empty_block_added_to_history(self, role):
-        import asyncio
-
-        fake = self._FakeBus("<system-reminder>\ngit changed\n</system-reminder>")
-        role._components._graph.seed("turn_context_bus", fake)
-        before = role.context_manager.count()
-        asyncio.run(role._record_turn_context())
-        msgs = role.context_manager.get()
-        assert role.context_manager.count() == before + 1
-        assert msgs[-1].content == "<system-reminder>\ngit changed\n</system-reminder>"
-        assert msgs[-1].role == "user"
-
-    def test_empty_block_adds_nothing(self, role):
-        import asyncio
-
-        role._components._graph.seed("turn_context_bus", self._FakeBus(""))
-        before = role.context_manager.count()
-        asyncio.run(role._record_turn_context())
-        assert role.context_manager.count() == before
-
-    def test_passes_working_dir_as_cwd(self, role):
-        import asyncio
-
-        fake = self._FakeBus("")
-        role._components._graph.seed("turn_context_bus", fake)
-        role.state.working_dir = "/some/dir"
-        asyncio.run(role._record_turn_context())
-        assert fake.seen_cwd == "/some/dir"
-
-
 # =============================================================================
 # Skills explicit per-role specification wiring
 # =============================================================================
 class TestSkillsWiring:
     """A role that lists skills opts the subsystem in on its own — regardless
-    of the global master switch (``role_zero.skills.enabled``) — and loads
+    of the global master switch (``role.skills.enabled``) — and loads
     exactly the listed skills (load_by_names). The tests force the global
     switch OFF to prove the per-role opt-in is what does the enabling."""
 
@@ -460,7 +421,7 @@ class TestSkillsWiring:
         r = Role(name="X", role_schema=RoleSchema(name="X", **schema_kwargs), context=context)
         # Neutralise the ambient project config (config.yaml may enable skills
         # globally) so the assertions isolate the per-role opt-in.
-        r.config.role_zero.skills.enabled = False
+        r.config.role.skills.enabled = False
         return r
 
     def test_explicit_skills_enable_subsystem_with_global_off(self, context):
@@ -623,6 +584,35 @@ class TestFileWatchHotReload:
 
         asyncio.run(scenario())
         assert calls["n"] == 1
+
+    def test_base_root_watched_only_inside_a_git_repo(self, role, monkeypatch):
+        """The whole-tree base root is the git root — added only when cwd is in a repo.
+
+        The base root is the one entry that pulls the *entire* tree into the
+        watcher's baseline walk. Gating it on a real git root keeps a launch from
+        a home / large directory (no repo) from recursively walking the whole
+        tree — the reload_* config dirs are watched regardless.
+        """
+        from mote.common.schema import FileWatchConfig
+
+        monkeypatch.setattr("mote.roles.role_components.find_git_root", lambda cwd: "/proj/repo")
+        role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
+        svc = role.file_watch_service
+        assert os.path.abspath("/proj/repo") in svc.watcher._roots
+
+    def test_base_root_omitted_outside_a_git_repo(self, role, monkeypatch):
+        """Outside a repo the cwd is NOT added — no whole-tree walk from home."""
+        from mote.common.schema import FileWatchConfig
+
+        monkeypatch.setattr("mote.roles.role_components.find_git_root", lambda cwd: None)
+        role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
+        svc = role.file_watch_service
+        # The cwd is never pulled in as a root when there is no repo boundary.
+        cwd = os.path.abspath(role.get_cwd())
+        assert cwd not in svc.watcher._roots
+        # Hot-reload still works: the skill dir is present.
+        skill_root = role._components.skill_manager.source_dirs()[0]
+        assert os.path.abspath(skill_root) in svc.watcher._roots
 
     def test_reload_config_engages_hook_and_swaps_config(self, role, monkeypatch):
         from mote.common.schema import FileWatchConfig
@@ -812,6 +802,8 @@ class TestCapabilities:
             "end_session",
             "record_file_read",
             "get_file_read_mtime",
+            "record_file_glimpsed",
+            "is_resource_visible",
             "record_file_snapshot",
             "get_tool_session",
             "set_tool_session",

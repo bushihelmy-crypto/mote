@@ -14,15 +14,6 @@ import time
 from typing import Any, Optional, Union
 
 from json_repair import repair_json
-from openai import AsyncOpenAI, AsyncStream
-from openai._base_client import AsyncHttpxClientWrapper
-from openai.types import CompletionUsage, Image
-from openai.types.chat import ChatCompletion, ChatCompletionChunk
-from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_message import ChatCompletionMessage
-from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
-
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.const import USE_CONFIG_TIMEOUT
 from mote.common.events import log_llm_stream
@@ -36,6 +27,14 @@ from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.constant import GENERAL_FUNCTION_SCHEMA
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
+from openai import AsyncOpenAI, AsyncStream
+from openai._base_client import AsyncHttpxClientWrapper
+from openai.types import CompletionUsage, Image
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 # Models that reject standard chat params. Keyed by model name → the set of
 # request kwargs to drop. Data-driven so adding a model is a table edit, not a

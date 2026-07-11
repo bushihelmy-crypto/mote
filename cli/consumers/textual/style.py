@@ -36,6 +36,28 @@ from mote.cli.consumers.render.palette import (  # re-export the shared figure s
 # ``DIM`` (a rich colour name) to a concrete hex so Textual CSS always resolves.
 _DIM_HEX = "#808080"
 
+# --- Warm dark surface tokens (the TUI's "chrome" background) -----------------
+# Textual's built-in ``textual-dark`` theme leaves ``background``/``surface``
+# unset, so it auto-derives a near-black (#0e0e0e-ish) canvas that reads as a
+# flat black slab. These warm neutrals — a hair of the brand orange bled into
+# near-black — give the transcript a softer, "toasted" charcoal that sits with
+# the accent instead of fighting it (stone-900 family, tuned toward the brand).
+THEME_NAME = "mote-monokai"
+# The classic Monokai canvas (cmder's default) — a neutral olive-charcoal, not
+# a warm brown. Each step is a distinct raised surface off the same base hue so
+# inputs / panels read as lifted planes without any muddy tint.
+_BG = "#222219"  # app canvas — deep near-black Monokai olive-charcoal
+_SURFACE = "#6b6c5f"  # cards / inputs — clearly lifted off the canvas
+_PANEL = "#787969"  # raised chrome
+_FOREGROUND = "#f8f8f2"  # Monokai off-white body text
+
+# The bottom status bar keeps the classic editor blue (VS Code's status-bar
+# ``#007ACC`` family) — a calm anchoring band under the warm transcript rather
+# than another charcoal slab. Exposed as ``$status-bg`` / ``$status-fg`` so the
+# ``StatusBar`` widget CSS reads them from the shared token map.
+STATUS_BG = "#12507e"  # status bar band — settled editor blue
+STATUS_FG = "#dbe7f2"  # status bar text — cool off-white for contrast on blue
+
 
 def textual_css_vars() -> dict[str, str]:
     """Return the Textual ``$variable → value`` map derived from :class:`Palette`.
@@ -54,7 +76,35 @@ def textual_css_vars() -> dict[str, str]:
         "diff-add": Palette.DIFF_ADD,
         "diff-del": Palette.DIFF_DEL,
         "question": Palette.QUESTION,
+        "status-bg": STATUS_BG,
+        "status-fg": STATUS_FG,
     }
+
+
+def mote_theme():
+    """Build the Monokai-dark :class:`textual.theme.Theme` the app registers.
+
+    Keyed off the same :class:`Palette` the CSS vars read, so brand orange is the
+    ``primary``/``accent`` while the canvas uses the Monokai olive-charcoal surface
+    tokens above instead of Textual's auto-derived near-black. Imported lazily so
+    this module stays cheap for the non-Textual hosts that only want the CSS vars.
+    """
+    from textual.theme import Theme
+
+    return Theme(
+        name=THEME_NAME,
+        primary=Palette.BRAND,
+        secondary=Palette.SHIMMER,
+        accent=Palette.BRAND,
+        warning=Palette.WARNING,
+        error=Palette.ERROR,
+        success=Palette.SUCCESS,
+        foreground=_FOREGROUND,
+        background=_BG,
+        surface=_SURFACE,
+        panel=_PANEL,
+        dark=True,
+    )
 
 
 def textual_css_var_block() -> str:
@@ -71,6 +121,8 @@ def textual_css_var_block() -> str:
 __all__ = [
     "textual_css_vars",
     "textual_css_var_block",
+    "mote_theme",
+    "THEME_NAME",
     "Palette",
     "BULLET",
     "BRANCH",

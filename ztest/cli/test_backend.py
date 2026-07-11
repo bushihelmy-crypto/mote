@@ -164,23 +164,13 @@ def test_generic_role_enables_file_watch_hot_reload():
     assert fw.reload_skills is True
 
 
-def test_discover_tools_names_every_registered_tool():
-    # Mirrors the mcp/skill "empty ⇒ load everything" default: discovery returns
-    # every @register_tool class under mote.executor.tools (a superset of the
-    # RoleSchema curated default), deduplicated to primary names.
-    names = backend._discover_tools()
-    assert "Read" in names and "Bash" in names and "Skill" in names
-    # The full toolbox is a superset of RoleSchema's curated default (the extra
-    # control/terminal verbs — End/Reply/Ask/ApplyPatch — surface too).
-    assert len(names) >= len(RoleSchema.model_fields["tools"].default)
-    assert len(names) == len(set(names))  # no duplicate primary names
-
-
-def test_generic_role_loads_all_tools_when_none_passed():
+def test_generic_role_uses_curated_default_when_none_passed():
     role = backend.build_role(context=_context(), name="Tester")
-    # No explicit tools ⇒ the whole registered toolbox (empty ⇒ load all),
-    # NOT RoleSchema's curated subset. So it equals discovery, not the default.
-    assert set(role.role_schema.tools) == set(backend._discover_tools())
+    # No explicit tools ⇒ RoleSchema's curated default (its declared tool
+    # surface), NOT the full registered toolbox. So the CLI reports exactly the
+    # declared set — internal control verbs (End/Reply/Ask/ApplyPatch/…) that are
+    # registered but not curated do not leak into the top-level role.
+    assert role.role_schema.tools == RoleSchema.model_fields["tools"].default
     assert "Read" in role.role_schema.tools
     assert "Skill" in role.role_schema.tools
 
@@ -191,19 +181,16 @@ def test_generic_role_explicit_tools_are_respected():
     assert role.role_schema.tools == ["Read", "Grep"]
 
 
-def test_role_tool_counts_reports_builtin_and_mcp():
-    from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-
-    servers = [MCPServerConfig(name="fs", type=MCPTransportType.STDIO, enabled=True, command="npx")]
+def test_role_tool_count_reports_builtin_only():
+    # MCP servers are on the schema but not counted — the badge reports only the
+    # one-time startup tool load. Deduplicated: three names collapse to two.
     role = SimpleNamespace(role_schema=SimpleNamespace(tools=["Read", "Write", "Read"], mcps=["fs"]))
-    del servers  # unused; counts read the schema, not the loader
-    # Deduplicated: three tool names collapse to two distinct.
-    assert backend.role_tool_counts(role) == (2, 1)
+    assert backend.role_tool_count(role) == 2
 
 
-def test_role_tool_counts_degrades_to_zero():
-    assert backend.role_tool_counts(SimpleNamespace()) == (0, 0)
-    assert backend.role_tool_counts(SimpleNamespace(role_schema=SimpleNamespace())) == (0, 0)
+def test_role_tool_count_degrades_to_zero():
+    assert backend.role_tool_count(SimpleNamespace()) == 0
+    assert backend.role_tool_count(SimpleNamespace(role_schema=SimpleNamespace())) == 0
 
 
 def test_build_role_unknown_agent_type_returns_none():

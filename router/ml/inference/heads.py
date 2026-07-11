@@ -7,7 +7,6 @@ Source: ``squilla_router/models/.../runtime_src/src/router/inference/heads.py``.
 from __future__ import annotations
 
 import numpy as np
-
 from mote.router.ml.inference.types import FeatureBundle, HeadOutputs
 
 

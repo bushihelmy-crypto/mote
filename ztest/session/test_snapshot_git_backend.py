@@ -16,7 +16,6 @@ import shutil
 import subprocess
 
 import pytest
-
 from mote.session.events import FILE_SNAPSHOT
 from mote.session.history import diff_snapshot, file_history, restore
 from mote.session.log import SessionLog

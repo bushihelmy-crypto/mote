@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mote.common.schema import PermissionConfig, SandboxConfig
 from mote.executor.permission.engine import PermissionEngine
 from mote.executor.permission.rule_store import RuleStore

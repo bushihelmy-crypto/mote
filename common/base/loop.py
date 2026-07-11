@@ -34,7 +34,6 @@ class LoopContext:
     # React limits
     max_react_loop: int
     max_consecutive_react_limit: int
-    memory_k: int
 
     # Identity
     name: str

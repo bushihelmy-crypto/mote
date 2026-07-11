@@ -48,6 +48,7 @@ class FileNeighborhood:
     """One touched file's local structure + its edges *within the touched set*."""
 
     path: str  # absolute path
+    module_summary: str = ""  # module docstring first line (intent), "" when undocumented
     symbols: list[Symbol] = field(default_factory=list)  # what this file defines
     imports: list[str] = field(default_factory=list)  # touched files it imports (abspaths)
     imported_by: list[str] = field(default_factory=list)  # touched files importing it (abspaths)
@@ -151,6 +152,7 @@ class CodeMap:
         out: list[FileNeighborhood] = []
         for f in abs_files:
             symbols = self._store.symbols_in(f)
+            module_summary = self._store.module_summary_of(f)
             calls = self._store.calls_in(f)
             # Forward: which touched files does f import? Match f's import targets
             # against the module candidates of every other touched file.
@@ -171,6 +173,7 @@ class CodeMap:
             out.append(
                 FileNeighborhood(
                     path=f,
+                    module_summary=module_summary,
                     symbols=symbols,
                     imports=sorted(imports),
                     imported_by=sorted(imported_by),

@@ -3,7 +3,6 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from fastmcp import Client
-
 from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 from mote.common.exception import ToolNotFoundError
 from mote.common.logs import logger

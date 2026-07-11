@@ -6,9 +6,8 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from loguru import logger
-
 import mote
+from loguru import logger
 
 #: The per-project config directory name. All project-local mote assets
 #: (skills / agents / mcp.json / settings.local.json) live under ``<dir>/.mote``,
@@ -55,7 +54,9 @@ DEFAULT_WORKSPACE_ROOT = CONFIG_ROOT / "workspace"
 # `storage` under the individual generated project.
 SERDESER_PATH = DEFAULT_WORKSPACE_ROOT / "storage"
 
-SOURCE_ROOT = MOTE_ROOT / "mote"
+# The trusted PROJECT config lives under ``~/.mote`` (CONFIG_ROOT), same dir as
+# the user config — that is where ``config.yaml`` is shipped/edited.
+SOURCE_ROOT = CONFIG_ROOT
 TOOL_SCHEMA_PATH = MOTE_ROOT / "mote/tools/schemas"
 
 

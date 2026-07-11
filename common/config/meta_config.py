@@ -5,17 +5,16 @@
 @Author  : alexanderwu
 @File    : meta_config.py
 """
-from pydantic import Field, model_validator
-
 from mote.common.config.config.exp_pool_config import ExperiencePoolConfig
 from mote.common.config.config.langfuse_config import LangfuseConfig
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.config.config.mcp_config import MCPConfig
 from mote.common.config.config.multimodal_config import MultimodalConfig
-from mote.common.config.config.role_zero_config import RoleZeroConfig
+from mote.common.config.config.role_config import RoleConfig
 from mote.common.config.config.sentry_config import SentryConfig
 from mote.common.observability.langfuse_integration import init_langfuse
 from mote.common.utils.yaml_model import YamlModel
+from pydantic import Field, model_validator
 
 
 class Config(YamlModel):
@@ -61,8 +60,8 @@ class Config(YamlModel):
     # Experience Pool Parameters
     exp_pool: ExperiencePoolConfig = Field(default_factory=ExperiencePoolConfig)
 
-    # RoleZero's configuration
-    role_zero: RoleZeroConfig = Field(default_factory=RoleZeroConfig)
+    # Role's configuration
+    role: RoleConfig = Field(default_factory=RoleConfig)
 
     # MCP
     mcp: MCPConfig = Field(default_factory=MCPConfig)

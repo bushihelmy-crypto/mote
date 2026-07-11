@@ -16,7 +16,6 @@ Key facts the fixtures encode:
 from __future__ import annotations
 
 import pytest
-
 from mote.roles import Role
 
 

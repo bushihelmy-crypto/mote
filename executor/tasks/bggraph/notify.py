@@ -10,11 +10,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Optional
 
-from pydantic import BaseModel
-
 from mote.common.exception import ErrorReport, render_error_block
 from mote.executor.tasks.bggraph.report import _truncate, report_progress
 from mote.executor.tasks.bggraph.types import END, BgStatus, GraphRunState
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Per-node progress message templates

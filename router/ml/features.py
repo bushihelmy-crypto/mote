@@ -20,7 +20,6 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-
 from mote.router.ml.trajectory import Trajectory, classify
 
 # ---------------------------------------------------------------------------

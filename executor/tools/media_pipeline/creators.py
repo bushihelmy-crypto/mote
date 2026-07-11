@@ -24,7 +24,6 @@ from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 import aiohttp
-
 from mote.common.config.loader import load_config
 from mote.common.exception import RecoveryAction, RecoveryRunner
 from mote.common.exception.media import MediaGenerationError, PermanentMediaGenerationError, classify_media_failure

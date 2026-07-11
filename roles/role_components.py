@@ -49,8 +49,9 @@ from mote.common.observability.langfuse_integration import is_enabled, step_trac
 from mote.common.observability.tracing import TracingSubscriber
 from mote.common.resource import ResourceRegistry
 from mote.common.schema import SandboxConfig
+from mote.common.utils.git_state import find_git_root
 from mote.common.utils.report import ReporterSubscriber
-from mote.context import ContextManager
+from mote.context import ContextManager, ContextVisibility
 from mote.context.code_map.indexer import RepoIndexer
 from mote.context.compaction import FileRehydrator
 from mote.context.skills.skill_manager import SkillManager
@@ -59,6 +60,7 @@ from mote.context.turn_context import (
     ChangedFilesContextSource,
     CodeMapContextSource,
     CompactionNoticeContextSource,
+    FoldPressureContextSource,
     GitContextSource,
     SkillActivationContextSource,
     SkillListingContextSource,
@@ -209,6 +211,7 @@ class RoleComponents:
             # --- one-sibling-edge nodes -------------------------------------
             ComponentSpec("executor", _build_executor),  # eager event_bus; defers bg_pool
             ComponentSpec("context_manager", _build_context_manager),  # eager registry/router/event_bus
+            ComponentSpec("context_visibility", _build_context_visibility),  # reads the live stored history
             ComponentSpec("repo_index", _build_repo_index, available=_repo_index_available),
             ComponentSpec("turn_context_sources", _build_turn_context_sources),  # eager diagnostics_buffer
             # --- L2 (read an L1 sibling) ------------------------------------
@@ -262,6 +265,10 @@ class RoleComponents:
     @property
     def context_manager(self) -> ContextManager:
         return self._graph.get("context_manager")
+
+    @property
+    def context_visibility(self) -> ContextVisibility:
+        return self._graph.get("context_visibility")
 
     @property
     def resource_registry(self) -> ResourceRegistry:
@@ -538,6 +545,20 @@ class RoleComponents:
         except Exception:  # noqa: BLE001 — purely advisory
             return []
 
+    def _glimpsed_files(self) -> list[str]:
+        """Absolute paths surfaced by a Grep/Glob match but not read in full.
+
+        Feeds only :class:`CodeMapContextSource` (P2): it merges these into the
+        map's touched set so a searched-but-unopened file's structure (defines +
+        intent) can help the model decide what to Read. Deliberately NOT part of
+        ``_touched_files`` — glimpses carry no body, so they must not drive the
+        skill-activation or rehydration paths that assume a real read. Best-effort.
+        """
+        try:
+            return list(self._role.state._file_glimpsed_state.keys())
+        except Exception:  # noqa: BLE001 — purely advisory
+            return []
+
     def _lsp_code_query(self) -> "_LspCodeQuery":
         """The lazy LSP facade the code-map Layer B queries for unread symbols.
 
@@ -688,7 +709,7 @@ def _skill_source_dirs(role, cfg) -> list:
 
 
 def _build_skill_manager(ctx) -> SkillManager:
-    cfg = ctx.role.config.role_zero.skills
+    cfg = ctx.role.config.role.skills
     # Per-role opt-in: a role that *lists* skills engages the subsystem even when
     # the global master switch is off (``cfg.enabled or bool(skills)``).
     skills = ctx.role.role_schema.skills
@@ -787,15 +808,26 @@ def _build_lsp_service(ctx):
 
 
 def _repo_index_available(role, state) -> bool:
-    """A whole-repo code index exists iff the file-watch layer is engaged.
+    """A whole-repo code index exists iff file-watch is on AND we are in a repo.
 
     Layer C's reverse-dep freshness rides the same FileChanged signal the watcher
     fires, so it is gated on the watcher being configured — no separate config
     knob. When off, ``CodeMapContextSource`` falls back to touched-set-scoped
     ``used by:`` (backward compatible).
+
+    Additionally gated on the cwd being inside a real git repo, mirroring the
+    file-watch base-root rule (see ``_build_file_watch_service``): outside a repo
+    the project root would default to the whole home / launch directory, so the
+    cold ``scan_all`` would recursively walk that entire tree — a pointless
+    multi-GB index of unrelated files whose walk starves the event loop and
+    freezes the UI. A whole-repo index has no meaning without a repo anyway, so
+    the layer simply stays off and ``CodeMapContextSource`` uses its touched-set
+    fallback.
     """
     cfg = role.role_schema.file_watch
-    return cfg is not None and cfg.enabled
+    if cfg is None or not cfg.enabled:
+        return False
+    return find_git_root(role.get_cwd()) is not None
 
 
 def _build_repo_index(ctx):
@@ -941,6 +973,21 @@ def _build_context_manager(ctx) -> ContextManager:
     )
 
 
+def _build_context_visibility(ctx) -> ContextVisibility:
+    """The authority on whether a reconstructable result is still in context.
+
+    Holds a live view of the stored history (``role.state.context.messages`` —
+    the same list the ContextManager folds/erases in place) so every query
+    reflects the current compaction state with no cache to invalidate. Read-only:
+    it never mutates messages, it only answers "is this file's last read still
+    present?". The Role publishes its :meth:`is_resource_visible` as a narrow
+    tool capability, so a deduplicating read tool can consult it instead of
+    trusting its own drifting mirror of the context.
+    """
+    role = ctx.role
+    return ContextVisibility(lambda: role.state.context.messages)
+
+
 def _build_turn_context_sources(ctx) -> list:
     """The single per-turn ephemeral-context roster (drives both buses).
 
@@ -970,6 +1017,10 @@ def _build_turn_context_sources(ctx) -> list:
         # line into the structured reminder envelope (ephemeral, never persisted).
         TimestampContextSource(),
         TokenPressureContextSource(ctx.defer("context_manager")),
+        # Count-based sibling of the token-pressure warning: nudges the model to
+        # record what it needs before the FREE fold clears old tool-result bodies
+        # (fold fires on result COUNT, independent of the token budget above).
+        FoldPressureContextSource(ctx.defer("context_manager")),
         # Reactive post-compaction notice (also subscribes to the event bus to
         # arm itself off PostCompactEvent — dual-role).
         CompactionNoticeContextSource(),
@@ -983,7 +1034,7 @@ def _build_turn_context_sources(ctx) -> list:
         # The steady Skills index (what skills exist), token-capped.
         SkillListingContextSource(
             get_injector=lambda: components.skill_manager.injector,
-            max_tokens=role.config.role_zero.max_skill_tokens,
+            max_tokens=role.config.role.max_skill_tokens,
         ),
         # External-edit freshness: flags tracked files changed on disk since the
         # agent last read them. Self-suppresses when nothing changed.
@@ -1000,11 +1051,15 @@ def _build_turn_context_sources(ctx) -> list:
         # body is NOT already in context. F3: an interface-changing edit surfaces
         # a ⚠ risk label + used-by prominently; F2: precise call sites via the LSP
         # references path (reuses the same _lsp_code_query facade).
+        # P3: surface_callers (default off) opportunistically names calm public
+        # symbols' real callers via the same LSP references facade F2 uses.
         CodeMapContextSource(
             get_touched_files=components._touched_files,
             lsp_query=components._lsp_code_query(),
             repo_index=ctx.dep("repo_index"),
             get_read_state=components._read_state,
+            get_glimpsed_files=components._glimpsed_files,
+            surface_callers=role.config.role.code_map_surface_callers,
         ),
     ]
     # LSP diagnostics: the buffer is itself the turn-context source (dual-role —
@@ -1062,6 +1117,8 @@ def _build_react_loop(ctx: "BuildContext", think_engine: BaseThinkEngine) -> ReA
         set_active=role._set_active,
         get_bg_pool=role._peek_bg_pool,
         report_think_result=role._report_think_result,
+        turn_context_bus=ctx.dep("turn_context_bus"),
+        get_cwd=role.get_cwd,
     )
 
 
@@ -1151,7 +1208,21 @@ def _build_file_watch_service(ctx):
     if cfg is None or not cfg.enabled:
         return None
 
-    roots = list(cfg.roots) or [role.state.project_root or role.get_cwd()]
+    roots = list(cfg.roots)
+    if not roots:
+        # Base root = the project root, but ONLY when the cwd is inside a real
+        # git repo (a genuine project boundary). Outside a repo we deliberately
+        # do NOT fall back to the cwd: launched from a home / large directory
+        # that base root would recursively walk the whole tree to build the
+        # watcher's baseline, which is both pointless (no project to track) and
+        # dangerous (a multi-second walk that used to freeze the UI). The
+        # reload_* config dirs below are watched regardless, so skill / mcp /
+        # config hot-reload still works outside a repo — only the whole-repo
+        # `.py` index freshness (Layer C) needs the base root, and that has no
+        # meaning without a repo anyway.
+        git_root = find_git_root(role.get_cwd())
+        if git_root:
+            roots.append(str(git_root))
 
     # Auto-wire the opt-in hot-reload handlers *before* touching the hook
     # manager: registering them engages the hook layer (so the service has a

@@ -15,9 +15,8 @@ through the ContextEngine (no monkeypatching of module functions).
 """
 from __future__ import annotations
 
-import pytest
-
 import mote.context.budget as token_budget
+import pytest
 from mote.common.events import CompactionCheckpointEvent, EventBus, MessageAppendedEvent
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.schema import AIMessage, ContextManagerConfig, UserMessage

@@ -19,9 +19,6 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from rich.console import Group
-from rich.text import Text
-
 from mote.cli.consumers.render.builders import (
     RESULT_INDENT,
     bullet_row,
@@ -45,6 +42,8 @@ from mote.cli.consumers.render.builders import (
 from mote.cli.consumers.render.markdown import themed_markdown
 from mote.cli.consumers.textual.style import BULLET, NOTE, WARN, Palette
 from mote.cli.consumers.textual.widgets.base import SelectableStatic
+from rich.console import Group
+from rich.text import Text
 
 
 class AssistantBlock(SelectableStatic):

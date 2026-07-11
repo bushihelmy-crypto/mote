@@ -73,8 +73,15 @@ class CodeMapContextSource(ObservationSubscriber):
         lsp_query: Optional[object] = None,
         repo_index: Optional[object] = None,
         get_read_state: Optional[Callable[[], dict]] = None,
+        get_glimpsed_files: Optional[Callable[[], list]] = None,
+        surface_callers: bool = False,
     ) -> None:
         self._get_touched_files = get_touched_files
+        # P2: duck-typed provider of files surfaced by a Grep/Glob match but not
+        # read in full. Merged into the map's file set so a searched-but-unopened
+        # file's structure (defines + intent) can guide "what should I read".
+        # None -> the map reflects only the read trajectory (backward compatible).
+        self._get_glimpsed_files = get_glimpsed_files
         # Owned directly (same context layer). Long-lived: holds the extractor's
         # mtime cache + the SQLite store across turns, so re-parsing is lazy.
         self._map = code_map if code_map is not None else CodeMap()
@@ -90,6 +97,13 @@ class CodeMapContextSource(ObservationSubscriber):
         # seam ChangedFilesContextSource reads). None -> self-description always
         # renders (fully backward compatible).
         self._get_read_state = get_read_state
+        # P3: opportunistic symbol-level callers. When on (and an LSP facade is
+        # wired), a *calm* row's public top-level symbols get their real call
+        # sites queried once per version — rendered as ``foo called by: a.py`` so
+        # the model sees the reverse call direction, not just file-level "used by".
+        # Default off: it adds LSP ``references`` volume, so it is opt-in until the
+        # cheaper F1/F2/F3 signals are shown to be insufficient (see the plan).
+        self._surface_callers = surface_callers
         # path -> last-emitted neighborhood signature, so an unchanged map row
         # stays quiet until its structure or within-set edges actually change.
         self._reported: dict[str, str] = {}
@@ -111,9 +125,13 @@ class CodeMapContextSource(ObservationSubscriber):
         #   _changed_symbols: path -> [Symbol] still existing (sig-changed only)
         #                   — F2's references targets (a removed symbol can't be queried).
         #   _precise: path -> {qualified_name: [caller display paths]} from F2.
+        #   _surfaced: path -> {qualified_name: [caller display paths]} from P3 —
+        #             opportunistic callers of calm public symbols (kept separate
+        #             from _precise so the interface-change ⚠ path is unchanged).
         self._changed_names: dict[str, list[str]] = {}
         self._changed_symbols: dict[str, list] = {}
         self._precise: dict[str, dict[str, list[str]]] = {}
+        self._surfaced: dict[str, dict[str, list[str]]] = {}
 
     async def handle(self, event) -> None:
         """Reset the incremental frontier after a compaction (re-emit the full map).
@@ -133,16 +151,35 @@ class CodeMapContextSource(ObservationSubscriber):
             self._shape_cache = {}
         return None
 
+    def _collect_files(self) -> list:
+        """The map's file set: the read trajectory plus glimpsed search hits (P2).
+
+        Read files come first (the working set), then glimpsed-only files a
+        Grep/Glob surfaced but the model has not opened — deduped, order-preserved
+        so an already-read file is never demoted to a glimpse. Best-effort: a
+        raising provider contributes nothing.
+        """
+        try:
+            touched = list(self._get_touched_files()) if self._get_touched_files else []
+        except Exception:  # noqa: BLE001 — advisory; never break a turn
+            touched = []
+        try:
+            glimpsed = list(self._get_glimpsed_files()) if self._get_glimpsed_files else []
+        except Exception:  # noqa: BLE001
+            glimpsed = []
+        seen = set(touched)
+        return touched + [p for p in glimpsed if p not in seen]
+
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
-        touched = self._get_touched_files() if self._get_touched_files else []
-        if not touched:
+        files = self._collect_files()
+        if not files:
             return None
 
         # Layer C: whole-repo reverse deps when a repo index is wired; else the
         # touched-set-scoped query (backward compatible).
         repo_importers = getattr(self._repo_index, "importers", None) if self._repo_index else None
         try:
-            neighborhoods = self._map.neighborhood(list(touched), repo_importers=repo_importers)
+            neighborhoods = self._map.neighborhood(files, repo_importers=repo_importers)
         except Exception:  # noqa: BLE001 — best-effort; never break a turn
             return None
 
@@ -163,6 +200,11 @@ class CodeMapContextSource(ObservationSubscriber):
         self._precise = {}
         if self._lsp_query is not None:
             await self._fill_precise_callers(neighborhoods)
+
+        # P3: opportunistic callers for calm rows' public symbols (opt-in, LSP-gated).
+        self._surfaced = {}
+        if self._surface_callers and self._lsp_query is not None:
+            await self._fill_surfaced_callers(neighborhoods)
 
         changed: list[FileNeighborhood] = []
         for nb in neighborhoods:
@@ -328,6 +370,31 @@ class CodeMapContextSource(ObservationSubscriber):
             except Exception:  # noqa: BLE001 — never break a turn on a bad query
                 self._precise[path] = {}
 
+    # -- P3: opportunistic callers of calm public symbols --------------------
+
+    async def _fill_surfaced_callers(self, neighborhoods: list) -> None:
+        """Query real callers for each row's *public top-level* symbols (opt-in).
+
+        Where F2 fires only when a symbol's interface breaks, P3 surfaces the
+        reverse call direction for *calm* rows too — so the model sees "who calls
+        this" without an edit. Only public top-level symbols are queried (a caller
+        imports those, not methods/privates — same filter as the risk label), and
+        an interface-changed row is skipped here (F2 already owns its callers, and
+        its ⚠ block renders them). The same :meth:`CodeMap.precise_callers` does
+        the work — bounded by ``_MAX_REF_SYMBOLS`` and cached per version — so the
+        query cost matches F2's; this only widens *when* it runs, behind the flag.
+        """
+        for nb in neighborhoods:
+            if nb.path in self._changed_names:
+                continue  # F2 owns this row's callers (rendered under the ⚠ label)
+            targets = [s for s in nb.symbols if self._is_public_interface(s.qualified_name)]
+            if not targets:
+                continue
+            try:
+                self._surfaced[nb.path] = await self._map.precise_callers(nb.path, targets, self._lsp_query)
+            except Exception:  # noqa: BLE001 — never break a turn on a bad query
+                self._surfaced[nb.path] = {}
+
     # -- rendering -----------------------------------------------------------
 
     def _render_within_budget(self, changed: list[FileNeighborhood], cwd: Optional[str]) -> str:
@@ -372,14 +439,24 @@ class CodeMapContextSource(ObservationSubscriber):
         interface_changed = nb.path in self._changed_names
         out = [f"- {display_path(nb.path, cwd)}"]
         in_context = nb.path in self._in_context
+        # P1: the module's one-line intent, so the model knows what the file is
+        # for without opening it. Tier 0 only (dropped first under budget
+        # pressure) and never for an in-context file (its body is already shown).
+        if tier < 1 and nb.module_summary and (not in_context or interface_changed):
+            out.append(f"    purpose: {nb.module_summary}")
         # F1: gate self-description on body-not-in-context. An interface change
         # re-shows defines regardless — the model needs to see what it just broke.
         if nb.symbols and (not in_context or interface_changed):
-            out.append(f"    defines: {self._render_symbols(nb.symbols, tier)}")
+            out.extend(self._render_defines(nb.symbols, tier))
             if tier < 1:
                 calls = self._render_calls(nb.calls)
                 if calls:
                     out.append(f"    calls: {calls}")
+        # P3: opportunistic per-symbol callers for calm rows (tier 0 only, so it
+        # drops first under budget pressure). Interface-changed rows render their
+        # callers under the ⚠ label instead (see _render_risk), so skip them here.
+        if tier < 1 and not interface_changed:
+            out.extend(self._render_surfaced_callers(nb, cwd))
         if nb.imports:
             targets = ", ".join(display_path(p, cwd) for p in nb.imports)
             out.append(f"    imports: {targets}")
@@ -416,6 +493,22 @@ class CodeMapContextSource(ObservationSubscriber):
             out.append(f"    used by: {', '.join(display_path(p, cwd) for p in nb.imported_by)}")
         return out
 
+    def _render_surfaced_callers(self, nb: FileNeighborhood, cwd: Optional[str]) -> list[str]:
+        """P3 ``sym called by: a.py, b.py`` lines for a calm row's public symbols.
+
+        Renders the opportunistic callers gathered by :meth:`_fill_surfaced_callers`
+        — the reverse call direction the model otherwise only gets on an interface
+        break. Empty when the flag is off, LSP is unwired, or nothing resolved.
+        """
+        surfaced = self._surfaced.get(nb.path) or {}
+        out: list[str] = []
+        for sym in sorted(surfaced):
+            callers = surfaced.get(sym)
+            if callers:
+                names = ", ".join(display_path(p, cwd) for p in callers)
+                out.append(f"    {sym} called by: {names}")
+        return out
+
     def _render_unread(self, path: str, unread_symbols: dict, cwd: Optional[str], tier: int) -> str:
         """One unread-import target: ``pkg/other.py (thing, helper)`` when resolved.
 
@@ -430,16 +523,38 @@ class CodeMapContextSource(ObservationSubscriber):
             return f"{display} ({', '.join(names)})"
         return display
 
-    @staticmethod
-    def _render_symbols(symbols: list, tier: int) -> str:
-        """Symbol list, folding a long tail and honouring the tier's verbosity.
+    def _render_defines(self, symbols: list, tier: int) -> list[str]:
+        """The ``defines:`` sub-lines for a file, honouring the tier's verbosity.
 
-        Tier 0 shows ``name(sig)`` for the first :data:`_MAX_SYMBOLS_PER_FILE`
-        top-level-ish symbols; tiers ≥1 show bare qualified names. Either way a
-        folded tail is summarised as ``(+N more)`` so one big file stays bounded.
+        Tier 0 with any documented symbol expands to one line per symbol —
+        ``name(sig) — summary`` (P1) — so the model reads each symbol's intent
+        without opening the file; undocumented symbols render as bare
+        ``name(sig)``. Tier 0 with no summaries, and every tier ≥1, collapses to
+        the compact single ``defines: a, b, c`` line (names + signatures at tier
+        0, bare names above). Either way the tail past :data:`_MAX_SYMBOLS_PER_FILE`
+        folds to ``(+N more)`` so one big file stays bounded.
         """
         head = symbols[:_MAX_SYMBOLS_PER_FILE]
         overflow = len(symbols) - len(head)
+        if tier < 1 and any(s.summary for s in head):
+            out = ["    defines:"]
+            for s in head:
+                sig = s.signature or ""
+                label = f"{s.qualified_name}{sig}"
+                out.append(f"      {label} — {s.summary}" if s.summary else f"      {label}")
+            if overflow > 0:
+                out.append(f"      (+{overflow} more)")
+            return out
+        return [f"    defines: {self._render_symbols(head, overflow, tier)}"]
+
+    @staticmethod
+    def _render_symbols(head: list, overflow: int, tier: int) -> str:
+        """Compact single-line symbol list (names + signatures at tier 0).
+
+        The no-summary / degraded-tier form: ``a(sig), b(sig), (+N more)`` at
+        tier 0, bare qualified names above. *head* is already capped by the
+        caller and *overflow* is the folded remainder.
+        """
         if tier < 1:
             names = [f"{s.qualified_name}{s.signature}" if s.signature else s.qualified_name for s in head]
         else:
@@ -483,9 +598,15 @@ class CodeMapContextSource(ObservationSubscriber):
         - F3 interface-change: the risky row re-surfaces the turn the change
           happens even if the raw edge set is unchanged;
         - F2 precise callers: a change in resolved callers re-surfaces the row
-          (mirrors the Layer B ``resolved`` fold).
+          (mirrors the Layer B ``resolved`` fold);
+        - P3 surfaced callers: a change in a calm public symbol's resolved callers
+          re-surfaces the row so a newly-appearing "called by" is not swallowed.
         """
-        syms = ",".join(s.qualified_name for s in nb.symbols)
+        # P1: fold the module + per-symbol summaries so a docstring edit that
+        # changes the rendered intent re-surfaces the row (the raw symbol/edge
+        # sets may be otherwise unchanged).
+        syms = ",".join(f"{s.qualified_name}:{s.summary}" for s in nb.symbols)
+        mod = nb.module_summary
         imps = ",".join(nb.imports)  # already sorted by the facade
         unread = ",".join(nb.imports_unread)  # already sorted by the facade
         used = ",".join(nb.imported_by)  # already sorted by the facade
@@ -498,7 +619,10 @@ class CodeMapContextSource(ObservationSubscriber):
         precise = ";".join(
             f"{sym}:{','.join(callers)}" for sym, callers in sorted((self._precise.get(nb.path) or {}).items())
         )
-        return f"{syms}|{imps}|{unread}|{used}|{calls}|{resolved}|{in_ctx}|{risk}|{precise}"
+        surfaced = ";".join(
+            f"{sym}:{','.join(callers)}" for sym, callers in sorted((self._surfaced.get(nb.path) or {}).items())
+        )
+        return f"{mod}|{syms}|{imps}|{unread}|{used}|{calls}|{resolved}|{in_ctx}|{risk}|{precise}|{surfaced}"
 
 
 __all__ = ["CodeMapContextSource"]

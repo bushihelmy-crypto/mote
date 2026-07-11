@@ -1,4 +1,4 @@
-"""RoleZero Serializer."""
+"""Role Serializer."""
 
 import copy
 import json
@@ -6,7 +6,7 @@ import json
 from mote.memory.procedural_memory.serializers.simple import SimpleSerializer
 
 
-class RoleZeroSerializer(SimpleSerializer):
+class RoleSerializer(SimpleSerializer):
     def serialize_req(self, **kwargs) -> str:
         """Serialize the request for database storage, ensuring it is a string.
 

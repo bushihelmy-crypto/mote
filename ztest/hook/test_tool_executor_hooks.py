@@ -10,7 +10,6 @@ With no hook_manager the executor behaves exactly as before.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.events import EventBus
 from mote.common.hook.manager import HookManager
 from mote.common.hook.subscriber import HookSubscriber

@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from mcp.types import Tool as MCPTool
-from pydantic import BaseModel
-
 from mote.common.const import TOOL_SCHEMA_PATH
 from mote.common.logs import logger
 from mote.executor.mcp.tool_data_type import Tool, ToolSchema
 from mote.executor.tool_convert import convert_code_to_tool_schema, convert_code_to_tool_schema_ast
+from pydantic import BaseModel
 
 
 class ToolRegistry(BaseModel):
@@ -128,7 +127,7 @@ class ToolRegistry(BaseModel):
             base_name = name.split(":")[0]
             tool = self.tools.get(base_name)
             if not tool or not tool.tool_class:
-                continue  # Plan, RoleZero, Agent etc. — not registry-backed tools
+                continue  # Plan, Role, Agent etc. — not registry-backed tools
 
             instance = self.get_instance(base_name)
             if instance is None:

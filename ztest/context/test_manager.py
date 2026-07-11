@@ -18,7 +18,6 @@ configs so the real gates fire on tiny inputs.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
 from mote.context import ContextManager
 
@@ -243,6 +242,51 @@ async def test_token_state_returns_snapshot():
     state = cm.token_state()
     assert state.model == "gpt-4"
     assert state.token_count > 0
+
+
+# ---------------------------------------------------------------------------
+# fold_state — count-based sibling of token_state, drives the pre-fold warning
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fold_state_counts_foldable_results():
+    # 3 reconstructable Read pairs against the injected compactable set.
+    cm = ContextManager(
+        model="gpt-4",
+        config=ContextManagerConfig(microcompact_trigger_threshold=10, microcompact_keep_recent=5),
+        compactable=COMPACTABLE,
+    )
+    await cm.add_batch(make_pairs(3, name="Read"))
+    state = cm.fold_state()
+    assert state.enabled is True
+    assert state.active_count == 3
+    assert state.trigger == 10
+    assert state.keep_recent == 5
+    assert state.near_fold is False  # 3 < ceil(10*0.8)=8
+
+
+@pytest.mark.asyncio
+async def test_fold_state_near_fold_in_warning_window():
+    cm = ContextManager(
+        model="gpt-4",
+        config=ContextManagerConfig(microcompact_trigger_threshold=10, microcompact_keep_recent=5),
+        compactable=COMPACTABLE,
+    )
+    await cm.add_batch(make_pairs(8, name="Read"))  # exactly ceil(10*0.8)
+    assert cm.fold_state().near_fold is True
+
+
+@pytest.mark.asyncio
+async def test_fold_state_ignores_non_reconstructable_results():
+    # Empty compactable set => no result is foldable => count stays 0.
+    cm = ContextManager(
+        model="gpt-4",
+        config=ContextManagerConfig(microcompact_trigger_threshold=10, microcompact_keep_recent=5),
+        compactable=frozenset(),
+    )
+    await cm.add_batch(make_pairs(8, name="Read"))
+    assert cm.fold_state().active_count == 0
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,6 @@ import os
 import subprocess
 
 import pytest
-
 from mote.common.utils.git_state import collector
 from mote.common.utils.git_state.collector import GitState, _parse_status, _read_branch, collect_git_state
 

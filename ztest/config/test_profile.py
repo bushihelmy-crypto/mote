@@ -10,7 +10,7 @@ from mote.common.config.sources import ConfigSource, discover_source_files
 
 def _point_user_dir_at(tmp_path, monkeypatch):
     """Redirect the user config dir so profile files resolve under tmp_path."""
-    monkeypatch.setattr(sources_mod, "_USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(sources_mod, "CONFIG_ROOT", tmp_path)
 
 
 def test_no_profile_means_no_profile_layer():

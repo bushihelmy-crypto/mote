@@ -1,6 +1,5 @@
 """Cache-aware pricing + pricing modes."""
 import pytest
-
 from mote.router.cost import DEFAULT_UNKNOWN_PRICING, PricingMode, TokenUsage, cost_of, lookup_pricing
 
 

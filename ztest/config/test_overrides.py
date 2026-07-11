@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.common.config.overrides import ConfigOverrides, parse_cli_overrides, parse_override_value, set_nested
 
 

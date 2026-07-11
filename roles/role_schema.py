@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from typing import ClassVar, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from mote.common.prompt.role import CMD_PROMPT, ROLE_INFO, SUMMARY_PROMPT, SUMMARY_WITH_RECOMMEND_PROMPT, SYSTEM_PROMPT
 from mote.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoleSchema(BaseModel):
@@ -36,7 +35,7 @@ class RoleSchema(BaseModel):
     team_info: str = ""
     # End-of-session summary prompts (consumed by Role.end_session). Kept on the
     # schema like the other deploy-time templates so a Role can override the
-    # summary voice without patching role_zero imports. The "with recommend"
+    # summary voice without patching role imports. The "with recommend"
     # variant is selected when need_end_recommendations_tag is set.
     summary_prompt: str = SUMMARY_PROMPT
     summary_with_recommend_prompt: str = SUMMARY_WITH_RECOMMEND_PROMPT
@@ -120,7 +119,7 @@ class RoleSchema(BaseModel):
     file_watch: Optional[FileWatchConfig] = None
 
     # --- File history ---
-    # When True (default), file-mutating tools (Write/Edit/NotebookEdit) record a
+    # When True (default), file-mutating tools (Write/Edit) record a
     # before-image of each file just before overwriting it, into the session's
     # blob store + rollout log (the truth source for diff/undo/rollback). Set
     # False to disable snapshotting (saves disk; loses undo history).
@@ -183,7 +182,6 @@ class RoleSchema(BaseModel):
 
     # --- Memory / summary config ---
     enable_memory: bool = True
-    memory_k: int = 30
     use_summary: bool = True
     enable_router: bool = False
 

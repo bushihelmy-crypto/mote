@@ -28,6 +28,7 @@ import glob as _glob_mod
 import os
 from typing import Callable, ClassVar
 
+from mote.common.const.tools import GLIMPSE_EXTENSIONS, GLIMPSE_RECORD_LIMIT
 from mote.common.const.tools import GLOB_DEFAULT_LIMIT as DEFAULT_LIMIT
 from mote.common.const.tools import SEARCH_TIMEOUT, VCS_DIRECTORIES_TO_EXCLUDE
 from mote.common.prompt.tools import GLOB_DESCRIPTION
@@ -52,6 +53,14 @@ _MSG_NO_FILES = "No files found"
 _MSG_TRUNCATED = "(Results are truncated. Consider using a more specific path or pattern.)"
 
 
+def _mtime(p: str) -> float:
+    """File mtime (epoch secs), 0.0 when unstattable — for recency ordering."""
+    try:
+        return os.stat(p).st_mtime
+    except OSError:
+        return 0.0
+
+
 @register_tool
 class Glob(BaseTool):
     """Fast file pattern matching tool that works with any codebase size."""
@@ -64,11 +73,13 @@ class Glob(BaseTool):
     max_result_size_chars: ClassVar[int] = 100_000
     description = GLOB_DESCRIPTION
     # get_cwd is the stable base for the default search root + output
-    # relativization. Optional: unbound (no Role) falls back to the process cwd.
-    requires = ("get_cwd",)
+    # relativization. record_file_glimpsed feeds matched files to the code map as
+    # navigation hints. Both optional: unbound (no Role) falls back / no-ops.
+    requires = ("get_cwd", "record_file_glimpsed")
 
-    # Injected from Role by bind(): Role.get_cwd.
+    # Injected from Role by bind(): Role.get_cwd, Role.record_file_glimpsed.
     get_cwd: Callable[[], str]
+    record_file_glimpsed: Callable[[str], None]
 
     def _base_cwd(self) -> str:
         """The stable base dir for default root / relativization (unbound: cwd)."""
@@ -117,7 +128,28 @@ class Glob(BaseTool):
         except Exception as e:  # noqa: BLE001 — surface the failure to the model
             raise ToolError(_MSG_FIND_FAILED.format(error=e))
 
+        self._record_glimpses(files)
         return self._format(files, base_cwd)
+
+    def _record_glimpses(self, files: list[str]) -> None:
+        """Feed the top matched ``.py`` files to the code map as glimpse hints (P2).
+
+        Records at most :data:`GLIMPSE_RECORD_LIMIT` files, most-recently-modified
+        first (the same ordering :meth:`_format` surfaces), so the map can show
+        their structure to guide "which of these should I open". Unbound (no
+        Role) → the capability is absent → no-op. Best-effort: a raising sink is
+        swallowed (a navigation hint must never fail a search).
+        """
+        record = getattr(self, "record_file_glimpsed", None)
+        if record is None:
+            return
+        py = [p for p in files if p.endswith(GLIMPSE_EXTENSIONS)]
+        ordered = sorted(py, key=lambda p: (-_mtime(p), p))[:GLIMPSE_RECORD_LIMIT]
+        for p in ordered:
+            try:
+                record(os.path.abspath(p))
+            except Exception:  # noqa: BLE001 — advisory; never fail the search
+                return
 
     async def _run_ripgrep(self, rg: str, root: str, pattern: str) -> list[str]:
         """List files under root matching pattern via ripgrep, return abs paths.
@@ -180,14 +212,7 @@ class Glob(BaseTool):
     @staticmethod
     def _format(files: list[str], cwd: str) -> str:
         """Sort by mtime (most recent first), truncate, relativize, render."""
-
-        def mtime(p: str) -> float:
-            try:
-                return os.stat(p).st_mtime
-            except OSError:
-                return 0.0
-
-        ordered = sorted(files, key=lambda p: (-mtime(p), p))
+        ordered = sorted(files, key=lambda p: (-_mtime(p), p))
         truncated = len(ordered) > DEFAULT_LIMIT
         limited = ordered[:DEFAULT_LIMIT]
         if not limited:

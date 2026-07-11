@@ -16,7 +16,6 @@ import os
 import shutil
 
 import pytest
-
 from mote.sandbox.backend import SandboxPolicy
 from mote.sandbox.runtime import SandboxRuntime
 

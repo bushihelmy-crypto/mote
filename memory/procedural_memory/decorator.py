@@ -4,8 +4,6 @@ import asyncio
 import functools
 from typing import Any, Callable, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, model_validator
-
 from mote.common.config.loader import load_config
 from mote.common.utils.async_helper import run_coroutine_sync
 from mote.common.utils.exceptions import handle_exception
@@ -15,6 +13,7 @@ from mote.memory.procedural_memory.perfect_judges import BasePerfectJudge, Simpl
 from mote.memory.procedural_memory.schema import Experience, Metric, QueryType, Score
 from mote.memory.procedural_memory.scorers import BaseScorer, SimpleScorer
 from mote.memory.procedural_memory.serializers import BaseSerializer, SimpleSerializer
+from pydantic import BaseModel, ConfigDict, model_validator
 
 ReturnType = TypeVar("ReturnType")
 

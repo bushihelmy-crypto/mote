@@ -8,7 +8,6 @@ so the process-wide singleton is never mutated.
 from __future__ import annotations
 
 import pytest
-
 from mote.executor.base_tool import BaseTool
 
 

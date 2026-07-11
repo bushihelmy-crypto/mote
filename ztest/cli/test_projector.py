@@ -12,7 +12,6 @@ the most coverage.
 from __future__ import annotations
 
 import pytest
-
 from mote.cli.view import (
     BaseProjector,
     Capabilities,

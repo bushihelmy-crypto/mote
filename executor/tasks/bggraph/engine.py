@@ -19,8 +19,6 @@ import random
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Optional
 
-from pydantic import TypeAdapter, ValidationError
-
 from mote.common.exception import RecoveryAction, RecoveryRunner
 from mote.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
 from mote.executor.tasks.bggraph.channels import apply_updates
@@ -48,6 +46,7 @@ from mote.executor.tasks.bggraph.types import (
     Stage,
 )
 from mote.executor.tasks.types import BgTaskResult, GraphMeta
+from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from mote.executor.tasks.bggraph.graph import BgGraph

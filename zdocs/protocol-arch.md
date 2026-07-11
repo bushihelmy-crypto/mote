@@ -60,8 +60,8 @@
                                          ContextManager/Role
                  Control/ObservationSubscriber ★  EventBus    控制面/观察面订阅者  handle_control / handle
 ───────────────────────────────────────────────────────────────────────────────────────
- ⑤ 上下文/持久   FileSnapshotStore ★     Write/Edit/         FileSnapshotRecorder snapshot(path)
-                                         NotebookEdit工具     (session/)
+ ⑤ 上下文/持久   FileSnapshotStore ★     Write/Edit工具       FileSnapshotRecorder snapshot(path)
+                                                             (session/)
                  EphemeralContextSource ★TurnContextBus      Git/Token/BgTask/    name/priority/render
                                                              Lsp Sources
 ═══════════════════════════════════════════════════════════════════════════════════════

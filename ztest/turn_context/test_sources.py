@@ -11,7 +11,13 @@ import asyncio
 
 from mote.common.events import PostCompactEvent, SessionStartEvent, TurnEndEvent
 from mote.common.interface import EphemeralContextSource, ObservationSubscriber
-from mote.context.turn_context import CompactionNoticeContextSource, GitContextSource, TokenPressureContextSource
+from mote.common.schema import FoldState
+from mote.context.turn_context import (
+    CompactionNoticeContextSource,
+    FoldPressureContextSource,
+    GitContextSource,
+    TokenPressureContextSource,
+)
 
 
 def run(coro):
@@ -22,6 +28,7 @@ class TestProtocolConformance:
     def test_sources_are_ephemeral_context_sources(self):
         assert isinstance(GitContextSource(), EphemeralContextSource)
         assert isinstance(TokenPressureContextSource(None), EphemeralContextSource)
+        assert isinstance(FoldPressureContextSource(None), EphemeralContextSource)
         assert isinstance(CompactionNoticeContextSource(), EphemeralContextSource)
 
     def test_compaction_notice_is_also_event_subscriber(self):
@@ -174,6 +181,103 @@ class TestTokenPressureContextSource:
     def test_priority_and_name(self):
         s = TokenPressureContextSource(None)
         assert s.name == "token" and s.priority == 20
+
+
+# --------------------------------------------------------------------------
+# Fold pressure — count-based sibling of token pressure. Uses the REAL
+# ``FoldState`` so its ``near_fold`` (ceil(trigger*0.8) window) is exercised too.
+# --------------------------------------------------------------------------
+class _FakeFoldProvider:
+    def __init__(self, state):
+        self._state = state
+
+    def fold_state(self):
+        return self._state
+
+
+class _SeqFoldProvider:
+    """Yields a scripted sequence of FoldStates, one per ``fold_state()`` call.
+
+    Drives the edge-trigger tests: successive renders see successive counts, so
+    the latch's rising-edge behaviour (fire on entry, silent while parked in the
+    window, re-arm after leaving) can be exercised turn by turn.
+    """
+
+    def __init__(self, states):
+        self._states = list(states)
+        self._i = 0
+
+    def fold_state(self):
+        s = self._states[min(self._i, len(self._states) - 1)]
+        self._i += 1
+        return s
+
+
+def _fold(count, *, enabled=True, trigger=10, keep_recent=5):
+    return FoldState(enabled=enabled, active_count=count, trigger=trigger, keep_recent=keep_recent)
+
+
+class TestFoldPressureContextSource:
+    def test_none_provider_returns_none(self):
+        assert run(FoldPressureContextSource(None).render()) is None
+
+    def test_none_state_returns_none(self):
+        assert run(FoldPressureContextSource(_FakeFoldProvider(None)).render()) is None
+
+    def test_below_warning_window_returns_none(self):
+        # trigger 10 -> warn at ceil(8)=8; 7 is still silent.
+        src = FoldPressureContextSource(_FakeFoldProvider(_fold(7)))
+        assert run(src.render()) is None
+
+    def test_at_warning_window_emits_block_with_keep_recent(self):
+        src = FoldPressureContextSource(_FakeFoldProvider(_fold(8)))
+        out = run(src.render())
+        assert out is not None
+        assert "clearing imminent" in out.lower()
+        assert "5 most recent" in out  # keep_recent surfaced
+
+    def test_past_trigger_returns_none(self):
+        # Once past the trigger the fold has (or is about to have) already run —
+        # the pre-warning window is closed, so stay silent rather than nag.
+        src = FoldPressureContextSource(_FakeFoldProvider(_fold(11)))
+        assert run(src.render()) is None
+
+    def test_disabled_returns_none(self):
+        src = FoldPressureContextSource(_FakeFoldProvider(_fold(10, enabled=False)))
+        assert run(src.render()) is None
+
+    def test_lazy_getter_provider_is_resolved(self):
+        src = FoldPressureContextSource(lambda: _FakeFoldProvider(_fold(9)))
+        assert run(src.render()) is not None
+
+    def test_edge_trigger_fires_once_while_parked_in_window(self):
+        # Counts climb 7->8->9->10: silent below the window, one warning on the
+        # rising edge (7->8), then silent while parked inside it (9, 10) — no
+        # per-turn nagging.
+        src = FoldPressureContextSource(_SeqFoldProvider([_fold(7), _fold(8), _fold(9), _fold(10)]))
+        assert run(src.render()) is None  # 7: below window
+        assert run(src.render()) is not None  # 8: rising edge -> fire once
+        assert run(src.render()) is None  # 9: still in window -> silent
+        assert run(src.render()) is None  # 10: still in window -> silent
+
+    def test_edge_trigger_rearms_after_leaving_window(self):
+        # A fold drops the count back below the window; the next approach must
+        # re-fire (one nudge per approach, not one per session).
+        src = FoldPressureContextSource(_SeqFoldProvider([_fold(8), _fold(3), _fold(8)]))
+        assert run(src.render()) is not None  # rising edge -> fire
+        assert run(src.render()) is None  # folded back to 3 -> re-arm, silent
+        assert run(src.render()) is not None  # approaches again -> fire again
+
+    def test_edge_trigger_fires_when_jumping_straight_into_window(self):
+        # Below window then straight to the trigger boundary (no intermediate
+        # step): still a rising edge, so it fires.
+        src = FoldPressureContextSource(_SeqFoldProvider([_fold(7), _fold(10)]))
+        assert run(src.render()) is None
+        assert run(src.render()) is not None
+
+    def test_priority_and_name(self):
+        s = FoldPressureContextSource(None)
+        assert s.name == "fold" and s.priority == 22
 
 
 # Note: the LSP feed is the dual-role `DiagnosticsBuffer` (it is both the bus

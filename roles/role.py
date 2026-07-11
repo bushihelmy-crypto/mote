@@ -19,8 +19,8 @@ from mote.common.base import BaseRole
 from mote.common.const import MESSAGE_ROUTE_TO_SELF
 from mote.common.events import SessionStartEvent, TurnEndEvent, UserPromptSubmitEvent, set_bus, span
 from mote.common.exception import RoleContextNotSetError
-from mote.common.logs import bind_trace, log_class, logger
-from mote.common.schema import AIMessage, CauseBy, Message, UserMessage
+from mote.common.logs import bind_session_logfile, bind_trace, log_class, logger, unbind_session_logfile
+from mote.common.schema import AIMessage, CauseBy, Message
 from mote.common.utils.common import any_to_str, role_raise_decorator
 from mote.context import ContextManager
 from mote.context.skills.skill_manager import SkillManager
@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         "set_cwd",
         "record_file_read",
         "get_file_read_mtime",
+        "is_resource_visible",
         "put_message",
         "publish_message",
         "tool_capabilities",
@@ -109,7 +110,7 @@ class Role(BaseRole):
         # state controller and the tool-capabilities holder). The Role keeps a
         # thin property surface that delegates onto this holder; the wiring logic
         # lives there. Role.__init__ constructs nothing but this holder.
-        self._components = RoleComponents(self)
+        self._components = RoleComponents(self)  # pyright: ignore[reportArgumentType]  # self-identity: dir!=pkg name
         # Guards firing SessionStart exactly once across this Role's run() calls.
         self._session_started = False
 
@@ -413,6 +414,28 @@ class Role(BaseRole):
         """
         return self._state_ctl.get_file_read_mtime(path)
 
+    def record_file_glimpsed(self, path: str) -> None:
+        """Record that a file surfaced in a search result (Grep/Glob), un-read.
+
+        The Grep/Glob tools call this for each file they matched so the code map
+        can surface those files' structure (defines + intent) as a "which of
+        these should I open" hint — without the file's body ever entering
+        context. Kept separate from record_file_read(): a glimpse carries no body
+        and must not trip the read-before-write guard.
+        """
+        self._state_ctl.record_file_glimpsed(path)
+
+    def is_resource_visible(self, path: str) -> bool:
+        """Is the most-recent tool result read from `path` still present in context?
+
+        Delegates to :class:`~mote.context.visibility.ContextVisibility`. A
+        deduplicating read tool consults this before returning a "you already
+        read this" stub: if the earlier result has been folded/erased by
+        compaction the stub would strand the model with no content, so the tool
+        must re-read instead. Read-only; never mutates history.
+        """
+        return self._components.context_visibility.is_resource_visible(path)
+
     def get_tool_session(self, key: str) -> Any:
         """Return a stateful tool's live per-Role session (keyed by tool name).
 
@@ -476,6 +499,8 @@ class Role(BaseRole):
             "end_session": self.end_session,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
+            "record_file_glimpsed": self.record_file_glimpsed,
+            "is_resource_visible": self.is_resource_visible,
             "record_file_snapshot": self._capabilities.record_file_snapshot,
             "record_terminal_state": self._capabilities.record_terminal_state,
             "take_pending_terminal_restore": self._state_ctl.take_pending_terminal_restore,
@@ -661,22 +686,6 @@ class Role(BaseRole):
         """Place the message into the Role object's private message buffer."""
         self._state_ctl.put_message(message)
 
-    async def _record_turn_context(self) -> None:
-        """Persist this turn's save_to_context turn-context block into history.
-
-        Renders the bus's persisted bucket (git status / token pressure / LSP
-        diagnostics / ... — everything not flagged ``save_to_context=False``) and,
-        when non-empty, appends it as a user message through the ContextManager so
-        it is stored in history and recorded to the durable log. Best-effort:
-        change-gated sources self-suppress, so quiet turns add nothing.
-        """
-        bus = self.turn_context_bus
-        if bus is None:
-            return
-        block = await bus.collect_to_context(cwd=self.state.working_dir or None)
-        if block:
-            await self.context_manager.add(UserMessage(content=block))
-
     def _coerce_to_message(self, with_message) -> Message:
         """Normalize the run() input (str / list / Message) into one Message.
 
@@ -707,6 +716,11 @@ class Role(BaseRole):
             return
         self._session_started = True
 
+        # Open this session's own log file (logs/{session_id}.txt), named to
+        # match its workspace session folder. run() has bound session_id as the
+        # trace_id, so the sink's filter routes this session's lines here.
+        bind_session_logfile(self.session_id)
+
         await self.event_bus.emit(
             SessionStartEvent(
                 session_id=self.state.session_id,
@@ -722,7 +736,7 @@ class Role(BaseRole):
 
         watcher = self.file_watch_service
         if watcher is not None and not watcher.watcher.is_running():
-            watcher.start()
+            await watcher.start_async()
 
         # Kick off the whole-repo code-index cold scan off the event loop (Layer
         # C). No-op when the index layer is off; best-effort inside.
@@ -762,12 +776,6 @@ class Role(BaseRole):
                     # user prompt's <system-reminder> (never stored in history),
                     # alongside git status / token pressure / background-task feeds.
                     self.put_message(msg)
-
-                # Persistent turn-context: the bus sources flagged save_to_context
-                # (the default) are rendered once per turn and written into history
-                # via the ContextManager, so they survive across turns / compaction
-                # (vs the ephemeral request-only block in the user prompt).
-                await self._record_turn_context()
 
                 # Auto-continue budget (opt-in, default 0): a TurnEnd control
                 # subscriber may block the "stop" to force another turn (CC's
@@ -838,7 +846,7 @@ class Role(BaseRole):
         Thin delegator onto :class:`RoleSessionManager`; returns a fresh role of
         the same class resumed onto the inherited history, independent afterwards.
         """
-        return self._session_manager.fork()
+        return self._session_manager.fork()  # pyright: ignore[reportReturnType]  # self-identity: dir!=pkg name
 
     def _should_auto_continue(self, turn_outcome: Optional[Any], budget: int) -> bool:
         """Decide whether the run loop should force another turn.
@@ -930,6 +938,10 @@ class Role(BaseRole):
                 repo_index.close()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
                 logger.warning(f"Role: repo_index.close() failed: {exc}")
+        # Close this session's per-session log sink (frees the file handle; a
+        # long-lived CLI process opens many sessions). Idempotent / no-op when
+        # file logging was disabled or the session never emitted its start.
+        unbind_session_logfile(self.session_id)
 
     # =========================================================================
     # Readiness

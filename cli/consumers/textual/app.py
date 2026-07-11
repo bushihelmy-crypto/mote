@@ -24,16 +24,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
-from textual.css.query import NoMatches
-from textual.message import Message
-from textual.widgets import Static
-from textual.worker import Worker, WorkerState
-
 from mote.cli.consumers.render.builders import is_collapsible_tool
 from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_copy
-from mote.cli.consumers.textual.style import Palette, textual_css_vars
+from mote.cli.consumers.textual.style import THEME_NAME, Palette, mote_theme, textual_css_vars
 from mote.cli.consumers.textual.widgets import (
     ApprovalMarkerRow,
     AssistantBlock,
@@ -74,6 +67,12 @@ from mote.cli.contracts.view import (
     TRANSCRIPT_CLEARED,
     USAGE_UPDATED,
 )
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
+from textual.message import Message
+from textual.widgets import Static
+from textual.worker import Worker, WorkerState
 
 
 class ViewEventMessage(Message):
@@ -189,6 +188,11 @@ class MoteApp(App):
         yield PromptInput(id="prompt")
 
     def on_mount(self) -> None:
+        # Swap Textual's auto-derived near-black canvas for the ``mote-monokai``
+        # theme (Monokai olive-charcoal surfaces + brand-orange accent), so the
+        # transcript reads as the familiar cmder/Monokai dark rather than flat black.
+        self.register_theme(mote_theme())
+        self.theme = THEME_NAME
         self.query_one("#prompt", PromptInput).focus()
         if self._session_driver is not None:
             self._worker = self.run_worker(self._session_driver.run(), exclusive=True, exit_on_error=True)

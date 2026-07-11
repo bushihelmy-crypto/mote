@@ -18,7 +18,6 @@ the real ``.mote/settings.local.json`` files on disk.
 import json
 
 import pytest
-
 from mote.common.const import paths
 from mote.executor.permission import settings_source
 from mote.executor.permission.settings_source import SETTINGS_FILE_NAME, load_permission_rules, settings_paths

@@ -13,7 +13,6 @@ import subprocess
 import sys
 
 import pytest
-
 from mote.sandbox.hardening import apply_in_child, harden_env, hardening_prelude
 
 

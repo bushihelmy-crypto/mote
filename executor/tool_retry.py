@@ -25,9 +25,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Tuple, Type, Union
 
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
-
 from mote.common.exception import is_retryable
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 # Either a predicate ``(exc) -> bool`` or an exception type / tuple of types.
 RetryOn = Union[Callable[[BaseException], bool], Type[BaseException], Tuple[Type[BaseException], ...]]

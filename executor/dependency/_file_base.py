@@ -1,6 +1,6 @@
 """FileMutatingTool — shared base for tools that modify files on disk.
 
-Write, Edit, and NotebookEdit all share the same cross-cutting concerns:
+Write and Edit share the same cross-cutting concerns:
 
 - They need the Role's shared file-read state to enforce *read-before-write*
   (an existing file must have been read this session and be unchanged on disk
@@ -40,7 +40,7 @@ _MSG_MODIFIED_SINCE_READ = (
 
 
 class FileMutatingTool(BaseTool):
-    """Base for file-mutating tools (Write/Edit/NotebookEdit).
+    """Base for file-mutating tools (Write/Edit).
 
     Provides read-before-write enforcement, post-write read-state refresh, and
     newline-style detection against the Role's shared file-read state. Concrete
@@ -74,7 +74,7 @@ class FileMutatingTool(BaseTool):
 
     def permission_target(self, args: dict) -> str:
         """The path being written — matched against ``Tool(pattern)`` rules."""
-        return args.get("file_path") or args.get("notebook_path") or ""
+        return args.get("file_path") or ""
 
     @staticmethod
     def _detect_line_ending(full_path: str) -> str:
@@ -111,7 +111,7 @@ class FileMutatingTool(BaseTool):
         Args:
             display_path: Path as the model referred to it, used in messages.
             full_path: Resolved absolute path, used for the actual lookup/stat.
-            noun: How to refer to the target in messages ("file"/"notebook").
+            noun: How to refer to the target in messages (e.g. "file").
             verb: The action being guarded, used in the not-read message
                 ("writing to"/"editing"/"overwriting").
         """

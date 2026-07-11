@@ -38,7 +38,7 @@ class Palette:
     SUCCESS = "#2c7a39"  # green — ok result / success notice
     ERROR = "#ab2b3f"  # red — failed result / error
     WARNING = "#966c1e"  # amber — approval / warning notice
-    DIM = "grey50"  # secondary text, folded affordance, usage line
+    DIM = "#a8a8a8"  # secondary text, folded affordance, usage line (brightened)
     DIFF_ADD = "#69db7c"  # diff added line — bright fg on the add bar
     DIFF_DEL = "#ffa8b4"  # diff removed line — bright fg on the del bar
     # Filled diff bars (claude-code look): a dark tinted background spans the

@@ -11,7 +11,6 @@ sibling carrying the inherited history and lineage; listing surfaces the parent.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import UserMessage
 from mote.session.events import CompactedEvent, MessageEvent, SessionMetaEvent
 from mote.session.fork import fork

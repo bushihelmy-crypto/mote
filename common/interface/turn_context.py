@@ -39,6 +39,7 @@ class TurnContextPriority(IntEnum):
     TOOL_CATALOG = 5  # the available-commands catalogue — leads the reminder
     GIT = 10  # working-tree branch / status / recent commits
     TOKEN = 20  # context-budget pressure note (only when near the limit)
+    FOLD = 22  # count-based fold pressure — old tool results about to be cleared
     COMPACTION = 25  # a just-happened compaction's summary (one-shot)
     CHANGED_FILES = 27  # files edited on disk since the agent last read them
     CODE_MAP = 28  # local structure map of the touched files (defines / imports / used-by)

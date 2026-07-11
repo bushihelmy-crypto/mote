@@ -12,7 +12,6 @@ structured channel with scriptable answers.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 from mote.executor.tool_result import ToolError, ToolResult
 from mote.executor.tools.human import AskHuman, AskUserQuestion, ReplyToHuman

@@ -23,8 +23,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Set
 
-from pydantic import ConfigDict, PrivateAttr
-
 from mote.common.exception import AgentNotFound
 from mote.common.logs import logger
 from mote.common.schema import Message
@@ -33,6 +31,7 @@ from mote.environment.control import AgentControl
 from mote.environment.registry import AgentMetadata
 from mote.environment.runtime import AgentRuntime
 from mote.environment.store import ResidencyStore
+from pydantic import ConfigDict, PrivateAttr
 
 
 class AgentEnvironment(BaseEnvironment):

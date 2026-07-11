@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Optional
 from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
 from mote.common.schema import AIMessage, UserMessage
 from mote.common.utils.report import RecommendReporter, ThoughtReporter
-from mote.common.utils.role_zero_utils import attach_media, detach_media
+from mote.common.utils.role_utils import attach_media, detach_media
 from mote.roles.role_state import RoleState
 from mote.router.router import SUMMARY_TASK
 from mote.think.prompt_builder import PromptBuilder
@@ -156,9 +156,9 @@ class RoleCapabilities:
 
         Delegates to the session's ``file_snapshot_recorder``, which stores the
         prior on-disk content content-addressed and appends a snapshot event to
-        the rollout log (the truth source for diff/undo). The Write/Edit/
-        NotebookEdit tools call this capability without touching the session log
-        directly. Best-effort — never raises into the tool.
+        the rollout log (the truth source for diff/undo). The Write/Edit tools
+        call this capability without touching the session log directly.
+        Best-effort — never raises into the tool.
         """
         self._role.file_snapshot_recorder.snapshot(full_path, tool=tool)
 
@@ -325,7 +325,10 @@ class RoleCapabilities:
         role.deactivate()
 
         memory = role.context_manager
-        messages = memory.get(role.role_schema.memory_k)
+        # Full managed history: kept boundary-safe (paired tool_use/tool_result)
+        # and under budget by manage_history each turn. A tail slice here could
+        # strand an orphan tool_result at the head → Anthropic 400.
+        messages = memory.get()
         # The loop publishes this turn's think result to state the moment the
         # think task drains, so we read the assistant's final text off state
         # rather than reaching into the (now per-turn, stateless) think engine.

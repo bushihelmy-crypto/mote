@@ -9,12 +9,11 @@ from urllib.parse import unquote, urlparse, urlunparse
 from uuid import UUID, uuid4
 
 from aiohttp import ClientSession, UnixConnector
-from pydantic import BaseModel, Field, PrivateAttr
-
 from mote.common.const import MOTE_REPORTER_DEFAULT_URL
 from mote.common.events import LLMStreamDeltaEvent, ResourceReportEvent, current_bus, observe_event, observe_event_sync
 from mote.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
 from mote.common.logs import logger
+from pydantic import BaseModel, Field, PrivateAttr
 
 if typing.TYPE_CHECKING:
     from mote.roles.role import Role

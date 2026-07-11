@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.common.exception import MoteError, NonRetryableError, RecoveryAction, RecoveryRunner, RetryableError
 from mote.common.interface.event_subscriber import ObservationSubscriber
 

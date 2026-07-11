@@ -462,7 +462,7 @@ class PromptBuilder:
         keep_recent comes from protected_recent_messages. Returns ("", "")
         otherwise.
         """
-        rz = config.role_zero
+        rz = config.role
         if not getattr(rz, "enable_compressable_memory", False):
             return "", ""
         keep_recent = getattr(rz, "protected_recent_messages", 8)

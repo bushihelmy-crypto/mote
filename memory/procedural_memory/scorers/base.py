@@ -2,9 +2,8 @@
 
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, ConfigDict
-
 from mote.memory.procedural_memory.schema import Score
+from pydantic import BaseModel, ConfigDict
 
 
 class BaseScorer(BaseModel, ABC):

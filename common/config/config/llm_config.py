@@ -10,12 +10,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import field_validator, model_validator
-
 from mote.common.config.config.oauth_config import OAuthProviderConfig
 from mote.common.const import LLM_API_TIMEOUT
 from mote.common.exception import MissingAPIKeyError
 from mote.common.utils.yaml_model import YamlModel
+from pydantic import field_validator, model_validator
 
 
 class LLMType(Enum):

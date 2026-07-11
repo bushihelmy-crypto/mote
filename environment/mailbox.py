@@ -25,11 +25,10 @@ import asyncio
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from mote.common.schema import Message, UserMessage
 from mote.environment.agent_path import AgentPath
 from mote.environment.comms import CommKind
+from pydantic import BaseModel, ConfigDict, Field
 
 # Metadata keys carried on the staged UserMessage so the recipient can see who
 # wrote it, which path it was addressed to, what kind of message it is, and which

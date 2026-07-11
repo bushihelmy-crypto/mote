@@ -7,7 +7,6 @@ import base64
 import json
 
 import pytest
-
 from mote.router.oauth.jwt_utils import JWTDecodeError, decode_jwt_payload, parse_claims
 
 

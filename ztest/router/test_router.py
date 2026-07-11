@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.exception import ModelNotFoundError
 from mote.router.schema import RoutingRequest

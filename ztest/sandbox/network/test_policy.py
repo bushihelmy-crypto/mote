@@ -9,7 +9,6 @@ decision (closed-by-default when no domains are allowed).
 from __future__ import annotations
 
 import pytest
-
 from mote.sandbox.network.policy import NetworkPolicy, is_blocked_host, normalize_host
 
 

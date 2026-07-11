@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.common.text import count_noun, plural, verb_agree
 
 

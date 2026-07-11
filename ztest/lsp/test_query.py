@@ -10,7 +10,6 @@ LSP-shaped and that any failure degrades to ``[]`` (best-effort, never raises).
 from __future__ import annotations
 
 import pytest
-
 from mote.common.schema import LspServerConfig
 from mote.roles.lsp.registry import DiagnosticRegistry
 from mote.roles.lsp.server import LspServerInstance, path_to_uri

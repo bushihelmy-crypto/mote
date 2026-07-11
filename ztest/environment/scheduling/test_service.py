@@ -6,7 +6,6 @@ import types
 from datetime import datetime
 
 import pytest
-
 from mote.common.schema.queue import MessageQueue
 from mote.environment.agent_path import AgentPath
 from mote.environment.control import AgentControl

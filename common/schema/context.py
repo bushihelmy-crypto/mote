@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel
-
 from mote.common.const.context import AUTOCOMPACT_BUFFER_TOKENS as _AUTOCOMPACT_BUFFER_TOKENS
 from mote.common.const.context import AUTOCOMPACT_KEEP_TAIL_MESSAGES as _AUTOCOMPACT_KEEP_TAIL_MESSAGES
 from mote.common.const.context import AUTOCOMPACT_KEEP_TAIL_TOKENS as _AUTOCOMPACT_KEEP_TAIL_TOKENS
@@ -18,6 +16,7 @@ from mote.common.const.context import MAX_OUTPUT_TOKENS_FOR_SUMMARY as _MAX_OUTP
 from mote.common.const.context import MICROCOMPACT_CLEAR_AT_LEAST_TOKENS as _MICROCOMPACT_CLEAR_AT_LEAST_TOKENS
 from mote.common.const.context import MICROCOMPACT_KEEP_RECENT as _MICROCOMPACT_KEEP_RECENT
 from mote.common.const.context import MICROCOMPACT_TRIGGER_THRESHOLD as _MICROCOMPACT_TRIGGER_THRESHOLD
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # ContextManagerConfig (from context/config.py)
@@ -76,3 +75,35 @@ class TokenState:
     def should_autocompact(self) -> bool:
         """True when the stored history should be summarized & rebuilt."""
         return self.above_autocompact
+
+
+# ---------------------------------------------------------------------------
+# FoldState (from context/manager.fold_state)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FoldState:
+    """A snapshot of where the history sits relative to the count-based fold.
+
+    The token-based autocompact is described by :class:`TokenState`; this is its
+    count-based sibling for the FREE microcompact fold, which clears old
+    reconstructable tool-result bodies once their number exceeds ``trigger``,
+    keeping only the most recent ``keep_recent``. Lets a pre-fold pressure warning
+    reason about the same count the reducer will act on, without re-deriving it.
+    """
+
+    enabled: bool
+    active_count: int
+    trigger: int
+    keep_recent: int
+
+    @property
+    def near_fold(self) -> bool:
+        """True when active results have reached 80% of the trigger (but not yet
+        past it): the last window to record anything before the oldest bodies are
+        cleared. Silent when folding is disabled or the trigger is non-positive."""
+        if not self.enabled or self.trigger <= 0:
+            return False
+        warn_at = -(-self.trigger * 4 // 5)  # ceil(trigger * 0.8), int-only
+        return warn_at <= self.active_count <= self.trigger

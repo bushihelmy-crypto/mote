@@ -35,6 +35,17 @@ RESOURCE_ID = "resource_id"
 RESOURCE_KIND = "resource_kind"
 RESOURCE_STICKY = "resource_sticky"
 
+# Resource provenance of a tool-result (carried in Message.metadata on a
+# tool-result message). Records which durable resource — today a filesystem
+# path — a *reconstructable* result was derived from, so the visibility layer
+# can answer "is this file's last read still present in context?" without the
+# caller having to know the opaque tool_call_id. Stamped by the channel from
+# ``ToolResult.resource_path``; read by :class:`ContextVisibility`. Absent on
+# results that are not tied to a re-readable resource. Like the other keys here,
+# it is metadata-as-truth: it survives dump/load even though the ToolMessage
+# subclass identity does not.
+TOOL_RESULT_RESOURCE_PATH = "tool_result_resource_path"
+
 # Result-lifecycle retention (carried in Message.metadata on a tool-result message).
 # This is the model-facing counterpart to the tool author's static ``reconstructable``
 # ClassVar: a per-result hint about how compaction should treat *this specific*

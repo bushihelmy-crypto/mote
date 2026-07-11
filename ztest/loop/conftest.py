@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import pytest
-
 from mote.common.base import LoopContext
 from mote.common.schema import Message, UserMessage
 from mote.loop.react_loop import ReActLoop
@@ -113,6 +112,7 @@ class FakeResult:
     pdfs: list = field(default_factory=list)
     terminate: bool = False
     retention: str | None = None
+    resource_path: str | None = None
 
 
 class FakeExecutor:
@@ -231,7 +231,6 @@ def make_loop_context(**overrides) -> LoopContext:
     params: dict[str, Any] = dict(
         max_react_loop=5,
         max_consecutive_react_limit=3,
-        memory_k=10,
         name="Alice",
         display_name="Alice(Tester)",
         tools=["Read", "AskUserQuestion"],
@@ -282,6 +281,8 @@ def make_loop():
         provider: Optional[FakeContextProvider] = None,
         active: bool = True,
         bg_pool: Optional[FakeBgPool] = None,
+        turn_context_bus=None,
+        get_cwd: Optional[Callable[[], str]] = None,
         **ctx_overrides,
     ) -> LoopBundle:
         ctx = ctx or make_loop_context(**ctx_overrides)
@@ -317,6 +318,8 @@ def make_loop():
             set_active=set_active,
             get_bg_pool=get_bg_pool,
             report_think_result=report_think_result,
+            turn_context_bus=turn_context_bus,
+            get_cwd=get_cwd,
         )
         return LoopBundle(
             loop=loop,

@@ -83,6 +83,14 @@ class ToolResult:
             message's metadata; the compaction layer is the sole interpreter.
             This is pure plumbing here — the field only exists so a tool can
             express intent; how a tool populates it is the tool's concern.
+        resource_path: Absolute path of the durable resource this result was
+            derived from, set by *reconstructable* read-only tools (Read stamps
+            the file it read). The executor/channel carry it verbatim onto the
+            tool_result message's metadata (``TOOL_RESULT_RESOURCE_PATH``), where
+            :class:`~mote.context.visibility.ContextVisibility` uses it to answer
+            "is this file's last read still present in context?". ``None`` for
+            results not tied to a re-readable resource. Pure plumbing here, like
+            ``retention``.
     """
 
     output: str
@@ -94,6 +102,7 @@ class ToolResult:
     error: Optional[ErrorReport] = None
     terminate: bool = False
     retention: Optional[str] = None
+    resource_path: Optional[str] = None
 
     def media_artifacts(self) -> list[ToolMedia]:
         """Describe this result's media as structured ``ToolMedia`` facts.

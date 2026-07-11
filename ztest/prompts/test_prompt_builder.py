@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from mote.common import prompt as R
 from mote.common.base.command_channel import PROMPT_VAR_KEYS
 from mote.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems

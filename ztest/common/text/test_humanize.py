@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mote.common.text import format_elapsed, format_file_size, format_token_count
 
 

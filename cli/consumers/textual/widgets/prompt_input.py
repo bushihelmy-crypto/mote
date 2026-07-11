@@ -15,10 +15,9 @@ import os
 import re
 from typing import Any, Optional
 
+from mote.cli.consumers.textual.style import PROMPT_SYMBOL
 from textual.binding import Binding
 from textual.widgets import Input
-
-from mote.cli.consumers.textual.style import PROMPT_SYMBOL
 
 
 class PromptInput(Input):

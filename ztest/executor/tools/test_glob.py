@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from mote.executor.tool_result import ToolError
 from mote.executor.tools.glob import Glob
 
@@ -135,3 +134,27 @@ class TestGlobPythonFallback:
     def test_run_python_excludes_vcs(self, tree):
         files = Glob._run_python(str(tree), "*.py")
         assert all(".git" not in f for f in files)
+
+
+class TestGlobGlimpse:
+    """P2: Glob records matched .py files as code-map glimpse hints."""
+
+    def test_records_matched_py_files(self, tree):
+        role = CapRole()
+        tool = bind(Glob(), role)
+        run(tool.call(pattern="**/*.py"))
+        # a.py, b.py, sub/d.py matched (.git excluded); all recorded as abspaths.
+        assert any(p.endswith("a.py") for p in role.glimpsed)
+        assert any(p.endswith("d.py") for p in role.glimpsed)
+        assert all(os.path.isabs(p) for p in role.glimpsed)
+
+    def test_non_py_matches_not_recorded(self, tree):
+        role = CapRole()
+        tool = bind(Glob(), role)
+        run(tool.call(pattern="*.txt"))
+        assert role.glimpsed == []  # c.txt has no structure to map
+
+    def test_unbound_glob_does_not_raise(self, tree):
+        # No Role bound -> record_file_glimpsed absent -> the glimpse pass no-ops.
+        out = _glob(pattern="**/*.py")
+        assert "a.py" in out

@@ -14,7 +14,6 @@ hand-computed thresholds rather than the machine's real token counts.
 from __future__ import annotations
 
 import pytest
-
 from mote.common.const.context import (
     AUTOCOMPACT_BUFFER_TOKENS,
     ERROR_THRESHOLD_BUFFER_TOKENS,
