@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Tuple
 
-from metagpt.cli.consumers.render.builders._rich import Text
-from metagpt.cli.consumers.render.palette import Palette
+from mote.cli.consumers.render.builders._rich import Text
+from mote.cli.consumers.render.palette import Palette
 
 
 def _hex_to_rgb(color: str) -> Tuple[int, int, int]:

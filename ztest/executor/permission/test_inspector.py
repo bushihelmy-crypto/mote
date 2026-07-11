@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.events import EventBus, PreToolUseEvent
-from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage
-from metagpt.executor.permission import Inspection, ToolCallInspector
+from mote.common.events import EventBus, PreToolUseEvent
+from mote.common.interface.event_subscriber import FAIL_CLOSED, ControlStage
+from mote.executor.permission import Inspection, ToolCallInspector
 
 
 def run(coro):
@@ -138,8 +138,8 @@ class TestOnTheBus:
     def test_gate_sees_hook_rewritten_args(self):
         # A REWRITE-stage subscriber mutates the args; the GATE inspector, running
         # after it, must observe the rewritten args (the bus threads them forward).
-        from metagpt.common.events.outcomes import ToolCallOutcome
-        from metagpt.common.interface.event_subscriber import ControlSubscriber
+        from mote.common.events.outcomes import ToolCallOutcome
+        from mote.common.interface.event_subscriber import ControlSubscriber
 
         class _Rewriter(ControlSubscriber):
             handles = ("pre_tool_use",)

@@ -1,26 +1,22 @@
-"""Graph execution tier exceptions (``metagpt.executor.bggraph``).
+"""Graph execution tier exceptions (``mote.executor.bggraph``).
 
 The background graph engine runs a langgraph-style forward frontier. These are
 terminal failures of a graph run — a conditional-edge router blew up or returned
 an unknown key, the activation budget was exhausted, or one/more nodes failed at
 the terminal step. They are named with a ``Graph`` prefix to disambiguate from
-the model-routing :class:`~metagpt.common.exception.router.RouterError`.
+the model-routing :class:`~mote.common.exception.router.RouterError`.
 """
 
 from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from metagpt.common.exception.base import (
-    MetaGPTError,
-    NonRetryableError,
-    RetryableError,
-)
-from metagpt.common.exception.codes import ErrorCode
-from metagpt.common.exception.report import ErrorReport
+from mote.common.exception.base import MoteError, NonRetryableError, RetryableError
+from mote.common.exception.codes import ErrorCode
+from mote.common.exception.report import ErrorReport
 
 
-class GraphError(MetaGPTError):
+class GraphError(MoteError):
     """Base for background-graph execution failures.
 
     ``run_state`` / ``graph_state`` are declared here (default ``None``) so the

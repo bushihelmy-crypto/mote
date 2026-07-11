@@ -30,11 +30,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.const import TOOL_CALL_ID, TOOL_CALLS
-from metagpt.common.schema import Message
-from metagpt.context.compaction.pipeline import ReductionPipeline
-from metagpt.context.compaction.request import ReductionReason, ReductionRequest, Urgency
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.const import TOOL_CALL_ID, TOOL_CALLS
+from mote.common.schema import Message
+from mote.context.compaction.pipeline import ReductionPipeline
+from mote.context.compaction.request import ReductionReason, ReductionRequest, Urgency
+from mote.context.compaction.transcript import Transcript
 
 # Private metadata key stashing the original wire dict on a reconstructed
 # message, so a kept (undropped, unfolded) message is emitted byte-for-byte.
@@ -47,9 +47,7 @@ def _flatten_content(content) -> str:
         return content
     if isinstance(content, list):
         return "".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
         )
     return "" if content is None else str(content)
 

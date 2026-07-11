@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures and helpers for the ``metagpt.tasks`` test suite.
+"""Shared fixtures and helpers for the ``mote.tasks`` test suite.
 
 The fixtures keep every test fully offline and deterministic:
 
-- ``msg_buffer`` is a real :class:`~metagpt.common.schema.MessageQueue` (it
+- ``msg_buffer`` is a real :class:`~mote.common.schema.MessageQueue` (it
   builds offline and is what the pool pushes notifications into).
-- ``pool`` is a real :class:`~metagpt.tasks.BackgroundTaskPool` bound to that
+- ``pool`` is a real :class:`~mote.tasks.BackgroundTaskPool` bound to that
   buffer.
 - The coroutine helpers (``echo`` / ``boom`` / ``gated`` / ``forever``) are
   *factories* — each call returns a fresh, single-use coroutine so a test can
@@ -22,9 +22,8 @@ from typing import Optional
 
 import pytest
 
-from metagpt.common.schema import MessageQueue
-from metagpt.executor.tasks import BackgroundTaskPool
-
+from mote.common.schema import MessageQueue
+from mote.executor.tasks import BackgroundTaskPool
 
 # ---------------------------------------------------------------------------
 # Coroutine factories

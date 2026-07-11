@@ -11,19 +11,16 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
-from metagpt.common.config.loader import load_config
-from metagpt.common.config.meta_config import Config
-from metagpt.router.cost import CostTracker, PricingMode
-from metagpt.router.llm.base_llm import BaseLLM
-from metagpt.router.llm.llm_provider_registry import (
-    create_llm_instance,
-    resolve_api_type,
-)
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.common.config.loader import load_config
+from mote.common.config.meta_config import Config
+from mote.router.cost import CostTracker, PricingMode
+from mote.router.llm.base_llm import BaseLLM
+from mote.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
 
 
 class Context(BaseModel):
-    """LLM build context for MetaGPT.
+    """LLM build context for Mote.
 
     Bundles the global :class:`Config` with a :class:`CostTracker` and exposes
     the only capability the router needs: build a :class:`BaseLLM` from the

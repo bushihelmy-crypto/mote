@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Import-time layering guard for ``metagpt.executor.compress``.
+"""Import-time layering guard for ``mote.executor.compress``.
 
-The compression package is a leaf: it may import ``metagpt.common.*`` and
+The compression package is a leaf: it may import ``mote.common.*`` and
 executor-internal siblings, but must never reach up into the higher layers
 (``router`` / ``roles`` / ``context``). This mirrors the import-time layering
 enforcement introduced in commit b595d04 — a static AST scan of every module
@@ -13,9 +13,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import metagpt.executor.compress as compress_pkg
+import mote.executor.compress as compress_pkg
 
-_FORBIDDEN_ROOTS = ("metagpt.router", "metagpt.roles", "metagpt.context")
+_FORBIDDEN_ROOTS = ("mote.router", "mote.roles", "mote.context")
 
 
 def _module_names(node: ast.AST) -> list[str]:

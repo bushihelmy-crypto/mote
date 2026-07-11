@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Console-free rich *builders* shared by every rich host.
 
-The :class:`~metagpt.cli.consumers.terminal.consumer.TerminalConsumer` used to
+The :class:`~mote.cli.consumers.terminal.consumer.TerminalConsumer` used to
 own both the incremental ``Live`` streaming machinery *and* a set of pure
 ``rich`` renderable builders (colour a diff, build a TSV table, format the usage
 line, compose a tool's headline/summary text). The builders are **console-free**
@@ -14,7 +14,7 @@ reuses the exact same look.
 This package is that shared renderer, living in the neutral ``consumers/render``
 package so neither host depends on the other. It splits the builders by concern
 into sibling modules and re-exports every public symbol here as a facade, so
-``from metagpt.cli.consumers.render.builders import X`` keeps resolving for all
+``from mote.cli.consumers.render.builders import X`` keeps resolving for all
 existing call sites:
 
 - :mod:`._rich` — the single optional-``rich`` import point (``_HAS_RICH`` + rich
@@ -30,8 +30,8 @@ consumers degrade gracefully when it is absent (§9.10).
 
 from __future__ import annotations
 
-from metagpt.cli.consumers.render.builders._rich import _HAS_RICH
-from metagpt.cli.consumers.render.builders.core import (
+from mote.cli.consumers.render.builders._rich import _HAS_RICH  # noqa: F401  # facade re-export
+from mote.cli.consumers.render.builders.core import (
     CONTENT_INDENT,
     RESULT_INDENT,
     USAGE_SEP,
@@ -39,29 +39,28 @@ from metagpt.cli.consumers.render.builders.core import (
     bullet_row,
     compaction_summary_text,
     conversation_compacted_text,
+    file_change_caption,
+    file_change_verb,
     fold_note,
+    fold_note_str,
     format_usage_line,
     indent,
     is_collapsible_tool,
     linkify,
+    media_caption,
+    notice_style,
+    render_result_detail,
     session_table,
+    task_progress_text,
     tool_body_syntax,
     tool_completed_text,
     tool_group_summary_text,
     tool_started_text,
     user_message_row,
 )
-from metagpt.cli.consumers.render.builders.diff import render_diff, render_file_change
-from metagpt.cli.consumers.render.builders.effects import (
-    interpolate_color,
-    shimmer_text,
-    sparkline,
-)
-from metagpt.cli.consumers.render.builders.image import (
-    IMAGE_MAX_COLS,
-    IMAGE_MAX_ROWS,
-    render_image,
-)
+from mote.cli.consumers.render.builders.diff import render_diff, render_file_change
+from mote.cli.consumers.render.builders.effects import interpolate_color, shimmer_text, sparkline
+from mote.cli.consumers.render.builders.image import IMAGE_MAX_COLS, IMAGE_MAX_ROWS, render_image
 
 __all__ = [
     "CONTENT_INDENT",
@@ -82,7 +81,14 @@ __all__ = [
     "tool_completed_text",
     "is_collapsible_tool",
     "tool_group_summary_text",
+    "notice_style",
+    "render_result_detail",
     "fold_note",
+    "fold_note_str",
+    "file_change_verb",
+    "file_change_caption",
+    "media_caption",
+    "task_progress_text",
     "conversation_compacted_text",
     "compaction_summary_text",
     "session_table",

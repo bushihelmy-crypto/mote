@@ -38,7 +38,7 @@ import asyncio
 import atexit
 from typing import Callable, Optional, Tuple, TypeVar
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 T = TypeVar("T")
 

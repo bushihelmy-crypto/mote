@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.kernel_state`` — the kernel-state recorder.
+"""Tests for ``mote.session.kernel_state`` — the kernel-state recorder.
 
 Covers: a record appends a ``kernel_state`` event to the shared rollout log
 (cwd + env diff + unset); the ``enabled`` gate suppresses recording; recording
@@ -8,10 +8,10 @@ is best-effort and conforms to the ``KernelStateStore`` protocol.
 """
 from __future__ import annotations
 
-from metagpt.common.interface import KernelStateStore
-from metagpt.session.events import KERNEL_STATE
-from metagpt.session.kernel_state import KernelStateRecorder
-from metagpt.session.log import SessionLog
+from mote.common.interface import KernelStateStore
+from mote.session.events import KERNEL_STATE
+from mote.session.kernel_state import KernelStateRecorder
+from mote.session.log import SessionLog
 
 
 def _recorder(tmp_path, **kw):

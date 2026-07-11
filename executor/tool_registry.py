@@ -2,7 +2,7 @@
 ToolRegistry — global registry for BaseTool subclasses.
 
 Usage:
-    from metagpt.executor.tool_registry import register_tool, registry
+    from mote.executor.tool_registry import register_tool, registry
 
     @register_tool
     class MyTool(BaseTool):
@@ -20,7 +20,7 @@ import importlib
 import pkgutil
 from typing import ClassVar
 
-from metagpt.common.base.singleton import Singleton
+from mote.common.base.singleton import Singleton
 
 
 class ToolRegistry(metaclass=Singleton):
@@ -34,8 +34,8 @@ class ToolRegistry(metaclass=Singleton):
 
     # Packages scanned for @register_tool classes. Tools are expected to live in
     # one of these; a whitelist keeps discovery fast and side-effect-free instead
-    # of importing the whole metagpt tree.
-    _SCAN_PACKAGES: ClassVar[tuple[str, ...]] = ("metagpt.executor.tools",)
+    # of importing the whole mote tree.
+    _SCAN_PACKAGES: ClassVar[tuple[str, ...]] = ("mote.executor.tools",)
 
     def discover(self) -> None:
         """Recursively import modules under the whitelisted packages so each
@@ -76,9 +76,7 @@ class ToolRegistry(metaclass=Singleton):
 
         for method in self._FROZEN_METHODS:
             if method in cls.__dict__:
-                raise TypeError(
-                    f"@register_tool: class '{cls.__name__}' must not override '{method}'"
-                )
+                raise TypeError(f"@register_tool: class '{cls.__name__}' must not override '{method}'")
 
         self._check_conflict(name, cls)
         self._registry[name] = cls

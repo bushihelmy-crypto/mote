@@ -1,7 +1,7 @@
 """State schema for the media production pipeline graph."""
 from __future__ import annotations
 
-from metagpt.executor.tasks.bggraph import GraphState
+from mote.executor.tasks.bggraph import GraphState
 
 
 class MediaPipelineState(GraphState):

@@ -5,17 +5,17 @@
 import typing
 from abc import abstractmethod
 
-from metagpt.common.schema.serialization import BaseSerialization
+from mote.common.schema.serialization import BaseSerialization
 
 if typing.TYPE_CHECKING:
-    from metagpt.common.schema.messages import Message
+    from mote.common.schema.messages import Message
 
 
 class BaseEnvironment(BaseSerialization):
     """Base environment — the message-passing orchestration contract.
 
     The gym/RL episode interface (``reset``/``observe``/``step``) lives in
-    :mod:`metagpt.common.schema.gym_env` (``GymEnvironment``) so this core stays
+    :mod:`mote.common.schema.gym_env` (``GymEnvironment``) so this core stays
     free of RL baggage.
     """
 

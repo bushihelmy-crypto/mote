@@ -35,19 +35,11 @@ from __future__ import annotations
 import os
 from typing import Awaitable, Callable, Optional
 
-from metagpt.executor.permission.prompts import (
-    build_approval_prompt,
-    build_escalation_prompt,
-    parse_approval_response,
-)
-from metagpt.executor.permission.rule_matcher import suggest_command_rule
-from metagpt.executor.permission.rule_store import RuleStore
-from metagpt.executor.permission.sandbox import SandboxGuard
-from metagpt.common.schema.permission_types import (
-    PermissionDecision,
-    PermissionMode,
-    PermissionRule,
-)
+from mote.common.schema.permission_types import PermissionDecision, PermissionMode, PermissionRule
+from mote.executor.permission.prompts import build_approval_prompt, build_escalation_prompt, parse_approval_response
+from mote.executor.permission.rule_matcher import suggest_command_rule
+from mote.executor.permission.rule_store import RuleStore
+from mote.executor.permission.sandbox import SandboxGuard
 
 # An async callback that asks the human a question and returns their free-text
 # reply. Supplied by the Role (``request_approval`` capability); ``None`` when
@@ -103,12 +95,7 @@ class PermissionEngine:
 
         # Sandbox gate (axis B). Only narrows allows, and never re-questions a
         # write the user just approved this turn (reason "user").
-        if (
-            decision.behavior == "allow"
-            and mutates_fs
-            and self._sandbox is not None
-            and decision.reason.type != "user"
-        ):
+        if decision.behavior == "allow" and mutates_fs and self._sandbox is not None and decision.reason.type != "user":
             decision = await self._apply_sandbox(tool_name, target, decision)
 
         return decision
@@ -140,11 +127,9 @@ class PermissionEngine:
         their exact existing behavior.
         """
         if not targets:
-            return await self.check(
-                tool_name, target="", tool_check=tool_check, mutates_fs=mutates_fs
-            )
+            return await self.check(tool_name, target="", tool_check=tool_check, mutates_fs=mutates_fs)
 
-        ask_paths: list[str] = []        # rule/default/tool_check ask
+        ask_paths: list[str] = []  # rule/default/tool_check ask
         escalation_paths: list[str] = []  # sandbox boundary violations
         reasons: list[str] = []
 
@@ -161,11 +146,7 @@ class PermissionEngine:
                 continue
 
             # allow — apply the sandbox boundary (axis B) just like check().
-            if (
-                mutates_fs
-                and self._sandbox is not None
-                and decision.reason.type != "user"
-            ):
+            if mutates_fs and self._sandbox is not None and decision.reason.type != "user":
                 verdict = self._sandbox.check_write(target)
                 if not verdict.allowed:
                     escalation_paths.append(target)
@@ -180,10 +161,7 @@ class PermissionEngine:
             return PermissionDecision.deny(
                 "default",
                 "multi-path approval required",
-                message=(
-                    f"'{tool_name}' needs approval for {blocked} but no "
-                    f"interactive channel is available."
-                ),
+                message=(f"'{tool_name}' needs approval for {blocked} but no " f"interactive channel is available."),
             )
 
         pending = ask_paths + escalation_paths
@@ -293,9 +271,7 @@ class PermissionEngine:
 
         # 3-4. Bypass-immune asks.
         if rule_behavior == "ask":
-            return await self._resolve_ask(
-                tool_name, target, "rule", "an ask rule requires confirmation", segments
-            )
+            return await self._resolve_ask(tool_name, target, "rule", "an ask rule requires confirmation", segments)
         if tool_check is not None and tool_check.behavior == "ask":
             return await self._resolve_ask(
                 tool_name, target, "tool_check", tool_check.message or "the tool requires confirmation", segments
@@ -332,13 +308,9 @@ class PermissionEngine:
             )
 
         # 11. default: ask the user.
-        return await self._resolve_ask(
-            tool_name, target, "default", "this action needs your approval", segments
-        )
+        return await self._resolve_ask(tool_name, target, "default", "this action needs your approval", segments)
 
-    def _resolve_rules(
-        self, tool_name: str, target: str, segments: Optional[list[str]]
-    ) -> Optional[str]:
+    def _resolve_rules(self, tool_name: str, target: str, segments: Optional[list[str]]) -> Optional[str]:
         """Rule behavior for a call: per-segment fold for commands, else single."""
         if segments is not None:
             return self._store.resolve_segments(tool_name, segments)
@@ -348,16 +320,18 @@ class PermissionEngine:
     # Axis B — sandbox boundary
     # ------------------------------------------------------------------
 
-    async def _apply_sandbox(
-        self, tool_name: str, path: str, allowed: PermissionDecision
-    ) -> PermissionDecision:
+    async def _apply_sandbox(self, tool_name: str, path: str, allowed: PermissionDecision) -> PermissionDecision:
         """Gate an allowed filesystem write against the sandbox boundary.
 
         Returns the original allow when the write is inside the boundary; on a
         violation, escalates to the user. With no interactive channel an
         escalation fails closed (deny). A "session" grant widens the sandbox via
         ``add_session_root`` so later writes under that directory pass silently.
+
+        Only reached when the caller has already checked ``self._sandbox is not
+        None`` (see the guard at the single call site), so narrow it here.
         """
+        assert self._sandbox is not None, "_apply_sandbox called with no sandbox configured"
         verdict = self._sandbox.check_write(path)
         if verdict.allowed:
             return allowed
@@ -373,7 +347,9 @@ class PermissionEngine:
         choice = parse_approval_response(reply)
         if choice == "deny":
             return PermissionDecision.deny(
-                "sandbox", "user blocked sandbox escalation", message=f"The user blocked '{tool_name}' writing '{path}'."
+                "sandbox",
+                "user blocked sandbox escalation",
+                message=f"The user blocked '{tool_name}' writing '{path}'.",
             )
         if choice == "allow_session":
             self._sandbox.add_session_root(os.path.dirname(path) or path)
@@ -411,9 +387,7 @@ class PermissionEngine:
         choice = parse_approval_response(reply)
 
         if choice == "deny":
-            return PermissionDecision.deny(
-                "user", "user denied", message=f"The user denied running '{tool_name}'."
-            )
+            return PermissionDecision.deny("user", "user denied", message=f"The user denied running '{tool_name}'.")
         if choice == "allow_session":
             # Remember exactly the rule shown in the prompt — no surprise grant.
             self._store.add_session_rule(rule)
@@ -434,8 +408,6 @@ class PermissionEngine:
             if rule is not None:
                 return rule, f"{rule.tool_name}({rule.pattern})"
         pattern = target or None
-        rule = PermissionRule(
-            tool_name=tool_name, pattern=pattern, behavior="allow", source="session"
-        )
+        rule = PermissionRule(tool_name=tool_name, pattern=pattern, behavior="allow", source="session")
         spec = f"{tool_name}({pattern})" if pattern else tool_name
         return rule, spec

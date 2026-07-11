@@ -6,20 +6,18 @@ is the frontier-scheduler driver coroutine.  See :mod:`engine` for execution.
 
 from __future__ import annotations
 
+import types
 import typing
 from typing import Any, Awaitable, Callable, Optional, Union
 
-from metagpt.common.utils.docstring import first_line
-from metagpt.executor.tasks.bggraph.base_node import (
-    BaseNode,
-    _parse_params_from_docstring,
-)
-from metagpt.executor.tasks.bggraph.channels import derive_reducers
-from metagpt.executor.tasks.bggraph.engine import _build_executor
-from metagpt.executor.tasks.bggraph.engine import resume as _resume
-from metagpt.executor.tasks.bggraph.engine import resume_skip as _resume_skip
-from metagpt.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
-from metagpt.executor.tasks.bggraph.types import (
+from mote.common.utils.docstring import first_line
+from mote.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
+from mote.executor.tasks.bggraph.channels import derive_reducers
+from mote.executor.tasks.bggraph.engine import _build_executor
+from mote.executor.tasks.bggraph.engine import resume as _resume
+from mote.executor.tasks.bggraph.engine import resume_skip as _resume_skip
+from mote.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
+from mote.executor.tasks.bggraph.types import (
     END,
     START,
     GraphState,
@@ -29,8 +27,8 @@ from metagpt.executor.tasks.bggraph.types import (
     _NodeDef,
     _WaitingEdge,
 )
-from metagpt.executor.tasks.types import BgTaskResult
-from metagpt.executor.tool_spec_adapter import annotation_to_json_schema
+from mote.executor.tasks.types import BgTaskResult
+from mote.executor.tool_spec_adapter import annotation_to_json_schema
 
 # ---------------------------------------------------------------------------
 # Type-compatibility check for compile-time param validation
@@ -55,9 +53,9 @@ def _types_compatible(source_type: type, target_type: type) -> bool:
 
     # Unwrap Optional[T] → check T against target
     if origin is typing.Union:
-        args = [a for a in typing.get_args(source_type) if a is not type(None)]
+        args = [a for a in typing.get_args(source_type) if a is not types.NoneType]  # noqa: E721  # identity check
         if not args:
-            return target_type is type(None)
+            return target_type is types.NoneType  # noqa: E721  # identity check
         # All non-None arms must be compatible
         return all(_types_compatible(a, target_type) for a in args)
 

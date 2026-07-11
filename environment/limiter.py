@@ -14,8 +14,8 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from metagpt.common.exception import AgentLimitReached
-from metagpt.environment._scope import ScopedExitMixin
+from mote.common.exception import AgentLimitReached
+from mote.environment._scope import ScopedExitMixin
 
 
 class AgentExecutionLimiter:

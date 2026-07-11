@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Read tool (``metagpt.executor.tools.read``).
+"""Tests for the Read tool (``mote.executor.tools.read``).
 
 Covers text slicing (offset/limit + line numbers), the empty/short-file and
 binary/device guards, notebook flattening, image media results, the per-instance
@@ -15,9 +15,9 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.tools.read import Read, FILE_UNCHANGED_STUB
-from metagpt.common.const.tools import MAX_LINE_LENGTH
+from mote.common.const.tools import MAX_LINE_LENGTH
+from mote.executor.tool_result import ToolError, ToolResult
+from mote.executor.tools.read import FILE_UNCHANGED_STUB, Read
 
 from .conftest import CapRole, bind, run, write_file
 
@@ -48,6 +48,25 @@ class TestReadText:
         out = _read(Read(), file_path="rel.txt")
         assert "1→hi" in out
 
+    def test_relative_path_resolves_against_role_cwd(self, workspace, tmp_path):
+        # A bound tool resolves relative paths against the ROLE's stable cwd, not
+        # the process cwd (which the workspace fixture chdir'd into).
+        sub = tmp_path / "role_dir"
+        sub.mkdir()
+        write_file(sub / "here.txt", "role-side\n")
+        # A same-named file in the process cwd must NOT be the one read.
+        write_file(workspace / "here.txt", "process-side\n")
+        role = CapRole(cwd=str(sub))
+        out = _read(bind(Read(), role), file_path="here.txt")
+        assert "role-side" in out
+        assert "process-side" not in out
+
+    def test_relative_path_unbound_uses_process_cwd(self, workspace):
+        # Unbound (no Role): relative paths fall back to the process cwd.
+        write_file(workspace / "unbound.txt", "ok\n")
+        out = _read(Read(), file_path="unbound.txt")
+        assert "1→ok" in out
+
     def test_empty_file_warns(self, workspace):
         p = write_file(workspace / "empty.txt", "")
         out = _read(Read(), file_path=p)
@@ -63,7 +82,8 @@ class TestReadText:
         p = write_file(workspace / "long.txt", "x" * (MAX_LINE_LENGTH + 50) + "\n")
         out = _read(Read(), file_path=p)
         assert "[line truncated]" in out
-        assert "were truncated" in out
+        assert "1 line exceeded" in out
+        assert "was truncated" in out
 
     def test_missing_file_raises(self, workspace):
         with pytest.raises(ToolError, match="does not exist"):
@@ -198,7 +218,7 @@ class TestReadImage:
     def test_large_image_is_downscaled_to_fit(self, workspace):
         from PIL import Image
 
-        from metagpt.common.const.tools import MAX_IMAGE_DIMENSION
+        from mote.common.const.tools import MAX_IMAGE_DIMENSION
 
         p = os.path.join(str(workspace), "big.png")
         Image.new("RGB", (4000, 2000), (123, 50, 200)).save(p)

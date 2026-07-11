@@ -12,15 +12,15 @@ from __future__ import annotations
 
 import json
 import typing
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, Field, create_model, model_validator
 
-from metagpt.common.const import MARKDOWN_TITLE_PREFIX
-from metagpt.common.logs import logger
+from mote.common.const import MARKDOWN_TITLE_PREFIX
+from mote.common.logs import logger
 
 if TYPE_CHECKING:
-    from metagpt.router import BaseLLM
+    from mote.router import BaseLLM
 
 
 TAG = "CONTENT"
@@ -85,11 +85,11 @@ class ActionNode:
     def __init__(
         self,
         key: str,
-        expected_type: Type,
+        expected_type: Any,
         instruction: str,
         example: Any,
         content: str = "",
-        children: dict[str, "ActionNode"] = None,
+        children: Optional[dict[str, "ActionNode"]] = None,
         schema: str = "",
     ):
         self.key = key
@@ -193,10 +193,10 @@ class ActionNode:
             else:
                 new_fields[field_name] = field_value
 
-        new_class = create_model(class_name, __validators__=validators, **new_fields)
+        new_class = create_model(class_name, __validators__=validators, **new_fields)  # type: ignore[call-overload]  # dynamic field defs vs create_model reserved-kw stub
         return new_class
 
-    def create_class(self, mode: str = "auto", class_name: str = None, exclude=None):
+    def create_class(self, mode: str = "auto", class_name: Optional[str] = None, exclude=None):
         class_name = class_name if class_name else f"{self.key}_AN"
         mapping = self.get_mapping(mode=mode, exclude=exclude)
         return self.create_model_class(class_name, mapping)
@@ -214,19 +214,20 @@ class ActionNode:
             nodes = {self.key: nodes}
         return nodes
 
-    def _to_dict(self, format_func=None, mode="auto", exclude=None) -> Dict:
+    def _to_dict(self, format_func=None, mode="auto", exclude=None) -> Any:
         """将当前节点与子节点都按照node: format的格式组织成字典"""
 
         # 如果没有提供格式化函数，则使用默认的格式化函数
-        if format_func is None:
+        def _default_format(node):
+            return node.instruction
 
-            def format_func(node):
-                return node.instruction
+        fmt = format_func if format_func is not None else _default_format
 
         # 使用提供的格式化函数来格式化当前节点的值
-        formatted_value = format_func(self)
+        formatted_value = fmt(self)
 
         # 创建当前节点的键值对
+        node_value: Any
         if (mode == "children" or mode == "auto") and self.children:
             node_value = {}
         else:
@@ -241,7 +242,7 @@ class ActionNode:
             if child_key in exclude:
                 continue
             # 递归调用 to_dict 方法并更新节点字典
-            child_dict = child_node._to_dict(format_func, mode, exclude)
+            child_dict = child_node._to_dict(fmt, mode, exclude)
             node_value[child_key] = child_dict
 
         return node_value
@@ -357,7 +358,7 @@ class ActionNode:
         self.set_recursive("context", context)
 
     @classmethod
-    def from_pydantic(cls, model: Type[BaseModel], key: str = None):
+    def from_pydantic(cls, model: Type[BaseModel], key: Optional[str] = None):
         """
         Creates an ActionNode tree from a Pydantic model.
 
@@ -375,11 +376,22 @@ class ActionNode:
             description = field_info.description
             default = field_info.default
 
-            # Recursively handle nested models if needed
-            if not isinstance(field_type, typing._GenericAlias) and issubclass(field_type, BaseModel):
+            # Recursively handle nested models if needed. A parametrized generic
+            # (e.g. list[int]) has a non-None ``get_origin`` and is not a class,
+            # so skip the issubclass probe for those (it would raise on non-types).
+            if (
+                typing.get_origin(field_type) is None
+                and isinstance(field_type, type)
+                and issubclass(field_type, BaseModel)
+            ):
                 child_node = cls.from_pydantic(field_type, key=field_name)
             else:
-                child_node = cls(key=field_name, expected_type=field_type, instruction=description, example=default)
+                child_node = cls(
+                    key=field_name,
+                    expected_type=field_type or Any,
+                    instruction=description or "",
+                    example=default,
+                )
 
             root_node.add_child(child_node)
 

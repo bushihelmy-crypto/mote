@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.replay`` — rebuild history from a rollout.
+"""Tests for ``mote.session.replay`` — rebuild history from a rollout.
 
 Covers: plain message stream replays in order; a ``compacted`` checkpoint resets
 the history to its self-contained ``replacement_history``; messages after a
@@ -9,8 +9,8 @@ skipped (counted) without aborting; turn_context is ignored for history.
 """
 from __future__ import annotations
 
-from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.session.events import (
+from mote.common.schema import AIMessage, UserMessage
+from mote.session.events import (
     CompactedEvent,
     KernelStateEvent,
     MessageEvent,
@@ -18,8 +18,8 @@ from metagpt.session.events import (
     TerminalStateEvent,
     TurnContextEvent,
 )
-from metagpt.session.log import SessionLog
-from metagpt.session.replay import replay
+from mote.session.log import SessionLog
+from mote.session.replay import replay
 
 
 def _fresh_log(tmp_path, sid="r"):
@@ -163,4 +163,3 @@ def test_terminal_and_kernel_states_are_independent(tmp_path):
     result = replay(log)
     assert result.terminal_state == {"cwd": "/shell", "env": {"SH": "1"}, "unset": []}
     assert result.kernel_state == {"cwd": "/kernel", "env": {"KE": "2"}, "unset": []}
-

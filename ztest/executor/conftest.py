@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures and helpers for the ``metagpt.executor`` test suite.
+"""Shared fixtures and helpers for the ``mote.executor`` test suite.
 
 Everything stays fully offline and deterministic — no LLM, no network, no MCP
 servers. The building blocks are:
 
-- A set of plain :class:`~metagpt.executor.base_tool.BaseTool` subclasses
+- A set of plain :class:`~mote.executor.base_tool.BaseTool` subclasses
   (``EchoTool`` / ``AddTool`` / ``FailTool`` / ``BoomTool`` / ``BgTool`` /
   ``MediaTool`` / ``CapTool``). They are NOT decorated with ``@register_tool``,
   so importing this module never pollutes the global tool registry.
@@ -25,13 +25,13 @@ from typing import Any
 
 import pytest
 
-from metagpt.common.schema import ToolResultLimitConfig
-from metagpt.executor.tasks.types import BgTaskResult
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.executor.tool_registry import ToolRegistry, registry as global_registry
-from metagpt.executor.tool_result import ToolError, ToolResult
-
+from mote.common.schema import ToolResultLimitConfig
+from mote.executor.base_tool import BaseTool
+from mote.executor.tasks.types import BgTaskResult
+from mote.executor.tool_executor import ToolExecutor
+from mote.executor.tool_registry import ToolRegistry
+from mote.executor.tool_registry import registry as global_registry
+from mote.executor.tool_result import ToolError, ToolResult
 
 # ---------------------------------------------------------------------------
 # Plain (unregistered) tools

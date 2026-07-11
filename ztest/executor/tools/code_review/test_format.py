@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import json
 
-from metagpt.executor.tools.code_review.format import Finding, format_findings
-
+from mote.executor.tools.code_review.format import Finding, format_findings
 
 _FINDINGS = [
     Finding(
@@ -50,7 +49,7 @@ class TestText:
 
     def test_summary_header(self):
         out = format_findings(_FINDINGS, fmt="text")
-        assert "found 3 issue(s) across 2 file(s)" in out
+        assert "found 3 issues across 2 files" in out
 
     def test_empty(self):
         out = format_findings([], fmt="text")

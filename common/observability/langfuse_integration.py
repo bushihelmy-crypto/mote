@@ -6,12 +6,12 @@ langfuse installed when tracing is disabled. This module now owns only
 client, and exposes the enabled / step-tracing flags.
 
 Instrumentation moved onto the spine: spans are emitted by the framework-native
-``span`` contextmanager (:mod:`metagpt.common.events.trace`) as
+``span`` contextmanager (:mod:`mote.common.events.trace`) as
 ``SpanStart``/``SpanEnd`` events, and LLM generations as request/response/error
-events. A backend-agnostic :class:`~metagpt.common.observability.tracing.TracingSubscriber`
+events. A backend-agnostic :class:`~mote.common.observability.tracing.TracingSubscriber`
 rebuilds the trace tree from explicit IDs and drives a pluggable
-:class:`~metagpt.common.observability.tracing.TracerBackend`
-(:class:`~metagpt.common.observability.langfuse_backend.LangfuseBackend` today).
+:class:`~mote.common.observability.tracing.TracerBackend`
+(:class:`~mote.common.observability.langfuse_backend.LangfuseBackend` today).
 
 Activation is idempotent via ``init_langfuse``, called once from Config's
 model_validator so env/client are ready before any LLM client is built.
@@ -21,10 +21,10 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 if TYPE_CHECKING:
-    from metagpt.common.config.config.langfuse_config import LangfuseConfig
+    from mote.common.config.config.langfuse_config import LangfuseConfig
 
 _ENABLED: bool = False
 _STEPS_ENABLED: bool = False

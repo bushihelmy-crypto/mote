@@ -10,7 +10,7 @@ module top level (no lazy-import cycle).
 
 - :func:`format_report` — dump the layer stack, per-value provenance, and
   unknown keys (secrets redacted).
-- ``python -m metagpt.common.config.report`` — the CLI entry point.
+- ``python -m mote.common.config.report`` — the CLI entry point.
 """
 from __future__ import annotations
 
@@ -18,14 +18,10 @@ import argparse
 from pathlib import Path
 from typing import List, Optional
 
-from metagpt.common.config.diagnostics import (
-    _get_path,
-    _render_value,
-    unknown_key_paths,
-)
-from metagpt.common.config.loader import build_layer_stack
-from metagpt.common.config.meta_config import Config
-from metagpt.common.exception import UnknownConfigKeysError
+from mote.common.config.diagnostics import _get_path, _render_value, unknown_key_paths
+from mote.common.config.loader import build_layer_stack
+from mote.common.config.meta_config import Config
+from mote.common.exception import UnknownConfigKeysError
 
 
 def format_report(cwd: Optional[Path] = None, *, profile: Optional[str] = None) -> str:
@@ -59,7 +55,7 @@ def format_report(cwd: Optional[Path] = None, *, profile: Optional[str] = None) 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m metagpt.common.config.report",
+        prog="python -m mote.common.config.report",
         description="Dump the effective config, its provenance, and unknown keys.",
     )
     parser.add_argument("--cwd", default=None, help="working directory for layer discovery")

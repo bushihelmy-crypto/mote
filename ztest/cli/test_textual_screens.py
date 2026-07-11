@@ -19,8 +19,8 @@ pytest.importorskip("textual")
 
 from textual.app import App
 
-from metagpt.cli.consumers.textual.screens import QuestionScreen
-from metagpt.cli.consumers.textual.style import textual_css_vars
+from mote.cli.consumers.textual.screens import QuestionScreen
+from mote.cli.consumers.textual.style import textual_css_vars
 
 
 class _ScreenHarness(App):
@@ -58,7 +58,7 @@ async def test_single_select_navigate_then_pick():
     app = _ScreenHarness(QuestionScreen("Pick", ["Red", "Blue"]))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("down")   # highlight the second option
+        await pilot.press("down")  # highlight the second option
         await pilot.press("enter")  # pick it → dismiss
         await pilot.pause()
     assert app.result == (["Blue"], "")
@@ -69,8 +69,8 @@ async def test_other_reveals_free_text_input():
     app = _ScreenHarness(QuestionScreen("Pick", ["Red", "Blue"]))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("down")   # Blue
-        await pilot.press("down")   # Other
+        await pilot.press("down")  # Blue
+        await pilot.press("down")  # Other
         await pilot.press("enter")  # choose Other → reveal + focus the Input
         await pilot.pause()
         for ch in "teal":
@@ -86,8 +86,8 @@ async def test_other_numeric_free_text_stays_free_text():
     app = _ScreenHarness(QuestionScreen("How many?", ["One", "Two"]))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("down")   # Two
-        await pilot.press("down")   # Other
+        await pilot.press("down")  # Two
+        await pilot.press("down")  # Other
         await pilot.press("enter")  # choose Other → reveal + focus the Input
         await pilot.pause()
         for ch in "42":
@@ -116,7 +116,7 @@ async def test_multi_select_confirms_via_submit():
         await pilot.pause()
         await pilot.press("enter")  # toggle Cheese (index 0)
         await pilot.press("down")
-        await pilot.press("down")   # highlight Olives (index 2)
+        await pilot.press("down")  # highlight Olives (index 2)
         await pilot.press("enter")  # toggle Olives
         await pilot.click("#submit")
         await pilot.pause()

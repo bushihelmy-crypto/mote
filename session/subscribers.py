@@ -8,7 +8,7 @@ subscriber) and disk (this) are now fed by the *same* event stream, so they can
 no longer diverge.
 
 The ``session_meta`` first line is **not** written here: the
-:attr:`~metagpt.roles.role_components.RoleComponents.session_log` property writes
+:attr:`~mote.roles.role_components.RoleComponents.session_log` property writes
 it when it builds the log (before this subscriber is even constructed), so meta
 has a single source of truth and this sink only appends.
 
@@ -19,34 +19,19 @@ its say (a vetoed action is never recorded as having happened).
 
 This is the **durable** sink (``delivery = DURABLE``): unlike a mirror observer,
 its failures are *not* swallowed here. The bus's durable branch surfaces them —
-logged loud and counted in :attr:`~metagpt.common.events.bus.EventBus.durable_failures`
+logged loud and counted in :attr:`~mote.common.events.bus.EventBus.durable_failures`
 — because a dropped rollout record is real data loss, not a cosmetic mirror miss.
 The bus also never times this sink out: it must complete.
 """
 
 from __future__ import annotations
 
-from metagpt.common.disk import get_disk_writer
-from metagpt.common.events.types import (
-    CompactionCheckpointEvent,
-    LLMResponseEvent,
-    MessageAppendedEvent,
-    TurnEndEvent,
-)
-from metagpt.common.interface.event_subscriber import (
-    DURABLE,
-    DeliveryPolicy,
-    ObservationSubscriber,
-    ObserverPriority,
-)
-from metagpt.common.logs import log_class
-from metagpt.session.events import (
-    CompactedEvent,
-    LLMCallEvent,
-    MessageEvent,
-    TurnContextEvent,
-)
-from metagpt.session.log import SessionLog
+from mote.common.disk import get_disk_writer
+from mote.common.events.types import CompactionCheckpointEvent, LLMResponseEvent, MessageAppendedEvent, TurnEndEvent
+from mote.common.interface.event_subscriber import DURABLE, DeliveryPolicy, ObservationSubscriber, ObserverPriority
+from mote.common.logs import log_class
+from mote.session.events import CompactedEvent, LLMCallEvent, MessageEvent, TurnContextEvent
+from mote.session.log import SessionLog
 
 
 @log_class(level="DEBUG", exclude={"handle"})

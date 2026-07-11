@@ -20,7 +20,7 @@ Topology (static, N-independent — the ring walks the file list)::
 """
 from __future__ import annotations
 
-from metagpt.executor.tasks.bggraph import BgGraph, START, END
+from mote.executor.tasks.bggraph import END, START, BgGraph
 
 from .nodes import (
     _route_after_batch,
@@ -57,7 +57,7 @@ def build_code_review_graph() -> BgGraph:
     g.add_edge("plan", "review_batch")
     g.add_conditional_edges(
         "review_batch",
-        _route_after_batch,
+        _route_after_batch,  # type: ignore[arg-type]  # router reads ReviewState (a GraphState subclass)
         {"loop": "review_batch", "done": "review_filter"},
     )
     g.add_edge("review_filter", "aggregate")

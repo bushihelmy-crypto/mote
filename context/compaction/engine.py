@@ -11,15 +11,11 @@ it with *when to announce it*.
 
 from __future__ import annotations
 
-from metagpt.common.events import (
-    CompactionCheckpointEvent,
-    PostCompactEvent,
-    PreCompactEvent,
-)
-from metagpt.context.compaction.pipeline import ReductionPipeline
-from metagpt.context.compaction.reducers.base import ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.events import CompactionCheckpointEvent, PostCompactEvent, PreCompactEvent
+from mote.context.compaction.pipeline import ReductionPipeline
+from mote.context.compaction.reducers.base import ReductionOutcome
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 
 class ContextEngine:

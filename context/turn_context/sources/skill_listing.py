@@ -19,9 +19,29 @@ skills are disabled / not yet ready).
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional, Protocol
 
-from metagpt.common.interface import TurnContextPriority
+from mote.common.interface import TurnContextPriority
+
+
+class _IndexedSkill(Protocol):
+    """The one field this source reads off an eligible skill (its name)."""
+
+    name: str
+
+
+class _SkillInjector(Protocol):
+    """The skill-index slice this source reads off the injector (duck-typed).
+
+    Structural only — keeps the low ``context`` layer from importing the skill
+    manager; any object exposing these two members satisfies it.
+    """
+
+    def _index_skills(self) -> Iterable[_IndexedSkill]:
+        ...
+
+    def build_index(self, *, max_tokens: int = ..., only_names: Optional[set[str]] = ...) -> Optional[str]:
+        ...
 
 
 class SkillListingContextSource:
@@ -35,7 +55,7 @@ class SkillListingContextSource:
 
     def __init__(
         self,
-        get_injector: Callable[[], object],
+        get_injector: Callable[[], Optional[_SkillInjector]],
         *,
         max_tokens: int = 2000,
     ) -> None:

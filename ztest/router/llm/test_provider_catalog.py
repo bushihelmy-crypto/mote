@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.config.config.llm_config import LLMType
-from metagpt.router.llm.provider_catalog import (
+from mote.common.config.config.llm_config import LLMType
+from mote.router.llm.provider_catalog import (
     PROVIDER_CATALOG,
     apply_provider_preset,
     find_env_keys,

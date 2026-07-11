@@ -1,7 +1,7 @@
 """DiagnosticsBuffer — the push→pull bridge that surfaces LSP diagnostics.
 
 The output-side counterpart to :class:`LspService`. The service *produces*
-:class:`~metagpt.common.events.DiagnosticsEvent`\\s on the bus when a synced edit
+:class:`~mote.common.events.DiagnosticsEvent`\\s on the bus when a synced edit
 yields a changed diagnostic set; this object *accumulates* their rendered blocks
 until the turn boundary, then *renders* them into the cycle's
 ``<system-reminder>``.
@@ -9,10 +9,10 @@ until the turn boundary, then *renders* them into the cycle's
 A single object playing both sides of the bridge (the same dual-role shape as
 ``CompactionNoticeContextSource``, since the producer — ``LspService`` — already
 lives elsewhere, so no extra wrapper is warranted):
-- as an :class:`~metagpt.common.interface.ObservationSubscriber` it ``handle``\\s each
+- as an :class:`~mote.common.interface.ObservationSubscriber` it ``handle``\\s each
   DiagnosticsEvent and stages its block (several edits within one turn collapse
   into one drained block);
-- as an :class:`~metagpt.common.interface.EphemeralContextSource` it ``render``\\s
+- as an :class:`~mote.common.interface.EphemeralContextSource` it ``render``\\s
   the accumulated blocks once per think() cycle and clears (so unchanged
   diagnostics aren't re-shown).
 
@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from metagpt.common.events import DiagnosticsEvent
-from metagpt.common.interface import ObservationSubscriber, TurnContextPriority
+from mote.common.events import DiagnosticsEvent
+from mote.common.interface import ObservationSubscriber, TurnContextPriority
 
 
 class DiagnosticsBuffer(ObservationSubscriber):
@@ -40,7 +40,12 @@ class DiagnosticsBuffer(ObservationSubscriber):
     # ObserverPriority). Its observer-dispatch position is immaterial — the
     # handler only accumulates, returning no outcome.
     priority: int = TurnContextPriority.DIAGNOSTICS
-    save_to_context: bool = True
+    # Ephemeral (request-only): diagnostics are a one-shot drain — ``render``
+    # empties ``_blocks`` so unchanged sets are never re-shown. They report "your
+    # last edit produced these errors", actionable only on the turn they surface
+    # (an error is often fixed the very next turn), so persisting them would just
+    # leave stale diagnostics in history. Matches the drain-once contract above.
+    save_to_context: bool = False
 
     def __init__(self) -> None:
         self._blocks: List[str] = []

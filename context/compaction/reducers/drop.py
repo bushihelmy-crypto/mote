@@ -15,11 +15,11 @@ never dropped, and at least the most-recent non-pinned segment is always kept.
 
 from __future__ import annotations
 
-from metagpt.common.const.context import HEAD_DROPPED_MESSAGE
-from metagpt.common.schema import ContextManagerConfig, Message, UserMessage
-from metagpt.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.const.context import HEAD_DROPPED_MESSAGE
+from mote.common.schema import ContextManagerConfig, Message, UserMessage
+from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 
 class HeadDropReducer:

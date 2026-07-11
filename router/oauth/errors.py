@@ -11,15 +11,10 @@ from __future__ import annotations
 from typing import Optional
 
 # Exception types are unified under the global exception package; re-exported
-# here so existing ``from metagpt.router.oauth.errors import OAuthError`` call
+# here so existing ``from mote.router.oauth.errors import OAuthError`` call
 # sites keep working. Only the refresh-failure classification (OAuth-domain
 # logic) lives in this module.
-from metagpt.common.exception import (  # noqa: F401
-    OAuthConfigError,
-    OAuthError,
-    OAuthHTTPError,
-    OAuthRefreshError,
-)
+from mote.common.exception import OAuthConfigError, OAuthError, OAuthHTTPError, OAuthRefreshError  # noqa: F401
 
 # OAuth2 error codes that mean the refresh token is permanently unusable.
 _UNRECOVERABLE_ERROR_CODES = {

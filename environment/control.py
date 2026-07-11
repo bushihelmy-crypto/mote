@@ -29,31 +29,40 @@ import asyncio
 import re
 import uuid
 import weakref
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Protocol, cast
 
-from metagpt.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, set_control
-from metagpt.common.events import AgentLifecycleEvent, EventBus, LogSubscriber, PreAgentSpawnEvent
-from metagpt.common.exception import AgentLimitReached, AgentNotFound, AgentNotKnown
-from metagpt.common.logs import logger
-from metagpt.common.schema import Message
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.comms import CommGraph, CommKind
-from metagpt.environment.handle import ChildAgentHandle
-from metagpt.environment.limiter import AgentExecutionLimiter
-from metagpt.environment.mailbox import DeliveryMode, InterAgentCommunication
-from metagpt.environment.pending_delivery import PendingDelivery, PendingDeliveryQueue
-from metagpt.environment.registry import (
-    AgentMetadata,
-    AgentRegistry,
-    next_agent_spawn_depth,
-)
-from metagpt.environment.residency import Residency, ResidencySlot
-from metagpt.environment.runtime import AgentRuntime, AgentStatus, is_final
-from metagpt.environment.spawn_gate import SpawnGate
-from metagpt.environment.store import ResidencyStore
-from metagpt.environment.turn_scheduler import EventDrivenScheduler
-from metagpt.router.cost.node import CostNode
-from metagpt.router.llm.context import Context
+from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, set_control
+from mote.common.events import AgentLifecycleEvent, EventBus, LogSubscriber, PreAgentSpawnEvent
+from mote.common.events.outcomes import SpawnOutcome
+from mote.common.exception import AgentLimitReached, AgentNotFound, AgentNotKnown
+from mote.common.logs import logger
+from mote.common.schema import Message
+from mote.environment.agent_path import AgentPath
+from mote.environment.comms import CommGraph, CommKind
+from mote.environment.handle import ChildAgentHandle
+from mote.environment.limiter import AgentExecutionLimiter
+from mote.environment.mailbox import DeliveryMode, InterAgentCommunication
+from mote.environment.pending_delivery import PendingDelivery, PendingDeliveryQueue
+from mote.environment.registry import AgentMetadata, AgentRegistry, next_agent_spawn_depth
+from mote.environment.residency import Residency, ResidencySlot
+from mote.environment.runtime import AgentRuntime, AgentStatus, is_final
+from mote.environment.spawn_gate import SpawnGate
+from mote.environment.store import ResidencyStore
+from mote.environment.turn_scheduler import EventDrivenScheduler
+from mote.router.cost.node import CostNode
+from mote.router.cost.tracker import CostTracker
+from mote.router.llm.context import Context
+
+
+class _ContextualRole(Protocol):
+    """The one attribute this module provisions on a spawned role (duck-typed).
+
+    Structural only — keeps the ``environment`` layer from importing the Role;
+    any object carrying a settable ``_context`` satisfies it.
+    """
+
+    _context: object
+
 
 # Consecutive fulfilment passes a parked delivery may sit through before its
 # sustained back-pressure is surfaced as an AgentLifecycleEvent (and then once
@@ -244,7 +253,7 @@ class AgentControl:
     # Cost mirror tree
     # ------------------------------------------------------------------
     @staticmethod
-    def _role_cost_tracker(role: object) -> Optional[object]:
+    def _role_cost_tracker(role: object) -> Optional[CostTracker]:
         """Best-effort fetch of a role's own ``CostTracker`` (its node bucket)."""
         ctx = getattr(role, "_context", None)
         if ctx is None:
@@ -323,7 +332,9 @@ class AgentControl:
             )
         )
         if spawn_outcome is not None and spawn_outcome.is_blocking:
-            raise AgentLimitReached(message=spawn_outcome.reason or "spawn denied")
+            # A PreAgentSpawnEvent always folds a SpawnOutcome (or None).
+            reason = cast("SpawnOutcome", spawn_outcome).reason
+            raise AgentLimitReached(message=reason or "spawn denied")
 
         # Live-incarnation cap: residency reserves a slot, evicting the LRU idle
         # resident if full (raises AgentLimitReached when nothing can free room).
@@ -409,7 +420,8 @@ class AgentControl:
             getter = getattr(parent_role, "get_cwd", None)
             if callable(getter):
                 try:
-                    parent_cwd = getter()
+                    result = getter()
+                    parent_cwd = str(result) if result is not None else None
                 except Exception:  # noqa: BLE001 — best-effort
                     parent_cwd = None
             parent_config = getattr(parent_role, "_config", None)
@@ -427,7 +439,7 @@ class AgentControl:
             parent_session_id=spec.parent_id or "",
         )
 
-    def _provision_context(self, role: object, spec: SpawnSpec, spawn_ctx: SpawnContext) -> None:
+    def _provision_context(self, role: _ContextualRole, spec: SpawnSpec, spawn_ctx: SpawnContext) -> None:
         """Give the freshly-built child role its LLM Context, per the spawn policy.
 
         The single place a spawned child's context is set — unconditionally, so a
@@ -445,8 +457,7 @@ class AgentControl:
             parent_rt = self._runtimes.get(spec.parent_id) if spec.parent_id else None
             if parent_rt is None:
                 raise RuntimeError(
-                    f"SHARE_PARENT spawn requires a live parent context; "
-                    f"parent '{spec.parent_id}' is not resident."
+                    f"SHARE_PARENT spawn requires a live parent context; " f"parent '{spec.parent_id}' is not resident."
                 )
             role._context = parent_rt.role._context
             return
@@ -756,6 +767,7 @@ class AgentControl:
         """Enqueue an already-loaded parked *delivery* into *runtime*'s mailbox."""
         if delivery.is_communication:
             comm = delivery.communication
+            assert comm is not None, "is_communication delivery must carry a communication"
             runtime.mailbox.enqueue_communication(comm)
             if comm.trigger_turn:
                 runtime.wake()

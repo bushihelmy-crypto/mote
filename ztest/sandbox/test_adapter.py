@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import os
 
-from metagpt.common.schema import SandboxConfig, SandboxRuntimeConfig
-from metagpt.executor.permission.sandbox.adapter import build_policy, build_runtime
-from metagpt.executor.permission.sandbox.guard import SandboxGuard
+from mote.common.schema import SandboxConfig, SandboxRuntimeConfig
+from mote.executor.permission.sandbox.adapter import build_policy, build_runtime
+from mote.executor.permission.sandbox.guard import SandboxGuard
 
 
 def _guard(cwd: str) -> SandboxGuard:
@@ -50,9 +50,7 @@ class TestBuildPolicy:
 
 class TestBuildRuntime:
     def test_runtime_config_passthrough(self, tmp_path):
-        cfg = SandboxRuntimeConfig(
-            enabled=True, backend="none", network="open", harden_process=True
-        )
+        cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", harden_process=True)
         rt = build_runtime(
             cfg,
             get_cwd=lambda: str(tmp_path),
@@ -82,8 +80,12 @@ class TestBuildRuntime:
 
     def test_resource_limits_thread_through(self, tmp_path):
         cfg = SandboxRuntimeConfig(
-            enabled=True, backend="none", network="open",
-            memory_max="512M", pids_max=64, cpu_quota="200%",
+            enabled=True,
+            backend="none",
+            network="open",
+            memory_max="512M",
+            pids_max=64,
+            cpu_quota="200%",
         )
         rt = build_runtime(cfg, get_cwd=lambda: str(tmp_path), guard_factory=lambda: _guard(str(tmp_path)))
         # No explicit ResourceGuard -> build_runtime seeds a default one from the
@@ -94,11 +96,9 @@ class TestBuildRuntime:
         assert limits.cpu_quota == "200%"
 
     def test_resource_guard_adjustment_visible_next_call(self, tmp_path):
-        from metagpt.executor.permission.sandbox import ResourceGuard
+        from mote.executor.permission.sandbox import ResourceGuard
 
-        cfg = SandboxRuntimeConfig(
-            enabled=True, backend="none", network="open", memory_max="4G"
-        )
+        cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", memory_max="4G")
         rguard = ResourceGuard(cfg)
         rt = build_runtime(
             cfg,

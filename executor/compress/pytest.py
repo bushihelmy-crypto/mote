@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from metagpt.executor.compress.base import CompressionResult, applied
+from mote.executor.compress.base import CompressionResult, applied
 
 # A pytest section banner: a line of ``=`` with a section title in it.
 _SECTION_RE = re.compile(r"^=+.*=+\s*$")

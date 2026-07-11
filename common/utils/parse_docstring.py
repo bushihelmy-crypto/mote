@@ -1,9 +1,10 @@
-import re
 from typing import Tuple
+
+from mote.common.text import collapse_whitespace
 
 
 def remove_spaces(text):
-    return re.sub(r"\s+", " ", text).strip() if text else ""
+    return collapse_whitespace(text) if text else ""
 
 
 class DocstringParser:
@@ -17,6 +18,7 @@ class DocstringParser:
         Returns:
             Tuple[str, str]: A tuple of (overall description, parameter description)
         """
+        raise NotImplementedError
 
 
 class GoogleDocstringParser(DocstringParser):

@@ -4,7 +4,7 @@
 
 Every widget here is a thin :class:`SelectableStatic` that mounts into the
 scrolling transcript. The **rich renderables** they display are produced by the
-SHARED ``metagpt.cli.consumers.render.builders`` — the exact same diff colours,
+SHARED ``mote.cli.consumers.render.builders`` — the exact same diff colours,
 TSV tables, tool headline/summary text the rich terminal draws — so the two
 hosts never diverge on look (§9.7 "format once").
 
@@ -22,41 +22,29 @@ from typing import Any, Optional
 from rich.console import Group
 from rich.text import Text
 
-from metagpt.cli.common.view import (
-    RESULT_KIND_DIFF,
-    RESULT_KIND_TABLE,
-)
-from metagpt.cli.consumers.render.builders import (
+from mote.cli.consumers.render.builders import (
     RESULT_INDENT,
-    build_table,
     bullet_row,
     compaction_summary_text,
     conversation_compacted_text,
+    file_change_caption,
     indent,
     linkify,
-    render_diff,
+    media_caption,
+    notice_style,
     render_file_change,
     render_image,
+    render_result_detail,
+    task_progress_text,
     tool_body_syntax,
     tool_completed_text,
     tool_group_summary_text,
     tool_started_text,
     user_message_row,
 )
-from metagpt.cli.consumers.render.markdown import themed_markdown
-from metagpt.cli.consumers.textual.style import (
-    BRANCH,
-    BULLET,
-    CHECK,
-    CROSS,
-    MEDIA,
-    NOTE,
-    PLAY,
-    SKIP,
-    WARN,
-    Palette,
-)
-from metagpt.cli.consumers.textual.widgets.base import SelectableStatic
+from mote.cli.consumers.render.markdown import themed_markdown
+from mote.cli.consumers.textual.style import BULLET, NOTE, WARN, Palette
+from mote.cli.consumers.textual.widgets.base import SelectableStatic
 
 
 class AssistantBlock(SelectableStatic):
@@ -108,20 +96,10 @@ def build_tool_parts(started: Any, completed: Any, *, blink: bool = False) -> li
         parts.append(indent(body, RESULT_INDENT))
     if completed is not None:
         parts.append(tool_completed_text(completed))
-        detail = getattr(completed, "detail", None)
-        if detail:
-            kind = getattr(completed, "result_kind", None)
-            if kind == RESULT_KIND_DIFF:
-                parts.append(indent(render_diff(detail), RESULT_INDENT))
-            elif kind == RESULT_KIND_TABLE:
-                table = build_table(detail)
-                if table is not None:
-                    parts.append(indent(table, RESULT_INDENT))
-            else:
-                # Plain result preview (up to ~100 words), dimmed under the
-                # summary — same look as the rich terminal host. Bare URLs are
-                # linkified so Ctrl+click opens them (handled below).
-                parts.append(indent(linkify(detail, base_style=Palette.DIM), RESULT_INDENT))
+        # The shared builder renders the structured detail per kind (diff/table/
+        # plain) so this host never diverges from the rich terminal; a plain
+        # preview's bare URLs stay linkified for Ctrl+click.
+        parts.extend(render_result_detail(completed, RESULT_INDENT))
     return parts
 
 
@@ -213,10 +191,7 @@ class ToolGroupWidget(SelectableStatic):
             parts.append(Text(" (ctrl+o 折叠)", style=Palette.DIM))
             self.update(Group(*parts))
             return
-        items = [
-            (getattr(started, "tool_name", ""), getattr(started, "headline", ""))
-            for started, _ in self._entries
-        ]
+        items = [(getattr(started, "tool_name", ""), getattr(started, "headline", "")) for started, _ in self._entries]
         active = any(completed is None for _, completed in self._entries)
         self.update(tool_group_summary_text(items, active=active, expanded=False))
 
@@ -246,10 +221,7 @@ class MediaRow(SelectableStatic):
     def __init__(self, ev: Any, **kwargs: Any) -> None:
         label = getattr(ev, "media_kind", None) or "media"
         ref = getattr(ev, "ref", None) or ""
-        caption = Text()
-        caption.append("  " + BRANCH + " ", style=Palette.DIM)
-        caption.append(f"{MEDIA} [{label}] ", style=Palette.BRAND)
-        caption.append(ref or getattr(ev, "alt", None) or "(no reference)", style=Palette.DIM)
+        caption = media_caption(ev)
         image = render_image(ref) if label == "image" and ref and os.path.isfile(ref) else None
         if image is not None:
             super().__init__(Group(caption, indent(image, RESULT_INDENT)), **kwargs)
@@ -271,11 +243,7 @@ class FileDiffRow(SelectableStatic):
         old = getattr(ev, "old", "") or ""
         new = getattr(ev, "new", "") or ""
         path = getattr(ev, "path", "") or ""
-        verb = "created" if not old else ("deleted" if not new else "updated")
-        caption = Text()
-        caption.append("  " + BRANCH + " ", style=Palette.DIM)
-        caption.append(f"{path or 'file'} ", style=Palette.BRAND)
-        caption.append(f"({verb})", style=Palette.DIM)
+        caption = file_change_caption(ev)
         diff = indent(render_file_change(old, new, path), RESULT_INDENT)
         super().__init__(Group(caption, diff), **kwargs)
 
@@ -284,16 +252,14 @@ class NoticeRow(SelectableStatic):
     """A system notice (info / warning / success)."""
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        style = {"warning": Palette.WARNING, "success": Palette.SUCCESS}.get(
-            getattr(ev, "level", "info"), Palette.DIM
-        )
+        style = notice_style(getattr(ev, "level", "info"))
         super().__init__(linkify(getattr(ev, "text", "") or "", base_style=style), **kwargs)
 
 
 class SystemReminderRow(SelectableStatic):
     """A framework-injected ``<system-reminder>``, condensed to a dim ⚑ note.
 
-    metagpt injects per-turn context (git/token/changed-files/skill/tool/
+    mote injects per-turn context (git/token/changed-files/skill/tool/
     compaction) as a ``<system-reminder>`` block the model sees but the human
     otherwise wouldn't. The projector already summarized it to a heading line;
     this renders it dim + ⚑ so the human sees *what* was fed to the model without
@@ -324,7 +290,7 @@ class CompactionSummaryRow(SelectableStatic):
     """The dim, folded compaction *recap* re-rendered after a full-screen clear.
 
     Textual is an alt-buffer app with no native scrollback, so on compaction the
-    app wipes the stale transcript (see ``MetaGPTApp._on_conversation_compacted``)
+    app wipes the stale transcript (see ``MoteApp._on_conversation_compacted``)
     and re-mounts this recap as the on-screen bridge to what came before — folded
     via the shared ``compaction_summary_text`` builder so a long recap stays tidy.
     """
@@ -351,20 +317,7 @@ class TaskProgressRow(SelectableStatic):
     """A background-task progress line (running / success / failed / other)."""
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        status = getattr(ev, "status", "")
-        stage = getattr(ev, "stage", "") or "?"
-        detail = getattr(ev, "detail", "")
-        symbol, style = {
-            "running": (PLAY, Palette.BRAND),
-            "success": (CHECK, Palette.SUCCESS),
-            "failed": (CROSS, Palette.ERROR),
-        }.get(status, (SKIP, Palette.WARNING))
-        line = Text()
-        line.append("  " + symbol + " ", style=style)
-        line.append(f"{stage} {status}", style=style)
-        if detail and status == "failed":
-            line.append(f": {detail}", style=Palette.DIM)
-        super().__init__(line, **kwargs)
+        super().__init__(task_progress_text(ev), **kwargs)
 
 
 class QuestionMarkerRow(SelectableStatic):
@@ -395,7 +348,7 @@ class SessionListWidget(SelectableStatic):
     """The resumable-session list rendered as a numbered rich table."""
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        from metagpt.cli.consumers.render.builders import session_table
+        from mote.cli.consumers.render.builders import session_table
 
         items = getattr(ev, "items", None)
         if not items:

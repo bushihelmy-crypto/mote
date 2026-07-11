@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.fork`` + ``Role.fork_session`` (Phase 4).
+"""Tests for ``mote.session.fork`` + ``Role.fork_session`` (Phase 4).
 
 Covers: fork() seeds a new rollout from the parent's final history, records
 parent_session_id + copied cwd/model anchors on session_meta, and stays
@@ -12,27 +12,19 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import UserMessage
-from metagpt.session.events import (
-    CompactedEvent,
-    MessageEvent,
-    SessionMetaEvent,
-)
-from metagpt.session.fork import fork
-from metagpt.session.history import diff_snapshot, file_history, restore
-from metagpt.session.listing import list_sessions
-from metagpt.session.log import SessionLog
-from metagpt.session.replay import replay
-from metagpt.session.snapshot import FileSnapshotRecorder
+from mote.common.schema import UserMessage
+from mote.session.events import CompactedEvent, MessageEvent, SessionMetaEvent
+from mote.session.fork import fork
+from mote.session.history import diff_snapshot, file_history, restore
+from mote.session.listing import list_sessions
+from mote.session.log import SessionLog
+from mote.session.replay import replay
+from mote.session.snapshot import FileSnapshotRecorder
 
 
 def _seed(tmp_path, sid, *, working_dir="/w", project_root="/p", model="m", messages=()):
     log = SessionLog(sid, base_dir=str(tmp_path))
-    log.create(
-        SessionMetaEvent(
-            session_id=sid, working_dir=working_dir, project_root=project_root, model=model
-        )
-    )
+    log.create(SessionMetaEvent(session_id=sid, working_dir=working_dir, project_root=project_root, model=model))
     for content in messages:
         log.append(MessageEvent(message=UserMessage(content=content)))
     return log
@@ -139,10 +131,10 @@ def test_fork_file_history_independent_of_parent(tmp_path):
 
 @pytest.mark.asyncio
 async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypatch):
-    from metagpt.roles import Role
-    from metagpt.router.llm.context import Context
+    from mote.roles import Role
+    from mote.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
 
     parent = Role(name="P", context=Context())
     parent._components._wire_spine()  # wire the recorder subscriber

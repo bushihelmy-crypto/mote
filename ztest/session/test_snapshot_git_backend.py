@@ -17,16 +17,10 @@ import subprocess
 
 import pytest
 
-from metagpt.session.events import FILE_SNAPSHOT
-from metagpt.session.history import diff_snapshot, file_history, restore
-from metagpt.session.log import SessionLog
-from metagpt.session.snapshot import (
-    BlobStore,
-    FileSnapshotRecorder,
-    GitBlobStore,
-    detect_blob_backend,
-    make_blob_store,
-)
+from mote.session.events import FILE_SNAPSHOT
+from mote.session.history import diff_snapshot, file_history, restore
+from mote.session.log import SessionLog
+from mote.session.snapshot import BlobStore, FileSnapshotRecorder, GitBlobStore, detect_blob_backend, make_blob_store
 
 git_required = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")
 
@@ -121,7 +115,7 @@ def test_detect_backend_in_subdir_of_repo_is_git(tmp_path):
 
 
 def test_detect_backend_no_git_binary_is_blob(tmp_path, monkeypatch):
-    monkeypatch.setattr("metagpt.session.snapshot.shutil.which", lambda _: None)
+    monkeypatch.setattr("mote.session.snapshot.shutil.which", lambda _: None)
     # Even inside a repo, absence of the binary forces the blob backend.
     assert detect_blob_backend(str(tmp_path)) == "blob"
 

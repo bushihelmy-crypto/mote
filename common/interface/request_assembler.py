@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, Union
 
 if TYPE_CHECKING:
-    from metagpt.common.schema import Message
+    from mote.common.schema import Message
 
 
 class RequestAssembler(Protocol):

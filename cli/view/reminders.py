@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """``<system-reminder>`` envelope detection + one-line summarisation.
 
-metagpt's turn-context bus wraps each injected per-turn block (git/token/
+mote's turn-context bus wraps each injected per-turn block (git/token/
 changed-files/skill/tool/compaction context) in a single ``<system-reminder>``
 envelope written into history as a *user* message. These helpers let the
 projector tell that injected context apart from the human's own typed prompt and
@@ -18,39 +18,18 @@ from __future__ import annotations
 import re
 from typing import List
 
-# The exact envelope metagpt's turn-context bus wraps every injected block in
-# (metagpt/context/turn_context/format.py). A user message whose content is this
-# envelope is framework-injected context, NOT the human's own typed prompt — the
-# latter keeps flowing through the drop path (the driver renders it separately).
-_REMINDER_OPEN = "<system-reminder>"
-_REMINDER_CLOSE = "</system-reminder>"
+# Envelope detection/peeling is owned by the bottom-layer marker authority
+# (``common/text/markers.py``) — the same literal the turn-context bus writes on
+# the other side, so the two can never desync. This module keeps only the
+# CLI-specific *summarisation* (heading extraction, skill counting) below.
+from mote.common.text import is_system_reminder as _is_system_reminder
+from mote.common.text import strip_system_reminder as _strip_envelope
 
 # A markdown ATX heading (``# …`` … ``###### …``) — the per-source block boundary.
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 # A skill-listing/activation heading ("Available Skills", "New Skills available",
 # "Relevant Skills") — the blocks whose summary should carry a skill *count*.
 _SKILL_HEADING_RE = re.compile(r"skill", re.IGNORECASE)
-
-
-def _is_system_reminder(content: str) -> bool:
-    """True iff *content* is exactly a ``<system-reminder>`` envelope.
-
-    Strict on both ends so a human prompt that merely mentions the tag in prose
-    is never mistaken for injected context — only the bus's own wrapper (the
-    whole message opens with the tag and closes with it) folds to a reminder.
-    """
-    stripped = content.strip()
-    return stripped.startswith(_REMINDER_OPEN) and stripped.endswith(_REMINDER_CLOSE)
-
-
-def _strip_envelope(content: str) -> str:
-    """Peel the ``<system-reminder>`` tags off, returning the inner block text."""
-    inner = content.strip()
-    if inner.startswith(_REMINDER_OPEN):
-        inner = inner[len(_REMINDER_OPEN):]
-    if inner.endswith(_REMINDER_CLOSE):
-        inner = inner[: -len(_REMINDER_CLOSE)]
-    return inner.strip()
 
 
 def _split_blocks(inner: str) -> List[tuple[str, List[str]]]:

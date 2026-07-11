@@ -6,16 +6,16 @@ import types
 
 import pytest
 
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from metagpt.common.schema.messages import UserMessage
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.control import AgentControl, format_completion_notification
-from metagpt.environment.exceptions import AgentLimitReached, AgentNotFound, AgentNotKnown
-from metagpt.environment.mailbox import DeliveryMode, InterAgentCommunication
-from metagpt.environment.registry import AgentMetadata
-from metagpt.environment.runtime import AgentRuntime, AgentStatus
-from metagpt.environment.store import ResidencyStore
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.common.schema.messages import UserMessage
+from mote.common.schema.queue import MessageQueue
+from mote.environment.agent_path import AgentPath
+from mote.environment.control import AgentControl, format_completion_notification
+from mote.environment.exceptions import AgentLimitReached, AgentNotFound, AgentNotKnown
+from mote.environment.mailbox import DeliveryMode, InterAgentCommunication
+from mote.environment.registry import AgentMetadata
+from mote.environment.runtime import AgentRuntime, AgentStatus
+from mote.environment.store import ResidencyStore
 
 
 class FakeRole:
@@ -261,7 +261,7 @@ class _CaptureSub(ObservationSubscriber, SyncObserver):
         return None
 
     def handle_sync(self, event) -> None:
-        from metagpt.common.events import AgentLifecycleEvent
+        from mote.common.events import AgentLifecycleEvent
 
         if isinstance(event, AgentLifecycleEvent):
             self.events.append((event.phase, event.session_id))
@@ -286,12 +286,7 @@ async def test_runtime_bus_emits_interrupted(control):
 # ---------------------------------------------------------------------------
 # Spawn authority: AgentControl.spawn_agent (the single birth channel)
 # ---------------------------------------------------------------------------
-from metagpt.common.agent_control import (  # noqa: E402
-    ContextPolicy,
-    Lifecycle,
-    SpawnSpec,
-    current_control,
-)
+from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnSpec, current_control  # noqa: E402
 
 
 class SpawnRole:
@@ -454,7 +449,7 @@ async def test_sustained_back_pressure_emits_lifecycle_event(tmp_path):
     # threshold a single AgentLifecycleEvent(phase="delivery_back_pressure") is
     # surfaced (pure observability — delivery semantics are unchanged: it stays
     # parked the whole time).
-    from metagpt.environment.control import _DELIVERY_STUCK_FLUSHES
+    from mote.environment.control import _DELIVERY_STUCK_FLUSHES
 
     control = make_control(tmp_path, max_agents=1)
     await control.store.materialize(AgentRuntime(FakeRole("evicted")))
@@ -481,7 +476,7 @@ async def test_sustained_back_pressure_emits_lifecycle_event(tmp_path):
 async def test_back_pressure_event_resets_after_delivery(tmp_path):
     # Once a delivery is finally fulfilled the stuck counter resets, so a later
     # parked delivery starts its own silent grace period again.
-    from metagpt.environment.control import _DELIVERY_STUCK_FLUSHES
+    from mote.environment.control import _DELIVERY_STUCK_FLUSHES
 
     control = make_control(tmp_path, max_agents=1)
     await control.store.materialize(AgentRuntime(FakeRole("evicted")))
@@ -599,7 +594,7 @@ async def test_spawn_agent_run_to_completion_releases(control):
 
 
 def _cost_role(summary="result"):
-    from metagpt.router.cost import CostTracker
+    from mote.router.cost import CostTracker
 
     role = SpawnRole(summary=summary)
     role._context = types.SimpleNamespace(cost_manager=CostTracker(), config=None)
@@ -642,12 +637,10 @@ async def test_child_usage_only_in_own_bucket_but_subtree_includes_it(control):
         SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
     )
     # Child records 1000 tokens against a known model; parent records nothing.
-    from metagpt.router.cost import TokenUsage
+    from mote.router.cost import TokenUsage
 
     child_node = control.cost_node_for(handle.session_id)
-    child_node.tracker.add(
-        TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "gpt-4o"
-    )
+    child_node.tracker.add(TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "gpt-4o")
     # Parent's own bucket stays empty; the fleet subtree total includes the child.
     assert control.cost_root.tracker.total_cost == 0.0
     assert control.cost_root.subtree_cost() == child_node.tracker.total_cost
@@ -677,7 +670,7 @@ async def test_skill_fork_shared_tracker_not_double_counted(control):
     assert child_role._context is parent_role._context
     # No separate node is created for the shared bucket.
     assert control.cost_node_for(handle.session_id) is None
-    from metagpt.router.cost import TokenUsage
+    from mote.router.cost import TokenUsage
 
     shared.add(TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "gpt-4o")
     # Counted exactly once (root self == subtree).
@@ -693,7 +686,7 @@ async def test_subtree_estimated_flag_rolls_up(control):
     handle = await control.spawn_agent(
         SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
     )
-    from metagpt.router.cost import TokenUsage
+    from mote.router.cost import TokenUsage
 
     # Unknown model -> has_unknown_model_cost on the child, rolled up to root.
     control.cost_node_for(handle.session_id).tracker.add(
@@ -707,7 +700,7 @@ async def test_subtree_estimated_flag_rolls_up(control):
 async def test_spawn_provisions_fresh_context_by_default(control):
     # A context-less role from the factory MUST come out of spawn_agent with a
     # real Context: provisioning is the authority's invariant, not the factory's.
-    from metagpt.router.llm.context import Context
+    from mote.router.llm.context import Context
 
     child_role = SpawnRole()
     assert not hasattr(child_role, "_context")
@@ -767,7 +760,7 @@ async def test_scheduler_binds_ambient_control_during_turn(control):
 # ---------------------------------------------------------------------------
 # Workflow C: communication graph (channels + subtree broadcast)
 # ---------------------------------------------------------------------------
-from metagpt.environment.comms import CommKind  # noqa: E402
+from mote.environment.comms import CommKind  # noqa: E402
 
 
 @pytest.mark.asyncio
@@ -802,15 +795,9 @@ async def test_broadcast_subtree_reaches_descendants_only(control):
     # root -> parent (MANAGED) -> two MANAGED grandchildren under the parent
     root_rt = make_runtime("root-1")
     control.add_agent(root_rt, root=True)
-    parent = await control.spawn_agent(
-        _spec(nickname="parent", lifecycle=Lifecycle.MANAGED, parent_id="root-1")
-    )
-    child1 = await control.spawn_agent(
-        _spec(nickname="kid", lifecycle=Lifecycle.MANAGED, parent_id=parent.session_id)
-    )
-    child2 = await control.spawn_agent(
-        _spec(nickname="kid", lifecycle=Lifecycle.MANAGED, parent_id=parent.session_id)
-    )
+    parent = await control.spawn_agent(_spec(nickname="parent", lifecycle=Lifecycle.MANAGED, parent_id="root-1"))
+    child1 = await control.spawn_agent(_spec(nickname="kid", lifecycle=Lifecycle.MANAGED, parent_id=parent.session_id))
+    child2 = await control.spawn_agent(_spec(nickname="kid", lifecycle=Lifecycle.MANAGED, parent_id=parent.session_id))
     comm = InterAgentCommunication.new(
         author=parent.agent_path,
         recipient=parent.agent_path,
@@ -823,9 +810,7 @@ async def test_broadcast_subtree_reaches_descendants_only(control):
 
 
 def test_broadcast_subtree_unknown_root_returns_empty(control):
-    comm = InterAgentCommunication.new(
-        author=AgentPath.root(), recipient=AgentPath.root(), content="x"
-    )
+    comm = InterAgentCommunication.new(author=AgentPath.root(), recipient=AgentPath.root(), content="x")
     assert control.broadcast_subtree("ghost", comm) == []
 
 
@@ -840,7 +825,7 @@ async def test_release_child_clears_comm_graph(control):
 
 
 def test_completion_notification_carries_notification_kind(control):
-    from metagpt.environment.mailbox import MAILBOX_KIND
+    from mote.environment.mailbox import MAILBOX_KIND
 
     rt = make_runtime("a")
     control.add_agent(rt)

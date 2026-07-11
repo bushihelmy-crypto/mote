@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`metagpt.tasks.pool.BackgroundTaskPool`.
+"""Unit tests for :class:`mote.tasks.pool.BackgroundTaskPool`.
 
 Covers task submission and id allocation, the success / failure / timeout /
 cancellation completion paths, metadata bookkeeping, the per-agent helpers, the
@@ -15,9 +15,9 @@ import asyncio
 
 import pytest
 
-from metagpt.common.const.tasks import MAX_RESULT_LEN
-from metagpt.executor.tasks import BackgroundTaskPool, BackgroundTaskNotification, BgStatus, TaskType
-from metagpt.common.schema import MessagePriority
+from mote.common.const.tasks import MAX_RESULT_LEN
+from mote.common.schema import MessagePriority
+from mote.executor.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskType
 
 from .conftest import boom, echo, forever, gated, started_gated, wait_started
 
@@ -188,7 +188,7 @@ class TestProgressTaskTermination:
     """
 
     def _progress_pool(self, msg_buffer, tmp_path):
-        from metagpt.executor.tasks.disk_output import TaskOutputStore
+        from mote.executor.tasks.disk_output import TaskOutputStore
 
         return BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(tmp_path))
 
@@ -209,17 +209,11 @@ class TestProgressTaskTermination:
     async def test_progress_task_cancel_still_delivers_terminal(self, msg_buffer, tmp_path):
         pool = self._progress_pool(msg_buffer, tmp_path)
         started, release = asyncio.Event(), asyncio.Event()
-        tid = pool.submit(
-            lambda: started_gated(started, release), "g", timeout=None, progress=True
-        )
+        tid = pool.submit(lambda: started_gated(started, release), "g", timeout=None, progress=True)
         await wait_started(started)
         assert pool.cancel(tid) is True
         await pool.wait_all()
-        terminals = [
-            m
-            for m in msg_buffer.pop_all()
-            if isinstance(m, BackgroundTaskNotification) and m.task_terminal
-        ]
+        terminals = [m for m in msg_buffer.pop_all() if isinstance(m, BackgroundTaskNotification) and m.task_terminal]
         assert len(terminals) == 1
         assert terminals[0].status == BgStatus.CANCELLED
 
@@ -259,12 +253,8 @@ class TestDeliver:
         # producer (_on_done), so two terminals for the same task can only occur
         # in tests. Both are pushed — deliver carries no per-task state.
         pool = BackgroundTaskPool(msg_buffer)
-        first = BackgroundTaskNotification(
-            content="t1", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True
-        )
-        second = BackgroundTaskNotification(
-            content="t2", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True
-        )
+        first = BackgroundTaskNotification(content="t1", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
+        second = BackgroundTaskNotification(content="t2", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
         pool.deliver(first)
         pool.deliver(second)
         assert msg_buffer.pop_all() == [first, second]
@@ -368,7 +358,7 @@ class TestWaiters:
     async def test_wait_any_new_message(self, pool, msg_buffer):
         waiter = asyncio.create_task(pool.wait_any(timeout=1))
         await asyncio.sleep(0)
-        from metagpt.common.schema import UserMessage
+        from mote.common.schema import UserMessage
 
         msg_buffer.push(UserMessage(content="ping"))
         assert await asyncio.wait_for(waiter, timeout=1) == "new_message"
@@ -479,10 +469,10 @@ class TestProgressBusVisibility:
 
     @pytest.mark.asyncio
     async def test_report_progress_reaches_bus_subscriber(self, msg_buffer, tmp_path):
-        from metagpt.common.events import EventBus, TaskProgressEvent, set_bus
-        from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-        from metagpt.executor.tasks import TaskOutputStore
-        from metagpt.executor.tasks.bggraph.report import report_progress
+        from mote.common.events import EventBus, TaskProgressEvent, set_bus
+        from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+        from mote.executor.tasks import TaskOutputStore
+        from mote.executor.tasks.bggraph.report import report_progress
 
         class _Recorder(ObservationSubscriber, SyncObserver):
             priority = 50

@@ -8,20 +8,15 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.schema import ThinkResult
-from metagpt.common.logs import log_class
-from metagpt.common.base import BaseThinkEngine
-from metagpt.common.utils.report import ThoughtReporter
-from metagpt.common.utils.role_zero_utils import (
-    call_signature,
-    check_duplicate_calls,
-    check_duplicates,
-)
-
-from metagpt.common.const import TOOL_CALLS
+from mote.common.base import BaseThinkEngine
+from mote.common.const import TOOL_CALLS
+from mote.common.logs import log_class
+from mote.common.schema import ThinkResult
+from mote.common.utils.report import ThoughtReporter
+from mote.common.utils.role_zero_utils import call_signature, check_duplicate_calls, check_duplicates
 
 if TYPE_CHECKING:
-    from metagpt.common.interface import LLMClient, MessageStore
+    from mote.common.interface import LLMClient, MessageStore
 
 
 @log_class(level="DEBUG")
@@ -52,24 +47,24 @@ class ThinkEngine(BaseThinkEngine):
         (aask_tool); otherwise the XML text channel (aask) is used.
         """
         self.llm = llm
-        self._task = asyncio.create_task(
-            self._run(req, system_prompt, tool_specs)
-        )
+        self._task = asyncio.create_task(self._run(req, system_prompt, tool_specs))
 
     async def _run(self, req, system_prompt, tool_specs=None):
         """Background: LLM call + dedup. Produces a fresh ThinkResult."""
+        # start() always assigns self.llm before creating this task, so it is
+        # non-None here; capture it into a local to narrow away the Optional.
+        llm = self.llm
+        assert llm is not None, "think task started before start() set the LLM"
         content = ""
         tool_calls: Optional[list[dict]] = None
         async with ThoughtReporter(enable_llm_stream=True) as reporter:
             await reporter.async_report({"type": "react"})
             if tool_specs:
-                rsp = await self.llm.aask_tool(req, system_msgs=[system_prompt], tools=tool_specs)
+                rsp = await llm.aask_tool(req, system_msgs=[system_prompt], tools=tool_specs)
                 content = rsp.content or ""
-                tool_calls = [
-                    {"id": c.id, "command_name": c.name, "args": c.arguments} for c in rsp.tool_calls
-                ]
+                tool_calls = [{"id": c.id, "command_name": c.name, "args": c.arguments} for c in rsp.tool_calls]
             else:
-                content = await self.llm.aask(req, system_msgs=[system_prompt])
+                content = await llm.aask(req, system_msgs=[system_prompt])
         # Duplicate detection differs by protocol. XML compares raw response text;
         # native compares a structured-call signature (the text may be empty or
         # repeat while the calls differ), and on a hard repeat overrides the calls
@@ -77,18 +72,20 @@ class ThinkEngine(BaseThinkEngine):
         if tool_calls is None:
             rsp_hist = [mem.content for mem in self.memory.get()]
             content = await check_duplicates(
-                req=req, command_rsp=content,
-                rsp_hist=rsp_hist, llm=self.llm,
+                req=req,
+                command_rsp=content,
+                rsp_hist=rsp_hist,
+                llm=llm,
             )
         else:
             sig_hist = [
-                call_signature(mem.metadata[TOOL_CALLS])
-                for mem in self.memory.get()
-                if mem.metadata.get(TOOL_CALLS)
+                call_signature(mem.metadata[TOOL_CALLS]) for mem in self.memory.get() if mem.metadata.get(TOOL_CALLS)
             ]
             override = await check_duplicate_calls(
-                req=req, command_calls=tool_calls,
-                sig_hist=sig_hist, llm=self.llm,
+                req=req,
+                command_calls=tool_calls,
+                sig_hist=sig_hist,
+                llm=llm,
             )
             if override is not None:
                 tool_calls = override

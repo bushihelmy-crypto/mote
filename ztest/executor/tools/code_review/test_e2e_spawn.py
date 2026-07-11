@@ -26,14 +26,13 @@ import pytest
 
 # Import the roles package so its ChildRoleBuilder registers into the
 # common-layer holder; the deep spawn path (build_child_role) requires it.
-import metagpt.roles  # noqa: F401
-from metagpt.common.agent_control import set_control
-from metagpt.environment.control import AgentControl
-from metagpt.environment.store import ResidencyStore
-from metagpt.executor.tools.code_review import nodes as nodes_mod
-from metagpt.executor.tools.code_review.graph import build_code_review_graph
-from metagpt.router.llm.llm_response import LLMResponse
-
+import mote.roles  # noqa: F401
+from mote.common.agent_control import set_control
+from mote.environment.control import AgentControl
+from mote.environment.store import ResidencyStore
+from mote.executor.tools.code_review import nodes as nodes_mod
+from mote.executor.tools.code_review.graph import build_code_review_graph
+from mote.router.llm.llm_response import LLMResponse
 
 # A diff with 2 reviewable .py files.
 _DIFF = "".join(
@@ -101,8 +100,8 @@ def redirect_sessions(tmp_path, monkeypatch):
     """Keep child rollout logs under tmp (children build a SessionLog)."""
     from pathlib import Path
 
-    import metagpt.session.listing as listing
-    import metagpt.session.log as log
+    import mote.session.listing as listing
+    import mote.session.log as log
 
     base = Path(tmp_path) / ".agent_sessions"
     monkeypatch.setattr(log, "_default_base_dir", lambda: base)
@@ -114,7 +113,7 @@ def redirect_sessions(tmp_path, monkeypatch):
 def scripted_llm(monkeypatch):
     """Patch the single LLM factory so every child resolves to the scripted LLM."""
     llm = ScriptedLLM()
-    monkeypatch.setattr("metagpt.router.llm.context.create_llm_instance", lambda cfg: llm)
+    monkeypatch.setattr("mote.router.llm.context.create_llm_instance", lambda cfg: llm)
     return llm
 
 

@@ -1,13 +1,9 @@
 """ResourceRegistry: load/unload/get_all + budgeted most-recent-first projection."""
-from metagpt.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from metagpt.common.resource import (
-    POST_COMPACT_MAX_TOKENS_PER_UNIT,
-    POST_COMPACT_TOKEN_BUDGET,
-    ResourceRegistry,
-)
-from metagpt.common.resource.registry import _project_one
-from metagpt.common.resource.unit import ResourceUnit
-from metagpt.common.schema import ResourceMessage
+from mote.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
+from mote.common.resource import POST_COMPACT_MAX_TOKENS_PER_UNIT, POST_COMPACT_TOKEN_BUDGET, ResourceRegistry
+from mote.common.resource.registry import _project_one
+from mote.common.resource.unit import ResourceUnit
+from mote.common.schema import ResourceMessage
 
 
 def test_load_and_contains_and_len():
@@ -82,7 +78,7 @@ def test_project_truncates_oversized_unit_head_kept():
     r.load(id="big", kind="skill", content=big)
     m = r.project()[0]
     assert "line0" in m.content  # head kept
-    assert "truncated due to token limit" in m.content
+    assert "tokens omitted" in m.content
 
 
 def test_project_drops_units_over_total_budget():

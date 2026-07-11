@@ -7,10 +7,10 @@ import time
 
 import pytest
 
-from metagpt.common.config.config.oauth_config import GrantType, OAuthProviderConfig
-from metagpt.router.oauth.manager import OAuthManager
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.storage.file_store import FileCredentialStore
+from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
+from mote.router.oauth.manager import OAuthManager
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.storage.file_store import FileCredentialStore
 
 
 class FakeClient:
@@ -109,7 +109,7 @@ def test_force_refresh_bypasses_buffer(tmp_path):
 
 
 def test_force_refresh_returns_none_on_permanent_failure(tmp_path):
-    from metagpt.router.oauth.errors import OAuthRefreshError
+    from mote.router.oauth.errors import OAuthRefreshError
 
     class FailingClient(FakeClient):
         def client_credentials(self):
@@ -120,7 +120,7 @@ def test_force_refresh_returns_none_on_permanent_failure(tmp_path):
 
 
 def test_refresh_grant_without_token_errors(tmp_path):
-    from metagpt.router.oauth.errors import OAuthConfigError
+    from mote.router.oauth.errors import OAuthConfigError
 
     client = FakeClient()
     mgr, _ = _manager(tmp_path, client, grant_type=GrantType.REFRESH_TOKEN)
@@ -135,7 +135,7 @@ def test_refresh_grant_without_token_errors(tmp_path):
 
 
 def test_login_dispatches_device_code_and_persists(tmp_path, monkeypatch):
-    import metagpt.router.oauth.manager as manager_mod
+    import mote.router.oauth.manager as manager_mod
 
     captured = OAuthToken(access_token="logged-in", refresh_token="r-li", expires_at=time.time() + 3600)
     monkeypatch.setattr(manager_mod, "run_device_code_flow", lambda config, callbacks=None: captured)
@@ -149,7 +149,7 @@ def test_login_dispatches_device_code_and_persists(tmp_path, monkeypatch):
 
 
 def test_login_dispatches_authorization_code(tmp_path, monkeypatch):
-    import metagpt.router.oauth.manager as manager_mod
+    import mote.router.oauth.manager as manager_mod
 
     token = OAuthToken(access_token="ac-token", expires_at=time.time() + 3600)
     monkeypatch.setattr(manager_mod, "run_auth_code_flow", lambda config, callbacks=None: token)
@@ -159,7 +159,7 @@ def test_login_dispatches_authorization_code(tmp_path, monkeypatch):
 
 
 def test_login_rejects_headless_grant(tmp_path):
-    from metagpt.router.oauth.errors import OAuthConfigError
+    from mote.router.oauth.errors import OAuthConfigError
 
     mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.CLIENT_CREDENTIALS)
     with pytest.raises(OAuthConfigError):
@@ -167,7 +167,7 @@ def test_login_rejects_headless_grant(tmp_path):
 
 
 def test_interactive_grant_without_token_says_login_first(tmp_path):
-    from metagpt.router.oauth.errors import OAuthConfigError
+    from mote.router.oauth.errors import OAuthConfigError
 
     mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.DEVICE_CODE)
     with pytest.raises(OAuthConfigError):

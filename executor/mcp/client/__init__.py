@@ -1,12 +1,12 @@
-from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-from metagpt.executor.mcp.client.sse import MCPSSEClient
-from metagpt.executor.mcp.client.stdio import MCPStdioClient
-from metagpt.common.config.loader import load_config
+from typing import Optional, Union
 
-from typing import Union
+from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+from mote.common.config.loader import load_config
+from mote.executor.mcp.client.sse import MCPSSEClient
+from mote.executor.mcp.client.stdio import MCPStdioClient
 
 
-def get_mcp_client(server_config: MCPServerConfig = None) -> Union[MCPSSEClient, MCPStdioClient]:
+def get_mcp_client(server_config: Optional[MCPServerConfig] = None) -> Union[MCPSSEClient, MCPStdioClient]:
     """Get the appropriate MCP client based on the server configuration.
 
     Args:

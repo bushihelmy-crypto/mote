@@ -41,8 +41,8 @@ import socket
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlsplit
 
-from metagpt.common.logs import logger
-from metagpt.sandbox.network.policy import NetworkPolicy, is_blocked_host
+from mote.common.logs import logger
+from mote.sandbox.network.policy import NetworkPolicy, is_blocked_host
 
 _CRLF = b"\r\n"
 _BUF = 65536
@@ -65,7 +65,7 @@ async def _default_resolver(host: str, port: int) -> list[str]:
     out: list[str] = []
     for info in infos:
         sockaddr = info[4]
-        ip = sockaddr[0]
+        ip = str(sockaddr[0])
         if ip not in seen:
             seen.add(ip)
             out.append(ip)
@@ -144,9 +144,7 @@ class EgressProxy:
             return None
         for ip in addrs:
             if is_blocked_host(ip):
-                logger.debug(
-                    f"EgressProxy blocking {host!r}: resolved to internal address {ip}"
-                )
+                logger.debug(f"EgressProxy blocking {host!r}: resolved to internal address {ip}")
                 return None
         # All resolved addresses are public; pin to the first validated one so
         # the actual connection does not trigger a second (re-bindable) lookup.
@@ -175,9 +173,7 @@ class EgressProxy:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _handle_connect(
-        self, target: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle_connect(self, target: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a ``CONNECT host:port`` HTTPS tunnel request."""
         host, _, port_str = target.partition(":")
         port = int(port_str) if port_str.isdigit() else 443
@@ -278,9 +274,14 @@ class EgressProxy:
     async def _reject(writer: asyncio.StreamWriter, code: int, reason: str) -> None:
         body = reason.encode("latin1")
         writer.write(
-            f"HTTP/1.1 {code} {reason}".encode("latin1") + _CRLF
-            + b"Content-Length: " + str(len(body)).encode() + _CRLF
-            + b"Connection: close" + _CRLF + _CRLF
+            f"HTTP/1.1 {code} {reason}".encode("latin1")
+            + _CRLF
+            + b"Content-Length: "
+            + str(len(body)).encode()
+            + _CRLF
+            + b"Connection: close"
+            + _CRLF
+            + _CRLF
             + body
         )
         try:

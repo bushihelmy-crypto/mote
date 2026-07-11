@@ -11,7 +11,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, List, Optional
 
-from metagpt.executor.tasks.bggraph import GraphState
+from mote.executor.tasks.bggraph import GraphState
 
 
 class ReviewState(GraphState):

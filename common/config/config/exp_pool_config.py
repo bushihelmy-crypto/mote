@@ -2,7 +2,7 @@ from enum import Enum
 
 from pydantic import Field
 
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.utils.yaml_model import YamlModel
 
 
 class ExperiencePoolRetrievalType(Enum):

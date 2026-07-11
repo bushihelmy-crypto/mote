@@ -27,10 +27,7 @@ from typing import List, Optional
 _DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 _SINGLE_QUOTES = "\u2018\u2019\u201a\u201b"
 _DOUBLE_QUOTES = "\u201c\u201d\u201e\u201f"
-_SPACES = (
-    "\u00a0\u2002\u2003\u2004\u2005\u2006\u2007\u2008"
-    "\u2009\u200a\u202f\u205f\u3000"
-)
+_SPACES = "\u00a0\u2002\u2003\u2004\u2005\u2006\u2007\u2008" "\u2009\u200a\u202f\u205f\u3000"
 
 _NORMALISE_TABLE = str.maketrans(
     {
@@ -89,9 +86,7 @@ def seek_sequence(
 
     # Pass 4: normalise typographic Unicode punctuation, then compare.
     for i in range(search_start, last + 1):
-        if all(
-            _normalise(lines[i + j]) == _normalise(pat) for j, pat in enumerate(pattern)
-        ):
+        if all(_normalise(lines[i + j]) == _normalise(pat) for j, pat in enumerate(pattern)):
             return i
 
     return None

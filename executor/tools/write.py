@@ -21,11 +21,22 @@ from __future__ import annotations
 import os
 from typing import ClassVar
 
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.dependency._file_base import FileMutatingTool
-from metagpt.common.const.tools import MAX_CONTENT_SIZE_BYTES
-from metagpt.common.prompt.tools import WRITE_DESCRIPTION
+from mote.common.const.tools import MAX_CONTENT_SIZE_BYTES
+from mote.common.prompt.tools import WRITE_DESCRIPTION
+from mote.common.text import count_noun
+from mote.executor.dependency._file_base import FileMutatingTool
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise/return site).
+_MSG_FILE_PATH_REQUIRED = "Error: 'file_path' argument is required."
+_MSG_CONTENT_NOT_STRING = "Error: 'content' must be a string."
+_MSG_CONTENT_TOO_LARGE = "Error: content ({size} bytes) exceeds the maximum allowed size ({max_size} bytes)."
+_MSG_IS_DIRECTORY = "Error: '{path}' is a directory, not a file. Provide a file path to write to."
+_MSG_CANNOT_MKDIR = "Error: cannot create parent directory for '{path}': {error}"
+_MSG_CANNOT_WRITE = "Error: cannot write '{path}': {error}"
+_MSG_WRITE_OK = "{verb} {path} ({lines}, {size} bytes written)."
 
 
 @register_tool
@@ -55,27 +66,21 @@ class Write(FileMutatingTool):
             content: The full text content to write to the file.
         """
         if not file_path or not file_path.strip():
-            raise ToolError("Error: 'file_path' argument is required.")
+            raise ToolError(_MSG_FILE_PATH_REQUIRED)
 
         if content is None:
             content = ""
         if not isinstance(content, str):
-            raise ToolError("Error: 'content' must be a string.")
+            raise ToolError(_MSG_CONTENT_NOT_STRING)
 
         encoded_size = len(content.encode("utf-8"))
         if encoded_size > MAX_CONTENT_SIZE_BYTES:
-            raise ToolError(
-                f"Error: content ({encoded_size} bytes) exceeds the maximum "
-                f"allowed size ({MAX_CONTENT_SIZE_BYTES} bytes)."
-            )
+            raise ToolError(_MSG_CONTENT_TOO_LARGE.format(size=encoded_size, max_size=MAX_CONTENT_SIZE_BYTES))
 
-        full_path = os.path.abspath(os.path.expanduser(file_path.strip()))
+        full_path = self._resolve_path(file_path.strip())
 
         if os.path.isdir(full_path):
-            raise ToolError(
-                f"Error: '{file_path}' is a directory, not a file. Provide a "
-                f"file path to write to."
-            )
+            raise ToolError(_MSG_IS_DIRECTORY.format(path=file_path))
 
         existed = os.path.exists(full_path)
 
@@ -83,9 +88,7 @@ class Write(FileMutatingTool):
         # session and not changed on disk since. Skipped for new files and when
         # the capability isn't injected (unbound use).
         if existed:
-            self._check_read_before_write(
-                file_path, full_path, noun="file", verb="overwriting"
-            )
+            self._check_read_before_write(file_path, full_path, noun="file", verb="overwriting")
 
         # Preserve the existing newline style on overwrite; default to LF for
         # new files. Content arrives normalized to "\n"; translate on write.
@@ -96,7 +99,7 @@ class Write(FileMutatingTool):
             try:
                 os.makedirs(parent, exist_ok=True)
             except OSError as e:
-                raise ToolError(f"Error: cannot create parent directory for '{file_path}': {e}")
+                raise ToolError(_MSG_CANNOT_MKDIR.format(path=file_path, error=e))
 
         # Capture a before-image for file history (undo/diff) just before we
         # overwrite. No-op when unbound; best-effort (never blocks the write).
@@ -111,7 +114,7 @@ class Write(FileMutatingTool):
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(normalized)
         except OSError as e:
-            raise ToolError(f"Error: cannot write '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_WRITE.format(path=file_path, error=e))
 
         # Refresh the shared file-read state to the just-written content, so a
         # subsequent Write/Edit to the same file isn't blocked as "modified
@@ -120,8 +123,4 @@ class Write(FileMutatingTool):
 
         line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
         verb = "Updated" if existed else "Created"
-        return (
-            f"{verb} {full_path} ({line_count} line(s), {encoded_size} bytes "
-            f"written)."
-        )
-
+        return _MSG_WRITE_OK.format(verb=verb, path=full_path, lines=count_noun(line_count, "line"), size=encoded_size)

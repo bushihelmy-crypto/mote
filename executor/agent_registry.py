@@ -2,7 +2,7 @@
 AgentRegistry — global registry for spawnable agent types.
 
 Usage:
-    from metagpt.executor.agent_registry import register_agent, registry
+    from mote.executor.agent_registry import register_agent, registry
 
     @register_agent
     class ExploreAgent(BaseAgent, Role):
@@ -15,7 +15,7 @@ Usage:
 
 Agent subclasses themselves should not access the registry. Agent types are
 Role + BaseAgent subclasses that wear @register_agent and live under the
-metagpt.agents package; discover() imports them so registration is automatic.
+mote.agents package; discover() imports them so registration is automatic.
 An agent owns its own schema via BaseAgent.get_schema — the registry only
 registers and looks up.
 """
@@ -25,8 +25,8 @@ import importlib
 import pkgutil
 from typing import ClassVar
 
-from metagpt.common.base.role import BaseRole
-from metagpt.common.base.singleton import Singleton
+from mote.common.base.role import BaseRole
+from mote.common.base.singleton import Singleton
 
 
 class AgentRegistry(metaclass=Singleton):
@@ -37,7 +37,7 @@ class AgentRegistry(metaclass=Singleton):
     def __init__(self):
         self._registry = {}
 
-    def discover(self, package: str = "metagpt.roles.agents") -> None:
+    def discover(self, package: str = "mote.roles.agents") -> None:
         """Recursively import every module under `package` so each @register_agent runs.
 
         This is what makes the registry pattern self-contained: an agent type
@@ -83,7 +83,7 @@ class AgentRegistry(metaclass=Singleton):
             )
 
         name = getattr(cls, "agent_name", "") or cls.__name__
-        cls.agent_name = name
+        setattr(cls, "agent_name", name)
 
         self._check_conflict(name, cls)
         self._registry[name] = cls

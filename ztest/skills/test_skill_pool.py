@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.context.skills.skill_pool.SkillPool."""
+"""Tests for mote.context.skills.skill_pool.SkillPool."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from metagpt.context.skills.skill_pool import SkillPool
+from mote.context.skills.skill_pool import SkillPool
 
 from .conftest import write_skill
 

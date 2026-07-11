@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for bggraph notification rendering (:mod:`metagpt.executor.bggraph.notify`).
+"""Tests for bggraph notification rendering (:mod:`mote.executor.bggraph.notify`).
 
 Each ``push_*`` helper routes through ``report_progress``; the tests install a
 collecting progress writer (via :func:`set_progress_writer`) and assert on the
@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import END, START, GraphBatchFailureError, BgGraph, BgStatus
-from metagpt.executor.tasks.bggraph.types import GraphRunState
-from metagpt.executor.tasks.bggraph.notify import (
+from mote.executor.tasks.bggraph import END, START, BgGraph, BgStatus, GraphBatchFailureError
+from mote.executor.tasks.bggraph.notify import (
     _render_completed_nodes,
     _render_status_nodes,
     _resolve_param_source,
@@ -22,11 +21,8 @@ from metagpt.executor.tasks.bggraph.notify import (
     push_started_notification,
     push_terminal_notification,
 )
-from metagpt.executor.tasks.bggraph.report import (
-    report_progress,
-    reset_progress_writer,
-    set_progress_writer,
-)
+from mote.executor.tasks.bggraph.report import report_progress, reset_progress_writer, set_progress_writer
+from mote.executor.tasks.bggraph.types import GraphRunState
 
 from .conftest import S, sync_node
 
@@ -122,9 +118,7 @@ class TestPushTerminal:
     def test_success(self, collector):
         g = _build_graph()
         state = g.state_schema(x=1)
-        push_terminal_notification(
-            g, state, BgStatus.SUCCESS, result="final", initial_params={"x": 1}
-        )
+        push_terminal_notification(g, state, BgStatus.SUCCESS, result="final", initial_params={"x": 1})
         detail = collector.events[-1][2]
         assert "success" in detail
         assert "final" in detail
@@ -133,9 +127,7 @@ class TestPushTerminal:
         g = _build_graph()
         state = g.state_schema(x=1)
         err = GraphBatchFailureError([("tts", ValueError("boom tts"))])
-        push_terminal_notification(
-            g, state, BgStatus.FAILED, error=err, initial_params={"x": 1}
-        )
+        push_terminal_notification(g, state, BgStatus.FAILED, error=err, initial_params={"x": 1})
         detail = collector.events[-1][2]
         assert "failed" in detail
         assert "tts" in detail
@@ -145,9 +137,7 @@ class TestPushTerminal:
         # Cyclic re-run: the same node fails twice → listed once.
         g = _build_graph()
         state = g.state_schema(x=1)
-        err = GraphBatchFailureError(
-            [("tts", ValueError("boom1")), ("tts", ValueError("boom2"))]
-        )
+        err = GraphBatchFailureError([("tts", ValueError("boom1")), ("tts", ValueError("boom2"))])
         push_terminal_notification(g, state, BgStatus.FAILED, error=err)
         detail = collector.events[-1][2]
         failed_seg = detail.split("failed nodes:")[1].split("waiting_for_route")[0]
@@ -183,9 +173,7 @@ class TestPushTerminal:
         push_terminal_notification(g, state, BgStatus.SUCCESS, result="went")
         # Success path uses a different template, so force a FAILED terminal to
         # exercise the waiting section explicitly.
-        push_terminal_notification(
-            g, state, BgStatus.FAILED, error=GraphBatchFailureError([("go", ValueError("x"))])
-        )
+        push_terminal_notification(g, state, BgStatus.FAILED, error=GraphBatchFailureError([("go", ValueError("x"))]))
         detail = collector.events[-1][2]
         waiting_seg = detail.split("waiting_for_route nodes:")[1].split("completed nodes:")[0]
         assert "(none)" in waiting_seg
@@ -266,8 +254,13 @@ class TestPushNodeFailure:
         g._nodes["tts"].status = BgStatus.SKIPPED
         g._nodes["merge"].status = BgStatus.PENDING
         push_node_notification(
-            "render", BgStatus.FAILED, state, g,
-            completed={"split"}, running_names=[], exc=ValueError("render crashed"),
+            "render",
+            BgStatus.FAILED,
+            state,
+            g,
+            completed={"split"},
+            running_names=[],
+            exc=ValueError("render crashed"),
         )
         detail = collector.events[-1][2]
         assert "description:" not in detail
@@ -277,8 +270,12 @@ class TestPushNodeFailure:
         g = _build_graph()
         state = g.state_schema(x=1)
         push_node_notification(
-            "tts", BgStatus.SUCCESS, state, g,
-            completed={"tts"}, running_names=[],
+            "tts",
+            BgStatus.SUCCESS,
+            state,
+            g,
+            completed={"tts"},
+            running_names=[],
         )
         detail = collector.events[-1][2]
         assert "- tts" in detail
@@ -293,8 +290,13 @@ class TestPushNodeFailure:
         rs = GraphRunState.for_graph(g)
         rs.get("work").attempts = 3  # third lap around the ring
         push_node_notification(
-            "work", BgStatus.SUCCESS, state, g,
-            completed={"work"}, running_names=[], run_state=rs,
+            "work",
+            BgStatus.SUCCESS,
+            state,
+            g,
+            completed={"work"},
+            running_names=[],
+            run_state=rs,
         )
         detail = collector.events[-1][2]
         assert "- work" in detail
@@ -303,8 +305,12 @@ class TestPushNodeFailure:
         # A non-ring node in the same graph must NOT get the lap annotation.
         collector.events.clear()
         push_node_notification(
-            "done", BgStatus.SUCCESS, state, g,
-            completed={"done"}, running_names=[],
+            "done",
+            BgStatus.SUCCESS,
+            state,
+            g,
+            completed={"done"},
+            running_names=[],
         )
         assert "lap" not in collector.events[-1][2]
 
@@ -312,8 +318,13 @@ class TestPushNodeFailure:
         g = _build_graph()
         state = g.state_schema(x=1)
         push_node_notification(
-            "render", BgStatus.FAILED, state, g,
-            completed=set(), running_names=["merge"], exc=ValueError("x"),
+            "render",
+            BgStatus.FAILED,
+            state,
+            g,
+            completed=set(),
+            running_names=["merge"],
+            exc=ValueError("x"),
         )
         assert "Other nodes are still running" in collector.events[-1][2]
 
@@ -321,8 +332,13 @@ class TestPushNodeFailure:
         g = _build_graph()
         state = g.state_schema(x=1)
         push_node_notification(
-            "render", BgStatus.FAILED, state, g,
-            completed=set(), running_names=[], exc=ValueError("x"),
+            "render",
+            BgStatus.FAILED,
+            state,
+            g,
+            completed=set(),
+            running_names=[],
+            exc=ValueError("x"),
         )
         assert "No runnable nodes remain" in collector.events[-1][2]
 

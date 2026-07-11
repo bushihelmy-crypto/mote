@@ -6,13 +6,13 @@ import asyncio
 
 import pytest
 
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.mailbox import (
+from mote.environment.agent_path import AgentPath
+from mote.environment.mailbox import (
+    MAILBOX_AUTHOR_PATH,
+    MAILBOX_RECIPIENT_PATH,
     DeliveryMode,
     InterAgentCommunication,
     Mailbox,
-    MAILBOX_AUTHOR_PATH,
-    MAILBOX_RECIPIENT_PATH,
 )
 
 
@@ -58,7 +58,7 @@ def test_mailbox_tracks_pending_trigger_turn():
 
 
 def test_enqueue_raw_message_modes():
-    from metagpt.common.schema import UserMessage
+    from mote.common.schema import UserMessage
 
     mailbox = Mailbox()
     mailbox.enqueue(UserMessage("queued"), mode=DeliveryMode.QUEUE_ONLY)

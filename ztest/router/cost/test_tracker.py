@@ -1,7 +1,7 @@
 """CostTracker aggregation + legacy CostManager shim."""
 import pytest
 
-from metagpt.router.cost import Costs, CostTracker, PricingMode, TokenUsage
+from mote.router.cost import Costs, CostTracker, PricingMode, TokenUsage
 
 
 def test_per_model_and_session_aggregation():

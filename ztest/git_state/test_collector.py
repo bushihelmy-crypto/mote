@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.utils.git_state.collector`` — read-only git snapshot.
+"""Tests for ``mote.common.utils.git_state.collector`` — read-only git snapshot.
 
 Covers: non-repo / empty cwd -> None; branch read filesystem-first from
 .git/HEAD; detached HEAD; staged / unstaged / untracked counting; recent-commit
@@ -14,13 +14,8 @@ import subprocess
 
 import pytest
 
-from metagpt.common.utils.git_state import collector
-from metagpt.common.utils.git_state.collector import (
-    GitState,
-    _parse_status,
-    _read_branch,
-    collect_git_state,
-)
+from mote.common.utils.git_state import collector
+from mote.common.utils.git_state.collector import GitState, _parse_status, _read_branch, collect_git_state
 
 # Async tests are decorated individually so the pure-function unit tests at the
 # bottom don't inherit a spurious asyncio mark.
@@ -189,17 +184,19 @@ async def test_collect_never_raises_on_git_failure(tmp_path, monkeypatch):
 
 
 def test_parse_status_counts():
-    porcelain = "\n".join([
-        "M  staged.py",      # staged modification
-        " M unstaged.py",    # unstaged modification
-        "MM both.py",        # staged + unstaged
-        "?? new.py",         # untracked
-        "A  added.py",       # staged add
-    ])
+    porcelain = "\n".join(
+        [
+            "M  staged.py",  # staged modification
+            " M unstaged.py",  # unstaged modification
+            "MM both.py",  # staged + unstaged
+            "?? new.py",  # untracked
+            "A  added.py",  # staged add
+        ]
+    )
     staged, unstaged, untracked = _parse_status(porcelain)
-    assert staged == 3      # staged.py, both.py, added.py
-    assert unstaged == 2    # unstaged.py, both.py
-    assert untracked == 1   # new.py
+    assert staged == 3  # staged.py, both.py, added.py
+    assert unstaged == 2  # unstaged.py, both.py
+    assert untracked == 1  # new.py
 
 
 def test_parse_status_empty():

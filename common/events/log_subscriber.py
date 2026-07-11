@@ -21,7 +21,9 @@ swallows its own errors — a logging failure must never break a turn.
 
 from __future__ import annotations
 
-from metagpt.common.events.types import (
+from typing import Any, Callable
+
+from mote.common.events.types import (
     AgentLifecycleEvent,
     CompactionCheckpointEvent,
     DiagnosticsEvent,
@@ -41,12 +43,70 @@ from metagpt.common.events.types import (
     TurnStartEvent,
     UserPromptSubmitEvent,
 )
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
-from metagpt.common.logs import logger
+from mote.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
+from mote.common.logs import logger
+from mote.common.text import collapse_whitespace
 
 
 def _clip(text: str) -> str:
-    return " ".join(str(text).split())
+    return collapse_whitespace(str(text))
+
+
+def _fmt_message_appended(e) -> str:
+    msg = e.message
+    role = getattr(msg, "role", "?")
+    content = getattr(msg, "content", "") or ""
+    return f"event message_appended role={role} chars={len(content)} '{_clip(content)}'"
+
+
+def _fmt_agent_lifecycle(e) -> str:
+    detail = f" {e.detail}" if e.detail else ""
+    return f"event agent_lifecycle phase={e.phase} id={e.session_id[:8] or '?'}{detail}"
+
+
+# Per-event-type log rendering: maps an event class to ``(level, format_fn)``.
+# Milestone events log at INFO; routine per-turn events at DEBUG. Dispatch is by
+# exact type (the logged events form a flat hierarchy — none subclasses another),
+# so a table lookup replaces a long isinstance/elif chain; an unlisted type falls
+# back to a bare name line. Kept module-level (built once) rather than rebuilt per
+# call.
+_EVENT_LOG: dict[type, tuple[str, "Callable[[Any], str]"]] = {
+    SessionStartEvent: (
+        "info",
+        lambda e: f"event session_start id={e.session_id[:8] or '?'} source={e.source} model={e.model or '?'}",
+    ),
+    SessionEndEvent: ("info", lambda e: f"event session_end id={e.session_id[:8] or '?'}"),
+    CompactionCheckpointEvent: (
+        "info",
+        lambda e: f"event compaction_checkpoint messages={len(e.messages)} summary='{_clip(e.summary)}'",
+    ),
+    PreCompactEvent: ("info", lambda e: f"event pre_compact trigger={e.trigger}"),
+    PostCompactEvent: ("info", lambda e: f"event post_compact trigger={e.trigger}"),
+    TurnStartEvent: ("debug", lambda e: f"event turn_start turn={e.turn_id or '?'}"),
+    TurnEndEvent: ("debug", lambda e: f"event turn_end turn={e.turn_id or '?'} model={e.model or '?'}"),
+    MessageAppendedEvent: ("debug", _fmt_message_appended),
+    UserPromptSubmitEvent: ("debug", lambda e: f"event user_prompt_submit '{_clip(e.prompt)}'"),
+    PreToolUseEvent: ("debug", lambda e: f"event pre_tool_use tool={e.tool_name}"),
+    PostToolUseEvent: ("debug", lambda e: f"event post_tool_use tool={e.tool_name}"),
+    FileSnapshotEvent: (
+        "debug",
+        lambda e: f"event file_snapshot op={e.operation} backend={e.backend} path={e.display_path or e.path}",
+    ),
+    FileChangedEvent: ("debug", lambda e: f"event file_changed type={e.change_type} path={e.path}"),
+    DiagnosticsEvent: ("debug", lambda e: f"event diagnostics files={len(e.paths)} chars={len(e.block)}"),
+    AgentLifecycleEvent: ("info", _fmt_agent_lifecycle),
+    RecoveryEvent: (
+        "info",
+        lambda e: (
+            f"event recovery phase={e.phase} action={e.action} "
+            f"attempt={e.attempt} error={e.error_type}: '{e.error}'"
+        ),
+    ),
+    ResourceReportEvent: (
+        "debug",
+        lambda e: f"event resource_report block={e.block} name={e.name_} role={e.role or '?'}",
+    ),
+}
 
 
 class LogSubscriber(ObservationSubscriber, SyncObserver):
@@ -85,64 +145,12 @@ class LogSubscriber(ObservationSubscriber, SyncObserver):
 
     @staticmethod
     def _log(event) -> None:
-        # Milestone events at INFO; routine per-turn events at DEBUG.
-        if isinstance(event, SessionStartEvent):
-            logger.info(
-                f"event session_start id={event.session_id[:8] or '?'} "
-                f"source={event.source} model={event.model or '?'}"
-            )
-        elif isinstance(event, SessionEndEvent):
-            logger.info(f"event session_end id={event.session_id[:8] or '?'}")
-        elif isinstance(event, CompactionCheckpointEvent):
-            logger.info(
-                f"event compaction_checkpoint messages={len(event.messages)} "
-                f"summary='{_clip(event.summary)}'"
-            )
-        elif isinstance(event, PreCompactEvent):
-            logger.info(f"event pre_compact trigger={event.trigger}")
-        elif isinstance(event, PostCompactEvent):
-            logger.info(f"event post_compact trigger={event.trigger}")
-        elif isinstance(event, TurnStartEvent):
-            logger.debug(f"event turn_start turn={event.turn_id or '?'}")
-        elif isinstance(event, TurnEndEvent):
-            logger.debug(f"event turn_end turn={event.turn_id or '?'} model={event.model or '?'}")
-        elif isinstance(event, MessageAppendedEvent):
-            msg = event.message
-            role = getattr(msg, "role", "?")
-            content = getattr(msg, "content", "") or ""
-            logger.debug(f"event message_appended role={role} chars={len(content)} '{_clip(content)}'")
-        elif isinstance(event, UserPromptSubmitEvent):
-            logger.debug(f"event user_prompt_submit '{_clip(event.prompt)}'")
-        elif isinstance(event, PreToolUseEvent):
-            logger.debug(f"event pre_tool_use tool={event.tool_name}")
-        elif isinstance(event, PostToolUseEvent):
-            logger.debug(f"event post_tool_use tool={event.tool_name}")
-        elif isinstance(event, FileSnapshotEvent):
-            logger.debug(
-                f"event file_snapshot op={event.operation} backend={event.backend} "
-                f"path={event.display_path or event.path}"
-            )
-        elif isinstance(event, FileChangedEvent):
-            logger.debug(f"event file_changed type={event.change_type} path={event.path}")
-        elif isinstance(event, DiagnosticsEvent):
-            logger.debug(f"event diagnostics files={len(event.paths)} chars={len(event.block)}")
-        elif isinstance(event, AgentLifecycleEvent):
-            detail = f" {event.detail}" if event.detail else ""
-            logger.info(
-                f"event agent_lifecycle phase={event.phase} "
-                f"id={event.session_id[:8] or '?'}{detail}"
-            )
-        elif isinstance(event, RecoveryEvent):
-            logger.info(
-                f"event recovery phase={event.phase} action={event.action} "
-                f"attempt={event.attempt} error={event.error_type}: '{event.error}'"
-            )
-        elif isinstance(event, ResourceReportEvent):
-            logger.debug(
-                f"event resource_report block={event.block} name={event.name_} role={event.role or '?'}"
-            )
-        else:
+        entry = _EVENT_LOG.get(type(event))
+        if entry is None:
             logger.debug(f"event {getattr(event, 'name', '?')}")
+            return
+        level, fmt = entry
+        getattr(logger, level)(fmt(event))
 
 
 __all__ = ["LogSubscriber"]

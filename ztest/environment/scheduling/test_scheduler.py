@@ -4,9 +4,9 @@
 
 from datetime import datetime
 
-from metagpt.environment.scheduling.scheduler import CronScheduler, is_recurring_task_aged
-from metagpt.environment.scheduling.store import CronTaskStore
-from metagpt.environment.scheduling.task import CronTask
+from mote.environment.scheduling.scheduler import CronScheduler, is_recurring_task_aged
+from mote.environment.scheduling.store import CronTaskStore
+from mote.environment.scheduling.task import CronTask
 
 
 def _ms(year, month, day, hour=0, minute=0, second=0):

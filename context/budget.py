@@ -1,6 +1,6 @@
 """Token accounting and context-window state — ported from Claude Code.
 
-Wraps MetaGPT's existing ``count_message_tokens`` / ``TOKEN_MAX`` with the
+Wraps Mote's existing ``count_message_tokens`` / ``TOKEN_MAX`` with the
 window-aware threshold math from CC's ``autoCompact.ts``: effective window,
 autocompact buffer scaling, and the warning / error / blocking / should-compact
 state used by the loop and UI.
@@ -11,18 +11,24 @@ can be called both on stored history and on a built request.
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from typing import TYPE_CHECKING, Sequence, Union
 
-from metagpt.common.schema import TokenState, Message
-from metagpt.common.const.context import (
+from mote.common.schema import TokenState
+
+if TYPE_CHECKING:
+    from mote.common.schema.messages import Message
+else:
+    from mote.common.schema import Message
+
+from mote.common.const.context import (
     AUTOCOMPACT_BUFFER_TOKENS,
+    ERROR_THRESHOLD_BUFFER_TOKENS,
     MANUAL_COMPACT_BUFFER_TOKENS,
     MAX_OUTPUT_TOKENS_FOR_SUMMARY,
     MODEL_CONTEXT_WINDOW_DEFAULT,
     WARNING_THRESHOLD_BUFFER_TOKENS,
-    ERROR_THRESHOLD_BUFFER_TOKENS,
 )
-from metagpt.common.utils.token_counter import TOKEN_MAX, count_message_tokens
+from mote.common.utils.token_counter import TOKEN_MAX, count_message_tokens
 
 MessageLike = Union[Message, dict]
 

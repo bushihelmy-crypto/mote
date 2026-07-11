@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 
 @dataclass

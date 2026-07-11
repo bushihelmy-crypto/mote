@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from metagpt.router.ml.inference.types import FeatureBundle, HeadOutputs
+from mote.router.ml.inference.types import FeatureBundle, HeadOutputs
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -35,20 +35,14 @@ def run_heads(
     if not np.isfinite(temperature) or temperature <= 0:
         raise ValueError("temperature must be finite and > 0")
 
-    p_main = np.asarray(
-        main_model.predict(bundle.features_390[None, :])[0], dtype=np.float64
-    )
+    p_main = np.asarray(main_model.predict(bundle.features_390[None, :])[0], dtype=np.float64)
     p_aux = None
     if aux_model is not None:
-        p_aux = np.asarray(
-            aux_model.predict(bundle.features_390[None, :])[0], dtype=np.float64
-        )
+        p_aux = np.asarray(aux_model.predict(bundle.features_390[None, :])[0], dtype=np.float64)
 
     scaled = mlp_scaler.transform(bundle.raw_bge_1536[None, :]).astype(np.float32)
     input_name = _get_session_input_name(mlp_session)
-    logits = np.asarray(
-        mlp_session.run(None, {input_name: scaled})[0][0], dtype=np.float64
-    )
+    logits = np.asarray(mlp_session.run(None, {input_name: scaled})[0][0], dtype=np.float64)
     calibrated = _softmax(logits / temperature)
     return HeadOutputs(
         p_main_lgbm=p_main,

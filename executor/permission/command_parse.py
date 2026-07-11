@@ -33,9 +33,23 @@ _SHELLS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 # they tweak behavior but never change *which* binary runs.
 _SAFE_ENV_VARS: frozenset[str] = frozenset(
     {
-        "NODE_ENV", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "RUST_BACKTRACE",
-        "RUST_LOG", "LANG", "LC_ALL", "LANGUAGE", "TZ", "TERM", "CI", "DEBUG",
-        "FORCE_COLOR", "NO_COLOR", "GIT_PAGER", "PAGER", "EDITOR",
+        "NODE_ENV",
+        "PYTHONUNBUFFERED",
+        "PYTHONDONTWRITEBYTECODE",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "LANG",
+        "LC_ALL",
+        "LANGUAGE",
+        "TZ",
+        "TERM",
+        "CI",
+        "DEBUG",
+        "FORCE_COLOR",
+        "NO_COLOR",
+        "GIT_PAGER",
+        "PAGER",
+        "EDITOR",
     }
 )
 
@@ -43,9 +57,17 @@ _SAFE_ENV_VARS: frozenset[str] = frozenset(
 # Their presence means we cannot vouch for a stable prefix — refuse to extract.
 _UNSAFE_ENV_VARS: frozenset[str] = frozenset(
     {
-        "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH", "PYTHONPATH", "NODE_OPTIONS", "BASH_ENV", "ENV",
-        "IFS", "SHELL",
+        "PATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "PYTHONPATH",
+        "NODE_OPTIONS",
+        "BASH_ENV",
+        "ENV",
+        "IFS",
+        "SHELL",
     }
 )
 
@@ -54,9 +76,30 @@ _UNSAFE_ENV_VARS: frozenset[str] = frozenset(
 # is just the command name.
 _SUBCOMMAND_COMMANDS: frozenset[str] = frozenset(
     {
-        "git", "npm", "pnpm", "yarn", "docker", "docker-compose", "cargo", "pip",
-        "pip3", "go", "kubectl", "apt", "apt-get", "brew", "gh", "poetry", "uv",
-        "make", "conda", "dotnet", "bundle", "gem", "terraform", "systemctl",
+        "git",
+        "npm",
+        "pnpm",
+        "yarn",
+        "docker",
+        "docker-compose",
+        "cargo",
+        "pip",
+        "pip3",
+        "go",
+        "kubectl",
+        "apt",
+        "apt-get",
+        "brew",
+        "gh",
+        "poetry",
+        "uv",
+        "make",
+        "conda",
+        "dotnet",
+        "bundle",
+        "gem",
+        "terraform",
+        "systemctl",
     }
 )
 

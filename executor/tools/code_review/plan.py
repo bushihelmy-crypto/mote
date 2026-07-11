@@ -17,14 +17,12 @@ reorders and annotates.
 """
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
 from typing import List
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
-from ._agent import build_child_role, run_child_for_text
+from ._agent import build_child_role, extract_json_object, run_child_for_text
 from .parser import FileDiff
 
 _PLAN_SYSTEM_PROMPT = """\
@@ -122,7 +120,7 @@ async def make_plan(
     if not output:
         return _identity_plan(files)
 
-    obj = _extract_plan_object(output)
+    obj = extract_json_object(output)
     if obj is None:
         logger.warning("code_review: could not parse plan JSON; using identity plan")
         return _identity_plan(files)
@@ -131,34 +129,6 @@ async def make_plan(
     order = obj.get("order")
     ordered = _reorder(files, order) if isinstance(order, list) else list(files)
     return ReviewPlan(strategy=strategy, ordered=ordered)
-
-
-def _extract_plan_object(text: str) -> dict | None:
-    """Extract the plan JSON object from the agent's output.
-
-    Reuses the array extractor's fence handling by trying the same candidates,
-    but accepts an object (``{...}``) rather than an array.
-    """
-    if not text:
-        return None
-    text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    candidates: List[str] = []
-    if fence:
-        candidates.append(fence.group(1).strip())
-    candidates.append(text)
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last != -1 and last > first:
-        candidates.append(text[first : last + 1])
-    for cand in candidates:
-        try:
-            parsed = json.loads(cand)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
 
 
 __all__ = ["ReviewPlan", "make_plan"]

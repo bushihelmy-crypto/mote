@@ -14,11 +14,10 @@ import asyncio
 import hashlib
 import os
 
-from metagpt.session.events import FILE_SNAPSHOT
-from metagpt.session.log import SessionLog
-from metagpt.session.replay import replay
-from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
-
+from mote.session.events import FILE_SNAPSHOT
+from mote.session.log import SessionLog
+from mote.session.replay import replay
+from mote.session.snapshot import BlobStore, FileSnapshotRecorder
 
 # ---------------------------------------------------------------------------
 # BlobStore
@@ -114,7 +113,7 @@ def test_snapshot_unreadable_path_is_best_effort(tmp_path):
 
 
 def test_recorder_conforms_to_protocol(tmp_path):
-    from metagpt.common.interface import FileSnapshotStore
+    from mote.common.interface import FileSnapshotStore
 
     rec, _ = _recorder(tmp_path)
     assert isinstance(rec, FileSnapshotStore)
@@ -138,8 +137,8 @@ def test_repeated_snapshots_dedup_blob(tmp_path):
 
 
 def test_replay_ignores_file_snapshot_events(tmp_path):
-    from metagpt.common.schema import UserMessage
-    from metagpt.session.events import MessageEvent
+    from mote.common.schema import UserMessage
+    from mote.session.events import MessageEvent
 
     log = SessionLog("mix", base_dir=str(tmp_path))
     log.append(MessageEvent(message=UserMessage(content="hi")))
@@ -168,7 +167,7 @@ def _bind_snapshot(tool, rec):
 
 
 def test_write_overwrite_captures_before_image(tmp_path):
-    from metagpt.executor.tools.write import Write
+    from mote.executor.tools.write import Write
 
     target = tmp_path / "f.txt"
     target.write_text("original")
@@ -189,7 +188,7 @@ def test_write_overwrite_captures_before_image(tmp_path):
 
 
 def test_write_new_file_records_create(tmp_path):
-    from metagpt.executor.tools.write import Write
+    from mote.executor.tools.write import Write
 
     target = tmp_path / "new.txt"
     rec, log = _recorder(tmp_path)
@@ -205,7 +204,7 @@ def test_write_new_file_records_create(tmp_path):
 
 
 def test_edit_captures_before_image(tmp_path):
-    from metagpt.executor.tools.edit import Edit
+    from mote.executor.tools.edit import Edit
 
     target = tmp_path / "f.py"
     target.write_text("a = 1\nb = 2\n")
@@ -225,7 +224,7 @@ def test_edit_captures_before_image(tmp_path):
 
 def test_unbound_tool_snapshot_is_noop(tmp_path):
     # A tool used standalone (no Role injected the capability) must not blow up.
-    from metagpt.executor.tools.write import Write
+    from mote.executor.tools.write import Write
 
     tool = Write()
     # _snapshot_pre_write self-skips when the capability is absent.

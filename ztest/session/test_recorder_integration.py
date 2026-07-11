@@ -17,15 +17,11 @@ from __future__ import annotations
 
 import pytest
 
-import metagpt.context.budget as token_budget
-from metagpt.common.events import (
-    CompactionCheckpointEvent,
-    EventBus,
-    MessageAppendedEvent,
-)
-from metagpt.common.interface.event_subscriber import ObservationSubscriber
-from metagpt.common.schema import AIMessage, ContextManagerConfig, UserMessage
-from metagpt.context.manager import ContextManager
+import mote.context.budget as token_budget
+from mote.common.events import CompactionCheckpointEvent, EventBus, MessageAppendedEvent
+from mote.common.interface.event_subscriber import ObservationSubscriber
+from mote.common.schema import AIMessage, ContextManagerConfig, UserMessage
+from mote.context.manager import ContextManager
 
 
 class _FakeLLM:
@@ -35,9 +31,11 @@ class _FakeLLM:
 
     async def aask(self, msg=None, system_msgs=None, stream=True, **kwargs) -> str:
         return self._summary
-from metagpt.session.events import COMPACTED, MESSAGE
-from metagpt.session.log import SessionLog
-from metagpt.session.subscribers import RecorderSubscriber
+
+
+from mote.session.events import COMPACTED, MESSAGE
+from mote.session.log import SessionLog
+from mote.session.subscribers import RecorderSubscriber
 
 
 class SpySubscriber(ObservationSubscriber):
@@ -101,9 +99,7 @@ async def test_real_recorder_appends_to_log(tmp_path):
     recorder = RecorderSubscriber(log)
     cm = ContextManager(bus=_bus_with(recorder))
     await cm.add(UserMessage(content="persisted"))
-    await recorder.handle(
-        CompactionCheckpointEvent(messages=[UserMessage(content="[summary]")], summary="s")
-    )
+    await recorder.handle(CompactionCheckpointEvent(messages=[UserMessage(content="[summary]")], summary="s"))
     # iter_raw() drains the DiskWriter first, so queued writes are on disk here.
     types = [r["type"] for r in log.iter_raw()]
     assert types == [MESSAGE, COMPACTED]
@@ -115,16 +111,14 @@ async def test_disabled_recorder_does_not_append(tmp_path):
     recorder = RecorderSubscriber(log, enabled=False)
     cm = ContextManager(bus=_bus_with(recorder))
     await cm.add(UserMessage(content="ignored"))
-    await recorder.handle(
-        CompactionCheckpointEvent(messages=[UserMessage(content="x")], summary="s")
-    )
+    await recorder.handle(CompactionCheckpointEvent(messages=[UserMessage(content="x")], summary="s"))
     assert list(log.iter_raw()) == []
 
 
 @pytest.mark.asyncio
 async def test_llm_response_persists_compact_call_record(tmp_path):
-    from metagpt.common.events import LLMResponseEvent
-    from metagpt.session.events import LLM_CALL, parse_event
+    from mote.common.events import LLMResponseEvent
+    from mote.session.events import LLM_CALL, parse_event
 
     log = SessionLog("sess_llm", base_dir=str(tmp_path))
     recorder = RecorderSubscriber(log)
@@ -150,7 +144,7 @@ async def test_llm_response_persists_compact_call_record(tmp_path):
 
 @pytest.mark.asyncio
 async def test_llm_response_without_usage_is_not_recorded(tmp_path):
-    from metagpt.common.events import LLMResponseEvent
+    from mote.common.events import LLMResponseEvent
 
     log = SessionLog("sess_llm_empty", base_dir=str(tmp_path))
     recorder = RecorderSubscriber(log)

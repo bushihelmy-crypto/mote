@@ -28,13 +28,13 @@ what is kept) and reports the freed-token count.
 
 from __future__ import annotations
 
-from metagpt.common.const import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALL_ID
-from metagpt.common.const.context import TOOL_RESULT_CLEARED_MESSAGE
-from metagpt.common.schema import ContextManagerConfig, Message
-from metagpt.common.utils.token_counter import count_string_tokens
-from metagpt.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import SegmentKind, Transcript
+from mote.common.const import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALL_ID
+from mote.common.const.context import TOOL_RESULT_CLEARED_MESSAGE
+from mote.common.schema import ContextManagerConfig, Message
+from mote.common.utils.token_counter import count_string_tokens
+from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import SegmentKind, Transcript
 
 
 class FoldReducer:

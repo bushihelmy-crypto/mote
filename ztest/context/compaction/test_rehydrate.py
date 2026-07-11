@@ -10,9 +10,9 @@ unreadable files, a throwing provider).
 """
 from __future__ import annotations
 
-from metagpt.common.const import TOOL_CALLS
-from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.context.compaction.rehydrate import FileRehydrator
+from mote.common.const import TOOL_CALLS
+from mote.common.schema import AIMessage, UserMessage
+from mote.context.compaction.rehydrate import FileRehydrator
 
 
 def _write(tmp_path, name, body):
@@ -92,7 +92,7 @@ def test_per_file_truncation(tmp_path):
     big = "\n".join(f"line {i}" for i in range(1000))
     path = _write(tmp_path, "big.py", big)
     (msg,) = FileRehydrator(lambda: [path], max_tokens_per_file=20).project()
-    assert "truncated" in msg.content
+    assert "omitted" in msg.content
 
 
 def test_total_budget_drops_older_files(tmp_path):
@@ -100,9 +100,7 @@ def test_total_budget_drops_older_files(tmp_path):
     a = _write(tmp_path, "a.py", big)  # oldest
     b = _write(tmp_path, "b.py", "small")  # newest
     # Budget only fits the small newest file; the big older one is dropped whole.
-    msgs = FileRehydrator(
-        lambda: [a, b], max_tokens_per_file=100_000, token_budget=20
-    ).project()
+    msgs = FileRehydrator(lambda: [a, b], max_tokens_per_file=100_000, token_budget=20).project()
     bodies = [m.content.split("\n\n", 1)[1] for m in msgs]
     assert bodies == ["small"]
 

@@ -27,15 +27,20 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, ClassVar, Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.prompt.tools import TERMINAL_DESCRIPTION
-from metagpt.common.schema.permission_types import PermissionDecision
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.dependency._terminal import DEFAULT_YIELD_MS, TerminalSession
-from metagpt.executor.permission.classifier import classify_command
-from metagpt.executor.permission.command_parse import segment_strings
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
+from mote.common.logs import logger
+from mote.common.prompt.tools import TERMINAL_DESCRIPTION
+from mote.common.schema.permission_types import PermissionDecision
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._terminal import DEFAULT_YIELD_MS, TerminalSession
+from mote.executor.permission.classifier import classify_command
+from mote.executor.permission.command_parse import segment_strings
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+_MSG_NO_TERMINAL_TO_INTERRUPT = "Error: no live terminal to interrupt."
+_MSG_TERMINAL_FAILED = "Error driving terminal: {error}"
 
 
 @register_tool
@@ -69,7 +74,7 @@ class Terminal(BaseTool):
     # Capability accessor returning the session's SandboxRuntime, or None when no
     # OS-level sandbox is configured. Defaults to a no-runtime stub so a tool
     # bound without a Role (some unit tests) still runs un-sandboxed.
-    get_sandbox_runtime: Callable[[], object] = staticmethod(lambda: None)
+    get_sandbox_runtime: Callable[[], Any] = staticmethod(lambda: None)
     # Capability accessors for session-resume terminal-state restore:
     #   record_terminal_state — persist (cwd, env diff, unset) into the rollout
     #     after a call settles at a prompt (so resume can re-seed a shell).
@@ -178,11 +183,12 @@ class Terminal(BaseTool):
             self.set_tool_session(self.name, None)
             return "[terminal closed]"
 
+        result: tuple[str, Optional[int], bool, bool]
         try:
             if interrupt:
                 session = self.get_tool_session(self.name)
                 if session is None or session.closed:
-                    raise ToolError("Error: no live terminal to interrupt.")
+                    raise ToolError(_MSG_NO_TERMINAL_TO_INTERRUPT)
                 result = await session.interrupt(yield_time_ms)
             else:
                 session = await self._ensure_session()
@@ -190,7 +196,7 @@ class Terminal(BaseTool):
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Error driving terminal: {e}")
+            raise ToolError(_MSG_TERMINAL_FAILED.format(error=e))
 
         if result[3]:  # the shell itself exited — drop the stored session
             session.shutdown()

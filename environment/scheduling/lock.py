@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.logs import log_class
+from mote.common.logs import log_class
 
 #: Lock file name, alongside the schedule file in the schedules dir.
 LOCK_FILENAME = "scheduled_tasks.lock"
@@ -61,9 +61,7 @@ class SchedulerLock:
         return self._held
 
     def _body(self) -> str:
-        return json.dumps(
-            {"session_id": self.session_id, "pid": os.getpid(), "acquired_at": int(time.time() * 1000)}
-        )
+        return json.dumps({"session_id": self.session_id, "pid": os.getpid(), "acquired_at": int(time.time() * 1000)})
 
     def _read(self) -> Optional[dict]:
         try:

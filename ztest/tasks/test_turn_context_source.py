@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :mod:`metagpt.tasks.turn_context_source`.
+"""Unit tests for :mod:`mote.tasks.turn_context_source`.
 
 ``BackgroundTaskContextSource`` adapts the background pool into an
 ``EphemeralContextSource``: it peeks the pool lazily (None until a tool spawns
@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.interface import EphemeralContextSource
-from metagpt.executor.tasks import BgStatus, TaskMeta, BackgroundTaskContextSource
+from mote.common.interface import EphemeralContextSource
+from mote.executor.tasks import BackgroundTaskContextSource, BgStatus, TaskMeta
 
 
 def run(coro):

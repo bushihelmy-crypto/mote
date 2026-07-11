@@ -14,16 +14,20 @@ bggraph engine and snapshotted onto the task meta. Two modes:
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Callable
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tasks.types import BgStatus
+from mote.common.text import collapse_whitespace
+from mote.executor.base_tool import BaseTool
+from mote.executor.tasks.types import BgStatus
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+if TYPE_CHECKING:
+    from mote.executor.tasks import BackgroundTaskPool
 
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_NO_RUN_STATE = (
-    "Task {task_id} ({command_name}) is status {status}; it has no per-node "
-    "state (not a graph pipeline)."
+    "Task {task_id} ({command_name}) is status {status}; it has no per-node " "state (not a graph pipeline)."
 )
 _MSG_NODE_NOT_FOUND = "Node '{node_name}' not found in graph. Available: {available}"
 _MSG_UNKNOWN_FIELD = "Unknown state field(s): {fields}. Available: {available}"
@@ -105,7 +109,7 @@ def _preview_value(value, *, limit: int, collapse: bool = False) -> str:
             body = repr(value)
     body = body.strip()
     if collapse:
-        body = " ".join(body.split())
+        body = collapse_whitespace(body)
     if len(body) > limit:
         body = f"{body[:limit]}… (+{len(body) - limit} more chars)"
     return f"{prefix}{body}"
@@ -176,6 +180,9 @@ class GetNodeState(BaseTool):
     )
     requires = ("get_bg_pool",)
 
+    # Injected from Role by bind(): Role.get_bg_pool.
+    get_bg_pool: Callable[[], "BackgroundTaskPool"]
+
     async def call(
         self,
         *,
@@ -221,11 +228,7 @@ class GetNodeState(BaseTool):
         if graph is not None:
             for n in requested:
                 if n not in graph._nodes:
-                    raise ToolError(
-                        _MSG_NODE_NOT_FOUND.format(
-                            node_name=n, available=list(graph._nodes.keys())
-                        )
-                    )
+                    raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=list(graph._nodes.keys())))
         return self._render_details(task_id, meta, run_state, graph, requested)
 
     def _render_overview(self, task_id, meta, run_state, graph=None) -> str:

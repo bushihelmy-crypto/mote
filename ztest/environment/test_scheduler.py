@@ -7,11 +7,11 @@ import types
 
 import pytest
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.mailbox import DeliveryMode
-from metagpt.environment.runtime import AgentRuntime, AgentStatus
-from metagpt.environment.turn_scheduler import EventDrivenScheduler
+from mote.common.schema.messages import UserMessage
+from mote.common.schema.queue import MessageQueue
+from mote.environment.mailbox import DeliveryMode
+from mote.environment.runtime import AgentRuntime, AgentStatus
+from mote.environment.turn_scheduler import EventDrivenScheduler
 
 
 class FakeRole:

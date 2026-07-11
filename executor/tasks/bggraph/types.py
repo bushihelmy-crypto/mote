@@ -1,4 +1,4 @@
-"""Core data types for :mod:`metagpt.executor.bggraph`.
+"""Core data types for :mod:`mote.executor.bggraph`.
 
 This module is deliberately dependency-light (``common`` + stdlib only) so that
 it can be imported by the pool layer for the ``_LLM_ROUTE_SENTINEL`` marker
@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict
 # Graph execution exceptions are unified under the global exception package;
 # re-exported here so existing ``from .types import GraphRouterError`` (etc.)
 # call sites within the bggraph package keep working.
-from metagpt.common.exception import (  # noqa: F401
+from mote.common.exception import (  # noqa: F401
     GraphBatchFailureError,
     GraphNodeRetryExhaustedError,
     GraphNodeTimeoutError,
@@ -40,6 +40,7 @@ from metagpt.common.exception import (  # noqa: F401
 
 START = "__start__"
 END = "__end__"
+
 
 @dataclass
 class LlmPauseResult:
@@ -63,8 +64,7 @@ _LLM_ROUTE_SENTINEL = LlmPauseResult
 # Node status — canonical definition lives in common/schema/node_status.py
 # ---------------------------------------------------------------------------
 
-from metagpt.common.schema.node_status import BgStatus  # noqa: E402
-
+from mote.common.schema.node_status import BgStatus  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Authoritative run state — per-node execution records
@@ -132,6 +132,18 @@ class GraphRunState:
         """
         return cls.for_graph(graph)
 
+    @classmethod
+    def ensure(cls, graph: Any, state: Any, run_state: Optional["GraphRunState"]) -> "GraphRunState":
+        """Return *run_state* when present, else infer one (legacy fallback).
+
+        Live runs always thread their authoritative ``run_state`` in; this only
+        bridges callers (older snapshots / tests) that have none, recovering a
+        best-effort state via :meth:`infer_from_state`.
+        """
+        if run_state is not None:
+            return run_state
+        return cls.infer_from_state(graph, state)
+
     def get(self, name: str) -> NodeRecord:
         rec = self.records.get(name)
         if rec is None:
@@ -153,9 +165,7 @@ class GraphRunState:
         rec.started_at = time.time()
         rec.ended_at = None
 
-    def mark_success(
-        self, name: str, *, route_key: Optional[str] = None, writes: Optional[list[str]] = None
-    ) -> None:
+    def mark_success(self, name: str, *, route_key: Optional[str] = None, writes: Optional[list[str]] = None) -> None:
         rec = self.get(name)
         rec.status = BgStatus.SUCCESS
         rec.ended_at = time.time()

@@ -16,7 +16,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from metagpt.executor.tool_result import ToolResult
+from mote.executor.tool_result import ToolResult
 
 
 class BaseToolExecutor(ABC):

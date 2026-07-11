@@ -13,10 +13,10 @@ import time
 
 import pytest
 
-import metagpt.router.oauth.client as client_mod
-from metagpt.common.config.config.oauth_config import GrantType, OAuthProviderConfig
-from metagpt.router.oauth.client import OAuthClient
-from metagpt.router.oauth.errors import OAuthRefreshError
+import mote.router.oauth.client as client_mod
+from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
+from mote.router.oauth.client import OAuthClient
+from mote.router.oauth.errors import OAuthRefreshError
 
 
 class FakeResponse:
@@ -183,7 +183,7 @@ def test_exchange_code_success(monkeypatch):
 
 
 def test_exchange_code_requires_client_id(monkeypatch):
-    from metagpt.router.oauth.errors import OAuthConfigError
+    from mote.router.oauth.errors import OAuthConfigError
 
     with pytest.raises(OAuthConfigError):
         OAuthClient(_cfg(client_id=None)).exchange_code("c", "v", "http://localhost/cb")
@@ -212,7 +212,7 @@ def test_request_device_code_success(monkeypatch):
 
 
 def test_request_device_code_requires_device_url(monkeypatch):
-    from metagpt.router.oauth.errors import OAuthConfigError
+    from mote.router.oauth.errors import OAuthConfigError
 
     with pytest.raises(OAuthConfigError):
         OAuthClient(_cfg(client_id="cid")).request_device_code()
@@ -235,7 +235,7 @@ def test_poll_device_token_pending_then_success(monkeypatch):
 
 
 def test_poll_device_token_terminal_error_raises(monkeypatch):
-    from metagpt.router.oauth.errors import OAuthRefreshError
+    from mote.router.oauth.errors import OAuthRefreshError
 
     _patch_seq(monkeypatch, [FakeResponse(400, {"error": "access_denied"})])
     cfg = _cfg(client_id="cid", device_authorization_url="https://issuer/device")
@@ -244,7 +244,7 @@ def test_poll_device_token_terminal_error_raises(monkeypatch):
 
 
 def test_poll_device_token_expires(monkeypatch):
-    from metagpt.router.oauth.errors import OAuthRefreshError
+    from mote.router.oauth.errors import OAuthRefreshError
 
     _patch_seq(monkeypatch, [])
     cfg = _cfg(client_id="cid", device_authorization_url="https://issuer/device")

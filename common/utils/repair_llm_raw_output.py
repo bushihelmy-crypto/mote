@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Callable, Optional, Union
 import regex as re
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_fixed
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.config.meta_config import Config
-from metagpt.common.logs import logger
-from metagpt.common.utils.custom_decoder import CustomDecoder
+from mote.common.config.loader import load_config
+from mote.common.config.meta_config import Config
+from mote.common.logs import logger
+from mote.common.utils.custom_decoder import CustomDecoder
 
 if TYPE_CHECKING:
     import loguru
@@ -102,8 +102,7 @@ def repair_required_key_pair_missing(output: str, req_key: str = "[/CONTENT]") -
             if output.strip().endswith("}") or (output.strip().endswith("]") and not output.strip().endswith(left_key)):
                 # # avoid [req_key]xx[req_key] case to append [/req_key]
                 output = output + "\n" + right_key
-            elif judge_potential_json(output, left_key) and (not output.strip().endswith(left_key)):
-                sub_content = judge_potential_json(output, left_key)
+            elif (sub_content := judge_potential_json(output, left_key)) and (not output.strip().endswith(left_key)):
                 output = sub_content + "\n" + right_key
 
     return output
@@ -144,7 +143,7 @@ def repair_json_format(output: str) -> str:
     return output
 
 
-def _repair_llm_raw_output(output: str, req_key: str, repair_type: RepairType = None) -> str:
+def _repair_llm_raw_output(output: str, req_key: str, repair_type: Optional[RepairType] = None) -> str:
     repair_types = [repair_type] if repair_type else [item for item in RepairType if item not in [RepairType.JSON]]
     for repair_type in repair_types:
         if repair_type == RepairType.CS:
@@ -159,7 +158,7 @@ def _repair_llm_raw_output(output: str, req_key: str, repair_type: RepairType = 
 
 
 def repair_llm_raw_output(
-    output: str, req_keys: list[str], repair_type: RepairType = None, config: Optional[Config] = None
+    output: str, req_keys: list[str], repair_type: Optional[RepairType] = None, config: Optional[Config] = None
 ) -> str:
     """
     in open-source llm model, it usually can't follow the instruction well, the output may be incomplete,
@@ -264,13 +263,16 @@ def run_after_exp_and_passon_next_retry(logger: "loguru.Logger") -> Callable[["R
             }
         """
         config = load_config()
-        if retry_state.outcome.failed:
+        # tenacity always populates outcome before invoking a retry callback.
+        outcome = retry_state.outcome
+        assert outcome is not None, "retry callback ran before any attempt completed"
+        if outcome.failed:
             if retry_state.args:
                 # # can't be used as args=retry_state.args
                 func_param_output = retry_state.args[0]
             elif retry_state.kwargs:
                 func_param_output = retry_state.kwargs.get("output", "")
-            exp_str = str(retry_state.outcome.exception())
+            exp_str = str(outcome.exception())
 
             fix_str = "try to fix it, " if config.repair_llm_output else ""
             logger.warning(

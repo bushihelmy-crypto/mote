@@ -27,18 +27,13 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.schema import MessagePriority, MessageQueue
-from metagpt.executor.tasks.bggraph import END, START, BgGraph, BgStatus
-from metagpt.executor.tasks.bggraph.types import GraphRunState
-from metagpt.executor.tasks.bggraph.engine import _run_driver, _run_one_node
-from metagpt.executor.tasks.bggraph.report import (
-    make_progress_writer,
-    reset_progress_writer,
-    set_progress_writer,
-)
+from mote.common.schema import MessagePriority, MessageQueue
+from mote.executor.tasks.bggraph import END, START, BgGraph, BgStatus
+from mote.executor.tasks.bggraph.engine import _run_driver, _run_one_node
+from mote.executor.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
+from mote.executor.tasks.bggraph.types import GraphRunState
 
 from .conftest import S, gated_node, sync_node
-
 
 # ---------------------------------------------------------------------------
 # Harness
@@ -132,9 +127,7 @@ def test_stuck_running_node_never_reports_completion():
         state = g.state_schema(x=1)
         token = set_progress_writer(h.writer())
         try:
-            driver = asyncio.create_task(
-                _run_driver(g, state, execute_nodes=["image"], initial_params={"x": 1})
-            )
+            driver = asyncio.create_task(_run_driver(g, state, execute_nodes=["image"], initial_params={"x": 1}))
             # Wait until the node has reported RUNNING (it blocks on the gate
             # right after), then snapshot the buffer while it is stuck.
             for _ in range(200):
@@ -171,9 +164,7 @@ def test_cancelled_node_pushes_cancelled_not_success():
         run_state = GraphRunState.for_graph(g)
         token = set_progress_writer(h.writer())
         try:
-            node_task = asyncio.create_task(
-                _run_one_node("image", state, g, set(), run_state)
-            )
+            node_task = asyncio.create_task(_run_one_node("image", state, g, set(), run_state))
             for _ in range(200):
                 await asyncio.sleep(0.01)
                 if any("[image] running" in line for line in h.disk):

@@ -66,14 +66,7 @@ def is_blocked_host(host: str) -> bool:
         return False  # a hostname — allowlist decides, not the SSRF filter
 
     # Standard non-routable / internal categories.
-    if (
-        ip.is_loopback
-        or ip.is_private
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    ):
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         return True
 
     # CGNAT 100.64.0.0/10 — shared address space, not caught by is_private.

@@ -10,14 +10,9 @@ from __future__ import annotations
 
 import os
 
-from metagpt.session.history import (
-    SnapshotEntry,
-    diff_snapshot,
-    file_history,
-    restore,
-)
-from metagpt.session.log import SessionLog
-from metagpt.session.snapshot import FileSnapshotRecorder
+from mote.session.history import SnapshotEntry, diff_snapshot, file_history, restore
+from mote.session.log import SessionLog
+from mote.session.snapshot import FileSnapshotRecorder
 
 
 def _recorder(tmp_path):

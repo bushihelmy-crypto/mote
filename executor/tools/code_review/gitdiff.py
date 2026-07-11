@@ -6,7 +6,7 @@ Three modes, selected by the arguments supplied:
 * ``from_ref`` and ``to_ref`` → ``git diff <from>..<to>`` (review a range)
 * neither                     → ``git diff HEAD`` (review the working tree)
 
-Shells out via :func:`metagpt.common.utils.common.aexecute` (``wait=True`` →
+Shells out via :func:`mote.common.utils.common.aexecute` (``wait=True`` →
 ``(rc, out, err)``). Best-effort: a non-zero git exit returns whatever git
 wrote to stdout (often empty) rather than raising, so the pipeline degrades to
 "no files to review" instead of crashing the background task.
@@ -14,9 +14,9 @@ wrote to stdout (often empty) rather than raising, so the pipeline degrades to
 from __future__ import annotations
 
 import shlex
-from typing import Optional
+from typing import Optional, cast
 
-from metagpt.common.utils.common import aexecute
+from mote.common.utils.common import aexecute
 
 
 def _build_command(
@@ -28,9 +28,7 @@ def _build_command(
     if commit:
         return f"git show --no-color {shlex.quote(commit)}"
     if from_ref and to_ref:
-        return (
-            f"git diff --no-color {shlex.quote(from_ref)}..{shlex.quote(to_ref)}"
-        )
+        return f"git diff --no-color {shlex.quote(from_ref)}..{shlex.quote(to_ref)}"
     if from_ref:
         # Single ref given — diff it against the working tree.
         return f"git diff --no-color {shlex.quote(from_ref)}"
@@ -59,5 +57,5 @@ async def get_diff(
     result = await aexecute(cmd, working_dir=repo_dir, wait=True)
     if not result:
         return ""
-    _rc, out, _err = result
+    _rc, out, _err = cast("tuple[int, str, str]", result)
     return out or ""

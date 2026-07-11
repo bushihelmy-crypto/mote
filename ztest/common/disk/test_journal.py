@@ -12,7 +12,7 @@ missing journal scans as empty.
 """
 from __future__ import annotations
 
-from metagpt.common.disk.journal import Journal
+from mote.common.disk.journal import Journal
 
 
 def test_append_and_iter_roundtrip(tmp_path):

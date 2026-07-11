@@ -12,16 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.events import (
-    EventBus,
-    SpanEndEvent,
-    SpanStartEvent,
-    current_span_id,
-    set_bus,
-    span,
-)
-from metagpt.common.interface.event_subscriber import ObservationSubscriber
-from metagpt.common.logs import bind_trace
+from mote.common.events import EventBus, SpanEndEvent, SpanStartEvent, current_span_id, set_bus, span
+from mote.common.interface.event_subscriber import ObservationSubscriber
+from mote.common.logs import bind_trace
 
 
 def run(coro):

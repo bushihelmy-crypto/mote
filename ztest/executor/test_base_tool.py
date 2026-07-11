@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.base_tool.BaseTool``.
+"""Unit tests for ``mote.executor.base_tool.BaseTool``.
 
 Covers binding/capability injection (the narrow allowlist), schema generation
 (auto + custom), and the native-schema path.
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
-from metagpt.executor.base_tool import BaseTool
+from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
+from mote.executor.base_tool import BaseTool
 
 from .conftest import AddTool, CapTool, EchoTool, FakeRole
 

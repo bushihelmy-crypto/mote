@@ -12,13 +12,9 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from metagpt.common.exception import ErrorReport, render_error_block
-from metagpt.executor.tasks.bggraph.report import _truncate, report_progress
-from metagpt.executor.tasks.bggraph.types import (
-    END,
-    BgStatus,
-    GraphRunState,
-)
+from mote.common.exception import ErrorReport, render_error_block
+from mote.executor.tasks.bggraph.report import _truncate, report_progress
+from mote.executor.tasks.bggraph.types import END, BgStatus, GraphRunState
 
 # ---------------------------------------------------------------------------
 # Per-node progress message templates
@@ -37,8 +33,7 @@ _MSG_MAX_RESTARTS = "max_restarts exceeded ({retry_count}/{max_restarts})"
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_TASK_ALREADY_DONE = "Task {task_id} is already {status}, cannot resume."
 _MSG_NODE_NOT_RESUMABLE = (
-    "Node '{node_name}' is {node_status}, cannot resume. "
-    "Only failed or not-yet-run nodes can be resumed."
+    "Node '{node_name}' is {node_status}, cannot resume. " "Only failed or not-yet-run nodes can be resumed."
 )
 _MSG_CANCEL_DONE = "Task {task_id} is already {status}, cannot cancel."
 _MSG_CANCELLED_REASON = "Cancelled: {reason}"
@@ -53,14 +48,8 @@ _MSG_CANCEL_SUCCESS = (
 # Notification rendering templates
 # ---------------------------------------------------------------------------
 
-_FMT_NOTIFICATION_STARTED = (
-    '"{command}" task started (task_id: {task_id})\n'
-    "stage-summary:\n{stage_summary}"
-)
-_FMT_NOTIFICATION_SUCCESS = (
-    '"{command}" task success (task_id: {task_id})\n'
-    "result: {result}"
-)
+_FMT_NOTIFICATION_STARTED = '"{command}" task started (task_id: {task_id})\n' "stage-summary:\n{stage_summary}"
+_FMT_NOTIFICATION_SUCCESS = '"{command}" task success (task_id: {task_id})\n' "result: {result}"
 _FMT_NOTIFICATION_FAILED = (
     '"{command}" task failed (task_id: {task_id})\n'
     "{error_block}"
@@ -106,17 +95,9 @@ _FMT_LLM_ROUTE_OPTION = (
 _HINT_OPTIONAL = "You may also do nothing (route to END requires no action)."
 _HINT_REQUIRED = "You MUST choose one of the above options to continue."
 
-_FMT_FAILED_NODE_BLOCK = (
-    "  - {node_name}\n"
-    "    error: {error}\n"
-    "    auto_retries: {auto_retries_text}"
-)
+_FMT_FAILED_NODE_BLOCK = "  - {node_name}\n" "    error: {error}\n" "    auto_retries: {auto_retries_text}"
 _FMT_NODE_PARAM = "      {name} = {value}\n        {desc}, {source}"
-_FMT_WAITING_NODE_BLOCK = (
-    "  - {node_name}\n"
-    "    description: {node_desc}\n"
-    "    prompt: {prompt}"
-)
+_FMT_WAITING_NODE_BLOCK = "  - {node_name}\n" "    description: {node_desc}\n" "    prompt: {prompt}"
 # Bare-name block — the single template for every section that reports node
 # identity only (the node subject on success, plus the completed / running /
 # skipped / pending sections). No description, result, error or prompt.
@@ -130,18 +111,6 @@ _FMT_SELF_LOOP_LAP = " (ring: completed lap {lap}; loops back to itself per batc
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _ensure_render_run_state(graph: Any, state: Any, run_state: Optional[GraphRunState]) -> GraphRunState:
-    """Return a run state for rendering, inferring one for legacy callers.
-
-    Live runs always thread their authoritative ``run_state`` in; this fallback
-    only bridges callers (e.g. older tests) that render a notification without
-    one, recovering status best-effort from the state values.
-    """
-    if run_state is not None:
-        return run_state
-    return GraphRunState.infer_from_state(graph, state)
 
 
 def _format_auto_retries(run_state: Optional[GraphRunState], node_name: str) -> str:
@@ -165,7 +134,7 @@ def _resolve_param_source(source: str, state: Any, initial_params: dict) -> Any:
     optionally indexed into by a ``.key`` for dict-valued fields.
     """
     if source.startswith("$input."):
-        field_name = source[len("$input."):]
+        field_name = source[len("$input.") :]
         if field_name in initial_params:
             return initial_params.get(field_name)
         return getattr(state, field_name, None)
@@ -188,15 +157,11 @@ def _render_node_params(node_name: str, graph: Any, state: Any) -> str:
     for name, info in node_def.params.items():
         source = info["from"]
         source_text = (
-            "task input param"
-            if source.startswith("$input.")
-            else f"from state field '{source.split('.')[0]}'"
+            "task input param" if source.startswith("$input.") else f"from state field '{source.split('.')[0]}'"
         )
         value = _resolve_param_source(source, state, {})
         lines.append(
-            _FMT_NODE_PARAM.format(
-                name=name, value=repr(value), desc=info.get("desc", ""), source=source_text
-            )
+            _FMT_NODE_PARAM.format(name=name, value=repr(value), desc=info.get("desc", ""), source=source_text)
         )
     return "\n".join(lines) if lines else "      (none)"
 
@@ -207,11 +172,7 @@ def _waiting_names(graph: Any, completed: set) -> set:
     These take precedence over the ``completed nodes`` section so a node is
     reported in exactly one place.
     """
-    return {
-        le.from_node
-        for le in graph._llm_edges
-        if le.from_node in completed and le.from_node in graph._nodes
-    }
+    return {le.from_node for le in graph._llm_edges if le.from_node in completed and le.from_node in graph._nodes}
 
 
 def _render_waiting_nodes(graph: Any, completed: set) -> str:
@@ -230,7 +191,7 @@ def _render_waiting_nodes(graph: Any, completed: set) -> str:
 def _render_completed_nodes(
     graph: Any,
     state: Any,
-    run_state: Optional[GraphRunState],
+    run_state: GraphRunState,
     completed: Optional[set] = None,
     failed_names: Optional[set] = None,
 ) -> str:
@@ -258,7 +219,7 @@ def _render_completed_nodes(
     return "\n".join(blocks) if blocks else "  (none)"
 
 
-def _render_status_nodes(graph: Any, run_state: Optional[GraphRunState], status: BgStatus) -> str:
+def _render_status_nodes(graph: Any, run_state: GraphRunState, status: BgStatus) -> str:
     """Render nodes whose run-state status equals *status* as bare name blocks.
 
     Used for the ``skipped`` and ``pending`` sections — these report node
@@ -266,9 +227,7 @@ def _render_status_nodes(graph: Any, run_state: Optional[GraphRunState], status:
     declared nodes (stable order) and reads each status from the per-run record.
     """
     blocks = [
-        _FMT_BARE_NODE_BLOCK.format(node_name=name)
-        for name in graph._nodes
-        if run_state.get(name).status == status
+        _FMT_BARE_NODE_BLOCK.format(node_name=name) for name in graph._nodes if run_state.get(name).status == status
     ]
     return "\n".join(blocks) if blocks else "  (none)"
 
@@ -322,11 +281,7 @@ def _render_terminal_error_block(error: Optional[BaseException]) -> str:
 
 
 def _render_running_nodes(running_names: list[str], graph: Any) -> str:
-    blocks = [
-        _FMT_BARE_NODE_BLOCK.format(node_name=name)
-        for name in running_names
-        if name in graph._nodes
-    ]
+    blocks = [_FMT_BARE_NODE_BLOCK.format(node_name=name) for name in running_names if name in graph._nodes]
     return "\n".join(blocks) if blocks else "  (none)"
 
 
@@ -399,7 +354,7 @@ def push_terminal_notification(
     run_state: Optional[GraphRunState] = None,
     task_id: str = "(current)",
 ) -> None:
-    run_state = _ensure_render_run_state(graph, state, run_state)
+    run_state = GraphRunState.ensure(graph, state, run_state)
     failures = getattr(error, "failures", None) or []
     failed_names = {name for name, _ in failures}
     error_block = _render_terminal_error_block(error)
@@ -413,9 +368,7 @@ def push_terminal_notification(
         error_block=error_block,
         failed_nodes_text=_render_failed_nodes(error, graph, state, run_state),
         # Exclude failed nodes so a cyclic fail→succeed node is not double-listed.
-        completed_nodes_text=_render_completed_nodes(
-            graph, state, run_state, failed_names=failed_names
-        ),
+        completed_nodes_text=_render_completed_nodes(graph, state, run_state, failed_names=failed_names),
         # The graph is never paused on an LLM route at terminal → no waiting node.
         waiting_nodes_text=_render_waiting_nodes(graph, set()),
         skipped_nodes_text=_render_status_nodes(graph, run_state, BgStatus.SKIPPED),
@@ -440,7 +393,7 @@ def push_node_notification(
 
     Works for success, failure, cancellation — same graph-snapshot format.
     """
-    run_state = _ensure_render_run_state(graph, state, run_state)
+    run_state = GraphRunState.ensure(graph, state, run_state)
     if status == BgStatus.FAILED and exc is not None:
         subject_label = "node fail"
         event = "failed"

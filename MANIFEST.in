@@ -1,0 +1,16 @@
+# Controls what goes into the source distribution (sdist).
+include LICENSE
+include README.md
+include ruff.toml
+
+# Ship non-Python data files that the package needs at runtime.
+recursive-include router *.yaml
+recursive-include roles *.yaml
+
+# Keep tests, dev tooling, and local artifacts out of the dist.
+prune ztest
+prune zdocs
+prune .claude
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so

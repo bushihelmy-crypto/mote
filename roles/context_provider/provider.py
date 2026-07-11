@@ -7,26 +7,21 @@ queries, and produces a ThinkRequest — the complete input set for
 ThinkEngine.start().
 
 Dependency direction is one-way: this module imports PromptBuilder (a stateless
-pure-function assembler in metagpt/prompts/), never the reverse.
+pure-function assembler in mote/prompts/), never the reverse.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from metagpt.router.schema import RoutingRequest
-from metagpt.common.base import LoopContext
-from metagpt.think.prompt_builder import (
-    PromptBuilder,
-    ThinkContext,
-    ThinkInputs,
-    ThinkSubsystems,
-)
-from metagpt.roles.context_provider.base import BaseContextProvider
-from metagpt.roles.context_provider.request import ThinkRequest
+from mote.common.base import LoopContext
+from mote.roles.context_provider.base import BaseContextProvider
+from mote.roles.context_provider.request import ThinkRequest
+from mote.router.schema import RoutingRequest
+from mote.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems
 
 if TYPE_CHECKING:
-    from metagpt.roles.role import Role
+    from mote.roles.role import Role
 
 
 class ContextProvider(BaseContextProvider):
@@ -128,9 +123,7 @@ class ContextProvider(BaseContextProvider):
         memory_k truncation with proper context-window management.
         """
         ctx = await self._collect()
-        system_prompt, user_prompt = PromptBuilder.build(
-            self._schema.system_prompt, self._schema.cmd_prompt, ctx
-        )
+        system_prompt, user_prompt = PromptBuilder.build(self._schema.system_prompt, self._schema.cmd_prompt, ctx)
 
         req = await self._context_manager.prepare_request(user_prompt)
 
@@ -143,9 +136,7 @@ class ContextProvider(BaseContextProvider):
 
     async def _collect(self) -> ThinkContext:
         """Delegate context collection to PromptBuilder."""
-        return await PromptBuilder.collect_context(
-            self._think_inputs(), self._think_subsystems()
-        )
+        return await PromptBuilder.collect_context(self._think_inputs(), self._think_subsystems())
 
     def _think_inputs(self) -> ThinkInputs:
         """The field set published for one think() cycle — pure data.
@@ -169,6 +160,7 @@ class ContextProvider(BaseContextProvider):
             other_role_names=self._other_role_names(),
             team_info=self._team_info(),
             working_dir=self._get_cwd(),
+            original_working_dir=self._state.original_working_dir,
             project_root=self._state.project_root,
         )
 

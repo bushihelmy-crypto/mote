@@ -5,25 +5,19 @@ import asyncio
 
 import pytest
 
-from metagpt.common.exception import (
-    MetaGPTError,
-    NonRetryableError,
-    RecoveryAction,
-    RecoveryRunner,
-    RetryableError,
-)
-from metagpt.common.interface.event_subscriber import ObservationSubscriber
+from mote.common.exception import MoteError, NonRetryableError, RecoveryAction, RecoveryRunner, RetryableError
+from mote.common.interface.event_subscriber import ObservationSubscriber
 
 pytestmark = pytest.mark.asyncio
 
 
-class _CompressError(MetaGPTError):
+class _CompressError(MoteError):
     """A typed error whose recovery hint is COMPRESS (for testing dispatch)."""
 
     default_recovery = RecoveryAction.COMPRESS
 
 
-class _FallbackError(MetaGPTError):
+class _FallbackError(MoteError):
     default_recovery = RecoveryAction.FALLBACK
 
 
@@ -100,7 +94,7 @@ class TestReRaise:
         with pytest.raises(_CompressError):
             await runner.run(call)
 
-    async def test_non_metagpt_error_propagates(self):
+    async def test_non_mote_error_propagates(self):
         """A plain (non-typed) exception is never caught by the runner."""
 
         async def call():
@@ -158,15 +152,13 @@ class TestDispatchSelectsByAction:
             seen["fallback"] += 1
             return True
 
-        runner = RecoveryRunner(
-            {RecoveryAction.COMPRESS: compress, RecoveryAction.FALLBACK: fallback}
-        )
+        runner = RecoveryRunner({RecoveryAction.COMPRESS: compress, RecoveryAction.FALLBACK: fallback})
         assert await runner.run(call) == "done"
         assert seen == {"compress": 1, "fallback": 1}
 
 
 class TestUntypedExceptionDispatch:
-    """Untyped (non-``MetaGPTError``) exceptions are classified by is_retryable.
+    """Untyped (non-``MoteError``) exceptions are classified by is_retryable.
 
     This is the unification point: a bare ``ConnectionError`` has no ``.recovery``
     hint, so the runner derives RETRY (transient) / ABORT (permanent) via the
@@ -257,7 +249,7 @@ class _RecordingBusSub(ObservationSubscriber):
         self.events = []
 
     async def handle(self, event):
-        from metagpt.common.events import RecoveryEvent
+        from mote.common.events import RecoveryEvent
 
         if isinstance(event, RecoveryEvent):
             self.events.append(event)
@@ -265,7 +257,7 @@ class _RecordingBusSub(ObservationSubscriber):
 
 
 def _bus_with_recorder():
-    from metagpt.common.events import EventBus
+    from mote.common.events import EventBus
 
     bus = EventBus()
     rec = _RecordingBusSub()
@@ -275,7 +267,7 @@ def _bus_with_recorder():
 
 class TestRecoveryEmission:
     async def test_successful_recovery_emits_recovered(self):
-        from metagpt.common.events import set_bus
+        from mote.common.events import set_bus
 
         attempts = []
 
@@ -295,7 +287,7 @@ class TestRecoveryEmission:
         assert e.error_type == "_CompressError"
 
     async def test_abort_emits_give_up(self):
-        from metagpt.common.events import set_bus
+        from mote.common.events import set_bus
 
         class _Permanent(NonRetryableError):
             pass
@@ -311,7 +303,7 @@ class TestRecoveryEmission:
         assert len(rec.events) == 1 and rec.events[0].phase == "give_up"
 
     async def test_missing_strategy_emits_give_up(self):
-        from metagpt.common.events import set_bus
+        from mote.common.events import set_bus
 
         async def call():
             raise _CompressError("too big")
@@ -325,7 +317,7 @@ class TestRecoveryEmission:
         assert rec.events[0].action == "compress"
 
     async def test_strategy_false_emits_give_up(self):
-        from metagpt.common.events import set_bus
+        from mote.common.events import set_bus
 
         async def call():
             raise _CompressError("too big")
@@ -338,7 +330,7 @@ class TestRecoveryEmission:
         assert len(rec.events) == 1 and rec.events[0].phase == "give_up"
 
     async def test_budget_exhausted_emits_recovered_then_give_up(self):
-        from metagpt.common.events import set_bus
+        from mote.common.events import set_bus
 
         async def call():
             raise _CompressError("still too big")
@@ -367,7 +359,7 @@ class TestRecoveryEmission:
         assert await runner.run(call) == "ok"
 
     async def test_cancelled_error_passes_through_without_emit(self):
-        from metagpt.common.events import set_bus
+        from mote.common.events import set_bus
 
         async def call():
             raise asyncio.CancelledError()

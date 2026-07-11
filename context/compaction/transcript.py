@@ -37,9 +37,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Sequence
 
-from metagpt.common.const import RETENTION, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
-from metagpt.common.schema import Message
-from metagpt.common.utils.token_counter import count_string_tokens
+from mote.common.const import RETENTION, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
+from mote.common.schema import Message
+from mote.common.utils.token_counter import count_string_tokens
 
 _SYSTEM_ROLE = "system"
 
@@ -95,9 +95,7 @@ class Transcript:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_messages(
-        cls, messages: Sequence[Message], *, compactable: frozenset[str] = frozenset()
-    ) -> "Transcript":
+    def from_messages(cls, messages: Sequence[Message], *, compactable: frozenset[str] = frozenset()) -> "Transcript":
         """Segment a flat stored history, grouping tool_call turns with their results.
 
         A ``role="system"`` message becomes a pinned ``SYSTEM_ANCHOR``. An

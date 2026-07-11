@@ -23,7 +23,7 @@ Following MarkText/Muya's "Markdown element colours" convention, colour choice i
   surface colour) for a plain brand-tinted foreground.
 
 The theme is intentionally a plain data object: hosts apply it locally (see
-:mod:`metagpt.cli.consumers.render.markdown`) rather than mutating any global
+:mod:`mote.cli.consumers.render.markdown`) rather than mutating any global
 console, so a terminal stream and the Textual app render byte-identically.
 """
 
@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from rich.theme import Theme
 
-from metagpt.cli.consumers.render.palette import Palette
+from mote.cli.consumers.render.palette import Palette
 
 # Heading hierarchy: h1 is the brand accent; h2→h6 step toward the dim secondary
 # tone so nested outlines stay readable without shouting. h1's border colour is

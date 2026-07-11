@@ -1,9 +1,8 @@
-"""Tests for :mod:`metagpt.common.utils.docstring` shared parsing utilities."""
+"""Tests for :mod:`mote.common.utils.docstring` shared parsing utilities."""
 
 from __future__ import annotations
 
-from metagpt.common.utils.docstring import first_line, parse_section
-
+from mote.common.utils.docstring import first_line, parse_section
 
 # ---------------------------------------------------------------------------
 # first_line

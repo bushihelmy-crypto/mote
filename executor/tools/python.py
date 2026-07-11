@@ -27,12 +27,17 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, ClassVar, Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.prompt.tools import PYTHON_DESCRIPTION
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KernelSession
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
+from mote.common.logs import logger
+from mote.common.prompt.tools import PYTHON_DESCRIPTION
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KernelSession
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+_MSG_NO_KERNEL_TO_INTERRUPT = "Error: no live kernel to interrupt."
+_MSG_KERNEL_FAILED = "Error running Python kernel: {error}"
 
 
 @register_tool
@@ -66,7 +71,7 @@ class Python(BaseTool):
     # Capability accessor returning the session's SandboxRuntime, or None when no
     # OS-level sandbox is configured. Defaults to a no-runtime stub so a tool
     # bound without a Role (some unit tests) still runs un-sandboxed.
-    get_sandbox_runtime: Callable[[], object] = staticmethod(lambda: None)
+    get_sandbox_runtime: Callable[[], Any] = staticmethod(lambda: None)
     # Capability accessors for session-resume kernel-state restore:
     #   record_kernel_state — persist (cwd, env diff, unset) into the rollout
     #     after a cell settles at idle (so resume can re-seed a kernel).
@@ -149,7 +154,7 @@ class Python(BaseTool):
             if interrupt:
                 session = self.get_tool_session(self.name)
                 if session is None or session.closed:
-                    raise ToolError("Error: no live kernel to interrupt.")
+                    raise ToolError(_MSG_NO_KERNEL_TO_INTERRUPT)
                 text = await session.interrupt()
                 return _join(text, "[kernel interrupted]")
             session = await self._ensure_session()
@@ -157,7 +162,7 @@ class Python(BaseTool):
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            raise ToolError(f"Error running Python kernel: {e}")
+            raise ToolError(_MSG_KERNEL_FAILED.format(error=e))
 
         if not timed_out:
             # Cell settled at idle — snapshot the kernel env for resume. Skipped

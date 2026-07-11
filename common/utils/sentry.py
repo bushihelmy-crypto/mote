@@ -2,8 +2,8 @@ import asyncio
 import functools
 from typing import Any, Callable, Optional, TypeVar
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.logs import logger
+from mote.common.config.loader import load_config
+from mote.common.logs import logger
 
 ReturnType = TypeVar("ReturnType")
 
@@ -51,13 +51,13 @@ def _init_sentry() -> bool:
 
 
 def capture_errors(
-    _func: Callable[..., ReturnType] = None,
+    _func: Optional[Callable[..., ReturnType]] = None,
     *,
     reraise: bool = True,
     extra_data: Optional[dict] = None,
     tags: Optional[dict] = None,
     level: str = "error",
-) -> Callable[..., ReturnType]:
+) -> Callable[..., Any]:
     """Decorator to capture errors and send them to Sentry.
 
     Args:
@@ -82,9 +82,9 @@ def capture_errors(
             pass
     """
 
-    def decorator(func: Callable[..., ReturnType]) -> Callable[..., ReturnType]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> ReturnType:
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
             except Exception as e:
@@ -94,7 +94,7 @@ def capture_errors(
                 raise
 
         @functools.wraps(func)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> ReturnType:
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return func(*args, **kwargs)
             except Exception as e:

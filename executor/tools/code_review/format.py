@@ -10,6 +10,8 @@ import json
 from dataclasses import asdict, dataclass
 from typing import List, Optional
 
+from mote.common.text import count_noun
+
 
 @dataclass
 class Finding:
@@ -57,7 +59,7 @@ def format_findings(findings: List[Finding], fmt: str = "text") -> str:
 
     lines: List[str] = []
     total = len(findings)
-    lines.append(f"Code review found {total} issue(s) across {len(grouped)} file(s):")
+    lines.append(f"Code review found {count_noun(total, 'issue')} across {count_noun(len(grouped), 'file')}:")
     lines.append("")
     for path, items in grouped.items():
         lines.append(f"## {path}")

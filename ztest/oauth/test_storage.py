@@ -6,11 +6,11 @@ from __future__ import annotations
 import os
 import stat
 
-from metagpt.common.config.config.oauth_config import StoreBackend
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.storage import get_store
-from metagpt.router.oauth.storage.fallback_store import FallbackCredentialStore
-from metagpt.router.oauth.storage.file_store import FileCredentialStore
+from mote.common.config.config.oauth_config import StoreBackend
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.storage import get_store
+from mote.router.oauth.storage.fallback_store import FallbackCredentialStore
+from mote.router.oauth.storage.file_store import FileCredentialStore
 
 
 def test_file_round_trip(tmp_path):

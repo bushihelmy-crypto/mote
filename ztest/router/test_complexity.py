@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.complexity (signals → score → tier + rules engine)."""
+"""Tests for mote.router.complexity (signals → score → tier + rules engine)."""
 from __future__ import annotations
 
-from metagpt.router.complexity import (
+from mote.router.complexity import (
     TIER_THRESHOLDS,
     ComplexitySignals,
     ContextSignals,

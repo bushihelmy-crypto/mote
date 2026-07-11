@@ -18,24 +18,9 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from metagpt.cli.consumers.render.builders import (
-    USAGE_SEP,
-    shimmer_text,
-    sparkline,
-)
-from metagpt.cli.consumers.textual.style import (
-    COMPACT,
-    RETRY,
-    Palette,
-)
-
-
-def _format_tok(n: int) -> str:
-    """Compact token count for the live spinner meta (``3.4k`` / ``12k`` / ``840``)."""
-    if n < 1000:
-        return str(n)
-    k = n / 1000
-    return f"{k:.0f}k" if k >= 10 else f"{k:.1f}k"
+from mote.cli.consumers.render.builders import USAGE_SEP, shimmer_text, sparkline
+from mote.cli.consumers.textual.style import COMPACT, RETRY, Palette
+from mote.common.text import format_token_count as _format_tok
 
 
 class StatusBar(Static):
@@ -119,10 +104,7 @@ class StatusBar(Static):
     def set_retry(self, ev: Any) -> None:
         """Show the transient retry countdown (from a ``RetryStatus`` event)."""
         etype = getattr(ev, "error_type", "") or "error"
-        self.retry_msg = (
-            f"LLM 请求失败（{etype}）· 第 {getattr(ev, 'attempt', 0)}"
-            f"/{getattr(ev, 'max_attempts', 0)} 次重试"
-        )
+        self.retry_msg = f"LLM 请求失败（{etype}）· 第 {getattr(ev, 'attempt', 0)}" f"/{getattr(ev, 'max_attempts', 0)} 次重试"
         self.retry_secs = max(0.0, (getattr(ev, "delay_ms", 0.0) or 0.0) / 1000.0)
 
     def clear_retry(self) -> None:

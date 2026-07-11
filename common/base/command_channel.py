@@ -4,14 +4,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
-from metagpt.common.const import IMAGES, PDFS
-from metagpt.common.prompt.refs import lower as _lower_symbols
-from metagpt.common.prompt.refs import normalize_vocabulary
-from metagpt.common.schema import CauseBy, UserMessage
+from mote.common.const import IMAGES, PDFS
+from mote.common.prompt.refs import lower as _lower_symbols
+from mote.common.prompt.refs import normalize_vocabulary
+from mote.common.schema import CauseBy, UserMessage
 
 if TYPE_CHECKING:
-    from metagpt.common.base.think_engine import BaseThinkEngine
-    from metagpt.common.interface import MessageStore
+    from mote.common.base.think_engine import BaseThinkEngine
+    from mote.common.interface import MessageStore
 
 
 #: The protocol-specific ``${placeholder}`` names the prompt templates expect
@@ -98,9 +98,7 @@ class CommandChannel(ABC):
         """Native tool specs to pass to the LLM, or None for the text channel."""
 
     @abstractmethod
-    async def iter_commands(
-        self, think_engine: "BaseThinkEngine", valid_names: set[str]
-    ) -> AsyncGenerator[dict, None]:
+    async def iter_commands(self, think_engine: "BaseThinkEngine", valid_names: set[str]) -> AsyncGenerator[dict, None]:
         """Yield unified-IR commands from a completed ThinkEngine output.
 
         Each item: ``{command_name, args, id, status, error_msg}``. ``id`` is the

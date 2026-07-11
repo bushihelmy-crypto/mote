@@ -1,7 +1,7 @@
 """Sandbox adapter — translate our policy objects into runtime inputs.
 
 The *adapter* layer (this module + ``guard.py``) binds the runtime
-(``metagpt.sandbox``) to our domain types. It is the only place that knows about
+(``mote.sandbox``) to our domain types. It is the only place that knows about
 BOTH the executor's ``SandboxGuard`` / config AND the runtime's
 ``SandboxPolicy`` — keeping the runtime product-agnostic (it depends only on
 ``common``) and the executor unaware of bwrap argv details.
@@ -23,11 +23,11 @@ from __future__ import annotations
 import os
 from typing import Callable, Optional
 
-from metagpt.common.schema import SandboxRuntimeConfig
-from metagpt.executor.permission.sandbox.guard import SandboxGuard
-from metagpt.executor.permission.sandbox.resource_guard import ResourceGuard
-from metagpt.sandbox import SandboxRuntime
-from metagpt.sandbox.backend import SandboxPolicy
+from mote.common.schema import SandboxRuntimeConfig
+from mote.executor.permission.sandbox.guard import SandboxGuard
+from mote.executor.permission.sandbox.resource_guard import ResourceGuard
+from mote.sandbox import SandboxRuntime
+from mote.sandbox.backend import SandboxPolicy
 
 # Paths (relative to a writable root) that must stay read-only even inside the
 # workspace: config + VCS metadata + the session rollout store. A sandboxed

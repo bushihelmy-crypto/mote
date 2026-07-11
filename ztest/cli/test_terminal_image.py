@@ -13,10 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.cli.consumers.render.terminal_image import (
-    KittyImageProtocol,
-    detect_image_protocol,
-)
+from mote.cli.consumers.render.terminal_image import KittyImageProtocol, detect_image_protocol
 
 
 def _clear_image_env(monkeypatch):

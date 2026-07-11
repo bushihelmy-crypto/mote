@@ -18,8 +18,8 @@ import json
 import sys
 from typing import Any
 
-from metagpt.cli.common.base import BaseConsumer
-from metagpt.cli.common.view import STRUCTURED_CAPS, Capabilities
+from mote.cli.contracts.base import BaseConsumer
+from mote.cli.contracts.view import STRUCTURED_CAPS, Capabilities
 
 
 class StructuredConsumer(BaseConsumer):
@@ -56,7 +56,7 @@ def build_structured_consumer(config: Any = None) -> StructuredConsumer:
 
 # Self-register on import.
 try:
-    from metagpt.cli.consumers.registry import register_consumer
+    from mote.cli.consumers.registry import register_consumer
 
     register_consumer("structured", capabilities=STRUCTURED_CAPS)(build_structured_consumer)
 except Exception:  # noqa: BLE001

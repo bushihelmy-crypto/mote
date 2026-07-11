@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.roles.role_schema.RoleSchema (deploy-time static config)."""
+"""Tests for mote.roles.role_schema.RoleSchema (deploy-time static config)."""
 from __future__ import annotations
 
-from metagpt.roles.role_schema import RoleSchema
+from mote.roles.role_schema import RoleSchema
 
 
 class TestDefaults:
@@ -46,7 +46,10 @@ class TestDefaults:
     def test_prompt_templates_populated(self):
         s = RoleSchema()
         assert s.system_prompt
-        assert s.cmd_prompt
+        # cmd_prompt defaults to "" by design — the trailing user prompt is now
+        # assembled from per-turn context (memory + reminder sources), so the base
+        # command template is intentionally empty.
+        assert s.cmd_prompt == ""
         # instruction defaults to "" by design — it is populated per-skill at
         # assembly time (see roles/capabilities.py), not from a constant template.
         assert s.instruction == ""

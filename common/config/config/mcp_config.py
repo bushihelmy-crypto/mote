@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import Field, model_validator
 
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.utils.yaml_model import YamlModel
 
 
 class MCPTransportType(str, Enum):

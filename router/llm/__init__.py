@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""LLM abstraction layer (formerly metagpt.provider)."""
+"""LLM abstraction layer (formerly mote.provider)."""
 
-from metagpt.router.llm.openai_api import OpenAILLM
-from metagpt.router.llm.anthropic_api import AnthropicLLM
-from metagpt.router.llm.deepseek_api import DeepSeekLLM
-from metagpt.router.llm.base_llm import BaseLLM
+from mote.router.llm.anthropic_api import AnthropicLLM
+from mote.router.llm.base_llm import BaseLLM
+from mote.router.llm.deepseek_api import DeepSeekLLM
+from mote.router.llm.openai_api import OpenAILLM
 
 __all__ = [
     "OpenAILLM",

@@ -1,4 +1,4 @@
-"""Router tier exceptions (``metagpt/router``).
+"""Router tier exceptions (``mote/router``).
 
 Routing is a distinct concern from the LLM call itself: it selects *which* model
 to use and resolves the concrete provider class. These are configuration-shaped,
@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from metagpt.common.exception.base import MetaGPTError, NonRetryableError
-from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+from mote.common.exception.base import MoteError, NonRetryableError
+from mote.common.exception.codes import ErrorCode, RecoveryAction
 
 
-class RouterError(MetaGPTError):
+class RouterError(MoteError):
     """Base for model-routing failures."""
 
 
@@ -22,7 +22,7 @@ class ModelNotFoundError(RouterError, NonRetryableError):
     """No registered model card matches the requested name.
 
     Raised by ``LLMRouter._build`` when an explicit/task-mapped name has no
-    corresponding :class:`~metagpt.router.schema.ModelCard`. The suggested
+    corresponding :class:`~mote.router.schema.ModelCard`. The suggested
     recovery is to fall back to another model rather than abort outright.
     """
 

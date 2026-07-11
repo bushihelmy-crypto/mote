@@ -18,16 +18,16 @@ from enum import IntEnum
 from pathlib import Path
 from typing import List, Optional
 
-from metagpt.common.const import CONFIG_ROOT, SOURCE_ROOT
+from mote.common.const import CONFIG_ROOT, SOURCE_ROOT
 
 CONFIG_FILE_NAME = "config.yaml"
 LEGACY_CONFIG_FILE_NAME = "config2.yaml"
-PROFILE_FILE_SUFFIX = ".config.yaml"  # ~/.agentframe/<name>.config.yaml
-MANAGED_CONFIG_FILE_NAME = "managed.config.yaml"  # /etc/agentframe/managed.config.yaml
+PROFILE_FILE_SUFFIX = ".config.yaml"  # ~/.mote/<name>.config.yaml
+MANAGED_CONFIG_FILE_NAME = "managed.config.yaml"  # /etc/mote/managed.config.yaml
 
-_SYSTEM_CONFIG_DIR = Path("/etc/agentframe")
-_USER_CONFIG_DIR = Path.home() / ".agentframe"
-_WORKDIR_CONFIG_SUBDIR = ".agentframe"
+_SYSTEM_CONFIG_DIR = Path("/etc/mote")
+_USER_CONFIG_DIR = Path.home() / ".mote"
+_WORKDIR_CONFIG_SUBDIR = ".mote"
 
 
 class ConfigSource(IntEnum):
@@ -38,15 +38,15 @@ class ConfigSource(IntEnum):
     """
 
     DEFAULT = 0  # pydantic field defaults (no file)
-    SYSTEM = 10  # /etc/agentframe/config.yaml (+ config.d/*.yaml) — managed
-    USER = 20  # ~/.agentframe/config.yaml (BC: ~/.metagpt/config2.yaml)
-    PROJECT = 30  # trusted repo/installation config (metagpt/config.yaml)
-    WORKDIR = 35  # <cwd>/.agentframe/config.yaml — UNTRUSTED, credentials stripped
-    PROFILE = 40  # ~/.agentframe/<name>.config.yaml — named overlay, trusted
-    ENV = 50  # AGENTFRAME_*/METAGPT_* environment variables
+    SYSTEM = 10  # /etc/mote/config.yaml (+ config.d/*.yaml) — managed
+    USER = 20  # ~/.mote/config.yaml (BC: ~/.mote/config2.yaml)
+    PROJECT = 30  # trusted repo/installation config (mote/config.yaml)
+    WORKDIR = 35  # <cwd>/.mote/config.yaml — UNTRUSTED, credentials stripped
+    PROFILE = 40  # ~/.mote/<name>.config.yaml — named overlay, trusted
+    ENV = 50  # MOTE_*/MOTE_* environment variables
     CLI_FLAG = 60  # -c key=value runtime overrides
     PROGRAMMATIC = 70  # code-supplied overrides
-    MANAGED = 80  # /etc/agentframe/managed.config.yaml — admin policy, locks all below
+    MANAGED = 80  # /etc/mote/managed.config.yaml — admin policy, locks all below
 
     @property
     def trusted(self) -> bool:
@@ -72,7 +72,7 @@ def _existing(paths: List[Optional[Path]]) -> List[Path]:
 
 
 def profile_path(profile: str) -> Path:
-    """The on-disk path of a named profile overlay (``~/.agentframe/<name>.config.yaml``)."""
+    """The on-disk path of a named profile overlay (``~/.mote/<name>.config.yaml``)."""
     return _USER_CONFIG_DIR / f"{profile}{PROFILE_FILE_SUFFIX}"
 
 
@@ -80,11 +80,11 @@ def discover_source_files(cwd: Optional[Path] = None, *, profile: Optional[str] 
     """Resolve every config file that exists, in ascending precedence order.
 
     A single source may map to multiple files (e.g. USER = the legacy
-    ``~/.metagpt/config2.yaml`` plus ``~/.agentframe/config.yaml``); they are
+    ``~/.mote/config2.yaml`` plus ``~/.mote/config.yaml``); they are
     listed low->high so a later file overrides an earlier one within the same
-    source band. The trusted PROJECT band is the user's ``metagpt/config.yaml``.
+    source band. The trusted PROJECT band is the user's ``mote/config.yaml``.
 
-    When ``profile`` is given, ``~/.agentframe/<profile>.config.yaml`` is added
+    When ``profile`` is given, ``~/.mote/<profile>.config.yaml`` is added
     as a trusted PROFILE layer (above WORKDIR, below ENV) — a named overlay
     that selectively overrides the base config (mirrors codex profiles).
     """
@@ -99,19 +99,19 @@ def discover_source_files(cwd: Optional[Path] = None, *, profile: Optional[str] 
         for p in sorted(sys_d.glob("*.yaml")):
             files.append(SourceFile(ConfigSource.SYSTEM, p))
 
-    # USER: legacy ~/.metagpt/config2.yaml (BC) then ~/.agentframe/config.yaml.
+    # USER: legacy ~/.mote/config2.yaml (BC) then ~/.mote/config.yaml.
     for p in _existing([CONFIG_ROOT / LEGACY_CONFIG_FILE_NAME, _USER_CONFIG_DIR / CONFIG_FILE_NAME]):
         files.append(SourceFile(ConfigSource.USER, p))
 
-    # PROJECT (trusted): the user's metagpt/config.yaml.
+    # PROJECT (trusted): the user's mote/config.yaml.
     for p in _existing([SOURCE_ROOT / CONFIG_FILE_NAME]):
         files.append(SourceFile(ConfigSource.PROJECT, p))
 
-    # WORKDIR (untrusted): <cwd>/.agentframe/config.yaml.
+    # WORKDIR (untrusted): <cwd>/.mote/config.yaml.
     for p in _existing([cwd / _WORKDIR_CONFIG_SUBDIR / CONFIG_FILE_NAME]):
         files.append(SourceFile(ConfigSource.WORKDIR, p))
 
-    # PROFILE (trusted): named overlay ~/.agentframe/<profile>.config.yaml.
+    # PROFILE (trusted): named overlay ~/.mote/<profile>.config.yaml.
     if profile:
         for p in _existing([profile_path(profile)]):
             files.append(SourceFile(ConfigSource.PROFILE, p))

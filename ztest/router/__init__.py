@@ -1,3 +1,3 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the metagpt.router package."""
+"""Tests for the mote.router package."""

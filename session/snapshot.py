@@ -14,11 +14,11 @@ Two pieces:
   (tmp + ``os.replace``) so a crash never leaves a half-written blob masquerading
   as a valid one.
 * :class:`FileSnapshotRecorder` — implements
-  ``metagpt.common.interface.FileSnapshotStore``: reads the before-image, puts
+  ``mote.common.interface.FileSnapshotStore``: reads the before-image, puts
   it in the blob store, appends the metadata event. Best-effort and never raises
   into the tool (a snapshot failure must not break a write). ``enabled`` gates
   recording (off during resume replay, mirroring
-  :class:`~metagpt.session.subscribers.RecorderSubscriber`).
+  :class:`~mote.session.subscribers.RecorderSubscriber`).
 
 Only the *before* image is stored: that is what undo/rollback needs (the "after"
 is whatever the tool just wrote, recoverable from the file itself or the next
@@ -34,11 +34,11 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.disk import atomic_write, get_disk_writer
-from metagpt.common.logs import log_class, logger
-from metagpt.common.utils.git_state import find_git_root
-from metagpt.session.events import FileSnapshotEvent
-from metagpt.session.log import SessionLog
+from mote.common.disk import atomic_write, get_disk_writer
+from mote.common.logs import log_class, logger
+from mote.common.utils.git_state import find_git_root
+from mote.session.events import FileSnapshotEvent
+from mote.session.log import SessionLog
 
 #: Directory (inside a session dir) holding content-addressed before-images.
 BLOBS_DIRNAME = "blobs"
@@ -73,10 +73,10 @@ class BlobStore:
 
         The digest is computed in memory, so the hash is returned immediately
         (no disk wait); the actual blob write is ordered through the shared
-        :class:`~metagpt.common.disk.DiskWriter` (per-blob key) using
-        :func:`~metagpt.common.disk.atomic_write`. A reader therefore sees either
+        :class:`~mote.common.disk.DiskWriter` (per-blob key) using
+        :func:`~mote.common.disk.atomic_write`. A reader therefore sees either
         the old absence or the complete blob — but should ``drain`` first if it
-        needs the bytes (see :mod:`metagpt.session.history`). Idempotent: an
+        needs the bytes (see :mod:`mote.session.history`). Idempotent: an
         already-present hash is a no-op.
         """
         digest = hashlib.sha256(content).hexdigest()
@@ -162,7 +162,7 @@ def detect_blob_backend(working_dir: Optional[str] = None) -> str:
     everything else (non-code tasks, no git, errors) uses the plain ``blob``
     backend. Best-effort — any failure falls back to ``"blob"``.
 
-    The "are we in a repo?" probe reuses :func:`metagpt.common.utils.git_state.find_git_root`
+    The "are we in a repo?" probe reuses :func:`mote.common.utils.git_state.find_git_root`
     (filesystem-first, no subprocess, handles ``.git`` file pointers). The
     ``git`` binary must still be present because :class:`GitBlobStore` shells out
     to it for every put/get.
@@ -188,7 +188,7 @@ def make_blob_store(base_dir: Path, backend: str = "blob"):
 class FileSnapshotRecorder:
     """Captures before-images of mutated files into the session log + blob store.
 
-    Conforms to ``metagpt.common.interface.FileSnapshotStore``. Shares the
+    Conforms to ``mote.common.interface.FileSnapshotStore``. Shares the
     session's :class:`SessionLog` so snapshot events interleave with the rest of
     the rollout, and owns a content-addressed store rooted at the same session
     dir. ``backend`` selects the store implementation ("blob" = raw blob files,

@@ -17,8 +17,8 @@ import shutil
 
 import pytest
 
-from metagpt.sandbox.backend import SandboxPolicy
-from metagpt.sandbox.runtime import SandboxRuntime
+from mote.sandbox.backend import SandboxPolicy
+from mote.sandbox.runtime import SandboxRuntime
 
 _HAS_BWRAP = shutil.which("bwrap") is not None and os.name == "posix"
 
@@ -148,7 +148,9 @@ class TestWrapExecExtraWritable:
         rt = SandboxRuntime(backend="bwrap", harden_process=False, network="open")
         argv, _ = _run(
             rt.wrap_exec(
-                ["/bin/true"], cwd=str(tmp_path), env={"PATH": "/bin"},
+                ["/bin/true"],
+                cwd=str(tmp_path),
+                env={"PATH": "/bin"},
                 extra_writable=[str(sock)],
             )
         )
@@ -177,7 +179,7 @@ class TestNetnsEgressPolicy:
         return rt
 
     def test_policy_sets_netns_flags(self, tmp_path):
-        from metagpt.sandbox.network.enforce import TUN_DEVICE
+        from mote.sandbox.network.enforce import TUN_DEVICE
 
         rt = self._runtime()
         policy = rt._policy_for(str(tmp_path))
@@ -199,20 +201,20 @@ class TestNetnsEgressPolicy:
         rt = self._runtime()
         # NullBackend can't build a real netns argv but the launcher path still
         # assembles a token; force a usable backend to assemble the bwrap argv.
-        from metagpt.sandbox.bwrap import BwrapBackend
+        from mote.sandbox.bwrap import BwrapBackend
 
         rt._backend = BwrapBackend()
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
-        assert "metagpt.sandbox.network.orchestrator" in cmd
+        assert "mote.sandbox.network.orchestrator" in cmd
 
     def test_wrap_exec_emits_launcher(self, tmp_path):
         rt = self._runtime()
-        from metagpt.sandbox.bwrap import BwrapBackend
+        from mote.sandbox.bwrap import BwrapBackend
 
         rt._backend = BwrapBackend()
         argv, _ = _run(rt.wrap_exec(["/bin/bash", "-i"], cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert "-m" in argv
-        assert "metagpt.sandbox.network.orchestrator" in argv
+        assert "mote.sandbox.network.orchestrator" in argv
 
     def test_wrap_exec_extra_writable_in_netns_bwrap_argv(self, tmp_path):
         # extra_writable must survive into the bwrap argv encoded inside the
@@ -224,7 +226,7 @@ class TestNetnsEgressPolicy:
         sock = tmp_path / "sock"
         sock.mkdir()
         rt = self._runtime()
-        from metagpt.sandbox.bwrap import BwrapBackend
+        from mote.sandbox.bwrap import BwrapBackend
 
         # Mark started so wrap_exec's start() doesn't reset our backend (the fake
         # proxy is already wired by _runtime()).
@@ -232,7 +234,9 @@ class TestNetnsEgressPolicy:
         rt._backend = BwrapBackend()
         argv, _ = _run(
             rt.wrap_exec(
-                ["/bin/bash", "-i"], cwd=str(tmp_path), env={"PATH": "/bin"},
+                ["/bin/bash", "-i"],
+                cwd=str(tmp_path),
+                env={"PATH": "/bin"},
                 extra_writable=[str(sock)],
             )
         )
@@ -267,16 +271,14 @@ class TestCgroupLimitsWrapping:
     """
 
     def _patch_available(self, monkeypatch, *, available=True, cpu=False):
-        import metagpt.sandbox.runtime as rtmod
+        import mote.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: available)
         monkeypatch.setattr(rtmod, "cpu_controller_delegated", lambda: cpu)
 
     def test_wrap_command_prepends_scope(self, monkeypatch, tmp_path):
         self._patch_available(monkeypatch)
-        rt = SandboxRuntime(
-            backend="none", harden_process=True, network="open", memory_max="64M", pids_max=8
-        )
+        rt = SandboxRuntime(backend="none", harden_process=True, network="open", memory_max="64M", pids_max=8)
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert cmd.startswith("systemd-run --user --scope")
         assert "MemoryMax=64M" in cmd
@@ -320,12 +322,14 @@ class TestCgroupLimitsWrapping:
         # The dynamic contract: a limits_provider is read on every wrap, so a
         # session-time cap change is honoured on the next command without
         # rebuilding the runtime (mirrors the policy_provider seam).
-        from metagpt.sandbox.resources import ResourceLimits
+        from mote.sandbox.resources import ResourceLimits
 
         self._patch_available(monkeypatch)
         live = ResourceLimits(memory_max="64M")
         rt = SandboxRuntime(
-            backend="none", harden_process=True, network="open",
+            backend="none",
+            harden_process=True,
+            network="open",
             limits_provider=lambda: live,
         )
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
@@ -339,11 +343,13 @@ class TestCgroupLimitsWrapping:
     def test_provider_overrides_static_kwargs(self, monkeypatch, tmp_path):
         # When both a provider and static kwargs are present the provider wins
         # (the static caps are only the no-provider fallback baseline).
-        from metagpt.sandbox.resources import ResourceLimits
+        from mote.sandbox.resources import ResourceLimits
 
         self._patch_available(monkeypatch)
         rt = SandboxRuntime(
-            backend="none", harden_process=True, network="open",
+            backend="none",
+            harden_process=True,
+            network="open",
             memory_max="999M",  # static baseline, should be ignored
             limits_provider=lambda: ResourceLimits(pids_max=8),
         )
@@ -354,8 +360,11 @@ class TestCgroupLimitsWrapping:
     def test_cpu_quota_dropped_when_not_delegated(self, monkeypatch, tmp_path):
         self._patch_available(monkeypatch, available=True, cpu=False)
         rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open",
-            memory_max="64M", cpu_quota="200%",
+            backend="none",
+            harden_process=False,
+            network="open",
+            memory_max="64M",
+            cpu_quota="200%",
         )
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert "CPUQuota" not in cmd
@@ -363,9 +372,7 @@ class TestCgroupLimitsWrapping:
 
     def test_cpu_quota_emitted_when_delegated(self, monkeypatch, tmp_path):
         self._patch_available(monkeypatch, available=True, cpu=True)
-        rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open", cpu_quota="200%"
-        )
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open", cpu_quota="200%")
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert "CPUQuota=200%" in cmd
 
@@ -375,17 +382,18 @@ class TestCgroupLimitsWrapping:
         # remain the very last token of the command string.
         self._patch_available(monkeypatch)
         rt = SandboxRuntime(
-            backend="bwrap", harden_process=False, network="open",
-            seccomp=True, memory_max="64M",
+            backend="bwrap",
+            harden_process=False,
+            network="open",
+            seccomp=True,
+            memory_max="64M",
         )
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert cmd.startswith("systemd-run --user --scope")
         # If a seccomp filter was built, the redirect is appended last.
         if rt._seccomp_bpf_path is not None:
             assert "9<" in cmd
-            assert cmd.rstrip().endswith(rt._seccomp_bpf_path) or cmd.rstrip().endswith(
-                f"'{rt._seccomp_bpf_path}'"
-            )
+            assert cmd.rstrip().endswith(rt._seccomp_bpf_path) or cmd.rstrip().endswith(f"'{rt._seccomp_bpf_path}'")
         _run(rt.shutdown())
 
     def test_netns_launcher_gets_scope(self, monkeypatch, tmp_path):
@@ -399,7 +407,7 @@ class TestCgroupLimitsWrapping:
             async def shutdown(self):  # pragma: no cover - trivial
                 pass
 
-        from metagpt.sandbox.bwrap import BwrapBackend
+        from mote.sandbox.bwrap import BwrapBackend
 
         rt = SandboxRuntime(backend="none", harden_process=False, network="proxy", memory_max="64M")
         rt._netns_egress = True
@@ -407,7 +415,7 @@ class TestCgroupLimitsWrapping:
         rt._backend = BwrapBackend()
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert cmd.startswith("systemd-run --user --scope")
-        assert "metagpt.sandbox.network.orchestrator" in cmd
+        assert "mote.sandbox.network.orchestrator" in cmd
 
 
 class TestRlimitFallbackWrapping:
@@ -419,15 +427,18 @@ class TestRlimitFallbackWrapping:
     """
 
     def _patch_unavailable(self, monkeypatch):
-        import metagpt.sandbox.runtime as rtmod
+        import mote.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: False)
 
     def test_wrap_command_injects_ulimit_when_cgroup_down(self, monkeypatch, tmp_path):
         self._patch_unavailable(monkeypatch)
         rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open",
-            memory_max="64M", pids_max=8,
+            backend="none",
+            harden_process=False,
+            network="open",
+            memory_max="64M",
+            pids_max=8,
         )
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         # No scope (cgroup down) but the per-process caps are set in the shell.
@@ -438,9 +449,7 @@ class TestRlimitFallbackWrapping:
 
     def test_wrap_exec_injects_ulimit_via_shim(self, monkeypatch, tmp_path):
         self._patch_unavailable(monkeypatch)
-        rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open", pids_max=8
-        )
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open", pids_max=8)
         argv, _ = _run(rt.wrap_exec(["/bin/bash", "-i"], cwd=str(tmp_path), env={"PATH": "/bin"}))
         # The argv path wraps in an ``sh -c '… exec "$@"'`` shim so the exec'd
         # shell + descendants inherit the cap; the original argv survives.
@@ -453,13 +462,11 @@ class TestRlimitFallbackWrapping:
     def test_no_ulimit_when_cgroup_available(self, monkeypatch, tmp_path):
         # The cgroup scope is mutually exclusive with the rlimit fallback: when
         # the scope is active the tree is already capped, so no ulimit is added.
-        import metagpt.sandbox.runtime as rtmod
+        import mote.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: True)
         monkeypatch.setattr(rtmod, "cpu_controller_delegated", lambda: False)
-        rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open", memory_max="64M"
-        )
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open", memory_max="64M")
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert cmd.startswith("systemd-run --user --scope")
         assert "ulimit" not in cmd
@@ -475,9 +482,7 @@ class TestRlimitFallbackWrapping:
         # Both gates fire independently: the hardening prelude AND the rlimit
         # fallback share the one ``sh -c`` body.
         self._patch_unavailable(monkeypatch)
-        rt = SandboxRuntime(
-            backend="none", harden_process=True, network="open", pids_max=8
-        )
+        rt = SandboxRuntime(backend="none", harden_process=True, network="open", pids_max=8)
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert "ulimit -c 0" in cmd  # hardening
         assert "ulimit -u 8" in cmd  # rlimit fallback
@@ -486,12 +491,14 @@ class TestRlimitFallbackWrapping:
     def test_fallback_reads_live_limits(self, monkeypatch, tmp_path):
         # Dynamic: a limits_provider is read per wrap, so a session cap change is
         # honoured on the next command (mirrors the cgroup path's contract).
-        from metagpt.sandbox.resources import ResourceLimits
+        from mote.sandbox.resources import ResourceLimits
 
         self._patch_unavailable(monkeypatch)
         live = ResourceLimits(pids_max=8)
         rt = SandboxRuntime(
-            backend="none", harden_process=False, network="open",
+            backend="none",
+            harden_process=False,
+            network="open",
             limits_provider=lambda: live,
         )
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
@@ -563,9 +570,7 @@ class TestBwrapEndToEnd:
         )
         import shlex
 
-        cmd, env = _run(
-            rt.wrap_command(f"python3 -c {shlex.quote(code)}", cwd=str(tmp_path), env=dict(os.environ))
-        )
+        cmd, env = _run(rt.wrap_command(f"python3 -c {shlex.quote(code)}", cwd=str(tmp_path), env=dict(os.environ)))
         rc, out, err = self._exec(cmd, env)
         _run(rt.shutdown())
         assert rc == 0, err

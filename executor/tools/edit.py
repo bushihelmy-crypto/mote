@@ -29,11 +29,46 @@ from __future__ import annotations
 import os
 from typing import ClassVar, Optional
 
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import FileChange, ToolError, ToolResult
-from metagpt.executor.dependency._file_base import FileMutatingTool
-from metagpt.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
-from metagpt.common.prompt.tools import EDIT_DESCRIPTION
+from mote.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
+from mote.common.prompt.tools import EDIT_DESCRIPTION
+from mote.common.text import count_noun, verb_agree
+from mote.executor.dependency._file_base import FileMutatingTool
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import FileChange, ToolError, ToolResult
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise/return site).
+_MSG_FILE_PATH_REQUIRED = "Error: 'file_path' argument is required."
+_MSG_STRINGS_REQUIRED = "Error: 'old_string' and 'new_string' are required."
+_MSG_STRINGS_MUST_BE_STR = "Error: 'old_string' and 'new_string' must be strings."
+_MSG_NO_CHANGES = "Error: no changes to make — old_string and new_string are identical."
+_MSG_IS_DIRECTORY = "Error: '{path}' is a directory, not a file."
+_MSG_IS_NOTEBOOK = "Error: '{path}' is a Jupyter notebook. Use a notebook edit tool to modify " ".ipynb files."
+_MSG_FILE_NOT_EXIST = (
+    "Error: file does not exist. Note that relative paths resolve against the "
+    "working directory {base}. To create a new file, pass an empty old_string."
+)
+_MSG_CANNOT_STAT = "Error: cannot stat '{path}': {error}"
+_MSG_FILE_TOO_LARGE = "Error: file ({size} bytes) exceeds the maximum editable size ({max_size} bytes)."
+_MSG_NOT_UTF8 = "Error: cannot edit '{path}': file is not valid UTF-8 text."
+_MSG_CANNOT_READ = "Error: cannot read '{path}': {error}"
+_MSG_NOT_FOUND = "Error: string to replace not found in file.\nString: {old_string}"
+_MSG_MULTIPLE_MATCHES = (
+    "Error: found {count} matches of the string to replace, but replace_all is "
+    "false. To replace all occurrences set replace_all to true. To replace only "
+    "one, provide more surrounding context to uniquely identify the instance."
+    "\nString: {old_string}"
+)
+_MSG_NO_CHANGE_PRODUCED = "Error: applying the edit produced no change to the file."
+_MSG_CANNOT_WRITE = "Error: cannot write '{path}': {error}"
+_MSG_UPDATED_ALL = "The file {path} has been updated. All {count} {verb} successfully replaced."
+_MSG_UPDATED = "The file {path} has been updated successfully."
+_MSG_CANNOT_CLOBBER = (
+    "Error: cannot create new file — '{path}' already exists with content. "
+    "Provide a non-empty old_string to edit it."
+)
+_MSG_CANNOT_MKDIR = "Error: cannot create parent directory for '{path}': {error}"
+_MSG_CREATED = "The file {path} has been {verb} successfully."
 
 # Curly quotes. The model emits straight quotes; files may contain curly ones.
 # We normalize curly→straight for matching, then re-apply curly on write.
@@ -46,10 +81,7 @@ _RIGHT_DOUBLE = "\u201d"
 def _normalize_quotes(s: str) -> str:
     """Convert curly quotes to straight quotes."""
     return (
-        s.replace(_LEFT_SINGLE, "'")
-        .replace(_RIGHT_SINGLE, "'")
-        .replace(_LEFT_DOUBLE, '"')
-        .replace(_RIGHT_DOUBLE, '"')
+        s.replace(_LEFT_SINGLE, "'").replace(_RIGHT_SINGLE, "'").replace(_LEFT_DOUBLE, '"').replace(_RIGHT_DOUBLE, '"')
     )
 
 
@@ -213,7 +245,7 @@ class Edit(FileMutatingTool):
         old_string: str,
         new_string: str,
         replace_all: bool = False,
-    ) -> str:
+    ) -> ToolResult:
         """Perform an exact string replacement in a file.
 
         Locates old_string in the file and replaces it with new_string. By
@@ -231,23 +263,20 @@ class Edit(FileMutatingTool):
             replace_all: Replace all occurrences of old_string (default False).
         """
         if not file_path or not file_path.strip():
-            raise ToolError("Error: 'file_path' argument is required.")
+            raise ToolError(_MSG_FILE_PATH_REQUIRED)
         if old_string is None or new_string is None:
-            raise ToolError("Error: 'old_string' and 'new_string' are required.")
+            raise ToolError(_MSG_STRINGS_REQUIRED)
         if not isinstance(old_string, str) or not isinstance(new_string, str):
-            raise ToolError("Error: 'old_string' and 'new_string' must be strings.")
+            raise ToolError(_MSG_STRINGS_MUST_BE_STR)
         if old_string == new_string:
-            raise ToolError("Error: no changes to make — old_string and new_string are identical.")
+            raise ToolError(_MSG_NO_CHANGES)
 
-        full_path = os.path.abspath(os.path.expanduser(file_path.strip()))
+        full_path = self._resolve_path(file_path.strip())
 
         if os.path.isdir(full_path):
-            raise ToolError(f"Error: '{file_path}' is a directory, not a file.")
+            raise ToolError(_MSG_IS_DIRECTORY.format(path=file_path))
         if full_path.endswith(".ipynb"):
-            raise ToolError(
-                f"Error: '{file_path}' is a Jupyter notebook. Use a notebook edit "
-                f"tool to modify .ipynb files."
-            )
+            raise ToolError(_MSG_IS_NOTEBOOK.format(path=file_path))
 
         existed = os.path.exists(full_path)
 
@@ -256,27 +285,18 @@ class Edit(FileMutatingTool):
             return self._create_file(file_path, full_path, new_string, existed)
 
         if not existed:
-            raise ToolError(
-                f"Error: file does not exist. Note that the path should be "
-                f"absolute; the current working directory is {os.getcwd()}. To "
-                f"create a new file, pass an empty old_string."
-            )
+            raise ToolError(_MSG_FILE_NOT_EXIST.format(base=self._base_cwd()))
 
         # Size guard before reading the whole file into memory.
         try:
             size = os.stat(full_path).st_size
         except OSError as e:
-            raise ToolError(f"Error: cannot stat '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_STAT.format(path=file_path, error=e))
         if size > MAX_EDIT_FILE_SIZE_BYTES:
-            raise ToolError(
-                f"Error: file ({size} bytes) exceeds the maximum editable size "
-                f"({MAX_EDIT_FILE_SIZE_BYTES} bytes)."
-            )
+            raise ToolError(_MSG_FILE_TOO_LARGE.format(size=size, max_size=MAX_EDIT_FILE_SIZE_BYTES))
 
         # Read-before-edit + unchanged-since-read guard (raises ToolError to abort).
-        self._check_read_before_write(
-            file_path, full_path, noun="file", verb="editing"
-        )
+        self._check_read_before_write(file_path, full_path, noun="file", verb="editing")
 
         line_ending = self._detect_line_ending(full_path)
 
@@ -286,32 +306,25 @@ class Edit(FileMutatingTool):
             with open(full_path, "r", encoding="utf-8", newline="") as f:
                 raw = f.read()
         except UnicodeDecodeError:
-            raise ToolError(f"Error: cannot edit '{file_path}': file is not valid UTF-8 text.")
+            raise ToolError(_MSG_NOT_UTF8.format(path=file_path))
         except OSError as e:
-            raise ToolError(f"Error: cannot read '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_READ.format(path=file_path, error=e))
 
         content = raw.replace("\r\n", "\n")
 
         actual_old = _find_actual_string(content, old_string)
         if actual_old is None:
-            raise ToolError(
-                f"Error: string to replace not found in file.\nString: {old_string}"
-            )
+            raise ToolError(_MSG_NOT_FOUND.format(old_string=old_string))
 
         matches = content.count(actual_old)
         if matches > 1 and not replace_all:
-            raise ToolError(
-                f"Error: found {matches} matches of the string to replace, but "
-                f"replace_all is false. To replace all occurrences set replace_all "
-                f"to true. To replace only one, provide more surrounding context to "
-                f"uniquely identify the instance.\nString: {old_string}"
-            )
+            raise ToolError(_MSG_MULTIPLE_MATCHES.format(count=matches, old_string=old_string))
 
         actual_new = _preserve_quote_style(old_string, actual_old, new_string)
         updated = _apply_edit(content, actual_old, actual_new, replace_all)
 
         if updated == content:
-            raise ToolError("Error: applying the edit produced no change to the file.")
+            raise ToolError(_MSG_NO_CHANGE_PRODUCED)
 
         normalized = updated
         if line_ending != "\n":
@@ -322,17 +335,15 @@ class Edit(FileMutatingTool):
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(normalized)
         except OSError as e:
-            raise ToolError(f"Error: cannot write '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_WRITE.format(path=file_path, error=e))
 
         self._refresh_read_state(full_path)
 
         if replace_all:
-            message = (
-                f"The file {full_path} has been updated. All {matches} "
-                f"occurrence(s) were successfully replaced."
-            )
+            verb = verb_agree(matches, "was", "were")
+            message = _MSG_UPDATED_ALL.format(path=full_path, count=count_noun(matches, "occurrence"), verb=verb)
         else:
-            message = f"The file {full_path} has been updated successfully."
+            message = _MSG_UPDATED.format(path=full_path)
         # Carry the change as a structured fact (old/new full content, LF-normalized
         # — the display-agnostic form) so the view layer renders it without sniffing.
         return ToolResult(
@@ -354,10 +365,7 @@ class Edit(FileMutatingTool):
             except (OSError, UnicodeDecodeError):
                 current = "non-empty"  # treat unreadable as non-empty → refuse
             if current.strip() != "":
-                raise ToolError(
-                    f"Error: cannot create new file — '{file_path}' already exists "
-                    f"with content. Provide a non-empty old_string to edit it."
-                )
+                raise ToolError(_MSG_CANNOT_CLOBBER.format(path=file_path))
             old = current.replace("\r\n", "\n")
 
         parent = os.path.dirname(full_path)
@@ -365,7 +373,7 @@ class Edit(FileMutatingTool):
             try:
                 os.makedirs(parent, exist_ok=True)
             except OSError as e:
-                raise ToolError(f"Error: cannot create parent directory for '{file_path}': {e}")
+                raise ToolError(_MSG_CANNOT_MKDIR.format(path=file_path, error=e))
 
         # Capture a before-image for file history just before we write.
         self._snapshot_pre_write(full_path)
@@ -373,7 +381,7 @@ class Edit(FileMutatingTool):
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(content)
         except OSError as e:
-            raise ToolError(f"Error: cannot write '{file_path}': {e}")
+            raise ToolError(_MSG_CANNOT_WRITE.format(path=file_path, error=e))
 
         self._refresh_read_state(full_path)
         verb = "updated" if existed else "created"
@@ -381,7 +389,6 @@ class Edit(FileMutatingTool):
         # written bytes may carry the detected line ending, but the *fact* the
         # view renders is the logical content).
         return ToolResult(
-            output=f"The file {full_path} has been {verb} successfully.",
+            output=_MSG_CREATED.format(path=full_path, verb=verb),
             file_changes=[FileChange(path=full_path, old=old, new=content.replace("\r\n", "\n"))],
         )
-

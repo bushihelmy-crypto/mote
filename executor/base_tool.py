@@ -16,10 +16,10 @@ import inspect
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from metagpt.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
-from metagpt.common.schema.permission_types import PermissionDecision
-from metagpt.executor.tool_convert import function_docstring_to_schema
-from metagpt.executor.tool_spec_adapter import build_json_schema
+from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
+from mote.common.schema.permission_types import PermissionDecision
+from mote.executor.tool_convert import function_docstring_to_schema
+from mote.executor.tool_spec_adapter import build_json_schema
 
 
 class BaseTool(ABC):
@@ -53,9 +53,9 @@ class BaseTool(ABC):
     """
 
     # --- Identity ---
-    name: ClassVar[str] = ""              # Primary tool name
-    aliases: ClassVar[list[str]] = []     # Alternative names (LLM can use any)
-    description: ClassVar[str] = ""       # Override; if empty, extracted from call() docstring
+    name: ClassVar[str] = ""  # Primary tool name
+    aliases: ClassVar[list[str]] = []  # Alternative names (LLM can use any)
+    description: ClassVar[str] = ""  # Override; if empty, extracted from call() docstring
     # Names of Role capabilities (methods) this tool needs. bind() injects ONLY
     # these, resolved against Role.tool_capabilities() (an explicit allowlist).
     # A name not published there is rejected; the tool never receives RoleState,
@@ -65,7 +65,7 @@ class BaseTool(ABC):
     # Cap on this tool's result size, in characters. When a single call's text
     # output exceeds this, the framework persists the full result to disk and
     # replaces the inline content with a <persisted-output> preview (see
-    # metagpt.executor.tool_result_limit). The effective threshold is
+    # mote.executor.tool_result_limit). The effective threshold is
     # this value clamped by the system-wide default; override per tool to allow
     # larger (e.g. Read) or smaller (e.g. Sleep) results. Aligned with CC's
     # per-tool `maxResultSizeChars`.
@@ -93,7 +93,7 @@ class BaseTool(ABC):
 
     # --- Permission metadata (consumed by the PermissionEngine) ---
     # Coarse risk label a tool self-declares (advisory in phase 1). See
-    # metagpt.common.schema.permission_types.RiskLevel.
+    # mote.common.schema.permission_types.RiskLevel.
     risk_level: ClassVar[str] = "low"
     # Whether this tool mutates the filesystem. Drives the ``acceptEdits``
     # permission mode (auto-approve edits). Set True on file-writing tools.
@@ -251,4 +251,3 @@ class BaseTool(ABC):
             "description": base["description"],
             "input_schema": build_json_schema(cls.call),
         }
-

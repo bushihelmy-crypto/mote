@@ -14,11 +14,11 @@ import sys
 
 import pytest
 
-from metagpt.common.events import DiagnosticsEvent, EventBus, FileMutatedEvent
-from metagpt.common.interface.event_subscriber import ObservationSubscriber
-from metagpt.common.schema import LspConfig, LspServerConfig
-from metagpt.roles.lsp.buffer import DiagnosticsBuffer
-from metagpt.roles.lsp.service import LspService
+from mote.common.events import DiagnosticsEvent, EventBus, FileMutatedEvent
+from mote.common.interface.event_subscriber import ObservationSubscriber
+from mote.common.schema import LspConfig, LspServerConfig
+from mote.roles.lsp.buffer import DiagnosticsBuffer
+from mote.roles.lsp.service import LspService
 
 aio = pytest.mark.asyncio
 
@@ -289,7 +289,7 @@ def test_buffer_is_dual_role_event_subscriber_and_context_source():
     # The buffer plays both sides of the push->pull bridge in one object: it is
     # the bus ObservationSubscriber AND the turn-context EphemeralContextSource
     # (so the thin LspContextSource wrapper is no longer needed).
-    from metagpt.common.interface import EphemeralContextSource, ObservationSubscriber
+    from mote.common.interface import EphemeralContextSource, ObservationSubscriber
 
     buffer = DiagnosticsBuffer()
     assert isinstance(buffer, ObservationSubscriber)

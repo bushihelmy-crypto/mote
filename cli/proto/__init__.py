@@ -28,7 +28,7 @@ Approval semantics (§6.4): a high-trust auto-approve permission profile answers
 turn becomes a hard ``turn_input_required`` → ``turn_failed`` rather than blocking
 forever — a *consumer-level* policy, not a core change.
 
-The eventual entry is ``python -m metagpt.cli app-server`` (stdio, no TUI).
+The eventual entry is ``python -m mote.cli app-server`` (stdio, no TUI).
 """
 
 from __future__ import annotations

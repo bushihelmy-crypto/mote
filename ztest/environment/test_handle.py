@@ -6,10 +6,10 @@ import types
 
 import pytest
 
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.handle import ChildAgentHandle
-from metagpt.environment.runtime import AgentRuntime, AgentStatus
+from mote.common.schema.queue import MessageQueue
+from mote.environment.agent_path import AgentPath
+from mote.environment.handle import ChildAgentHandle
+from mote.environment.runtime import AgentRuntime, AgentStatus
 
 
 class FakeRole:

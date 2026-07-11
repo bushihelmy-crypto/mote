@@ -11,9 +11,9 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.const.llm import MULTI_MODAL_MODELS
-from metagpt.common.utils.token_counter import count_message_tokens, count_string_tokens
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.const.llm import supports_vision
+from mote.common.utils.token_counter import count_message_tokens, count_string_tokens
 
 
 class ModelCard(BaseModel):
@@ -37,11 +37,10 @@ class ModelCard(BaseModel):
     def supports_vision(self) -> bool:
         """Whether the underlying model accepts image input.
 
-        Derived from ``llm_config.model`` against ``MULTI_MODAL_MODELS``
-        (mirrors ``BaseLLM.support_image_input``).
+        Delegates to the shared ``common.const.llm.supports_vision`` authority
+        (same check as ``BaseLLM.support_image_input``), so the two never drift.
         """
-        model = self.llm_config.model or ""
-        return any(m in model for m in MULTI_MODAL_MODELS)
+        return supports_vision(self.llm_config.model)
 
 
 class RoutingRequest(BaseModel):
@@ -66,6 +65,8 @@ class RoutingRequest(BaseModel):
             try:
                 return count_message_tokens(self.messages, model)
             except Exception:
+                # Unknown model / malformed messages: fall through to the text
+                # path, then to 0 — token_estimate is best-effort by contract.
                 pass
         if self.text:
             try:
@@ -82,11 +83,7 @@ class RoutingRequest(BaseModel):
         Mirrors ``token_estimate``'s messages-before-text precedence.
         """
         if self.messages:
-            parts = [
-                str(m.get("content", ""))
-                for m in self.messages
-                if isinstance(m, dict) and m.get("content")
-            ]
+            parts = [str(m.get("content", "")) for m in self.messages if isinstance(m, dict) and m.get("content")]
             if parts:
                 return "\n".join(parts)
         return self.text

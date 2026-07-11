@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 # @Desc   : base llm postprocess plugin to do the operations like repair the raw llm output
 
-from typing import Union
+from typing import Optional, Union
 
-from metagpt.common.utils.repair_llm_raw_output import (
+from mote.common.utils.repair_llm_raw_output import (
     RepairType,
     extract_content_from_output,
     repair_llm_raw_output,
@@ -28,12 +28,14 @@ class BasePostProcessPlugin(object):
         content = self.run_repair_llm_raw_output(output, req_keys=output_class_fields + [req_key])
         content = self.run_extract_content_from_output(content, right_key=req_key)
         # # req_keys mocked
-        content = self.run_repair_llm_raw_output(content, req_keys=[None], repair_type=RepairType.JSON)
+        content = self.run_repair_llm_raw_output(content, req_keys=[""], repair_type=RepairType.JSON)
         parsed_data = self.run_retry_parse_json_text(content)
 
         return parsed_data
 
-    def run_repair_llm_raw_output(self, content: str, req_keys: list[str], repair_type: str = None) -> str:
+    def run_repair_llm_raw_output(
+        self, content: str, req_keys: list[str], repair_type: Optional[RepairType] = None
+    ) -> str:
         """inherited class can re-implement the function"""
         return repair_llm_raw_output(content, req_keys=req_keys, repair_type=repair_type)
 
@@ -61,7 +63,7 @@ class BasePostProcessPlugin(object):
             schema: output json schema
             req_key: outer pair right key, usually in `[/REQ_KEY]` format
         """
-        assert len(schema.get("properties")) > 0
+        assert len(schema.get("properties", {})) > 0
         assert "/" in req_key
 
         # current, postprocess only deal the repair_llm_raw_output

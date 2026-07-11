@@ -17,8 +17,8 @@ import io
 
 import pytest
 
-from metagpt.cli.io.terminal_io import TerminalPort
-from metagpt.cli.io.terminal_menu import _menu_lines, _option_lines
+from mote.cli.io.terminal_io import TerminalPort
+from mote.cli.io.terminal_menu import _menu_lines, _option_lines
 
 
 class FakeReader:
@@ -255,7 +255,7 @@ def _q(question, header, options, multiSelect=False):
 
 
 def _questions(*qs):
-    from metagpt.common.schema import AskUserQuestionInput
+    from mote.common.schema import AskUserQuestionInput
 
     return AskUserQuestionInput.model_validate({"questions": list(qs)})
 
@@ -282,9 +282,7 @@ async def test_ask_questions_arrow_down_then_enter():
 @pytest.mark.asyncio
 async def test_ask_questions_digit_shortcut_selects():
     port, _buf = make_interactive_port([b"2"])
-    result = await port.ask_questions(
-        None, _questions(_q("Pick", "P", [("Red", ""), ("Blue", ""), ("Green", "")]))
-    )
+    result = await port.ask_questions(None, _questions(_q("Pick", "P", [("Red", ""), ("Blue", ""), ("Green", "")])))
     assert result.answers[0].selected == ["Blue"]
 
 

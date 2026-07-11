@@ -2,16 +2,17 @@
 
 Public API::
 
-    from metagpt.executor.tasks.bggraph import BgGraph, GraphState, Stage, START, END, BaseNode
+    from mote.executor.tasks.bggraph import BgGraph, GraphState, Stage, START, END, BaseNode
 """
 
 from __future__ import annotations
 
-from metagpt.executor.tasks.bggraph.base_node import BaseNode, From
-from metagpt.executor.tasks.bggraph.graph import BgGraph
-from metagpt.executor.tasks.bggraph.types import (
+from mote.executor.tasks.bggraph.base_node import BaseNode, From
+from mote.executor.tasks.bggraph.graph import BgGraph
+from mote.executor.tasks.bggraph.types import (
     END,
     START,
+    BgStatus,
     GraphBatchFailureError,
     GraphParamTypeError,
     GraphRecursionError,
@@ -20,7 +21,6 @@ from metagpt.executor.tasks.bggraph.types import (
     GraphState,
     LlmPauseResult,
     NodeRecord,
-    BgStatus,
     Stage,
 )
 

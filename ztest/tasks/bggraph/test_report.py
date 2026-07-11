@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.events import EventBus, TaskProgressEvent, set_bus
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from metagpt.executor.tasks.bggraph.report import MAX_RESULT_DISPLAY_CHARS, make_progress_writer
+from mote.common.events import EventBus, TaskProgressEvent, set_bus
+from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.executor.tasks.bggraph.report import MAX_RESULT_DISPLAY_CHARS, make_progress_writer
 
 
 class _Recorder(ObservationSubscriber, SyncObserver):
@@ -100,12 +100,10 @@ def test_no_bus_still_appends():
 
 
 def test_push_worthy_status_delivers_structured_notification():
-    from metagpt.executor.tasks.types import BackgroundTaskNotification
+    from mote.executor.tasks.types import BackgroundTaskNotification
 
     lines, delivered = [], []
-    writer = make_progress_writer(
-        lines.append, task_id="bg_1", command_name="my_graph", deliver=delivered.append
-    )
+    writer = make_progress_writer(lines.append, task_id="bg_1", command_name="my_graph", deliver=delivered.append)
     writer("split", "success", "node done")
     # Terminal status is push-worthy → one structured notification.
     assert len(delivered) == 1
@@ -131,7 +129,7 @@ def test_running_status_not_delivered():
 
 
 def test_graph_start_marker_is_delivered():
-    from metagpt.executor.tasks.bggraph.types import END
+    from mote.executor.tasks.bggraph.types import END
 
     delivered = []
     writer = make_progress_writer(lambda _l: None, task_id="bg_1", deliver=delivered.append)
@@ -143,7 +141,7 @@ def test_graph_start_marker_is_delivered():
 
 
 def test_writer_delivers_only_non_terminal_events():
-    from metagpt.executor.tasks.bggraph.types import END
+    from mote.executor.tasks.bggraph.types import END
 
     delivered = []
     writer = make_progress_writer(lambda _l: None, task_id="bg_1", deliver=delivered.append)

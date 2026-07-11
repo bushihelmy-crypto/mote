@@ -13,8 +13,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializeAsAny
 
-from metagpt.common.schema.messages import Message
-from metagpt.common.logs import logger
+from mote.common.logs import logger
+from mote.common.schema.messages import Message
 
 
 class MessagePriority(int, Enum):
@@ -70,7 +70,7 @@ class MessageQueue(BaseModel):
             self._new_msg_event.clear()
         return [item.message for item in drain]
 
-    def push(self, msg: Message, priority: int = MessagePriority.NEXT):
+    def push(self, msg: Message, priority: MessagePriority = MessagePriority.NEXT):
         """Push a message with the given priority (default NEXT)."""
         self._items.append(QueuedMessage(priority=priority, message=msg))
         self._new_msg_event.set()

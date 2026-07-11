@@ -5,8 +5,9 @@ from __future__ import annotations
 import functools
 from typing import Callable, Optional
 
-from metagpt.common.utils.report import ThoughtReporter
-from metagpt.executor.tasks.pool import BackgroundTaskPool
+from mote.common.text import count_noun
+from mote.common.utils.report import ThoughtReporter
+from mote.executor.tasks.pool import BackgroundTaskPool
 
 
 def require_bg_complete(
@@ -40,7 +41,7 @@ def require_bg_complete(
                     meta = pool.get_task_info(tid)
                     if meta and meta.command_name:
                         task_names.append(meta.command_name)
-                tasks_desc = ", ".join(task_names) if task_names else f"{pending} task(s)"
+                tasks_desc = ", ".join(task_names) if task_names else count_noun(pending, "task")
                 # Push waiting status to frontend
                 reporter = ThoughtReporter()
                 await reporter.async_report(

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.schema (ModelCard / RoutingRequest / RoutingDecision)."""
+"""Tests for mote.router.schema (ModelCard / RoutingRequest / RoutingDecision)."""
 from __future__ import annotations
 
-from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
+from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
 
 from .conftest import make_card
 

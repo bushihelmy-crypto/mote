@@ -1,10 +1,10 @@
-"""Cache-aware USD pricing — Claude Code's model, bridged to MetaGPT's tables.
+"""Cache-aware USD pricing — Claude Code's model, bridged to Mote's tables.
 
 Claude Code prices every token bucket independently (input / output / cache
 *write* / cache *read*) at a per-million-token rate, because cache reads are an
 order of magnitude cheaper than fresh input and cache writes are ~25% dearer.
 Codex, by contrast, computes no dollars at all. We adopt CC's dollar model and
-feed it from MetaGPT's existing ``TOKEN_COSTS`` (per-1k) so no rate is lost.
+feed it from Mote's existing ``TOKEN_COSTS`` (per-1k) so no rate is lost.
 
 Three pricing *modes* replace the old CostManager subclasses:
 
@@ -20,10 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from metagpt.common.utils.token_counter import (
-    FIREWORKS_GRADE_TOKEN_COSTS,
-    TOKEN_COSTS,
-)
+from mote.common.utils.token_counter import FIREWORKS_GRADE_TOKEN_COSTS, TOKEN_COSTS
 
 # Anthropic-style derivation factors for models whose table only lists
 # input/output (no explicit cache rates): cache writes cost 1.25x fresh input,
@@ -43,7 +40,7 @@ class ModelPricing:
 
     @classmethod
     def from_per_1k(cls, prompt: float, completion: float) -> "ModelPricing":
-        """Bridge a MetaGPT ``TOKEN_COSTS`` row (per-1k) into per-Mtok rates."""
+        """Bridge a Mote ``TOKEN_COSTS`` row (per-1k) into per-Mtok rates."""
         input_m = prompt * 1000.0
         output_m = completion * 1000.0
         return cls(
@@ -141,8 +138,9 @@ def _fireworks_pricing(model: str) -> ModelPricing:
         else:
             row = FIREWORKS_GRADE_TOKEN_COSTS["-1"]
     # Fireworks has no cache tiers; reads/writes priced as fresh input.
-    return ModelPricing(input=row["prompt"], output=row["completion"],
-                        cache_write=row["prompt"], cache_read=row["prompt"])
+    return ModelPricing(
+        input=row["prompt"], output=row["completion"], cache_write=row["prompt"], cache_read=row["prompt"]
+    )
 
 
 def resolve_pricing(model: Optional[str], mode: PricingMode) -> tuple[ModelPricing, bool]:

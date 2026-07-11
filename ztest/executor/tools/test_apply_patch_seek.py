@@ -8,7 +8,7 @@ the end-of-file bias.
 """
 from __future__ import annotations
 
-from metagpt.executor.dependency._apply_patch.seek import seek_sequence
+from mote.executor.dependency._apply_patch.seek import seek_sequence
 
 
 class TestStrictness:

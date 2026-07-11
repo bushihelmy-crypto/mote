@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re
 
-from metagpt.executor.compress.base import CompressionResult, applied, unchanged
+from mote.common.text import Elision, ElisionStrategy, ElisionUnit
+from mote.executor.compress.base import CompressionResult, applied, unchanged
 
 # A ``git log --oneline`` row: ``<sha> <subject>`` — already compact, kept as-is.
 _ONELINE_RE = re.compile(r"^[0-9a-f]{7,40}\b")
@@ -137,7 +138,8 @@ class GitCompressor:
         def flush() -> None:
             nonlocal added, removed, dropped
             if dropped:
-                out.append(f"  [... {dropped} more changed lines omitted (+{added} -{removed} total)]")
+                el = Elision(ElisionUnit.LINES, dropped, added + removed, ElisionStrategy.TAIL)
+                out.append("  " + el.render_for_model(noun="more changed lines", extra=f"(+{added} -{removed} total)"))
             added = removed = dropped = 0
 
         for line in output.splitlines():

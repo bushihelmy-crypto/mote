@@ -6,13 +6,13 @@ import types
 
 import pytest
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.common.schema.queue import MessageQueue
-from metagpt.environment.mailbox import Mailbox
-from metagpt.environment.runtime import AgentRuntime
-from metagpt.environment.store import ResidencyRecord, ResidencyStore, _strip_history
-from metagpt.session import SessionLog
-from metagpt.session.events import MessageEvent, SessionMetaEvent
+from mote.common.schema.messages import UserMessage
+from mote.common.schema.queue import MessageQueue
+from mote.environment.mailbox import Mailbox
+from mote.environment.runtime import AgentRuntime
+from mote.environment.store import ResidencyRecord, ResidencyStore, _strip_history
+from mote.session import SessionLog
+from mote.session.events import MessageEvent, SessionMetaEvent
 
 
 class FakeRole:
@@ -50,7 +50,7 @@ def make_role_loader():
     def loader(role_dump):
         state = role_dump.get("state", {})
         context = state.get("context", {})
-        from metagpt.common.schema import Message
+        from mote.common.schema import Message
 
         messages = [Message.load(m) for m in context.get("messages", [])]
         return FakeRole(
@@ -228,7 +228,7 @@ async def test_rehydrate_no_rollout_keeps_loaded_history(tmp_path):
 @pytest.mark.asyncio
 async def test_rehydrate_refill_survives_compaction_checkpoint(tmp_path):
     """A compacted checkpoint in the rollout is the post-compaction truth."""
-    from metagpt.session.events import CompactedEvent
+    from mote.session.events import CompactedEvent
 
     sessions = tmp_path / "sessions"
     store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))

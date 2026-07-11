@@ -11,7 +11,7 @@ concrete ``FileSnapshotRecorder`` / blob store live in ``session`` and are
 tools only depend on this structural face, so no upward import is introduced.
 
 Like the other ``common.interface`` Protocols (e.g.
-:class:`~metagpt.common.interface.LspNotifier`), this is a leaf module that only
+:class:`~mote.common.interface.LspNotifier`), this is a leaf module that only
 needs ``typing``, importable from anywhere without risking a cycle.
 """
 

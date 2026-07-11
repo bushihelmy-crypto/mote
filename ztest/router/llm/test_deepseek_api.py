@@ -18,14 +18,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
-from metagpt.router.llm.deepseek_api import DeepSeekLLM
-from metagpt.router.llm.dsml import contains_dsml, parse_dsml_tool_calls
-from metagpt.router.llm.llm_provider_registry import (
-    LLM_REGISTRY,
-    create_llm_instance,
-    resolve_api_type,
-)
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.router.llm.deepseek_api import DeepSeekLLM
+from mote.router.llm.dsml import contains_dsml, parse_dsml_tool_calls
+from mote.router.llm.llm_provider_registry import LLM_REGISTRY, create_llm_instance, resolve_api_type
 
 # Fullwidth vertical line (U+FF5C), doubled — the real DSML separator.
 _BAR = "\uff5c\uff5c"
@@ -57,9 +53,7 @@ def test_contains_dsml_false_on_plain_text():
 # -- decoder: parse_dsml_tool_calls ------------------------------------------
 def test_parse_single_invoke_string_param():
     # Mirrors log line ~35661: GetNodeState(task_id="bg_1").
-    content = "Let me check progress.\n" + _dsml(
-        _invoke("GetNodeState", _param("task_id", "bg_1", "true"))
-    )
+    content = "Let me check progress.\n" + _dsml(_invoke("GetNodeState", _param("task_id", "bg_1", "true")))
     calls, remaining = parse_dsml_tool_calls(content)
     assert calls == [{"id": None, "name": "GetNodeState", "arguments": {"task_id": "bg_1"}}]
     # The DSML block is stripped; the surrounding prose survives (trimmed).
@@ -142,9 +136,7 @@ def _make_llm() -> DeepSeekLLM:
 # -- DeepSeekLLM: salvage on empty tool_calls --------------------------------
 def test_salvage_when_tool_calls_empty():
     llm = _make_llm()
-    leaked = "Let me check progress.\n" + _dsml(
-        _invoke("GetNodeState", _param("task_id", "bg_1"))
-    )
+    leaked = "Let me check progress.\n" + _dsml(_invoke("GetNodeState", _param("task_id", "bg_1")))
     rsp = _rsp(content=leaked, tool_calls=None)
     calls = llm.get_choice_tool_calls(rsp)
     assert len(calls) == 1
@@ -156,9 +148,7 @@ def test_salvage_when_tool_calls_empty():
 
 def test_salvage_strips_dsml_from_text():
     llm = _make_llm()
-    leaked = "Let me check progress.\n" + _dsml(
-        _invoke("GetNodeState", _param("task_id", "bg_1"))
-    )
+    leaked = "Let me check progress.\n" + _dsml(_invoke("GetNodeState", _param("task_id", "bg_1")))
     rsp = _rsp(content=leaked, tool_calls=None)
     # The visible text has the DSML block removed.
     assert llm.get_choice_text(rsp) == "Let me check progress."

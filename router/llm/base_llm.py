@@ -16,17 +16,12 @@ from uuid import uuid4
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
-from tenacity import (
-    after_log,
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_random_exponential,
-)
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
-from metagpt.common.events import (
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
+from mote.common.const.llm import supports_pdf_input, supports_vision
+from mote.common.events import (
     LLMErrorEvent,
     LLMRequestEvent,
     LLMResponseEvent,
@@ -35,17 +30,16 @@ from metagpt.common.events import (
     observe_event,
     observe_event_sync,
 )
-from metagpt.common.exception import RecoveryAction, RecoveryRunner, is_retryable
-from metagpt.common.interface import ContextReducer
-from metagpt.common.logs import current_trace_id, logger
-from metagpt.common.const.llm import MULTI_MODAL_MODELS
-from metagpt.common.schema import Message
-from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
-from metagpt.router.llm.recovery import build_llm_strategies
-from metagpt.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
-from metagpt.common.utils.common import log_and_reraise, pdfs_within_limits, sniff_image_media_type
-from metagpt.common.utils.token_counter import TOKEN_MAX, count_message_tokens
-from metagpt.router.cost import CostTracker, Costs, TokenUsage
+from mote.common.exception import RecoveryAction, RecoveryRunner, is_retryable
+from mote.common.interface import ContextReducer
+from mote.common.logs import current_trace_id, logger
+from mote.common.schema import Message
+from mote.common.utils.common import build_data_url, log_and_reraise, pdfs_within_limits
+from mote.common.utils.token_counter import TOKEN_MAX, count_message_tokens
+from mote.router.cost import Costs, CostTracker, TokenUsage
+from mote.router.llm.llm_response import LLMResponse, LLMToolCall
+from mote.router.llm.recovery import build_llm_strategies
+from mote.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
 
 # Tenacity retry budget for a single LLM call (the transient-error RETRY tier).
 # Shared by the base ``acompletion_text`` and provider overrides so the retry
@@ -61,7 +55,7 @@ class BaseLLM(ABC):
     system_prompt = "You are a helpful assistant."
 
     # OpenAI / Azure / Others
-    aclient: Optional[Union[AsyncOpenAI]] = None
+    aclient: Optional[AsyncOpenAI] = None
     cost_manager: Optional[CostTracker] = None
     # Maintain model name in own instance in case the global config has changed,
     # Should always use model not config.model within this class
@@ -117,20 +111,19 @@ class BaseLLM(ABC):
             ok_to_attach, total_pdf_bytes, total_pdf_pages = pdfs_within_limits(pdfs)
             if not ok_to_attach:
                 pdfs = []
-        content = [{"type": "text", "text": msg}]
+        content: list[dict[str, Any]] = [{"type": "text", "text": msg}]
         # images
         for image in images or []:
             if isinstance(image, str) and image.startswith("http"):
                 url = image
             else:
-                # Declared media type is often wrong (e.g. a PNG read as jpeg);
-                # Bedrock/Anthropic reject mismatches, so sniff from the bytes.
-                media_type = sniff_image_media_type(image) or "image/jpeg"
-                url = f"data:{media_type};base64,{image}"
+                # Raw base64: build_data_url resolves the correct media type by
+                # sniffing the bytes (a declared type is often wrong and
+                # Bedrock/Anthropic reject mismatches).
+                url = build_data_url(image)
             content.append({"type": "image_url", "image_url": {"url": url}})
         # pdfs (Anthropic-compatible document input)
-        is_anthropic_pdf_supported = "claude" in self.model.lower()
-        if is_anthropic_pdf_supported:
+        if supports_pdf_input(self.model):
             for pdf_b64 in pdfs or []:
                 content.append(
                     {
@@ -157,7 +150,7 @@ class BaseLLM(ABC):
         return self._system_msg("")["role"]
 
     def support_image_input(self) -> bool:
-        return any([m in self.model for m in MULTI_MODAL_MODELS])
+        return supports_vision(self.model)
 
     def format_msg(self, messages: Union[str, "Message", list[dict], list["Message"], list[str]]) -> list[dict]:
         """convert messages to list[dict]."""
@@ -169,7 +162,9 @@ class BaseLLM(ABC):
             if isinstance(msg, str):
                 processed_messages.append({"role": "user", "content": msg})
             elif isinstance(msg, dict):
-                assert "role" in msg and "content" in msg, f"dict message must have 'role' and 'content', got keys: {list(msg.keys())}"
+                assert (
+                    "role" in msg and "content" in msg
+                ), f"dict message must have 'role' and 'content', got keys: {list(msg.keys())}"
                 processed_messages.append(msg)
             elif isinstance(msg, Message):
                 images = msg.metadata.get(IMAGES)
@@ -190,12 +185,19 @@ class BaseLLM(ABC):
     def _default_system_msg(self):
         return self._system_msg(self.system_prompt)
 
-    def _update_costs(self, usage: Union[dict, BaseModel], model: str = None, local_calc_usage: bool = True):
+    def _update_costs(
+        self,
+        usage: Union[dict, BaseModel, None],
+        model: Optional[str] = None,
+        local_calc_usage: bool = True,
+    ):
         """update each request's token cost
         Args:
             model (str): model name or in some scenarios called endpoint
             local_calc_usage (bool): some models don't calculate usage, it will overwrite LLMConfig.calc_usage
         """
+        if usage is None:
+            return
         calc_usage = self.config.calc_usage and local_calc_usage
         model = model or self.pricing_plan
         model = model or self.model
@@ -226,6 +228,7 @@ class BaseLLM(ABC):
         Shared by aask (text channel) and aask_tool (native tool-use channel) so
         both build the conversation identically; only the completion call differs.
         """
+        message: list[dict]
         if system_msgs:
             message = self._system_msgs(system_msgs)
         else:
@@ -304,8 +307,7 @@ class BaseLLM(ABC):
             content = llm.get_choice_text(rsp) or ""
             raw_calls = llm.get_choice_tool_calls(rsp)
             tool_calls = [
-                LLMToolCall(id=c.get("id", ""), name=c["name"], arguments=c.get("arguments") or {})
-                for c in raw_calls
+                LLMToolCall(id=c.get("id", ""), name=c["name"], arguments=c.get("arguments") or {}) for c in raw_calls
             ]
             return LLMResponse(content=content, tool_calls=tool_calls)
 
@@ -358,7 +360,7 @@ class BaseLLM(ABC):
             reducer = self.context_reducer
             if reducer is None:
                 return False
-            target = int(TOKEN_MAX.get(self.model, 128000) * 0.8)
+            target = int(TOKEN_MAX.get(self.model or "", 128000) * 0.8)
             reduced = await reducer.reduce(state["messages"], target_tokens=target)
             if reduced is None:
                 return False
@@ -385,8 +387,7 @@ class BaseLLM(ABC):
             return _strategy
 
         transformers = {
-            action: _wrap_transformer(transform)
-            for action, transform in (self._message_transformers or {}).items()
+            action: _wrap_transformer(transform) for action, transform in (self._message_transformers or {}).items()
         }
 
         strategies = build_llm_strategies(
@@ -431,7 +432,7 @@ class BaseLLM(ABC):
         @retry(
             stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
             wait=wait_random_exponential(min=1, max=60),
-            after=after_log(logger, logger.level("WARNING").name),
+            after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
             retry=retry_if_exception(is_retryable),
             retry_error_callback=log_and_reraise,
             before_sleep=_before_sleep,
@@ -471,9 +472,7 @@ class BaseLLM(ABC):
                 )
                 raise
             await observe_event(
-                self._build_response_event(
-                    request_id, llm, result, (time.monotonic() - started) * 1000.0
-                )
+                self._build_response_event(request_id, llm, result, (time.monotonic() - started) * 1000.0)
             )
             return result
 
@@ -489,9 +488,7 @@ class BaseLLM(ABC):
             return ""
 
     @staticmethod
-    def _build_response_event(
-        request_id: str, llm: "BaseLLM", result, latency_ms: float
-    ) -> LLMResponseEvent:
+    def _build_response_event(request_id: str, llm: "BaseLLM", result, latency_ms: float) -> LLMResponseEvent:
         """Build an :class:`LLMResponseEvent` from a completed call.
 
         Pulls this call's token usage + USD cost off the cost tracker (set by
@@ -503,9 +500,7 @@ class BaseLLM(ABC):
         tool_calls: list = []
         if isinstance(result, LLMResponse):
             content = result.content or ""
-            tool_calls = [
-                {"id": c.id, "name": c.name, "arguments": c.arguments} for c in result.tool_calls
-            ]
+            tool_calls = [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in result.tool_calls]
         elif isinstance(result, str):
             content = result
         usage = None
@@ -543,7 +538,7 @@ class BaseLLM(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def _achat_completion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **kwargs):
+    async def _achat_completion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **kwargs) -> dict:
         """_achat_completion implemented by inherited class.
 
         ``**kwargs`` carries provider chat params (e.g. ``tools``/``tool_choice``
@@ -568,7 +563,9 @@ class BaseLLM(ABC):
     async def _achat_completion_stream(self, messages: list[dict], timeout: int = USE_CONFIG_TIMEOUT) -> str:
         """_achat_completion_stream implemented by inherited class"""
 
-    async def _achat_completion_stream_tool(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **chat_configs):
+    async def _achat_completion_stream_tool(
+        self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **chat_configs
+    ) -> dict:
         """Streaming counterpart to ``_achat_completion`` for the native tool channel.
 
         Streams the assistant text via ``log_llm_stream`` while accumulating any
@@ -583,7 +580,7 @@ class BaseLLM(ABC):
     @retry(
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         wait=wait_random_exponential(min=1, max=60),
-        after=after_log(logger, logger.level("WARNING").name),
+        after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),
         retry_error_callback=log_and_reraise,
     )
@@ -598,7 +595,7 @@ class BaseLLM(ABC):
 
     def get_choice_text(self, rsp: dict) -> str:
         """Required to provide the first text of choice"""
-        return rsp.get("choices")[0]["message"]["content"] or ""
+        return rsp["choices"][0]["message"]["content"] or ""
 
     def get_choice_delta_text(self, rsp: dict) -> str:
         """Required to provide the first text of stream choice"""
@@ -633,7 +630,7 @@ class BaseLLM(ABC):
         :return dict: return first function of choice, for exmaple,
             {'name': 'execute', 'arguments': '{\n  "language": "python",\n  "code": "print(\'Hello, World!\')"\n}'}
         """
-        return rsp.get("choices")[0]["message"]["tool_calls"][0]["function"]
+        return rsp["choices"][0]["message"]["tool_calls"][0]["function"]
 
     def get_choice_function_arguments(self, rsp: dict) -> dict:
         """Required to provide the first function arguments of choice.

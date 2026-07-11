@@ -1,4 +1,4 @@
-"""Tests for :mod:`metagpt.executor.tasks.bggraph.base_node`."""
+"""Tests for :mod:`mote.executor.tasks.bggraph.base_node`."""
 
 from __future__ import annotations
 
@@ -6,12 +6,10 @@ from typing import Annotated
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import BaseNode, BgGraph, From, GraphState, Stage, START, END
-from metagpt.executor.tasks.bggraph import GraphParamTypeError
-from metagpt.executor.tasks.types import BgTaskResult
+from mote.executor.tasks.bggraph import END, START, BaseNode, BgGraph, From, GraphParamTypeError, GraphState, Stage
+from mote.executor.tasks.types import BgTaskResult
 
 from .conftest import S
-
 
 # ---------------------------------------------------------------------------
 # Concrete test nodes
@@ -285,8 +283,8 @@ def test_from_marker_sets_source_for_signature_only_param():
 def test_from_marker_overrides_docstring_from_keeps_desc():
     """Non-empty Annotated From overrides docstring from; signature type wins; desc kept."""
     params = FromOverrideNode.get_params()
-    assert params["val"]["from"] == "b"          # From("b") overrides $input.x
-    assert params["val"]["type"] is int          # signature int over docstring str
+    assert params["val"]["from"] == "b"  # From("b") overrides $input.x
+    assert params["val"]["type"] is int  # signature int over docstring str
     assert params["val"]["desc"] == "described in docstring"
 
 
@@ -385,7 +383,7 @@ async def test_runtime_type_mismatch_raises():
 
     # Pydantic coerces "5" → 5 for int fields, but let's test with extra="allow"
     # by setting state directly
-    from metagpt.executor.tasks.bggraph.engine import _validate_node_params_runtime
+    from mote.executor.tasks.bggraph.engine import _validate_node_params_runtime
 
     state = BadState(x=0)
     object.__setattr__(state, "x", "not_an_int")  # bypass pydantic to force wrong type
@@ -408,7 +406,7 @@ async def test_runtime_type_ok_passes():
 
 async def test_runtime_none_value_skipped():
     """None values on state skip the isinstance check (not an error)."""
-    from metagpt.executor.tasks.bggraph.engine import _validate_node_params_runtime
+    from mote.executor.tasks.bggraph.engine import _validate_node_params_runtime
 
     class NullState(GraphState):
         x: int = 0
@@ -431,7 +429,7 @@ async def test_runtime_none_value_skipped():
 
 async def test_runtime_generic_type_validated():
     """TypeAdapter catches list[str] containing ints — deep generic validation."""
-    from metagpt.executor.tasks.bggraph.engine import _validate_node_params_runtime
+    from mote.executor.tasks.bggraph.engine import _validate_node_params_runtime
 
     class ListState(GraphState):
         items: list = []

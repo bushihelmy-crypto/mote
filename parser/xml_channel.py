@@ -3,21 +3,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.schema import AIMessage, CauseBy, UserMessage
-from metagpt.common.utils.role_zero_utils import parse_commands2
-from metagpt.common.base.command_channel import (
-    CommandChannel,
-    _collect_media,
-    _media_message,
-    join_command_outputs,
-)
-from metagpt.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
-from metagpt.common.prompt.refs import Sym
+from mote.common.base.command_channel import CommandChannel, _collect_media, _media_message, join_command_outputs
+from mote.common.logs import logger
+from mote.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
+from mote.common.prompt.refs import Sym
+from mote.common.schema import AIMessage, CauseBy, UserMessage
+from mote.common.utils.role_zero_utils import parse_commands2
 
 if TYPE_CHECKING:
-    from metagpt.common.base import BaseThinkEngine
-    from metagpt.common.interface import MessageStore
+    from mote.common.base import BaseThinkEngine
+    from mote.common.interface import MessageStore
 
 
 class XmlCommandChannel(CommandChannel):
@@ -48,9 +43,7 @@ class XmlCommandChannel(CommandChannel):
     def tool_specs(self, executor) -> Optional[list[dict]]:
         return None
 
-    async def iter_commands(
-        self, think_engine: "BaseThinkEngine", valid_names: set[str]
-    ) -> AsyncGenerator[dict, None]:
+    async def iter_commands(self, think_engine: "BaseThinkEngine", valid_names: set[str]) -> AsyncGenerator[dict, None]:
         if not think_engine.done:
             await think_engine.join()
         command_rsp = think_engine.result.content

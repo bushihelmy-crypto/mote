@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.config.layers import deep_merge
+from mote.common.config.layers import deep_merge
 
 
 def parse_override_value(raw: str) -> Any:

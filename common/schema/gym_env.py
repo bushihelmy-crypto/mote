@@ -6,7 +6,7 @@
 
 These types model the classic OpenAI Gym / Gymnasium episode interface
 (``reset`` / ``observe`` / ``step``) and are kept here, separate from the lean
-message-passing :class:`~metagpt.common.schema.env.BaseEnvironment`, so the
+message-passing :class:`~mote.common.schema.env.BaseEnvironment`, so the
 multi-agent control plane never carries RL baggage. :class:`GymEnvironment`
 extends ``BaseEnvironment`` with the RL methods; implement it only if you need
 ``reset``/``observe``/``step`` semantics.
@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.schema.env import BaseEnvironment
+from mote.common.schema.env import BaseEnvironment
 
 
 class BaseEnvActionType(IntEnum):

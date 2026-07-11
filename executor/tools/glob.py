@@ -26,18 +26,30 @@ from __future__ import annotations
 import asyncio
 import glob as _glob_mod
 import os
-from typing import ClassVar
+from typing import Callable, ClassVar
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
-from metagpt.common.const.tools import (
-    GLOB_DEFAULT_LIMIT as DEFAULT_LIMIT,
-    SEARCH_TIMEOUT,
-    VCS_DIRECTORIES_TO_EXCLUDE,
+from mote.common.const.tools import GLOB_DEFAULT_LIMIT as DEFAULT_LIMIT
+from mote.common.const.tools import SEARCH_TIMEOUT, VCS_DIRECTORIES_TO_EXCLUDE
+from mote.common.prompt.tools import GLOB_DESCRIPTION
+from mote.common.text import display_path
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._paths import base_cwd, resolve_path
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.grep import _find_ripgrep
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise/return site).
+_MSG_PATTERN_REQUIRED = "Error: 'pattern' argument is required."
+_MSG_DIR_NOT_FOUND = (
+    "Error: directory does not exist: {path}. The path should be absolute or "
+    "relative to the working directory ({base_cwd})."
 )
-from metagpt.executor.tools.grep import _find_ripgrep
-from metagpt.common.prompt.tools import GLOB_DESCRIPTION
+_MSG_NOT_A_DIRECTORY = "Error: path is not a directory: {path}"
+_MSG_SEARCH_TIMEOUT = "Error: search timed out after {seconds:.0f}s. Try a more specific path or pattern."
+_MSG_FIND_FAILED = "Error finding files: {error}"
+_MSG_NO_FILES = "No files found"
+_MSG_TRUNCATED = "(Results are truncated. Consider using a more specific path or pattern.)"
 
 
 @register_tool
@@ -51,6 +63,16 @@ class Glob(BaseTool):
     # Glob can list many paths; allow a higher cap before persisting (CC).
     max_result_size_chars: ClassVar[int] = 100_000
     description = GLOB_DESCRIPTION
+    # get_cwd is the stable base for the default search root + output
+    # relativization. Optional: unbound (no Role) falls back to the process cwd.
+    requires = ("get_cwd",)
+
+    # Injected from Role by bind(): Role.get_cwd.
+    get_cwd: Callable[[], str]
+
+    def _base_cwd(self) -> str:
+        """The stable base dir for default root / relativization (unbound: cwd)."""
+        return base_cwd(getattr(self, "get_cwd", None))
 
     async def call(
         self,
@@ -74,20 +96,15 @@ class Glob(BaseTool):
                 be a valid directory if provided.
         """
         if not pattern or not pattern.strip():
-            raise ToolError("Error: 'pattern' argument is required.")
+            raise ToolError(_MSG_PATTERN_REQUIRED)
 
-        search_root = (
-            os.path.abspath(os.path.expanduser(path.strip())) if path.strip() else os.getcwd()
-        )
+        base_cwd = self._base_cwd()
+        search_root = resolve_path(getattr(self, "get_cwd", None), path.strip()) if path.strip() else base_cwd
         if path.strip():
             if not os.path.exists(search_root):
-                raise ToolError(
-                    f"Error: directory does not exist: {path}. The path should "
-                    f"be absolute or relative to the current working directory "
-                    f"({os.getcwd()})."
-                )
+                raise ToolError(_MSG_DIR_NOT_FOUND.format(path=path, base_cwd=base_cwd))
             if not os.path.isdir(search_root):
-                raise ToolError(f"Error: path is not a directory: {path}")
+                raise ToolError(_MSG_NOT_A_DIRECTORY.format(path=path))
 
         rg = _find_ripgrep()
         try:
@@ -96,14 +113,11 @@ class Glob(BaseTool):
             else:
                 files = self._run_python(search_root, pattern)
         except TimeoutError:
-            raise ToolError(
-                f"Error: search timed out after {SEARCH_TIMEOUT:.0f}s. Try a more "
-                f"specific path or pattern."
-            )
+            raise ToolError(_MSG_SEARCH_TIMEOUT.format(seconds=SEARCH_TIMEOUT))
         except Exception as e:  # noqa: BLE001 — surface the failure to the model
-            raise ToolError(f"Error finding files: {e}")
+            raise ToolError(_MSG_FIND_FAILED.format(error=e))
 
-        return self._format(files)
+        return self._format(files, base_cwd)
 
     async def _run_ripgrep(self, rg: str, root: str, pattern: str) -> list[str]:
         """List files under root matching pattern via ripgrep, return abs paths.
@@ -164,8 +178,9 @@ class Glob(BaseTool):
         return out
 
     @staticmethod
-    def _format(files: list[str]) -> str:
+    def _format(files: list[str], cwd: str) -> str:
         """Sort by mtime (most recent first), truncate, relativize, render."""
+
         def mtime(p: str) -> float:
             try:
                 return os.stat(p).st_mtime
@@ -176,17 +191,9 @@ class Glob(BaseTool):
         truncated = len(ordered) > DEFAULT_LIMIT
         limited = ordered[:DEFAULT_LIMIT]
         if not limited:
-            return "No files found"
+            return _MSG_NO_FILES
 
-        cwd = os.getcwd()
-        rels = []
-        for p in limited:
-            try:
-                rels.append(os.path.relpath(p, cwd))
-            except ValueError:
-                rels.append(p)
+        rels = [display_path(p, cwd) for p in limited]
         if truncated:
-            rels.append(
-                "(Results are truncated. Consider using a more specific path or pattern.)"
-            )
+            rels.append(_MSG_TRUNCATED)
         return "\n".join(rels)

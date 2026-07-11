@@ -1,6 +1,6 @@
 """Scorers init."""
 
-from metagpt.memory.procedural_memory.scorers.base import BaseScorer
-from metagpt.memory.procedural_memory.scorers.simple import SimpleScorer
+from mote.memory.procedural_memory.scorers.base import BaseScorer
+from mote.memory.procedural_memory.scorers.simple import SimpleScorer
 
 __all__ = ["BaseScorer", "SimpleScorer"]

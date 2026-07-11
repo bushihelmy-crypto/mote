@@ -20,15 +20,11 @@ This is a LEAF package: it imports only ``typing`` and (under TYPE_CHECKING) the
 ``Message`` type, so it can be imported from anywhere without risking a cycle.
 """
 
-from metagpt.common.interface.background_pool import BackgroundPool
-from metagpt.common.interface.browser_state import BrowserStateStore
-from metagpt.common.interface.child_role import (
-    ChildRoleBuilder,
-    build_child_role,
-    register_child_role_builder,
-)
-from metagpt.common.interface.context_reducer import ContextReducer
-from metagpt.common.interface.event_subscriber import (
+from mote.common.interface.background_pool import BackgroundPool
+from mote.common.interface.browser_state import BrowserStateStore
+from mote.common.interface.child_role import ChildRoleBuilder, build_child_role, register_child_role_builder
+from mote.common.interface.context_reducer import ContextReducer
+from mote.common.interface.event_subscriber import (
     DEFAULT_PRIORITY,
     DEFAULT_STAGE,
     DURABLE,
@@ -45,17 +41,17 @@ from metagpt.common.interface.event_subscriber import (
     ObserverPriority,
     SyncObserver,
 )
-from metagpt.common.interface.file_snapshot import FileSnapshotStore
-from metagpt.common.interface.hook_runner import HookRunner
-from metagpt.common.interface.kernel_state import KernelStateStore
-from metagpt.common.interface.llm_client import LLMClient
-from metagpt.common.interface.message_activity import MessageActivity
-from metagpt.common.interface.message_sink import MessageSink
-from metagpt.common.interface.message_store import MessageStore
-from metagpt.common.interface.request_assembler import RequestAssembler
-from metagpt.common.interface.resource_loader import ResourceProvider
-from metagpt.common.interface.terminal_state import TerminalStateStore
-from metagpt.common.interface.turn_context import (
+from mote.common.interface.file_snapshot import FileSnapshotStore
+from mote.common.interface.hook_runner import HookRunner
+from mote.common.interface.kernel_state import KernelStateStore
+from mote.common.interface.llm_client import LLMClient
+from mote.common.interface.message_activity import MessageActivity
+from mote.common.interface.message_sink import MessageSink
+from mote.common.interface.message_store import MessageStore
+from mote.common.interface.request_assembler import RequestAssembler
+from mote.common.interface.resource_loader import ResourceProvider
+from mote.common.interface.terminal_state import TerminalStateStore
+from mote.common.interface.turn_context import (
     DEFAULT_TURN_CONTEXT_PRIORITY,
     EphemeralContextSource,
     TurnContextPriority,

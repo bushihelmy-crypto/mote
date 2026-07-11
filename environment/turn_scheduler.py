@@ -27,10 +27,10 @@ import asyncio
 from contextlib import nullcontext
 from typing import Awaitable, Callable, ContextManager, Dict, Optional
 
-from metagpt.common.logs import logger
-from metagpt.environment.limiter import AgentExecutionLimiter
-from metagpt.environment.mailbox import DeliveryMode
-from metagpt.environment.runtime import AgentRuntime
+from mote.common.logs import logger
+from mote.environment.limiter import AgentExecutionLimiter
+from mote.environment.mailbox import DeliveryMode
+from mote.environment.runtime import AgentRuntime
 
 
 class EventDrivenScheduler:

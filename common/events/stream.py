@@ -4,7 +4,7 @@
 LLM stream emission.
 
 Streamed LLM tokens are emitted onto the unified agent event bus as
-:class:`~metagpt.common.events.types.LLMStreamDeltaEvent` observation events.
+:class:`~mote.common.events.types.LLMStreamDeltaEvent` observation events.
 Whoever wants to mirror them live (the REPL renderer) or forward them (the web
 reporter) subscribes to the bus — there is no process-global sink anymore, so
 screen and disk can no longer diverge.
@@ -22,8 +22,8 @@ event-bus concern: it depends only on ``events`` primitives. Keeping it here let
 
 from __future__ import annotations
 
-from metagpt.common.events.context import observe_event_sync
-from metagpt.common.events.types import LLMStreamDeltaEvent
+from mote.common.events.context import observe_event_sync
+from mote.common.events.types import LLMStreamDeltaEvent
 
 
 def log_llm_stream(msg):

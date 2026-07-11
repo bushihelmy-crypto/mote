@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 def _event_types(role):
     """Collect the rollout event ``type`` values for a role's session."""
-    from metagpt.session import SessionLog
+    from mote.session import SessionLog
 
     log = SessionLog(role.state.session_id)
     return [rec["type"] for rec in log.iter_raw()]
@@ -36,7 +36,7 @@ async def test_run_writes_rollout(make_role, tmp_path):
 
     await role.run(with_message="make a.txt")
 
-    from metagpt.session import SessionLog
+    from mote.session import SessionLog
 
     log = SessionLog(role.state.session_id)
     assert log.exists()
@@ -61,8 +61,8 @@ async def test_resume_rebuilds_history(make_role, context, tmp_path):
 
     # A brand-new Role pinned to the same session_id rebuilds the history from
     # the rollout, without re-running anything.
-    from metagpt.roles import Role
-    from metagpt.roles.role_schema import RoleSchema
+    from mote.roles import Role
+    from mote.roles.role_schema import RoleSchema
 
     revived = Role(role_schema=RoleSchema(name="Tester", tools=["Write"]), context=context)
     revived.state.session_id = sid
@@ -76,8 +76,8 @@ async def test_resume_rebuilds_history(make_role, context, tmp_path):
 
 
 async def test_resume_without_log_returns_false(context):
-    from metagpt.roles import Role
-    from metagpt.roles.role_schema import RoleSchema
+    from mote.roles import Role
+    from mote.roles.role_schema import RoleSchema
 
     role = Role(role_schema=RoleSchema(name="Ghost"), context=context)
     assert role.resume_session() is False
@@ -100,7 +100,7 @@ async def test_fork_branches_independent_child(make_role, tmp_path):
     assert child.state.parent_session_id == parent_sid
     assert child.state.session_id != parent_sid
 
-    from metagpt.session import SessionLog
+    from mote.session import SessionLog
 
     assert SessionLog(child.state.session_id).exists()
 
@@ -148,7 +148,7 @@ async def test_resume_then_continue_running(make_role, context, tmp_path):
 
 async def test_fork_child_runs_independently(make_role, tmp_path):
     """A forked child can run new work without disturbing the parent's log."""
-    from metagpt.session import SessionLog
+    from mote.session import SessionLog
 
     p_file = os.path.join(str(tmp_path), "p.txt")
     role = make_role(
@@ -191,7 +191,7 @@ async def test_list_sessions_sees_run(make_role, tmp_path, redirect_sessions):
     )
     await role.run(with_message="go")
 
-    from metagpt.session import list_sessions
+    from mote.session import list_sessions
 
     infos = list_sessions(str(redirect_sessions))
     ids = [i.session_id for i in infos]

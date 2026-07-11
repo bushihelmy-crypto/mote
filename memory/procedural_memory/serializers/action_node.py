@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Type
+from typing import Type
 
-# Import ActionNode only for type checking to avoid circular imports
-if TYPE_CHECKING:
-    from metagpt.common.utils.action_node import ActionNode
-
-from metagpt.common.utils.action_node import ActionNode
-from metagpt.memory.procedural_memory.serializers.simple import SimpleSerializer
+from mote.common.utils.action_node import ActionNode
+from mote.memory.procedural_memory.serializers.simple import SimpleSerializer
 
 
 class ActionNodeSerializer(SimpleSerializer):
@@ -30,6 +26,8 @@ class ActionNodeSerializer(SimpleSerializer):
                 return self.json_data
 
         action_node = ActionNode(key="", expected_type=Type[str], instruction="", example="")
-        action_node.instruct_content = InstructContent(resp)
+        # InstructContent is a minimal duck type exposing only model_dump_json (the
+        # sole method the resp path calls); the field is declared BaseModel.
+        action_node.instruct_content = InstructContent(resp)  # type: ignore[assignment]
 
         return action_node

@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.compress.registry.lookup_compressor``."""
+"""Unit tests for ``mote.executor.compress.registry.lookup_compressor``."""
 from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.compress.cargo import CargoCompressor
-from metagpt.executor.compress.git import GitCompressor
-from metagpt.executor.compress.pip import PipCompressor
-from metagpt.executor.compress.pytest import PytestCompressor
-from metagpt.executor.compress.registry import lookup_compressor
-from metagpt.executor.compress.ruff import RuffCompressor
+from mote.executor.compress.cargo import CargoCompressor
+from mote.executor.compress.git import GitCompressor
+from mote.executor.compress.pip import PipCompressor
+from mote.executor.compress.pytest import PytestCompressor
+from mote.executor.compress.registry import lookup_compressor
+from mote.executor.compress.ruff import RuffCompressor
 
 
 class TestFullPrefixRouting:

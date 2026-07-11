@@ -10,6 +10,8 @@ ref3: https://github.com/Significant-Gravitas/Auto-GPT/blob/master/autogpt/llm/t
 ref4: https://github.com/hwchase17/langchain/blob/master/langchain/chat_models/openai.py
 ref5: https://ai.google.dev/models/gemini
 """
+from typing import Optional
+
 import tiktoken
 from loguru import logger
 
@@ -71,7 +73,6 @@ TOKEN_COSTS = {
     "deepseek-chat": {"prompt": 0.00014, "completion": 0.00028},
     "deepseek-coder": {"prompt": 0.00014, "completion": 0.00028},
 }
-
 
 
 FIREWORKS_GRADE_TOKEN_COSTS = {
@@ -144,8 +145,9 @@ TOKEN_MAX = {
 }
 
 
-def count_message_tokens(messages, model="gpt-3.5-turbo-0125"):
+def count_message_tokens(messages, model: Optional[str] = "gpt-3.5-turbo-0125"):
     """Return the number of tokens used by a list of messages."""
+    model = model or "gpt-3.5-turbo-0125"
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
@@ -232,7 +234,7 @@ def count_message_tokens(messages, model="gpt-3.5-turbo-0125"):
     return int(num_tokens)
 
 
-def count_string_tokens(string: str, model_name: str) -> int:
+def count_string_tokens(string: str, model_name: Optional[str]) -> int:
     """
     Returns the number of tokens in a text string.
 
@@ -243,6 +245,7 @@ def count_string_tokens(string: str, model_name: str) -> int:
     Returns:
         int: The number of tokens in the text string.
     """
+    model_name = model_name or "gpt-3.5-turbo-0125"
     try:
         encoding = tiktoken.encoding_for_model(model_name)
     except KeyError:
@@ -256,7 +259,7 @@ def count_string_tokens(string: str, model_name: str) -> int:
         return len(encoding.encode(string, allowed_special="all"))
 
 
-def get_max_completion_tokens(messages: list[dict], model: str, default: int) -> int:
+def get_max_completion_tokens(messages: list[dict], model: Optional[str], default: int) -> int:
     """Calculate the maximum number of completion tokens for a given model and list of messages.
 
     Args:

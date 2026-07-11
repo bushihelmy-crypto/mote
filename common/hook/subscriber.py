@@ -35,16 +35,10 @@ hook package's import graph minimal.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
-from metagpt.common.events.outcomes import (
-    CompactOutcome,
-    PromptOutcome,
-    ToolCallOutcome,
-    ToolResultOutcome,
-    TurnOutcome,
-)
-from metagpt.common.events.types import (
+from mote.common.events.outcomes import CompactOutcome, PromptOutcome, ToolCallOutcome, ToolResultOutcome, TurnOutcome
+from mote.common.events.types import (
     FILE_CHANGED,
     POST_COMPACT,
     POST_TOOL_USE,
@@ -54,8 +48,8 @@ from metagpt.common.events.types import (
     TURN_END,
     USER_PROMPT_SUBMIT,
 )
-from metagpt.common.hook.types import HookOutcome
-from metagpt.common.interface.event_subscriber import ControlOutcome, ControlStage, ControlSubscriber
+from mote.common.hook.types import HookOutcome
+from mote.common.interface.event_subscriber import ControlOutcome, ControlStage, ControlSubscriber
 
 
 @dataclass(frozen=True)
@@ -69,7 +63,7 @@ class _HookBinding:
     """
 
     hook_name: str
-    payload: Callable[[object], dict]
+    payload: Callable[[Any], dict]
     project: Optional[Callable[[HookOutcome], ControlOutcome]] = None
 
 

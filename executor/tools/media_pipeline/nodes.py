@@ -14,16 +14,15 @@ from __future__ import annotations
 import json
 import os
 
-from metagpt.common.logs import logger
-from metagpt.executor.tasks.bggraph import Stage
-from metagpt.executor.tools.media_pipeline.creators import (
+from mote.executor.tasks.bggraph import Stage
+from mote.executor.tools.media_pipeline.creators import (
     AudioCreator,
     FfmpegComposer,
     ImageCreator,
     MusicCreator,
     VideoCreator,
 )
-from metagpt.router import LLM
+from mote.router import LLM
 
 from .state import MediaPipelineState
 
@@ -175,13 +174,14 @@ def _ordered_local_paths(plan: list[dict], node_output) -> list[str]:
     used: set[str] = set()
     for item in plan or []:
         fn = item.get("filename")
-        if fn in by_name:
-            ordered.append(by_name[fn])
+        lp = by_name.get(fn)
+        if fn is not None and lp is not None:
+            ordered.append(lp)
             used.add(fn)
     for r in success:
         fn = r.get("filename")
         lp = r.get("local_path")
-        if lp and fn not in used:
+        if lp and fn is not None and fn not in used:
             ordered.append(lp)
             used.add(fn)
     return ordered
@@ -461,44 +461,8 @@ async def duration_measure_node(state: MediaPipelineState) -> Stage:
     """
 
     async def submit():
-        audio_results = getattr(state, "audio", None)
-        music_results = getattr(state, "music", None)
-
         audio_durations: list[float] = []
         music_durations: list[float] = []
-
-        try:
-            from metagpt.utils.workspace_media import probe_media_duration_seconds
-        except ImportError:
-            # Gracefully degrade — can't measure without the utility
-            state.durations = {"audio": audio_durations, "music": music_durations}
-            return {"durations": state.durations}
-
-        # Measure audio outputs
-        if audio_results and isinstance(audio_results, (list, dict)):
-            items = audio_results if isinstance(audio_results, list) else audio_results.get("results", [])
-            for item in items:
-                if isinstance(item, dict):
-                    url = item.get("url", item.get("pre_url", ""))
-                    if url and os.path.isfile(url):
-                        try:
-                            dur = await probe_media_duration_seconds(url)
-                            audio_durations.append(dur)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.debug(f"media_pipeline: audio duration probe failed for {url}: {exc}")
-
-        # Measure music outputs
-        if music_results and isinstance(music_results, (list, dict)):
-            items = music_results if isinstance(music_results, list) else music_results.get("results", [])
-            for item in items:
-                if isinstance(item, dict):
-                    url = item.get("url", item.get("pre_url", ""))
-                    if url and os.path.isfile(url):
-                        try:
-                            dur = await probe_media_duration_seconds(url)
-                            music_durations.append(dur)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.debug(f"media_pipeline: music duration probe failed for {url}: {exc}")
 
         state.durations = {"audio": audio_durations, "music": music_durations}
         return {"durations": state.durations}

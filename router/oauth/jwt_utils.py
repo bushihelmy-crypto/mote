@@ -12,8 +12,8 @@ import base64
 import json
 from typing import Dict
 
-from metagpt.common.exception import JWTDecodeError  # noqa: F401
-from metagpt.router.oauth.models import TokenClaims
+from mote.common.exception import JWTDecodeError  # noqa: F401
+from mote.router.oauth.models import TokenClaims
 
 
 def _b64url_decode(segment: str) -> bytes:

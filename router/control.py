@@ -15,8 +15,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from metagpt.common.exception import RouterControlValidationError  # noqa: F401
-from metagpt.router.schema import ModelCard
+from mote.common.exception import RouterControlValidationError  # noqa: F401
+from mote.router.schema import ModelCard
 
 # Zero turns means no turn-count cap; the hold expires on idle TTL only.
 DEFAULT_HOLD_TURNS = 0

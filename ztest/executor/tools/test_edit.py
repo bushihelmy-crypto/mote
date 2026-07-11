@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Edit tool (``metagpt.executor.tools.edit``).
+"""Tests for the Edit tool (``mote.executor.tools.edit``).
 
 Covers exact string replacement, replace_all, the forgiving match cascade (curly
 quotes + tab/space), create-via-empty-old_string, the read-before-edit guard,
@@ -13,8 +13,8 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.edit import (
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.edit import (
     Edit,
     _apply_edit,
     _find_actual_string,
@@ -23,7 +23,7 @@ from metagpt.executor.tools.edit import (
     _preserve_quote_style,
 )
 
-from .conftest import CapRole, bind, run, write_file, mark_read
+from .conftest import CapRole, bind, mark_read, run, write_file
 
 
 def _edit(tool: Edit, **kwargs):
@@ -64,7 +64,7 @@ class TestExactReplace:
     def test_replace_all(self, workspace):
         tool, p, _ = _ready(workspace, "a.py", "a\na\na\n")
         out = _edit(tool, file_path=p, old_string="a", new_string="b", replace_all=True)
-        assert "All 3 occurrence(s)" in out.output
+        assert "All 3 occurrences were" in out.output
         assert open(p, encoding="utf-8").read() == "b\nb\nb\n"
 
     def test_string_not_found_raises(self, workspace):
@@ -191,3 +191,19 @@ class TestHelpers:
         # Matched via curly normalization => new_string's double quotes go curly.
         result = _preserve_quote_style('"x"', "\u201cx\u201d", 'say "hi"')
         assert "\u201c" in result or "\u201d" in result
+
+
+class TestCwdResolution:
+    def test_create_relative_resolves_against_role_cwd(self, workspace, tmp_path):
+        # An empty old_string creates the file; a bound Edit resolves the relative
+        # path against the ROLE's stable cwd, not the process cwd.
+        sub = tmp_path / "role_dir"
+        sub.mkdir()
+        role = CapRole(cwd=str(sub))
+        _edit(bind(Edit(), role), file_path="fresh.txt", old_string="", new_string="hi\n")
+        assert os.path.isfile(sub / "fresh.txt")
+        assert not os.path.isfile(workspace / "fresh.txt")
+
+    def test_create_relative_unbound_uses_process_cwd(self, workspace):
+        _edit(Edit(), file_path="unbound.txt", old_string="", new_string="ok\n")
+        assert os.path.isfile(workspace / "unbound.txt")

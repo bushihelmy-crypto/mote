@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""End-to-end multi-agent: real Roles driven inside ``MGXEnv``.
+"""End-to-end multi-agent: real Roles driven inside ``MoteEnv``.
 
 Where ``ztest/environment/test_integration.py`` proves the control-plane
 plumbing with *fake* roles, these tests drop a *real* ``Role`` (scripted LLM +
@@ -14,14 +14,14 @@ import os
 
 import pytest
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.environment.mgx.mgx_env import MGXEnv
+from mote.common.schema.messages import UserMessage
+from mote.environment.mote.mote_env import MoteEnv
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_real_role_processes_routed_message(make_role, tmp_path):
-    """A message routed through MGXEnv reaches a real Role and runs its tools."""
+    """A message routed through MoteEnv reaches a real Role and runs its tools."""
     target = os.path.join(str(tmp_path), "env.txt")
     role = make_role(
         name="worker",
@@ -30,7 +30,7 @@ async def test_real_role_processes_routed_message(make_role, tmp_path):
         turns=[[("Write", {"file_path": target, "content": "from-env"})], "done"],
     )
 
-    env = MGXEnv()
+    env = MoteEnv()
     env.add_role(role)
 
     env.publish_message(UserMessage(content="please write env.txt", send_to={"worker"}))
@@ -54,7 +54,7 @@ async def test_unaddressed_role_stays_idle(make_role, tmp_path):
         turns=[[("Write", {"file_path": target, "content": "nope"})], "done"],
     )
 
-    env = MGXEnv()
+    env = MoteEnv()
     env.add_role(role)
 
     # Addressed to a non-existent recipient -> not delivered here.
@@ -82,7 +82,7 @@ async def test_two_real_roles_scheduled_independently(make_role, tmp_path):
         turns=[[("Write", {"file_path": b_file, "content": "B"})], "done"],
     )
 
-    env = MGXEnv()
+    env = MoteEnv()
     env.add_role(role_a)
     env.add_role(role_b)
 

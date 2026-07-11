@@ -27,8 +27,9 @@ from __future__ import annotations
 import os
 from typing import ClassVar, List, Tuple
 
-from metagpt.common.const.tools import MAX_CONTENT_SIZE_BYTES
-from metagpt.executor.dependency._apply_patch import (
+from mote.common.const.tools import MAX_CONTENT_SIZE_BYTES
+from mote.common.prompt.tools import APPLY_PATCH_GRAMMAR
+from mote.executor.dependency._apply_patch import (
     AddFile,
     ApplyPatchError,
     DeleteFile,
@@ -37,10 +38,34 @@ from metagpt.executor.dependency._apply_patch import (
     apply_update,
     parse_patch,
 )
-from metagpt.executor.dependency._file_base import FileMutatingTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import FileChange, ToolError, ToolResult
-from metagpt.common.prompt.tools import APPLY_PATCH_GRAMMAR
+from mote.executor.dependency._file_base import FileMutatingTool
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import FileChange, ToolError, ToolResult
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+# The ``_summary`` assembly fragments (``A/M/D`` rows, counts) stay inline.
+_MSG_INPUT_REQUIRED = "Error: 'input' (the patch text) is required."
+_MSG_PARSE_FAILED = "Error: failed to parse patch: {error}"
+_MSG_NO_OPERATIONS = "Error: the patch contained no file operations."
+_MSG_CANNOT_DELETE = "Error: cannot delete '{path}': {error}"
+_MSG_CANNOT_REMOVE_ORIGINAL = "Error: cannot remove original '{path}': {error}"
+_MSG_CANNOT_ADD = (
+    "Error: cannot add '{path}': a file already exists there with content. Use " "an Update File hunk to edit it."
+)
+_MSG_DELETE_NOT_EXIST = "Error: cannot delete '{path}': file does not exist."
+_MSG_UPDATE_NOT_EXIST = "Error: cannot update '{path}': file does not exist."
+_MSG_MOVE_DEST_EXISTS = "Error: cannot move '{path}' to '{dest}': the destination already exists."
+_MSG_UPDATE_NOT_UTF8 = "Error: cannot update '{path}': file is not valid UTF-8 text."
+_MSG_CANNOT_READ = "Error: cannot read '{path}': {error}"
+_MSG_CANNOT_APPLY = "Error: cannot apply update to '{path}': {error}"
+_MSG_IS_DIRECTORY = "Error: '{path}' is a directory, not a file."
+_MSG_IS_NOTEBOOK = "Error: '{path}' is a Jupyter notebook. Use a notebook edit tool to modify " ".ipynb files."
+_MSG_RESULT_TOO_LARGE = (
+    "Error: resulting content for '{path}' ({size} bytes) exceeds the maximum " "allowed size ({max_size} bytes)."
+)
+_MSG_CANNOT_MKDIR = "Error: cannot create parent directory for '{path}': {error}"
+_MSG_CANNOT_WRITE = "Error: cannot write '{path}': {error}"
 
 
 @register_tool
@@ -90,15 +115,15 @@ class ApplyPatch(FileMutatingTool):
                 whole patch is rejected with no files written.
         """
         if not isinstance(input, str) or not input.strip():
-            raise ToolError("Error: 'input' (the patch text) is required.")
+            raise ToolError(_MSG_INPUT_REQUIRED)
 
         try:
             hunks = parse_patch(input)
         except ApplyPatchError as e:
-            raise ToolError(f"Error: failed to parse patch: {e}")
+            raise ToolError(_MSG_PARSE_FAILED.format(error=e))
 
         if not hunks:
-            raise ToolError("Error: the patch contained no file operations.")
+            raise ToolError(_MSG_NO_OPERATIONS)
 
         # --- Phase 1: resolve + validate + compute (no writes) ---
         plans: List[dict] = []
@@ -131,7 +156,7 @@ class ApplyPatch(FileMutatingTool):
                 try:
                     os.unlink(plan["full"])
                 except OSError as e:
-                    raise ToolError(f"Error: cannot delete '{plan['display']}': {e}")
+                    raise ToolError(_MSG_CANNOT_DELETE.format(path=plan["display"], error=e))
                 deleted.append(plan["display"])
                 changes.append(FileChange(path=plan["full"], old=plan["old"], new=""))
             elif op == "update":
@@ -141,9 +166,7 @@ class ApplyPatch(FileMutatingTool):
                     try:
                         os.unlink(plan["src"])
                     except OSError as e:
-                        raise ToolError(
-                            f"Error: cannot remove original '{plan['display']}': {e}"
-                        )
+                        raise ToolError(_MSG_CANNOT_REMOVE_ORIGINAL.format(path=plan["display"], error=e))
                     self._refresh_read_state(plan["dest"])
                     updated.append((plan["display"], f" -> {plan['move_display']}"))
                 else:
@@ -168,10 +191,7 @@ class ApplyPatch(FileMutatingTool):
             except (OSError, UnicodeDecodeError):
                 existing = "non-empty"  # unreadable → treat as non-empty, refuse
             if existing.strip() != "":
-                raise ToolError(
-                    f"Error: cannot add '{hunk.path}': a file already exists there "
-                    f"with content. Use an Update File hunk to edit it."
-                )
+                raise ToolError(_MSG_CANNOT_ADD.format(path=hunk.path))
         self._guard_size(hunk.path, hunk.contents)
         return {"op": "add", "display": hunk.path, "full": full, "content": hunk.contents}
 
@@ -179,7 +199,7 @@ class ApplyPatch(FileMutatingTool):
         full = self._resolve(hunk.path)
         self._reject_special(hunk.path, full)
         if not os.path.exists(full):
-            raise ToolError(f"Error: cannot delete '{hunk.path}': file does not exist.")
+            raise ToolError(_MSG_DELETE_NOT_EXIST.format(path=hunk.path))
         self._check_read_before_write(hunk.path, full, verb="deleting")
         # Read the pre-delete content so the change is a structured fact (old→"").
         try:
@@ -193,7 +213,7 @@ class ApplyPatch(FileMutatingTool):
         src = self._resolve(hunk.path)
         self._reject_special(hunk.path, src)
         if not os.path.exists(src):
-            raise ToolError(f"Error: cannot update '{hunk.path}': file does not exist.")
+            raise ToolError(_MSG_UPDATE_NOT_EXIST.format(path=hunk.path))
         self._check_read_before_write(hunk.path, src, verb="editing")
 
         dest = src
@@ -203,10 +223,7 @@ class ApplyPatch(FileMutatingTool):
             dest = self._resolve(hunk.move_path)
             self._reject_special(hunk.move_path, dest)
             if os.path.exists(dest):
-                raise ToolError(
-                    f"Error: cannot move '{hunk.path}' to '{hunk.move_path}': "
-                    f"the destination already exists."
-                )
+                raise ToolError(_MSG_MOVE_DEST_EXISTS.format(path=hunk.path, dest=hunk.move_path))
             moved = True
             move_display = hunk.move_path
 
@@ -215,15 +232,15 @@ class ApplyPatch(FileMutatingTool):
             with open(src, "r", encoding="utf-8", newline="") as f:
                 raw = f.read()
         except UnicodeDecodeError:
-            raise ToolError(f"Error: cannot update '{hunk.path}': file is not valid UTF-8 text.")
+            raise ToolError(_MSG_UPDATE_NOT_UTF8.format(path=hunk.path))
         except OSError as e:
-            raise ToolError(f"Error: cannot read '{hunk.path}': {e}")
+            raise ToolError(_MSG_CANNOT_READ.format(path=hunk.path, error=e))
 
         content = raw.replace("\r\n", "\n")
         try:
             new_content = apply_update(content, hunk.chunks)
         except ApplyPatchError as e:
-            raise ToolError(f"Error: cannot apply update to '{hunk.path}': {e}")
+            raise ToolError(_MSG_CANNOT_APPLY.format(path=hunk.path, error=e))
 
         self._guard_size(hunk.path, new_content)
         return {
@@ -242,28 +259,22 @@ class ApplyPatch(FileMutatingTool):
     # Shared low-level helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _resolve(path: str) -> str:
-        return os.path.abspath(os.path.expanduser(path.strip()))
+    def _resolve(self, path: str) -> str:
+        """Resolve a patch path against the stable working directory."""
+        return self._resolve_path(path.strip())
 
     @staticmethod
     def _reject_special(display_path: str, full_path: str) -> None:
         if os.path.isdir(full_path):
-            raise ToolError(f"Error: '{display_path}' is a directory, not a file.")
+            raise ToolError(_MSG_IS_DIRECTORY.format(path=display_path))
         if full_path.endswith(".ipynb"):
-            raise ToolError(
-                f"Error: '{display_path}' is a Jupyter notebook. Use a notebook "
-                f"edit tool to modify .ipynb files."
-            )
+            raise ToolError(_MSG_IS_NOTEBOOK.format(path=display_path))
 
     @staticmethod
     def _guard_size(display_path: str, content: str) -> None:
         size = len(content.encode("utf-8"))
         if size > MAX_CONTENT_SIZE_BYTES:
-            raise ToolError(
-                f"Error: resulting content for '{display_path}' ({size} bytes) "
-                f"exceeds the maximum allowed size ({MAX_CONTENT_SIZE_BYTES} bytes)."
-            )
+            raise ToolError(_MSG_RESULT_TOO_LARGE.format(path=display_path, size=size, max_size=MAX_CONTENT_SIZE_BYTES))
 
     def _do_write(self, full_path: str, content: str, line_ending: str) -> None:
         """Snapshot then write ``content`` to ``full_path``, honoring line ending.
@@ -277,7 +288,7 @@ class ApplyPatch(FileMutatingTool):
             try:
                 os.makedirs(parent, exist_ok=True)
             except OSError as e:
-                raise ToolError(f"Error: cannot create parent directory for '{full_path}': {e}")
+                raise ToolError(_MSG_CANNOT_MKDIR.format(path=full_path, error=e))
         normalized = content
         if line_ending != "\n":
             normalized = content.replace("\r\n", "\n").replace("\n", line_ending)
@@ -285,7 +296,7 @@ class ApplyPatch(FileMutatingTool):
             with open(full_path, "w", encoding="utf-8", newline="") as f:
                 f.write(normalized)
         except OSError as e:
-            raise ToolError(f"Error: cannot write '{full_path}': {e}")
+            raise ToolError(_MSG_CANNOT_WRITE.format(path=full_path, error=e))
 
     @staticmethod
     def _summary(
@@ -300,8 +311,6 @@ class ApplyPatch(FileMutatingTool):
             lines.append(f"  M {display}{suffix}")
         for path in deleted:
             lines.append(f"  D {path}")
-        counts = (
-            f"{len(added)} added, {len(updated)} updated, {len(deleted)} deleted"
-        )
+        counts = f"{len(added)} added, {len(updated)} updated, {len(deleted)} deleted"
         lines.append(f"({counts})")
         return "\n".join(lines)

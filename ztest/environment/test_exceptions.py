@@ -4,7 +4,7 @@
 
 import pytest
 
-from metagpt.environment.exceptions import (
+from mote.environment.exceptions import (
     AgentControlError,
     AgentLimitReached,
     AgentNotFound,

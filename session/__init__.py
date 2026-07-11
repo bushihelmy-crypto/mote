@@ -11,7 +11,8 @@ resume/list. Core pieces:
   ``SessionRecorder`` sink injected into ``ContextManager``).
 """
 
-from metagpt.session.events import (
+from mote.session.browser_state import BrowserStateRecorder
+from mote.session.events import (
     BrowserStateEvent,
     CompactedEvent,
     FileSnapshotEvent,
@@ -22,22 +23,16 @@ from metagpt.session.events import (
     TerminalStateEvent,
     TurnContextEvent,
 )
-from metagpt.session.fork import fork
-from metagpt.session.history import (
-    SnapshotEntry,
-    diff_snapshot,
-    file_history,
-    restore,
-)
-from metagpt.session.listing import SessionInfo, list_sessions
-from metagpt.session.log import SessionLog
-from metagpt.session.recall import body_for_tool_call
-from metagpt.session.replay import ReplayResult, replay
-from metagpt.session.snapshot import BlobStore, FileSnapshotRecorder
-from metagpt.session.subscribers import RecorderSubscriber
-from metagpt.session.terminal_state import TerminalStateRecorder
-from metagpt.session.kernel_state import KernelStateRecorder
-from metagpt.session.browser_state import BrowserStateRecorder
+from mote.session.fork import fork
+from mote.session.history import SnapshotEntry, diff_snapshot, file_history, restore
+from mote.session.kernel_state import KernelStateRecorder
+from mote.session.listing import SessionInfo, list_sessions
+from mote.session.log import SessionLog
+from mote.session.recall import body_for_tool_call
+from mote.session.replay import ReplayResult, replay
+from mote.session.snapshot import BlobStore, FileSnapshotRecorder
+from mote.session.subscribers import RecorderSubscriber
+from mote.session.terminal_state import TerminalStateRecorder
 
 __all__ = [
     "SessionLog",

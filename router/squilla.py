@@ -5,11 +5,11 @@
 This is the capstone of the opensquilla port. It reproduces opensquilla's
 end-to-end routing decision pipeline and drives it from the **real** Phase-3 ML
 inference core (TF-IDF+SVD ⊕ BGE features → LightGBM ⊕ MLP probability ensemble),
-falling back to MetaGPT's deterministic heuristic complexity scorer when the
+falling back to Mote's deterministic heuristic complexity scorer when the
 model bundle or its heavy optional deps are missing.
 
 Both paths converge on opensquilla's single authoritative post-processing
-pipeline (:func:`metagpt.router.ml.inference.postprocess.apply_postprocess`):
+pipeline (:func:`mote.router.ml.inference.postprocess.apply_postprocess`):
 
     messages ─► InferenceRequest
              ─► [ ML engine.predict()      → fused probs + FinalDecision ]
@@ -32,26 +32,21 @@ from typing import Optional
 
 import numpy as np
 
-from metagpt.router.complexity import (
+from mote.router.complexity import (
     TIER_THRESHOLDS,
     complexity_score,
     decide_tier,
     extract_all_signals,
     signals_from_messages,
 )
-from metagpt.router.control import RouterControlHoldStore
-from metagpt.router.ml.engine import SquillaMLEngine
-from metagpt.router.ml.flags import RoutingFlags as MLRoutingFlags
-from metagpt.router.ml.inference.postprocess import apply_postprocess as ml_apply_postprocess
-from metagpt.router.ml.inference.types import InferenceRequest
-from metagpt.router.ml.predictor import (
-    ROUTE_CLASSES,
-    _CLASS_TO_IDX,
-    _apply_flag_overrides,
-    _get_prompt_hint,
-)
-from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
-from metagpt.router.strategy import RoutingStrategy
+from mote.router.control import RouterControlHoldStore
+from mote.router.ml.engine import SquillaMLEngine
+from mote.router.ml.flags import RoutingFlags as MLRoutingFlags
+from mote.router.ml.inference.postprocess import apply_postprocess as ml_apply_postprocess
+from mote.router.ml.inference.types import InferenceRequest
+from mote.router.ml.predictor import _CLASS_TO_IDX, ROUTE_CLASSES, _apply_flag_overrides, _get_prompt_hint
+from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
+from mote.router.strategy import RoutingStrategy
 
 # default-model token window when no card declares one (opensquilla default)
 _DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
@@ -72,19 +67,106 @@ _THINKING_MODE_LEVEL = {"T0": None, "T1": "low", "T2": "medium", "T3": "high"}
 
 # multilingual complaint terms (opensquilla engine/steps/squilla_router._COMPLAINT_TERMS)
 _COMPLAINT_TERMS = (
-    "不对", "不行", "不对劲", "还是不对", "完全不对", "不是这样", "你搞错了", "你说错了",
-    "回答错了", "理解错了", "搞错重点了", "错了", "答非所问", "没理解", "没听懂", "太差",
-    "太敷衍", "敷衍", "没用", "废话", "离谱", "乱说", "瞎说", "胡扯", "答得太差", "质量太差",
-    "不满意", "胡说", "漏了", "遗漏了", "没提到", "没覆盖", "跑题了", "偏题了", "不是我要的",
-    "没按要求", "没有按要求", "重写", "重新来", "重新回答", "再来一版", "换个说法", "重新组织",
-    "按我说的重来", "你没有回答", "垃圾", "傻逼", "sb", "蠢", "废物", "滚", "妈的", "操", "艹",
-    "wrong", "incorrect", "not correct", "you are wrong", "completely wrong", "totally wrong",
-    "not what i asked", "you misunderstood", "that's not right", "this is not right",
-    "bad answer", "terrible answer", "awful answer", "horrible answer", "poor answer",
-    "lazy answer", "low quality", "poor quality", "try again", "redo", "rewrite", "start over",
-    "answer again", "you missed", "missed the point", "off topic", "irrelevant", "not helpful",
-    "garbage", "trash", "crap", "sucks", "stupid", "idiot", "moron", "dumb", "pathetic",
-    "ridiculous", "fuck", "fucking", "shit", "damn", "wtf", "asshole", "bullshit", "nonsense",
+    "不对",
+    "不行",
+    "不对劲",
+    "还是不对",
+    "完全不对",
+    "不是这样",
+    "你搞错了",
+    "你说错了",
+    "回答错了",
+    "理解错了",
+    "搞错重点了",
+    "错了",
+    "答非所问",
+    "没理解",
+    "没听懂",
+    "太差",
+    "太敷衍",
+    "敷衍",
+    "没用",
+    "废话",
+    "离谱",
+    "乱说",
+    "瞎说",
+    "胡扯",
+    "答得太差",
+    "质量太差",
+    "不满意",
+    "胡说",
+    "漏了",
+    "遗漏了",
+    "没提到",
+    "没覆盖",
+    "跑题了",
+    "偏题了",
+    "不是我要的",
+    "没按要求",
+    "没有按要求",
+    "重写",
+    "重新来",
+    "重新回答",
+    "再来一版",
+    "换个说法",
+    "重新组织",
+    "按我说的重来",
+    "你没有回答",
+    "垃圾",
+    "傻逼",
+    "sb",
+    "蠢",
+    "废物",
+    "滚",
+    "妈的",
+    "操",
+    "艹",
+    "wrong",
+    "incorrect",
+    "not correct",
+    "you are wrong",
+    "completely wrong",
+    "totally wrong",
+    "not what i asked",
+    "you misunderstood",
+    "that's not right",
+    "this is not right",
+    "bad answer",
+    "terrible answer",
+    "awful answer",
+    "horrible answer",
+    "poor answer",
+    "lazy answer",
+    "low quality",
+    "poor quality",
+    "try again",
+    "redo",
+    "rewrite",
+    "start over",
+    "answer again",
+    "you missed",
+    "missed the point",
+    "off topic",
+    "irrelevant",
+    "not helpful",
+    "garbage",
+    "trash",
+    "crap",
+    "sucks",
+    "stupid",
+    "idiot",
+    "moron",
+    "dumb",
+    "pathetic",
+    "ridiculous",
+    "fuck",
+    "fucking",
+    "shit",
+    "damn",
+    "wtf",
+    "asshole",
+    "bullshit",
+    "nonsense",
     "useless",
 )
 
@@ -94,7 +176,7 @@ def score_to_probs(score: float, *, span: float = 12.0, sharpness: float = 1.2) 
     """Turn a heuristic complexity score into a 4-class probability vector.
 
     This is the bridge that lets opensquilla's probability-based post-processing
-    run on MetaGPT's integer complexity score when the ML engine is unavailable.
+    run on Mote's integer complexity score when the ML engine is unavailable.
     The score is mapped to a continuous *difficulty* ``d`` in ``[0, 3]``
     (``score == span`` → ``d == 3``), then a Gaussian centred on ``d`` produces a
     peaked distribution whose top-2 margin naturally reflects how borderline the
@@ -190,11 +272,9 @@ class RoutingHistoryStore:
         history = self._entries.setdefault(session_key, [])
         history.append(_HistoryEntry(final_route_class=route_class, ts=now))
         if len(history) > self._max:
-            self._entries[session_key] = history[-self._max:]
+            self._entries[session_key] = history[-self._max :]
 
-    def previous_within_window(
-        self, session_key: str, *, window: float, now: Optional[float] = None
-    ) -> Optional[str]:
+    def previous_within_window(self, session_key: str, *, window: float, now: Optional[float] = None) -> Optional[str]:
         now = time.monotonic() if now is None else now
         history = self._entries.get(session_key)
         if not history:
@@ -275,7 +355,7 @@ class SquillaStrategy(RoutingStrategy):
         """
         user_texts: list[str] = []
         assistant_texts: list[str] = []
-        for msg in (request.messages or []):
+        for msg in request.messages or []:
             role = msg.get("role")
             content = msg.get("content") or ""
             if role == "user":
@@ -322,8 +402,7 @@ class SquillaStrategy(RoutingStrategy):
         # 1. confidence gate — low confidence falls back to the default class.
         if confidence < cfg.confidence_threshold and final != cfg.default_route_class:
             reasons.append(
-                f"confidence {confidence:.2f} < {cfg.confidence_threshold} "
-                f"→ default {cfg.default_route_class}"
+                f"confidence {confidence:.2f} < {cfg.confidence_threshold} " f"→ default {cfg.default_route_class}"
             )
             final = cfg.default_route_class
 
@@ -347,11 +426,7 @@ class SquillaStrategy(RoutingStrategy):
                     final = upgraded
 
         # 3. KV-cache anti-downgrade — don't drop below a recent stronger tier.
-        if (
-            cfg.kv_cache_anti_downgrade_enabled
-            and previous in valid
-            and route_index(previous) > route_index(final)
-        ):
+        if cfg.kv_cache_anti_downgrade_enabled and previous in valid and route_index(previous) > route_index(final):
             reasons.append(f"anti-downgrade: hold previous {previous}")
             final = previous
 
@@ -359,9 +434,7 @@ class SquillaStrategy(RoutingStrategy):
         tokens = request.token_estimate()
         window = self._context_window(cards)
         floor = None
-        if tokens >= cfg.large_context_t3_floor_tokens or tokens >= int(
-            window * cfg.large_context_t3_context_ratio
-        ):
+        if tokens >= cfg.large_context_t3_floor_tokens or tokens >= int(window * cfg.large_context_t3_context_ratio):
             floor = "R3"
         elif tokens >= cfg.large_context_t2_floor_tokens:
             floor = "R2"
@@ -390,7 +463,9 @@ class SquillaStrategy(RoutingStrategy):
         hold = self.control_holds.get_valid(request.session_key, decrement=True)
         if hold is not None and hold.name in candidates:
             return RoutingDecision(
-                name=hold.name, confidence=0.99, source="squilla",
+                name=hold.name,
+                confidence=0.99,
+                source="squilla",
                 reasons=[f"router-control hold → {hold.name}"],
                 extra={"hold": True, "hold_target": hold.target_id},
             )
@@ -401,8 +476,13 @@ class SquillaStrategy(RoutingStrategy):
         if vision_required:
             vision_cards = [c for c in cards if c.supports_vision]
             if not vision_cards:
-                return RoutingDecision(name=default, confidence=0.5, source="squilla",
-                                       fallback=True, reasons=["requires vision/pdf but no capable card"])
+                return RoutingDecision(
+                    name=default,
+                    confidence=0.5,
+                    source="squilla",
+                    fallback=True,
+                    reasons=["requires vision/pdf but no capable card"],
+                )
             pool = vision_cards
 
         # 1. ML inference (real LightGBM ⊕ MLP) OR heuristic fallback. Both
@@ -443,9 +523,7 @@ class SquillaStrategy(RoutingStrategy):
 
         # 3. finalization (confidence gate / complaint / anti-downgrade / floor).
         confidence = max(probs.values()) if probs else 0.5
-        final_class, reasons = self._finalize(
-            floored, confidence, reasons, request=request, cards=pool, prompt=prompt
-        )
+        final_class, reasons = self._finalize(floored, confidence, reasons, request=request, cards=pool, prompt=prompt)
 
         # 4. reconcile thinking/prompt with any tier override, then map to a card.
         thinking_mode, prompt_policy = self._reconcile(

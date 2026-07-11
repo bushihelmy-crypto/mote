@@ -1,12 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.llm.editor_read_parser (Editor.read segment parsing)."""
+"""Tests for mote.router.llm.editor_read_parser (Editor.read segment parsing)."""
 from __future__ import annotations
 
-from metagpt.router.llm.editor_read_parser import (
-    EDITOR_READ_MARKER,
-    find_editor_read_segments,
-)
+from mote.router.llm.editor_read_parser import EDITOR_READ_MARKER, find_editor_read_segments
 
 
 class TestFindEditorReadSegments:
@@ -37,10 +34,7 @@ class TestFindEditorReadSegments:
         assert segs[0]["block_content"] == "body"
 
     def test_segment_bounded_by_next_command(self):
-        text = (
-            f"{EDITOR_READ_MARKER} path=/a.py content=AAA"
-            "\n\nCommand Bash executed: ls"
-        )
+        text = f"{EDITOR_READ_MARKER} path=/a.py content=AAA" "\n\nCommand Bash executed: ls"
         segs = find_editor_read_segments(text)
         assert len(segs) == 1
         assert segs[0]["block_content"] == "AAA"
@@ -48,11 +42,7 @@ class TestFindEditorReadSegments:
         assert segs[0]["end"] < len(text)
 
     def test_multiple_segments(self):
-        text = (
-            f"{EDITOR_READ_MARKER} path=/a.py content=AAA"
-            "\n\n"
-            f"{EDITOR_READ_MARKER} path=/b.py content=BBB"
-        )
+        text = f"{EDITOR_READ_MARKER} path=/a.py content=AAA" "\n\n" f"{EDITOR_READ_MARKER} path=/b.py content=BBB"
         segs = find_editor_read_segments(text)
         assert len(segs) == 2
         assert [s["file_path"] for s in segs] == ["/a.py", "/b.py"]

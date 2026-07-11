@@ -21,10 +21,10 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.disk import atomic_write
-from metagpt.common.logs import log_class
-from metagpt.environment.scheduling.task import CronTask
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.disk import atomic_write, mtime_seconds
+from mote.common.logs import log_class
+from mote.environment.scheduling.task import CronTask
 
 #: Directory name under the workspace root holding the schedule file.
 SCHEDULES_DIRNAME = ".agent_schedules"
@@ -53,10 +53,7 @@ class CronTaskStore:
 
     def mtime(self) -> Optional[float]:
         """File modification time, or ``None`` when the file does not exist."""
-        try:
-            return self._path.stat().st_mtime
-        except OSError:
-            return None
+        return mtime_seconds(self._path)
 
     # ------------------------------------------------------------------
     # Durable load / save

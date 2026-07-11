@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""ML routing config + model-dir resolution glue (MetaGPT-specific).
+"""ML routing config + model-dir resolution glue (Mote-specific).
 
 The trained model bundle (~75 MB of LightGBM / ONNX / sklearn artifacts) is NOT
-vendored into git; it is cached under ``~/.metagpt/router_models/...``. The small
+vendored into git; it is cached under ``~/.mote/router_models/...``. The small
 ``router.runtime.yaml`` (thresholds / flag rules / tier mapping) IS vendored next
 to this module so post-processing works even when the bundle is absent.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from metagpt.common.const.paths import CONFIG_ROOT
+from mote.common.const.paths import CONFIG_ROOT
 
 # Phase-3 inference bundle name (matches the rsync'd cache dir).
 MODEL_BUNDLE_NAME = "v4.2_phase3_inference"

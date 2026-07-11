@@ -15,33 +15,27 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Optional, Set
 from uuid import uuid4
 
-from metagpt.common.base import BaseRole
-from metagpt.common.const import MESSAGE_ROUTE_TO_SELF
-from metagpt.common.events import (
-    SessionStartEvent,
-    TurnEndEvent,
-    UserPromptSubmitEvent,
-    set_bus,
-    span,
-)
-from metagpt.common.exception import RoleContextNotSetError
-from metagpt.common.logs import bind_trace, log_class, logger
-from metagpt.common.schema import AIMessage, CauseBy, Message, UserMessage
-from metagpt.common.utils.common import any_to_str, role_raise_decorator
-from metagpt.context import ContextManager
-from metagpt.context.skills.skill_manager import SkillManager
-from metagpt.executor.tasks import BackgroundTaskPool
-from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.parser import CommandChannel
-from metagpt.roles.context_provider import ContextProvider
-from metagpt.roles.role_components import RoleComponents
-from metagpt.roles.role_schema import RoleSchema
-from metagpt.roles.role_state import RoleState
-from metagpt.router.router import LLMRouter
-from metagpt.session import list_sessions as _list
+from mote.common.base import BaseRole
+from mote.common.const import MESSAGE_ROUTE_TO_SELF
+from mote.common.events import SessionStartEvent, TurnEndEvent, UserPromptSubmitEvent, set_bus, span
+from mote.common.exception import RoleContextNotSetError
+from mote.common.logs import bind_trace, log_class, logger
+from mote.common.schema import AIMessage, CauseBy, Message, UserMessage
+from mote.common.utils.common import any_to_str, role_raise_decorator
+from mote.context import ContextManager
+from mote.context.skills.skill_manager import SkillManager
+from mote.executor.tasks import BackgroundTaskPool
+from mote.executor.tool_executor import ToolExecutor
+from mote.parser import CommandChannel
+from mote.roles.context_provider import ContextProvider
+from mote.roles.role_components import RoleComponents
+from mote.roles.role_schema import RoleSchema
+from mote.roles.role_state import RoleState
+from mote.router.router import LLMRouter
+from mote.session import list_sessions as _list
 
 if TYPE_CHECKING:
-    from metagpt.session import (
+    from mote.session import (
         BrowserStateRecorder,
         FileSnapshotRecorder,
         KernelStateRecorder,
@@ -392,10 +386,12 @@ class Role(BaseRole):
         return self._state_ctl.get_cwd()
 
     def set_cwd(self, path: str) -> None:
-        """Persist the live working directory, aligned with Claude Code's setCwd().
+        """Set the stable working directory (framework API for an explicit switch).
 
-        Tools that run shell commands call this to record a `cd`, so they never
-        need access to RoleState. Delegates to the state controller.
+        No longer called by the Bash tool — a `cd` inside a command does not drift
+        the cwd (Codex-aligned: cwd is stable data). Retained as the capability for
+        a deliberate future directory-change entry point. Delegates to the state
+        controller.
         """
         self._state_ctl.set_cwd(path)
 
@@ -595,7 +591,7 @@ class Role(BaseRole):
     async def ask_human(self, question: str) -> str:
         """Ask the human user a question and return their response.
 
-        Only valid inside an MGXEnv. A trailing 'stop' deactivates the role.
+        Only valid inside a MoteEnv. A trailing 'stop' deactivates the role.
         Capability surface; delegates to :class:`RoleCapabilities`.
         """
         return await self._capabilities.ask_human(question)
@@ -619,7 +615,7 @@ class Role(BaseRole):
     async def reply_to_human(self, content: str) -> str:
         """Reply to the human user with the provided content.
 
-        Only valid inside an MGXEnv. Capability surface; delegates to
+        Only valid inside a MoteEnv. Capability surface; delegates to
         :class:`RoleCapabilities`.
         """
         return await self._capabilities.reply_to_human(content)
@@ -727,6 +723,10 @@ class Role(BaseRole):
         watcher = self.file_watch_service
         if watcher is not None and not watcher.watcher.is_running():
             watcher.start()
+
+        # Kick off the whole-repo code-index cold scan off the event loop (Layer
+        # C). No-op when the index layer is off; best-effort inside.
+        await self._components.kickoff_repo_scan()
 
     @role_raise_decorator
     async def run(self, with_message=None) -> Message | None:
@@ -924,6 +924,12 @@ class Role(BaseRole):
                 await sandbox_runtime.shutdown()
             except Exception as exc:  # noqa: BLE001 — best-effort shutdown
                 logger.warning(f"Role: sandbox_runtime.shutdown() failed: {exc}")
+        repo_index = self._components.peek_repo_index()
+        if repo_index is not None:
+            try:
+                repo_index.close()
+            except Exception as exc:  # noqa: BLE001 — best-effort shutdown
+                logger.warning(f"Role: repo_index.close() failed: {exc}")
 
     # =========================================================================
     # Readiness

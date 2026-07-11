@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :mod:`metagpt.tasks.decorators`.
+"""Unit tests for :mod:`mote.tasks.decorators`.
 
 Covers the ``bg_tool`` marker + ``is_bg_tool`` predicate and the
 ``require_bg_complete`` gate (no-wait fast path, wait-until-empty path, and the
@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from metagpt.executor.tasks import bg_tool, is_bg_tool, require_bg_complete
+from mote.executor.tasks import bg_tool, is_bg_tool, require_bg_complete
 
 from .conftest import gated, wait_started
 
@@ -33,7 +33,7 @@ def patch_reporter(monkeypatch):
         async def async_report(self, value, name="object"):
             reports.append((value, name))
 
-    monkeypatch.setattr("metagpt.executor.tasks.decorators.ThoughtReporter", FakeReporter)
+    monkeypatch.setattr("mote.executor.tasks.decorators.ThoughtReporter", FakeReporter)
     return reports
 
 

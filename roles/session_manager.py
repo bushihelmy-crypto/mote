@@ -19,12 +19,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from metagpt.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from metagpt.roles.role_state import RoleState
-from metagpt.session import SessionLog, fork, replay
+from mote.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
+from mote.roles.role_state import RoleState
+from mote.session import SessionLog, fork, replay
 
 if TYPE_CHECKING:
-    from metagpt.roles.role import Role
+    from mote.roles.role import Role
 
 
 class RoleSessionManager:

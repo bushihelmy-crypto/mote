@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.dependency._browser import _html_to_markdown
+from mote.executor.dependency._browser import _html_to_markdown
 
 # The conversion depends on the optional ``markdownify`` library.
 pytest.importorskip("markdownify")
@@ -22,11 +22,7 @@ pytest.importorskip("markdownify")
 def test_div_based_page_is_not_one_line():
     """div/section blocks (no <p>/<h*>) must render across multiple lines."""
     html = (
-        "<div>"
-        "<div>First block of text.</div>"
-        "<div>Second block of text.</div>"
-        "<div>Third block.</div>"
-        "</div>"
+        "<div>" "<div>First block of text.</div>" "<div>Second block of text.</div>" "<div>Third block.</div>" "</div>"
     )
     md = _html_to_markdown(html)
     assert md is not None
@@ -38,10 +34,7 @@ def test_div_based_page_is_not_one_line():
 
 
 def test_headings_and_paragraphs_render_as_markdown():
-    html = (
-        "<h1>Big Title</h1><p>First paragraph of the body.</p>"
-        "<h2>Section</h2><p>Second paragraph here.</p>"
-    )
+    html = "<h1>Big Title</h1><p>First paragraph of the body.</p>" "<h2>Section</h2><p>Second paragraph here.</p>"
     md = _html_to_markdown(html)
     assert md is not None
     assert "# Big Title" in md

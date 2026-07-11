@@ -1,19 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.compress.base``.
+"""Unit tests for ``mote.executor.compress.base``.
 
 The fail-safe scaffolding: exceptions collapse to unchanged, the grow-guard
 rejects bloating "compression", and ANSI stripping is clean.
 """
 from __future__ import annotations
 
-from metagpt.executor.compress.base import (
-    CompressionResult,
-    applied,
-    safe_compress,
-    strip_ansi,
-    unchanged,
-)
+from mote.executor.compress.base import CompressionResult, applied, safe_compress, strip_ansi, unchanged
 
 
 class TestStripAnsi:

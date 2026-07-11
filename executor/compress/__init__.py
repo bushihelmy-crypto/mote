@@ -12,15 +12,9 @@ original output unchanged, so compression can never break a tool call.
 
 from __future__ import annotations
 
-from metagpt.executor.compress.base import (
-    CompressionResult,
-    Compressor,
-    safe_compress,
-    strip_ansi,
-    unchanged,
-)
-from metagpt.executor.compress.registry import lookup_compressor
-from metagpt.executor.permission.command_parse import command_prefix, prefix_tokens
+from mote.executor.compress.base import CompressionResult, Compressor, safe_compress, strip_ansi, unchanged
+from mote.executor.compress.registry import lookup_compressor
+from mote.executor.permission.command_parse import command_prefix, prefix_tokens
 
 __all__ = [
     "CompressionResult",

@@ -14,16 +14,16 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING, Callable, Optional
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.exception import ModelNotFoundError
-from metagpt.common.logs import log_class, logger
-from metagpt.router.llm.base_llm import BaseLLM
-from metagpt.router.llm.context import Context
-from metagpt.router.schema import ModelCard, RoutingDecision, RoutingRequest
-from metagpt.router.strategy import RoutingStrategy, RuleBasedStrategy
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.exception import ModelNotFoundError
+from mote.common.logs import log_class, logger
+from mote.router.llm.base_llm import BaseLLM
+from mote.router.llm.context import Context
+from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
+from mote.router.strategy import RoutingStrategy, RuleBasedStrategy
 
 if TYPE_CHECKING:
-    from metagpt.router.llm.context import Context
+    from mote.common.interface import ContextReducer
 
 # field name of the default named model in Config
 DEFAULT_MODEL_NAME = "llm"
@@ -92,7 +92,7 @@ class LLMRouter:
         # injects for COMPRESS recovery; stamped onto every built/routed LLM so
         # the recovery loop can shrink+re-issue an overflowing wire payload. None
         # (standalone/test use) => COMPRESS degrades to a re-raise.
-        self.context_reducer = None
+        self.context_reducer: Optional["ContextReducer"] = None
         self._auto_register_from_config()
 
     # ------------------------------------------------------------------ setup

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.disk import writer
+from mote.common.disk import writer
 
 
 @pytest.fixture(autouse=True)

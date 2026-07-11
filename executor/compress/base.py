@@ -18,19 +18,12 @@ The two guarantees callers rely on:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
 
-# Copied verbatim from ``executor.dependency._kernel._ANSI_RE`` so this leaf
-# module does not import a dependency-package internal. Matches CSI escape
-# sequences (colour codes, cursor moves) emitted by pytest/ruff/git on a TTY.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-
-def strip_ansi(text: str) -> str:
-    """Remove ANSI escape sequences so structural parsing sees clean text."""
-    return _ANSI_RE.sub("", text)
+# ANSI stripping is owned by the bottom-layer text authority; re-exported here so
+# ``compress`` consumers keep importing ``strip_ansi`` from this module.
+from mote.common.text import strip_ansi  # noqa: F401  (re-export)
 
 
 @dataclass

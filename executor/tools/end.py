@@ -1,11 +1,11 @@
 """End command — terminate current session and produce summary."""
 from __future__ import annotations
 
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.common.prompt.tools import END_DESCRIPTION
+from mote.common.prompt.tools import END_DESCRIPTION
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_registry import register_tool
 
 
 @register_tool

@@ -10,14 +10,9 @@ Role's ``ask_human`` onto any port's ``ask``.
 
 from __future__ import annotations
 
-from metagpt.cli.common.interface.ports import (
-    BroadcastPort,
-    InputPort,
-    InteractivePort,
-    ProtocolPort,
-)
-from metagpt.cli.io.human_channel import PortHumanChannel
-from metagpt.cli.io.terminal_io import TerminalPort
+from mote.cli.contracts.interface.ports import BroadcastPort, InputPort, InteractivePort, ProtocolPort
+from mote.cli.io.human_channel import PortHumanChannel
+from mote.cli.io.terminal_io import TerminalPort
 
 __all__ = [
     "InputPort",

@@ -14,7 +14,9 @@ import pytest
 
 pytest.importorskip("textual")
 
-from metagpt.cli.common.view import (
+from mote.cli.consumers.textual.app import ViewEventMessage
+from mote.cli.consumers.textual.consumer import TextualConsumer
+from mote.cli.contracts.view import (
     ApprovalRequested,
     ErrorRaised,
     MediaBlock,
@@ -30,8 +32,6 @@ from metagpt.cli.common.view import (
     ToolCallStarted,
     UsageUpdated,
 )
-from metagpt.cli.consumers.textual.app import ViewEventMessage
-from metagpt.cli.consumers.textual.consumer import TextualConsumer
 
 
 class _FakeApp:
@@ -93,6 +93,6 @@ def test_sync_handle_routes_to_post(ev):
 
 
 def test_capabilities_are_terminal_caps():
-    from metagpt.cli.common.view import TERMINAL_CAPS
+    from mote.cli.contracts.view import TERMINAL_CAPS
 
     assert TextualConsumer.capabilities is TERMINAL_CAPS

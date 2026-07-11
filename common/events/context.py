@@ -36,10 +36,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator, Optional, Set
 
-from metagpt.common.events.bus import EventBus
-from metagpt.common.logs import logger
+from mote.common.events.bus import EventBus
+from mote.common.logs import logger
 
-_ACTIVE_BUS: ContextVar[Optional[EventBus]] = ContextVar("metagpt_event_bus", default=None)
+_ACTIVE_BUS: ContextVar[Optional[EventBus]] = ContextVar("mote_event_bus", default=None)
 
 #: Flips true the first time a real (non-``None``) bus is bound anywhere in this
 #: process — the proxy for "this is a wired agent runtime, not a bare library /

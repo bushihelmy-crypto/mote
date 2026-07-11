@@ -10,19 +10,17 @@ the AutomationControlled launch flag, and the ``navigator.webdriver`` patch).
 """
 from __future__ import annotations
 
-from metagpt.executor.dependency._browser import (
+from mote.executor.dependency._browser import (
     _LOCALE_PROFILES,
+    BrowserSession,
     _parse_proxy,
     _resolve_locale,
     _stealth_init_js,
-    BrowserSession,
 )
 
 
 def _session(stealth: bool, browser_locale: str = "en", proxy: str = "") -> BrowserSession:
-    return BrowserSession(
-        session_key="t", headless=True, stealth=stealth, browser_locale=browser_locale, proxy=proxy
-    )
+    return BrowserSession(session_key="t", headless=True, stealth=stealth, browser_locale=browser_locale, proxy=proxy)
 
 
 def test_stealth_off_by_default():

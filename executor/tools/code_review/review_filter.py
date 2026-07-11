@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import List
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 from ._agent import build_child_role, extract_json_array, run_child_for_text
 from .format import Finding

@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tools.code_review import plan as plan_mod
-from metagpt.executor.tools.code_review.parser import FileDiff, Hunk
-from metagpt.executor.tools.code_review.plan import ReviewPlan, make_plan
+from mote.executor.tools.code_review import plan as plan_mod
+from mote.executor.tools.code_review._agent import extract_json_object
+from mote.executor.tools.code_review.parser import FileDiff, Hunk
+from mote.executor.tools.code_review.plan import ReviewPlan, make_plan
 
 
 def _f(path: str) -> FileDiff:
@@ -21,23 +22,23 @@ _FILES = [_f("a.py"), _f("b.py"), _f("c.py")]
 
 class TestExtractPlanObject:
     def test_bare_object(self):
-        obj = plan_mod._extract_plan_object('{"strategy": "s", "order": ["a.py"]}')
+        obj = extract_json_object('{"strategy": "s", "order": ["a.py"]}')
         assert obj == {"strategy": "s", "order": ["a.py"]}
 
     def test_fenced_json(self):
         text = 'prose\n```json\n{"strategy": "x"}\n```\nmore'
-        assert plan_mod._extract_plan_object(text) == {"strategy": "x"}
+        assert extract_json_object(text) == {"strategy": "x"}
 
     def test_embedded_span(self):
         text = 'here: {\n  "strategy": "y"\n} done'
-        assert plan_mod._extract_plan_object(text) == {"strategy": "y"}
+        assert extract_json_object(text) == {"strategy": "y"}
 
     def test_array_not_object_none(self):
-        assert plan_mod._extract_plan_object("[1, 2]") is None
+        assert extract_json_object("[1, 2]") is None
 
     def test_unparseable_none(self):
-        assert plan_mod._extract_plan_object("not json") is None
-        assert plan_mod._extract_plan_object("") is None
+        assert extract_json_object("not json") is None
+        assert extract_json_object("") is None
 
 
 class TestReorder:

@@ -12,9 +12,9 @@ would be stringized (``'int'`` instead of ``int``) under PEP 563.
 """
 import pytest
 
-from metagpt.executor.agent_registry import AgentRegistry
-from metagpt.executor.mcp_adapter import MCPToolAdapter
-from metagpt.executor.tool_convert import (
+from mote.executor.agent_registry import AgentRegistry
+from mote.executor.mcp_adapter import MCPToolAdapter
+from mote.executor.tool_convert import (
     convert_code_to_tool_schema,
     convert_code_to_tool_schema_ast,
     function_docstring_to_schema,
@@ -135,7 +135,7 @@ class TestAgentRegistry:
             fresh_agent_registry.register(NotARole)
 
     def test_register_role_subclass(self, fresh_agent_registry):
-        from metagpt.roles.role import Role
+        from mote.roles.role import Role
 
         class MyAgent(Role):
             agent_name = "MyAgent"
@@ -146,7 +146,7 @@ class TestAgentRegistry:
         assert fresh_agent_registry.get("ma") is MyAgent
 
     def test_default_agent_name_from_classname(self, fresh_agent_registry):
-        from metagpt.roles.role import Role
+        from mote.roles.role import Role
 
         class Defaulted(Role):
             pass
@@ -156,7 +156,7 @@ class TestAgentRegistry:
         assert fresh_agent_registry.get("Defaulted") is Defaulted
 
     def test_conflict_rejected(self, fresh_agent_registry):
-        from metagpt.roles.role import Role
+        from mote.roles.role import Role
 
         class AgentA(Role):
             agent_name = "Shared"
@@ -169,7 +169,7 @@ class TestAgentRegistry:
             fresh_agent_registry.register(AgentB)
 
     def test_idempotent_reregister(self, fresh_agent_registry):
-        from metagpt.roles.role import Role
+        from mote.roles.role import Role
 
         class AgentC(Role):
             agent_name = "C"
@@ -180,7 +180,7 @@ class TestAgentRegistry:
         assert fresh_agent_registry.get("c") is AgentC
 
     def test_all_agents_deduplicates(self, fresh_agent_registry):
-        from metagpt.roles.role import Role
+        from mote.roles.role import Role
 
         class AgentD(Role):
             agent_name = "D"
@@ -226,8 +226,8 @@ class TestMCPToolAdapter:
     async def test_call_delegates_to_mcp(self, mcp_schema):
         mcp = _FakeMCP()
         adapter = MCPToolAdapter(mcp=mcp, tool_name="server:search", schema=mcp_schema)
-        result = await adapter.call(q="metagpt")
-        assert mcp.calls == [("server:search", {"q": "metagpt"})]
+        result = await adapter.call(q="mote")
+        assert mcp.calls == [("server:search", {"q": "mote"})]
         assert "server:search" in result
 
     def test_native_schema_passes_through_parameters(self, mcp_schema):

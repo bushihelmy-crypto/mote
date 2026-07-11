@@ -4,7 +4,7 @@ from typing import AsyncGenerator
 from mcp import StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from metagpt.executor.mcp.client.base import EnhancedClientSession, MCPBaseClient
+from mote.executor.mcp.client.base import EnhancedClientSession, MCPBaseClient
 
 
 class MCPStdioClient(MCPBaseClient):
@@ -17,8 +17,10 @@ class MCPStdioClient(MCPBaseClient):
     async def get_session(self) -> AsyncGenerator[EnhancedClientSession, None]:
         if self._session is None:
             self._exit_stack = AsyncExitStack()
+            command = self.server_config.command
+            assert command is not None, "stdio server config requires a command"
             server_params = StdioServerParameters(
-                command=self.server_config.command, args=self.server_config.args, env=self.server_config.env
+                command=command, args=self.server_config.args or [], env=self.server_config.env
             )
 
             stdio_transport = await self._exit_stack.enter_async_context(stdio_client(server_params))

@@ -25,9 +25,10 @@ today, but the flag keeps a stray event-loop-thread access from raising.
 from __future__ import annotations
 
 import sqlite3
+import time
 from typing import Iterable
 
-from metagpt.context.code_map.extractor import CallEdge, FileExtract, Symbol
+from mote.context.code_map.extractor import CallEdge, FileExtract, Symbol
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -49,7 +50,14 @@ CREATE TABLE IF NOT EXISTS edges (
 );
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_file, kind);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target, kind);
+
+CREATE TABLE IF NOT EXISTS files (
+    path TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    indexed_at INTEGER
+);
 """
+
 
 class CodeMapStore:
     """A tiny SQLite nodes/edges store for the local code map.
@@ -92,6 +100,20 @@ class CodeMapStore:
             "INSERT INTO edges (source_file, target, kind, caller, line) VALUES (?, ?, 'calls', ?, ?)",
             [(path, c.callee, c.caller, c.line) for c in extract.calls],
         )
+        # The files row is the staleness anchor: content hash + parse time. An
+        # INSERT-OR-REPLACE keyed on the path keeps exactly one row per file.
+        cur.execute(
+            "INSERT OR REPLACE INTO files (path, content_hash, indexed_at) VALUES (?, ?, ?)",
+            (path, extract.content_hash, int(time.time())),
+        )
+        self._conn.commit()
+
+    def delete_file(self, path: str) -> None:
+        """Drop all rows for ``path`` (a vanished file). Idempotent."""
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM nodes WHERE file_path = ?", (path,))
+        cur.execute("DELETE FROM edges WHERE source_file = ?", (path,))
+        cur.execute("DELETE FROM files WHERE path = ?", (path,))
         self._conn.commit()
 
     # -- reads ---------------------------------------------------------------
@@ -141,6 +163,59 @@ class CodeMapStore:
             (*target_list, *scope_list),
         ).fetchall()
         return [r[0] for r in rows]
+
+    def importers_repo(self, targets: Iterable[str]) -> list[str]:
+        """Every file in the *whole repo* that imports any name in ``targets``.
+
+        Layer C's reverse-dependency query: the whole-repo variant of
+        :meth:`importers_within` with the ``scope_files`` clause dropped, so it
+        surfaces importers the agent has never opened (mirrors CodeGraph's
+        ``getDependentFilePaths``). Backed by ``idx_edges_target`` — a cheap
+        DISTINCT scan even at repo scale.
+        """
+        target_list = list(targets)
+        if not target_list:
+            return []
+        tq = ",".join("?" for _ in target_list)
+        rows = self._conn.execute(
+            f"SELECT DISTINCT source_file FROM edges WHERE kind = 'imports' AND target IN ({tq})",
+            (*target_list,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    # -- files table (staleness) ---------------------------------------------
+
+    def all_indexed_paths(self) -> list[str]:
+        """Every path with a persisted files row (the indexed universe)."""
+        rows = self._conn.execute("SELECT path FROM files").fetchall()
+        return [r[0] for r in rows]
+
+    def indexed_hashes(self) -> dict:
+        """``{path: content_hash}`` for every indexed file."""
+        rows = self._conn.execute("SELECT path, content_hash FROM files").fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def content_hash_of(self, path: str) -> str:
+        """The stored content hash for a single ``path`` ("" when not indexed).
+
+        A single-row lookup for the one caller that needs one file's hash (F2's
+        ``precise_callers`` cache key) — cheaper than :meth:`indexed_hashes`, and
+        it reuses the hash the extractor already computed at parse time instead of
+        re-reading + re-hashing the file.
+        """
+        row = self._conn.execute("SELECT content_hash FROM files WHERE path = ?", (path,)).fetchone()
+        return row[0] if row else ""
+
+    def get_stale_paths(self, current: dict) -> list[str]:
+        """Paths in ``current`` whose hash differs from stored (or untracked).
+
+        ``current`` is ``{path: content_hash}`` of the live tree. A path is stale
+        when it has no files row yet (new) or its stored hash no longer matches
+        (changed) — the ``getStaleFiles`` equivalent that drives incremental
+        re-parse. Unchanged files are skipped, so a warm store re-parses nothing.
+        """
+        stored = self.indexed_hashes()
+        return [path for path, h in current.items() if stored.get(path) != h]
 
 
 __all__ = ["CodeMapStore"]

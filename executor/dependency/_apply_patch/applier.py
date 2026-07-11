@@ -2,31 +2,37 @@
 
 Pure text transformation: given a file's current contents and a list of parsed
 :class:`UpdateFileChunk`, locate each chunk via the fuzzy
-:func:`~metagpt.executor.dependency._apply_patch.seek.seek_sequence` matcher and
+:func:`~mote.executor.dependency._apply_patch.seek.seek_sequence` matcher and
 produce the new file contents. No filesystem IO, no Role, no permission
 dependencies — the tool layer owns those.
 """
 from __future__ import annotations
 
+from string import Template
 from typing import List, Tuple
 
-from metagpt.executor.dependency._apply_patch.parser import (
+from mote.executor.dependency._apply_patch.parser import (
     AddFile,
+    ApplyPatchError,
     DeleteFile,
     Hunk,
     UpdateFile,
     UpdateFileChunk,
     hunk_path,
 )
-from metagpt.executor.dependency._apply_patch.seek import seek_sequence
-from metagpt.executor.dependency._apply_patch.parser import ApplyPatchError
+from mote.executor.dependency._apply_patch.seek import seek_sequence
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place. The interpolated variant uses ``string.Template``
+# to match the parser's convention; the joined old-lines body stays inline.
+_MSG_FAILED_FIND_CONTEXT = "Failed to find context '${context}'"
+_MSG_FAILED_FIND_LINES = "Failed to find expected lines:"
+
 # A scheduled edit: (start index, number of old lines to drop, new lines).
 _Replacement = Tuple[int, int, List[str]]
 
 
-def _compute_replacements(
-    original_lines: List[str], chunks: List[UpdateFileChunk]
-) -> List[_Replacement]:
+def _compute_replacements(original_lines: List[str], chunks: List[UpdateFileChunk]) -> List[_Replacement]:
     """Locate each chunk in ``original_lines`` and schedule its replacement.
 
     Raises :class:`ApplyPatchError` (via ValueError-style message) when a chunk's
@@ -40,13 +46,9 @@ def _compute_replacements(
     for chunk in chunks:
         # Narrow the search window using the chunk's context anchor, if any.
         if chunk.change_context is not None:
-            idx = seek_sequence(
-                original_lines, [chunk.change_context], line_index, False
-            )
+            idx = seek_sequence(original_lines, [chunk.change_context], line_index, False)
             if idx is None:
-                raise ApplyPatchError(
-                    f"Failed to find context '{chunk.change_context}'"
-                )
+                raise ApplyPatchError(Template(_MSG_FAILED_FIND_CONTEXT).safe_substitute(context=chunk.change_context))
             line_index = idx + 1
 
         if not chunk.old_lines:
@@ -69,14 +71,10 @@ def _compute_replacements(
             pattern = pattern[:-1]
             if new_slice and new_slice[-1] == "":
                 new_slice = new_slice[:-1]
-            found = seek_sequence(
-                original_lines, pattern, line_index, chunk.is_end_of_file
-            )
+            found = seek_sequence(original_lines, pattern, line_index, chunk.is_end_of_file)
 
         if found is None:
-            raise ApplyPatchError(
-                "Failed to find expected lines:\n" + "\n".join(chunk.old_lines)
-            )
+            raise ApplyPatchError(_MSG_FAILED_FIND_LINES + "\n" + "\n".join(chunk.old_lines))
 
         replacements.append((found, len(pattern), list(new_slice)))
         line_index = found + len(pattern)
@@ -85,9 +83,7 @@ def _compute_replacements(
     return replacements
 
 
-def _apply_replacements(
-    lines: List[str], replacements: List[_Replacement]
-) -> List[str]:
+def _apply_replacements(lines: List[str], replacements: List[_Replacement]) -> List[str]:
     """Apply replacements in descending index order so earlier edits don't shift
     the positions of later ones."""
     out = list(lines)

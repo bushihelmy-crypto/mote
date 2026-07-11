@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.squilla (SquillaStrategy — heuristic-fallback path).
+"""Tests for mote.router.squilla (SquillaStrategy — heuristic-fallback path).
 
 The trained ML bundle (LightGBM / ONNX / sklearn) is NOT vendored, so the engine
 is deliberately pointed at a missing ``model_dir`` and ``engine.predict`` returns
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.router.control import build_control_targets
-from metagpt.router.schema import RoutingRequest
-from metagpt.router.squilla import (
+from mote.router.control import build_control_targets
+from mote.router.schema import RoutingRequest
+from mote.router.squilla import (
     RoutingHistoryStore,
     SquillaStrategy,
     _normalize_decisions,
@@ -168,10 +168,7 @@ class TestSquillaSelectFallback:
 
     @pytest.mark.asyncio
     async def test_complex_prompt_escalates_tier(self, squilla, cards):
-        prompt = (
-            "请重新设计整个系统架构，迁移生产数据库，这是不可逆的高风险操作，"
-            "需要跨所有模块进行重构并评估安全影响。"
-        )
+        prompt = "请重新设计整个系统架构，迁移生产数据库，这是不可逆的高风险操作，" "需要跨所有模块进行重构并评估安全影响。"
         d = await squilla.select(cards, RoutingRequest(text=prompt), default="mid")
         assert d.tier in ("R2", "R3")
         assert d.name in ("vision", "strong")

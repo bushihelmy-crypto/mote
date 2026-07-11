@@ -14,7 +14,7 @@ emits a ``FileMutatedEvent`` that this service subscribes to off the shared bus,
 and diagnostics flow back out onto the same bus as a ``DiagnosticsEvent``.
 """
 
-from metagpt.roles.lsp.buffer import DiagnosticsBuffer
-from metagpt.roles.lsp.service import LspService
+from mote.roles.lsp.buffer import DiagnosticsBuffer
+from mote.roles.lsp.service import LspService
 
 __all__ = ["LspService", "DiagnosticsBuffer"]

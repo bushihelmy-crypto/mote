@@ -10,7 +10,7 @@ loop retries; otherwise the error propagates.
 Resolving the action (:meth:`RecoveryRunner._action_for`) is the single point
 that unifies the codebase's two historical retry judgements into one:
 
-- a typed :class:`MetaGPTError` carries an explicit ``recovery`` hint
+- a typed :class:`MoteError` carries an explicit ``recovery`` hint
   (RETRY / ABORT / COMPRESS / ROTATE_CREDENTIAL / FALLBACK / …);
 - an untyped exception (bare ``ConnectionError`` / ``TimeoutError`` / a vendor
   SDK error) is classified by the generic :func:`is_retryable` predicate — the
@@ -45,16 +45,17 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Mapping, Optional
 
-from metagpt.common.events import RecoveryEvent, observe_event
-from metagpt.common.exception.base import MetaGPTError
-from metagpt.common.exception.codes import RecoveryAction
-from metagpt.common.exception.handlers import is_retryable
-from metagpt.common.logs import logger
+from mote.common.events import RecoveryEvent, observe_event
+from mote.common.exception.base import MoteError
+from mote.common.exception.codes import RecoveryAction
+from mote.common.exception.handlers import is_retryable
+from mote.common.logs import logger
 
 # A no-arg coroutine factory: each invocation issues one attempt and returns its result.
 Call = Callable[[], Awaitable]
 # Recover from ``exc`` (mutating captured domain state); return True if recovered.
-RecoveryStrategy = Callable[[MetaGPTError], Awaitable[bool]]
+# ``exc`` is any ``Exception`` — a typed ``MoteError`` or an untyped vendor error.
+RecoveryStrategy = Callable[[Exception], Awaitable[bool]]
 
 
 class RecoveryRunner:
@@ -137,14 +138,14 @@ class RecoveryRunner:
     def _action_for(exc: BaseException) -> RecoveryAction:
         """Resolve the recovery hint for *exc* — the unified retry judgement.
 
-        A typed :class:`MetaGPTError` carries an explicit ``recovery`` hint
+        A typed :class:`MoteError` carries an explicit ``recovery`` hint
         (which may be COMPRESS / ROTATE_CREDENTIAL / FALLBACK etc., not just
         RETRY/ABORT). An untyped exception falls back to the generic
         :func:`is_retryable` predicate, deriving RETRY (transient) or ABORT
         (permanent). ``is_retryable`` is imported lazily so this module stays a
         pure leaf (importing it eagerly would drag in ``common.utils``).
         """
-        if isinstance(exc, MetaGPTError):
+        if isinstance(exc, MoteError):
             return exc.recovery
 
         return RecoveryAction.RETRY if is_retryable(exc) else RecoveryAction.ABORT

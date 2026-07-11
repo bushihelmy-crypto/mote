@@ -1,6 +1,6 @@
 """LangfuseBackend — the only SDK-touching tracer backend.
 
-Implements :class:`~metagpt.common.observability.tracing.TracerBackend` against
+Implements :class:`~mote.common.observability.tracing.TracerBackend` against
 the langfuse v3 client. The key difference from the old ``LangfuseSubscriber`` /
 ``maybe_span`` pair is **explicit-parent nesting**: a child observation is
 created off its parent *handle* (``parent_handle.start_observation(...)``) when
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from metagpt.common.logs import logger
+from mote.common.logs import logger
 
 
 def _default_client_factory():

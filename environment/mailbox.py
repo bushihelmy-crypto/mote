@@ -27,9 +27,9 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from metagpt.common.schema import Message, UserMessage
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.comms import CommKind
+from mote.common.schema import Message, UserMessage
+from mote.environment.agent_path import AgentPath
+from mote.environment.comms import CommKind
 
 # Metadata keys carried on the staged UserMessage so the recipient can see who
 # wrote it, which path it was addressed to, what kind of message it is, and which
@@ -164,10 +164,7 @@ class Mailbox:
     # ------------------------------------------------------------------
     def dump(self) -> list[dict]:
         """Serialize pending items to a plain list of ``{message, trigger_turn}``."""
-        return [
-            {"message": item.message.dump(), "trigger_turn": item.trigger_turn}
-            for item in self._items
-        ]
+        return [{"message": item.message.dump(), "trigger_turn": item.trigger_turn} for item in self._items]
 
     @staticmethod
     def load(data: Optional[list[dict]]) -> "Mailbox":

@@ -12,11 +12,11 @@ style tokens) directly — no ``Console`` needed.
 
 from __future__ import annotations
 
-import pytest
-
 from types import SimpleNamespace
 
-from metagpt.cli.consumers.render.builders import (
+import pytest
+
+from mote.cli.consumers.render.builders import (
     _HAS_RICH,
     compaction_summary_text,
     format_usage_line,
@@ -31,7 +31,7 @@ from metagpt.cli.consumers.render.builders import (
     tool_group_summary_text,
     tool_started_text,
 )
-from metagpt.cli.consumers.render.palette import Palette
+from mote.cli.consumers.render.palette import Palette
 
 pytestmark = pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 

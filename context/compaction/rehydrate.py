@@ -34,15 +34,15 @@ import json
 import os
 from typing import Callable, Iterable, Optional
 
-from metagpt.common.const.message import TOOL_CALLS
-from metagpt.common.const.context import (
+from mote.common.const.context import (
     POST_COMPACT_REHYDRATE_MAX_FILES,
     POST_COMPACT_REHYDRATE_MAX_TOKENS_PER_FILE,
     POST_COMPACT_REHYDRATE_TOKEN_BUDGET,
 )
-from metagpt.common.logs import logger
-from metagpt.common.schema import Message, UserMessage
-from metagpt.common.utils.prompt_sanitizer import count_tokens, truncate_to_tokens
+from mote.common.const.message import TOOL_CALLS
+from mote.common.logs import logger
+from mote.common.schema import Message, UserMessage
+from mote.common.utils.prompt_sanitizer import count_tokens, truncate_to_tokens
 
 # The Read tool's file-path argument name (``executor/tools/read.py``); the tail
 # already surfaces the bytes of any file read through it, so dedup keys off this.
@@ -172,10 +172,7 @@ class FileRehydrator:
 
 def _snapshot_message(path: str, body: str) -> UserMessage:
     name = os.path.basename(path) or path
-    header = (
-        f"# File snapshot: {name} (re-read after compaction; current on-disk contents)\n"
-        f"Path: {path}"
-    )
+    header = f"# File snapshot: {name} (re-read after compaction; current on-disk contents)\n" f"Path: {path}"
     return UserMessage(content=f"{header}\n\n{body}")
 
 

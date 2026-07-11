@@ -1,0 +1,14 @@
+.git
+.gitignore
+.pre-commit-config.yaml
+ztest
+zdocs
+.claude
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+build
+dist

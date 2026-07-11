@@ -7,18 +7,19 @@ from __future__ import annotations
 import os.path
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Union
+from typing import Any, Dict, Iterable, Optional, Union, cast
 
 from pydantic import BaseModel, Field
 
-from metagpt.common.schema.serialization import BaseSerialization
-from metagpt.common.const import SERDESER_PATH
-from metagpt.common.utils.common import aread, read_json_file, write_json_file
-from metagpt.common.utils.exceptions import handle_exception
+from mote.common.const import SERDESER_PATH
+from mote.common.schema.serialization import BaseSerialization
+from mote.common.utils.common import aread, read_json_file, write_json_file
+from mote.common.utils.exceptions import handle_exception
 
 
 class CauseBy(str, Enum):
     """Message causation tags — replaces heavyweight Action subclasses used purely as markers."""
+
     USER_REQUIREMENT = "UserRequirement"
     RUN_COMMAND = "RunCommand"
     ACTION = "Action"
@@ -35,7 +36,7 @@ class ActionOutput:
 
 class SerializationMixin(BaseSerialization):
     @handle_exception
-    def serialize(self, file_path: str = None) -> str:
+    def serialize(self, file_path: Optional[str] = None) -> str:
         """Serializes the current instance to a JSON file."""
         file_path = file_path or self.get_serialization_path()
         serialized_data = self.model_dump()
@@ -44,10 +45,10 @@ class SerializationMixin(BaseSerialization):
 
     @classmethod
     @handle_exception
-    def deserialize(cls, file_path: str = None) -> BaseModel:
+    def deserialize(cls, file_path: Optional[str] = None) -> BaseModel:
         """Deserializes a JSON file to an instance of cls."""
         file_path = file_path or cls.get_serialization_path()
-        data: dict = read_json_file(file_path)
+        data = cast("dict[str, Any]", read_json_file(file_path))
         model = cls(**data)
         return model
 
@@ -89,7 +90,7 @@ class Document(BaseModel):
         content = await aread(filename=filename)
         doc = cls(content=content, filename=str(filename))
         if project_path and Path(filename).is_relative_to(project_path):
-            doc.root_path = Path(filename).relative_to(project_path).parent
+            doc.root_path = str(Path(filename).relative_to(project_path).parent)
             doc.filename = Path(filename).name
         return doc
 

@@ -26,19 +26,17 @@ from string import Template
 
 import pytest
 
-from metagpt.common import prompt as R
-from metagpt.common.prompt.refs import Sym, UnknownSymbolError, find_symbols
-from metagpt.parser.native_channel import NativeToolChannel
-from metagpt.parser.xml_channel import XmlCommandChannel
+from mote.common import prompt as R
+from mote.common.prompt.refs import Sym, UnknownSymbolError, find_symbols
+from mote.parser.native_channel import NativeToolChannel
+from mote.parser.xml_channel import XmlCommandChannel
 
 # The shared prose templates that flow to BOTH protocols. Each is reduced to a
 # concrete string (placeholders filled with dummies) so only protocol symbols,
 # not ${...} template holes, remain to inspect.
 _SHARED_PROMPTS = {
     "SYSTEM_PROMPT": R.SYSTEM_PROMPT,
-    "AGENT_TASK_PROMPT": Template(R.AGENT_TASK_PROMPT).safe_substitute(
-        parent_name="P", context="C", task="T"
-    ),
+    "AGENT_TASK_PROMPT": Template(R.AGENT_TASK_PROMPT).safe_substitute(parent_name="P", context="C", task="T"),
 }
 
 # Raw protocol-mechanic literals that must NOT appear in shared prose — the
@@ -55,9 +53,7 @@ class TestVocabularyCompleteness:
             used.update(find_symbols(text))
         assert used, "expected shared prose to use protocol symbols"
         for ch_name, ch in _CHANNELS.items():
-            vocab_values = {
-                (k.value if isinstance(k, Sym) else str(k)) for k in ch.vocabulary()
-            }
+            vocab_values = {(k.value if isinstance(k, Sym) else str(k)) for k in ch.vocabulary()}
             missing = used - vocab_values
             assert not missing, f"{ch_name} vocabulary missing surfaces for {missing}"
 
@@ -72,9 +68,7 @@ class TestNoResidualSymbols:
     @pytest.mark.parametrize("ch_name", sorted(_CHANNELS))
     def test_lowering_leaves_no_symbol(self, prompt_name, ch_name):
         lowered = _CHANNELS[ch_name].lower(_SHARED_PROMPTS[prompt_name])
-        assert find_symbols(lowered) == [], (
-            f"{ch_name}.lower({prompt_name}) left symbols: {find_symbols(lowered)}"
-        )
+        assert find_symbols(lowered) == [], f"{ch_name}.lower({prompt_name}) left symbols: {find_symbols(lowered)}"
 
 
 class TestNativeNeverLeaksXmlMechanics:
@@ -104,8 +98,7 @@ class TestSharedProseHasNoRawLiterals:
         text = _SHARED_PROMPTS[prompt_name]
         for literal in _XML_RAW_LITERALS:
             assert literal not in text, (
-                f"{prompt_name} contains raw protocol literal {literal!r}; "
-                f"use a ⟦...⟧ symbol instead"
+                f"{prompt_name} contains raw protocol literal {literal!r}; " f"use a ⟦...⟧ symbol instead"
             )
 
 

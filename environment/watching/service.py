@@ -4,7 +4,7 @@
 
 The watcher is intentionally control-plane-agnostic; this service owns the
 wiring. Each detected change is turned into a ``FileChanged`` hook fire on the
-injected :class:`~metagpt.common.interface.HookRunner` (normally a Role's
+injected :class:`~mote.common.interface.HookRunner` (normally a Role's
 ``HookManager``)::
 
     on_change(event) -> hook_runner.fire("FileChanged", {
@@ -25,16 +25,30 @@ agent's own edit back as an external ``FileChanged``.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Protocol
 
-from metagpt.common.events import FileMutatedEvent
-from metagpt.common.interface import HookRunner, ObservationSubscriber, ObserverPriority
-from metagpt.common.logs import log_class, logger
-from metagpt.environment.watching.events import FileChangeEvent
-from metagpt.environment.watching.watcher import FileWatcher
+from mote.common.events import FileMutatedEvent
+from mote.common.interface import HookRunner, ObservationSubscriber, ObserverPriority
+from mote.common.logs import log_class, logger
+from mote.environment.watching.events import FileChangeEvent
+from mote.environment.watching.watcher import FileWatcher
 
 #: Hook event name fired per detected change.
 FILE_CHANGED_EVENT = "FileChanged"
+
+
+class _SubscribableBus(Protocol):
+    """The event-spine slice this service uses (duck-typed).
+
+    Structural only — annotated locally so the service type-checks against
+    ``subscribe``/``unsubscribe`` without pinning the concrete ``EventBus``.
+    """
+
+    def subscribe(self, subscriber: object) -> object:
+        ...
+
+    def unsubscribe(self, subscriber: object) -> object:
+        ...
 
 
 @log_class(level="DEBUG")
@@ -53,7 +67,7 @@ class FileWatchService(ObservationSubscriber):
         *,
         ignore: Optional[Iterable[str]] = None,
         check_interval: float = 1.0,
-        bus: Optional["object"] = None,
+        bus: Optional[_SubscribableBus] = None,
     ):
         self._hooks = hook_runner
         self._watcher = FileWatcher(

@@ -26,14 +26,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, Iterable, List, Optional, Set
 
-from metagpt.common.const import MESSAGE_ROUTE_TO_ALL
-from metagpt.environment.agent_path import AgentPath
+from mote.common.const import MESSAGE_ROUTE_TO_ALL
+from mote.environment.agent_path import AgentPath
 
 
 class CommKind(str, Enum):
     """The semantic kind of an inter-agent message.
 
-    Orthogonal to :class:`~metagpt.environment.mailbox.DeliveryMode` (which only
+    Orthogonal to :class:`~mote.environment.mailbox.DeliveryMode` (which only
     says *whether to wake a turn*): the kind describes *what the message means* so
     a recipient (or an observer) can tell a delegated task from a result, a
     notification, or a query.

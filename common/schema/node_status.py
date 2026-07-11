@@ -20,5 +20,3 @@ class BgStatus(str, Enum):
     TIMEOUT = "timeout"
     SKIPPED = "skipped"
     WAITING_FOR_ROUTE = "waiting_for_route"
-
-

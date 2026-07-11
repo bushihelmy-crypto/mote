@@ -1,4 +1,4 @@
-"""State channels & reducers for :mod:`metagpt.executor.bggraph`.
+"""State channels & reducers for :mod:`mote.executor.bggraph`.
 
 LangGraph-style state sync: a node returns a ``dict`` of field updates
 (``{field: value}``) instead of a bare value stored under its own name. Each

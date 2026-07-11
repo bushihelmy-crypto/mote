@@ -4,7 +4,7 @@ P1's pragmatic network confinement: rather than unsharing the network namespace
 (which would also cut off the proxy), we leave the network shared and inject the
 standard proxy environment variables so that proxy-honouring tools (curl / pip /
 git / requests with trust_env) route through our local
-:class:`~metagpt.sandbox.network.proxy.EgressProxy`. (A sandboxed Jupyter kernel
+:class:`~mote.sandbox.network.proxy.EgressProxy`. (A sandboxed Jupyter kernel
 is orthogonal: its control channels run over ipc:// unix sockets, unaffected by
 either the netns or the proxy env.)
 

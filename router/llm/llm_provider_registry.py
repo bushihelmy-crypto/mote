@@ -5,10 +5,10 @@
 @Author  : alexanderwu
 @File    : llm_provider_registry.py
 """
-from metagpt.common.base.singleton import Singleton
-from metagpt.common.config.config.llm_config import LLMConfig, LLMType
-from metagpt.common.exception import ProviderNotFoundError
-from metagpt.router.llm.base_llm import BaseLLM
+from mote.common.base.singleton import Singleton
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.common.exception import ProviderNotFoundError
+from mote.router.llm.base_llm import BaseLLM
 
 
 class LLMProviderRegistry(metaclass=Singleton):

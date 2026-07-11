@@ -4,8 +4,8 @@
 
 Aligned with claude-code's aesthetic (brand-orange accent, light bullet +
 tree-branch layout instead of heavy boxes). Every rich-based host — the scrolling
-:class:`~metagpt.cli.consumers.terminal.consumer.TerminalConsumer` and the
-full-screen :class:`~metagpt.cli.consumers.textual.app.MetaGPTApp` (and, in future,
+:class:`~mote.cli.consumers.terminal.consumer.TerminalConsumer` and the
+full-screen :class:`~mote.cli.consumers.textual.app.MoteApp` (and, in future,
 the same Textual app served over the web) — reads its colours and figures from
 here, so the "look" is tuned in ONE neutral place that depends on no host.
 

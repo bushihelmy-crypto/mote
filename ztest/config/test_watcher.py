@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.config.watcher`` — mtime-poll hot reload."""
+"""Tests for ``mote.common.config.watcher`` — mtime-poll hot reload."""
 from __future__ import annotations
 
 import os
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.config.watcher import ConfigWatcher
+from mote.common.config.loader import load_config
+from mote.common.config.watcher import ConfigWatcher
 
 
 def _write_workdir_cfg(tmp_path, text: str):
-    cfg_dir = tmp_path / ".agentframe"
+    cfg_dir = tmp_path / ".mote"
     cfg_dir.mkdir(exist_ok=True)
     path = cfg_dir / "config.yaml"
     path.write_text(text)

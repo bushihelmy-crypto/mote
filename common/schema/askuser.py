@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
 
-
 # CC's chip-width limit on a question's `header` (used in the schema description).
 ASK_USER_QUESTION_CHIP_WIDTH = 12
 

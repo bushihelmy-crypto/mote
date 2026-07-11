@@ -8,20 +8,13 @@ import json
 import uuid
 from datetime import datetime
 from json import JSONDecodeError
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from pydantic import (
-    BaseModel,
-    Field,
-    SerializeAsAny,
-    create_model,
-    field_serializer,
-    field_validator,
-)
+from pydantic import BaseModel, Field, SerializeAsAny, create_model, field_serializer, field_validator
 
-from metagpt.common.schema.document import CauseBy, Resource
-from metagpt.common.const import (
+from mote.common.const import (
     AGENT,
+    CACHE_INTENT,
     MESSAGE_ROUTE_CAUSE_BY,
     MESSAGE_ROUTE_FROM,
     MESSAGE_ROUTE_TO,
@@ -33,19 +26,21 @@ from metagpt.common.const import (
     TOOL_CALL_ID,
     TOOL_CALLS,
 )
-from metagpt.common.logs import logger
-from metagpt.common.utils.common import (
-    CodeParser,
-    any_to_str,
-    any_to_str_set,
-    import_class,
-)
-from metagpt.common.utils.exceptions import handle_exception
-from metagpt.common.utils.serialize import (
+from mote.common.logs import logger
+from mote.common.schema.document import CauseBy, Resource
+from mote.common.utils.common import CodeParser, any_to_str, any_to_str_set, import_class
+from mote.common.utils.exceptions import handle_exception
+from mote.common.utils.serialize import (
     actionoutout_schema_to_mapping,
     actionoutput_mapping_to_str,
     actionoutput_str_to_mapping,
 )
+
+if TYPE_CHECKING:
+    # Type-only import: `common.schema` is a low layer and must not import the
+    # higher `router` layer at runtime. Guarded so the "BaseLLM" annotation in
+    # parse_resources resolves for the type checker without a real dependency.
+    from mote.router.llm.base_llm import BaseLLM
 
 
 class Message(BaseModel):
@@ -68,11 +63,11 @@ class Message(BaseModel):
 
     @field_validator("instruct_content", mode="before")
     @classmethod
-    def check_instruct_content(cls, ic: Any) -> BaseModel:
+    def check_instruct_content(cls, ic: Any) -> Any:
         if ic and isinstance(ic, dict) and "class" in ic:
             if "mapping" in ic:
                 mapping = actionoutput_str_to_mapping(ic["mapping"])
-                actionnode_class = import_class("ActionNode", "metagpt.common.utils.action_node")
+                actionnode_class = import_class("ActionNode", "mote.common.utils.action_node")
                 ic_obj = actionnode_class.create_model_class(class_name=ic["class"], mapping=mapping)
             elif "module" in ic:
                 ic_obj = import_class(ic["class"], ic["module"])
@@ -108,7 +103,7 @@ class Message(BaseModel):
         if ic:
             schema = ic.model_json_schema()
             ic_type = str(type(ic))
-            if "<class 'metagpt.common.utils.action_node" in ic_type:
+            if "<class 'mote.common.utils.action_node" in ic_type:
                 mapping = actionoutout_schema_to_mapping(schema)
                 mapping = actionoutput_mapping_to_str(mapping)
                 ic_dict = {"class": schema["title"], "mapping": mapping, "value": ic.model_dump()}
@@ -147,12 +142,12 @@ class Message(BaseModel):
     def to_dict(self) -> dict:
         """Return a dict for the LLM call."""
         if self.metadata.get(TOOL_CALL_ID):
-            return {
+            wire = {
                 "role": "tool",
                 "tool_call_id": self.metadata[TOOL_CALL_ID],
                 "content": self.content,
             }
-        if self.metadata.get(TOOL_CALLS):
+        elif self.metadata.get(TOOL_CALLS):
             tool_calls = [
                 {
                     "id": c["id"],
@@ -164,8 +159,17 @@ class Message(BaseModel):
                 }
                 for c in self.metadata[TOOL_CALLS]
             ]
-            return {"role": self.role, "content": self.content or "", "tool_calls": tool_calls}
-        return {"role": self.role, "content": self.content}
+            wire = {"role": self.role, "content": self.content or "", "tool_calls": tool_calls}
+        else:
+            wire = {"role": self.role, "content": self.content}
+        # Declarative prompt-cache intent (provider-agnostic). Carried as a private
+        # wire key ONLY when non-default; providers translate it into their own
+        # caching mechanism and strip it before the request goes out (so it never
+        # reaches an API that rejects unknown keys). Absence == CACHE_INTENT_DURABLE.
+        intent = self.metadata.get(CACHE_INTENT)
+        if intent:
+            wire["_cache_intent"] = intent
+        return wire
 
     def dump(self) -> str:
         """Convert the object to json string"""
@@ -197,7 +201,7 @@ class Message(BaseModel):
             logger.error(f"parse json failed: {val}, error:{err}")
         return None
 
-    async def parse_resources(self, llm: "BaseLLM", key_descriptions: Dict[str, str] = None) -> Dict:
+    async def parse_resources(self, llm: "BaseLLM", key_descriptions: Optional[Dict[str, str]] = None) -> Dict:
         """Parse resources from message content using LLM."""
         if not self.content:
             return {}
@@ -228,7 +232,8 @@ class Message(BaseModel):
         """Dynamically creates a Pydantic BaseModel subclass based on a given dictionary."""
         if not class_name:
             class_name = "DM" + uuid.uuid4().hex[0:8]
-        dynamic_class = create_model(class_name, **{key: (value.__class__, ...) for key, value in kvs.items()})
+        field_defs = {key: (value.__class__, ...) for key, value in kvs.items()}
+        dynamic_class = create_model(class_name, **field_defs)  # type: ignore[call-overload]  # dynamic field defs vs create_model reserved-kw stub
         return dynamic_class.model_validate(kvs)
 
     def is_user_message(self) -> bool:

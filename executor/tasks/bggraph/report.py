@@ -10,11 +10,11 @@ from __future__ import annotations
 import contextvars
 from typing import Any, Callable, Optional
 
-from metagpt.common.events import TaskProgressEvent, observe_event_sync
-from metagpt.common.logs import logger
-from metagpt.common.schema import CauseBy
-from metagpt.executor.tasks.bggraph.types import END
-from metagpt.executor.tasks.types import BackgroundTaskNotification
+from mote.common.events import TaskProgressEvent, observe_event_sync
+from mote.common.logs import logger
+from mote.common.schema import CauseBy
+from mote.executor.tasks.bggraph.types import END
+from mote.executor.tasks.types import BackgroundTaskNotification
 
 # ---------------------------------------------------------------------------
 # Generic progress reporting via contextvars

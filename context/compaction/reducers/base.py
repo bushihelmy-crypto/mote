@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Protocol, runtime_checkable
 
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 
 class ReducerCost(IntEnum):

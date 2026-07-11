@@ -15,14 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-import metagpt.parser as parser_pkg
-from metagpt.common.config.config.llm_config import LLMType
-from metagpt.parser import (
-    NativeToolChannel,
-    XmlCommandChannel,
-    infer_native_tool_provider,
-    make_command_channel,
-)
+import mote.parser as parser_pkg
+from mote.common.config.config.llm_config import LLMType
+from mote.parser import NativeToolChannel, XmlCommandChannel, infer_native_tool_provider, make_command_channel
 
 from .conftest import _LLMConfig
 
@@ -104,11 +99,11 @@ class TestPackageExports:
             assert hasattr(parser_pkg, name), name
 
     def test_command_channel_is_the_base_class(self):
-        from metagpt.common.base import CommandChannel
+        from mote.common.base import CommandChannel
 
         assert parser_pkg.CommandChannel is CommandChannel
 
     def test_output_section_reexported(self):
-        from metagpt.common.prompt.output import OUTPUT_SECTION
+        from mote.common.prompt.output import OUTPUT_SECTION
 
         assert parser_pkg.OUTPUT_SECTION is OUTPUT_SECTION

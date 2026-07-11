@@ -16,12 +16,12 @@ import asyncio
 
 import pytest
 
-from metagpt.common.schema import MessageQueue
-from metagpt.executor.tasks import BackgroundTaskPool, TaskOutputStore, BackgroundTaskNotification, BgStatus
-from metagpt.executor.tasks.bggraph import END, START, BgGraph
-from metagpt.executor.tasks.bggraph.types import LlmPauseResult
+from mote.common.schema import MessageQueue
+from mote.executor.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskOutputStore
+from mote.executor.tasks.bggraph import END, START, BgGraph
+from mote.executor.tasks.bggraph.types import LlmPauseResult
 
-from .conftest import S, sync_node, gated_node
+from .conftest import S, gated_node, sync_node
 
 pytestmark = pytest.mark.asyncio
 
@@ -220,6 +220,7 @@ class TestPoolPauseAndResubmit:
 
     async def test_resubmit_unknown_id_raises(self, pool, store, msg_buffer):
         """resubmit() with an unknown task_id raises ValueError."""
+
         async def noop():
             return None
 

@@ -30,20 +30,16 @@ import math
 import time
 from typing import Callable, Dict, List, Optional
 
-from metagpt.common.logs import log_class
-from metagpt.common.scheduling import PeriodicLoop
-from metagpt.environment.scheduling.cron import (
+from mote.common.logs import log_class
+from mote.common.scheduling import PeriodicLoop
+from mote.environment.scheduling.cron import (
     _next_cron_run_ms,
     jittered_next_cron_run_ms,
     one_shot_jittered_next_cron_run_ms,
 )
-from metagpt.environment.scheduling.lock import SchedulerLock
-from metagpt.environment.scheduling.store import CronTaskStore
-from metagpt.environment.scheduling.task import (
-    DEFAULT_CRON_JITTER_CONFIG,
-    CronJitterConfig,
-    CronTask,
-)
+from mote.environment.scheduling.lock import SchedulerLock
+from mote.environment.scheduling.store import CronTaskStore
+from mote.environment.scheduling.task import DEFAULT_CRON_JITTER_CONFIG, CronJitterConfig, CronTask
 
 
 def _default_clock() -> float:
@@ -161,9 +157,7 @@ class CronScheduler:
                 # First sight — anchor recurring from last_fired_at/created_at,
                 # one-shot from created_at (see upstream rationale).
                 if task.recurring:
-                    computed = jittered_next_cron_run_ms(
-                        task.cron, task.last_fired_at or task.created_at, task.id, cfg
-                    )
+                    computed = jittered_next_cron_run_ms(task.cron, task.last_fired_at or task.created_at, task.id, cfg)
                 else:
                     computed = one_shot_jittered_next_cron_run_ms(task.cron, task.created_at, task.id, cfg)
                 next_fire = math.inf if computed is None else computed

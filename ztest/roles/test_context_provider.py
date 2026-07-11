@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.roles.context_provider — ContextProvider + ThinkRequest.
+"""Tests for mote.roles.context_provider — ContextProvider + ThinkRequest.
 
 Focus on the pure, side-effect-free assembly the provider does by READING the
 Role: loop_context() packing, property forwarders, env-derived strings, and the
@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.base import LoopContext
-from metagpt.roles import Role
-from metagpt.roles.context_provider import ContextProvider
-from metagpt.roles.context_provider.base import BaseContextProvider
-from metagpt.roles.context_provider.request import ThinkRequest
+from mote.common.base import LoopContext
+from mote.roles import Role
+from mote.roles.context_provider import ContextProvider
+from mote.roles.context_provider.base import BaseContextProvider
+from mote.roles.context_provider.request import ThinkRequest
 
 from .conftest import FakeEnv
 
@@ -131,7 +131,5 @@ class TestResolveLLM:
             return sentinel
 
         monkeypatch.setattr(role.router, "aroute", fake_aroute)
-        out = asyncio.run(
-            role.context_provider.resolve_llm(messages=[{"role": "user", "content": "hi"}])
-        )
+        out = asyncio.run(role.context_provider.resolve_llm(messages=[{"role": "user", "content": "hi"}]))
         assert out is sentinel

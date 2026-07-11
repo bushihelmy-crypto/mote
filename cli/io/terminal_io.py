@@ -36,18 +36,22 @@ from typing import Any, Callable, Optional
 # selection menu reads the same brand as the rest of the terminal host. The pure
 # row/redraw string builders live in ``terminal_menu`` (no ``self``, no I/O); the
 # port keeps only the stateful reader + raw termios concerns.
-from metagpt.cli.consumers.render.palette import WARN
-from metagpt.cli.consumers.terminal.style import ansi_fg
-from metagpt.cli.io.terminal_menu import (
+from mote.cli.consumers.render.palette import WARN
+from mote.cli.consumers.terminal.style import ansi_fg
+from mote.cli.io.terminal_menu import (
     _AMBER_RGB,
     _RULE_WIDTH,
     _dim,
     _menu_lines,
-    _option_lines,
     _redraw_menu,
     _redraw_option_lines,
     _render_option_lines,
 )
+
+# After a lone ESC byte we wait this long for the rest of a CSI arrow sequence
+# (``ESC [ A/B``). A real arrow key sends all three bytes back-to-back, so a short
+# window distinguishes it from a deliberate bare-Esc (cancel) without a laggy feel.
+_CSI_TIMEOUT = 0.05
 
 
 class TerminalPort:
@@ -77,7 +81,7 @@ class TerminalPort:
         # Default to the shared terminal look (orange ``❯`` prompt + masthead);
         # the style module is rich-free so importing it keeps the port's plain
         # stream contract. ``prompt``/``banner`` overrides are the test seam.
-        from metagpt.cli.consumers.terminal.style import PROMPT, render_banner
+        from mote.cli.consumers.terminal.style import PROMPT, render_banner
 
         self._prompt = prompt if prompt is not None else PROMPT
         self._banner = banner if banner is not None else render_banner()
@@ -225,9 +229,13 @@ class TerminalPort:
         calls would race for one line and the answer could be stolen.
         """
         while True:
-            done, _ = await asyncio.wait({self._read_task}, timeout=self._idle_poll_interval)
-            if self._read_task in done:
-                data = self._read_task.result()
+            # A read task is always in flight while this loop runs; capture it into
+            # a local so the .result() access below is narrowed off the Optional.
+            read_task = self._read_task
+            assert read_task is not None, "readline loop entered without an active read task"
+            done, _ = await asyncio.wait({read_task}, timeout=self._idle_poll_interval)
+            if read_task in done:
+                data = read_task.result()
                 waiter = self._ask_waiter
                 if waiter is not None and not waiter.done():
                     waiter.set_result(data)
@@ -265,7 +273,7 @@ class TerminalPort:
         multi). The "Other" branch's raw string becomes ``free_text`` verbatim —
         multi-line or numeric, with zero reverse-parsing (this is the real fix).
         """
-        from metagpt.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
         out = []
         multiq = len(questions.questions) > 1
@@ -273,11 +281,7 @@ class TerminalPort:
             labels = [o.label for o in q.options]
             header = f"[{q.header}] {q.question}" if multiq else q.question
             selected, free = await self._select_structured(header, labels, q.multiSelect)
-            out.append(
-                AskUserQuestionAnswer(
-                    header=q.header, question=q.question, selected=selected, free_text=free
-                )
-            )
+            out.append(AskUserQuestionAnswer(header=q.header, question=q.question, selected=selected, free_text=free))
         return AskUserQuestionAnswers(answers=out)
 
     async def _select_terminal(self, question: str, labels: list, multi: bool) -> tuple:
@@ -416,6 +420,56 @@ class TerminalPort:
         self._reprompt()
         return await self._read_line()
 
+    async def _read_csi_arrow(self) -> str:
+        """After a lone ESC, resolve a CSI arrow (``ESC [ A/B``) or bare-Esc cancel.
+
+        A real arrow key sends ``ESC [ A`` (up) / ``ESC [ B`` (down) back-to-back;
+        a lone ESC that never completes within :data:`_CSI_TIMEOUT` is a deliberate
+        bare Esc → ``cancel``. An incomplete/unknown sequence → ``other``.
+        """
+        try:
+            b2 = await asyncio.wait_for(self._reader.read(1), _CSI_TIMEOUT)
+        except asyncio.TimeoutError:
+            return "cancel"  # bare Esc
+        if b2 == b"[":
+            try:
+                b3 = await asyncio.wait_for(self._reader.read(1), _CSI_TIMEOUT)
+            except asyncio.TimeoutError:
+                return "other"
+            if b3 == b"A":
+                return "up"
+            if b3 == b"B":
+                return "down"
+        return "other"
+
+    async def _read_nav_key(self, extra_keys: Callable[[str], Optional[str]]) -> str:
+        """Read one logical navigation key, shared by the menu + approval prompts.
+
+        Handles the common vocabulary — arrows / ``j`` / ``k`` → ``up``/``down``;
+        Enter → ``enter``; Esc / Ctrl+C / EOF → ``cancel`` — then defers the
+        prompt-specific tail keys to *extra_keys* (a digit for the select menu,
+        ``y``/``a``/``n``/``d`` for approval): it maps a lowercased char to its
+        outcome or ``None`` to fall through to ``other`` (the caller re-loops).
+        """
+        b = await self._reader.read(1)
+        if not b:
+            return "cancel"  # EOF
+        if b in (b"\r", b"\n"):
+            return "enter"
+        if b == b"\x03":  # Ctrl+C
+            return "cancel"
+        if b == b"\x1b":  # ESC — maybe a CSI arrow sequence
+            return await self._read_csi_arrow()
+        ch = b.decode(errors="ignore").lower()
+        if ch == "k":
+            return "up"
+        if ch == "j":
+            return "down"
+        mapped = extra_keys(ch)
+        if mapped is not None:
+            return mapped
+        return "other"
+
     async def _read_menu_key(self) -> str:
         """Read one logical key for the select menu.
 
@@ -423,38 +477,7 @@ class TerminalPort:
         ``space``; a digit returns itself; Esc / Ctrl+C / EOF → ``cancel``;
         anything else → ``other`` (the caller re-loops).
         """
-        b = await self._reader.read(1)
-        if not b:
-            return "cancel"
-        if b in (b"\r", b"\n"):
-            return "enter"
-        if b == b"\x03":  # Ctrl+C
-            return "cancel"
-        if b == b" ":
-            return "space"
-        if b == b"\x1b":  # ESC — maybe a CSI arrow sequence
-            try:
-                b2 = await asyncio.wait_for(self._reader.read(1), 0.05)
-            except asyncio.TimeoutError:
-                return "cancel"  # bare Esc
-            if b2 == b"[":
-                try:
-                    b3 = await asyncio.wait_for(self._reader.read(1), 0.05)
-                except asyncio.TimeoutError:
-                    return "other"
-                if b3 == b"A":
-                    return "up"
-                if b3 == b"B":
-                    return "down"
-            return "other"
-        ch = b.decode(errors="ignore").lower()
-        if ch == "k":
-            return "up"
-        if ch == "j":
-            return "down"
-        if ch.isdigit():
-            return ch
-        return "other"
+        return await self._read_nav_key(lambda ch: "space" if ch == " " else (ch if ch.isdigit() else None))
 
     # Approval choices, in display order: ``(outcome, label, shortcut)``. The
     # shortcut key jumps to *and* selects the option (claude-code parity).
@@ -475,7 +498,7 @@ class TerminalPort:
         typed ``[y]/[n]/[a]/[d]`` prompt via the shared, parked-reader-safe
         ``_read_line`` so it never races the main-loop reader.
         """
-        from metagpt.cli.common.view.events import ApprovalDecision
+        from mote.cli.contracts.view.events import ApprovalDecision
 
         action = getattr(request, "action", "") or getattr(request, "tool_name", "") or "action"
         risk = getattr(request, "risk", "medium")
@@ -594,36 +617,7 @@ class TerminalPort:
         Ctrl+C and EOF → ``cancel``; the ``y``/``a``/``n``/``d`` shortcuts return
         themselves; anything else → ``other`` (the caller re-loops).
         """
-        b = await self._reader.read(1)
-        if not b:
-            return "cancel"  # EOF
-        if b in (b"\r", b"\n"):
-            return "enter"
-        if b == b"\x03":  # Ctrl+C
-            return "cancel"
-        if b == b"\x1b":  # ESC — maybe a CSI arrow sequence
-            try:
-                b2 = await asyncio.wait_for(self._reader.read(1), 0.05)
-            except asyncio.TimeoutError:
-                return "cancel"  # bare Esc
-            if b2 == b"[":
-                try:
-                    b3 = await asyncio.wait_for(self._reader.read(1), 0.05)
-                except asyncio.TimeoutError:
-                    return "other"
-                if b3 == b"A":
-                    return "up"
-                if b3 == b"B":
-                    return "down"
-            return "other"
-        ch = b.decode(errors="ignore").lower()
-        if ch == "k":
-            return "up"
-        if ch == "j":
-            return "down"
-        if ch in ("y", "a", "n", "d"):
-            return ch
-        return "other"
+        return await self._read_nav_key(lambda ch: ch if ch in ("y", "a", "n", "d") else None)
 
     async def _typed_approval(self, action: str, risk: str, preview: str) -> str:
         """Typed fallback: one line mapped to an outcome (non-tty / test path)."""

@@ -1,13 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.common.config.sources`` — precedence + file discovery."""
+"""Tests for ``mote.common.config.sources`` — precedence + file discovery."""
 from __future__ import annotations
 
-from metagpt.common.config.sources import (
-    CONFIG_FILE_NAME,
-    ConfigSource,
-    discover_source_files,
-)
+from mote.common.config.sources import CONFIG_FILE_NAME, ConfigSource, discover_source_files
 
 
 def test_precedence_is_strictly_ascending():
@@ -34,7 +30,7 @@ def test_only_workdir_is_untrusted():
 
 
 def test_discover_returns_files_in_ascending_precedence(tmp_path):
-    work_cfg_dir = tmp_path / ".agentframe"
+    work_cfg_dir = tmp_path / ".mote"
     work_cfg_dir.mkdir()
     (work_cfg_dir / CONFIG_FILE_NAME).write_text("proxy: tmp\n")
 

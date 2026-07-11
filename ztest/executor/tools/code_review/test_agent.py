@@ -14,9 +14,9 @@ import types
 
 import pytest
 
-from metagpt.common.agent_control import set_control
-from metagpt.common.exception import AgentLimitReached
-from metagpt.executor.tools.code_review._agent import run_child, run_child_for_text
+from mote.common.agent_control import set_control
+from mote.common.exception import AgentLimitReached
+from mote.executor.tools.code_review._agent import run_child, run_child_for_text
 
 
 class _LeafRole:

@@ -12,12 +12,11 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 
-from metagpt.executor.compress.base import CompressionResult, applied, unchanged
+from mote.common.text import count_noun
+from mote.executor.compress.base import CompressionResult, applied, unchanged
 
 # ``path:line:col: CODE message`` — ruff and flake8 share this shape.
-_FINDING_RE = re.compile(
-    r"^(?P<path>[^:]+):(?P<line>\d+):(?P<col>\d+):\s+(?P<code>[A-Z]+\d+)\s+(?P<msg>.*)$"
-)
+_FINDING_RE = re.compile(r"^(?P<path>[^:]+):(?P<line>\d+):(?P<col>\d+):\s+(?P<code>[A-Z]+\d+)\s+(?P<msg>.*)$")
 
 # Locations to show per rule code before summarising the rest.
 _KEEP_PER_CODE = 3
@@ -49,7 +48,7 @@ class RuffCompressor:
 
         out: list[str] = []
         for code, occ in groups.items():
-            out.append(f"{code}: {len(occ)} occurrence(s)")
+            out.append(f"{code}: {count_noun(len(occ), 'occurrence')}")
             for loc, msg in occ[:_KEEP_PER_CODE]:
                 out.append(f"  {loc}: {msg}")
             if len(occ) > _KEEP_PER_CODE:

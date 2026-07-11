@@ -13,8 +13,8 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.apply_patch import ApplyPatch
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.apply_patch import ApplyPatch
 
 from .conftest import CapRole, bind, mark_read, run, write_file
 
@@ -124,12 +124,7 @@ class TestMove:
         full = write_file("old.py", "a = 1\n")
         mark_read(role, full)
         tool = _bound_tool(role)
-        patch = _wrap(
-            "*** Update File: old.py\n"
-            "*** Move to: new.py\n"
-            "-a = 1\n"
-            "+a = 2"
-        )
+        patch = _wrap("*** Update File: old.py\n" "*** Move to: new.py\n" "-a = 1\n" "+a = 2")
         out = run(tool.call(input=patch))
         assert "old.py -> new.py" in out.output
         assert not os.path.exists(full)
@@ -146,9 +141,7 @@ class TestMove:
         write_file("new.py", "occupied\n")
         mark_read(role, full)
         tool = _bound_tool(role)
-        patch = _wrap(
-            "*** Update File: old.py\n*** Move to: new.py\n-a = 1\n+a = 2"
-        )
+        patch = _wrap("*** Update File: old.py\n*** Move to: new.py\n-a = 1\n+a = 2")
         with pytest.raises(ToolError) as e:
             run(tool.call(input=patch))
         assert "destination already exists" in str(e.value)

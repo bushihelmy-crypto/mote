@@ -10,11 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.sandbox.network.policy import (
-    NetworkPolicy,
-    is_blocked_host,
-    normalize_host,
-)
+from mote.sandbox.network.policy import NetworkPolicy, is_blocked_host, normalize_host
 
 
 class TestNormalizeHost:
@@ -43,18 +39,18 @@ class TestIsBlockedHost:
     @pytest.mark.parametrize(
         "host",
         [
-            "127.0.0.1",        # loopback
-            "10.0.0.1",         # RFC1918
-            "192.168.1.1",      # RFC1918
-            "172.16.0.1",       # RFC1918
-            "169.254.1.1",      # link-local
-            "100.64.0.1",       # CGNAT
-            "224.0.0.1",        # multicast
-            "0.0.0.0",          # unspecified
-            "192.0.2.5",        # TEST-NET-1
-            "198.51.100.5",     # TEST-NET-2
-            "203.0.113.5",      # TEST-NET-3
-            "::1",              # ipv6 loopback
+            "127.0.0.1",  # loopback
+            "10.0.0.1",  # RFC1918
+            "192.168.1.1",  # RFC1918
+            "172.16.0.1",  # RFC1918
+            "169.254.1.1",  # link-local
+            "100.64.0.1",  # CGNAT
+            "224.0.0.1",  # multicast
+            "0.0.0.0",  # unspecified
+            "192.0.2.5",  # TEST-NET-1
+            "198.51.100.5",  # TEST-NET-2
+            "203.0.113.5",  # TEST-NET-3
+            "::1",  # ipv6 loopback
         ],
     )
     def test_internal_addresses_blocked(self, host):

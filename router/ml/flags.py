@@ -7,7 +7,7 @@ Source: ``squilla_router/models/.../runtime_src/src/router/flags.py``.
 Computes five boolean flags from raw text using keyword matching and pattern
 detection. All rules are config-driven via ``router.runtime.yaml``. This is the
 *internal* config-driven flag computer used by the verbatim Phase-3 postprocess;
-the public ergonomic wrapper lives in ``metagpt.router.flags``.
+the public ergonomic wrapper lives in ``mote.router.flags``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from metagpt.router.ml.features import ContextMetadata
+from mote.router.ml.features import ContextMetadata
 
 
 @dataclass
@@ -29,9 +29,7 @@ class RoutingFlags:
 
 _CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
 _LOG_BLOCK_RE = re.compile(
-    r"(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}.*\n){3,}"
-    r"|"
-    r"(^\[?(INFO|WARN|ERROR|DEBUG)\]?\s.*\n){3,}",
+    r"(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}.*\n){3,}" r"|" r"(^\[?(INFO|WARN|ERROR|DEBUG)\]?\s.*\n){3,}",
     re.MULTILINE,
 )
 _FILE_PATH_RE = re.compile(
@@ -70,16 +68,10 @@ def compute_flags(text: str, config: dict, context: ContextMetadata | None = Non
     rules = config.get("flag_rules", {})
 
     hr = rules.get("high_risk", {})
-    high_risk = (
-        _has_keyword(text, hr.get("keywords_zh", []))
-        or _has_keyword(text, hr.get("keywords_en", []))
-    )
+    high_risk = _has_keyword(text, hr.get("keywords_zh", [])) or _has_keyword(text, hr.get("keywords_en", []))
 
     dbg = rules.get("debug", {})
-    debug = (
-        _has_keyword(text, dbg.get("keywords", []))
-        or _has_pattern(text, dbg.get("patterns", []))
-    )
+    debug = _has_keyword(text, dbg.get("keywords", [])) or _has_pattern(text, dbg.get("patterns", []))
 
     ra = rules.get("repo_arch", {})
     repo_arch = _has_keyword(text, ra.get("keywords", []))

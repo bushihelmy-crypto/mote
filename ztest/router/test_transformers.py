@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.llm.transformers (message-repair recovery handlers)."""
+"""Tests for mote.router.llm.transformers (message-repair recovery handlers)."""
 from __future__ import annotations
 
 import base64
@@ -8,19 +8,19 @@ import io
 
 import pytest
 
-from metagpt.common.exception import (
+from mote.common.exception import (
     LLMImageTooLargeError,
     LLMInvalidRequestStateError,
     LLMMultimodalToolContentError,
+    RecoveryAction,
 )
-from metagpt.router.llm.transformers import (
-    DEFAULT_MESSAGE_TRANSFORMERS,
+from mote.router.llm.transformers import (
     _IMAGE_TARGET_BYTES,
+    DEFAULT_MESSAGE_TRANSFORMERS,
     downgrade_tool_content,
     shrink_image,
     strip_request_state,
 )
-from metagpt.common.exception import RecoveryAction
 
 
 def _big_image_data_url() -> str:
@@ -122,16 +122,12 @@ class TestDowngradeToolContent:
     @pytest.mark.asyncio
     async def test_text_only_list_no_change(self):
         # No image part → stripping doesn't fix anything → None.
-        msgs = [
-            {"role": "tool", "tool_call_id": "1", "content": [{"type": "text", "text": "x"}]}
-        ]
+        msgs = [{"role": "tool", "tool_call_id": "1", "content": [{"type": "text", "text": "x"}]}]
         assert await downgrade_tool_content(msgs, LLMMultimodalToolContentError("x")) is None
 
     @pytest.mark.asyncio
     async def test_non_tool_role_skipped(self):
-        msgs = [
-            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:"}}]}
-        ]
+        msgs = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:"}}]}]
         assert await downgrade_tool_content(msgs, LLMMultimodalToolContentError("x")) is None
 
 

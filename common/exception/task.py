@@ -1,4 +1,4 @@
-"""Background-task tier exceptions (``metagpt.executor.tasks.pool``).
+"""Background-task tier exceptions (``mote.executor.tasks.pool``).
 
 These are *whole-task* outcomes surfaced by the pool's ``_on_done`` callback —
 distinct from the graph-tier errors (which describe how a graph run failed) and
@@ -6,7 +6,7 @@ from the node-tier errors (a single node). A background task may end by being
 timed out (its wall-clock budget elapsed) or cancelled (killed externally or
 because its output exceeded the disk cap). Neither is a normal raised error from
 inside the task — the pool synthesizes one so the terminal notification carries
-the same structured :class:`~metagpt.common.exception.report.ErrorReport`
+the same structured :class:`~mote.common.exception.report.ErrorReport`
 contract every other failure surface uses.
 """
 
@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from metagpt.common.exception.base import MetaGPTError, NonRetryableError, RetryableError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import MoteError, NonRetryableError, RetryableError
+from mote.common.exception.codes import ErrorCode
 
 
-class BackgroundTaskError(MetaGPTError):
+class BackgroundTaskError(MoteError):
     """Base for whole-task background-execution outcomes."""
 
 

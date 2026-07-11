@@ -1,126 +1,210 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Path constants and root-directory helpers."""
+"""Path constants, root-directory helpers, and ``.mote/`` config discovery."""
+import json
 import os
 from pathlib import Path
+from typing import List, Optional
 
 from loguru import logger
 
-import metagpt
+import mote
+
+#: The per-project config directory name. All project-local mote assets
+#: (skills / agents / mcp.json / settings.local.json) live under ``<dir>/.mote``,
+#: mirroring Claude Code's ``.claude`` convention but keeping mote's own name.
+MOTE_DIR_NAME = ".mote"
 
 
-def get_metagpt_package_root():
+def get_mote_package_root():
     """Get the root directory of the installed package."""
-    package_root = Path(metagpt.__file__).parent.parent
+    package_root = Path(mote.__file__).parent.parent
     logger.info(f"Package root set to {str(package_root)}")
     return package_root
 
 
-def get_metagpt_root():
+def get_mote_root():
     """Get the project root directory.
 
-    Resolution order: the ``METAGPT_PROJECT_ROOT`` env override, then the
+    Resolution order: the ``MOTE_PROJECT_ROOT`` env override, then the
     package root when it looks like a project checkout (carries a ``.git`` /
     ``.project_root`` / ``.gitignore`` marker), else the current directory.
     Deriving from the package location keeps ``SOURCE_ROOT`` (and the shipped
-    ``metagpt/config.yaml`` it points at) stable regardless of ``cwd``.
+    ``mote/config.yaml`` it points at) stable regardless of ``cwd``.
     """
-    project_root_env = os.getenv("METAGPT_PROJECT_ROOT")
+    project_root_env = os.getenv("MOTE_PROJECT_ROOT")
     if project_root_env:
         project_root = Path(project_root_env)
         logger.info(f"PROJECT_ROOT set from environment variable to {str(project_root)}")
         return project_root
 
-    project_root = get_metagpt_package_root()
+    project_root = get_mote_package_root()
     for marker in (".git", ".project_root", ".gitignore"):
         if (project_root / marker).exists():
             return project_root
     return Path.cwd()
 
 
-# METAGPT PROJECT ROOT AND VARS
-CONFIG_ROOT = Path.home() / ".metagpt"
-METAGPT_ROOT = get_metagpt_root()  # Dependent on METAGPT_PROJECT_ROOT
-DEFAULT_WORKSPACE_ROOT = METAGPT_ROOT / "workspace"
+# MOTE PROJECT ROOT AND VARS
+CONFIG_ROOT = Path.home() / ".mote"
+MOTE_ROOT = get_mote_root()  # Dependent on MOTE_PROJECT_ROOT
+DEFAULT_WORKSPACE_ROOT = CONFIG_ROOT / "workspace"
 
 
-def get_backend_readme_path() -> Path:
-    return DEFAULT_WORKSPACE_ROOT / "app" / "backend" / "README.md"
+# Storage root for serialized documents (schema/document.py) — TODO: store
+# `storage` under the individual generated project.
+SERDESER_PATH = DEFAULT_WORKSPACE_ROOT / "storage"
+
+SOURCE_ROOT = MOTE_ROOT / "mote"
+TOOL_SCHEMA_PATH = MOTE_ROOT / "mote/tools/schemas"
 
 
-def get_frontend_readme_path() -> Path:
-    return DEFAULT_WORKSPACE_ROOT / "app" / "frontend" / "README.md"
+# ============================================================================
+# ``.mote`` project-dir discovery (Claude-Code-aligned)
+# ----------------------------------------------------------------------------
+# Skills / agents / mcp / settings are discovered by walking from the working
+# directory *up* to the git root, collecting every ``<dir>/.mote/<subdir>`` that
+# exists (mirrors Claude Code's ``getProjectDirsUpToHome``). Stopping at the git
+# root prevents assets from parent directories outside the repo from leaking in.
+# ============================================================================
+def user_mote_dir(subdir: str) -> Path:
+    """The user-level ``~/.mote/<subdir>`` location (lowest project-band layer)."""
+    return CONFIG_ROOT / subdir
 
 
-def set_default_workspace_root(new_path: Path):
-    global DEFAULT_WORKSPACE_ROOT
-    logger.warning(f"update DEFAULT_WORKSPACE_ROOT from: {DEFAULT_WORKSPACE_ROOT} to: {new_path}")
-    DEFAULT_WORKSPACE_ROOT = new_path
+def mote_project_dirs(subdir: str, cwd: Optional[Path] = None) -> List[Path]:
+    """Existing ``<dir>/.mote/<subdir>`` dirs from the git root down to *cwd*.
+
+    Walks upward from *cwd* collecting each existing ``<dir>/.mote/<subdir>``,
+    stopping at (and including) the git root — or, when *cwd* is not inside a
+    repo, at the filesystem root. Returned **low→high precedence** (git root
+    first, *cwd* last), so a caller can let a closer-to-cwd directory override a
+    farther one. Mirrors Claude Code's per-project upward walk with a git-root
+    boundary.
+
+    Best-effort and side-effect-free: only directories that actually exist are
+    returned; the list may be empty.
+    """
+    # Local import: git_state lives above const in the import layering, so we
+    # defer it to call-time to keep paths.py a leaf module.
+    from mote.common.utils.git_state import find_git_root
+
+    start = Path(cwd) if cwd is not None else Path.cwd()
+    try:
+        start = start.resolve()
+    except OSError:
+        start = start.absolute()
+
+    git_root_str = find_git_root(str(start))
+    stop = Path(git_root_str).resolve() if git_root_str else None
+
+    # Collect from cwd upward (high→low), then reverse to low→high.
+    collected: List[Path] = []
+    current = start
+    while True:
+        candidate = current / MOTE_DIR_NAME / subdir
+        if candidate.is_dir():
+            collected.append(candidate)
+        # Stop after processing the boundary (git root), or at fs root.
+        if stop is not None and current == stop:
+            break
+        parent = current.parent
+        if parent == current:  # reached filesystem root
+            break
+        current = parent
+
+    collected.reverse()  # low→high precedence (git root first, cwd last)
+    return collected
 
 
-# Deprecated: these are frozen at import time and won't reflect set_default_workspace_root().
-# Use get_backend_readme_path() / get_frontend_readme_path() instead.
-BACKEND_README_PATH = DEFAULT_WORKSPACE_ROOT / "app" / "backend" / "README.md"
-FRONTEND_README_PATH = DEFAULT_WORKSPACE_ROOT / "app" / "frontend" / "README.md"
+def mote_project_files(filename: str, cwd: Optional[Path] = None) -> List[Path]:
+    """Existing ``<dir>/.mote/<filename>`` files from the git root down to *cwd*.
 
-EXAMPLE_PATH = METAGPT_ROOT / "examples"
-EXAMPLE_DATA_PATH = EXAMPLE_PATH / "data"
-DATA_PATH = METAGPT_ROOT / "data"
-TEST_DATA_PATH = METAGPT_ROOT / "tests/data"
-RESEARCH_PATH = DATA_PATH / "research"
+    The file-oriented sibling of :func:`mote_project_dirs` (e.g. for
+    ``.mote/mcp.json`` / ``.mote/settings.local.json``). Same upward walk with a
+    git-root boundary; returned **low→high precedence** (git root first, *cwd*
+    last) so a closer file overrides a farther one.
+    """
+    from mote.common.utils.git_state import find_git_root
 
-UT_PATH = DATA_PATH / "ut"
-SWAGGER_PATH = UT_PATH / "files/api/"
-UT_PY_PATH = UT_PATH / "files/ut/"
-API_QUESTIONS_PATH = UT_PATH / "files/question/"
+    start = Path(cwd) if cwd is not None else Path.cwd()
+    try:
+        start = start.resolve()
+    except OSError:
+        start = start.absolute()
 
-# P1 Context Protocol file names
-CONTEXT_FILE_ATOMS = "ATOMS.md"
-CONTEXT_FILE_PROGRESS = "PROGRESS.md"
-CONTEXT_FILE_ARCHITECTURE = "ARCHITECTURE.md"
-CONTEXT_REPORTS_DIR = "reports"
+    git_root_str = find_git_root(str(start))
+    stop = Path(git_root_str).resolve() if git_root_str else None
 
-SERDESER_PATH = DEFAULT_WORKSPACE_ROOT / "storage"  # TODO to store `storage` under the individual generated project
+    collected: List[Path] = []
+    current = start
+    while True:
+        candidate = current / MOTE_DIR_NAME / filename
+        if candidate.is_file():
+            collected.append(candidate)
+        if stop is not None and current == stop:
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
 
-TMP = METAGPT_ROOT / "tmp"
+    collected.reverse()
+    return collected
 
-SOURCE_ROOT = METAGPT_ROOT / "metagpt"
-PROMPT_PATH = SOURCE_ROOT / "prompts"
-SKILL_DIRECTORY = SOURCE_ROOT / "skills"
-TOOL_SCHEMA_PATH = METAGPT_ROOT / "metagpt/tools/schemas"
-TOOL_LIBS_PATH = METAGPT_ROOT / "metagpt/tools/libs"
 
-# TEMPLATE PATH
-TEMPLATE_FOLDER_PATH = METAGPT_ROOT / "mgx_template" / "templates"
-DEFAULT_WEB_TEMPLATE_FOLDER_PATH = TEMPLATE_FOLDER_PATH / "default_web_project"
-VUE_TEMPLATE_PATH = DEFAULT_WEB_TEMPLATE_FOLDER_PATH / "vue_template"
-REACT_TEMPLATE_PATH = DEFAULT_WEB_TEMPLATE_FOLDER_PATH / "react_template"
-SLIDE_TEMPLATE_PATH = TEMPLATE_FOLDER_PATH / "presentation"
-PROTOTYPE_TEMPLATE_PATH = TEMPLATE_FOLDER_PATH / "prototype_template"
+def mote_layered_files(filename: str, cwd: Optional[Path] = None) -> List[Path]:
+    """All ``.mote/<filename>`` config files to read, low→high precedence.
 
-# FuncSea templates (React + shadcn/ui + Tailwind CSS)
-FUNCSEA_TEMPLATE_ROOT = TEMPLATE_FOLDER_PATH / "function_sea"
-FRONTEND_TEMPLATE_PATH = FUNCSEA_TEMPLATE_ROOT / "templates" / "base" / "frontend"
-SHADCN_UI_TEMPLATE_PATH = FRONTEND_TEMPLATE_PATH  # Backward compatibility alias
+    ``~/.mote/<filename>`` (user) first, then every ``<dir>/.mote/<filename>``
+    found walking from *cwd* up to the git root (closer-to-cwd last, so it wins).
+    Only existing files are returned; the list may be empty. The shared discovery
+    order behind the ``.mote/`` JSON config sources (permission settings, MCP).
+    """
+    paths: List[Path] = []
+    user_file = CONFIG_ROOT / filename
+    if user_file.is_file():
+        paths.append(user_file)
+    paths.extend(mote_project_files(filename, cwd))
+    return paths
 
-DOCS_FILE_REPO = "docs"
-PRDS_FILE_REPO = "docs/prd"
-SYSTEM_DESIGN_FILE_REPO = "docs/system_design"
-TASK_FILE_REPO = "docs/task"
-CODE_PLAN_AND_CHANGE_FILE_REPO = "docs/code_plan_and_change"
-COMPETITIVE_ANALYSIS_FILE_REPO = "resources/competitive_analysis"
-DATA_API_DESIGN_FILE_REPO = "resources/data_api_design"
-SEQ_FLOW_FILE_REPO = "resources/seq_flow"
-SYSTEM_DESIGN_PDF_FILE_REPO = "resources/system_design"
-PRD_PDF_FILE_REPO = "resources/prd"
-TASK_PDF_FILE_REPO = "resources/api_spec_and_task"
-CODE_PLAN_AND_CHANGE_PDF_FILE_REPO = "resources/code_plan_and_change"
-TEST_CODES_FILE_REPO = "tests"
-TEST_OUTPUTS_FILE_REPO = "test_outputs"
-CODE_SUMMARIES_FILE_REPO = "docs/code_summary"
-CODE_SUMMARIES_PDF_FILE_REPO = "resources/code_summary"
-RESOURCES_FILE_REPO = "resources"
-SD_OUTPUT_FILE_REPO = DEFAULT_WORKSPACE_ROOT
-GRAPH_REPO_FILE_REPO = "docs/graph_repo"
-VISUAL_GRAPH_REPO_FILE_REPO = "resources/graph_db"
-CLASS_VIEW_FILE_REPO = "docs/class_view"
+
+def load_mote_json_section(path: Path, top_key: str, log_prefix: str) -> dict:
+    """Read one ``.mote/`` JSON file and return its *top_key* object (best-effort).
+
+    Shared by the ``.mote/`` JSON config sources (permission ``settings.local.json``
+    → ``permissions``; MCP ``mcp.json`` → ``mcpServers``). A missing / empty /
+    malformed file, or a top-level shape mismatch, yields an empty dict rather
+    than raising, so a single bad file never breaks discovery. *log_prefix* tags
+    the warning lines (e.g. ``"settings"`` / ``"MCP config"``).
+    """
+    if not path.is_file():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        logger.warning(f"{log_prefix}: could not read {path}: {exc}")
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning(f"{log_prefix}: {path} is not valid JSON: {exc}")
+        return {}
+    section = data.get(top_key) if isinstance(data, dict) else None
+    if not isinstance(section, dict):
+        logger.warning(f"{log_prefix}: {path} has no '{top_key}' object.")
+        return {}
+    return section
+
+
+def mote_source_dirs(subdir: str, cwd: Optional[Path] = None) -> List[Path]:
+    """Full layered source-dir list for *subdir* (low→high precedence).
+
+    ``~/.mote/<subdir>`` (user) first, then the project upward-walk
+    (:func:`mote_project_dirs`). Non-existent user dir is still returned so
+    callers that create-on-demand see a stable base; project dirs are filtered
+    to existing ones.
+    """
+    return [user_mote_dir(subdir), *mote_project_dirs(subdir, cwd)]

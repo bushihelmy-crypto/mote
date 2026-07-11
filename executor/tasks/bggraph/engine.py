@@ -1,4 +1,4 @@
-"""Frontier scheduler for :mod:`metagpt.executor.bggraph`.
+"""Frontier scheduler for :mod:`mote.executor.bggraph`.
 
 Execution model (langgraph transitions, **not** static topological DAG):
 
@@ -21,14 +21,11 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import TypeAdapter, ValidationError
 
-from metagpt.common.exception import RecoveryAction, RecoveryRunner
-from metagpt.common.exception.graph import (
-    GraphNodeRetryExhaustedError,
-    GraphNodeTimeoutError,
-)
-from metagpt.executor.tasks.bggraph.channels import apply_updates
-from metagpt.executor.tasks.bggraph.marker import mark_pipeline_executor
-from metagpt.executor.tasks.bggraph.notify import (
+from mote.common.exception import RecoveryAction, RecoveryRunner
+from mote.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
+from mote.executor.tasks.bggraph.channels import apply_updates
+from mote.executor.tasks.bggraph.marker import mark_pipeline_executor
+from mote.executor.tasks.bggraph.notify import (
     _MSG_RESUMING,
     _MSG_RETRYING,
     _MSG_SKIPPING,
@@ -37,8 +34,8 @@ from metagpt.executor.tasks.bggraph.notify import (
     push_started_notification,
     push_terminal_notification,
 )
-from metagpt.executor.tasks.bggraph.report import report_progress
-from metagpt.executor.tasks.bggraph.types import (
+from mote.executor.tasks.bggraph.report import report_progress
+from mote.executor.tasks.bggraph.types import (
     END,
     BgStatus,
     GraphBatchFailureError,
@@ -50,10 +47,10 @@ from metagpt.executor.tasks.bggraph.types import (
     LlmPauseResult,
     Stage,
 )
-from metagpt.executor.tasks.types import BgTaskResult, GraphMeta
+from mote.executor.tasks.types import BgTaskResult, GraphMeta
 
 if TYPE_CHECKING:
-    from metagpt.executor.tasks.bggraph.graph import BgGraph
+    from mote.executor.tasks.bggraph.graph import BgGraph
 
 
 class _LlmPauseSignal(Exception):
@@ -128,6 +125,7 @@ def _validate_node_params_runtime(graph: "BgGraph", node_name: str, state: Graph
 
 
 async def _run_poll(stage: Stage, submit_result: Any) -> Any:
+    assert stage.poll is not None, "_run_poll requires a poll callable"
     poll_coro = stage.poll(submit_result)
     if stage.timeout:
         return await asyncio.wait_for(poll_coro, stage.timeout)
@@ -517,17 +515,6 @@ def _build_executor(graph: "BgGraph"):
 # ---------------------------------------------------------------------------
 
 
-def _ensure_run_state(graph: "BgGraph", state: GraphState, run_state: Optional[GraphRunState]) -> GraphRunState:
-    """Return an authoritative run state, inferring one for legacy snapshots.
-
-    A live task always carries its run_state on the snapshot; only tasks whose
-    snapshot predates run-state recording fall back to value-inference.
-    """
-    if run_state is not None:
-        return run_state
-    return GraphRunState.infer_from_state(graph, state)
-
-
 def resume(
     graph: "BgGraph",
     state: GraphState,
@@ -542,7 +529,7 @@ def resume(
     satisfied does not stall. Re-run nodes are ``reset`` (PENDING) while keeping
     their accumulated attempt count.
     """
-    run_state = _ensure_run_state(graph, state, run_state)
+    run_state = GraphRunState.ensure(graph, state, run_state)
     completed: set[str] = run_state.completed_names() - set(from_nodes)
     for node_name in from_nodes:
         run_state.reset(node_name)
@@ -585,7 +572,7 @@ def resume_skip(
     run_state: Optional[GraphRunState] = None,
 ) -> BgTaskResult:
     """Skip *skip_nodes* (keeping partial results) and continue downstream."""
-    run_state = _ensure_run_state(graph, state, run_state)
+    run_state = GraphRunState.ensure(graph, state, run_state)
     _apply_skip(graph, state, skip_nodes, run_state)
     completed: set[str] = run_state.completed_names() | set(skip_nodes)
     trigger_count: dict = defaultdict(set)
@@ -616,7 +603,7 @@ def resume_skip_and_from(
     run_state: Optional[GraphRunState] = None,
 ) -> BgTaskResult:
     """Skip *skip_nodes* then re-run *from_nodes*, continuing downstream."""
-    run_state = _ensure_run_state(graph, state, run_state)
+    run_state = GraphRunState.ensure(graph, state, run_state)
     _apply_skip(graph, state, skip_nodes, run_state)
     completed: set[str] = (run_state.completed_names() | set(skip_nodes)) - set(from_nodes)
     for node_name in from_nodes:

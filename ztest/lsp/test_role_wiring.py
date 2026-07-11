@@ -6,18 +6,14 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from metagpt.router.llm.context import Context
-from metagpt.common.schema import LspConfig, LspServerConfig
-from metagpt.roles.role import Role
-from metagpt.roles.role_schema import RoleSchema
+from mote.common.schema import LspConfig, LspServerConfig
+from mote.roles.role import Role
+from mote.roles.role_schema import RoleSchema
+from mote.router.llm.context import Context
 
 
 def _lsp_config(enabled=True, servers=True):
-    srv = (
-        [LspServerConfig(name="fake", command=[sys.executable, "-c", ""], extensions=[".py"])]
-        if servers
-        else []
-    )
+    srv = [LspServerConfig(name="fake", command=[sys.executable, "-c", ""], extensions=[".py"])] if servers else []
     return LspConfig(enabled=enabled, servers=srv)
 
 

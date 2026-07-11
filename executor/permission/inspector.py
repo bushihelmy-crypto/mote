@@ -18,7 +18,7 @@ instance on the same bus the executor uses and it lands in the ``PreToolUse``
 bucket automatically, ordered after any hook rewrite so it judges the *final*
 args.
 
-Like the :class:`~metagpt.executor.permission.subscriber.PermissionSubscriber`,
+Like the :class:`~mote.executor.permission.subscriber.PermissionSubscriber`,
 an inspector reads tool facts through the event's ``resolve_facts`` closure (the
 executor attaches it — it owns the tool), so this module never imports a tool.
 The facts are optional: a name/allowlist gate ignores them; a path/quota gate
@@ -37,9 +37,9 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
-from metagpt.common.events.outcomes import ToolCallOutcome
-from metagpt.common.events.types import PRE_TOOL_USE, PreToolUseEvent
-from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
+from mote.common.events.outcomes import ToolCallOutcome
+from mote.common.events.types import PRE_TOOL_USE, PreToolUseEvent
+from mote.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,7 @@ class ToolCallInspector(ControlSubscriber):
         Args:
             tool_name: The tool about to run.
             tool_input: Its arguments — already rewritten by any earlier hook.
-            facts: The tool-bound :class:`~metagpt.common.schema.PermissionFacts`
+            facts: The tool-bound :class:`~mote.common.schema.PermissionFacts`
                 (targets / mutates_fs / ...) resolved from the current args, or
                 ``None`` when no resolver is wired. A name/allowlist gate ignores
                 it; a path/quota gate reads it.

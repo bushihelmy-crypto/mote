@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.roles.lsp.jsonrpc`` — Content-Length framing + correlation.
+"""Tests for ``mote.roles.lsp.jsonrpc`` — Content-Length framing + correlation.
 
 Drives a JsonRpcEndpoint over an in-process subprocess running a tiny echo
 responder, so request/response correlation, notification dispatch, and
@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from metagpt.roles.lsp.jsonrpc import JsonRpcEndpoint, _parse_content_length
+from mote.roles.lsp.jsonrpc import JsonRpcEndpoint, _parse_content_length
 
 aio = pytest.mark.asyncio
 
@@ -52,7 +52,9 @@ while True:
 
 async def _spawn():
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", _RESPONDER,
+        sys.executable,
+        "-c",
+        _RESPONDER,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
@@ -96,9 +98,7 @@ async def test_error_response_raises():
 async def test_notification_dispatched():
     proc = await _spawn()
     got = []
-    ep = JsonRpcEndpoint(
-        proc.stdin, proc.stdout, on_notification=lambda m, p: got.append((m, p))
-    )
+    ep = JsonRpcEndpoint(proc.stdin, proc.stdout, on_notification=lambda m, p: got.append((m, p)))
     ep.start()
     try:
         ep.notify("ping", {})

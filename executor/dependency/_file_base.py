@@ -20,11 +20,23 @@ from __future__ import annotations
 import os
 from typing import Callable, Optional
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_result import ToolError
+from mote.executor.base_tool import BaseTool
+from mote.executor.dependency._paths import base_cwd, resolve_path
+from mote.executor.tool_result import ToolError
 
 # How many bytes to sniff when detecting an existing file's newline style.
 _SNIFF_BYTES = 64 * 1024
+
+# Complete model-facing message sentences for the read-before-write guard,
+# hoisted to module-top templates so the wording lives in one place.
+_MSG_NOT_READ = (
+    "Error: {noun} '{path}' has not been read this session. Use the Read tool "
+    "to read it first before {verb} it — this prevents changing content you "
+    "haven't seen."
+)
+_MSG_MODIFIED_SINCE_READ = (
+    "Error: {noun} '{path}' has been modified since it was last read. Read it " "again before {verb} it."
+)
 
 
 class FileMutatingTool(BaseTool):
@@ -36,9 +48,10 @@ class FileMutatingTool(BaseTool):
     """
 
     # Read-before-write needs both shared file-read capabilities; the snapshot
-    # capability records a before-image just before a mutation. bind() injects
-    # only these; absent (unbound) they stay unset and the helpers self-skip.
-    requires = ("get_file_read_mtime", "record_file_read", "record_file_snapshot")
+    # capability records a before-image just before a mutation; get_cwd is the
+    # stable base for resolving relative paths. bind() injects only these;
+    # absent (unbound) they stay unset and the helpers self-skip / fall back.
+    requires = ("get_file_read_mtime", "record_file_read", "record_file_snapshot", "get_cwd")
 
     # Permission metadata: these tools write to disk — high risk, and eligible
     # for the ``acceptEdits`` permission mode.
@@ -49,6 +62,15 @@ class FileMutatingTool(BaseTool):
     get_file_read_mtime: Callable[[str], Optional[int]]
     record_file_read: Callable[[str, int], None]
     record_file_snapshot: Callable[..., None]
+    get_cwd: Callable[[], str]
+
+    def _resolve_path(self, path: str) -> str:
+        """Resolve ``path`` against the stable working directory (unbound: cwd)."""
+        return resolve_path(getattr(self, "get_cwd", None), path)
+
+    def _base_cwd(self) -> str:
+        """The stable base dir used for relative paths (unbound: process cwd)."""
+        return base_cwd(getattr(self, "get_cwd", None))
 
     def permission_target(self, args: dict) -> str:
         """The path being written — matched against ``Tool(pattern)`` rules."""
@@ -99,20 +121,13 @@ class FileMutatingTool(BaseTool):
 
         read_mtime = getter(full_path)
         if read_mtime is None:
-            raise ToolError(
-                f"Error: {noun} '{display_path}' has not been read this session. "
-                f"Use the Read tool to read it first before {verb} it — this "
-                f"prevents changing content you haven't seen."
-            )
+            raise ToolError(_MSG_NOT_READ.format(noun=noun, path=display_path, verb=verb))
         try:
             current_mtime = os.stat(full_path).st_mtime_ns
         except OSError:
             return  # can't stat; let the read/write attempt surface the error
         if current_mtime != read_mtime:
-            raise ToolError(
-                f"Error: {noun} '{display_path}' has been modified since it was "
-                f"last read. Read it again before {verb} it."
-            )
+            raise ToolError(_MSG_MODIFIED_SINCE_READ.format(noun=noun, path=display_path, verb=verb))
 
     def _refresh_read_state(self, full_path: str) -> None:
         """Refresh the shared file-read state to the just-written file so a

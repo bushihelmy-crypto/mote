@@ -12,15 +12,11 @@ cheapest-first and stops once the target is met:
 
 from __future__ import annotations
 
-from metagpt.context.compaction.reducers.base import (
-    Reducer,
-    ReducerCost,
-    ReductionOutcome,
-)
-from metagpt.context.compaction.reducers.drop import HeadDropReducer
-from metagpt.context.compaction.reducers.erase import EraseReducer
-from metagpt.context.compaction.reducers.fold import FoldReducer
-from metagpt.context.compaction.reducers.summarize import SummarizeReducer
+from mote.context.compaction.reducers.base import Reducer, ReducerCost, ReductionOutcome
+from mote.context.compaction.reducers.drop import HeadDropReducer
+from mote.context.compaction.reducers.erase import EraseReducer
+from mote.context.compaction.reducers.fold import FoldReducer
+from mote.context.compaction.reducers.summarize import SummarizeReducer
 
 __all__ = [
     "Reducer",

@@ -3,7 +3,7 @@
 import copy
 import json
 
-from metagpt.memory.procedural_memory.serializers.simple import SimpleSerializer
+from mote.memory.procedural_memory.serializers.simple import SimpleSerializer
 
 
 class RoleZeroSerializer(SimpleSerializer):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``MetaGPTApp`` + ``run_textual`` — the full-screen Textual TUI host.
+"""``MoteApp`` + ``run_textual`` — the full-screen Textual TUI host.
 
 This module owns the asyncio loop for the Textual host. The design (§A–E of the
 plan) is:
@@ -26,33 +26,15 @@ from typing import Any, Optional
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Static
 from textual.worker import Worker, WorkerState
 
-from metagpt.cli.common.view import (
-    CONVERSATION_COMPACTED,
-    ERROR_RAISED,
-    FILE_DIFF_BLOCK,
-    MEDIA_BLOCK,
-    MESSAGE_BLOCK_COMPLETED,
-    MESSAGE_BLOCK_DELTA,
-    MESSAGE_BLOCK_STARTED,
-    NOTICE,
-    APPROVAL_REQUESTED,
-    QUESTION_ASKED,
-    REASONING_DELTA,
-    RETRY_STATUS,
-    SESSION_LIST_SHOWN,
-    SYSTEM_REMINDER,
-    TASK_PROGRESS,
-    TOOL_CALL_COMPLETED,
-    TOOL_CALL_STARTED,
-    TRANSCRIPT_CLEARED,
-    USAGE_UPDATED,
-)
-from metagpt.cli.consumers.textual.style import Palette, textual_css_vars
-from metagpt.cli.consumers.textual.widgets import (
+from mote.cli.consumers.render.builders import is_collapsible_tool
+from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_copy
+from mote.cli.consumers.textual.style import Palette, textual_css_vars
+from mote.cli.consumers.textual.widgets import (
     ApprovalMarkerRow,
     AssistantBlock,
     CompactionSummaryRow,
@@ -71,8 +53,27 @@ from metagpt.cli.consumers.textual.widgets import (
     ToolGroupWidget,
     UserMessageRow,
 )
-from metagpt.cli.consumers.render.builders import is_collapsible_tool
-from metagpt.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_copy
+from mote.cli.contracts.view import (
+    APPROVAL_REQUESTED,
+    CONVERSATION_COMPACTED,
+    ERROR_RAISED,
+    FILE_DIFF_BLOCK,
+    MEDIA_BLOCK,
+    MESSAGE_BLOCK_COMPLETED,
+    MESSAGE_BLOCK_DELTA,
+    MESSAGE_BLOCK_STARTED,
+    NOTICE,
+    QUESTION_ASKED,
+    REASONING_DELTA,
+    RETRY_STATUS,
+    SESSION_LIST_SHOWN,
+    SYSTEM_REMINDER,
+    TASK_PROGRESS,
+    TOOL_CALL_COMPLETED,
+    TOOL_CALL_STARTED,
+    TRANSCRIPT_CLEARED,
+    USAGE_UPDATED,
+)
 
 
 class ViewEventMessage(Message):
@@ -88,7 +89,7 @@ class ViewEventMessage(Message):
         self.event = event
 
 
-class MetaGPTApp(App):
+class MoteApp(App):
     """The full-screen host: scrolling transcript + status bar + prompt input."""
 
     CSS = """
@@ -198,7 +199,7 @@ class MetaGPTApp(App):
     def set_busy(self) -> None:
         try:
             self.query_one("#status", StatusBar).running = True
-        except Exception:  # noqa: BLE001 — status bar may not be mounted in a test
+        except NoMatches:  # status bar may not be mounted in a test
             pass
 
     def set_idle(self) -> None:
@@ -206,20 +207,20 @@ class MetaGPTApp(App):
             bar = self.query_one("#status", StatusBar)
             bar.running = False
             bar.set_thinking(False)  # a finished turn is no longer reasoning
-        except Exception:  # noqa: BLE001
+        except NoMatches:
             pass
 
     def _set_thinking(self, flag: bool) -> None:
         """Toggle the StatusBar's ``✻ 思考中`` reasoning state (safe if unmounted)."""
         try:
             self.query_one("#status", StatusBar).set_thinking(flag)
-        except Exception:  # noqa: BLE001 — status bar may not be mounted in a test
+        except NoMatches:  # status bar may not be mounted in a test
             pass
 
     def stage_prompt(self, text: str) -> None:
         try:
             self.query_one("#prompt", PromptInput).value = text
-        except Exception:  # noqa: BLE001
+        except NoMatches:
             pass
 
     # ------------------------------------------------------------------
@@ -377,7 +378,7 @@ class MetaGPTApp(App):
         if kind != RETRY_STATUS:
             try:
                 self.query_one("#status", StatusBar).clear_retry()
-            except Exception:  # noqa: BLE001 — status bar may not be mounted yet
+            except NoMatches:  # status bar may not be mounted yet
                 pass
         # Break the open search/read group on ANY non-transparent event (assistant
         # text, a non-collapsible tool, media, error, …). The grouped tools' own
@@ -392,7 +393,7 @@ class MetaGPTApp(App):
         # reasoning stream keeps its thinking label + elapsed timer.
         if kind not in self._THINKING_TRANSPARENT:
             self._set_thinking(False)
-        handler = self._DISPATCH.get(kind)
+        handler = self._DISPATCH.get(kind or "")
         if handler is not None:
             handler(self, ev)
 
@@ -494,7 +495,7 @@ class MetaGPTApp(App):
         if widget is not None:
             widget.complete(ev)
         else:  # no matching started widget — render a standalone completed row
-            from metagpt.cli.consumers.render.builders import tool_completed_text
+            from mote.cli.consumers.render.builders import tool_completed_text
 
             self._mount(Static(tool_completed_text(ev)))
         self._show_truncation(ev)
@@ -555,7 +556,7 @@ class MetaGPTApp(App):
     def _on_usage(self, ev: Any) -> None:
         try:
             self.query_one("#status", StatusBar).update_usage(ev)
-        except Exception:  # noqa: BLE001
+        except NoMatches:
             pass
 
     def _on_retry_status(self, ev: Any) -> None:
@@ -563,7 +564,7 @@ class MetaGPTApp(App):
         # transcript row (that would persist the retry, contra CC).
         try:
             self.query_one("#status", StatusBar).set_retry(ev)
-        except Exception:  # noqa: BLE001
+        except NoMatches:
             pass
 
     def _on_session_list(self, ev: Any) -> None:
@@ -582,7 +583,7 @@ class MetaGPTApp(App):
     def _show_truncation(self, ev: Any) -> None:
         if not getattr(ev, "content_truncated", False):
             return
-        from metagpt.cli.consumers.render.builders import fold_note, indent, RESULT_INDENT
+        from mote.cli.consumers.render.builders import RESULT_INDENT, fold_note, indent
 
         self._mount(Static(indent(fold_note(ev), RESULT_INDENT)))
 
@@ -656,12 +657,11 @@ def run_textual(
     (needs the app), (4) driver via ``build_app(consumer_objs=[consumer], port=port)``,
     (5) bind driver+port onto the app and bind the app onto the port, (6) run.
     """
-    from metagpt.common.logs import resume_console_log, suspend_console_log
+    from mote.cli.app import build_app
+    from mote.cli.consumers.textual.consumer import TextualConsumer
+    from mote.common.logs import resume_console_log, suspend_console_log
 
-    from metagpt.cli.app import build_app
-    from metagpt.cli.consumers.textual.consumer import TextualConsumer
-
-    app = MetaGPTApp()
+    app = MoteApp()
     port = TextualPort_lazy()
     consumer = TextualConsumer(app)
     driver = build_app(
@@ -690,9 +690,9 @@ def run_textual(
 
 def TextualPort_lazy() -> Any:
     """Late import of :class:`TextualPort` (keeps this module import-light)."""
-    from metagpt.cli.io.textual_io import TextualPort
+    from mote.cli.io.textual_io import TextualPort
 
     return TextualPort()
 
 
-__all__ = ["MetaGPTApp", "ViewEventMessage", "run_textual"]
+__all__ = ["MoteApp", "ViewEventMessage", "run_textual"]

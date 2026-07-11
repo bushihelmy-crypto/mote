@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from metagpt.cli.commands.registry import register_command
+from mote.cli.commands.registry import register_command
 
 
 @register_command("help", help="show this help", aliases=("h", "?"))

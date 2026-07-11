@@ -18,9 +18,21 @@ from __future__ import annotations
 
 import fnmatch
 import os
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional, Protocol
 
-from metagpt.common.interface import TurnContextPriority
+from mote.common.interface import TurnContextPriority
+from mote.common.text import display_path
+
+
+class _SkillPool(Protocol):
+    """The skill-pool slice this source reads (duck-typed).
+
+    Structural only — keeps the low ``context`` layer from importing the skill
+    pool; any object exposing ``get_all()`` satisfies it.
+    """
+
+    def get_all(self) -> Iterable[object]:
+        ...
 
 
 class SkillActivationContextSource:
@@ -30,11 +42,16 @@ class SkillActivationContextSource:
     # After git/token/compaction/bg/lsp — conditional skills are a low-urgency
     # hint, so they ride at the tail of the reminder.
     priority = TurnContextPriority.SKILL_ACTIVATION
-    save_to_context = True
+    # Ephemeral (request-only): a path-gated skill hint is a one-shot "this is
+    # relevant right now" nudge tied to the files just touched. It is re-derived
+    # every turn from the live touched-files set, so persisting it would only
+    # freeze a stale match into history. Matches the docstring contract above
+    # ("request-only; never stored in history").
+    save_to_context = False
 
     def __init__(
         self,
-        get_pool: Callable[[], object],
+        get_pool: Callable[[], Optional[_SkillPool]],
         get_touched_files: Callable[[], list],
     ) -> None:
         self._get_pool = get_pool
@@ -48,8 +65,7 @@ class SkillActivationContextSource:
         conditional = [
             s
             for s in pool.get_all()
-            if getattr(s, "is_conditional", False)
-            and not getattr(s, "disable_model_invocation", False)
+            if getattr(s, "is_conditional", False) and not getattr(s, "disable_model_invocation", False)
         ]
         if not conditional:
             return None
@@ -81,18 +97,9 @@ class SkillActivationContextSource:
         for raw in touched:
             path = str(raw)
             base = os.path.basename(path)
-            rel = path
-            if cwd:
-                try:
-                    rel = os.path.relpath(path, cwd)
-                except ValueError:  # different drive on Windows
-                    rel = path
+            rel = display_path(path, cwd)
             for pat in patterns:
-                if (
-                    fnmatch.fnmatch(path, pat)
-                    or fnmatch.fnmatch(rel, pat)
-                    or fnmatch.fnmatch(base, pat)
-                ):
+                if fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(base, pat):
                     return True
         return False
 

@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.router.cost.tracker import CostTracker
+from mote.router.cost.tracker import CostTracker
 
 if TYPE_CHECKING:
-    from metagpt.router.cost.node import CostNode
+    from mote.router.cost.node import CostNode
 
 
 def format_cost(cost: float) -> str:

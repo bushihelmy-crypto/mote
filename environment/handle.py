@@ -7,7 +7,7 @@ around the spawned :class:`AgentRuntime` + its committed
 :class:`SpawnReservation`, so the four hand-written *construct → run → read →
 cleanup* sites collapse into a single, consistent object.
 
-Two drive shapes mirror :class:`~metagpt.common.agent_control.Lifecycle`:
+Two drive shapes mirror :class:`~mote.common.agent_control.Lifecycle`:
   * ``EPHEMERAL`` — the caller runs the child inline with
     :meth:`run_to_completion` (one turn, summary read back), never entering the
     scheduler.
@@ -24,9 +24,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-from metagpt.common.logs import logger
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.runtime import AgentRuntime, AgentStatus, is_final
+from mote.common.logs import logger
+from mote.environment.agent_path import AgentPath
+from mote.environment.runtime import AgentRuntime, AgentStatus, is_final
 
 
 class ChildAgentHandle:

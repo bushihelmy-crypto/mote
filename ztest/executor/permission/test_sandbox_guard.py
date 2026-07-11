@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.permission.sandbox.guard.SandboxGuard``.
+"""Unit tests for ``mote.executor.permission.sandbox.guard.SandboxGuard``.
 
 Covers the three modes (full / read-only / workspace-write), cwd + configured
 writable-root containment, empty-path passthrough, symlink-resolved containment,
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 
-from metagpt.common.schema import SandboxConfig
-from metagpt.executor.permission.sandbox import SandboxGuard
+from mote.common.schema import SandboxConfig
+from mote.executor.permission.sandbox import SandboxGuard
 
 
 class TestFullMode:

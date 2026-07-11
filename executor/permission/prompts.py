@@ -16,9 +16,7 @@ from typing import Literal
 ApprovalChoice = Literal["allow_once", "allow_session", "deny"]
 
 
-def build_approval_prompt(
-    tool_name: str, target: str, reason: str = "", suggestion: str = ""
-) -> str:
+def build_approval_prompt(tool_name: str, target: str, reason: str = "", suggestion: str = "") -> str:
     """Compose the approval question shown to the user.
 
     ``suggestion`` (when given) is the permission rule an "always" reply will

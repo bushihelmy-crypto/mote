@@ -28,7 +28,7 @@ queued — mirroring the per-runtime ``wake_event`` the scheduler already uses
 (park-on-event, not clock polling).
 
 The queue is guarded by a ``threading.Lock`` (same discipline as
-:class:`~metagpt.environment.residency.Residency`) because the synchronous
+:class:`~mote.environment.residency.Residency`) because the synchronous
 accept path and the asynchronous fulfilment loop touch it from different call
 stacks. Critical sections are tiny; no I/O happens under the lock.
 """
@@ -41,8 +41,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from metagpt.environment.mailbox import DeliveryMode, InterAgentCommunication
-from metagpt.common.schema import Message
+from mote.common.schema import Message
+from mote.environment.mailbox import DeliveryMode, InterAgentCommunication
 
 
 @dataclass
@@ -132,7 +132,9 @@ class PendingDeliveryQueue:
             for q in self._queues.values():
                 for delivery in q:
                     if delivery.is_communication:
-                        if delivery.communication.trigger_turn:
+                        comm = delivery.communication
+                        assert comm is not None, "is_communication delivery must carry a communication"
+                        if comm.trigger_turn:
                             return True
                     elif delivery.mode is DeliveryMode.TRIGGER_TURN:
                         return True

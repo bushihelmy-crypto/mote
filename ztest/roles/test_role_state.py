@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.roles.role_state.RoleState (serializable runtime snapshot)."""
+"""Tests for mote.roles.role_state.RoleState (serializable runtime snapshot)."""
 from __future__ import annotations
 
-from metagpt.common.schema import LLMCallContext, Message, MessageQueue
-from metagpt.roles.role_state import RoleState
+from mote.common.schema import LLMCallContext, Message, MessageQueue
+from mote.roles.role_state import RoleState
 
 
 class TestDefaults:

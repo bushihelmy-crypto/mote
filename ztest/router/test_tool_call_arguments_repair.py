@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace as NS
 
-from metagpt.router.llm.openai_api import OpenAILLM
+from mote.router.llm.openai_api import OpenAILLM
 
 
 class _FakeLLM:

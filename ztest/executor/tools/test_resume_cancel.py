@@ -9,13 +9,13 @@ import asyncio
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import BgGraph, GraphState, Stage, START, END
-from metagpt.executor.tasks.pool import BackgroundTaskPool
-from metagpt.executor.tasks.types import BgStatus, BgTaskResult, GraphMeta
-from metagpt.executor.tools.resume_tasks import ResumeTasks
-from metagpt.executor.tools.cancel_tasks import CancelTasks
-from metagpt.executor.tool_result import ToolError
-from metagpt.common.schema import MessageQueue
+from mote.common.schema import MessageQueue
+from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Stage
+from mote.executor.tasks.pool import BackgroundTaskPool
+from mote.executor.tasks.types import BgStatus, BgTaskResult, GraphMeta
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.cancel_tasks import CancelTasks
+from mote.executor.tools.resume_tasks import ResumeTasks
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,7 +34,9 @@ def sync_node(fn, *, field=None):
         async def submit():
             result = fn(state)
             return {field: result} if field is not None else result
+
         return Stage(submit=submit())
+
     return node
 
 
@@ -42,7 +44,9 @@ def boom_node():
     async def node(state):
         async def submit():
             raise ValueError("permanent failure")
+
         return Stage(submit=submit())
+
     return node
 
 
@@ -102,7 +106,9 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=5,
+            res.poll_factory,
+            res.command_name,
+            timeout=5,
             graph_meta=GraphMeta(graph_ref=g, initial_params={"x": 5}, factory=executor),
         )
         # Wait for completion
@@ -119,7 +125,9 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=10,
+            res.poll_factory,
+            res.command_name,
+            timeout=10,
             graph_meta=GraphMeta(graph_ref=g, initial_params={"x": 5}, factory=executor),
             max_restarts=3,
         )
@@ -149,7 +157,9 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=5,
+            res.poll_factory,
+            res.command_name,
+            timeout=5,
             graph_meta=GraphMeta(graph_ref=g, initial_params={"x": 5}, factory=executor),
             max_restarts=1,
         )
@@ -178,7 +188,9 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=5,
+            res.poll_factory,
+            res.command_name,
+            timeout=5,
             graph_meta=GraphMeta(graph_ref=g, initial_params={"x": 5}, factory=executor),
         )
         await pool.wait_all()
@@ -196,7 +208,9 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=5,
+            res.poll_factory,
+            res.command_name,
+            timeout=5,
             graph_meta=GraphMeta(graph_ref=g, initial_params={"x": 5}, factory=executor),
         )
         await pool.wait_all()
@@ -236,8 +250,11 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=10,
-            graph_meta=res.graph_meta, max_restarts=3,
+            res.poll_factory,
+            res.command_name,
+            timeout=10,
+            graph_meta=res.graph_meta,
+            max_restarts=3,
         )
         await pool.wait_all()
         meta = pool.get_task_info(tid)
@@ -258,8 +275,11 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=10,
-            graph_meta=res.graph_meta, max_restarts=3,
+            res.poll_factory,
+            res.command_name,
+            timeout=10,
+            graph_meta=res.graph_meta,
+            max_restarts=3,
         )
         await pool.wait_all()
         meta = pool.get_task_info(tid)
@@ -282,7 +302,9 @@ class TestResumeTasks:
         executor = g.compile()
         res = await executor(x=5)
         tid = pool.submit(
-            res.poll_factory, res.command_name, timeout=5,
+            res.poll_factory,
+            res.command_name,
+            timeout=5,
             graph_meta=GraphMeta(graph_ref=g, initial_params={"x": 5}, factory=executor),
         )
         await pool.wait_all()

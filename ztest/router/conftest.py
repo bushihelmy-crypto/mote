@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.router.schema import ModelCard
+from mote.common.config.config.llm_config import LLMConfig
+from mote.router.schema import ModelCard
 
 
 class FakeLLM:
@@ -89,10 +89,10 @@ def router(cards):
 
     The router's auto-registered config cards are cleared and replaced with the
     deterministic ``cards`` ladder, so routing assertions don't depend on the
-    machine's metagpt config. ``context`` is swapped for a duck-typed fake so no
+    machine's mote config. ``context`` is swapped for a duck-typed fake so no
     real provider is constructed.
     """
-    from metagpt.router.router import LLMRouter
+    from mote.router.router import LLMRouter
 
     r = LLMRouter()
     # Replace auto-registered cards with our deterministic ladder + a default.

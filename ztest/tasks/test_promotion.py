@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :func:`metagpt.tasks.promotion.auto_background`.
+"""Unit tests for :func:`mote.tasks.promotion.auto_background`.
 
 Covers the three outcomes: the coroutine finishes inside the foreground window
 (value returned directly), it raises inside the window (exception re-raised),
@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from metagpt.executor.tasks import BgStatus, BgTaskResult, auto_background
+from mote.executor.tasks import BgStatus, BgTaskResult, auto_background
 
 from .conftest import boom, echo, gated, wait_started
 
@@ -57,9 +57,7 @@ class TestPromotion:
     @pytest.mark.asyncio
     async def test_zero_foreground_timeout_promotes_immediately(self, pool):
         release = asyncio.Event()
-        out = await auto_background(
-            gated(release, "v"), pool, "cmd", foreground_timeout=0, task_timeout=None
-        )
+        out = await auto_background(gated(release, "v"), pool, "cmd", foreground_timeout=0, task_timeout=None)
         assert isinstance(out, BgTaskResult)
         release.set()
         await pool.wait_all()

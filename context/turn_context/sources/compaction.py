@@ -8,10 +8,10 @@ was dropped.
 
 Push→pull bridge in one object (the ``ContextManager`` is already the producer,
 so unlike the LSP feed no separate buffer object is needed):
-- as an :class:`~metagpt.common.interface.ObservationSubscriber` it catches
-  :class:`~metagpt.common.events.PostCompactEvent` off the bus and arms a
+- as an :class:`~mote.common.interface.ObservationSubscriber` it catches
+  :class:`~mote.common.events.PostCompactEvent` off the bus and arms a
   pending flag (several compactions between turns collapse into one notice);
-- as an :class:`~metagpt.common.interface.EphemeralContextSource` it renders the
+- as an :class:`~mote.common.interface.EphemeralContextSource` it renders the
   notice once per think() cycle and disarms (so it shows exactly once, the turn
   after the compaction, then goes quiet).
 
@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.events import PostCompactEvent
-from metagpt.common.interface import ObservationSubscriber, TurnContextPriority
+from mote.common.events import PostCompactEvent
+from mote.common.interface import ObservationSubscriber, TurnContextPriority
 
 
 class CompactionNoticeContextSource(ObservationSubscriber):
@@ -36,7 +36,10 @@ class CompactionNoticeContextSource(ObservationSubscriber):
     # the ObservationSubscriber dispatch priority, where it is immaterial (this handler
     # only observes — it returns no outcome).
     priority = TurnContextPriority.COMPACTION
-    save_to_context = True
+    # Ephemeral (request-only): a one-shot "history was just compacted" flag,
+    # meaningful only on the turn after the event. It is self-disarming, so
+    # persisting it would leave a permanent stale notice in history.
+    save_to_context = False
 
     def __init__(self) -> None:
         self._pending = False

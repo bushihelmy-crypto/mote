@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.config.config.oauth_config import OAuthProviderConfig
-from metagpt.router.oauth.client import OAuthClient
-from metagpt.router.oauth.errors import OAuthConfigError
-from metagpt.router.oauth.flows.callbacks import LoginCallbacks
-from metagpt.router.oauth.models import OAuthToken
+from mote.common.config.config.oauth_config import OAuthProviderConfig
+from mote.router.oauth.client import OAuthClient
+from mote.router.oauth.errors import OAuthConfigError
+from mote.router.oauth.flows.callbacks import LoginCallbacks
+from mote.router.oauth.models import OAuthToken
 
 
 def run_device_code_flow(

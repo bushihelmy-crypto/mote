@@ -25,9 +25,9 @@ class BaseAgent:
     """Identity + self-description for a spawnable agent type."""
 
     # --- Identity ---
-    agent_name: ClassVar[str] = ""        # Primary agent type name (lookup key)
-    aliases: ClassVar[list[str]] = []     # Alternative names (LLM can use any)
-    description: ClassVar[str] = ""        # Override; if empty, taken from docstring
+    agent_name: ClassVar[str] = ""  # Primary agent type name (lookup key)
+    aliases: ClassVar[list[str]] = []  # Alternative names (LLM can use any)
+    description: ClassVar[str] = ""  # Override; if empty, taken from docstring
 
     @classmethod
     def get_schema(cls) -> dict:

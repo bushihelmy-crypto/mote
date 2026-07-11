@@ -9,7 +9,7 @@ Two scopes of limits live here:
    constants stay with that module.
 
 The third (tool-level) scope — per-tool result-size caps and disk-persistence
-preview size — is NOT here: it lives in ``metagpt.executor.tool_result_limit``
+preview size — is NOT here: it lives in ``mote.executor.tool_result_limit``
 because it is a tool-execution concern. Keeping those constants in the executor
 layer means this module never imports ``executor`` (dependency points downward,
 ``context`` → ``executor``).

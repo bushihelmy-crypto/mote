@@ -15,14 +15,10 @@ import asyncio
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-from metagpt.common.logs import logger
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.const.tasks import (
-    MAX_TASK_OUTPUT_BYTES,
-    MAX_TASK_OUTPUT_BYTES_DISPLAY,
-    DEFAULT_MAX_READ_BYTES,
-)
-from metagpt.common.disk import disk_io
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.const.tasks import DEFAULT_MAX_READ_BYTES, MAX_TASK_OUTPUT_BYTES, MAX_TASK_OUTPUT_BYTES_DISPLAY
+from mote.common.disk import disk_io
+from mote.common.logs import logger
 
 # Sentinel object to signal drain loop shutdown (never confused with real data).
 _SENTINEL = object()

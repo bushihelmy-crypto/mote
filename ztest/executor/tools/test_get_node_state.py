@@ -9,12 +9,12 @@ import asyncio
 
 import pytest
 
-from metagpt.executor.tasks.bggraph import BgGraph, GraphState, Stage, START, END
-from metagpt.executor.tasks.pool import BackgroundTaskPool
-from metagpt.executor.tasks.types import BgStatus
-from metagpt.executor.tools.get_node_state import GetNodeState
-from metagpt.executor.tool_result import ToolError
-from metagpt.common.schema import MessageQueue
+from mote.common.schema import MessageQueue
+from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Stage
+from mote.executor.tasks.pool import BackgroundTaskPool
+from mote.executor.tasks.types import BgStatus
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.get_node_state import GetNodeState
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +28,9 @@ def sync_node(fn, *, field=None):
         async def submit():
             result = fn(state)
             return {field: result} if field is not None else result
+
         return Stage(submit=submit())
+
     return node
 
 
@@ -36,7 +38,9 @@ def boom_node():
     async def node(state):
         async def submit():
             raise ValueError("permanent failure")
+
         return Stage(submit=submit())
+
     return node
 
 
@@ -73,6 +77,7 @@ def _ring_graph():
     async def work(state):
         async def submit():
             return {"n": max(0, state.n - 1)}
+
         return Stage(submit=submit())
 
     g.add_node("work", work)
@@ -129,8 +134,7 @@ class TestGetNodeState:
         g = _failing_graph()
         executor = g.compile()
         res = await executor(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -146,8 +150,7 @@ class TestGetNodeState:
         g = _detail_graph()
         executor = g.compile()
         res = await executor(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -170,8 +173,7 @@ class TestGetNodeState:
         g = _detail_graph()
         executor = g.compile()
         res = await executor(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -195,8 +197,7 @@ class TestGetNodeState:
         g.add_edge("producer", "consumer")
         g.add_edge("consumer", END)
         res = await g.compile()(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -209,8 +210,7 @@ class TestGetNodeState:
     async def test_fields_mode_dumps_state_values(self, pool):
         g = _detail_graph()
         res = await g.compile()(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -224,8 +224,7 @@ class TestGetNodeState:
     async def test_fields_mode_unknown_field_raises(self, pool):
         g = _detail_graph()
         res = await g.compile()(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -238,8 +237,7 @@ class TestGetNodeState:
         # being mistaken for one bogus field name.
         g = _detail_graph()
         res = await g.compile()(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -250,8 +248,7 @@ class TestGetNodeState:
         g = _detail_graph()
         executor = g.compile()
         res = await executor(x=5)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -264,8 +261,7 @@ class TestGetNodeState:
         # observability fix for review_batch being misread as "restarted".
         g = _ring_graph()
         res = await g.compile()(n=3)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)
@@ -280,8 +276,7 @@ class TestGetNodeState:
     async def test_detail_mode_labels_self_loop_activations(self, pool):
         g = _ring_graph()
         res = await g.compile()(n=2)
-        tid = pool.submit(res.poll_factory, res.command_name, timeout=10,
-                          graph_meta=res.graph_meta)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
         await pool.wait_all()
 
         tool = _make_tool(pool)

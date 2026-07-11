@@ -3,7 +3,7 @@
 """Unit tests for the ``compress_output`` entry point (escape valves)."""
 from __future__ import annotations
 
-from metagpt.executor.compress import compress_output
+from mote.executor.compress import compress_output
 
 # A genuinely compressible pytest blob, comfortably above the min floor.
 _PYTEST = (

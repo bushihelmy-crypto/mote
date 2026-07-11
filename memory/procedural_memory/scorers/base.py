@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, ConfigDict
 
-from metagpt.memory.procedural_memory.schema import Score
+from mote.memory.procedural_memory.schema import Score
 
 
 class BaseScorer(BaseModel, ABC):

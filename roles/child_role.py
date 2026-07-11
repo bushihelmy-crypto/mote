@@ -1,13 +1,13 @@
 """Concrete read-only child-Role builder + self-registration.
 
 This is the ``roles``-layer implementation of the common-layer
-:class:`~metagpt.common.interface.ChildRoleBuilder` contract. It constructs the
+:class:`~mote.common.interface.ChildRoleBuilder` contract. It constructs the
 read-only, bypass-permission child :class:`Role` the code-review pipeline (and
 any other ``executor`` caller) needs, then registers itself into the common
 holder at import time so the executor can build such a child *without* importing
 the ``roles`` stack.
 
-Imported by ``metagpt.roles`` (the package ``__init__``), so the registration
+Imported by ``mote.roles`` (the package ``__init__``), so the registration
 fires whenever the roles layer is loaded — which, in production, is always
 before any child agent is built (the pipeline runs inside a live agent).
 """
@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from metagpt.common.interface.child_role import register_child_role_builder
-from metagpt.common.schema.permission_config import PermissionConfig
-from metagpt.roles.role import Role
-from metagpt.roles.role_schema import RoleSchema
-from metagpt.roles.role_state import RoleState
+from mote.common.interface.child_role import register_child_role_builder
+from mote.common.schema.permission_config import PermissionConfig
+from mote.roles.role import Role
+from mote.roles.role_schema import RoleSchema
+from mote.roles.role_state import RoleState
 
 
 def build_child_role(

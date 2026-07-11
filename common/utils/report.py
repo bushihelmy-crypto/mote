@@ -1,6 +1,7 @@
 import asyncio
 import os
 import typing
+from contextvars import ContextVar
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
@@ -10,12 +11,13 @@ from uuid import UUID, uuid4
 from aiohttp import ClientSession, UnixConnector
 from pydantic import BaseModel, Field, PrivateAttr
 
-from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
-from metagpt.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
-from metagpt.common.logs import logger
+from mote.common.const import MOTE_REPORTER_DEFAULT_URL
+from mote.common.events import LLMStreamDeltaEvent, ResourceReportEvent, current_bus, observe_event, observe_event_sync
+from mote.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
+from mote.common.logs import logger
 
 if typing.TYPE_CHECKING:
-    from metagpt.roles.role import Role
+    from mote.roles.role import Role
 
 
 class _StreamQueueSubscriber(ObservationSubscriber, SyncObserver):
@@ -43,16 +45,6 @@ try:
 except ImportError:
     import requests
 
-from contextvars import ContextVar
-
-from metagpt.common.events import (
-    LLMStreamDeltaEvent,
-    ResourceReportEvent,
-    current_bus,
-    observe_event,
-    observe_event_sync,
-)
-
 CURRENT_ROLE: ContextVar["Role"] = ContextVar("role")
 
 
@@ -60,12 +52,12 @@ def _current_role_name() -> Optional[str]:
     """Resolve the reporting role's name from the producer-side contextvar.
 
     Read at emit time (the contextvar is only reliable on the producer side, not
-    inside an async subscriber). Falls back to the ``METAGPT_ROLE`` env var.
+    inside an async subscriber). Falls back to the ``MOTE_ROLE`` env var.
     """
     role = CURRENT_ROLE.get(None)
     if role:
         return role.name
-    return os.environ.get("METAGPT_ROLE")
+    return os.environ.get("MOTE_ROLE")
 
 
 class BlockType(str, Enum):
@@ -95,8 +87,12 @@ class ResourceReporter(BaseModel):
 
     block: BlockType = Field(description="The type of block that is reporting the resource")
     uuid: UUID = Field(default_factory=uuid4, description="The unique identifier for the resource")
-    enable_llm_stream: bool = Field(False, description="Indicates whether to connect to an LLM stream for reporting")
-    callback_url: str = Field(METAGPT_REPORTER_DEFAULT_URL, description="The URL to which the report should be sent")
+    enable_llm_stream: bool = Field(
+        default=False, description="Indicates whether to connect to an LLM stream for reporting"
+    )
+    callback_url: str = Field(
+        default=MOTE_REPORTER_DEFAULT_URL, description="The URL to which the report should be sent"
+    )
     _llm_task: Optional[asyncio.Task] = PrivateAttr(None)
     _llm_queue: Optional[asyncio.Queue] = PrivateAttr(None)
     _llm_sub: Optional["_StreamQueueSubscriber"] = PrivateAttr(None)
@@ -172,21 +168,21 @@ class ResourceReporter(BaseModel):
         )
 
     def _format_data(self, value, name, extra):
-        data = self.model_dump(mode="json", exclude=("callback_url", "llm_stream"))
+        data = self.model_dump(mode="json", exclude={"callback_url", "llm_stream"})
         if isinstance(value, BaseModel):
             value = value.model_dump(mode="json")
         elif isinstance(value, Path):
             value = str(value)
 
         if name == "path":
-            value = os.path.abspath(value)
+            value = os.path.abspath(str(value))
         data["value"] = value
         data["name"] = name
         role = CURRENT_ROLE.get(None)
         if role:
             role_name = role.name
         else:
-            role_name = os.environ.get("METAGPT_ROLE")
+            role_name = os.environ.get("MOTE_ROLE")
         data["role"] = role_name
         if extra:
             data["extra"] = extra
@@ -219,7 +215,7 @@ class ResourceReporter(BaseModel):
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         """Exit the asynchronous streaming callback context."""
-        if self._llm_task is not None and exc_type != asyncio.CancelledError:
+        if self._llm_task is not None and self._llm_queue is not None and exc_type != asyncio.CancelledError:
             await self._llm_queue.put(None)
             await self._llm_task
         if self._llm_bus is not None and self._llm_sub is not None:
@@ -289,7 +285,7 @@ def _build_report_payload(event) -> dict:
     elif isinstance(value, Path):
         value = str(value)
     if event.name_ == "path":
-        value = os.path.abspath(value)
+        value = os.path.abspath(str(value))
     data = {
         "block": event.block,
         "uuid": event.uuid,

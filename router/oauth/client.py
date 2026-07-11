@@ -13,15 +13,11 @@ from typing import Optional
 
 import httpx
 
-from metagpt.common.config.config.oauth_config import GrantType, OAuthProviderConfig
-from metagpt.common.logs import log_class
-from metagpt.router.oauth.errors import (
-    OAuthConfigError,
-    OAuthRefreshError,
-    classify_refresh_failure,
-)
-from metagpt.router.oauth.jwt_utils import JWTDecodeError, parse_claims
-from metagpt.router.oauth.models import DeviceCodeInfo, OAuthToken
+from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
+from mote.common.logs import log_class
+from mote.router.oauth.errors import OAuthConfigError, OAuthRefreshError, classify_refresh_failure
+from mote.router.oauth.jwt_utils import JWTDecodeError, parse_claims
+from mote.router.oauth.models import DeviceCodeInfo, OAuthToken
 
 _DEFAULT_TIMEOUT = 30.0
 _DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -100,14 +96,10 @@ class OAuthClient:
             resp = client.post(url, data=data, headers={"Accept": "application/json"})
         if not resp.is_success:
             error_code, description = self._parse_error(resp)
-            raise classify_refresh_failure(
-                status_code=resp.status_code, error_code=error_code, description=description
-            )
+            raise classify_refresh_failure(status_code=resp.status_code, error_code=error_code, description=description)
         return self._parse_device_code(resp)
 
-    def poll_device_token(
-        self, device_code: str, *, interval: int = 5, expires_in: Optional[int] = None
-    ) -> OAuthToken:
+    def poll_device_token(self, device_code: str, *, interval: int = 5, expires_in: Optional[int] = None) -> OAuthToken:
         """Poll the token endpoint until the user authorizes (RFC 8628 §3.4).
 
         Handles ``authorization_pending`` (keep waiting) and ``slow_down``
@@ -142,9 +134,7 @@ class OAuthClient:
             if error_code == "slow_down":
                 delay += 5
                 continue
-            raise classify_refresh_failure(
-                status_code=resp.status_code, error_code=error_code, description=description
-            )
+            raise classify_refresh_failure(status_code=resp.status_code, error_code=error_code, description=description)
 
     def revoke(self, token: str, *, token_type_hint: Optional[str] = None) -> bool:
         """Best-effort RFC 7009 token revocation. Returns True on 2xx."""
@@ -203,9 +193,7 @@ class OAuthClient:
             resp = client.post(url, data=data, headers={"Accept": "application/json"})
         if not resp.is_success:
             error_code, description = self._parse_error(resp)
-            raise classify_refresh_failure(
-                status_code=resp.status_code, error_code=error_code, description=description
-            )
+            raise classify_refresh_failure(status_code=resp.status_code, error_code=error_code, description=description)
         return self._parse_token(resp)
 
     @staticmethod

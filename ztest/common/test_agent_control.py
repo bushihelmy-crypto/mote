@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from metagpt.common.agent_control import (
+from mote.common.agent_control import (
     Lifecycle,
     SpawnContext,
     SpawnSpec,
@@ -15,7 +15,7 @@ from metagpt.common.agent_control import (
     set_control,
     spawn_and_run,
 )
-from metagpt.common.exception import AgentLimitReached
+from mote.common.exception import AgentLimitReached
 
 
 # ---------------------------------------------------------------------------

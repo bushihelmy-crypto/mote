@@ -106,7 +106,7 @@ class ObserverPriority(IntEnum):
     bookkeeping that just needs to land last*:
 
     Note a subscriber that is *also* a turn-context source (the LSP
-    ``DiagnosticsBuffer``) orders by :class:`~metagpt.common.interface.turn_context.TurnContextPriority`
+    ``DiagnosticsBuffer``) orders by :class:`~mote.common.interface.turn_context.TurnContextPriority`
     instead — its turn-context render order is the authoritative meaning of its
     ``priority``, and its observer-dispatch position is immaterial (it only
     accumulates, folding nothing).
@@ -206,8 +206,7 @@ class ControlSubscriber(abc.ABC):
             raise TypeError(f"{cls.__name__} must declare a non-empty `handles` tuple of event names")
         if cls.fail_mode == FAIL_CLOSED and not callable(getattr(cls, "on_failure", None)):
             raise TypeError(
-                f"fail-closed {cls.__name__} must define on_failure(reason) so the bus can "
-                "synthesize its typed deny"
+                f"fail-closed {cls.__name__} must define on_failure(reason) so the bus can " "synthesize its typed deny"
             )
 
     @abc.abstractmethod

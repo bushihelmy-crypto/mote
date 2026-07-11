@@ -6,11 +6,15 @@ task can be resumed later via resume_tasks.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Callable
 
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_registry import register_tool
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tasks.types import BgStatus
+from mote.executor.base_tool import BaseTool
+from mote.executor.tasks.types import BgStatus
+from mote.executor.tool_registry import register_tool
+from mote.executor.tool_result import ToolError
+
+if TYPE_CHECKING:
+    from mote.executor.tasks import BackgroundTaskPool
 
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_CANCEL_DONE = "Task {task_id} is already {status}, cannot cancel."
@@ -30,6 +34,9 @@ class CancelTasks(BaseTool):
         "already-completed node results are preserved and the task can be resumed later."
     )
     requires = ("get_bg_pool",)
+
+    # Injected from Role by bind(): Role.get_bg_pool.
+    get_bg_pool: Callable[[], "BackgroundTaskPool"]
 
     async def call(
         self,

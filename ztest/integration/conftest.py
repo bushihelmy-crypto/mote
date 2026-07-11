@@ -37,8 +37,7 @@ from typing import Any, Optional, Sequence, Union
 
 import pytest
 
-from metagpt.router.llm.llm_response import LLMResponse, LLMToolCall
-
+from mote.router.llm.llm_response import LLMResponse, LLMToolCall
 
 # ---------------------------------------------------------------------------
 # Turn scripting
@@ -127,8 +126,8 @@ def redirect_sessions(tmp_path, monkeypatch):
     """
     from pathlib import Path
 
-    import metagpt.session.listing as listing
-    import metagpt.session.log as log
+    import mote.session.listing as listing
+    import mote.session.log as log
 
     base = Path(tmp_path) / ".agent_sessions"
 
@@ -143,7 +142,7 @@ def redirect_sessions(tmp_path, monkeypatch):
 @pytest.fixture
 def context():
     """A real router Context (builds entirely offline, no network)."""
-    from metagpt.router.llm.context import Context
+    from mote.router.llm.context import Context
 
     return Context()
 
@@ -164,9 +163,9 @@ def build_role(
     ReActLoop and native command channel; only the router (hence the LLM) is
     faked. ``working_dir`` roots the filesystem tools at a tmp workspace.
     """
-    from metagpt.common.schema import PermissionConfig
-    from metagpt.roles import Role
-    from metagpt.roles.role_schema import RoleSchema
+    from mote.common.schema import PermissionConfig
+    from mote.roles import Role
+    from mote.roles.role_schema import RoleSchema
 
     if tools is None:
         tools = ["Read", "Write", "Edit", "Glob", "Grep"]

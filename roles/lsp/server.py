@@ -23,17 +23,12 @@ import asyncio
 import os
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlparse
 
-from metagpt.common.logs import logger
-from metagpt.common.schema import LspServerConfig
-from metagpt.roles.lsp.jsonrpc import JsonRpcEndpoint
-from metagpt.roles.lsp.registry import DiagnosticRegistry, parse_diagnostic
-
-
-def path_to_uri(path: str) -> str:
-    """Convert an absolute filesystem path to a ``file://`` URI."""
-    return Path(os.path.abspath(path)).as_uri()
+from mote.common.logs import logger
+from mote.common.schema import LspServerConfig
+from mote.common.text import path_to_uri, uri_to_path
+from mote.roles.lsp.jsonrpc import JsonRpcEndpoint
+from mote.roles.lsp.registry import DiagnosticRegistry, parse_diagnostic
 
 
 class LspServerInstance:
@@ -100,10 +95,28 @@ class LspServerInstance:
         """Sync *path* to the server (open/change + save). Best-effort no-op when dead."""
         if not self.alive or self._endpoint is None:
             return
-        try:
-            text = Path(path).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        uri = self._ensure_open(path)
+        if uri is None:
             return
+        self._endpoint.notify(
+            "textDocument/didSave", {"textDocument": {"uri": uri}, "text": self._read_text(path) or ""}
+        )
+        # Give the server a moment to analyze + publish diagnostics. They arrive
+        # asynchronously via _on_notification into the shared registry.
+        await asyncio.sleep(self.diagnostics_wait)
+
+    def _ensure_open(self, path: str) -> Optional[str]:
+        """Open *path* on first sight (didOpen), else re-sync it (didChange).
+
+        Returns the file's URI, or ``None`` when the doc can't be read / the
+        server is dead. Extracted from :meth:`did_save` so a *query* (Layer B
+        targets an untouched file the agent never edited) can open it too.
+        """
+        if not self.alive or self._endpoint is None:
+            return None
+        text = self._read_text(path)
+        if text is None:
+            return None
         uri = path_to_uri(path)
         if uri not in self._open_docs:
             self._open_docs[uri] = 1
@@ -128,10 +141,92 @@ class LspServerInstance:
                     "contentChanges": [{"text": text}],  # full-document sync
                 },
             )
-        self._endpoint.notify("textDocument/didSave", {"textDocument": {"uri": uri}, "text": text})
-        # Give the server a moment to analyze + publish diagnostics. They arrive
-        # asynchronously via _on_notification into the shared registry.
-        await asyncio.sleep(self.diagnostics_wait)
+        return uri
+
+    async def document_symbols(self, path: str) -> list:
+        """The file's top-level symbol table (``textDocument/documentSymbol``).
+
+        Opens the doc first, then requests its symbols. Best-effort: any failure
+        (dead server, timeout, malformed reply) yields ``[]`` — mirrors
+        :meth:`did_save`'s guards so a query never breaks a turn.
+        """
+        if not self.alive or self._endpoint is None:
+            return []
+        uri = self._ensure_open(path)
+        if uri is None:
+            return []
+        try:
+            result = await self._endpoint.request(
+                "textDocument/documentSymbol",
+                {"textDocument": {"uri": uri}},
+                timeout=self.diagnostics_wait + 2.0,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort query
+            logger.debug(f"LspServer: documentSymbol for {path} failed: {exc}")
+            return []
+        return result if isinstance(result, list) else []
+
+    async def definition(self, path: str, line: int, character: int) -> list:
+        """Definition sites for the symbol at ``(line, character)`` in *path*.
+
+        LSP ``textDocument/definition``. Opens the doc first. Best-effort: any
+        failure yields ``[]``. The reply may be a single ``Location`` or a list;
+        this normalizes to a list.
+        """
+        if not self.alive or self._endpoint is None:
+            return []
+        uri = self._ensure_open(path)
+        if uri is None:
+            return []
+        try:
+            result = await self._endpoint.request(
+                "textDocument/definition",
+                {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}},
+                timeout=self.diagnostics_wait + 2.0,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort query
+            logger.debug(f"LspServer: definition for {path} failed: {exc}")
+            return []
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return [result]
+        return []
+
+    async def references(self, path: str, line: int, character: int) -> list:
+        """Reference (call) sites for the symbol at ``(line, character)`` in *path*.
+
+        LSP ``textDocument/references`` with ``includeDeclaration: false`` (the
+        definition site itself is not a caller). Opens the doc first. Best-effort:
+        any failure yields ``[]``. The reply is a list of ``Location``; a non-list
+        reply normalizes to ``[]``.
+        """
+        if not self.alive or self._endpoint is None:
+            return []
+        uri = self._ensure_open(path)
+        if uri is None:
+            return []
+        try:
+            result = await self._endpoint.request(
+                "textDocument/references",
+                {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                    "context": {"includeDeclaration": False},
+                },
+                timeout=self.diagnostics_wait + 2.0,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort query
+            logger.debug(f"LspServer: references for {path} failed: {exc}")
+            return []
+        return result if isinstance(result, list) else []
+
+    @staticmethod
+    def _read_text(path: str) -> Optional[str]:
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
 
     async def shutdown(self) -> None:
         """Politely shut down the server, then kill the process. Idempotent."""
@@ -158,7 +253,7 @@ class LspServerInstance:
             return
         raw_diags = params.get("diagnostics") or []
         parsed = [d for d in (parse_diagnostic(r) for r in raw_diags) if d is not None]
-        self.registry.publish(_uri_to_path(uri), parsed)
+        self.registry.publish(uri_to_path(uri), parsed)
 
     def _initialize_params(self) -> dict:
         root_uri = path_to_uri(self.root_path) if os.path.isdir(self.root_path) else None
@@ -172,6 +267,15 @@ class LspServerInstance:
                     "synchronization": {
                         "didSave": True,
                         "dynamicRegistration": False,
+                    },
+                    # Layer B: advertise the request capabilities the code map
+                    # uses to resolve dangling-import symbols and (on-demand)
+                    # name the exact call sites of an interface-changed symbol.
+                    "definition": {"dynamicRegistration": False},
+                    "references": {"dynamicRegistration": False},
+                    "documentSymbol": {
+                        "dynamicRegistration": False,
+                        "hierarchicalDocumentSymbolSupport": True,
                     },
                 }
             },
@@ -189,13 +293,6 @@ class LspServerInstance:
                 await asyncio.wait_for(proc.wait(), timeout=2.0)
         except (ProcessLookupError, asyncio.TimeoutError, Exception):  # noqa: BLE001
             pass
-
-
-def _uri_to_path(uri: str) -> str:
-    """Convert a ``file://`` URI back to a filesystem path (best-effort)."""
-    if uri.startswith("file://"):
-        return unquote(urlparse(uri).path)
-    return uri
 
 
 __all__ = ["LspServerInstance", "path_to_uri"]

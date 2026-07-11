@@ -3,7 +3,7 @@
 """Tests for HookManager._matches (port of CC matchesPattern)."""
 from __future__ import annotations
 
-from metagpt.common.hook.manager import HookManager
+from mote.common.hook.manager import HookManager
 
 m = HookManager._matches
 

@@ -6,10 +6,10 @@ The projector feeds this consumer the same ``ViewEvent`` union every host sees,
 but a Textual widget must only ever be mutated on the app's message-pump thread.
 So instead of rendering inline (like the terminal consumer), this consumer does
 ONE thing: it re-posts every event as a single
-:class:`~metagpt.cli.consumers.textual.app.ViewEventMessage` via
+:class:`~mote.cli.consumers.textual.app.ViewEventMessage` via
 ``App.post_message`` — which is safe to call from any thread and preserves FIFO
 order. A single ``on_view_event_message`` handler on
-:class:`~metagpt.cli.consumers.textual.app.MetaGPTApp` then performs the actual
+:class:`~mote.cli.consumers.textual.app.MoteApp` then performs the actual
 widget mutation on the UI thread (§design C).
 
 Because it overrides :meth:`on_unhandled` and declares **no** ``on_<kind>``
@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from metagpt.cli.common.base import BaseConsumer
-from metagpt.cli.common.view import TERMINAL_CAPS, Capabilities
+from mote.cli.contracts.base import BaseConsumer
+from mote.cli.contracts.view import TERMINAL_CAPS, Capabilities
 
 
 class TextualConsumer(BaseConsumer):
@@ -38,7 +38,7 @@ class TextualConsumer(BaseConsumer):
 
     def on_unhandled(self, ev: Any) -> None:
         # Late import avoids a module-level cycle (app builds this consumer).
-        from metagpt.cli.consumers.textual.app import ViewEventMessage
+        from mote.cli.consumers.textual.app import ViewEventMessage
 
         self._app.post_message(ViewEventMessage(ev))
 

@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from metagpt.router.oauth.jwt_utils import JWTDecodeError, decode_jwt_payload, parse_claims
+from mote.router.oauth.jwt_utils import JWTDecodeError, decode_jwt_payload, parse_claims
 
 
 def _b64url(d: bytes) -> str:

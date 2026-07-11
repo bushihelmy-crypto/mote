@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.executor.tools.code_review import review_filter as rf
-from metagpt.executor.tools.code_review.format import Finding
+from mote.executor.tools.code_review import review_filter as rf
+from mote.executor.tools.code_review.format import Finding
 
 
 def _find(msg: str, sev: str = "warning") -> Finding:
@@ -58,9 +58,7 @@ class TestRenderComments:
 class TestFilterFindings:
     async def test_empty_passthrough(self, monkeypatch):
         called = {"built": False}
-        monkeypatch.setattr(
-            rf, "build_child_role", lambda **k: called.__setitem__("built", True)
-        )
+        monkeypatch.setattr(rf, "build_child_role", lambda **k: called.__setitem__("built", True))
         # Only an empty list skips the agent.
         assert await rf.filter_findings([]) == []
         assert not called["built"]

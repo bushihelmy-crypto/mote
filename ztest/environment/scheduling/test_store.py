@@ -4,8 +4,8 @@
 
 import json
 
-from metagpt.environment.scheduling.store import CronTaskStore
-from metagpt.environment.scheduling.task import CronTask
+from mote.environment.scheduling.store import CronTaskStore
+from mote.environment.scheduling.task import CronTask
 
 
 def make_store(tmp_path):

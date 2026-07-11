@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`metagpt.parser.native_channel.NativeToolChannel`.
+"""Unit tests for :class:`mote.parser.native_channel.NativeToolChannel`.
 
 Covers the protocol hooks (prompt_vars / tool_specs / iter_commands /
 record_turn / turn_signature / is_terminal) plus the contract that this channel
@@ -14,9 +14,9 @@ import json
 
 import pytest
 
-from metagpt.common.base import CommandChannel
-from metagpt.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS
-from metagpt.parser.native_channel import NativeToolChannel
+from mote.common.base import CommandChannel
+from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS
+from mote.parser.native_channel import NativeToolChannel
 
 from .conftest import FakeExecutor, FakeMemory, FakeThinkEngine, collect, executed_command
 
@@ -51,7 +51,7 @@ class TestContract:
         assert "Task Final Output" not in guide
 
     def test_prompt_vars_covers_required_keys(self):
-        from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
+        from mote.common.base.command_channel import PROMPT_VAR_KEYS
 
         assert set(NativeToolChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
 
@@ -69,14 +69,14 @@ class TestContract:
     def test_lower_renders_ctl_finish_without_end_marker(self):
         # The CTL_FINISH symbol must lower to a plain-English turn-end, never the
         # XML <end></end> marker, so symbolized prose can't leak it to native.
-        from metagpt.common.prompt.refs import CTL_FINISH
+        from mote.common.prompt.refs import CTL_FINISH
 
         out = NativeToolChannel().lower(f"Only {CTL_FINISH} when done.")
         assert "<end>" not in out
         assert "tool" in out.lower()
 
     def test_lower_renders_capability_symbols_as_plain_text(self):
-        from metagpt.common.prompt.refs import CAP_READ
+        from mote.common.prompt.refs import CAP_READ
 
         out = NativeToolChannel().lower(f"Use {CAP_READ} first.")
         assert "Editor.read" not in out
@@ -114,9 +114,7 @@ class TestIterCommands:
 
     @pytest.mark.asyncio
     async def test_yields_multiple_in_order(self):
-        engine = FakeThinkEngine(
-            tool_calls=[native_call("1", "Read"), native_call("2", "Glob")]
-        )
+        engine = FakeThinkEngine(tool_calls=[native_call("1", "Read"), native_call("2", "Glob")])
         cmds = await collect(NativeToolChannel(), engine, set())
         assert [c["command_name"] for c in cmds] == ["Read", "Glob"]
 
@@ -136,9 +134,7 @@ class TestIterCommands:
         # cmd has only command_name -> id None, args {}.
         engine = FakeThinkEngine(tool_calls=[{"command_name": "Glob"}])
         cmds = await collect(NativeToolChannel(), engine, set())
-        assert cmds == [
-            {"id": None, "command_name": "Glob", "args": {}, "status": "running", "error_msg": ""}
-        ]
+        assert cmds == [{"id": None, "command_name": "Glob", "args": {}, "status": "running", "error_msg": ""}]
 
     @pytest.mark.asyncio
     async def test_null_args_normalized_to_empty_dict(self):
@@ -155,17 +151,13 @@ class TestIterCommands:
 
     @pytest.mark.asyncio
     async def test_unknown_name_filtered_out(self):
-        engine = FakeThinkEngine(
-            tool_calls=[native_call("1", "Read"), native_call("2", "Nope")]
-        )
+        engine = FakeThinkEngine(tool_calls=[native_call("1", "Read"), native_call("2", "Nope")])
         cmds = await collect(NativeToolChannel(), engine, {"Read"})
         assert [c["command_name"] for c in cmds] == ["Read"]
 
     @pytest.mark.asyncio
     async def test_all_known_names_pass(self):
-        engine = FakeThinkEngine(
-            tool_calls=[native_call("1", "Read"), native_call("2", "Glob")]
-        )
+        engine = FakeThinkEngine(tool_calls=[native_call("1", "Read"), native_call("2", "Glob")])
         cmds = await collect(NativeToolChannel(), engine, {"Read", "Glob"})
         assert [c["command_name"] for c in cmds] == ["Read", "Glob"]
 
@@ -311,9 +303,7 @@ class TestRecordTurnMedia:
 
 class TestTurnSignature:
     def test_signature_is_sorted_json_of_calls(self):
-        engine = FakeThinkEngine(
-            tool_calls=[native_call("1", "Read", {"b": 2, "a": 1})]
-        )
+        engine = FakeThinkEngine(tool_calls=[native_call("1", "Read", {"b": 2, "a": 1})])
         sig = NativeToolChannel().turn_signature(engine)
         assert json.loads(sig) == [{"name": "Read", "args": {"b": 2, "a": 1}}]
         # sort_keys -> "a" before "b" in the serialized args.

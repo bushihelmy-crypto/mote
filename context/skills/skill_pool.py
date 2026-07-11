@@ -3,9 +3,9 @@
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.logs import logger
-from metagpt.common.utils.markdown_meta_parser import MarkdownMetaParser
-from metagpt.context.skills.skill_definition import SkillDefinition
+from mote.common.logs import logger
+from mote.common.utils.markdown_meta_parser import MarkdownMetaParser
+from mote.context.skills.skill_definition import SkillDefinition
 
 # Default skills directory relative to this package (the lowest-priority,
 # bundled layer).

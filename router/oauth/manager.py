@@ -12,18 +12,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.config.config.oauth_config import GrantType, OAuthProviderConfig
-from metagpt.common.const import CONFIG_ROOT
-from metagpt.common.logs import log_class
-from metagpt.router.oauth.client import OAuthClient
-from metagpt.router.oauth.errors import OAuthConfigError, OAuthRefreshError
-from metagpt.router.oauth.flows import (
-    LoginCallbacks,
-    run_auth_code_flow,
-    run_device_code_flow,
-)
-from metagpt.router.oauth.models import OAuthToken
-from metagpt.router.oauth.storage import CredentialStore, get_store
+from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
+from mote.common.const import CONFIG_ROOT
+from mote.common.logs import log_class
+from mote.router.oauth.client import OAuthClient
+from mote.router.oauth.errors import OAuthConfigError, OAuthRefreshError
+from mote.router.oauth.flows import LoginCallbacks, run_auth_code_flow, run_device_code_flow
+from mote.router.oauth.models import OAuthToken
+from mote.router.oauth.storage import CredentialStore, get_store
 
 _INTERACTIVE_GRANTS = (GrantType.AUTHORIZATION_CODE, GrantType.DEVICE_CODE)
 

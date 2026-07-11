@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :mod:`metagpt.tasks.attachment`.
+"""Unit tests for :mod:`mote.tasks.attachment`.
 
-Covers the elapsed-time formatter (``_fmt_elapsed``), the
-``format_attachment_xml`` renderer (with/without delta, escaping, enum vs str
-status), and the :class:`TaskAttachmentGenerator` state machine: pending /
+Covers the ``format_attachment_xml`` renderer (with/without delta, escaping,
+enum vs str status), and the :class:`TaskAttachmentGenerator` state machine: pending /
 running (with incremental delta + offset advance) attachments, first-time
 terminal final attachments vs the pool-already-notified skip, eviction of
 previously-notified terminal tasks, and ``mark_notified``.
@@ -15,8 +14,7 @@ import time
 
 import pytest
 
-from metagpt.executor.tasks import BgStatus, TaskMeta, TaskAttachment, TaskAttachmentGenerator, format_attachment_xml
-from metagpt.executor.tasks.attachment import _fmt_elapsed
+from mote.executor.tasks import BgStatus, TaskAttachment, TaskAttachmentGenerator, TaskMeta, format_attachment_xml
 
 
 class FakePool:
@@ -40,17 +38,6 @@ class FakeStore:
 
     async def get_tail(self, task_id, max_bytes):
         return self.tails.get(task_id, b"")[-max_bytes:]
-
-
-class TestFmtElapsed:
-    def test_seconds(self):
-        assert _fmt_elapsed(5.25) == "5.2s"
-
-    def test_minutes(self):
-        assert _fmt_elapsed(90) == "1m30s"
-
-    def test_exact_minute(self):
-        assert _fmt_elapsed(60) == "1m0s"
 
 
 class TestFormatXml:
@@ -83,7 +70,7 @@ class TestFormatXml:
         assert "<status>pending</status>" in xml
 
     def test_error_renders_uniform_error_block(self):
-        from metagpt.common.exception import ErrorReport
+        from mote.common.exception import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
         att = TaskAttachment(
@@ -175,7 +162,7 @@ class TestGenerateTerminal:
 
     @pytest.mark.asyncio
     async def test_failed_terminal_threads_error_report(self):
-        from metagpt.common.exception import ErrorReport
+        from mote.common.exception import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
         meta = TaskMeta(

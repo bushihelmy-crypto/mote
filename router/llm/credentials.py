@@ -13,11 +13,20 @@ during its client init, before the first :meth:`_rebuild_client`.
 """
 from __future__ import annotations
 
-from metagpt.router.oauth import OAuthManager
+from typing import TYPE_CHECKING
+
+from mote.router.oauth import OAuthManager
+
+if TYPE_CHECKING:
+    from mote.common.config.config.llm_config import LLMConfig
 
 
 class CredentialRotationMixin:
     """Multi-key / OAuth credential rotation shared by LLM providers."""
+
+    # Supplied by the concrete provider that mixes this in (declared here so the
+    # shared rotation logic type-checks against it without importing the host).
+    config: "LLMConfig"
 
     def _init_credentials(self) -> None:
         """Normalize ``config.api_key`` into a rotatable list and build OAuth (if any).
@@ -32,10 +41,11 @@ class CredentialRotationMixin:
 
     def _build_oauth_manager(self):
         """Construct an OAuthManager when ``config.oauth`` is set, else None."""
-        if not getattr(self.config, "oauth", None):
+        oauth = self.config.oauth
+        if not oauth:
             return None
 
-        return OAuthManager(self.config.oauth)
+        return OAuthManager(oauth)
 
     def _current_api_key(self) -> str:
         return self._api_keys[self._api_key_index]

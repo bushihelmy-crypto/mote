@@ -1,0 +1,31 @@
+# https://editorconfig.org
+# Top-most EditorConfig file for the mote-agent repo.
+root = true
+
+# Defaults for every file: LF line endings, UTF-8, trim trailing space,
+# and end files with a newline (mirrors the pre-commit hooks).
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Python: 4-space indent, 120-char lines (matches black / ruff / flake8).
+[*.py]
+indent_size = 4
+max_line_length = 120
+
+# Config and docs conventionally use 2-space indent.
+[*.{yaml,yml,json,toml}]
+indent_size = 2
+
+[*.md]
+indent_size = 2
+# Trailing whitespace can be meaningful (hard line breaks) in Markdown.
+trim_trailing_whitespace = false
+
+# Makefiles require real tabs.
+[Makefile]
+indent_style = tab

@@ -25,15 +25,12 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.exception import RecoveryAction, RecoveryRunner
-from metagpt.common.exception.media import (
-    MediaGenerationError,
-    PermanentMediaGenerationError,
-    classify_media_failure,
-)
-from metagpt.common.logs import logger
-from metagpt.executor.tasks.types import BgTaskResult
+from mote.common.config.loader import load_config
+from mote.common.exception import RecoveryAction, RecoveryRunner
+from mote.common.exception.media import MediaGenerationError, PermanentMediaGenerationError, classify_media_failure
+from mote.common.logs import logger
+from mote.common.text import count_noun
+from mote.executor.tasks.types import BgTaskResult
 
 # ---------------------------------------------------------------------------
 # Shared async-task polling
@@ -97,7 +94,7 @@ async def _generate_one_with_retry(
     try:
         return await runner.run(_call)
     except Exception as e:  # noqa: BLE001 — give up: record the per-item failure
-        logger.error(f"{noun} '{filename}' permanently failed after {attempts} attempt(s): {e}")
+        logger.error(f"{noun} '{filename}' permanently failed after {count_noun(attempts, 'attempt')}: {e}")
         return _failure_entry(filename, e)
 
 
@@ -335,7 +332,7 @@ class AudioCreator:
         if not pending:
             return BgTaskResult.foreground(immediate)
 
-        async def _poll() -> str:
+        async def _poll() -> dict:
             return await self._poll_all(pending)
 
         return BgTaskResult.hybrid(result=immediate, poll_factory=_poll, command_name="generate audios")
@@ -470,7 +467,7 @@ class MusicCreator:
         if not pending:
             return BgTaskResult.foreground(immediate)
 
-        async def _poll() -> str:
+        async def _poll() -> dict:
             return await self._poll_all(pending)
 
         return BgTaskResult.hybrid(result=immediate, poll_factory=_poll, command_name="generate music")
@@ -597,7 +594,7 @@ class ImageCreator:
         if not pending:
             return BgTaskResult.foreground(immediate)
 
-        async def _poll() -> str:
+        async def _poll() -> dict:
             return await self._poll_all(pending)
 
         return BgTaskResult.hybrid(result=immediate, poll_factory=_poll, command_name="generate images")
@@ -782,7 +779,7 @@ class VideoCreator:
         if not pending:
             return BgTaskResult.foreground(immediate)
 
-        async def _poll() -> str:
+        async def _poll() -> dict:
             return await self._poll_all(pending)
 
         return BgTaskResult.hybrid(result=immediate, poll_factory=_poll, command_name="generate videos")

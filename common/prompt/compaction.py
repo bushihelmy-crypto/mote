@@ -1,9 +1,9 @@
 """Compaction prompt text — ported from Claude Code ``services/compact/prompt.ts``.
 
-Pure text constants used by ``metagpt.context.prompt`` to build the autocompact
+Pure text constants used by ``mote.context.prompt`` to build the autocompact
 summarization instructions. The assembly functions (get_compact_prompt,
 get_partial_compact_prompt, format_compact_summary, ...) live in
-``metagpt.context.prompt`` and import these constants.
+``mote.context.prompt`` and import these constants.
 """
 
 # Aggressive no-tools preamble (CC NO_TOOLS_PREAMBLE). The summary turn must be

@@ -28,16 +28,41 @@ import asyncio
 import json
 import os
 import queue
-import re
 import shutil
 import signal
 import sys
 import tempfile
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Protocol
 
-from metagpt.common.logs import logger
-from metagpt.executor.tool_result import ToolError
+from mote.common.logs import logger
+from mote.common.text import cap_head_tail
+from mote.common.text import strip_ansi as _strip_ansi
+from mote.executor.dependency._session_state import diff_env_state
+from mote.executor.tool_result import ToolError
+
+if TYPE_CHECKING:
+    from jupyter_client.asynchronous.client import AsyncKernelClient
+    from jupyter_client.manager import AsyncKernelManager
+
+
+class _SandboxRuntime(Protocol):
+    """The one method this module calls on the sandbox runtime (duck-typed).
+
+    Structural only — keeps ``executor.dependency`` from importing the sandbox
+    layer; any object exposing ``wrap_exec`` satisfies it.
+    """
+
+    async def wrap_exec(
+        self,
+        argv: list[str],
+        *,
+        cwd: Optional[str] = ...,
+        env: Optional[dict[str, str]] = ...,
+        extra_writable: Optional[list[str]] = ...,
+    ) -> tuple[list[str], dict[str, str]]:
+        ...
+
 
 # --- Constants -------------------------------------------------------------
 # Default execute timeout: how long a call blocks for the kernel to return to
@@ -52,6 +77,11 @@ _INTERRUPT_GRACE_S = 5.0
 _READY_TIMEOUT_S = 30.0
 # Output cap: keep a head 50% + tail 50%, drop the middle.
 OUTPUT_MAX_CHARS = 1024 * 1024
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the raise site).
+_MSG_KERNEL_START_FAILED = "Error: Python kernel failed to start: {error}"
+_MSG_KERNEL_RESTART_FAILED = "Error: Python kernel failed to restart: {error}"
 
 # Timeout (s) for the internal, non-model-facing env probe / restore.
 _PROBE_TIMEOUT_S = 5.0
@@ -75,26 +105,9 @@ _ENV_NOISE_KEYS = frozenset(
     }
 )
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-
-def _strip_ansi(text: str) -> str:
-    """Strip ANSI escape sequences (kernel tracebacks are colourised)."""
-    return _ANSI_RE.sub("", text)
-
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(value, high))
-
-
-def _cap_text(text: str) -> str:
-    """Cap *text* at :data:`OUTPUT_MAX_CHARS`, keeping head + tail, drop middle."""
-    if len(text) <= OUTPUT_MAX_CHARS:
-        return text
-    head = OUTPUT_MAX_CHARS // 2
-    tail = OUTPUT_MAX_CHARS - head
-    omitted = len(text) - OUTPUT_MAX_CHARS
-    return f"{text[:head]}\n[... {omitted} chars omitted ...]\n{text[-tail:]}"
 
 
 class KernelSession:
@@ -106,7 +119,9 @@ class KernelSession:
     interrupted and the partial output returned).
     """
 
-    def __init__(self, *, session_key: str, cwd: Optional[str], sandbox_runtime: Optional[object] = None) -> None:
+    def __init__(
+        self, *, session_key: str, cwd: Optional[str], sandbox_runtime: Optional[_SandboxRuntime] = None
+    ) -> None:
         self.session_key = session_key
         self.cwd = cwd
         # Optional OS-level sandbox runtime. When set, start() wraps the kernel's
@@ -126,8 +141,8 @@ class KernelSession:
         # Host temp dir holding the ipc:// sockets + connection file when
         # sandboxed; bind-mounted into the sandbox and rmtree'd at teardown.
         self._sock_dir: Optional[str] = None
-        self._km = None  # AsyncKernelManager
-        self._kc = None  # AsyncKernelClient
+        self._km: "AsyncKernelManager | None" = None
+        self._kc: "AsyncKernelClient | None" = None
         self._closed = False
         # Snapshot of the kernel's launch env, baseline for capture_state()'s
         # diff. Empty until start() probes it.
@@ -138,7 +153,8 @@ class KernelSession:
     async def start(self) -> None:
         from jupyter_client.manager import AsyncKernelManager
 
-        self._km = AsyncKernelManager()
+        km = AsyncKernelManager()
+        self._km = km
         start_kwargs: dict = {"cwd": self.cwd}
         # When a sandbox runtime is wired, wrap the kernel launch command so the
         # kernel runs inside the sandbox.
@@ -159,18 +175,18 @@ class KernelSession:
         # netns paths.
         if self.sandbox_runtime is not None:
             self._sock_dir = tempfile.mkdtemp(prefix="mgk-")
-            self._km.transport = "ipc"
+            km.transport = "ipc"
             # Pin the connection file inside the (bind-mounted) socket dir so the
             # sandboxed kernel can read it. We set ``connection_file`` directly
             # rather than ``connection_dir`` because write_connection_file ignores
             # the latter and would otherwise drop a random ``/tmp/tmpXXX.json``
             # that bwrap's ``--tmpfs /tmp`` masks out (unreadable inside).
-            self._km.connection_file = os.path.join(self._sock_dir, "conn.json")
+            km.connection_file = os.path.join(self._sock_dir, "conn.json")
             # Absolute socket prefix => k-1 .. k-5. A relative prefix would be
             # resolved against each side's cwd and never line up.
-            self._km.ip = os.path.join(self._sock_dir, "k")
-            self._km.write_connection_file()
-            conn = self._km.connection_file
+            km.ip = os.path.join(self._sock_dir, "k")
+            km.write_connection_file()
+            conn = km.connection_file
             base_cmd = [sys.executable, "-m", "ipykernel_launcher", "-f", conn]
             wrapped, env = await self.sandbox_runtime.wrap_exec(
                 base_cmd,
@@ -185,16 +201,17 @@ class KernelSession:
             # would silently leave the kernel un-sandboxed. The argv carries a
             # concrete ``-f <conn>`` (no ``{connection_file}`` brace), so
             # format_kernel_cmd's substitution is a harmless no-op.
-            self._km.kernel_spec.argv = wrapped
+            km.kernel_spec.argv = wrapped
             start_kwargs["env"] = env
-        await self._km.start_kernel(**start_kwargs)
-        self._kc = self._km.client()
-        self._kc.start_channels()
+        await km.start_kernel(**start_kwargs)
+        kc = km.client()
+        self._kc = kc
+        kc.start_channels()
         try:
-            await self._kc.wait_for_ready(timeout=_READY_TIMEOUT_S)
+            await kc.wait_for_ready(timeout=_READY_TIMEOUT_S)
         except RuntimeError as e:
             self.kill()
-            raise ToolError(f"Error: Python kernel failed to start: {e}")
+            raise ToolError(_MSG_KERNEL_START_FAILED.format(error=e))
         # Snapshot the kernel's launch env as the baseline for capture_state()'s
         # diff (best-effort; an empty baseline just makes the first diff report
         # the full env, which is harmless).
@@ -205,6 +222,19 @@ class KernelSession:
     @property
     def closed(self) -> bool:
         return self._closed or self._km is None
+
+    @property
+    def _client(self) -> "AsyncKernelClient":
+        """The kernel client; populated by start(). Asserts it is live so the
+        operation methods (which only run post-start) narrow away the Optional."""
+        assert self._kc is not None, "kernel client used before start()"
+        return self._kc
+
+    @property
+    def _manager(self) -> "AsyncKernelManager":
+        """The kernel manager; populated by start(). Same post-start contract."""
+        assert self._km is not None, "kernel manager used before start()"
+        return self._km
 
     # --- output plumbing ---------------------------------------------------
 
@@ -240,7 +270,7 @@ class KernelSession:
             if remaining <= 0:
                 return False
             try:
-                msg = await self._kc.get_iopub_msg(timeout=remaining)
+                msg = await self._client.get_iopub_msg(timeout=remaining)
             except queue.Empty:
                 return False
             if msg["parent_header"].get("msg_id") != msg_id:
@@ -257,24 +287,24 @@ class KernelSession:
         grace window drains the KeyboardInterrupt traceback + idle marker.
         """
         timeout = _clamp(timeout, MIN_TIMEOUT_S, MAX_TIMEOUT_S)
-        msg_id = self._kc.execute(code)
+        msg_id = self._client.execute(code)
         loop = asyncio.get_event_loop()
         parts: list[str] = []
         idle = await self._drain(msg_id, parts, loop.time() + timeout)
         if idle:
-            return _cap_text("".join(parts)), False
+            return cap_head_tail("".join(parts), OUTPUT_MAX_CHARS)[0], False
         # Timed out: interrupt and drain the aftermath for a short grace window.
-        await self._km.interrupt_kernel()
+        await self._manager.interrupt_kernel()
         await self._drain(msg_id, parts, loop.time() + _INTERRUPT_GRACE_S)
-        return _cap_text("".join(parts)), True
+        return cap_head_tail("".join(parts), OUTPUT_MAX_CHARS)[0], True
 
     async def interrupt(self) -> str:
         """Send a KeyboardInterrupt to the kernel and drain any aftermath."""
-        await self._km.interrupt_kernel()
+        await self._manager.interrupt_kernel()
         loop = asyncio.get_event_loop()
         parts: list[str] = []
         await self._drain("", parts, loop.time() + _INTERRUPT_GRACE_S)
-        return _cap_text("".join(parts))
+        return cap_head_tail("".join(parts), OUTPUT_MAX_CHARS)[0]
 
     # --- state capture / restore (for session resume) ----------------------
 
@@ -288,7 +318,7 @@ class KernelSession:
         or ``None`` on timeout / failure (best-effort).
         """
         try:
-            msg_id = self._kc.execute(code, store_history=False, allow_stdin=False)
+            msg_id = self._client.execute(code, store_history=False, allow_stdin=False)
             loop = asyncio.get_event_loop()
             parts: list[str] = []
             if not await self._drain(msg_id, parts, loop.time() + timeout):
@@ -340,18 +370,7 @@ class KernelSession:
         filtered out of both. Best-effort: returns ``None`` on any failure (e.g.
         the kernel is not idle/healthy).
         """
-        probed = await self._probe_env()
-        if probed is None:
-            return None
-        cwd, env = probed
-        diff: dict[str, str] = {}
-        for key, value in env.items():
-            if key in _ENV_NOISE_KEYS:
-                continue
-            if self._baseline_env.get(key) != value:
-                diff[key] = value
-        unset = [key for key in self._baseline_env if key not in env and key not in _ENV_NOISE_KEYS]
-        return (cwd, diff, unset)
+        return diff_env_state(await self._probe_env(), self._baseline_env, _ENV_NOISE_KEYS)
 
     async def restore_state(self, cwd: str, env: dict[str, str], unset: list[str]) -> None:
         """Re-seed a fresh kernel to a saved ``(cwd, env, unset)`` state.
@@ -381,12 +400,12 @@ class KernelSession:
 
     async def restart(self) -> None:
         """Restart the kernel — clears all in-memory state."""
-        await self._km.restart_kernel(now=True)
+        await self._manager.restart_kernel(now=True)
         try:
-            await self._kc.wait_for_ready(timeout=_READY_TIMEOUT_S)
+            await self._client.wait_for_ready(timeout=_READY_TIMEOUT_S)
         except RuntimeError as e:
             self.kill()
-            raise ToolError(f"Error: Python kernel failed to restart: {e}")
+            raise ToolError(_MSG_KERNEL_RESTART_FAILED.format(error=e))
 
     async def shutdown(self) -> None:
         """Graceful async teardown."""

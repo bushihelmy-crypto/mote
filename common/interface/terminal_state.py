@@ -11,7 +11,7 @@ import the ``roles`` layer (the strict downward-only layering rule). The concret
 a Role capability (``record_terminal_state``); the tool only depends on this
 structural face, so no upward import is introduced.
 
-Mirrors :class:`~metagpt.common.interface.FileSnapshotStore`: a leaf module that
+Mirrors :class:`~mote.common.interface.FileSnapshotStore`: a leaf module that
 only needs ``typing``, importable from anywhere without risking a cycle.
 """
 

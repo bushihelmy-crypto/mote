@@ -6,9 +6,9 @@ import uuid
 
 import pytest
 
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.exceptions import AgentLimitReached
-from metagpt.environment.registry import (
+from mote.environment.agent_path import AgentPath
+from mote.environment.exceptions import AgentLimitReached
+from mote.environment.registry import (
     AgentMetadata,
     AgentRegistry,
     exceeds_agent_spawn_depth_limit,
@@ -157,9 +157,7 @@ def test_committed_agent_path_is_indexed_until_release():
     thread_id = new_id()
     reservation = registry.reserve_spawn_slot(None)
     reservation.reserve_agent_path(AgentPath.from_string("/root/researcher"))
-    reservation.commit(
-        AgentMetadata(agent_id=thread_id, agent_path=AgentPath.from_string("/root/researcher"))
-    )
+    reservation.commit(AgentMetadata(agent_id=thread_id, agent_path=AgentPath.from_string("/root/researcher")))
     assert registry.agent_id_for_path(AgentPath.from_string("/root/researcher")) == thread_id
 
     registry.release_spawned_agent(thread_id)

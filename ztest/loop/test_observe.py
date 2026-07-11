@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import CauseBy, MessagePriority, Message, UserMessage
+from mote.common.schema import CauseBy, Message, MessagePriority, UserMessage
 
 from .conftest import make_loop_context
 

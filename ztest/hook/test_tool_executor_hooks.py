@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.events import EventBus
-from metagpt.common.hook.manager import HookManager
-from metagpt.common.hook.subscriber import HookSubscriber
-from metagpt.common.interface.event_subscriber import ControlSubscriber, ObservationSubscriber
-from metagpt.common.schema import PermissionConfig
-from metagpt.executor.base_tool import BaseTool
-from metagpt.executor.tool_executor import ToolExecutor
+from mote.common.events import EventBus
+from mote.common.hook.manager import HookManager
+from mote.common.hook.subscriber import HookSubscriber
+from mote.common.interface.event_subscriber import ControlSubscriber, ObservationSubscriber
+from mote.common.schema import PermissionConfig
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_executor import ToolExecutor
 
 pytestmark = pytest.mark.asyncio
 
@@ -97,9 +97,9 @@ async def test_post_tool_use_output_rewrite_replaces_output():
     context."""
     from typing import Optional
 
-    from metagpt.common.events import ToolResultOutcome
-    from metagpt.common.events.types import POST_TOOL_USE, PostToolUseEvent
-    from metagpt.common.interface.event_subscriber import ControlStage
+    from mote.common.events import ToolResultOutcome
+    from mote.common.events.types import POST_TOOL_USE, PostToolUseEvent
+    from mote.common.interface.event_subscriber import ControlStage
 
     class Rewriter(ControlSubscriber):
         handles = (POST_TOOL_USE,)
@@ -132,10 +132,10 @@ async def test_post_tool_use_event_carries_structured_success():
     """
     from typing import Optional
 
-    from metagpt.common.events.types import POST_TOOL_USE, PostToolUseEvent
-    from metagpt.common.exception import ErrorReport
-    from metagpt.common.interface.event_subscriber import ControlStage
-    from metagpt.executor.tool_result import ToolError, ToolResult
+    from mote.common.events.types import POST_TOOL_USE, PostToolUseEvent
+    from mote.common.exception import ErrorReport
+    from mote.common.interface.event_subscriber import ControlStage
+    from mote.executor.tool_result import ToolError, ToolResult
 
     seen: list = []
 
@@ -196,7 +196,7 @@ async def test_raised_tool_error_notifies_observers_of_failure():
     can render "failed + reason" instead of leaving a dangling ToolCallStarted.
     The model's <error> block (the return value) is unaffected — a separate path.
     """
-    from metagpt.common.events.types import POST_TOOL_USE, PostToolUseEvent
+    from mote.common.events.types import POST_TOOL_USE, PostToolUseEvent
 
     seen: list = []
 
@@ -214,7 +214,7 @@ async def test_raised_tool_error_notifies_observers_of_failure():
             return ""
 
         async def call(self, **_kw) -> str:
-            from metagpt.executor.tool_result import ToolError
+            from mote.executor.tool_result import ToolError
 
             raise ToolError("kaboom")
 
@@ -262,9 +262,9 @@ async def test_hook_deny_composes_with_permission_engine():
 
 from typing import Optional  # noqa: E402
 
-from metagpt.common.events.types import POST_TOOL_USE, PostToolUseEvent  # noqa: E402
-from metagpt.common.interface.event_subscriber import ControlStage  # noqa: E402
-from metagpt.executor.tool_result import ToolError  # noqa: E402
+from mote.common.events.types import POST_TOOL_USE, PostToolUseEvent  # noqa: E402
+from mote.common.interface.event_subscriber import ControlStage  # noqa: E402
+from mote.executor.tool_result import ToolError  # noqa: E402
 
 
 class _RaiseTool(BaseTool):
@@ -354,7 +354,7 @@ async def test_preflight_deny_is_observed_only():
 async def test_control_block_of_failed_result_is_harmless():
     """(c) A control subscriber blocking an already-failed result is a no-op —
     the result stays failed, nothing crashes."""
-    from metagpt.common.events import ToolResultOutcome
+    from mote.common.events import ToolResultOutcome
 
     class Blocker(ControlSubscriber):
         handles = (POST_TOOL_USE,)
@@ -378,7 +378,7 @@ async def test_control_block_of_failed_result_is_harmless():
 async def test_bg_task_result_produces_post_tool_use_and_keeps_data():
     """(d) A BgTaskResult now emits a PostToolUse (row closes) and still carries
     the raw BgTaskResult in ``data``."""
-    from metagpt.executor.tasks.types import BgTaskResult
+    from mote.executor.tasks.types import BgTaskResult
 
     class BgTool(BaseTool):
         name = "Bg"

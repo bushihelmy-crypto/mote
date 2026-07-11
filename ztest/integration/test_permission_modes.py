@@ -8,7 +8,7 @@ the coarse :class:`PermissionMode` stances and the interactive ``ask`` path:
 * ``acceptEdits`` / ``bypass`` auto-allow a mutating tool with no allow rule.
 * ``plan`` / ``dontAsk`` block a mutating tool (the latter fails closed).
 * an ``ask`` rule routes through the Role's ``request_approval`` capability ->
-  ``MGXEnv.ask_human`` -> the human-input channel; a "yes" runs the tool and a
+  ``MoteEnv.ask_human`` -> the human-input channel; a "yes" runs the tool and a
   "no" denies it.
 
 Only the LLM (scripted) and, for the ask tests, the human-input channel are
@@ -20,8 +20,8 @@ import os
 
 import pytest
 
-from metagpt.common.schema import PermissionConfig
-from metagpt.environment.mgx.mgx_env import MGXEnv
+from mote.common.schema import PermissionConfig
+from mote.environment.mote.mote_env import MoteEnv
 
 pytestmark = pytest.mark.asyncio
 
@@ -124,13 +124,13 @@ async def test_allow_rule_overrides_plan(make_role, tmp_path):
 
 
 def _patch_human_input(monkeypatch, reply: str) -> None:
-    """Make ``MGXEnv.ask_human`` resolve to a fixed human reply."""
-    import metagpt.environment.mgx.mgx_env as mgx
+    """Make ``MoteEnv.ask_human`` resolve to a fixed human reply."""
+    import mote.environment.mote.mote_env as mote_env
 
     async def _fake(question):  # signature matches get_human_input(question)
         return reply
 
-    monkeypatch.setattr(mgx, "get_human_input", _fake)
+    monkeypatch.setattr(mote_env, "get_human_input", _fake)
 
 
 async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
@@ -143,7 +143,7 @@ async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
         turns=[[("Write", {"file_path": target, "content": "approved"})], "done"],
     )
     # request_approval needs an env channel.
-    env = MGXEnv()
+    env = MoteEnv()
     env.add_role(role)
 
     await role.run(with_message="write with approval")
@@ -162,7 +162,7 @@ async def test_ask_rule_denied_blocks_tool(make_role, tmp_path, monkeypatch):
         permissions=PermissionConfig(mode="default", ask=["Write"]),
         turns=[[("Write", {"file_path": target, "content": "rejected"})], "done"],
     )
-    env = MGXEnv()
+    env = MoteEnv()
     env.add_role(role)
 
     await role.run(with_message="write but get denied")

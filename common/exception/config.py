@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from typing import ClassVar, List
 
-from metagpt.common.exception.base import MetaGPTError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import MoteError
+from mote.common.exception.codes import ErrorCode
 
 
-class ConfigError(MetaGPTError):
+class ConfigError(MoteError):
     """Base for configuration / environment failures."""
 
 

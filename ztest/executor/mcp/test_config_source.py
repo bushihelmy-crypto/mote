@@ -9,33 +9,30 @@ tests pin the loader's contract: the map shape parses, transport is *inferred*
 input is best-effort (missing / empty / malformed / bad-entry => empty list or
 dropped entry, never an exception).
 
-All tests point the loader at a tmp file by monkeypatching ``mcp_config_path``
+All tests point the loader at a tmp file by monkeypatching ``mcp_config_paths``
 (the single seam every public function funnels through), so nothing touches the
-real package ``mcp_config.json``.
+real ``.mote/mcp.json`` files on disk.
 """
 import json
 
 import pytest
 
-from metagpt.common.config.config.mcp_config import MCPTransportType
-from metagpt.executor.mcp import config_source
-from metagpt.executor.mcp.config_source import (
-    MCP_CONFIG_FILE_NAME,
-    load_mcp_servers,
-    mcp_config_path,
-)
+from mote.common.config.config.mcp_config import MCPTransportType
+from mote.common.const import paths
+from mote.executor.mcp import config_source
+from mote.executor.mcp.config_source import MCP_CONFIG_FILE_NAME, load_mcp_servers, mcp_config_paths
 
 
 @pytest.fixture
 def mcp_file(tmp_path, monkeypatch):
-    """A tmp ``mcp_config.json`` wired in as the loader's config path.
+    """A tmp ``mcp.json`` wired in as the loader's only config path.
 
     Returns the ``Path``; write to it (or leave it absent) per-test. The loader
-    resolves through ``mcp_config_path`` so patching that one function redirects
-    every read here.
+    resolves through ``mcp_config_paths`` (list, low→high) so patching that one
+    function to return ``[path]`` (only when it exists) redirects every read here.
     """
     path = tmp_path / MCP_CONFIG_FILE_NAME
-    monkeypatch.setattr(config_source, "mcp_config_path", lambda cwd=None: path)
+    monkeypatch.setattr(config_source, "mcp_config_paths", lambda cwd=None: [path] if path.is_file() else [])
     return path
 
 
@@ -43,15 +40,24 @@ def _write(path, obj):
     path.write_text(json.dumps(obj), encoding="utf-8")
 
 
-class TestMcpConfigPath:
-    def test_anchored_at_source_root(self):
-        # The real path lives beside config.yaml under the package source root.
-        from metagpt.common.const import SOURCE_ROOT
-
-        assert mcp_config_path() == SOURCE_ROOT / MCP_CONFIG_FILE_NAME
-
+class TestMcpConfigPaths:
     def test_file_name_constant(self):
-        assert MCP_CONFIG_FILE_NAME == "mcp_config.json"
+        assert MCP_CONFIG_FILE_NAME == "mcp.json"
+
+    def test_paths_include_user_file_when_present(self, tmp_path, monkeypatch):
+        # ``~/.mote/mcp.json`` (CONFIG_ROOT) is the lowest layer; when it exists
+        # it leads the returned list, followed by the project walk. The discovery
+        # lives in ``common.const.paths.mote_layered_files``, so patch there.
+        user_file = tmp_path / MCP_CONFIG_FILE_NAME
+        user_file.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
+        monkeypatch.setattr(paths, "mote_project_files", lambda name, cwd=None: [])
+        assert mcp_config_paths() == [user_file]
+
+    def test_paths_empty_when_nothing_configured(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)  # no mcp.json inside
+        monkeypatch.setattr(paths, "mote_project_files", lambda name, cwd=None: [])
+        assert mcp_config_paths() == []
 
 
 class TestLoadMissingOrEmpty:
@@ -180,3 +186,26 @@ class TestBestEffortEntries:
             },
         )
         assert [s.name for s in load_mcp_servers()] == ["a", "b", "c"]
+
+
+class TestLayerMerge:
+    """The git-root→cwd walk merges by server name; a closer file overrides."""
+
+    def test_closer_file_overrides_same_name(self, tmp_path, monkeypatch):
+        far = tmp_path / "far.json"
+        near = tmp_path / "near.json"
+        _write(far, {"mcpServers": {"srv": {"command": "far-cmd"}}})
+        _write(near, {"mcpServers": {"srv": {"command": "near-cmd"}}})
+        # low→high precedence: far first, near last (closer wins).
+        monkeypatch.setattr(config_source, "mcp_config_paths", lambda cwd=None: [far, near])
+        servers = load_mcp_servers()
+        assert len(servers) == 1
+        assert servers[0].command == "near-cmd"
+
+    def test_distinct_names_union_across_layers(self, tmp_path, monkeypatch):
+        far = tmp_path / "far.json"
+        near = tmp_path / "near.json"
+        _write(far, {"mcpServers": {"a": {"command": "a-cmd"}}})
+        _write(near, {"mcpServers": {"b": {"url": "https://b/sse"}}})
+        monkeypatch.setattr(config_source, "mcp_config_paths", lambda cwd=None: [far, near])
+        assert sorted(s.name for s in load_mcp_servers()) == ["a", "b"]

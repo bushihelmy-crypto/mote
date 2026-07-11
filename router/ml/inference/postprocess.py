@@ -21,10 +21,10 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from metagpt.router.ml.features import ContextMetadata
-from metagpt.router.ml.flags import compute_flags
-from metagpt.router.ml.inference.types import FinalDecision, InferenceRequest
-from metagpt.router.ml.predictor import (
+from mote.router.ml.features import ContextMetadata
+from mote.router.ml.flags import compute_flags
+from mote.router.ml.inference.types import FinalDecision, InferenceRequest
+from mote.router.ml.predictor import (
     ROUTE_CLASSES,
     _apply_flag_overrides,
     _apply_margin_upgrade,
@@ -68,11 +68,7 @@ def _apply_aux_downgrade(
         + float(aux_probs.get("upgrade", 0.0))
         + float(aux_probs.get("downgrade", 0.0))
     )
-    downgrade_prob = (
-        float(aux_probs.get("downgrade", 0.0)) / non_initial_mass
-        if non_initial_mass > 0
-        else 0.0
-    )
+    downgrade_prob = float(aux_probs.get("downgrade", 0.0)) / non_initial_mass if non_initial_mass > 0 else 0.0
     if downgrade_prob < downgrade_threshold or route_class == "R0":
         return route_class, False
 
@@ -163,9 +159,7 @@ def _normalize_history(prev_route_decisions: list) -> list:
         elif isinstance(item, dict) and "route_class" in item:
             normalized.append(SimpleNamespace(route_class=item["route_class"]))
         else:
-            raise ValueError(
-                "prev_route_decisions entries must expose route_class"
-            )
+            raise ValueError("prev_route_decisions entries must expose route_class")
     return normalized
 
 
@@ -195,18 +189,12 @@ def apply_postprocess(
     route = _apply_r1_rescue(route, fused_probs, config)
     route = _apply_under_routing_safety(route, fused_probs, config)
 
-    flags_text = (
-        request.flags_text_override
-        if request.flags_text_override is not None
-        else request.current_user_text
-    )
+    flags_text = request.flags_text_override if request.flags_text_override is not None else request.current_user_text
     context = _context_from_request(request)
     flags = compute_flags(flags_text, config, context=context)
     route = _apply_flag_overrides(route, flags, config)
     route = _apply_context_rules(route, context, config)
-    route, sticky_applied = _apply_optional_sticky_tier(
-        route, fused_probs, request, config
-    )
+    route, sticky_applied = _apply_optional_sticky_tier(route, fused_probs, request, config)
 
     thinking_mode = _derive_thinking_mode(route, margin, flags, config)
     prompt_policy = _derive_prompt_policy(difficulty, margin, flags, config)

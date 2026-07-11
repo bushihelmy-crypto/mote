@@ -16,17 +16,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from metagpt.common.events import (
+from mote.common.events import (
     CompactOutcome,
     PromptOutcome,
-    Rewrite,
     Rewritable,
+    Rewrite,
     SpawnOutcome,
     ToolCallOutcome,
     ToolResultOutcome,
     TurnOutcome,
 )
-from metagpt.common.interface.event_subscriber import ControlOutcome
+from mote.common.interface.event_subscriber import ControlOutcome
 
 
 # Minimal Rewritable event stubs: inherit the nominal :class:`Rewritable` mixin
@@ -149,9 +149,7 @@ def test_tool_result_rebind_threads_updated_response():
 def test_tool_result_rebind_records_provenance():
     out = ToolResultOutcome(updated_response="[redacted]")
     threaded = out.rebind(_RespEvent(tool_response="secret"), by="hook")
-    assert threaded.rewrites == (
-        Rewrite(field="tool_response", before="secret", after="[redacted]", by="hook"),
-    )
+    assert threaded.rewrites == (Rewrite(field="tool_response", before="secret", after="[redacted]", by="hook"),)
 
 
 # ---------------------------------------------------------------------------

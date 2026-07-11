@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from metagpt.context.compaction.reducers.base import Reducer, ReducerCost, ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+from mote.context.compaction.reducers.base import Reducer, ReducerCost, ReductionOutcome
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 
 class ReductionPipeline:

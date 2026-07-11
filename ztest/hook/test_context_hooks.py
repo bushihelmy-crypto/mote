@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-import metagpt.context.budget as token_budget
-from metagpt.common.events import EventBus
-from metagpt.common.hook.manager import HookManager
-from metagpt.common.hook.subscriber import HookSubscriber
-from metagpt.common.schema import ContextManagerConfig, UserMessage
-from metagpt.context.manager import ContextManager
+import mote.context.budget as token_budget
+from mote.common.events import EventBus
+from mote.common.hook.manager import HookManager
+from mote.common.hook.subscriber import HookSubscriber
+from mote.common.schema import ContextManagerConfig, UserMessage
+from mote.context.manager import ContextManager
 
 
 class _FakeLLM:
@@ -86,7 +86,9 @@ async def test_postcompact_fires_after_compaction():
     fired = []
     mgr = HookManager()
     mgr.register("PostCompact", lambda hi: fired.append(hi.payload.get("compact_summary")))
-    cm = ContextManager(llm=_FakeLLM(summary="my summary"), config=_summarizing_cfg(), model="m", bus=_bus_with_hooks(mgr))
+    cm = ContextManager(
+        llm=_FakeLLM(summary="my summary"), config=_summarizing_cfg(), model="m", bus=_bus_with_hooks(mgr)
+    )
     await _seed(cm)
 
     await cm.manage_history()

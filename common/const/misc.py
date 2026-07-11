@@ -44,7 +44,7 @@ ASSISTANT_ALIAS = "response"
 MARKDOWN_TITLE_PREFIX = "## "
 
 # Reporter
-METAGPT_REPORTER_DEFAULT_URL = os.environ.get("METAGPT_REPORTER_URL", "")
+MOTE_REPORTER_DEFAULT_URL = os.environ.get("MOTE_REPORTER_URL", "")
 
 # experience pool
 EXPERIENCE_MASK = "<experience>"

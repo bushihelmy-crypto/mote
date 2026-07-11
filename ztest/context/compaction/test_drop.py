@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.const.context import HEAD_DROPPED_MESSAGE
-from metagpt.common.schema import ContextManagerConfig, Message
-from metagpt.context.compaction.reducers.drop import HeadDropReducer
-from metagpt.context.compaction.request import ReductionReason, ReductionRequest, Urgency
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.const.context import HEAD_DROPPED_MESSAGE
+from mote.common.schema import ContextManagerConfig, Message
+from mote.context.compaction.reducers.drop import HeadDropReducer
+from mote.context.compaction.request import ReductionReason, ReductionRequest, Urgency
+from mote.context.compaction.transcript import Transcript
 
 from ..conftest import make_pairs, text_msg
 

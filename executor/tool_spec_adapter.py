@@ -1,4 +1,4 @@
-"""tool_spec_adapter — convert MetaGPT tool schemas to native tool-use specs.
+"""tool_spec_adapter — convert Mote tool schemas to native tool-use specs.
 
 The XML command protocol describes tools as free-form text (name + signature +
 a natural-language ``Args:`` block). Native tool-use APIs instead require a
@@ -11,7 +11,7 @@ XML protocol never calls this. It exists so the native-tool-use channel (and
 its tests) can prove our tools are losslessly expressible as native specs.
 
 Usage:
-    from metagpt.executor.tool_spec_adapter import build_json_schema, to_native_tool_specs
+    from mote.executor.tool_spec_adapter import build_json_schema, to_native_tool_specs
 
     schema = build_json_schema(MyTool.call)              # {type:object, properties, required}
     specs = to_native_tool_specs(executor.get_tool_schemas_native(), "anthropic")
@@ -25,7 +25,7 @@ from typing import Any, Callable, Union
 
 from pydantic import BaseModel
 
-from metagpt.common.utils.docstring import parse_section
+from mote.common.utils.docstring import parse_section
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types
 # but maps to JSON Schema's "object" (not the parser's internal "map").
@@ -53,7 +53,7 @@ def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
     """
     origin = typing.get_origin(annotation)
     if origin is Union or isinstance(annotation, types.UnionType):
-        arms = [a for a in typing.get_args(annotation) if a is not type(None)]
+        arms = [a for a in typing.get_args(annotation) if a is not types.NoneType]  # noqa: E721  # identity check
         is_optional = len(arms) != len(typing.get_args(annotation))
         inner = arms[0] if arms else str
         return inner, is_optional

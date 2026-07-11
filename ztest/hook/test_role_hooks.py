@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.hook.types import HookOutcome
-from metagpt.roles import Role
-from metagpt.roles.role_schema import RoleSchema
+from mote.common.hook.types import HookOutcome
+from mote.roles import Role
+from mote.roles.role_schema import RoleSchema
 
 
 class _StubLoop:
@@ -27,9 +27,9 @@ class _StubLoop:
 
 @pytest.fixture
 def role_in_tmp(tmp_path, monkeypatch):
-    from metagpt.router.llm.context import Context
+    from mote.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
     role = Role(name="Hooked", context=Context())
     # Replace the loop with a no-op stub so run() exercises only the hook seams.
     # run() builds its loop via the graph's ``loop_factory``; seed that slot with
@@ -60,9 +60,7 @@ async def test_session_start_fired_once(role_in_tmp):
 async def test_user_prompt_submit_injects_context(role_in_tmp):
     seen_prompts: list[str] = []
 
-    role_in_tmp.register_hook(
-        "UserPromptSubmit", lambda hi: {"additionalContext": "PROJECT RULES"}
-    )
+    role_in_tmp.register_hook("UserPromptSubmit", lambda hi: {"additionalContext": "PROJECT RULES"})
 
     # Capture what actually got pushed into the buffer.
     pushed: list = []
@@ -85,10 +83,10 @@ async def test_stop_fired_in_finally(role_in_tmp):
 
 @pytest.mark.asyncio
 async def test_hook_config_engages_manager(tmp_path, monkeypatch):
-    from metagpt.router.llm.context import Context
-    from metagpt.common.schema import HookConfig
+    from mote.common.schema import HookConfig
+    from mote.router.llm.context import Context
 
-    monkeypatch.setattr("metagpt.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
     role = Role(role_schema=RoleSchema(name="Cfg", hooks=HookConfig()), context=Context())
     # A declared HookConfig (even empty events) engages the manager.
     assert role.hook_manager is not None

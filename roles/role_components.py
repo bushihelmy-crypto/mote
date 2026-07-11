@@ -30,64 +30,58 @@ accessors expose a built slot without triggering a build (teardown paths).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from metagpt.common.config.loader import load_config
-from metagpt.common.config.sources import discover_source_files
-from metagpt.common.const import METAGPT_REPORTER_DEFAULT_URL
-from metagpt.common.events import EventBus, LogSubscriber
-from metagpt.common.hook import HookManager
-from metagpt.common.hook.subscriber import HookSubscriber
-from metagpt.common.interface import ObservationSubscriber
-from metagpt.common.logs import logger
-from metagpt.common.observability.langfuse_backend import LangfuseBackend
-from metagpt.common.observability.langfuse_integration import (
-    is_enabled,
-    step_tracing_enabled,
-)
-from metagpt.common.observability.tracing import TracingSubscriber
-from metagpt.common.resource import ResourceRegistry
-from metagpt.common.schema import SandboxConfig
-from metagpt.common.utils.report import ReporterSubscriber
-from metagpt.context import ContextManager
-from metagpt.context.compaction import FileRehydrator
-from metagpt.context.skills.skill_manager import SkillManager
-from metagpt.context.skills.skill_pool import _BUILTIN_DIR
-from metagpt.context.turn_context import (
+from mote.common.base import BaseThinkEngine
+from mote.common.config.loader import load_config
+from mote.common.config.sources import discover_source_files
+from mote.common.const import MOTE_REPORTER_DEFAULT_URL
+from mote.common.const.paths import mote_project_dirs, user_mote_dir
+from mote.common.events import EventBus, LogSubscriber
+from mote.common.hook import HookManager
+from mote.common.hook.subscriber import HookSubscriber
+from mote.common.interface import ObservationSubscriber
+from mote.common.logs import logger
+from mote.common.observability.langfuse_backend import LangfuseBackend
+from mote.common.observability.langfuse_integration import is_enabled, step_tracing_enabled
+from mote.common.observability.tracing import TracingSubscriber
+from mote.common.resource import ResourceRegistry
+from mote.common.schema import SandboxConfig
+from mote.common.utils.report import ReporterSubscriber
+from mote.context import ContextManager
+from mote.context.code_map.indexer import RepoIndexer
+from mote.context.compaction import FileRehydrator
+from mote.context.skills.skill_manager import SkillManager
+from mote.context.skills.skill_pool import _BUILTIN_DIR
+from mote.context.turn_context import (
     ChangedFilesContextSource,
     CodeMapContextSource,
     CompactionNoticeContextSource,
     GitContextSource,
     SkillActivationContextSource,
     SkillListingContextSource,
+    TimestampContextSource,
     TokenPressureContextSource,
     ToolCatalogContextSource,
     TurnContextBus,
 )
-from metagpt.environment.watching import FileWatchService
-from metagpt.executor.permission.sandbox import (
-    ResourceGuard,
-    SandboxGuard,
-    build_runtime,
-)
-from metagpt.executor.mcp.config_source import mcp_config_path
-from metagpt.executor.tasks import BackgroundTaskPool, TaskOutputStore
-from metagpt.executor.tool_executor import ToolExecutor
-from metagpt.loop import BaseLoop, ReActLoop
-from metagpt.parser import (
-    CommandChannel,
-    infer_native_tool_provider,
-    make_command_channel,
-)
-from metagpt.roles.capabilities import RoleCapabilities
-from metagpt.roles.component_graph import BuildContext, ComponentGraph, ComponentSpec
-from metagpt.roles.context_provider import ContextProvider
-from metagpt.roles.lsp import DiagnosticsBuffer, LspService
-from metagpt.roles.role_state import RoleStateController
-from metagpt.roles.session_manager import RoleSessionManager
-from metagpt.router.router import COMPRESSION_TASK, LLMRouter
-from metagpt.session import (
+from mote.environment.watching import FileWatchService
+from mote.executor.mcp.config_source import mcp_config_paths
+from mote.executor.permission.sandbox import ResourceGuard, SandboxGuard, build_runtime
+from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
+from mote.executor.tool_executor import ToolExecutor
+from mote.loop import BaseLoop, ReActLoop
+from mote.parser import CommandChannel, infer_native_tool_provider, make_command_channel
+from mote.roles.capabilities import RoleCapabilities
+from mote.roles.component_graph import BuildContext, ComponentGraph, ComponentSpec
+from mote.roles.context_provider import ContextProvider
+from mote.roles.lsp import DiagnosticsBuffer, LspService
+from mote.roles.role_state import RoleStateController
+from mote.roles.session_manager import RoleSessionManager
+from mote.router.router import COMPRESSION_TASK, LLMRouter
+from mote.session import (
     BrowserStateRecorder,
     FileSnapshotRecorder,
     KernelStateRecorder,
@@ -95,14 +89,14 @@ from metagpt.session import (
     SessionMetaEvent,
     TerminalStateRecorder,
 )
-from metagpt.session.snapshot import detect_blob_backend
-from metagpt.session.subscribers import RecorderSubscriber
-from metagpt.common.base import BaseThinkEngine
-from metagpt.think.prompt_builder import ThinkSubsystems
-from metagpt.think.think_engine import ThinkEngine
+from mote.session.snapshot import detect_blob_backend
+from mote.session.subscribers import RecorderSubscriber
+from mote.think.prompt_builder import ThinkSubsystems
+from mote.think.think_engine import ThinkEngine
 
 if TYPE_CHECKING:
-    from metagpt.roles.role import Role
+    from mote.roles.role import Role
+
 
 class ComponentsState:
     """Mutable per-Role extras that are not themselves graph components.
@@ -118,6 +112,39 @@ class ComponentsState:
         self.pending_task_completion_wake: "Optional[Callable]" = None
         self.hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
         self.resource_guard: Optional[ResourceGuard] = None
+
+
+class _LspCodeQuery:
+    """Lazy async facade over the opt-in :class:`LspService` for code-map Layer B.
+
+    The object :meth:`CodeMap.resolve_unread` queries to name the symbols behind
+    a dangling import (``document_symbols`` / ``definition``). Holds the owning
+    :class:`RoleComponents` so it resolves the service *at query time* — the
+    turn-context roster is built before the LSP service is, and the service may
+    not exist until the spine is wired. Best-effort: an unbuilt/absent service
+    yields ``[]`` so Layer B degrades silently to the bare unread path.
+    """
+
+    def __init__(self, components: "RoleComponents") -> None:
+        self._components = components
+
+    async def document_symbols(self, path: str) -> list:
+        svc = self._components.lsp_service
+        if svc is None:
+            return []
+        return await svc.document_symbols(path)
+
+    async def definition(self, path: str, line: int, character: int) -> list:
+        svc = self._components.lsp_service
+        if svc is None:
+            return []
+        return await svc.definition(path, line, character)
+
+    async def references(self, path: str, line: int, character: int) -> list:
+        svc = self._components.lsp_service
+        if svc is None:
+            return []
+        return await svc.references(path, line, character)
 
 
 class RoleComponents:
@@ -182,6 +209,7 @@ class RoleComponents:
             # --- one-sibling-edge nodes -------------------------------------
             ComponentSpec("executor", _build_executor),  # eager event_bus; defers bg_pool
             ComponentSpec("context_manager", _build_context_manager),  # eager registry/router/event_bus
+            ComponentSpec("repo_index", _build_repo_index, available=_repo_index_available),
             ComponentSpec("turn_context_sources", _build_turn_context_sources),  # eager diagnostics_buffer
             # --- L2 (read an L1 sibling) ------------------------------------
             ComponentSpec("turn_context_bus", lambda ctx: TurnContextBus(ctx.dep("turn_context_sources"))),
@@ -285,6 +313,10 @@ class RoleComponents:
     @property
     def sandbox_runtime(self):
         return self._graph.get("sandbox_runtime")
+
+    @property
+    def repo_index(self):
+        return self._graph.get("repo_index")
 
     @property
     def diagnostics_buffer(self):
@@ -405,7 +437,7 @@ class RoleComponents:
             RecorderSubscriber(self.session_log),
             LogSubscriber(),
             TracingSubscriber(LangfuseBackend(), trace_steps=step_tracing_enabled()) if is_enabled() else None,
-            ReporterSubscriber(METAGPT_REPORTER_DEFAULT_URL) if METAGPT_REPORTER_DEFAULT_URL else None,
+            ReporterSubscriber(MOTE_REPORTER_DEFAULT_URL) if MOTE_REPORTER_DEFAULT_URL else None,
             self.lsp_service,  # observer + producer (on_subscribed); None when LSP off
         ]
         subs += [s for s in self.turn_context_sources if isinstance(s, ObservationSubscriber)]
@@ -440,6 +472,10 @@ class RoleComponents:
     def peek_sandbox_runtime(self):
         """The OS-level sandbox runtime if already built, else ``None``."""
         return self._graph.peek("sandbox_runtime")
+
+    def peek_repo_index(self):
+        """The whole-repo reverse-dep index if already built, else ``None``."""
+        return self._graph.peek("repo_index")
 
     def peek_resource_guard(self):
         """The live resource-cap guard if the sandbox runtime is built, else ``None``.
@@ -501,6 +537,53 @@ class RoleComponents:
             return list(self._role.state._file_read_state.keys())
         except Exception:  # noqa: BLE001 — purely advisory
             return []
+
+    def _lsp_code_query(self) -> "_LspCodeQuery":
+        """The lazy LSP facade the code-map Layer B queries for unread symbols.
+
+        Returned unconditionally (a thin, always-safe wrapper): it resolves the
+        opt-in :class:`LspService` at query time and yields ``[]`` when LSP is
+        off, so :class:`CodeMapContextSource` can hold it without knowing whether
+        an LSP layer is configured.
+        """
+        return _LspCodeQuery(self)
+
+    async def _reindex_code_map_on_change(self, hook_input) -> None:
+        """FileChanged handler: incrementally re-index a changed ``*.py`` (Layer C).
+
+        Feeds the whole-repo reverse-dependency index so ``used by:`` stays fresh
+        as files are edited. No-op when the repo index is not built (Layer C off).
+        Best-effort — a bad refresh is logged and swallowed, never breaks the watch.
+        """
+        indexer = self._graph.peek("repo_index")
+        if indexer is None:
+            return
+        path = None
+        payload = getattr(hook_input, "payload", None)
+        if isinstance(payload, dict):
+            path = payload.get("path")
+        if not path:
+            return
+        try:
+            indexer.refresh([path])
+        except Exception as exc:  # noqa: BLE001 — a bad reindex must not break the watcher
+            logger.warning(f"RoleComponents: code-map reindex failed: {exc}")
+
+    async def kickoff_repo_scan(self) -> None:
+        """Run the whole-repo code-index cold scan off the event loop (Layer C).
+
+        Fired once at session start. The scan is a stale-diff walk (a warm store
+        re-parses nothing), pushed to the default executor thread so the
+        ~hundreds-of-ms cold walk never blocks a turn. No-op when Layer C is off.
+        Best-effort — a scan failure is logged and swallowed.
+        """
+        indexer = self._graph.get("repo_index")
+        if indexer is None:
+            return
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, indexer.scan_all)
+        except Exception as exc:  # noqa: BLE001 — a bad scan must not break session start
+            logger.warning(f"RoleComponents: code-map cold scan failed: {exc}")
 
     def _read_state(self) -> dict:
         """Snapshot of ``{path: mtime_ns_when_last_read}`` for this session.
@@ -589,15 +672,17 @@ def _skill_source_dirs(role, cfg) -> list:
     """Layered skill source directories (precedence-as-data, low→high).
 
     Bundled package skills are the lowest layer; the conventional
-    ``~/.agent/skills`` (user) and ``<cwd>/.agent/skills`` (project) dirs and any
-    configured ``extra_dirs`` stack above them (later overrides earlier for
+    ``~/.mote/skills`` (user) dir and the per-project ``<dir>/.mote/skills`` dirs
+    (discovered by walking from cwd up to the git root, Claude-Code-aligned) and
+    any configured ``extra_dirs`` stack above them (later overrides earlier for
     same-named skills).
     """
     dirs: list[Path] = [_BUILTIN_DIR]
     if cfg.include_user_dir:
-        dirs.append(Path.home() / ".agent" / "skills")
+        dirs.append(user_mote_dir("skills"))
     if cfg.include_project_dir:
-        dirs.append(Path(role.get_cwd()) / ".agent" / "skills")
+        # git-root→cwd walk (low→high); closer-to-cwd overrides farther dirs.
+        dirs.extend(mote_project_dirs("skills", Path(role.get_cwd())))
     dirs.extend(Path(d) for d in cfg.extra_dirs)
     return dirs
 
@@ -627,9 +712,13 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
         output_store=output_store,
         wake=ctx.state.pending_task_completion_wake,
     )
+
     # Wire the disk-cap kill switch so an output that blows the size cap cancels
     # its task (mirrors Claude Code's #killedForSize).
-    output_store.set_on_cap(pool.cancel_for_cap)
+    def _cancel_on_cap(tid: str) -> None:
+        pool.cancel_for_cap(tid)
+
+    output_store.set_on_cap(_cancel_on_cap)
     return pool
 
 
@@ -695,6 +784,31 @@ def _build_lsp_service(ctx):
     cfg = ctx.role.role_schema.lsp
     root = ctx.role.state.project_root or ctx.role.get_cwd()
     return LspService(cfg, root)
+
+
+def _repo_index_available(role, state) -> bool:
+    """A whole-repo code index exists iff the file-watch layer is engaged.
+
+    Layer C's reverse-dep freshness rides the same FileChanged signal the watcher
+    fires, so it is gated on the watcher being configured — no separate config
+    knob. When off, ``CodeMapContextSource`` falls back to touched-set-scoped
+    ``used by:`` (backward compatible).
+    """
+    cfg = role.role_schema.file_watch
+    return cfg is not None and cfg.enabled
+
+
+def _build_repo_index(ctx):
+    """Opt-in whole-repo reverse-dependency index (code-map Layer C).
+
+    Owns a persistent per-repo SQLite :class:`CodeMap` under ``~/.mote`` so a warm
+    start skips the full rescan. The cold ``scan_all`` is kicked off the event
+    loop by :meth:`RoleComponents.kickoff_repo_scan` (from the Role's session
+    start), and incremental refreshes ride the FileChanged hook wired in
+    :func:`_build_file_watch_service`.
+    """
+    root = ctx.role.state.project_root or ctx.role.get_cwd()
+    return RepoIndexer(root)
 
 
 def _sandbox_available(role, state) -> bool:
@@ -847,6 +961,14 @@ def _build_turn_context_sources(ctx) -> list:
             get_channel=ctx.defer("command_channel"),
         ),
         GitContextSource(get_cwd=lambda: role.state.working_dir or None),
+        # NOTE: no per-turn cwd reminder. `working_dir` is now a STABLE base that
+        # never drifts with `cd` (Codex-aligned) and equals the startup dir the
+        # system prompt's env block already cites — a per-turn reminder would just
+        # repeat cacheable content. File tools resolve relative paths against it
+        # directly; a per-call `workdir` (Bash) scopes subdir work.
+        # Wall-clock time, per turn: moved off the request tail's current_state
+        # line into the structured reminder envelope (ephemeral, never persisted).
+        TimestampContextSource(),
         TokenPressureContextSource(ctx.defer("context_manager")),
         # Reactive post-compaction notice (also subscribes to the event bus to
         # arm itself off PostCompactEvent — dual-role).
@@ -871,7 +993,19 @@ def _build_turn_context_sources(ctx) -> list:
         # files it already opened. Dual-role: also resets its frontier on
         # PostCompactEvent to re-emit the full map. Self-suppresses with no touched
         # files or nothing structural to say.
-        CodeMapContextSource(get_touched_files=components._touched_files),
+        # Layer B: resolves dangling-import symbols via the opt-in LSP facade
+        # (None-safe — yields [] when LSP is off). Layer C: whole-repo reverse
+        # deps via the opt-in repo index (None → touched-set-scoped used-by).
+        # F1: get_read_state narrows the per-file self-description to files whose
+        # body is NOT already in context. F3: an interface-changing edit surfaces
+        # a ⚠ risk label + used-by prominently; F2: precise call sites via the LSP
+        # references path (reuses the same _lsp_code_query facade).
+        CodeMapContextSource(
+            get_touched_files=components._touched_files,
+            lsp_query=components._lsp_code_query(),
+            repo_index=ctx.dep("repo_index"),
+            get_read_state=components._read_state,
+        ),
     ]
     # LSP diagnostics: the buffer is itself the turn-context source (dual-role —
     # also the bus subscriber fed by the LspService), present only when an LSP
@@ -952,6 +1086,7 @@ def _build_think_engine_factory(ctx: "BuildContext") -> Callable[[], BaseThinkEn
     Reads ``role_schema.think_kind`` at call-time and dispatches through
     :data:`_THINK_BUILDERS` (falling back to ``"default"`` for an unknown kind).
     """
+
     def make_think_engine() -> BaseThinkEngine:
         kind = ctx.role.role_schema.think_kind
         builder = _THINK_BUILDERS.get(kind) or _THINK_BUILDERS["default"]
@@ -967,6 +1102,7 @@ def _build_loop_factory(ctx: "BuildContext") -> Callable[[], BaseLoop]:
     :data:`_LOOP_BUILDERS` (falling back to ``"react"``), wiring in a fresh
     think engine from the think factory so each run() gets its own machinery.
     """
+
     def make_loop() -> BaseLoop:
         kind = ctx.role.role_schema.loop_kind
         builder = _LOOP_BUILDERS.get(kind) or _LOOP_BUILDERS["react"]
@@ -983,6 +1119,7 @@ def _build_think_subsystems_factory(ctx) -> Callable[[], ThinkSubsystems]:
     after the provider was constructed is still seen), mirroring the provider's
     old ``_think_subsystems`` hand-assembly.
     """
+
     def make_think_subsystems() -> ThinkSubsystems:
         role = ctx.role
         return ThinkSubsystems(
@@ -1026,8 +1163,22 @@ def _build_file_watch_service(ctx):
         components.register_hook("FileChanged", components._reload_config_on_change, r"config2?\.yaml$")
         roots.extend(components._config_source_roots())
     if cfg.reload_mcp:
-        components.register_hook("FileChanged", components._reload_mcp_on_change, r"mcp_config\.json$")
-        roots.append(str(mcp_config_path().parent))
+        components.register_hook("FileChanged", components._reload_mcp_on_change, r"mcp\.json$")
+        cwd = Path(role.get_cwd())
+        # Watch every discovered .mote/mcp.json dir, plus <cwd>/.mote so a
+        # newly-created file is still picked up (walk only returns existing).
+        for p in mcp_config_paths(cwd):
+            roots.append(str(p.parent))
+        roots.append(str(cwd / ".mote"))
+
+    # Layer C: keep the whole-repo reverse-dep index fresh as .py files change.
+    # Piggybacks on an already-engaged hook layer (a HookConfig, a manual
+    # callback, or a reload_* handler above) — unlike those, it has no config
+    # flag of its own, so it must NOT be the thing that turns the watcher on when
+    # nothing else would consume FileChanged events. The handler no-ops when the
+    # index isn't built. The project root is already watched.
+    if _hook_available(role, ctx.state):
+        components.register_hook("FileChanged", components._reindex_code_map_on_change, r"\.py$")
 
     hook_runner = ctx.dep("hook_manager")
     if hook_runner is None:
@@ -1057,5 +1208,3 @@ def _dedupe_tools(tools: list[str]) -> list[str]:
             seen.add(tool)
             deduped.append(tool)
     return deduped
-
-

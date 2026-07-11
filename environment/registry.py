@@ -20,9 +20,9 @@ import threading
 from dataclasses import dataclass
 from typing import Optional
 
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment._scope import ScopedExitMixin
-from metagpt.common.exception import AgentLimitReached, AgentNotKnown, AgentPathExists
+from mote.common.exception import AgentLimitReached, AgentNotKnown, AgentPathExists
+from mote.environment._scope import ScopedExitMixin
+from mote.environment.agent_path import AgentPath
 
 
 @dataclass
@@ -219,9 +219,7 @@ class SpawnReservation(ScopedExitMixin):
         self._active = True
         self._reserved_path: Optional[AgentPath] = None
 
-    def reserve_agent_nickname_with_preference(
-        self, names: list[str], preferred: Optional[str] = None
-    ) -> str:
+    def reserve_agent_nickname_with_preference(self, names: list[str], preferred: Optional[str] = None) -> str:
         nickname = self._registry._reserve_agent_nickname(names, preferred)
         if nickname is None:
             raise AgentNotKnown(message="no available agent nicknames")

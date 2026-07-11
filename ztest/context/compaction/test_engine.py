@@ -11,17 +11,13 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.events import (
-    CompactionCheckpointEvent,
-    PostCompactEvent,
-    PreCompactEvent,
-)
-from metagpt.common.events.outcomes import CompactOutcome
-from metagpt.context.compaction.engine import ContextEngine
-from metagpt.context.compaction.pipeline import ReductionPipeline
-from metagpt.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from metagpt.context.compaction.request import ReductionRequest, Urgency
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.events import CompactionCheckpointEvent, PostCompactEvent, PreCompactEvent
+from mote.common.events.outcomes import CompactOutcome
+from mote.context.compaction.engine import ContextEngine
+from mote.context.compaction.pipeline import ReductionPipeline
+from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.context.compaction.request import ReductionRequest, Urgency
+from mote.context.compaction.transcript import Transcript
 
 from ..conftest import text_msg
 

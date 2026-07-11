@@ -1,8 +1,8 @@
-"""metagpt.common.prompt — all prompt text, organized by category.
+"""mote.common.prompt — all prompt text, organized by category.
 
 Single home for every prompt/template/description string in the framework:
 
-- role: core Role system prompt, identity templates, dynamic sections, MGX info,
+- role: core Role system prompt, identity templates, dynamic sections, Mote info,
   summary prompts, JSON-repair / ask-human helpers.
 - memory: persistent file-based memory instructions + MEMORY.md context block.
 - compaction: autocompact summarization prompt text (CC port).
@@ -10,10 +10,24 @@ Single home for every prompt/template/description string in the framework:
 - agent: child-agent delegation task prompt, agent-tool section, example.
 - tools: model-facing tool descriptions + tool-result prompt text.
 
-Names are re-exported here so callers can do ``from metagpt.common.prompt
+Names are re-exported here so callers can do ``from mote.common.prompt
 import SYSTEM_PROMPT`` or import the submodule directly.
 """
-from metagpt.common.prompt.role import (
+from mote.common.prompt.agent import (
+    AGENT_SECTION_TEMPLATE,
+    AGENT_TASK_PROMPT,
+    SUBAGENT_SECTION_TEMPLATE,
+    SUBAGENT_TASK_PROMPT,
+)
+from mote.common.prompt.compaction import NO_TOOLS_PREAMBLE, NO_TOOLS_TRAILER
+from mote.common.prompt.memory import (
+    MEMORY_CONTEXT,
+    MEMORY_EMPTY_STATE,
+    MEMORY_FRONTMATTER_EXAMPLE,
+    MEMORY_INSTRUCTIONS,
+)
+from mote.common.prompt.output import OUTPUT_SECTION, SUMMARIZE_STATUS_WHEN_CONSECUTIVE
+from mote.common.prompt.role import (
     CMD_EXPERIENCE_MASK,
     CMD_PROMPT,
     CONSTRAINT_TEMPLATE,
@@ -29,26 +43,6 @@ from metagpt.common.prompt.role import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     TASK_FINAL_OUTPUT_SECTION,
-)
-from metagpt.common.prompt.memory import (
-    MEMORY_CONTEXT,
-    MEMORY_EMPTY_STATE,
-    MEMORY_FRONTMATTER_EXAMPLE,
-    MEMORY_INSTRUCTIONS,
-)
-from metagpt.common.prompt.compaction import (
-    NO_TOOLS_PREAMBLE,
-    NO_TOOLS_TRAILER,
-)
-from metagpt.common.prompt.output import (
-    OUTPUT_SECTION,
-    SUMMARIZE_STATUS_WHEN_CONSECUTIVE,
-)
-from metagpt.common.prompt.agent import (
-    AGENT_SECTION_TEMPLATE,
-    AGENT_TASK_PROMPT,
-    SUBAGENT_SECTION_TEMPLATE,
-    SUBAGENT_TASK_PROMPT,
 )
 
 __all__ = [

@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from metagpt.common.schema import SandboxConfig
+from mote.common.schema import SandboxConfig
 
 
 @dataclass

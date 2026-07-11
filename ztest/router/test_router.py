@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.router (LLMRouter — three routing methods + fallback)."""
+"""Tests for mote.router.router (LLMRouter — three routing methods + fallback)."""
 from __future__ import annotations
 
 import pytest
 
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.exception import ModelNotFoundError
-from metagpt.router.schema import RoutingRequest
-from metagpt.router.strategy import RuleBasedStrategy
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.exception import ModelNotFoundError
+from mote.router.schema import RoutingRequest
+from mote.router.strategy import RuleBasedStrategy
 
 from .conftest import FakeLLM
-
 
 # The ``router`` fixture (conftest) wires a deterministic 4-card ladder + an
 # ``llm`` default, stubbing context.llm / llm_with_cost_manager_from_llm_config.
@@ -72,7 +71,7 @@ class TestRegister:
         # A re-register must drop EVERY cached variant for the name — including the
         # reducer-less COMPRESSION instance — not just the THINK one, or a stale
         # compression instance stays pinned to the old config.
-        from metagpt.router.router import COMPRESSION_TASK
+        from mote.router.router import COMPRESSION_TASK
 
         router.map_task(COMPRESSION_TASK, "strong")
         first = router.route_for_task(COMPRESSION_TASK)
@@ -139,7 +138,7 @@ class TestContextReducerInjection:
     def test_route_by_llm_config_gets_reducer(self, router):
         # The main think path bypasses _build via route(llm_config=), so it must
         # be stamped there too.
-        from metagpt.common.config.config.llm_config import LLMConfig
+        from mote.common.config.config.llm_config import LLMConfig
 
         sentinel = object()
         router.context_reducer = sentinel
@@ -154,7 +153,7 @@ class TestContextReducerInjection:
         # The summarize reducer runs on this instance and issues its own inner
         # aask(); withholding the reducer breaks the _compress → summarize cycle
         # at the injection layer (no runtime guard).
-        from metagpt.router.router import COMPRESSION_TASK
+        from mote.router.router import COMPRESSION_TASK
 
         sentinel = object()
         router.context_reducer = sentinel
@@ -165,7 +164,7 @@ class TestContextReducerInjection:
         # With no compression model *card* registered, the task-map entry
         # (compress_llm) can't resolve, so the task routes to the default — but
         # still reducer-less, so an unconfigured compression model can't recurse.
-        from metagpt.router.router import COMPRESSION_TASK
+        from mote.router.router import COMPRESSION_TASK
 
         sentinel = object()
         router.context_reducer = sentinel
@@ -175,7 +174,7 @@ class TestContextReducerInjection:
 
     def test_compression_instance_keeps_fallback_supplier(self, router):
         # Only COMPRESS is withheld; FALLBACK/ROTATE recovery stay wired.
-        from metagpt.router.router import COMPRESSION_TASK
+        from mote.router.router import COMPRESSION_TASK
 
         llm = router.route_for_task(COMPRESSION_TASK)
         assert llm._fallback_supplier is not None
@@ -184,7 +183,7 @@ class TestContextReducerInjection:
     def test_compression_instance_cached_separately_from_think_instance(self, router):
         # The reducer-less compression instance must not alias the reducer-bearing
         # instance built for the same model on the main think path.
-        from metagpt.router.router import COMPRESSION_TASK
+        from mote.router.router import COMPRESSION_TASK
 
         sentinel = object()
         router.context_reducer = sentinel
@@ -198,7 +197,7 @@ class TestContextReducerInjection:
     def test_summary_instance_keeps_reducer(self, router):
         # SUMMARY is a top-level turn-end call (not nested inside compression),
         # so it keeps its reducer — only COMPRESSION is withheld.
-        from metagpt.router.router import SUMMARY_TASK
+        from mote.router.router import SUMMARY_TASK
 
         sentinel = object()
         router.context_reducer = sentinel

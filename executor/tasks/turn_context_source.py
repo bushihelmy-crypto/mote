@@ -18,10 +18,13 @@ cycles thereafter.
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
-from metagpt.common.interface import TurnContextPriority
-from metagpt.executor.tasks.attachment import TaskAttachmentGenerator, format_attachment_xml
+from mote.common.interface import TurnContextPriority
+from mote.executor.tasks.attachment import TaskAttachmentGenerator, format_attachment_xml
+
+if TYPE_CHECKING:
+    from mote.executor.tasks.pool import BackgroundTaskPool
 
 
 class BackgroundTaskContextSource:
@@ -31,7 +34,7 @@ class BackgroundTaskContextSource:
     priority = TurnContextPriority.BACKGROUND_TASKS
     save_to_context = False  # ephemeral: in-flight task progress, never persisted
 
-    def __init__(self, get_pool: Callable[[], object], store=None) -> None:
+    def __init__(self, get_pool: Callable[[], "Optional[BackgroundTaskPool]"], store=None) -> None:
         self._get_pool = get_pool
         self._store = store
         self._generator: Optional[TaskAttachmentGenerator] = None

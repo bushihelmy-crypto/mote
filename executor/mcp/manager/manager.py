@@ -6,13 +6,13 @@ import threading
 from functools import partial
 from typing import Callable, Optional
 
-from metagpt.common.config.config.mcp_config import MCPServerConfig
-from metagpt.common.config.loader import load_config
-from metagpt.common.logs import logger
-from metagpt.common.utils.async_helper import run_coroutine_sync
-from metagpt.executor.mcp.client import get_mcp_client
-from metagpt.executor.mcp.client.base import MCPBaseClient
-from metagpt.executor.mcp.mcp_registry import MCP_REGISTRY
+from mote.common.config.config.mcp_config import MCPServerConfig
+from mote.common.config.loader import load_config
+from mote.common.logs import logger
+from mote.common.utils.async_helper import run_coroutine_sync
+from mote.executor.mcp.client import get_mcp_client
+from mote.executor.mcp.client.base import MCPBaseClient
+from mote.executor.mcp.mcp_registry import MCP_REGISTRY
 
 
 class MCPClientManager:

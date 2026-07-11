@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.context.manager.ContextManager`` — the facade.
+"""Tests for ``mote.context.manager.ContextManager`` — the facade.
 
 Two responsibilities:
 
@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
-from metagpt.context import ContextManager
+from mote.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
+from mote.context import ContextManager
 
 from .conftest import COMPACTABLE, FakeLLM, make_pairs, text_msg
 
@@ -51,9 +51,9 @@ async def test_add_and_count_and_get_all():
 def test_recovery_reducer_includes_summarize():
     """The reactive (HARD) recovery reducer now escalates fold → summarize → drop
     (summarize preserves history far better than a raw head-drop; drop is the floor)."""
-    from metagpt.context.compaction.reducers.drop import HeadDropReducer
-    from metagpt.context.compaction.reducers.fold import FoldReducer
-    from metagpt.context.compaction.reducers.summarize import SummarizeReducer
+    from mote.context.compaction.reducers.drop import HeadDropReducer
+    from mote.context.compaction.reducers.fold import FoldReducer
+    from mote.context.compaction.reducers.summarize import SummarizeReducer
 
     cm = ContextManager(model="gpt-4")
     reducers = cm.recovery_reducer._pipeline._reducers
@@ -87,7 +87,7 @@ async def test_tools_changed_event_refreshes_compactable():
     reconstructable set on the shared bus; the manager (an observer on that same
     bus) refreshes ``_compactable`` so compaction never keeps folding a result
     whose tool has since gone."""
-    from metagpt.common.events import EventBus, ToolsChangedEvent
+    from mote.common.events import EventBus, ToolsChangedEvent
 
     bus = EventBus()
     cm = ContextManager(model="gpt-4", compactable=frozenset({"Read", "Write"}), bus=bus)
@@ -100,7 +100,7 @@ async def test_tools_changed_event_refreshes_compactable():
 async def test_non_tools_changed_event_leaves_compactable_untouched():
     """The manager also *emits* on the same bus; its own emissions (and any
     unrelated event) fall through ``handle`` without disturbing the set."""
-    from metagpt.common.events import EventBus
+    from mote.common.events import EventBus
 
     bus = EventBus()
     cm = ContextManager(model="gpt-4", compactable=frozenset({"Read"}), bus=bus)

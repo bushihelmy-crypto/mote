@@ -28,7 +28,7 @@ Topology::
 """
 from __future__ import annotations
 
-from metagpt.executor.tasks.bggraph import BgGraph, START, END
+from mote.executor.tasks.bggraph import END, START, BgGraph
 
 from .nodes import (
     _route_after_render_gate,
@@ -69,7 +69,7 @@ def build_media_pipeline_graph() -> BgGraph:
     # --- Conditional: storyboard routes to full_pipeline or assets_only ---
     g.add_conditional_edges(
         "storyboard",
-        _route_after_storyboard,
+        _route_after_storyboard,  # type: ignore[arg-type]  # router reads MediaPipelineState (a GraphState subclass)
         {"full_pipeline": "template_init", "assets_only": "dispatch"},
     )
 
@@ -93,7 +93,7 @@ def build_media_pipeline_graph() -> BgGraph:
     # --- Conditional: render_gate routes to render or done ---
     g.add_conditional_edges(
         "render_gate",
-        _route_after_render_gate,
+        _route_after_render_gate,  # type: ignore[arg-type]  # router reads MediaPipelineState (a GraphState subclass)
         {"render": "promo_render", "done": END},
     )
 

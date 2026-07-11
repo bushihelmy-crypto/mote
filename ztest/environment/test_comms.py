@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Tests for CommGraph — address routing + named channels + subtree queries."""
 
-from metagpt.common.const import MESSAGE_ROUTE_TO_ALL
-from metagpt.environment.agent_path import AgentPath
-from metagpt.environment.comms import CommGraph, CommKind
+from mote.common.const import MESSAGE_ROUTE_TO_ALL
+from mote.environment.agent_path import AgentPath
+from mote.environment.comms import CommGraph, CommKind
 
 
 def test_register_and_addresses_for():

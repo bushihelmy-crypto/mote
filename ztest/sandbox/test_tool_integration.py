@@ -19,11 +19,10 @@ import sys
 
 import pytest
 
-from metagpt.executor.tools.bash import Bash
-from metagpt.executor.dependency._terminal import TerminalSession
-from metagpt.executor.dependency._kernel import KernelSession
-
-from metagpt.ztest.executor.tools.conftest import CapRole, bind, run
+from mote.executor.dependency._kernel import KernelSession
+from mote.executor.dependency._terminal import TerminalSession
+from mote.executor.tools.bash import Bash
+from mote.ztest.executor.tools.conftest import CapRole, bind, run
 
 
 @pytest.fixture

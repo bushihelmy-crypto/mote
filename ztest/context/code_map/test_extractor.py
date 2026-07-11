@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from metagpt.context.code_map.extractor import CodeMapExtractor
+from mote.context.code_map.extractor import CodeMapExtractor
 
 
 def _write(tmp_path, name: str, source: str) -> str:
@@ -65,11 +65,61 @@ def test_collects_imports_absolute_and_from(tmp_path):
 
 
 def test_relative_import_prefixed_with_dots(tmp_path):
+    # A bare (non-package) file has no package anchor, so a relative import can't
+    # be resolved to an absolute name and keeps its dotted spelling.
     src = "from . import sibling\nfrom ..pkg import other\n"
     path = _write(tmp_path, "rel.py", src)
     extract = CodeMapExtractor().extract(path)
-    assert "." in extract.imports  # from . import sibling
-    assert "..pkg" in extract.imports
+    assert "." in extract.imports  # from . import sibling — module-less, stays dotted
+    assert "..pkg" in extract.imports  # unanchorable (bare file) -> dotted fallback
+
+
+def _pkg_file(tmp_path, relpath: str, source: str) -> str:
+    """Write a file inside a package, creating __init__.py up the chain."""
+    full = os.path.join(str(tmp_path), relpath)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    d = os.path.dirname(full)
+    base = os.path.abspath(str(tmp_path))
+    while os.path.abspath(d) != base and len(os.path.abspath(d)) > len(base):
+        init = os.path.join(d, "__init__.py")
+        if not os.path.exists(init):
+            open(init, "w").close()
+        d = os.path.dirname(d)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(source)
+    return full
+
+
+def test_relative_import_resolved_to_absolute_in_package(tmp_path):
+    # A file inside package a.b importing `from .other import thing` resolves to
+    # the absolute dotted name a.b.other — recall for reverse-dep/dangling.
+    path = _pkg_file(tmp_path, "a/b/consumer.py", "from .other import thing\n")
+    extract = CodeMapExtractor().extract(path)
+    assert "a.b.other" in extract.imports
+    # No leading-dot spelling survives once resolved.
+    assert not any(m.startswith(".") for m in extract.imports)
+
+
+def test_relative_import_climbs_packages(tmp_path):
+    # `from ..sib import x` from a.b.consumer climbs to package a, descends sib.
+    path = _pkg_file(tmp_path, "a/b/consumer.py", "from ..sib import x\n")
+    extract = CodeMapExtractor().extract(path)
+    assert "a.sib" in extract.imports
+
+
+def test_relative_import_refs_resolved_to_absolute(tmp_path):
+    # The parallel import_refs carry the same resolved absolute module.
+    path = _pkg_file(tmp_path, "a/b/consumer.py", "from .other import thing\n")
+    extract = CodeMapExtractor().extract(path)
+    by_name = {r.name: r for r in extract.import_refs}
+    assert by_name["thing"].module == "a.b.other"
+
+
+def test_relative_import_overshoot_keeps_dotted(tmp_path):
+    # Climbing past the package root is unanchorable -> dotted fallback (no crash).
+    path = _pkg_file(tmp_path, "a/consumer.py", "from ...toofar import x\n")
+    extract = CodeMapExtractor().extract(path)
+    assert "...toofar" in extract.imports
 
 
 def test_imports_deduped_order_preserved(tmp_path):
@@ -116,6 +166,39 @@ class C:
     assert ("C.m", "target") in edges
 
 
+def test_self_method_call_recorded(tmp_path):
+    # self.helper() targets a same-class method defined here -> a real edge.
+    src = """
+class C:
+    def helper(self):
+        pass
+
+    def run(self):
+        self.helper()
+"""
+    path = _write(tmp_path, "selfcall.py", src)
+    extract = CodeMapExtractor().extract(path)
+    edges = [(c.caller, c.callee) for c in extract.calls]
+    assert ("C.run", "helper") in edges
+
+
+def test_attribute_call_on_foreign_receiver_not_recorded(tmp_path):
+    # x.helper() names an object we cannot type from the AST; matching the bare
+    # name "helper" against a same-named local def would be a false positive.
+    src = """
+def helper():
+    pass
+
+def run(x):
+    x.helper()
+"""
+    path = _write(tmp_path, "attrcall.py", src)
+    extract = CodeMapExtractor().extract(path)
+    edges = [(c.caller, c.callee) for c in extract.calls]
+    assert ("run", "helper") not in edges
+    assert extract.calls == []
+
+
 def test_syntax_error_yields_empty_extract(tmp_path):
     path = _write(tmp_path, "bad.py", "def broken(:\n")
     extract = CodeMapExtractor().extract(path)
@@ -153,3 +236,65 @@ def test_needs_refresh_false_after_parse_until_changed(tmp_path):
 def test_needs_refresh_false_for_missing_file(tmp_path):
     ex = CodeMapExtractor()
     assert ex.needs_refresh(str(tmp_path / "gone.py")) is False
+
+
+# -- Layer B: import_refs (binding + position) --------------------------------
+
+
+def test_import_refs_from_import_carries_name_and_position(tmp_path):
+    src = "from pkg.other import thing\n"
+    path = _write(tmp_path, "ir.py", src)
+    extract = CodeMapExtractor().extract(path)
+    by_name = {r.name: r for r in extract.import_refs}
+    assert "thing" in by_name
+    ref = by_name["thing"]
+    assert ref.module == "pkg.other"
+    assert ref.line == 1  # 1-based
+    assert ref.col >= 0  # 0-based character offset
+
+
+def test_import_refs_plain_import_binds_alias(tmp_path):
+    src = "import a.b.c as abc\nimport os\n"
+    path = _write(tmp_path, "ir2.py", src)
+    extract = CodeMapExtractor().extract(path)
+    by_name = {r.name: r for r in extract.import_refs}
+    # aliased import binds the asname; the module is the full dotted target.
+    assert by_name["abc"].module == "a.b.c"
+    # plain import binds the module name itself.
+    assert by_name["os"].module == "os"
+
+
+def test_import_refs_multiple_names_one_from(tmp_path):
+    src = "from pkg import a, b, c\n"
+    path = _write(tmp_path, "ir3.py", src)
+    extract = CodeMapExtractor().extract(path)
+    names = {r.name for r in extract.import_refs}
+    assert names == {"a", "b", "c"}
+    assert all(r.module == "pkg" for r in extract.import_refs)
+
+
+# -- Layer C: content_hash ----------------------------------------------------
+
+
+def test_content_hash_stable_across_reparse(tmp_path):
+    path = _write(tmp_path, "h.py", "x = 1\n")
+    ex = CodeMapExtractor()
+    h1 = ex.extract(path).content_hash
+    h2 = CodeMapExtractor().extract(path).content_hash
+    assert h1 and h1 == h2  # deterministic, non-empty
+
+
+def test_content_hash_changes_on_edit(tmp_path):
+    path = _write(tmp_path, "h2.py", "x = 1\n")
+    h1 = CodeMapExtractor().extract(path).content_hash
+    _write(tmp_path, "h2.py", "x = 2\n")
+    h2 = CodeMapExtractor().extract(path).content_hash
+    assert h1 != h2
+
+
+def test_content_hash_present_even_on_syntax_error(tmp_path):
+    path = _write(tmp_path, "hbad.py", "def broken(:\n")
+    extract = CodeMapExtractor().extract(path)
+    # A broken file still carries a stable content hash so the store's staleness
+    # diff sees it as parsed-at-this-version (no perpetual re-parse).
+    assert extract.content_hash != ""

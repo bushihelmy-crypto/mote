@@ -13,8 +13,8 @@ Public surface:
       :func:`final_output`, :func:`status_line_dict`, :func:`format_cost`.
 """
 
-from metagpt.router.cost.node import CostNode
-from metagpt.router.cost.pricing import (
+from mote.router.cost.node import CostNode
+from mote.router.cost.pricing import (
     DEFAULT_UNKNOWN_PRICING,
     PRICING,
     ModelPricing,
@@ -23,7 +23,7 @@ from metagpt.router.cost.pricing import (
     lookup_pricing,
     resolve_pricing,
 )
-from metagpt.router.cost.report import (
+from mote.router.cost.report import (
     final_output,
     format_cost,
     format_cost_tree,
@@ -31,14 +31,8 @@ from metagpt.router.cost.report import (
     format_total_cost,
     status_line_dict,
 )
-from metagpt.router.cost.tracker import (
-    BASELINE_TOKENS,
-    CostTracker,
-    Costs,
-    ModelUsage,
-    context_window_for,
-)
-from metagpt.router.cost.usage import EMPTY_USAGE, TokenUsage
+from mote.router.cost.tracker import BASELINE_TOKENS, Costs, CostTracker, ModelUsage, context_window_for
+from mote.router.cost.usage import EMPTY_USAGE, TokenUsage
 
 __all__ = [
     # usage

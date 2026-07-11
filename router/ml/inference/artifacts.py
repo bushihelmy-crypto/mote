@@ -15,13 +15,13 @@ from pathlib import Path
 
 import numpy as np
 
-from metagpt.router.ml.features import (
+from mote.router.ml.features import (
     ContextMetadata,
     extract_context_features,
     extract_handcrafted,
     extract_hist_features,
 )
-from metagpt.router.ml.v4_features import BGEChannelExtractor
+from mote.router.ml.v4_features import BGEChannelExtractor
 
 _V4_TFIDF_DIMS = 102
 

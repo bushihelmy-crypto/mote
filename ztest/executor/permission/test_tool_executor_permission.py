@@ -13,10 +13,10 @@ from typing import Any
 
 import pytest
 
-from metagpt.common.schema import PermissionConfig
-from metagpt.executor.base_tool import BaseTool
-from metagpt.common.schema.permission_types import PermissionDecision
-from metagpt.executor.tool_executor import ToolExecutor
+from mote.common.schema import PermissionConfig
+from mote.common.schema.permission_types import PermissionDecision
+from mote.executor.base_tool import BaseTool
+from mote.executor.tool_executor import ToolExecutor
 
 pytestmark = pytest.mark.asyncio
 

@@ -4,14 +4,14 @@
 
 from datetime import datetime
 
-from metagpt.environment.scheduling.cron import (
+from mote.environment.scheduling.cron import (
     compute_next_cron_run,
     cron_to_human,
     jittered_next_cron_run_ms,
     one_shot_jittered_next_cron_run_ms,
     parse_cron_expression,
 )
-from metagpt.environment.scheduling.task import CronJitterConfig
+from mote.environment.scheduling.task import CronJitterConfig
 
 
 def _ms(year, month, day, hour=0, minute=0):

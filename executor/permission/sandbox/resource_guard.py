@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.schema import SandboxRuntimeConfig
-from metagpt.sandbox.resources import ResourceLimits
+from mote.common.schema import SandboxRuntimeConfig
+from mote.sandbox.resources import ResourceLimits
 
 
 class ResourceGuard:

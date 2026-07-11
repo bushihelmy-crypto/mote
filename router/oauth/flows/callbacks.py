@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from metagpt.router.oauth.models import DeviceCodeInfo
+from mote.router.oauth.models import DeviceCodeInfo
 
 
 @dataclass

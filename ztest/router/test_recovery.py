@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.llm.recovery (build_llm_strategies registry builder).
+"""Tests for mote.router.llm.recovery (build_llm_strategies registry builder).
 
 The recovery *loop* now lives in the leaf layer (``common.exception.RecoveryRunner``)
 and is tested in ``ztest/exception/test_recovery.py``. This module covers the
@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.exception import MetaGPTError, RecoveryAction
-from metagpt.router.llm.recovery import build_llm_strategies
+from mote.common.exception import MoteError, RecoveryAction
+from mote.router.llm.recovery import build_llm_strategies
 
 pytestmark = pytest.mark.asyncio
 
 
-_EXC = MetaGPTError("boom")
+_EXC = MoteError("boom")
 
 
 class TestRegistryShape:
@@ -93,9 +93,7 @@ class TestFallbackStrategy:
         def on_fallback(p):
             seen["provider"] = p
 
-        registry = build_llm_strategies(
-            fallback=lambda: provider, on_fallback=on_fallback
-        )
+        registry = build_llm_strategies(fallback=lambda: provider, on_fallback=on_fallback)
         assert await registry[RecoveryAction.FALLBACK](_EXC) is True
         assert seen["provider"] is provider
 
@@ -122,9 +120,7 @@ class TestTransformers:
             seen["exc"] = exc
             return True
 
-        registry = build_llm_strategies(
-            transformers={RecoveryAction.STRIP_REQUEST_STATE: transform}
-        )
+        registry = build_llm_strategies(transformers={RecoveryAction.STRIP_REQUEST_STATE: transform})
         strategy = registry[RecoveryAction.STRIP_REQUEST_STATE]
         assert strategy is transform  # verbatim, no wrapping
         assert await strategy(_EXC) is True

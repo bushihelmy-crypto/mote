@@ -7,8 +7,9 @@ that runs one prompt and whose terminal summary (``state.last_end_output``) is
 read back, then cleaned up. This module factors that shape into one place so the
 three callers stay thin and consistent.
 
-The JSON-array extraction (agents end their turn with a JSON array) lives here
-too, since all three callers parse the same way.
+The JSON extraction (agents end their turn with a JSON array or object) lives
+here too, since every caller parses the same way — ``extract_json_array`` /
+``extract_json_object`` share one fence-aware core.
 """
 from __future__ import annotations
 
@@ -16,14 +17,9 @@ import json
 import re
 from typing import Any, Callable, List, Optional
 
-from metagpt.common.agent_control import (
-    Lifecycle,
-    SpawnContext,
-    SpawnSpec,
-    spawn_and_run,
-)
-from metagpt.common.interface.child_role import build_child_role as _build_child_role
-from metagpt.common.schema import UserMessage
+from mote.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from mote.common.interface.child_role import build_child_role as _build_child_role
+from mote.common.schema import UserMessage
 
 
 def build_child_role(
@@ -37,7 +33,7 @@ def build_child_role(
     """Construct a read-only, bypass-permission child Role.
 
     Delegates to the ``roles``-layer builder registered into the common-layer
-    holder (:mod:`metagpt.common.interface.child_role`), so the executor never
+    holder (:mod:`mote.common.interface.child_role`), so the executor never
     imports the concrete ``roles`` stack — at import time *or* runtime — keeping
     it a true leaf w.r.t. roles. Kept here as a named function so the pipeline's
     existing monkeypatch seams (``plan.build_child_role`` etc.) stay intact.
@@ -120,12 +116,12 @@ async def run_child_for_text(role, prompt: str, *, label: str = "child") -> Opti
     return await run_child(lambda _spawn_ctx: role, prompt, label=label)
 
 
-def extract_json_array(text: str) -> Optional[list]:
-    """Best-effort extraction of a JSON array from an agent's final output.
+def _extract_json(text: str, kind: type, open_ch: str, close_ch: str):
+    """Best-effort extraction of a JSON value of *kind* from an agent's output.
 
-    Tries, in order: a fenced ```json block, a fenced ``` block, the whole
-    text, then the first bare ``[ ... ]`` span. Returns the parsed list or
-    ``None`` when nothing parses to a list.
+    Tries, in order: a fenced ```json / ``` block, the whole text, then the
+    first bare ``open_ch ... close_ch`` span. Returns the first candidate that
+    parses to an instance of *kind* (``list`` / ``dict``), else ``None``.
     """
     if not text:
         return None
@@ -137,8 +133,8 @@ def extract_json_array(text: str) -> Optional[list]:
         candidates.append(fence.group(1).strip())
     candidates.append(text)
 
-    first = text.find("[")
-    last = text.rfind("]")
+    first = text.find(open_ch)
+    last = text.rfind(close_ch)
     if first != -1 and last != -1 and last > first:
         candidates.append(text[first : last + 1])
 
@@ -147,9 +143,19 @@ def extract_json_array(text: str) -> Optional[list]:
             parsed = json.loads(cand)
         except (json.JSONDecodeError, ValueError):
             continue
-        if isinstance(parsed, list):
+        if isinstance(parsed, kind):
             return parsed
     return None
+
+
+def extract_json_array(text: str) -> Optional[list]:
+    """Best-effort extraction of a JSON array from an agent's final output."""
+    return _extract_json(text, list, "[", "]")
+
+
+def extract_json_object(text: str) -> Optional[dict]:
+    """Best-effort extraction of a JSON object from an agent's final output."""
+    return _extract_json(text, dict, "{", "}")
 
 
 __all__ = [
@@ -157,4 +163,5 @@ __all__ = [
     "run_child",
     "run_child_for_text",
     "extract_json_array",
+    "extract_json_object",
 ]

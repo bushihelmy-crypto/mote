@@ -22,19 +22,29 @@ mutating it never touches the parent's log.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Protocol
 from uuid import uuid4
 
-from metagpt.common.logs import log_call
-from metagpt.session.events import (
-    FileSnapshotEvent,
-    MessageEvent,
-    SessionMetaEvent,
-    parse_event,
-)
-from metagpt.session.log import SessionLog
-from metagpt.session.replay import replay
-from metagpt.session.snapshot import make_blob_store
+from mote.common.logs import log_call
+from mote.session.events import FileSnapshotEvent, MessageEvent, SessionMetaEvent, parse_event
+from mote.session.log import SessionLog
+from mote.session.replay import replay
+from mote.session.snapshot import make_blob_store
+
+
+class _BlobStore(Protocol):
+    """The content-addressed store slice this module uses (duck-typed).
+
+    Both ``BlobStore`` and ``GitBlobStore`` (returned by ``make_blob_store``)
+    satisfy it; annotated locally so the copy loop type-checks without pinning a
+    concrete class.
+    """
+
+    def get(self, digest: str) -> Optional[bytes]:
+        ...
+
+    def put(self, content: bytes) -> str:
+        ...
 
 
 @log_call(level="DEBUG")
@@ -94,21 +104,17 @@ def _inherit_file_history(source: SessionLog, child: SessionLog) -> None:
     in the parent is skipped (the event is still copied; diff/restore then degrade
     gracefully, exactly as they do for a parent with a missing blob).
     """
-    parent_stores: Dict[str, object] = {}
-    child_stores: Dict[str, object] = {}
+    parent_stores: Dict[str, _BlobStore] = {}
+    child_stores: Dict[str, _BlobStore] = {}
     for record in source.iter_raw():
         event = parse_event(record)
         if not isinstance(event, FileSnapshotEvent):
             continue
         if event.pre_hash is not None:
-            src_store = parent_stores.setdefault(
-                event.backend, make_blob_store(source.path.parent, event.backend)
-            )
+            src_store = parent_stores.setdefault(event.backend, make_blob_store(source.path.parent, event.backend))
             content = src_store.get(event.pre_hash)
             if content is not None:
-                dst_store = child_stores.setdefault(
-                    event.backend, make_blob_store(child.path.parent, event.backend)
-                )
+                dst_store = child_stores.setdefault(event.backend, make_blob_store(child.path.parent, event.backend))
                 dst_store.put(content)
         child.append(event)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.browser_state`` — the browser-state recorder.
+"""Tests for ``mote.session.browser_state`` — the browser-state recorder.
 
 Covers: a record appends a ``browser_state`` event to the shared rollout log
 (open-tab URLs + active index + storage_state); the ``enabled`` gate suppresses
@@ -10,11 +10,11 @@ browser state (last-write-wins).
 """
 from __future__ import annotations
 
-from metagpt.common.interface import BrowserStateStore
-from metagpt.session.browser_state import BrowserStateRecorder
-from metagpt.session.events import BROWSER_STATE
-from metagpt.session.log import SessionLog
-from metagpt.session.replay import replay
+from mote.common.interface import BrowserStateStore
+from mote.session.browser_state import BrowserStateRecorder
+from mote.session.events import BROWSER_STATE
+from mote.session.log import SessionLog
+from mote.session.replay import replay
 
 
 def _recorder(tmp_path, **kw):
@@ -106,6 +106,6 @@ def test_replay_no_browser_state_is_none(tmp_path):
 
 
 def _meta():
-    from metagpt.session.events import SessionMetaEvent
+    from mote.session.events import SessionMetaEvent
 
     return SessionMetaEvent(session_id="empty_browser_sess")

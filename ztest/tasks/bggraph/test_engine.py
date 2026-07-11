@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for the bggraph frontier scheduler (:mod:`metagpt.executor.bggraph.engine`).
+"""Unit tests for the bggraph frontier scheduler (:mod:`mote.executor.bggraph.engine`).
 
 Covers linear chains, parallel fan-out, waiting-edge AND-joins (fast + slow
 source), conditional routing, cycles bounded by ``recursion_limit``, independent
@@ -15,15 +15,9 @@ import asyncio
 
 import pytest
 
-from metagpt.executor.tasks.types import BgTaskResult
-from metagpt.executor.tasks.bggraph import (
-    END,
-    START,
-    GraphBatchFailureError,
-    BgGraph,
-    GraphRecursionError,
-)
-from metagpt.executor.tasks.bggraph.types import LlmPauseResult, _LLM_ROUTE_SENTINEL
+from mote.executor.tasks.bggraph import END, START, BgGraph, GraphBatchFailureError, GraphRecursionError
+from mote.executor.tasks.bggraph.types import _LLM_ROUTE_SENTINEL, LlmPauseResult
+from mote.executor.tasks.types import BgTaskResult
 
 from .conftest import S, boom_node, flaky_node, gated_node, non_retryable_flaky_node, sync_node
 
@@ -144,9 +138,7 @@ class TestConditional:
         g.add_node("big", sync_node(lambda s: "BIG", field="big"))
         g.add_node("small", sync_node(lambda s: "SMALL", field="small"))
         g.add_edge(START, "a")
-        g.add_conditional_edges(
-            "a", lambda s: "big" if s.a > 10 else "small", {"big": "big", "small": "small"}
-        )
+        g.add_conditional_edges("a", lambda s: "big" if s.a > 10 else "small", {"big": "big", "small": "small"})
         g.add_edge("big", END)
         g.add_edge("small", END)
         assert (await _run(g, x=20))["big"] == "BIG"
@@ -170,9 +162,7 @@ class TestCycle:
         g.add_node("a", sync_node(lambda s: (getattr(s, "a", None) or 0) + 1, field="a"))
         g.add_edge(START, "a")
         # Loop back to 'a' until its result reaches 3, then go to END.
-        g.add_conditional_edges(
-            "a", lambda s: "done" if s.a >= 3 else "loop", {"loop": "a", "done": END}
-        )
+        g.add_conditional_edges("a", lambda s: "done" if s.a >= 3 else "loop", {"loop": "a", "done": END})
         assert (await _run(g, x=0))["a"] == 3
 
     async def test_and_join_inside_cycle_re_waits_each_lap(self):
@@ -186,7 +176,7 @@ class TestCycle:
         must wait for the slow source again, so every invocation sees fast and
         slow advanced in lockstep.
         """
-        from metagpt.executor.tasks.bggraph import Stage
+        from mote.executor.tasks.bggraph import Stage
 
         # One token must be released per slow-source invocation (one per lap).
         tokens: asyncio.Queue = asyncio.Queue()
@@ -270,7 +260,7 @@ class TestFailure:
 @pytest.fixture
 def fast_retry(monkeypatch):
     """Zero the framework backoff base so retry tests don't sleep for real."""
-    import metagpt.executor.tasks.bggraph.engine as eng
+    import mote.executor.tasks.bggraph.engine as eng
 
     monkeypatch.setattr(eng, "_RETRY_WAIT", 0.0)
     return eng
@@ -330,7 +320,7 @@ class TestRetryBackoff:
     """Engine-owned exponential backoff with full jitter, capped at the ceiling."""
 
     async def test_exponential_ceiling_grows(self, monkeypatch):
-        import metagpt.executor.tasks.bggraph.engine as eng
+        import mote.executor.tasks.bggraph.engine as eng
 
         # Pin the base and jitter to its upper bound to assert the exponential ceiling.
         monkeypatch.setattr(eng, "_RETRY_WAIT", 1.0)
@@ -340,7 +330,7 @@ class TestRetryBackoff:
         assert eng._retry_delay(3) == 4.0  # 1 * 2**2
 
     async def test_capped_at_max(self, monkeypatch):
-        import metagpt.executor.tasks.bggraph.engine as eng
+        import mote.executor.tasks.bggraph.engine as eng
 
         monkeypatch.setattr(eng, "_RETRY_WAIT", 5.0)
         monkeypatch.setattr(eng.random, "uniform", lambda lo, hi: hi)
@@ -348,7 +338,7 @@ class TestRetryBackoff:
         assert eng._retry_delay(20) == eng._MAX_BACKOFF_WAIT
 
     async def test_jitter_within_bounds(self, monkeypatch):
-        import metagpt.executor.tasks.bggraph.engine as eng
+        import mote.executor.tasks.bggraph.engine as eng
 
         monkeypatch.setattr(eng, "_RETRY_WAIT", 2.0)
         # With real jitter every sample stays within [0, capped_ceiling].
@@ -360,7 +350,7 @@ class TestRetryBackoff:
 
     async def test_backoff_delays_recorded_during_run(self, monkeypatch):
         # Capture the actual sleeps a node incurs across its retries.
-        import metagpt.executor.tasks.bggraph.engine as eng
+        import mote.executor.tasks.bggraph.engine as eng
 
         slept: list = []
 

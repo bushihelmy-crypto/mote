@@ -21,15 +21,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from metagpt.common.logs import log_call
-from metagpt.session.events import (
-    MessageEvent,
-    MetaUpdateEvent,
-    SessionMetaEvent,
-    parse_event,
-    parse_line,
-)
-from metagpt.session.log import ROLLOUT_FILENAME, _default_base_dir
+from mote.common.logs import log_call
+from mote.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent, parse_event, parse_line
+from mote.session.log import ROLLOUT_FILENAME, _default_base_dir
 
 #: How many leading lines to scan for the meta + first message preview.
 _HEAD_LINES = 16

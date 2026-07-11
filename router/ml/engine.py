@@ -13,10 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from metagpt.common.logs import logger
-from metagpt.router.ml.config import default_model_dir, load_runtime_config
-from metagpt.router.ml.inference.core import InferenceCore
-from metagpt.router.ml.inference.types import InferenceRequest, InferenceResult
+from mote.common.logs import logger
+from mote.router.ml.config import default_model_dir, load_runtime_config
+from mote.router.ml.inference.core import InferenceCore
+from mote.router.ml.inference.types import InferenceRequest, InferenceResult
 
 
 class SquillaMLEngine:

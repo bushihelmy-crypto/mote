@@ -10,7 +10,7 @@ bwrap, read the child-pid it reports on ``--info-fd``, spawn ``slirp4netns``
 attached to that pid, wait for the tap to come up, then let the payload run.
 
 The solution: emit a **launcher** invocation instead of bwrap directly. The
-runtime returns ``python3 -m metagpt.sandbox.network.orchestrator <b64-config>``
+runtime returns ``python3 -m mote.sandbox.network.orchestrator <b64-config>``
 (as a string for Bash, or an argv for the PTY/exec seam). That launcher process
 — this module's ``main`` — does the coordination, inheriting the caller's
 stdio (so a PTY flows straight through to the inner command) while using a
@@ -36,7 +36,7 @@ import sys
 import time
 from typing import Optional
 
-from metagpt.sandbox.network.enforce import build_slirp_argv
+from mote.sandbox.network.enforce import build_slirp_argv
 
 # Placeholder fd the backend bakes into the bwrap argv as ``--info-fd N``. The
 # launcher patches in the *real* inherited pipe fd at runtime (see
@@ -45,7 +45,7 @@ from metagpt.sandbox.network.enforce import build_slirp_argv
 INFO_FD = 3
 
 # Module path used to invoke the launcher (``python -m <this>``).
-_LAUNCHER_MODULE = "metagpt.sandbox.network.orchestrator"
+_LAUNCHER_MODULE = "mote.sandbox.network.orchestrator"
 
 
 def build_inner_argv(prelude: str, payload_argv: list[str]) -> list[str]:

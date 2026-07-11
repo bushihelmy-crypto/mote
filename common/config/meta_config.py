@@ -7,19 +7,19 @@
 """
 from pydantic import Field, model_validator
 
-from metagpt.common.config.config.exp_pool_config import ExperiencePoolConfig
-from metagpt.common.config.config.langfuse_config import LangfuseConfig
-from metagpt.common.config.config.llm_config import LLMConfig
-from metagpt.common.config.config.mcp_config import MCPConfig
-from metagpt.common.config.config.multimodal_config import MultimodalConfig
-from metagpt.common.config.config.role_zero_config import RoleZeroConfig
-from metagpt.common.config.config.sentry_config import SentryConfig
-from metagpt.common.observability.langfuse_integration import init_langfuse
-from metagpt.common.utils.yaml_model import YamlModel
+from mote.common.config.config.exp_pool_config import ExperiencePoolConfig
+from mote.common.config.config.langfuse_config import LangfuseConfig
+from mote.common.config.config.llm_config import LLMConfig
+from mote.common.config.config.mcp_config import MCPConfig
+from mote.common.config.config.multimodal_config import MultimodalConfig
+from mote.common.config.config.role_zero_config import RoleZeroConfig
+from mote.common.config.config.sentry_config import SentryConfig
+from mote.common.observability.langfuse_integration import init_langfuse
+from mote.common.utils.yaml_model import YamlModel
 
 
 class Config(YamlModel):
-    """Configurations for MetaGPT"""
+    """Configurations for Mote"""
 
     # Key Parameters
     llm: LLMConfig

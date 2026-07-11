@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Coroutine, Optional
 
-from metagpt.common.schema.messages import UserMessage
-from metagpt.common.schema.node_status import BgStatus
+from mote.common.schema.messages import UserMessage
+from mote.common.schema.node_status import BgStatus
 
 
 class TaskType(str, Enum):
@@ -162,7 +162,7 @@ class TaskMeta:
 
     task_id: str = ""
     command_name: str = ""
-    status: str = BgStatus.PENDING
+    status: BgStatus = BgStatus.PENDING
     submit_time: float = field(default_factory=time.time)
     start_time: float = field(default_factory=time.time)  # updated when semaphore acquired
     end_time: Optional[float] = None

@@ -2,7 +2,7 @@
 
 Lives in ``common/schema`` alongside ``permission_config.py`` so ``RoleSchema``
 (which declares it) can reference it without importing the hook engine. The
-engine itself lives in ``metagpt.common.hook``; this is only the declarative
+engine itself lives in ``mote.common.hook``; this is only the declarative
 shape (the Claude Code ``HooksSchema``: per-event lists of matcher groups).
 
 Backward compatibility: a Role with ``hooks=None`` (the default) runs with no

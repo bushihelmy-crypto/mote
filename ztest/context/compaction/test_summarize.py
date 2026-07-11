@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.schema import ContextManagerConfig, UserMessage
-from metagpt.context.compaction.reducers.summarize import SummarizeReducer
-from metagpt.context.compaction.request import ReductionRequest
-from metagpt.context.compaction.transcript import Transcript
+from mote.common.schema import ContextManagerConfig, UserMessage
+from mote.context.compaction.reducers.summarize import SummarizeReducer
+from mote.context.compaction.request import ReductionRequest
+from mote.context.compaction.transcript import Transcript
 
 from ..conftest import FakeLLM, make_pairs, text_msg
 

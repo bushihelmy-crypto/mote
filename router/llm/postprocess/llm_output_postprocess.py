@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 # @Desc   : the entry of choosing which PostProcessPlugin to deal particular LLM model's output
 
-from typing import Union
+from typing import Optional, Union
 
-from metagpt.common.base import BasePostProcessPlugin
+from mote.common.base import BasePostProcessPlugin
 
 
 def llm_output_postprocess(
-    output: str, schema: dict, req_key: str = "[/CONTENT]", model_name: str = None
-) -> Union[dict, str]:
+    output: str, schema: dict, req_key: str = "[/CONTENT]", model_name: Optional[str] = None
+) -> Union[dict, list, str]:
     """
     default use BasePostProcessPlugin if there is not matched plugin.
     """

@@ -12,10 +12,10 @@ import os
 
 import pytest
 
-from metagpt.common.schema import PermissionConfig, SandboxConfig
-from metagpt.executor.permission.engine import PermissionEngine
-from metagpt.executor.permission.rule_store import RuleStore
-from metagpt.executor.permission.sandbox import SandboxGuard
+from mote.common.schema import PermissionConfig, SandboxConfig
+from mote.executor.permission.engine import PermissionEngine
+from mote.executor.permission.rule_store import RuleStore
+from mote.executor.permission.sandbox import SandboxGuard
 
 pytestmark = pytest.mark.asyncio
 
@@ -26,9 +26,11 @@ def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
     ask_human = None
     prompts: list[str] = []
     if reply is not None:
+
         async def ask_human(prompt: str) -> str:  # noqa: E306
             prompts.append(prompt)
             return reply
+
     eng = PermissionEngine(mode=mode, store=store, ask_human=ask_human)
     eng._test_prompts = prompts  # type: ignore[attr-defined]
     return eng
@@ -40,9 +42,11 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None):
     ask_human = None
     prompts: list[str] = []
     if reply is not None:
+
         async def ask_human(prompt: str) -> str:  # noqa: E306
             prompts.append(prompt)
             return reply
+
     guard = SandboxGuard(
         SandboxConfig(mode="workspace-write", writable_roots=[]),
         get_cwd=lambda: cwd,
@@ -54,9 +58,7 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None):
 
 class TestFolding:
     async def test_all_allow(self):
-        d = await engine("bypass").check_multi(
-            "ApplyPatch", targets=["/a.py", "/b.py"]
-        )
+        d = await engine("bypass").check_multi("ApplyPatch", targets=["/a.py", "/b.py"])
         assert d.behavior == "allow"
 
     async def test_deny_wins(self):
@@ -68,9 +70,7 @@ class TestFolding:
 
     async def test_single_consolidated_ask_for_multiple_paths(self):
         eng = engine("default", reply="yes")  # default => ask each path
-        d = await eng.check_multi(
-            "ApplyPatch", targets=["/a.py", "/b.py", "/c.py"]
-        )
+        d = await eng.check_multi("ApplyPatch", targets=["/a.py", "/b.py", "/c.py"])
         assert d.behavior == "allow"
         # Exactly ONE prompt covering all asking paths.
         assert len(eng._test_prompts) == 1
@@ -84,9 +84,7 @@ class TestFolding:
 
     async def test_no_channel_fails_closed(self):
         # default mode, no ask_human => asks become a deny.
-        d = await engine("default").check_multi(
-            "ApplyPatch", targets=["/a.py", "/b.py"]
-        )
+        d = await engine("default").check_multi("ApplyPatch", targets=["/a.py", "/b.py"])
         assert d.behavior == "deny"
 
     async def test_always_remembers_session_rule(self):
@@ -107,9 +105,7 @@ class TestSandbox:
         outside = os.path.join(str(tmp_path.parent), "outside.py")
         inside = os.path.join(cwd, "inside.py")
         eng = sandboxed_engine(cwd, mode="bypass", reply="yes")
-        d = await eng.check_multi(
-            "ApplyPatch", targets=[inside, outside], mutates_fs=True
-        )
+        d = await eng.check_multi("ApplyPatch", targets=[inside, outside], mutates_fs=True)
         assert d.behavior == "allow"
         # The escalation prompt was raised for the out-of-sandbox path.
         assert len(eng._test_prompts) == 1
@@ -119,9 +115,7 @@ class TestSandbox:
         cwd = str(tmp_path)
         outside = os.path.join(str(tmp_path.parent), "outside.py")
         eng = sandboxed_engine(cwd, mode="bypass", reply=None)
-        d = await eng.check_multi(
-            "ApplyPatch", targets=[outside], mutates_fs=True
-        )
+        d = await eng.check_multi("ApplyPatch", targets=[outside], mutates_fs=True)
         assert d.behavior == "deny"
 
 

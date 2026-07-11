@@ -14,7 +14,7 @@ on the human protocol as neutral, pre-computed fields; no consumer re-derives th
 no I/O, no consumer knowledge; trivially unit-testable in isolation. The
 **plumbing** that fans this fold out to many consumers (capability downgrade per
 consumer, sync/async dispatch) lives in the reusable
-:class:`metagpt.cli.common.base.BaseProjector`, into which the host injects this
+:class:`mote.cli.contracts.base.BaseProjector`, into which the host injects this
 ``ViewProjector`` as its concrete fold.
 """
 
@@ -22,21 +22,9 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
-from metagpt.common.events.types import (
-    COMPACTION_CHECKPOINT,
-    LLM_ERROR,
-    LLM_RETRY,
-    LLM_STREAM_DELTA,
-    LLM_STREAM_END,
-    MESSAGE_APPENDED,
-    POST_TOOL_USE,
-    PRE_TOOL_USE,
-    TASK_PROGRESS,
-)
-
-from metagpt.cli.common.view.events import (
+from mote.cli.contracts.view.events import (
     RESULT_KIND_DIFF,
     RESULT_KIND_PLAIN,
     ConversationCompacted,
@@ -52,8 +40,20 @@ from metagpt.cli.common.view.events import (
     ToolCallStarted,
     ViewEvent,
 )
-from metagpt.cli.view.reminders import _is_system_reminder, _summarize_reminder
-from metagpt.cli.view.summaries import _result_summary
+from mote.cli.view.reminders import _is_system_reminder, _summarize_reminder
+from mote.cli.view.summaries import _result_summary
+from mote.common.events.types import (
+    COMPACTION_CHECKPOINT,
+    LLM_ERROR,
+    LLM_RETRY,
+    LLM_STREAM_DELTA,
+    LLM_STREAM_END,
+    MESSAGE_APPENDED,
+    POST_TOOL_USE,
+    PRE_TOOL_USE,
+    TASK_PROGRESS,
+)
+from mote.common.text import PERSISTED_OUTPUT_OPEN
 
 # ---------------------------------------------------------------------------
 # Tool-formatting tables — ported VERBATIM from ``cli/render.py``.
@@ -138,9 +138,14 @@ def _judge_failed(event: Any, text: str) -> bool:
         return not success
     return text.lstrip().startswith(_FAILURE_PREFIXES)
 
+
 _MAX_BODY_LINES = 30
 _MAX_RESULT_CHARS = 200
 _MAX_DETAIL_LINES = 40
+# A failed result shows only its first few lines inline (the error headline +
+# a little context); the rest folds to a "+N 行已折叠" hint. Errors are terse by
+# design, so this is much smaller than the success-path detail budget.
+_MAX_FAILURE_LINES = 5
 # A plain (non-diff/table) result no longer collapses to its first line: we show
 # a preview of up to this many whitespace-separated words so the user gets real
 # context before the "… 已折叠" affordance. Original whitespace (newlines, indent)
@@ -245,7 +250,7 @@ def _extract_full_ref(text: str) -> Optional[str]:
     That path is exactly the ViewEvent ``full_ref`` (the complete body a consumer's
     "see full" points at) — semantic truncation, not a physical wire chunk.
     """
-    if "<persisted-output>" not in text:
+    if PERSISTED_OUTPUT_OPEN not in text:
         return None
     marker = "Full output saved to:"
     for line in text.splitlines():
@@ -505,7 +510,7 @@ class ViewProjector:
             return [legacy] if legacy is not None else []
         tool_use_id = getattr(event, "tool_use_id", None)
         blocks: List[MediaBlock] = []
-        for m in media or []:
+        for m in cast("list[Any]", media) or []:
             kind = getattr(m, "kind", "") or "image"
             raw_ref = getattr(m, "ref", "") or ""
             ref = os.path.abspath(os.path.expanduser(str(raw_ref))) if raw_ref else ""
@@ -543,31 +548,22 @@ class ViewProjector:
         )
 
     def _complete_tool_event(self, event: Any) -> ToolCallCompleted:
+        """Fold a ``PostToolUse`` into a ``ToolCallCompleted``, dispatched by shape.
+
+        Three honest result shapes, each built by a focused helper: a *failed*
+        result (error text folded terse), a *diff*-shaped result (coloured detail),
+        and everything else as a word-bounded *plain* preview. A framework-persisted
+        result's path is the ``full_ref`` (its presence alone means the content was
+        truncated), threaded into whichever branch handles the event.
+        """
         name = getattr(event, "tool_name", "") or ""
         tool_use_id = getattr(event, "tool_use_id", None)
         response = getattr(event, "tool_response", None)
         text = response if isinstance(response, str) else ("" if response is None else str(response))
-        failed = _judge_failed(event, text)
-        # A framework-persisted result is already a preview of a larger body; its
-        # path is the ``full_ref`` and its presence means the content is truncated.
         full_ref = _extract_full_ref(text)
 
-        if failed:
-            detail, hidden = _fold_lines(text.strip(), 5)
-            truncated = hidden > 0
-            if len(detail) > _MAX_RESULT_CHARS:
-                detail = detail[:_MAX_RESULT_CHARS] + "…"
-                truncated = True
-            return ToolCallCompleted(
-                tool_name=name,
-                ok=False,
-                summary=detail,
-                tool_use_id=tool_use_id,
-                content_truncated=truncated or full_ref is not None,
-                full_ref=full_ref,
-                hidden_lines=hidden,
-            )
-
+        if _judge_failed(event, text):
+            return self._complete_failed(name, tool_use_id, text, full_ref)
         # Prefer a CC-style count summary ("读取 42 行" / "找到 3 个文件") computed
         # once per tool; fall back to the raw first line for tools with no honest
         # count (Bash/terminal/unknown), mirroring claude-code.
@@ -576,41 +572,70 @@ class ViewProjector:
             summary = "(no output)"
         elif len(summary) > _MAX_RESULT_CHARS:
             summary = summary[:_MAX_RESULT_CHARS] + "…"
-
-        # The one result-kind classification honestly available today: diff-shaped
-        # output ships as a ``diff`` detail so a consumer can +/- colorize it. All
-        # other kinds (table/media) await structured framework tool results.
         if _looks_like_diff(text):
-            body = text.strip()
-            detail, hidden = _fold_lines(body, _MAX_DETAIL_LINES)
-            return ToolCallCompleted(
-                tool_name=name,
-                ok=True,
-                summary=summary,
-                tool_use_id=tool_use_id,
-                result_kind=RESULT_KIND_DIFF,
-                detail=detail,
-                lexer="diff",
-                content_truncated=hidden > 0 or full_ref is not None,
-                full_ref=full_ref,
-                hidden_lines=hidden,
-            )
-        # Plain path: rather than collapse to the one-line summary, ship a
-        # word-bounded preview (up to _MAX_RESULT_WORDS) as the detail body so the
-        # user reads real context. The preview is truncated when words were
-        # dropped, the body spilled past the summary, or the framework persisted a
-        # larger result on disk.
+            return self._complete_diff(name, tool_use_id, text, summary, full_ref)
+        return self._complete_plain(name, tool_use_id, text, summary, full_ref)
+
+    @staticmethod
+    def _complete_failed(
+        name: str, tool_use_id: Optional[str], text: str, full_ref: Optional[str]
+    ) -> ToolCallCompleted:
+        """A failed result: the error text folded to a few lines, char-capped."""
+        detail, hidden = _fold_lines(text.strip(), _MAX_FAILURE_LINES)
+        truncated = hidden > 0
+        if len(detail) > _MAX_RESULT_CHARS:
+            detail = detail[:_MAX_RESULT_CHARS] + "…"
+            truncated = True
+        return ToolCallCompleted(
+            tool_name=name,
+            ok=False,
+            summary=detail,
+            tool_use_id=tool_use_id,
+            content_truncated=truncated or full_ref is not None,
+            full_ref=full_ref,
+            hidden_lines=hidden,
+        )
+
+    @staticmethod
+    def _complete_diff(
+        name: str, tool_use_id: Optional[str], text: str, summary: str, full_ref: Optional[str]
+    ) -> ToolCallCompleted:
+        """A diff-shaped result: ship the body as a ``diff`` detail (+/- colorizable).
+
+        The one result-kind classification honestly available today; all other
+        kinds (table/media) await structured framework tool results.
+        """
+        detail, hidden = _fold_lines(text.strip(), _MAX_DETAIL_LINES)
+        return ToolCallCompleted(
+            tool_name=name,
+            ok=True,
+            summary=summary,
+            tool_use_id=tool_use_id,
+            result_kind=RESULT_KIND_DIFF,
+            detail=detail,
+            lexer="diff",
+            content_truncated=hidden > 0 or full_ref is not None,
+            full_ref=full_ref,
+            hidden_lines=hidden,
+        )
+
+    @staticmethod
+    def _complete_plain(
+        name: str, tool_use_id: Optional[str], text: str, summary: str, full_ref: Optional[str]
+    ) -> ToolCallCompleted:
+        """A plain result: a word-bounded preview so the user reads real context.
+
+        Rather than collapse to the one-line summary, ship a preview of up to
+        ``_MAX_RESULT_WORDS`` words as the detail body. The preview is truncated
+        when words were dropped, the body spilled past the summary, or the
+        framework persisted a larger result on disk.
+        """
         body = text.strip("\n")
         preview, words_truncated = _preview_words(text, _MAX_RESULT_WORDS)
         # Only carry a detail body when it adds something beyond the summary line
         # (a single-line result already fully shown as the summary needs none).
         detail = preview if preview and preview.strip() != summary else None
-        plain_truncated = (
-            full_ref is not None
-            or words_truncated
-            or len(body.splitlines()) > 1
-            or summary.endswith("…")
-        )
+        plain_truncated = full_ref is not None or words_truncated or len(body.splitlines()) > 1 or summary.endswith("…")
         # When the word cap dropped whole lines, report how many so the consumer
         # can show a precise "+N 行已折叠" hint (a single very long line clipped at
         # the word boundary hides no *lines*, so this stays 0 and the consumer

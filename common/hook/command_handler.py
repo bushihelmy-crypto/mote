@@ -17,9 +17,9 @@ import json
 import os
 from typing import Any
 
-from metagpt.common.hook.parser import parse_command_output
-from metagpt.common.hook.types import EMPTY, HookInput, HookOutcome
-from metagpt.common.logs import logger
+from mote.common.hook.parser import parse_command_output
+from mote.common.hook.types import EMPTY, HookInput, HookOutcome
+from mote.common.logs import logger
 
 # Fallback timeout (seconds) when neither the handler nor the caller specifies
 # one — mirrors Claude Code's default 60s hook budget.

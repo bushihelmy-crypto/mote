@@ -20,9 +20,9 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional, Sequence
 
-from metagpt.common.interface import DEFAULT_TURN_CONTEXT_PRIORITY, EphemeralContextSource
-from metagpt.common.logs import logger
-from metagpt.context.turn_context.format import wrap_system_reminder
+from mote.common.interface import DEFAULT_TURN_CONTEXT_PRIORITY, EphemeralContextSource
+from mote.common.logs import logger
+from mote.context.turn_context.format import wrap_system_reminder
 
 
 class TurnContextBus:
@@ -75,9 +75,7 @@ class TurnContextBus:
         """
         return await self._render_bucket(self._persistent, cwd)
 
-    async def _render_bucket(
-        self, sources: List[EphemeralContextSource], cwd: Optional[str]
-    ) -> str:
+    async def _render_bucket(self, sources: List[EphemeralContextSource], cwd: Optional[str]) -> str:
         """Render a bucket of sources concurrently and merge the survivors.
 
         Returns ``""`` when the bucket is empty or no source produced anything.
@@ -87,9 +85,7 @@ class TurnContextBus:
         if not sources:
             return ""
 
-        results = await asyncio.gather(
-            *(self._render_one(s, cwd) for s in sources)
-        )
+        results = await asyncio.gather(*(self._render_one(s, cwd) for s in sources))
         # Record the injection manifest for this bucket (merged into last_render
         # so the two buckets share one observable view), then log a one-line
         # trace of which feeds actually spoke this turn.
@@ -101,16 +97,12 @@ class TurnContextBus:
         return wrap_system_reminder(r for r in results if r)
 
     @staticmethod
-    async def _render_one(
-        source: EphemeralContextSource, cwd: Optional[str]
-    ) -> Optional[str]:
+    async def _render_one(source: EphemeralContextSource, cwd: Optional[str]) -> Optional[str]:
         """Guarded single-source render — never raises into ``collect``."""
         try:
             block = await source.render(cwd=cwd)
         except Exception as exc:  # noqa: BLE001 — one feed must not break the turn
-            logger.warning(
-                f"turn_context: source {getattr(source, 'name', source)!r} failed: {exc}"
-            )
+            logger.warning(f"turn_context: source {getattr(source, 'name', source)!r} failed: {exc}")
             return None
         if not isinstance(block, str):
             return None

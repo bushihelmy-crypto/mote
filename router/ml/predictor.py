@@ -7,7 +7,7 @@ Source: ``squilla_router/models/.../runtime_src/src/router/predictor.py``.
 Only the model-free, config-driven post-processing helpers are kept here — the
 6 deterministic layers (margin upgrade / R1 rescue / flag overrides / sticky
 tier), thinking-mode & prompt-policy derivation, and model selection. The
-Phase-3 inference package (:mod:`metagpt.router.ml.inference`) imports these.
+Phase-3 inference package (:mod:`mote.router.ml.inference`) imports these.
 
 The v1/v2 ``SquillaRouter`` / ``CascadeRouter`` orchestrators + their
 ``apply_post_processing`` / ``_detect_model_version`` / ``_reconcile_extractor_schema``
@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
-from metagpt.router.ml.flags import RoutingFlags
+from mote.router.ml.flags import RoutingFlags
 
 ROUTE_CLASSES = ["R0", "R1", "R2", "R3"]
 _CLASS_TO_IDX = {c: i for i, c in enumerate(ROUTE_CLASSES)}
@@ -52,8 +52,7 @@ class RoutingResult:
         return asdict(self)
 
 
-def _apply_margin_upgrade(route_class: str, margin: float,
-                          config: dict) -> str:
+def _apply_margin_upgrade(route_class: str, margin: float, config: dict) -> str:
     threshold = config.get("thresholds", {}).get("margin_upgrade", 0.15)
     if margin < threshold:
         idx = _CLASS_TO_IDX[route_class]
@@ -62,8 +61,7 @@ def _apply_margin_upgrade(route_class: str, margin: float,
     return route_class
 
 
-def _apply_r1_rescue(route_class: str, probs: np.ndarray,
-                     config: dict) -> str:
+def _apply_r1_rescue(route_class: str, probs: np.ndarray, config: dict) -> str:
     """Rescue R1 from R0 only (safe upward direction).
 
     Only promotes R0→R1 when R1 is a close second. Never demotes R2→R1
@@ -80,8 +78,7 @@ def _apply_r1_rescue(route_class: str, probs: np.ndarray,
     return route_class
 
 
-def _apply_flag_overrides(route_class: str, flags: RoutingFlags,
-                          config: dict) -> str:
+def _apply_flag_overrides(route_class: str, flags: RoutingFlags, config: dict) -> str:
     idx = _CLASS_TO_IDX[route_class]
     if flags.high_risk:
         idx = max(idx, _CLASS_TO_IDX["R2"])
@@ -92,32 +89,27 @@ def _apply_flag_overrides(route_class: str, flags: RoutingFlags,
     return ROUTE_CLASSES[idx]
 
 
-def _derive_thinking_mode(route_class: str, margin: float,
-                          flags: RoutingFlags, config: dict) -> str:
+def _derive_thinking_mode(route_class: str, margin: float, flags: RoutingFlags, config: dict) -> str:
     rules = config.get("thinking_mode_rules", {})
     if route_class == "R3":
         return "T3"
     t3_flags = rules.get("T3", {}).get("flags", ["debug", "long_context", "high_risk"])
-    if _CLASS_TO_IDX[route_class] >= _CLASS_TO_IDX.get(
-            rules.get("T3", {}).get("min_class", "R2"), 2):
+    if _CLASS_TO_IDX[route_class] >= _CLASS_TO_IDX.get(rules.get("T3", {}).get("min_class", "R2"), 2):
         for flag_name in t3_flags:
             if getattr(flags, flag_name, False):
                 return "T3"
     t0_rule = rules.get("T0", {})
     max_class_t0 = t0_rule.get("max_class", "R0")
-    if (_CLASS_TO_IDX[route_class] <= _CLASS_TO_IDX.get(max_class_t0, 0)
-            and margin >= t0_rule.get("min_margin", 0.5)):
+    if _CLASS_TO_IDX[route_class] <= _CLASS_TO_IDX.get(max_class_t0, 0) and margin >= t0_rule.get("min_margin", 0.5):
         return "T0"
     t1_rule = rules.get("T1", {})
     max_class_t1 = t1_rule.get("max_class", "R1")
-    if (_CLASS_TO_IDX[route_class] <= _CLASS_TO_IDX.get(max_class_t1, 1)
-            and margin >= t1_rule.get("min_margin", 0.4)):
+    if _CLASS_TO_IDX[route_class] <= _CLASS_TO_IDX.get(max_class_t1, 1) and margin >= t1_rule.get("min_margin", 0.4):
         return "T1"
     return "T2"
 
 
-def _derive_prompt_policy(difficulty_score: float, margin: float,
-                          flags: RoutingFlags, config: dict) -> str:
+def _derive_prompt_policy(difficulty_score: float, margin: float, flags: RoutingFlags, config: dict) -> str:
     policies = config.get("prompt_policies", {})
     p2_conds = policies.get("P2", {}).get("conditions", {})
     any_flags = p2_conds.get("any_flag", ["high_risk", "long_context", "debug", "strict_format"])
@@ -148,11 +140,7 @@ def _prompt_hint_locale(text: str | None) -> str:
     cjk_count = 0
     latin_count = 0
     for char in text:
-        if (
-            "\u4e00" <= char <= "\u9fff"
-            or "\u3400" <= char <= "\u4dbf"
-            or "\uf900" <= char <= "\ufaff"
-        ):
+        if "\u4e00" <= char <= "\u9fff" or "\u3400" <= char <= "\u4dbf" or "\uf900" <= char <= "\ufaff":
             cjk_count += 1
         elif char.isascii() and char.isalpha():
             latin_count += 1
@@ -169,8 +157,7 @@ def _get_prompt_hint(policy: str, config: dict, text: str | None = None) -> str:
     return p.get("hint_en", "") or p.get("hint_zh", "")
 
 
-def _apply_sticky_tier(pred_class: str, probs: np.ndarray,
-                       history: list | None, cfg: dict) -> str:
+def _apply_sticky_tier(pred_class: str, probs: np.ndarray, history: list | None, cfg: dict) -> str:
     """Layer 6: KV-cache-aware sticky tier.
 
     When the current prediction is lower than the previous turn's class, stick

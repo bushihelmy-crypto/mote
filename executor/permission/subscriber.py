@@ -5,7 +5,7 @@ right after the ``PreToolUse`` emit. That made it a hidden second vetoer the bus
 knew nothing about. This subscriber puts the gate *on* the control plane so it is
 a first-class, ordered, foldable influence — exactly like the hook layer — while
 the engine itself stays tool-free (it only ever sees the tiny
-:class:`~metagpt.common.schema.PermissionFacts` bundle the executor resolves).
+:class:`~mote.common.schema.PermissionFacts` bundle the executor resolves).
 
 Three properties place it precisely on the plane:
 
@@ -31,11 +31,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.events.outcomes import ToolCallOutcome
-from metagpt.common.events.types import PRE_TOOL_USE, PreToolUseEvent
-from metagpt.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
-from metagpt.common.schema.permission_types import PermissionDecision
-from metagpt.executor.permission.engine import PermissionEngine
+from mote.common.events.outcomes import ToolCallOutcome
+from mote.common.events.types import PRE_TOOL_USE, PreToolUseEvent
+from mote.common.interface.event_subscriber import FAIL_CLOSED, ControlStage, ControlSubscriber
+from mote.common.schema.permission_types import PermissionDecision
+from mote.executor.permission.engine import PermissionEngine
 
 
 class PermissionSubscriber(ControlSubscriber):

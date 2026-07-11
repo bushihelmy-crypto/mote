@@ -1,7 +1,7 @@
-"""Agent control-plane tier exceptions (``metagpt.environment``).
+"""Agent control-plane tier exceptions (``mote.environment``).
 
 Port of the relevant ``CodexErr`` variants used by the multi-agent control
-plane (``codex-rs/core/src/agent``). Reparented onto :class:`MetaGPTError` so
+plane (``codex-rs/core/src/agent``). Reparented onto :class:`MoteError` so
 control-plane failures carry a stable :class:`ErrorCode` and serialize via
 ``to_dict()`` like every other typed error. The custom ``__init__`` signatures
 (``max_agents`` / ``agent_id`` / ``agent_path`` / ``reference``) are preserved
@@ -13,12 +13,12 @@ from __future__ import annotations
 
 from typing import ClassVar, Optional
 
-from metagpt.common.exception.base import MetaGPTError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import MoteError
+from mote.common.exception.codes import ErrorCode
 
 
-class AgentControlError(MetaGPTError):
-    """Base for every control-plane error raised inside ``metagpt.environment``."""
+class AgentControlError(MoteError):
+    """Base for every control-plane error raised inside ``mote.environment``."""
 
     default_code: ClassVar[ErrorCode] = ErrorCode.AGENT_CONTROL
 
@@ -35,9 +35,7 @@ class AgentLimitReached(AgentControlError):
         self.max_agents = max_agents
         if message is None:
             message = (
-                f"agent limit reached (max_agents={max_agents})"
-                if max_agents is not None
-                else "agent limit reached"
+                f"agent limit reached (max_agents={max_agents})" if max_agents is not None else "agent limit reached"
             )
         super().__init__(message, max_agents=max_agents)
 

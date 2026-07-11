@@ -15,15 +15,11 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from metagpt.common.exception.base import (
-    MetaGPTError,
-    NonRetryableError,
-    RetryableError,
-)
-from metagpt.common.exception.codes import ErrorCode, RecoveryAction
+from mote.common.exception.base import MoteError, NonRetryableError, RetryableError
+from mote.common.exception.codes import ErrorCode, RecoveryAction
 
 
-class LLMError(MetaGPTError):
+class LLMError(MoteError):
     """Base for all LLM/provider-layer failures.
 
     Adds an optional ``status_code`` (upstream HTTP status) on top of the base
@@ -83,7 +79,7 @@ class LLMAuthenticationError(LLMError, NonRetryableError):
 class LLMBillingError(LLMError, NonRetryableError):
     """The provider rejected for billing/credit reasons (HTTP 402 / balance).
 
-    Distinct from :class:`~metagpt.common.exception.resource.NoMoneyException`,
+    Distinct from :class:`~mote.common.exception.resource.NoMoneyException`,
     which is *our own* budget gate. This is the upstream provider refusing on
     its account/credit state — recovery is to rotate to another credential.
     """

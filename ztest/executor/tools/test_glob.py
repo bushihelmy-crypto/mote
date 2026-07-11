@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Glob tool (``metagpt.executor.tools.glob``).
+"""Tests for the Glob tool (``mote.executor.tools.glob``).
 
 Covers pattern matching (recursive **), the mtime ordering, the 100-file
 truncation note, VCS-dir exclusion, and the directory-validation guards. ripgrep
@@ -13,10 +13,10 @@ import os
 
 import pytest
 
-from metagpt.executor.tool_result import ToolError
-from metagpt.executor.tools.glob import Glob
+from mote.executor.tool_result import ToolError
+from mote.executor.tools.glob import Glob
 
-from .conftest import run, write_file
+from .conftest import CapRole, bind, run, write_file
 
 
 def _glob(**kwargs):
@@ -99,7 +99,30 @@ class TestGlobFormat:
         assert len(files) == 100
 
     def test_empty_format(self):
-        assert Glob._format([]) == "No files found"
+        assert Glob._format([], os.getcwd()) == "No files found"
+
+
+class TestGlobCwdResolution:
+    def test_default_root_is_role_cwd(self, tmp_path, workspace):
+        # A bound Glob with no `path` searches the ROLE's stable cwd, not the
+        # process cwd (the workspace fixture chdir'd into `workspace`).
+        sub = tmp_path / "role_dir"
+        sub.mkdir()
+        write_file(sub / "role_only.py", "x")
+        write_file(workspace / "process_only.py", "x")
+        role = CapRole(cwd=str(sub))
+        out = run(bind(Glob(), role).call(pattern="*.py"))
+        assert "role_only.py" in out
+        assert "process_only.py" not in out
+
+    def test_relative_path_resolves_against_role_cwd(self, tmp_path, workspace):
+        sub = tmp_path / "role_dir"
+        nested = sub / "nested"
+        nested.mkdir(parents=True)
+        write_file(nested / "deep.py", "x")
+        role = CapRole(cwd=str(sub))
+        out = run(bind(Glob(), role).call(pattern="*.py", path="nested"))
+        assert "deep.py" in out
 
 
 class TestGlobPythonFallback:

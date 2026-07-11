@@ -19,8 +19,8 @@ from __future__ import annotations
 import asyncio
 from typing import List
 
-from metagpt.common.logs import logger
-from metagpt.executor.tasks.bggraph import Stage
+from mote.common.logs import logger
+from mote.executor.tasks.bggraph import Stage
 
 from .bundle import attach_related
 from .filter import should_review
@@ -160,10 +160,7 @@ async def review_batch_node(state: ReviewState) -> Stage:
                     parent_session_id=state.parent_session_id,
                 )
             except Exception as e:  # noqa: BLE001 — isolate one file's failure
-                logger.warning(
-                    f"code_review: batch review failed for "
-                    f"{getattr(file_diff, 'path', '?')}: {e}"
-                )
+                logger.warning(f"code_review: batch review failed for " f"{getattr(file_diff, 'path', '?')}: {e}")
                 return []
 
         results = await asyncio.gather(*(_safe_review(f) for f in batch))
@@ -229,9 +226,7 @@ async def aggregate_node(state: ReviewState) -> Stage:
         kept = state.kept_findings
         findings = list(kept if kept is not None else (state.findings or []))
         # Stable ordering: by file path, then by start line (None last).
-        findings.sort(
-            key=lambda f: (f.file, f.start_line if f.start_line is not None else 1 << 30)
-        )
+        findings.sort(key=lambda f: (f.file, f.start_line if f.start_line is not None else 1 << 30))
         fmt = state.fmt or "text"
         report = format_findings(findings, fmt=fmt)
         strategy = (state.strategy or "").strip()

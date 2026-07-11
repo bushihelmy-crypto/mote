@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``metagpt.executor.permission.rule_store``."""
+"""Unit tests for ``mote.executor.permission.rule_store``."""
 from __future__ import annotations
 
-from metagpt.common.schema import PermissionConfig
-from metagpt.executor.permission.rule_store import RuleStore
-from metagpt.common.schema.permission_types import PermissionRule
+from mote.common.schema import PermissionConfig
+from mote.common.schema.permission_types import PermissionRule
+from mote.executor.permission.rule_store import RuleStore
 
 
 def make_store() -> RuleStore:
@@ -33,15 +33,11 @@ class TestResolve:
     def test_deny_beats_allow(self):
         # "Bash(rm -rf*)" deny vs "Bash(git*)" allow — different targets, but
         # deny must win when both could match a destructive command.
-        store = RuleStore.from_config(
-            PermissionConfig(allow=["Bash(rm*)"], deny=["Bash(rm -rf*)"])
-        )
+        store = RuleStore.from_config(PermissionConfig(allow=["Bash(rm*)"], deny=["Bash(rm -rf*)"]))
         assert store.resolve("Bash", "rm -rf /") == "deny"
 
     def test_ask_beats_allow(self):
-        store = RuleStore.from_config(
-            PermissionConfig(allow=["Write"], ask=["Write"])
-        )
+        store = RuleStore.from_config(PermissionConfig(allow=["Write"], ask=["Write"]))
         assert store.resolve("Write", "/x") == "ask"
 
 
@@ -67,9 +63,7 @@ class TestResolveSegments:
         assert make_store().resolve_segments("Bash", ["git status", "rm -rf /"]) == "deny"
 
     def test_ask_beats_allow(self):
-        store = RuleStore.from_config(
-            PermissionConfig(allow=["Bash(git*)"], ask=["Bash(deploy*)"])
-        )
+        store = RuleStore.from_config(PermissionConfig(allow=["Bash(git*)"], ask=["Bash(deploy*)"]))
         assert store.resolve_segments("Bash", ["git status", "deploy now"]) == "ask"
 
     def test_all_allow_required(self):
@@ -82,11 +76,6 @@ class TestResolveSegments:
 
     def test_deny_beats_ask(self):
         store = RuleStore.from_config(
-            PermissionConfig(
-                allow=["Bash(git*)"], ask=["Bash(deploy*)"], deny=["Bash(rm -rf*)"]
-            )
+            PermissionConfig(allow=["Bash(git*)"], ask=["Bash(deploy*)"], deny=["Bash(rm -rf*)"])
         )
-        assert (
-            store.resolve_segments("Bash", ["git status", "deploy x", "rm -rf /"])
-            == "deny"
-        )
+        assert store.resolve_segments("Bash", ["git status", "deploy x", "rm -rf /"]) == "deny"

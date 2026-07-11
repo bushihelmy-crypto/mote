@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from metagpt.common.exception.base import MetaGPTError, NonRetryableError
-from metagpt.common.exception.codes import ErrorCode
+from mote.common.exception.base import MoteError, NonRetryableError
+from mote.common.exception.codes import ErrorCode
 
 
-class ResourceError(MetaGPTError):
+class ResourceError(MoteError):
     """Base for resource / quota / budget failures."""
 
 

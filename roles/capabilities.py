@@ -23,18 +23,27 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Optional
 
-from metagpt.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
-from metagpt.common.schema import AIMessage, UserMessage
-from metagpt.common.utils.role_zero_utils import attach_media, detach_media
-from metagpt.common.utils.report import RecommendReporter, ThoughtReporter
-from metagpt.router.router import SUMMARY_TASK
-from metagpt.roles.role_state import RoleState
-from metagpt.think.prompt_builder import PromptBuilder
+from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from mote.common.schema import AIMessage, UserMessage
+from mote.common.utils.report import RecommendReporter, ThoughtReporter
+from mote.common.utils.role_zero_utils import attach_media, detach_media
+from mote.roles.role_state import RoleState
+from mote.router.router import SUMMARY_TASK
+from mote.think.prompt_builder import PromptBuilder
 
 if TYPE_CHECKING:
-    from metagpt.executor.tasks import BackgroundTaskPool
-    from metagpt.context.skills.skill_pool import SkillPool
-    from metagpt.roles.role import Role
+    from mote.context.skills.skill_pool import SkillPool
+    from mote.executor.tasks import BackgroundTaskPool
+    from mote.roles.role import Role
+
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the return site).
+_MSG_SKILL_FORK_FAILED = "Error: could not run skill fork (agent limit reached)."
+_MSG_QUESTION_REQUIRED = "Error: 'question' argument is required."
+_MSG_CONTENT_REQUIRED = "Error: 'content' argument is required."
+_MSG_NOT_IN_MOTE_ENV = "Not in MoteEnv, command will not be executed."
+_MSG_STOP_SUFFIX = " The user has asked me to stop because I have encountered a problem."
 
 
 class RoleCapabilities:
@@ -135,7 +144,7 @@ class RoleCapabilities:
         )
         report = await spawn_and_run(spec, UserMessage(content=arguments), ctx=role._context)
         if report is None:
-            return "Error: could not run skill fork (agent limit reached)."
+            return _MSG_SKILL_FORK_FAILED
         return report.strip()
 
     # ------------------------------------------------------------------
@@ -203,25 +212,25 @@ class RoleCapabilities:
         self._role.browser_state_recorder.record(urls, active=active, storage_state=storage_state, tool=tool)
 
     # ------------------------------------------------------------------
-    # Human I/O (only valid inside an MGXEnv)
+    # Human I/O (only valid inside a MoteEnv)
     # ------------------------------------------------------------------
 
     async def ask_human(self, question: str) -> str:
         """Ask the human user a question and return their response.
 
-        Only valid inside an MGXEnv. A trailing 'stop' deactivates the role.
+        Only valid inside a MoteEnv. A trailing 'stop' deactivates the role.
         """
         if not question:
-            return "Error: 'question' argument is required."
+            return _MSG_QUESTION_REQUIRED
 
         role = self._role
         env = role.state.env
         if env is None:
-            return "Not in MGXEnv, command will not be executed."
+            return _MSG_NOT_IN_MOTE_ENV
 
         response = await env.ask_human(question, sent_from=role.role_schema.name)
         if response.strip().lower().endswith(("stop", "<stop>")):
-            response += " The user has asked me to stop because I have encountered a problem."
+            response += _MSG_STOP_SUFFIX
             role.deactivate()
         return response
 
@@ -233,7 +242,7 @@ class RoleCapabilities:
         kill switch: a structured selection is not a control channel, so the stop
         semantics stay on the plain ``ask_human`` / ``AskHuman`` path.
         """
-        from metagpt.common.schema import AskUserQuestionAnswers
+        from mote.common.schema import AskUserQuestionAnswers
 
         role = self._role
         env = role.state.env
@@ -247,7 +256,7 @@ class RoleCapabilities:
         The interactive channel for the PermissionEngine's ``ask`` decisions.
         Unlike ask_human(), this does NOT treat a trailing 'stop' as a kill
         switch — an approval prompt should never silently deactivate the Role.
-        Outside an MGXEnv there is no channel, so it returns "" and the engine
+        Outside a MoteEnv there is no channel, so it returns "" and the engine
         fails closed (denies).
         """
         role = self._role
@@ -259,15 +268,15 @@ class RoleCapabilities:
     async def reply_to_human(self, content: str) -> str:
         """Reply to the human user with the provided content.
 
-        Only valid inside an MGXEnv.
+        Only valid inside a MoteEnv.
         """
         if not content:
-            return "Error: 'content' argument is required."
+            return _MSG_CONTENT_REQUIRED
 
         role = self._role
         env = role.state.env
         if env is None:
-            return "Not in MGXEnv, command will not be executed."
+            return _MSG_NOT_IN_MOTE_ENV
 
         return await env.reply_to_human(content, sent_from=role.role_schema.name)
 
@@ -293,7 +302,7 @@ class RoleCapabilities:
 
         start = time.time()
         sleep_task = asyncio.create_task(asyncio.sleep(duration_seconds))
-        waiters = {sleep_task}
+        waiters: set[asyncio.Task] = {sleep_task}
 
         msg_task = asyncio.create_task(msg_buffer.wait_for_message())
         waiters.add(msg_task)

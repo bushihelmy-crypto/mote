@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import asyncio
 
-from metagpt.common.interface import EphemeralContextSource
-from metagpt.context.turn_context import SkillListingContextSource
+from mote.common.interface import EphemeralContextSource
+from mote.context.turn_context import SkillListingContextSource
 
 
 def run(coro):
@@ -66,10 +66,12 @@ class TestSilent:
 
     def test_no_indexable_skills_silent(self):
         # Only conditional / human-only skills → nothing for the steady index.
-        inj = _FakeInjector([
-            _FakeSkill("cond", is_conditional=True),
-            _FakeSkill("hidden", disable_model_invocation=True),
-        ])
+        inj = _FakeInjector(
+            [
+                _FakeSkill("cond", is_conditional=True),
+                _FakeSkill("hidden", disable_model_invocation=True),
+            ]
+        )
         assert run(_source(inj).render()) is None
 
 

@@ -1,15 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.router.llm.llm_provider_registry (provider lookup + registration)."""
+"""Tests for mote.router.llm.llm_provider_registry (provider lookup + registration)."""
 from __future__ import annotations
 
 import pytest
 
-from metagpt.common.exception import ProviderNotFoundError
-from metagpt.router.llm.llm_provider_registry import (
-    LLMProviderRegistry,
-    register_provider,
-)
+from mote.common.exception import ProviderNotFoundError
+from mote.router.llm.llm_provider_registry import LLMProviderRegistry, register_provider
 
 
 class TestLLMProviderRegistry:

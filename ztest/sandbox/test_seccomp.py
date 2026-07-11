@@ -17,8 +17,8 @@ import shutil
 
 import pytest
 
-from metagpt.sandbox import seccomp
-from metagpt.sandbox.runtime import SandboxRuntime
+from mote.sandbox import seccomp
+from mote.sandbox.runtime import SandboxRuntime
 
 _HAS_SECCOMP = seccomp.seccomp_available()
 _HAS_BWRAP = shutil.which("bwrap") is not None and os.name == "posix"
@@ -144,9 +144,7 @@ class TestSeccompEnforcement:
             "libc.ptrace(0,0,0,0); "
             "print('errno', ctypes.get_errno())"
         )
-        cmd, env = _run(
-            rt.wrap_command(f"python3 -c {_q(code)}", cwd=str(tmp_path), env=dict(os.environ))
-        )
+        cmd, env = _run(rt.wrap_command(f"python3 -c {_q(code)}", cwd=str(tmp_path), env=dict(os.environ)))
         rc, out, err = self._exec(cmd, env)
         _run(rt.shutdown())
         assert rc == 0, err
@@ -164,9 +162,7 @@ class TestSeccompEnforcement:
     def test_wrap_exec_carries_seccomp(self, tmp_path):
         # The PTY/exec seam wraps bwrap in a sh-shim that redirects the BPF fd.
         rt = SandboxRuntime(backend="bwrap", seccomp=True, harden_process=False, network="open")
-        argv, env = _run(
-            rt.wrap_exec(["/bin/sh", "-c", "echo exec-ok"], cwd=str(tmp_path), env=dict(os.environ))
-        )
+        argv, env = _run(rt.wrap_exec(["/bin/sh", "-c", "echo exec-ok"], cwd=str(tmp_path), env=dict(os.environ)))
 
         async def go():
             proc = await asyncio.create_subprocess_exec(

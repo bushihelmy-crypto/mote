@@ -4,11 +4,17 @@ from typing import Any, Dict, List
 
 from fastmcp import Client
 
-from metagpt.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-from metagpt.common.exception import ToolNotFoundError
-from metagpt.common.logs import logger
-from metagpt.executor.mcp.config_source import load_mcp_servers
-from metagpt.executor.mcp_adapter import MCPToolAdapter
+from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+from mote.common.exception import ToolNotFoundError
+from mote.common.logs import logger
+from mote.executor.mcp.config_source import load_mcp_servers
+from mote.executor.mcp_adapter import MCPToolAdapter
+
+# Complete model-facing message sentences, hoisted to module-top templates so the
+# wording lives in one place (fill via ``.format(...)`` at the return site).
+_MSG_MCP_READY = "MCP tools available ({count}): {tools}"
+_MSG_MCP_FAILED = "MCP tool discovery failed: {errors}"
+_MSG_MCP_NONE = "No external MCP tools configured."
 
 
 class MCPInitState(str, Enum):
@@ -164,10 +170,10 @@ class UniversalMCP:
     def get_status_description(self) -> str:
         """Human-readable status for system prompt."""
         if self.state == MCPInitState.READY:
-            return f"MCP tools available ({len(self.tool_registry)}): {list(self.tool_registry.keys())}"
+            return _MSG_MCP_READY.format(count=len(self.tool_registry), tools=list(self.tool_registry.keys()))
         elif self.state == MCPInitState.FAILED:
-            return f"MCP tool discovery failed: {self.initialization_errors}"
-        return "No external MCP tools configured."
+            return _MSG_MCP_FAILED.format(errors=self.initialization_errors)
+        return _MSG_MCP_NONE
 
     async def cleanup_clients(self) -> None:
         for server_name, client in list(self.clients.items()):
@@ -187,6 +193,7 @@ class UniversalMCP:
 
     def _build_client(self, server_config: MCPServerConfig) -> Client:
         if server_config.type == MCPTransportType.SSE:
+            assert server_config.url is not None, "SSE server config requires a url"
             return Client(server_config.url)
         return Client(
             {

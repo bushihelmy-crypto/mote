@@ -2,9 +2,9 @@
 
 Lives in ``common/schema`` alongside ``permission_config.py`` so ``RoleSchema``
 (via ``PermissionConfig.runtime``) can declare it without importing the runtime
-package (``metagpt.sandbox``). This is *only* the declarative shape; the
-enforcement lives in ``metagpt.sandbox`` (the runtime layer) and the
-``SandboxPolicy`` translation lives in ``metagpt.executor.permission.sandbox``
+package (``mote.sandbox``). This is *only* the declarative shape; the
+enforcement lives in ``mote.sandbox`` (the runtime layer) and the
+``SandboxPolicy`` translation lives in ``mote.executor.permission.sandbox``
 (the adapter layer).
 
 Relationship to ``SandboxConfig`` (also in ``permission_config.py``):

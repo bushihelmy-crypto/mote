@@ -28,7 +28,7 @@ routes, and guarantees outbound; it never re-derives presentation.
 
 from __future__ import annotations
 
-from metagpt.cli.router.delivery import DeliveryManager, DeliveryReceipt
-from metagpt.cli.router.session_router import SessionRouter
+from mote.cli.router.delivery import DeliveryManager, DeliveryReceipt
+from mote.cli.router.session_router import SessionRouter
 
 __all__ = ["SessionRouter", "DeliveryManager", "DeliveryReceipt"]

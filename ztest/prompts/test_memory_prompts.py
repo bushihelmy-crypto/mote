@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for metagpt.prompts.memory — the auto-memory prompt split.
+"""Tests for mote.prompts.memory — the auto-memory prompt split.
 
 Two contracts matter: (1) MEMORY_INSTRUCTIONS carries exactly the ${memory_dir}
 placeholder (static system section) and MEMORY_CONTEXT carries exactly
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from string import Template
 
-from metagpt.common.prompt import memory as M
+from mote.common.prompt import memory as M
 
 
 class TestInstructions:

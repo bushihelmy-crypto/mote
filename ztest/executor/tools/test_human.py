@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the human-interaction tools (``metagpt.executor.tools.human``).
+"""Tests for the human-interaction tools (``mote.executor.tools.human``).
 
 Covers AskHuman + ReplyToHuman (thin delegations to the ask_human /
 reply_to_human Role capabilities) and AskUserQuestion (the CC port that now runs
@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import pytest
 
-from metagpt.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-from metagpt.executor.tool_result import ToolError, ToolResult
-from metagpt.executor.tools.human import AskHuman, ReplyToHuman, AskUserQuestion
+from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+from mote.executor.tool_result import ToolError, ToolResult
+from mote.executor.tools.human import AskHuman, AskUserQuestion, ReplyToHuman
 
 from .conftest import CapRole, bind, run
 
@@ -56,10 +56,7 @@ def _q(question, header, options, multiSelect=False):
 def _answers(*answers):
     """Build a scripted AskUserQuestionAnswers from (question, selected, free) tuples."""
     return AskUserQuestionAnswers(
-        answers=[
-            AskUserQuestionAnswer(question=q, selected=list(sel), free_text=free)
-            for q, sel, free in answers
-        ]
+        answers=[AskUserQuestionAnswer(question=q, selected=list(sel), free_text=free) for q, sel, free in answers]
     )
 
 
@@ -172,8 +169,7 @@ class TestFormatResult:
         answers = _answers(("Q", ["A"], ""))
         out = AskUserQuestion._format_result(answers)
         assert out == (
-            'User has answered your questions: "Q"="A". '
-            "You can now continue with the user's answers in mind."
+            'User has answered your questions: "Q"="A". ' "You can now continue with the user's answers in mind."
         )
 
     def test_display_combines_selected_and_free_text(self):

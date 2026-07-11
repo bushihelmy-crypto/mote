@@ -13,9 +13,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from metagpt.common.schema import PermissionConfig
-from metagpt.executor.permission.rule_matcher import parse_rule, rule_matches
-from metagpt.common.schema.permission_types import PermissionBehavior, PermissionRule
+from mote.common.schema import PermissionConfig
+from mote.common.schema.permission_types import PermissionBehavior, PermissionRule
+from mote.executor.permission.rule_matcher import parse_rule, rule_matches
 
 
 class RuleStore:
@@ -41,9 +41,7 @@ class RuleStore:
         self._rules.append(rule)
 
     def _has_match(self, behavior: PermissionBehavior, tool_name: str, target: str) -> bool:
-        return any(
-            r.behavior == behavior and rule_matches(r, tool_name, target) for r in self._rules
-        )
+        return any(r.behavior == behavior and rule_matches(r, tool_name, target) for r in self._rules)
 
     def resolve(self, tool_name: str, target: str) -> Optional[PermissionBehavior]:
         """Return the winning behavior for a call, or ``None`` if no rule matches.
@@ -58,9 +56,7 @@ class RuleStore:
             return "allow"
         return None
 
-    def resolve_segments(
-        self, tool_name: str, segments: list[str]
-    ) -> Optional[PermissionBehavior]:
+    def resolve_segments(self, tool_name: str, segments: list[str]) -> Optional[PermissionBehavior]:
         """Resolve a compound command by folding its segments strictest-wins.
 
         A command like ``git status && ./deploy.sh`` is split (by the caller)

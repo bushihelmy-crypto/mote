@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``metagpt.session.log.SessionLog`` — append-only JSONL.
+"""Tests for ``mote.session.log.SessionLog`` — append-only JSONL.
 
 Covers: create writes the session_meta first line and creates the directory;
 create no-ops on an existing log (no double meta, no truncation); append is
@@ -8,9 +8,9 @@ O_APPEND (earlier lines survive); iter_raw skips corrupt lines.
 """
 from __future__ import annotations
 
-from metagpt.common.schema import UserMessage
-from metagpt.session.events import MessageEvent, SessionMetaEvent
-from metagpt.session.log import ROLLOUT_FILENAME, SessionLog
+from mote.common.schema import UserMessage
+from mote.session.events import MessageEvent, SessionMetaEvent
+from mote.session.log import ROLLOUT_FILENAME, SessionLog
 
 
 def _log(tmp_path, session_id="sess1"):

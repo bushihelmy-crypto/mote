@@ -3,16 +3,16 @@
 """``cli/view`` — the human protocol (窄腰之一).
 
 The single fold point ``AgentEvent → ViewEvent`` is the host-specific
-:class:`~metagpt.cli.view.projector.ViewProjector`. The human *contract* it folds
+:class:`~mote.cli.view.projector.ViewProjector`. The human *contract* it folds
 into (``ViewEvent`` + the capability downgrade rules) is shared across hosts and
-lives in :mod:`metagpt.cli.common.view`; the reusable fan-out plumbing
-(:class:`~metagpt.cli.common.base.BaseProjector`) lives in
-:mod:`metagpt.cli.common.base`. This package re-exports them so existing callers
-keep importing ``from metagpt.cli.view import ...``.
+lives in :mod:`mote.cli.contracts.view`; the reusable fan-out plumbing
+(:class:`~mote.cli.contracts.base.BaseProjector`) lives in
+:mod:`mote.cli.contracts.base`. This package re-exports them so existing callers
+keep importing ``from mote.cli.view import ...``.
 """
 
-from metagpt.cli.common.base import BaseProjector
-from metagpt.cli.common.view import (
+from mote.cli.contracts.base import BaseProjector
+from mote.cli.contracts.view import (
     STRUCTURED_CAPS,
     TERMINAL_CAPS,
     Capabilities,
@@ -32,7 +32,7 @@ from metagpt.cli.common.view import (
     ToolCallStarted,
     ViewEvent,
 )
-from metagpt.cli.view.projector import ViewProjector
+from mote.cli.view.projector import ViewProjector
 
 __all__ = [
     "ViewEvent",

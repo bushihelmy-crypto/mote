@@ -3,7 +3,7 @@
 """Build the LLM recovery-strategy registry consumed by the generic ``RecoveryRunner``.
 
 The recovery *loop* now lives in the leaf layer
-(:class:`metagpt.common.exception.RecoveryRunner`): it owns the control flow
+(:class:`mote.common.exception.RecoveryRunner`): it owns the control flow
 (call → dispatch on ``exc.recovery`` → retry → budget) and is shared by every
 caller. This module supplies the **LLM-specific strategies** for that loop.
 
@@ -36,10 +36,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Awaitable, Callable, Mapping, Optional
 
-from metagpt.common.exception import MetaGPTError, RecoveryAction, RecoveryStrategy
+from mote.common.exception import RecoveryAction, RecoveryStrategy
 
 if TYPE_CHECKING:
-    from metagpt.router.llm.base_llm import BaseLLM
+    from mote.router.llm.base_llm import BaseLLM
 
 # Injected capabilities. Each already closes over the request state it mutates.
 # Compress the current messages in place; return True once compressed.
@@ -53,7 +53,7 @@ FallbackSupplier = Callable[[], Optional["BaseLLM"]]
 FallbackSink = Callable[["BaseLLM"], None]
 # Repair the outgoing request for a transform-then-retry action; return True if
 # the payload was repaired (False → can't fix → the loop re-raises).
-MessageTransformer = Callable[[MetaGPTError], Awaitable[bool]]
+MessageTransformer = Callable[[Exception], Awaitable[bool]]
 
 
 def build_llm_strategies(
@@ -73,21 +73,21 @@ def build_llm_strategies(
 
     if compress is not None:
 
-        async def _compress(_exc: MetaGPTError) -> bool:
+        async def _compress(_exc: Exception) -> bool:
             return await compress()
 
         strategies[RecoveryAction.COMPRESS] = _compress
 
     if rotate is not None:
 
-        async def _rotate(_exc: MetaGPTError) -> bool:
+        async def _rotate(_exc: Exception) -> bool:
             return bool(rotate())
 
         strategies[RecoveryAction.ROTATE_CREDENTIAL] = _rotate
 
     if fallback is not None:
 
-        async def _fallback(_exc: MetaGPTError) -> bool:
+        async def _fallback(_exc: Exception) -> bool:
             provider = fallback()
             if provider is None:
                 return False

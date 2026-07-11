@@ -15,15 +15,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from metagpt.common.hook.types import HookOutcome
+    from mote.common.hook.types import HookOutcome
 
 
 @runtime_checkable
 class HookRunner(Protocol):
     """The single method consumers use to fire a lifecycle event."""
 
-    async def fire(
-        self, event: str, payload: dict, *, permission_mode: Optional[str] = None
-    ) -> "HookOutcome":
+    async def fire(self, event: str, payload: dict, *, permission_mode: Optional[str] = None) -> "HookOutcome":
         """Run all handlers registered for ``event`` and return the folded outcome."""
         ...

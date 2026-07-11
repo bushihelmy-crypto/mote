@@ -8,11 +8,11 @@ Append-only JSONL is the canonical, crash-safe record (Codex ``rollout`` +
 Claude Code transcript). The first line is always a ``session_meta`` event;
 every subsequent line is one event.
 
-SessionLog now **composes a** :class:`~metagpt.common.disk.Journal` for the
+SessionLog now **composes a** :class:`~mote.common.disk.Journal` for the
 line-level append/scan mechanics: it keeps the event-shaped API
 (``create``/``append``/``iter_raw``) and only adds the event<->line
 (de)serialization (``to_line``/``parse_line``). The journal routes writes
-through the shared :class:`~metagpt.common.disk.DiskWriter` (per-path FIFO so the
+through the shared :class:`~mote.common.disk.DiskWriter` (per-path FIFO so the
 ``session_meta`` first line always lands first), and a ``drain()`` barrier flushes
 them at turn boundaries / shutdown / before any in-process replay.
 """
@@ -22,10 +22,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator, Optional
 
-from metagpt.common.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.common.disk import Journal, drain_blocking
-from metagpt.common.logs import log_class
-from metagpt.session.events import SessionEvent, SessionMetaEvent, parse_line, to_line
+from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.disk import Journal, drain_blocking
+from mote.common.logs import log_class
+from mote.session.events import SessionEvent, SessionMetaEvent, parse_line, to_line
 
 #: Directory name under the workspace root holding all session logs.
 SESSIONS_DIRNAME = ".agent_sessions"
@@ -76,7 +76,7 @@ class SessionLog:
     def iter_raw(self) -> Iterator[dict]:
         """Yield each parsed ``{type, ts, payload}`` record, skipping bad lines.
 
-        Flushes the shared :class:`~metagpt.common.disk.DiskWriter` first so any
+        Flushes the shared :class:`~mote.common.disk.DiskWriter` first so any
         queued appends (and queued blob writes) are on disk before the scan —
         the single durability barrier every in-process read path (replay / fork /
         file-history) relies on, so callers no longer drain by hand.
