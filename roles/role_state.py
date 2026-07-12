@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from mote.common.const import DEFAULT_WORKSPACE_ROOT
 from mote.common.schema import LLMCallContext, Message, MessageQueue, SerializationMixin, ThinkResult
 from mote.session.ids import new_session_id
-from pydantic import ConfigDict, Field, PrivateAttr
 
 
 class RoleState(SerializationMixin):
@@ -67,9 +68,8 @@ class RoleState(SerializationMixin):
 
     # Internal flags
     _active: bool = PrivateAttr(default=False)
-    _memory_ready: bool = PrivateAttr(default=False)
 
-    # Shared file-read state, aligned with Claude Code's readFileState. Maps an
+    # Shared file-read state. Maps an
     # absolute path -> the file's mtime_ns at the moment it was last read. The
     # Read tool records here; the Write/Edit tools consult it to enforce
     # read-before-overwrite and to detect files changed since the last read.
@@ -155,8 +155,8 @@ class RoleStateController:
     def set_cwd(self, path: str) -> None:
         """Set the stable working directory (framework API for an explicit switch).
 
-        No longer called automatically by the Bash tool — a `cd` inside a command
-        does not drift the cwd (Codex-aligned). Retained for a deliberate future
+        Not called automatically by the Bash tool — a `cd` inside a command
+        does not drift the cwd (Codex-aligned). Provided as a deliberate
         directory-change entry point.
         """
         self._state.working_dir = path

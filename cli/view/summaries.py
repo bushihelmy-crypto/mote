@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Per-tool result summaries (claude-code's "Read N lines" / "Found N files" …).
+"""Per-tool result summaries ("Read N lines" / "Found N files" …).
 
 The projector computes a count-based one-liner ONCE per tool (窄腰) so a human
 reads a meaningful chrome line ("读取 42 行") instead of the raw first line of
 output (e.g. Read's ``     1→import os``). Chinese wording per the CLI's
 convention. :func:`_result_summary` returns ``None`` for tools/shapes with no
 honest count → the caller falls back to the first-non-empty-line summary
-(Bash/terminal/unknown keep their raw output line, exactly like claude-code).
+(Bash/terminal/unknown keep their raw output line).
 
 Pure functions only (``(name, event, text) → Optional[str]``): no I/O, no
 projector state. Split out of ``projector.py`` so the fold's main class stays
@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import re
 from typing import Any, Optional
+
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 # A Read body line: right-justified number + ``→`` (U+2192) + content.
 _NUMBERED_LINE_RE = re.compile(r"^\s*\d+\u2192")
@@ -55,44 +58,45 @@ def _diff_counts(old: str, new: str) -> tuple[int, int]:
 def _summary_read(text: str) -> Optional[str]:
     head = text.lstrip()
     if head.startswith("Read image"):
-        return "读取图片"
+        return t(K.SUMMARY_READ_IMAGE)
     if head.startswith("Read PDF"):
-        return "读取 PDF"
+        return t(K.SUMMARY_READ_PDF)
     n = _count_numbered_lines(text)
-    return f"读取 {n} 行" if n else None
+    return t(K.SUMMARY_READ_LINES, count=n) if n else None
 
 
 def _summary_grep(text: str) -> Optional[str]:
     m = _GREP_COUNT_RE.search(text)
     if m:
-        return f"找到 {m.group(1)} 处匹配，共 {m.group(2)} 个文件"
+        return t(K.SUMMARY_GREP_MATCHES_FILES, matches=int(m.group(1)), files=int(m.group(2)))
     head = text.lstrip()
     m = _GREP_FILES_RE.match(head)
     if m:
-        return f"找到 {m.group(1)} 个文件"
+        return t(K.SUMMARY_FOUND_FILES, count=int(m.group(1)))
     if head.startswith(("No files found", "No matches found")):
-        return "无匹配"
+        return t(K.SUMMARY_NO_MATCHES)
     # ``content`` mode has no header — count the matching body lines.
     n = sum(1 for ln in text.splitlines() if ln.strip())
-    return f"找到 {n} 处匹配" if n else "无匹配"
+    return t(K.SUMMARY_GREP_MATCHES, count=n) if n else t(K.SUMMARY_NO_MATCHES)
 
 
 def _summary_glob(text: str) -> Optional[str]:
     head = text.lstrip()
     if head.startswith("No files found"):
-        return "无匹配文件"
+        return t(K.SUMMARY_NO_FILES)
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if lines and lines[-1].lstrip().startswith(_GLOB_TRUNC):
         lines = lines[:-1]
-    return f"找到 {len(lines)} 个文件" if lines else "无匹配文件"
+    return t(K.SUMMARY_FOUND_FILES, count=len(lines)) if lines else t(K.SUMMARY_NO_FILES)
 
 
 def _summary_write(text: str) -> Optional[str]:
     m = _WRITE_RE.search(text)
     if not m:
         return None
-    verb = "新建" if m.group(1) == "Created" else "更新"
-    return f"{verb} {m.group(2)} 行"
+    count = int(m.group(2))
+    key = K.SUMMARY_CREATED_LINES if m.group(1) == "Created" else K.SUMMARY_UPDATED_LINES
+    return t(key, count=count)
 
 
 def _summary_edit(event: Any, text: str) -> Optional[str]:
@@ -109,26 +113,26 @@ def _summary_edit(event: Any, text: str) -> Optional[str]:
             if old.strip():
                 all_new = False
         if all_new and added and not removed:
-            return f"新建 {added} 行"
+            return t(K.SUMMARY_CREATED_LINES, count=added)
         if added and removed:
-            return f"更新 +{added} -{removed} 行"
+            return t(K.SUMMARY_EDIT_ADDED_REMOVED, added=added, removed=removed)
         if added:
-            return f"更新 +{added} 行"
+            return t(K.SUMMARY_EDIT_ADDED, count=added)
         if removed:
-            return f"更新 -{removed} 行"
-        return "已更新"
+            return t(K.SUMMARY_EDIT_REMOVED, count=removed)
+        return t(K.SUMMARY_UPDATED)
     m = re.search(r"All (\d+) occurrence", text)
     if m:
-        return f"替换 {m.group(1)} 处"
+        return t(K.SUMMARY_REPLACED, count=int(m.group(1)))
     return None
 
 
 def _result_summary(name: str, event: Any, text: str) -> Optional[str]:
-    """CC-style count summary for a *successful* tool call, or None to fall back.
+    """Per-tool count summary for a *successful* tool call, or None to fall back.
 
     Dispatches per tool name to a small count-extractor. Bash/terminal and any
     unrecognised tool return None so the caller keeps the raw first-line summary
-    (claude-code shows Bash output verbatim, not a synthetic count).
+    (Bash output is shown verbatim, not a synthetic count).
     """
     if name == "Read":
         return _summary_read(text)

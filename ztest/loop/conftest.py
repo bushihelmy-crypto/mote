@@ -32,7 +32,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import pytest
-from mote.common.base import LoopContext
+
+from mote.common.base import PROCEED, BudgetVerdict, LoopContext
 from mote.common.schema import Message, UserMessage
 from mote.loop.react_loop import ReActLoop
 from mote.roles.context_provider.request import ThinkRequest
@@ -182,6 +183,10 @@ class FakeContextProvider:
         self.llm = llm or FakeLLM()
         self.prepare_calls = 0
         self.resolve_calls: list = []
+        # The verdict enforce_budget() returns. Defaults to PROCEED (no cap);
+        # tests set a stop verdict to exercise the loop's budget gate.
+        self.budget_verdict: BudgetVerdict = PROCEED
+        self.enforce_budget_calls = 0
 
     def loop_context(self) -> LoopContext:
         return self._ctx
@@ -193,6 +198,10 @@ class FakeContextProvider:
     async def resolve_llm(self, messages=None):
         self.resolve_calls.append(messages)
         return self.llm
+
+    async def enforce_budget(self) -> BudgetVerdict:
+        self.enforce_budget_calls += 1
+        return self.budget_verdict
 
 
 class FakeBgPool:

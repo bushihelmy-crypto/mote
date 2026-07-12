@@ -6,7 +6,7 @@
 ``ViewEvent`` kind identically to one JSON line via ``on_unhandled`` (it defines
 no per-kind methods), so a delta and a tool result both round-trip as JSON.
 ``PlainTerminalConsumer`` is the rich-less fallback that only ever renders whole
-blocks. ``PortHumanChannel`` routes ``Role.ask_human`` to an ``InputPort.ask``;
+blocks. ``PortHumanChannel`` routes ``Role.ask_user`` to an ``InputPort.ask``;
 everything else on the env surface is an inert no-op for the single-agent driver.
 """
 
@@ -16,8 +16,9 @@ import io
 import json
 
 import pytest
+
 from mote.cli.consumers.structured.consumer import StructuredConsumer
-from mote.cli.consumers.terminal.consumer import _HAS_RICH, PlainTerminalConsumer, TerminalConsumer
+from mote.cli.consumers.terminal.consumer import _HAS_RICH, PlainTerminalConsumer
 from mote.cli.contracts.view import (
     ConversationCompacted,
     ErrorRaised,
@@ -30,6 +31,8 @@ from mote.cli.contracts.view import (
     ToolCallStarted,
 )
 from mote.cli.io.human_channel import PortHumanChannel
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 # --------------------------------------------------------------------------
 # StructuredConsumer — one JSON line per ViewEvent
@@ -148,8 +151,8 @@ def test_plain_renders_conversation_compacted():
     c.on_conversation_compacted(ConversationCompacted(summary="recap", message_count=7))
     out = buf.getvalue()
     assert COMPACT in out
-    assert "对话已压缩" in out
-    assert "保留 7 条消息" in out
+    assert t(K.COMPACT_COMPACTED) in out
+    assert t(K.COMPACT_KEPT, count=7) in out
 
 
 def test_plain_conversation_compacted_omits_count_when_zero():
@@ -157,17 +160,18 @@ def test_plain_conversation_compacted_omits_count_when_zero():
     c = PlainTerminalConsumer(out=buf)
     c.on_conversation_compacted(ConversationCompacted(summary="recap"))
     out = buf.getvalue()
-    assert "对话已压缩" in out
-    assert "保留" not in out
+    assert t(K.COMPACT_COMPACTED) in out
+    # count omitted → no parenthetical kept-count clause on the marker line.
+    assert "(" not in out
 
 
 def test_plain_fold_note_shows_hidden_line_count():
-    # hidden_lines > 0 (no disk ref) → "+N 行已折叠".
+    # hidden_lines > 0 (no disk ref) → the FOLD_HIDDEN_LINES count note.
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
     c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=12))
     out = buf.getvalue()
-    assert "+12 行已折叠" in out
+    assert t(K.FOLD_HIDDEN_LINES, count=12) in out
 
 
 def test_plain_fold_note_shows_scissors_for_hard_truncation():
@@ -179,7 +183,7 @@ def test_plain_fold_note_shows_scissors_for_hard_truncation():
     c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, full_ref="/tmp/out.txt"))
     out = buf.getvalue()
     assert SCISSORS in out
-    assert "输出过大已截断" in out
+    assert t(K.FOLD_FULL_REF, ref="/tmp/out.txt") in out
     assert "/tmp/out.txt" in out
 
 
@@ -189,7 +193,7 @@ def test_plain_fold_note_generic_when_no_count_or_ref():
     c = PlainTerminalConsumer(out=buf)
     c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True))
     out = buf.getvalue()
-    assert "内容已折叠" in out
+    assert t(K.FOLD_CONTENT) in out
 
 
 def test_plain_no_fold_note_when_not_truncated():
@@ -197,8 +201,9 @@ def test_plain_no_fold_note_when_not_truncated():
     c = PlainTerminalConsumer(out=buf)
     c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", hidden_lines=5))
     out = buf.getvalue()
-    assert "折叠" not in out
-    assert "截断" not in out
+    # Not truncated → no fold note of any flavour (count / content / hard-ref).
+    assert t(K.FOLD_HIDDEN_LINES, count=5) not in out
+    assert t(K.FOLD_CONTENT) not in out
 
 
 def test_plain_retry_status_is_silent():
@@ -210,7 +215,13 @@ def test_plain_retry_status_is_silent():
 
 
 # --------------------------------------------------------------------------
-# TerminalConsumer (rich) — transient retry countdown that self-clears
+# TerminalSurface (rich) — transient retry countdown that self-clears
+#
+# The scrolling host is now a ``SurfaceDriver`` (the shared reducer) wrapping a
+# ``TerminalSurface`` (the rich primitives). Tests drive the driver's neutral
+# dispatch entry (``on_unhandled`` folds every ViewEvent through the reducer) and
+# inspect the surface's rich state — so the retry-clearing / grouping / thinking
+# *timing* is asserted through the same machine both hosts share.
 # --------------------------------------------------------------------------
 
 
@@ -218,6 +229,15 @@ def _rich_console(width: int = 120):
     from rich.console import Console
 
     return Console(file=io.StringIO(), force_terminal=True, width=width)
+
+
+def _terminal_pair(console):
+    """Build the ``(driver, surface)`` pair the rich terminal host ships as."""
+    from mote.cli.consumers.terminal.surface import TerminalSurface
+    from mote.cli.consumers.transcript import SurfaceDriver
+
+    surface = TerminalSurface(console=console)
+    return SurfaceDriver(surface), surface
 
 
 def _live_plain(live) -> str:
@@ -232,38 +252,82 @@ def _live_plain(live) -> str:
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_retry_status_opens_transient_line():
-    c = TerminalConsumer(console=_rich_console())
-    c.on_retry_status(RetryStatus(attempt=3, max_attempts=6, delay_ms=2000.0, error_type="LLMOverloadedError"))
-    assert c._retry_live is not None
-    text = _live_plain(c._retry_live)
+    driver, surface = _terminal_pair(_rich_console())
+    driver.on_unhandled(RetryStatus(attempt=3, max_attempts=6, delay_ms=2000.0, error_type="LLMOverloadedError"))
+    assert surface._retry_live is not None
+    text = _live_plain(surface._retry_live)
     assert "\u27f3" in text  # ⟳ retry glyph (not the ⚠ approval gate)
-    assert "第 3/6 次重试" in text
+    assert t(K.RETRY_ATTEMPT, attempt=3, total=6) in text
     assert "LLMOverloadedError" in text
-    assert "2s 后重试" in text
+    assert t(K.RETRY_COUNTDOWN, secs=2) in text
 
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_retry_cleared_by_next_event():
-    c = TerminalConsumer(console=_rich_console())
-    c.on_retry_status(RetryStatus(attempt=1, max_attempts=6, delay_ms=1000.0))
-    assert c._retry_live is not None
+    driver, surface = _terminal_pair(_rich_console())
+    driver.on_unhandled(RetryStatus(attempt=1, max_attempts=6, delay_ms=1000.0))
+    assert surface._retry_live is not None
     # Any subsequent event (here a notice) wipes the transient retry line.
-    c.on_notice(Notice(text="hello"))
-    assert c._retry_live is None
+    driver.on_unhandled(Notice(text="hello"))
+    assert surface._retry_live is None
 
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_retry_cleared_by_stream_delta():
-    c = TerminalConsumer(console=_rich_console())
-    c.on_retry_status(RetryStatus(attempt=1, max_attempts=6, delay_ms=1000.0))
-    assert c._retry_live is not None
+    driver, surface = _terminal_pair(_rich_console())
+    driver.on_unhandled(RetryStatus(attempt=1, max_attempts=6, delay_ms=1000.0))
+    assert surface._retry_live is not None
     # A streamed token means the retry succeeded — the countdown must vanish.
-    c.on_message_block_delta(MessageBlockDelta(text="hi"))
-    assert c._retry_live is None
+    driver.on_unhandled(MessageBlockDelta(text="hi"))
+    assert surface._retry_live is None
 
 
 # --------------------------------------------------------------------------
-# TerminalConsumer (rich) — compaction boundary + tool-result fold hints
+# TerminalSurface (rich) — converged grouping + thinking (new to the terminal)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_RICH, reason="rich required")
+def test_terminal_groups_read_search_into_one_summary_line():
+    # A Read/Grep/Glob run coalesces into a single ``● 搜索 N · 读取 M`` line
+    # (buffered until the run breaks) — the terminal now shares the Textual host's
+    # collapse-read-search behaviour via the reducer.
+    console = _rich_console()
+    driver, _ = _terminal_pair(console)
+    driver.on_unhandled(ToolCallStarted(tool_name="Read", headline="a.py", tool_use_id="t1"))
+    driver.on_unhandled(ToolCallCompleted(tool_name="Read", ok=True, summary="", tool_use_id="t1"))
+    driver.on_unhandled(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2"))
+    driver.on_unhandled(ToolCallCompleted(tool_name="Grep", ok=True, summary="", tool_use_id="t2"))
+    # A non-transparent event breaks the run and flushes the one summary line.
+    driver.on_unhandled(Notice(text="done"))
+    out = console.file.getvalue()
+    assert t(K.GROUP_READ, count=1) in out
+    assert t(K.GROUP_SEARCH, count=1) in out
+
+
+@pytest.mark.skipif(not _HAS_RICH, reason="rich required")
+def test_terminal_thinking_opens_and_clears_transient():
+    # Reasoning tokens surface only as the transient ``✻ 思考中`` indicator; a
+    # visible reply delta ends the thinking state (the reducer sequences it).
+    from mote.cli.consumers.render.palette import COMPACT
+    from mote.cli.contracts.view import ReasoningDelta
+
+    console = _rich_console()
+    driver, surface = _terminal_pair(console)
+    driver.on_unhandled(ReasoningDelta(text="pondering"))
+    assert surface._thinking_live is not None
+    text = _live_plain(surface._thinking_live)
+    assert COMPACT in text
+    assert t(K.STATUS_THINKING) in text
+    # The reasoning tokens themselves never enter the permanent scrollback.
+    assert "pondering" not in console.file.getvalue()
+    # A visible reply delta leaves the thinking state.
+    driver.on_unhandled(MessageBlockDelta(text="answer"))
+    assert surface._thinking_live is None
+
+
+# --------------------------------------------------------------------------
+# TerminalSurface (rich) — compaction boundary + tool-result fold hints
 # --------------------------------------------------------------------------
 
 
@@ -272,21 +336,21 @@ def test_terminal_renders_conversation_compacted():
     from mote.cli.consumers.render.palette import COMPACT
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c.on_conversation_compacted(ConversationCompacted(summary="recap", message_count=4))
+    driver, _ = _terminal_pair(console)
+    driver.on_unhandled(ConversationCompacted(summary="recap", message_count=4))
     out = console.file.getvalue()
     assert COMPACT in out
-    assert "对话已压缩" in out
-    assert "保留 4 条消息" in out
+    assert t(K.COMPACT_COMPACTED) in out
+    assert t(K.COMPACT_KEPT, count=4) in out
 
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_fold_note_hidden_lines():
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=9))
+    driver, _ = _terminal_pair(console)
+    driver.on_unhandled(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, hidden_lines=9))
     out = console.file.getvalue()
-    assert "+9 行已折叠" in out
+    assert t(K.FOLD_HIDDEN_LINES, count=9) in out
 
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
@@ -294,16 +358,15 @@ def test_terminal_fold_note_hard_truncation_shows_scissors():
     from mote.cli.consumers.render.palette import SCISSORS
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c.on_tool_call_completed(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, full_ref="/tmp/big.log"))
+    driver, _ = _terminal_pair(console)
+    driver.on_unhandled(ToolCallCompleted(ok=True, summary="ok", content_truncated=True, full_ref="/tmp/big.log"))
     out = console.file.getvalue()
     assert SCISSORS in out
-    assert "输出过大已截断" in out
-    assert "/tmp/big.log" in out
+    assert t(K.FOLD_FULL_REF, ref="/tmp/big.log") in out
 
 
 # --------------------------------------------------------------------------
-# TerminalConsumer.on_media_block — native-protocol → half-block → reference
+# TerminalSurface.render_media — native-protocol → half-block → reference
 # --------------------------------------------------------------------------
 
 
@@ -334,10 +397,10 @@ def test_media_block_uses_native_protocol_when_present(tmp_path):
     Image.new("RGB", (8, 8), (9, 9, 9)).save(str(img))
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
+    driver, surface = _terminal_pair(console)
     proto = _FakeProtocol()
-    c._image_protocol = proto  # inject a detected protocol
-    c.on_media_block(MediaBlock(media_kind="image", ref=str(img)))
+    surface._image_protocol = proto  # inject a detected protocol
+    driver.on_unhandled(MediaBlock(media_kind="image", ref=str(img)))
 
     out = console.file.getvalue()
     assert "\x1b_GFAKE\x1b\\" in out  # the native escape sequence landed
@@ -357,9 +420,9 @@ def test_media_block_falls_back_to_half_block_without_protocol(tmp_path):
     Image.new("RGB", (8, 8), (10, 20, 30)).save(str(img))
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c._image_protocol = None  # force the half-block fallback
-    c.on_media_block(MediaBlock(media_kind="image", ref=str(img)))
+    driver, surface = _terminal_pair(console)
+    surface._image_protocol = None  # force the half-block fallback
+    driver.on_unhandled(MediaBlock(media_kind="image", ref=str(img)))
 
     out = console.file.getvalue()
     assert "\u2580" in out  # ▀ half-block glyph
@@ -372,9 +435,9 @@ def test_media_block_missing_file_prints_reference_only(tmp_path):
     from mote.cli.contracts.view import MediaBlock
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c._image_protocol = _FakeProtocol()
-    c.on_media_block(MediaBlock(media_kind="image", ref="/no/such.png"))
+    driver, surface = _terminal_pair(console)
+    surface._image_protocol = _FakeProtocol()
+    driver.on_unhandled(MediaBlock(media_kind="image", ref="/no/such.png"))
 
     out = console.file.getvalue()
     assert "/no/such.png" in out  # caption reference
@@ -392,8 +455,8 @@ def test_file_diff_block_renders_caption_and_diff():
     from mote.cli.contracts.view import FileDiffBlock
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c.on_file_diff_block(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n"))
+    driver, _ = _terminal_pair(console)
+    driver.on_unhandled(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n"))
     out = console.file.getvalue()
     assert "/tmp/a.py" in out  # caption names the file
     assert "(updated)" in out  # both sides present → updated
@@ -407,9 +470,9 @@ def test_file_diff_block_caption_verb_reflects_create_delete():
     from mote.cli.contracts.view import FileDiffBlock
 
     console = _rich_console()
-    c = TerminalConsumer(console=console)
-    c.on_file_diff_block(FileDiffBlock(path="/tmp/new.py", old="", new="hi\n"))
-    c.on_file_diff_block(FileDiffBlock(path="/tmp/gone.py", old="bye\n", new=""))
+    driver, _ = _terminal_pair(console)
+    driver.on_unhandled(FileDiffBlock(path="/tmp/new.py", old="", new="hi\n"))
+    driver.on_unhandled(FileDiffBlock(path="/tmp/gone.py", old="bye\n", new=""))
     out = console.file.getvalue()
     assert "(created)" in out
     assert "(deleted)" in out
@@ -425,7 +488,7 @@ def test_plain_file_diff_block_prints_verb_and_path():
 
 
 # --------------------------------------------------------------------------
-# PortHumanChannel — ask_human → port.ask
+# PortHumanChannel — ask_user → port.ask
 # --------------------------------------------------------------------------
 
 
@@ -458,7 +521,7 @@ class FakeApprovalPort(FakePort):
 async def test_human_channel_ask_delegates_to_port():
     port = FakePort(answer="42")
     env = PortHumanChannel(port, ctx="CTX")
-    ans = await env.ask_human("How many?")
+    ans = await env.ask_user("How many?")
     assert ans == "42"
     assert port.asked == [("CTX", "How many?")]
 
@@ -480,7 +543,7 @@ async def test_human_channel_approval_prompt_routes_to_selector():
     ]:
         port = FakeApprovalPort(outcome=outcome)
         env = PortHumanChannel(port, ctx="CTX")
-        reply = await env.ask_human(prompt)
+        reply = await env.ask_user(prompt)
         assert reply == expected
         assert port.asked == []  # never fell through to the text input
         assert len(port.decided) == 1
@@ -499,7 +562,7 @@ async def test_human_channel_escalation_prompt_routes_to_selector():
     )
     port = FakeApprovalPort(outcome="always_allow")
     env = PortHumanChannel(port)
-    reply = await env.ask_human(prompt)
+    reply = await env.ask_user(prompt)
     assert reply == "always"
     assert port.decided[0][1].risk == "high"
 
@@ -511,7 +574,7 @@ async def test_human_channel_plain_question_ignores_selector():
     port = FakeApprovalPort()
     port._answer = "the answer"
     env = PortHumanChannel(port, ctx="C")
-    ans = await env.ask_human("What is your favorite color?")
+    ans = await env.ask_user("What is your favorite color?")
     assert ans == "the answer"
     assert port.decided == []
     assert port.asked == [("C", "What is your favorite color?")]
@@ -633,7 +696,7 @@ async def test_human_channel_degrade_falls_back_to_2arg_ask():
 @pytest.mark.asyncio
 async def test_human_channel_reply_is_empty():
     env = PortHumanChannel(FakePort())
-    assert await env.reply_to_human("anything") == ""
+    assert await env.reply_to_user("anything") == ""
 
 
 def test_human_channel_is_inert_for_team_surface():

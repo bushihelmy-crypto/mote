@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+
 from mote.common.schema import PermissionConfig, SandboxConfig
 from mote.common.schema.permission_types import PermissionDecision
 from mote.executor.permission.engine import PermissionEngine
@@ -25,30 +26,30 @@ def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
     """Build an engine with a canned (optional) approval reply."""
     cfg = PermissionConfig(mode=mode, allow=allow or [], deny=deny or [], ask=ask or [])
     store = RuleStore.from_config(cfg)
-    ask_human = None
+    ask_user = None
     if reply is not None:
 
-        async def ask_human(_prompt: str) -> str:  # noqa: E306
+        async def ask_user(_prompt: str) -> str:  # noqa: E306
             return reply
 
-    return PermissionEngine(mode=mode, store=store, ask_human=ask_human)
+    return PermissionEngine(mode=mode, store=store, ask_user=ask_user)
 
 
 def sandboxed_engine(cwd, *, mode="bypass", reply=None, writable_roots=None):
     """Build an engine whose allows are gated by a workspace-write sandbox."""
     cfg = PermissionConfig(mode=mode)
     store = RuleStore.from_config(cfg)
-    ask_human = None
+    ask_user = None
     if reply is not None:
 
-        async def ask_human(_prompt: str) -> str:  # noqa: E306
+        async def ask_user(_prompt: str) -> str:  # noqa: E306
             return reply
 
     guard = SandboxGuard(
         SandboxConfig(mode="workspace-write", writable_roots=writable_roots or []),
         get_cwd=lambda: cwd,
     )
-    return PermissionEngine(mode=mode, store=store, ask_human=ask_human, sandbox=guard)
+    return PermissionEngine(mode=mode, store=store, ask_user=ask_user, sandbox=guard)
 
 
 class TestRules:
@@ -126,7 +127,7 @@ class TestAskResolution:
         assert d1.behavior == "allow"
         # Second call hits the session rule — even with a deny-everything reply
         # it stays allowed because the rule short-circuits before prompting.
-        eng._ask_human = None  # ensure no prompt; rule must carry it
+        eng._ask_user = None  # ensure no prompt; rule must carry it
         d2 = await eng.check("Bash", target="make test")
         assert d2.behavior == "allow"
 
@@ -176,7 +177,7 @@ class TestStickyPrefix:
         d1 = await eng.check("Bash", target="git commit -m foo", segments=["git commit -m foo"])
         assert d1.behavior == "allow"
         # A variation of the same command rides the prefix rule without asking.
-        eng._ask_human = None
+        eng._ask_user = None
         d2 = await eng.check("Bash", target="git commit -m bar", segments=["git commit -m bar"])
         assert d2.behavior == "allow"
 
@@ -186,7 +187,7 @@ class TestStickyPrefix:
         assert d1.behavior == "allow"
         # A different git subcommand is NOT covered by "git commit:*" — still asks
         # (no channel => deny).
-        eng._ask_human = None
+        eng._ask_user = None
         d2 = await eng.check("Bash", target="git push origin main", segments=["git push origin main"])
         assert d2.behavior == "deny"
 
@@ -200,7 +201,7 @@ class TestStickyPrefix:
             segments=["git status", "git log"],
         )
         assert d1.behavior == "allow"
-        eng._ask_human = None
+        eng._ask_user = None
         d2 = await eng.check(
             "Bash",
             target="git status && git diff",
@@ -211,13 +212,13 @@ class TestStickyPrefix:
     async def test_prompt_shows_suggested_prefix_rule(self):
         seen = {}
 
-        async def ask_human(prompt: str) -> str:
+        async def ask_user(prompt: str) -> str:
             seen["prompt"] = prompt
             return "no"
 
         cfg = PermissionConfig(mode="default")
         store = RuleStore.from_config(cfg)
-        eng = PermissionEngine(mode="default", store=store, ask_human=ask_human)
+        eng = PermissionEngine(mode="default", store=store, ask_user=ask_user)
         await eng.check("Bash", target="git commit -m foo", segments=["git commit -m foo"])
         assert "Bash(git commit:*)" in seen["prompt"]
 
@@ -255,7 +256,7 @@ class TestSandbox:
         d1 = await eng.check("Write", target=first, mutates_fs=True)
         assert d1.behavior == "allow"
         # A sibling write under the now-granted directory passes without prompting.
-        eng._ask_human = None
+        eng._ask_user = None
         d2 = await eng.check("Write", target=str(granted_dir / "b.txt"), mutates_fs=True)
         assert d2.behavior == "allow"
 

@@ -1,9 +1,9 @@
 """LLM / provider tier exceptions.
 
 The ``ConnectionError`` mixin on the connection/empty-response classes is a
-safety net: it keeps legacy ``except ConnectionError`` blocks and
-``retry_if_exception_type((..., ConnectionError))`` predicates working after the
-migration away from raising bare ``ConnectionError``.
+safety net: it lets ``except ConnectionError`` blocks and
+``retry_if_exception_type((..., ConnectionError))`` predicates catch these typed
+errors uniformly.
 
 ``LLMError`` carries an optional ``status_code`` (the upstream HTTP status, when
 known) so callers/loggers can branch on it without re-parsing the message. Each

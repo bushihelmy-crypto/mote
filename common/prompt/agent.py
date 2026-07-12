@@ -1,9 +1,8 @@
 """Agent/sub-agent delegation prompt text.
 
-Consolidates the agent-delegation prompts that previously lived (duplicated) in
-both ``executor.prompts`` and ``prompts.role``. AGENT_TASK_PROMPT is the single
-canonical version, using ${...} placeholders rendered via
-``string.Template.safe_substitute`` (placeholders: parent_name, context, task).
+The single canonical home for the agent-delegation prompts. AGENT_TASK_PROMPT
+uses ${...} placeholders rendered via ``string.Template.safe_substitute``
+(placeholders: parent_name, context, task).
 """
 
 # The task brief handed to a spawned child agent. Placeholders: ${parent_name},
@@ -28,7 +27,7 @@ FIRST STEP — read project READMEs before writing any code:
   Read the README files mentioned in the context or discoverable from the working directory. If the README references additional docs (e.g., `skills_docs/`), read only the files explicitly listed there and relevant to your task. Do not guess API signatures, template conventions, or documentation filenames.
 
 Rules:
-- Do NOT use parent-only tools such as `CheckUI.run`, `Previewer.preview_project`, or `FrontendEngineer.*` — final UI validation and user-facing reporting belong to ${parent_name}.
+- Do NOT perform final UI validation, preview, or user-facing reporting — those parent-only responsibilities belong to ${parent_name}.
 - Do not ask the human, do not reply to the human, do not contact other agents, and do not delegate again.
 - After implementing code changes, run `lint` and `build` when the project supports them. A failed validation NEVER counts as task completion — fix and retry before finishing. Only stop early if genuinely blocked, and state the blocker clearly.
 - The final summary is for ${parent_name} only, not for the end user. Include: files changed, `lint` result, `build` result, and any unresolved blocker. Do not address the user or use phrases like "Would you like...".

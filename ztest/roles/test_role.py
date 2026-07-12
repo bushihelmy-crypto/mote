@@ -9,6 +9,7 @@ import os
 import types
 
 import pytest
+
 from mote.common.agent_control import set_control
 from mote.common.const import MESSAGE_ROUTE_TO_SELF
 from mote.common.exception import RoleContextNotSetError
@@ -17,7 +18,7 @@ from mote.common.utils.common import any_to_str
 from mote.roles import Role, RoleSchema, RoleState
 from mote.roles.role_components import _dedupe_tools
 
-from .conftest import FakeContextManager, FakeEnv, FakeLLM, FakeRouter, _FakeThinkResult
+from .conftest import FakeContextManager, FakeEnv
 
 
 # =============================================================================
@@ -31,8 +32,8 @@ class TestConstruction:
         assert isinstance(r.state, RoleState)
 
     def test_schema_kwargs_forwarded(self):
-        r = Role(name="Bob", goal="ship", tools=["Read"])
-        assert r.role_schema.goal == "ship"
+        r = Role(name="Bob", profile="Shipper", tools=["Read"])
+        assert r.role_schema.profile == "Shipper"
         assert r.role_schema.tools == ["Read"]
 
     def test_explicit_role_schema_used(self):
@@ -115,19 +116,19 @@ class TestAddressInit:
 # =============================================================================
 class TestSerialization:
     def test_dump_shape(self):
-        r = Role(name="Alice", goal="ship")
+        r = Role(name="Alice", profile="Shipper")
         data = r.dump()
         assert data["__module_class_name"] == "mote.roles.role.Role"
         assert data["role_schema"]["name"] == "Alice"
-        assert data["role_schema"]["goal"] == "ship"
+        assert data["role_schema"]["profile"] == "Shipper"
         assert "state" in data
 
     def test_round_trip_via_load(self):
-        r = Role(name="Alice", goal="ship", tools=["Read"])
+        r = Role(name="Alice", profile="Shipper", tools=["Read"])
         restored = Role.load(r.dump())
         assert isinstance(restored, Role)
         assert restored.name == "Alice"
-        assert restored.role_schema.goal == "ship"
+        assert restored.role_schema.profile == "Shipper"
         assert restored.role_schema.tools == ["Read"]
 
     def test_round_trip_preserves_session_id(self):
@@ -204,6 +205,8 @@ class TestTurnContextBus:
         # when no tracked file changed on disk since it was last read).
         # GitContextSource is wired unconditionally (self-suppresses off-repo;
         # renders the nearest repo containing cwd).
+        # TeamContextSource is wired unconditionally (self-suppresses when no
+        # control plane is bound / the agent has no parent/siblings/children).
         # ToolCatalogContextSource is wired unconditionally (self-suppresses under
         # native tool-use, where tools ride the API tools= param instead).
         # CodeMapContextSource is wired unconditionally (self-suppresses with no
@@ -220,6 +223,7 @@ class TestTurnContextBus:
         assert names == {
             "tool_catalog",
             "git",
+            "team",
             "timestamp",
             "token",
             "fold",
@@ -323,6 +327,33 @@ class TestEventSubscriberRoster:
         subs = _wired_subscribers(role)
         assert any(isinstance(s, HookSubscriber) for s in subs)
 
+    def test_secret_subscribers_absent_when_secrets_disabled(self, role):
+        # config.secrets.enabled defaults False → neither secret subscriber wired
+        # and the shared store getter is None (no vault touched).
+        from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
+
+        subs = _wired_subscribers(role)
+        assert not any(isinstance(s, (SecretUploadSubscriber, RedactionSubscriber)) for s in subs)
+        assert role._components.secret_store is None
+
+    def test_secret_subscribers_wired_when_secrets_enabled(self, role, tmp_path, monkeypatch):
+        # Enabling the layer wires BOTH secret subscribers onto the shared store.
+        # Redirect the key file + vault into tmp and skip config discovery so the
+        # test never touches the real ~/.mote or harvests a real config.yaml.
+        from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
+        from mote.roles import role_components as rc
+
+        monkeypatch.setattr("mote.common.secrets.cipher.CONFIG_ROOT", tmp_path)
+        monkeypatch.setattr(rc, "_primary_config_path", lambda cwd: None)
+        role.config.secrets.enabled = True
+        role.config.secrets.vault_path = str(tmp_path / "vault.json")
+
+        store = role._components.secret_store
+        assert store is not None
+        subs = _wired_subscribers(role)
+        assert any(isinstance(s, SecretUploadSubscriber) for s in subs)
+        assert any(isinstance(s, RedactionSubscriber) for s in subs)
+
     def test_lsp_service_wired_and_gets_bus_backref(self):
         # The LSP service is an observer that also *produces* DiagnosticsEvent:
         # subscribing it must hand it the bus via ``on_subscribed`` (no host
@@ -411,37 +442,39 @@ class TestEventSubscriberRoster:
 # Skills explicit per-role specification wiring
 # =============================================================================
 class TestSkillsWiring:
-    """A role that lists skills opts the subsystem in on its own — regardless
-    of the global master switch (``role.skills.enabled``) — and loads
-    exactly the listed skills (load_by_names). The tests force the global
-    switch OFF to prove the per-role opt-in is what does the enabling."""
+    """The Skills subsystem engages purely on the config switch
+    (``config.context.skills.enabled``): listing skills does NOT implicitly turn
+    it on. When enabled, a role's ``skills`` list narrows to an include filter."""
 
     @staticmethod
-    def _role_with_global_off(context, **schema_kwargs):
+    def _role(context, *, global_on, **schema_kwargs):
         r = Role(name="X", role_schema=RoleSchema(name="X", **schema_kwargs), context=context)
-        # Neutralise the ambient project config (config.yaml may enable skills
-        # globally) so the assertions isolate the per-role opt-in.
-        r.config.role.skills.enabled = False
+        # Pin the ambient project config so the assertions isolate the switch.
+        r.config.context.skills.enabled = global_on
         return r
 
-    def test_explicit_skills_enable_subsystem_with_global_off(self, context):
-        r = self._role_with_global_off(context, skills=["foo"])
-        mgr = r._components.skill_manager
-        assert mgr._enabled is True  # per-role opt-in
-        assert mgr._skills == ["foo"]  # narrows to an include filter
-
-    def test_no_skills_keeps_subsystem_disabled_by_default(self, context):
-        r = self._role_with_global_off(context, skills=[])
+    def test_listing_skills_does_not_enable_with_switch_off(self, context):
+        r = self._role(context, global_on=False, skills=["foo"])
         assert r._components.skill_manager._enabled is False
 
-    def test_executor_exposes_skill_tool_when_skills_listed(self, context):
-        # tools deliberately omits "Skill"; listing skills must still expose the
-        # bridge tool even with the global master switch off.
-        r = self._role_with_global_off(context, tools=["Read"], skills=["foo"])
+    def test_switch_on_enables_and_narrows_to_listed(self, context):
+        r = self._role(context, global_on=True, skills=["foo"])
+        mgr = r._components.skill_manager
+        assert mgr._enabled is True  # config switch engages the subsystem
+        assert mgr._skills == ["foo"]  # narrows to an include filter
+
+    def test_switch_off_keeps_subsystem_disabled(self, context):
+        r = self._role(context, global_on=False, skills=[])
+        assert r._components.skill_manager._enabled is False
+
+    def test_executor_exposes_skill_tool_when_switch_on(self, context):
+        # tools deliberately omits "Skill"; the enabled subsystem still exposes
+        # the bridge tool.
+        r = self._role(context, global_on=True, tools=["Read"], skills=["foo"])
         assert "Skill" in r._components.executor._tools
 
-    def test_executor_omits_skill_tool_when_no_skills_and_global_off(self, context):
-        r = self._role_with_global_off(context, tools=["Read"], skills=[])
+    def test_executor_omits_skill_tool_when_switch_off(self, context):
+        r = self._role(context, global_on=False, tools=["Read"], skills=["foo"])
         assert "Skill" not in r._components.executor._tools
 
 
@@ -773,7 +806,7 @@ class TestRunSkillFork:
         parent = self._parent()
         self._run_fork(parent, instructions="SKILL BODY", allowed_tools=["Read"])
         schema = _ForkProbeRole.captured["schema"]
-        assert schema.instruction == "SKILL BODY"
+        assert "SKILL BODY" in schema.system_prompt
         assert schema.tools == ["Read"]
         # A fork skill cannot spawn its own children.
         assert schema.mcps == [] and schema.agents == [] and schema.skills == []
@@ -795,10 +828,10 @@ class TestCapabilities:
             "get_cwd",
             "set_cwd",
             "deactivate",
-            "ask_human",
+            "ask_user",
             "ask_user_question",
             "request_approval",
-            "reply_to_human",
+            "reply_to_user",
             "end_session",
             "record_file_read",
             "get_file_read_mtime",
@@ -846,13 +879,13 @@ class TestBrowserProxy:
         # No per-role browser_proxy -> read the global config.yaml `proxy`.
         self._clear_proxy_env(monkeypatch)
         r = Role(name="X")
-        r.config = types.SimpleNamespace(proxy="http://gw:8080")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(proxy="http://gw:8080"))
         assert r.get_browser_proxy() == "http://gw:8080"
 
     def test_role_schema_overrides_global(self, monkeypatch):
         self._clear_proxy_env(monkeypatch)
         r = Role(name="X", role_schema=RoleSchema(name="X", browser_proxy="socks5://a:1"))
-        r.config = types.SimpleNamespace(proxy="http://gw:8080")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(proxy="http://gw:8080"))
         assert r.get_browser_proxy() == "socks5://a:1"
 
     def test_falls_back_to_env_proxy(self, monkeypatch):
@@ -860,13 +893,13 @@ class TestBrowserProxy:
         self._clear_proxy_env(monkeypatch)
         monkeypatch.setenv("HTTPS_PROXY", "http://192.168.88.121:7890")
         r = Role(name="X")
-        r.config = types.SimpleNamespace(proxy="")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(proxy=""))
         assert r.get_browser_proxy() == "http://192.168.88.121:7890"
 
     def test_empty_when_nothing_set(self, monkeypatch):
         self._clear_proxy_env(monkeypatch)
         r = Role(name="X")
-        r.config = types.SimpleNamespace(proxy="")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(proxy=""))
         assert r.get_browser_proxy() == ""
 
 
@@ -877,17 +910,17 @@ class TestBrowserLocale:
     def test_falls_back_to_global_config_locale(self):
         # role_schema "auto" -> read the global config.yaml `browser_locale`.
         r = Role(name="X")
-        r.config = types.SimpleNamespace(browser_locale="zh")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(browser_locale="zh"))
         assert r.get_browser_locale() == "zh"
 
     def test_role_schema_overrides_global(self):
         r = Role(name="X", role_schema=RoleSchema(name="X", browser_locale="en"))
-        r.config = types.SimpleNamespace(browser_locale="zh")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(browser_locale="zh"))
         assert r.get_browser_locale() == "en"
 
     def test_auto_when_neither_set(self):
         r = Role(name="X")
-        r.config = types.SimpleNamespace(browser_locale="auto")
+        r.config = types.SimpleNamespace(tools=types.SimpleNamespace(browser_locale="auto"))
         assert r.get_browser_locale() == "auto"
 
     def test_active_signal_default_false(self):
@@ -960,48 +993,48 @@ class TestMessaging:
 
 
 # =============================================================================
-# Async helpers: ask_human / reply_to_human
+# Async helpers: ask_user / reply_to_user
 # =============================================================================
 class TestHumanChannel:
-    def test_ask_human_requires_question(self):
+    def test_ask_user_requires_question(self):
         r = Role(name="X")
-        assert asyncio.run(r.ask_human("")).startswith("Error:")
+        assert asyncio.run(r.ask_user("")).startswith("Error:")
 
-    def test_ask_human_without_env(self):
+    def test_ask_user_without_env(self):
         r = Role(name="X")
-        assert "Not in MoteEnv" in asyncio.run(r.ask_human("hello?"))
+        assert "Not in MoteEnv" in asyncio.run(r.ask_user("hello?"))
 
-    def test_ask_human_returns_env_response(self):
+    def test_ask_user_returns_env_response(self):
         r = Role(name="Alice")
         env = FakeEnv()
         env.human_response = "blue"
         r.set_env(env)
-        assert asyncio.run(r.ask_human("favourite colour?")) == "blue"
+        assert asyncio.run(r.ask_user("favourite colour?")) == "blue"
         assert env.human_questions[0] == ("favourite colour?", "Alice")
 
-    def test_ask_human_stop_deactivates(self):
+    def test_ask_user_stop_deactivates(self):
         r = Role(name="Alice")
         r._set_active(True)
         env = FakeEnv()
         env.human_response = "please stop"
         r.set_env(env)
-        out = asyncio.run(r.ask_human("continue?"))
+        out = asyncio.run(r.ask_user("continue?"))
         assert "encountered a problem" in out
         assert r._is_active() is False
 
-    def test_reply_to_human_requires_content(self):
+    def test_reply_to_user_requires_content(self):
         r = Role(name="X")
-        assert asyncio.run(r.reply_to_human("")).startswith("Error:")
+        assert asyncio.run(r.reply_to_user("")).startswith("Error:")
 
-    def test_reply_to_human_without_env(self):
+    def test_reply_to_user_without_env(self):
         r = Role(name="X")
-        assert "Not in MoteEnv" in asyncio.run(r.reply_to_human("hi"))
+        assert "Not in MoteEnv" in asyncio.run(r.reply_to_user("hi"))
 
-    def test_reply_to_human_delegates(self):
+    def test_reply_to_user_delegates(self):
         r = Role(name="Alice")
         env = FakeEnv()
         r.set_env(env)
-        assert asyncio.run(r.reply_to_human("done")) == "delivered"
+        assert asyncio.run(r.reply_to_user("done")) == "delivered"
         assert env.human_replies[0] == ("done", "Alice")
 
 
@@ -1035,33 +1068,15 @@ class TestWaitInterruptible:
 # end_session
 # =============================================================================
 class TestEndSession:
-    def test_no_summary_returns_empty(self):
+    def test_deactivates_and_returns_empty(self):
+        # end_session no longer generates a summary — it just deactivates so the
+        # run loop terminates. The terminal reply is captured into
+        # last_end_output by the run loop's post-loop finalization, not here.
         r = Role(name="X")
-        r.role_schema.use_summary = False
-        r._components._graph.seed("context_manager", FakeContextManager())
-        # end_session reads this turn's result off state (published by the loop),
-        # not the think engine; the default is an empty ThinkResult.
         r._set_active(True)
         out = asyncio.run(r.end_session())
         assert out == ""
         assert r._is_active() is False
-        assert r.state.last_end_output == ""
-
-    def test_summary_uses_summary_task_llm(self):
-        r = Role(name="X")
-        r.role_schema.use_summary = True
-        r._components._graph.seed("context_manager", FakeContextManager())
-        # The loop publishes the turn's result to state; end_session reads it here.
-        r.state.last_think_result = _FakeThinkResult(content="found bug", is_empty=False)
-        fake_llm = FakeLLM(reply="THE SUMMARY")
-        fake_router = FakeRouter(llm=fake_llm)
-        r._components._graph.seed("router", fake_router)
-        out = asyncio.run(r.end_session())
-        assert out == "THE SUMMARY"
-        assert r.state.last_end_output == "THE SUMMARY"
-        # summary peripherally routed via the dedicated SUMMARY task
-        assert "summary" in fake_router.task_calls
-        assert fake_llm.aask_calls  # the summary llm was actually asked
 
 
 # =============================================================================

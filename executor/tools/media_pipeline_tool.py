@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from typing import Optional
 
+from pydantic import BaseModel
+
 from mote.executor.base_tool import BaseTool
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_registry import register_tool
 from mote.executor.tools.media_pipeline.graph import build_media_pipeline_graph
-from pydantic import BaseModel
 
 
 class PromoParams(BaseModel):

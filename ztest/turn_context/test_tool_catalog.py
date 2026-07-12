@@ -169,6 +169,48 @@ class TestIncremental:
         assert run(src.render()) is None  # removals are not re-announced
 
 
+class TestMcpEnabledGate:
+    def test_switch_off_drops_mcp_block(self):
+        # MCP master switch off (``config.mcp.enabled`` False) → the MCP block is
+        # never listed even if adapters are bound; built-in/pipeline still render.
+        exe = _FakeExecutor(
+            builtin={"Read": {"desc": "read"}},
+            mcp={"github:get_me": {"desc": "me"}},
+            pipeline={"deploy": {"desc": "ship"}},
+        )
+        src = ToolCatalogContextSource(
+            get_executor=lambda: exe,
+            get_channel=lambda: _FakeChannel(),
+            mcp_enabled=lambda: False,
+        )
+        out = run(src.render())
+        assert out is not None
+        assert "# Available Commands" in out
+        assert "# Pipeline Tools" in out
+        assert "# MCP Tools" not in out
+        assert "github:get_me" not in out
+        # The gated-off MCP name is not tracked in the frontier.
+        assert src._sent_names == {"Read", "deploy"}
+
+    def test_switch_on_lists_mcp(self):
+        exe = _FakeExecutor(builtin={"Read": {}}, mcp={"github:get_me": {}})
+        src = ToolCatalogContextSource(
+            get_executor=lambda: exe,
+            get_channel=lambda: _FakeChannel(),
+            mcp_enabled=lambda: True,
+        )
+        out = run(src.render())
+        assert out is not None
+        assert "# MCP Tools" in out
+        assert "github:get_me" in out
+
+    def test_no_gate_falls_back_to_original_logic(self):
+        # mcp_enabled None → list MCP whenever the map is non-empty (unchanged).
+        exe = _FakeExecutor(builtin={"Read": {}}, mcp={"gh:x": {}})
+        out = run(_source(exe).render())
+        assert "# MCP Tools" in out
+
+
 class TestPostCompactReset:
     def test_post_compact_resets_frontier_and_resends_full(self):
         exe = _FakeExecutor(builtin={"Read": {}}, mcp={"gh:x": {}})

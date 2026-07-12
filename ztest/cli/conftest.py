@@ -16,9 +16,11 @@ from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import pytest
+
 from mote.cli.contracts.base import BaseConsumer
 from mote.cli.contracts.view import Capabilities
 from mote.common.events.types import (
+    BUDGET,
     COMPACTION_CHECKPOINT,
     LLM_ERROR,
     LLM_RETRY,
@@ -71,43 +73,43 @@ def ev_post_tool(
     tool_response: Any,
     tool_use_id: str = "tu-1",
     tool_input: Optional[dict] = None,
-    success: Optional[bool] = None,
+    success: bool = True,
     media: Optional[list] = None,
     file_changes: Optional[list] = None,
+    error: Any = None,
 ) -> AgentEvt:
-    """Build a POST_TOOL_USE event.
+    """Build a POST_TOOL_USE event mirroring the core contract's constant stamp.
 
-    ``success=None`` (default) omits the structured field entirely, mirroring a
-    legacy event so the projector's prefix-sniff fallback is exercised. Passing
-    an explicit bool stamps ``event.success`` — the P0 structured fact the
-    projector reads in preference to sniffing.
+    The core always stamps ``success`` / ``media`` / ``file_changes`` on
+    ``PostToolUseEvent``, so this fixture does too: ``success`` defaults to True,
+    ``media`` / ``file_changes`` to empty lists. The projector reads these
+    structured facts directly (no text sniffing).
 
-    ``media=None`` (default) likewise omits the ``media`` field, so the projector's
-    legacy image-sniff fallback is exercised. Passing a list (possibly empty)
-    stamps ``event.media`` — the structured media facts the projector folds into
-    ``MediaBlock``\\s in preference to sniffing.
-
-    ``file_changes=None`` (default) omits the field; passing a list of
-    ``FileChange`` stamps ``event.file_changes`` — the structured file-change
-    facts the projector folds into ``FileDiffBlock``\\s.
+    ``success=False`` marks a failed call; ``media`` / ``file_changes`` accept a
+    list of ``ToolMedia`` / ``FileChange`` the projector folds into ``MediaBlock``
+    / ``FileDiffBlock``\\s. ``error`` carries an optional structured ``ErrorReport``
+    whose code/type/retryable/recovery the projector reads onto the completion.
     """
-    fields = dict(
+    return AgentEvt(
+        POST_TOOL_USE,
         tool_name=tool_name,
         tool_response=tool_response,
         tool_use_id=tool_use_id,
         tool_input=tool_input or {},
+        success=success,
+        media=media or [],
+        file_changes=file_changes or [],
+        error=error,
     )
-    if success is not None:
-        fields["success"] = success
-    if media is not None:
-        fields["media"] = media
-    if file_changes is not None:
-        fields["file_changes"] = file_changes
-    return AgentEvt(POST_TOOL_USE, **fields)
 
 
 def ev_progress(stage: str = "", status: str = "", detail: str = "") -> AgentEvt:
     return AgentEvt(TASK_PROGRESS, stage=stage, status=status, detail=detail)
+
+
+def ev_budget(spend: float = 0.0, limit: float = 0.0, fraction: float = 0.0, stopped: bool = False) -> AgentEvt:
+    """A BUDGET event — soft warning (``stopped=False``) or hard stop (True)."""
+    return AgentEvt(BUDGET, spend=spend, limit=limit, fraction=fraction, stopped=stopped)
 
 
 def ev_compaction(summary: str = "", messages: Optional[list] = None) -> AgentEvt:

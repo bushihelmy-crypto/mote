@@ -17,7 +17,7 @@ from mote.cli.consumers.render.palette import BULLET, PROMPT_SYMBOL
 
 # Brand accent as an RGB triple — the single numeric source for the ANSI
 # (truecolor) prompt/banner below (mirrors ``Palette.BRAND`` = ``#d77757``).
-BRAND_RGB = (215, 119, 87)  # claude-code ``claude`` accent orange
+BRAND_RGB = (215, 119, 87)  # brand accent orange
 _RESET = "\x1b[0m"
 
 
@@ -42,7 +42,7 @@ PROMPT = ansi_fg(PROMPT_SYMBOL, bold=True) + " "
 def render_banner() -> str:
     """Return the startup banner (ANSI-coloured, trailing newline).
 
-    A light claude-code-style masthead: the brand-orange bullet + product name
+    A light masthead: the brand-orange bullet + product name
     over a dim hint line. Kept rich-free so the ``TerminalPort`` can print it
     directly to its plain output stream during ``start()``.
     """

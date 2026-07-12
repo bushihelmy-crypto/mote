@@ -1,8 +1,7 @@
 """Stall detector for background tasks.
 
 Monitors running background tasks for signs of stalling (no output growth)
-and interactive prompts that require user intervention.  Aligned with
-Claude Code's stall watchdog (``LocalShellTask.tsx``).
+and interactive prompts that require user intervention.
 
 This module is standalone — it does **not** modify ``BackgroundTaskPool``,
 ``Role``, or the ``_observe()`` loop.
@@ -23,7 +22,7 @@ if TYPE_CHECKING:
     from mote.executor.tasks.disk_output import TaskOutputStore
     from mote.executor.tasks.pool import BackgroundTaskPool
 
-# Interactive prompt patterns (aligned with Claude Code)
+# Interactive prompt patterns
 _PROMPT_PATTERNS = [
     r"\(y/n\)",
     r"\[y/n\]",

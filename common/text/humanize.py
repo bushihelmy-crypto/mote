@@ -21,15 +21,15 @@ from __future__ import annotations
 
 
 def _one_decimal(value: float) -> str:
-    """``value.toFixed(1)`` with a trailing ``.0`` stripped (CC formatting)."""
+    """One decimal place with a trailing ``.0`` stripped."""
     return f"{value:.1f}".removesuffix(".0")
 
 
 def format_file_size(size_in_bytes: int) -> str:
-    """Human-readable byte size, matching CC ``formatFileSize``.
+    """Human-readable byte size.
 
     Bytes below 1 KB, else KB / MB / GB with one decimal (trailing ``.0``
-    stripped) so the persisted-output message reads like CC's.
+    stripped).
     """
     kb = size_in_bytes / 1024
     if kb < 1:

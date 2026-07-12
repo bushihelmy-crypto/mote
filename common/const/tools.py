@@ -56,7 +56,7 @@ VCS_DIRECTORIES_TO_EXCLUDE = (".git", ".svn", ".hg", ".bzr", ".jj", ".sl")
 DEFAULT_HEAD_LIMIT = 250  # default cap on grep results
 MAX_COLUMNS = 500  # match lines longer than this are truncated
 # Search budget: WSL's 9p filesystem is much slower over Windows-mounted trees,
-# so it gets a longer deadline (mirrors Claude Code's 60s-on-WSL / 20s default).
+# so it gets a longer deadline (60s on WSL, 20s default).
 SEARCH_TIMEOUT = 60.0 if _is_wsl() else 20.0  # search timeout in seconds
 
 # ---------------------------------------------------------------------------

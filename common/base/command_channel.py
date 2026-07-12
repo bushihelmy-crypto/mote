@@ -86,8 +86,8 @@ class CommandChannel(ABC):
         native tool-use: the provider already receives every tool via the API
         ``tools=`` param (``get_native_tool_specs`` — built-in + MCP), so copying
         the same schemas into the system prompt is pure token waste and bloats
-        the cacheable prefix. Mirrors Claude Code, which never puts native tool
-        definitions in the system prompt.
+        the cacheable prefix. Native tool definitions are never put in the
+        system prompt.
 
         Default True (safe: describe tools). Native overrides to False.
         """

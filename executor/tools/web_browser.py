@@ -32,7 +32,7 @@ from mote.common.prompt.tools import WEB_BROWSER_DESCRIPTION
 from mote.executor.base_tool import BaseTool
 from mote.executor.dependency._browser import BrowserSession
 from mote.executor.tool_registry import register_tool
-from mote.executor.tool_result import ToolError, ToolResult
+from mote.executor.tool_result import ToolError, ToolMedia, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).
@@ -62,7 +62,7 @@ _MSG_UNKNOWN_ACTION = (
 
 
 async def _noop_ask(_question: str) -> str:
-    """Default ``ask_human`` stub for a tool bound without a Role (unit tests)."""
+    """Default ``ask_user`` stub for a tool bound without a Role (unit tests)."""
     return ""
 
 
@@ -88,7 +88,7 @@ class WebBrowser(BaseTool):
         "get_browser_proxy",
         "record_browser_state",
         "take_pending_browser_restore",
-        "ask_human",
+        "ask_user",
     )
     # Navigates and executes JavaScript on arbitrary pages.
     risk_level = "high"
@@ -127,11 +127,11 @@ class WebBrowser(BaseTool):
     record_browser_state: Callable[..., None] = staticmethod(lambda *a, **k: None)
     take_pending_browser_restore: Callable[[], Optional[dict]] = staticmethod(lambda: None)
 
-    # Human text channel (Role.ask_human): used by the ``assist`` action to pause
+    # Human text channel (Role.ask_user): used by the ``assist`` action to pause
     # automation and let the user complete a step only a person can do (scan a
     # login QR code, enter an SMS / 2FA code). Defaults to a no-op stub returning
     # "" so a tool bound without a Role (unit tests) still runs.
-    ask_human: Callable[[str], Awaitable[str]] = staticmethod(lambda q: _noop_ask(q))
+    ask_user: Callable[[str], Awaitable[str]] = staticmethod(lambda q: _noop_ask(q))
 
     async def _ensure_session(self) -> BrowserSession:
         """Return this Role's live browser, launching a fresh one if needed.
@@ -319,7 +319,7 @@ class WebBrowser(BaseTool):
                 raise ToolError(_MSG_ASSIST_REQUIRES)
             return await session.assist(
                 prompt,
-                ask_human=self.ask_human,
+                ask_user=self.ask_user,
                 headless=self.get_browser_headless(),
             )
         if action == "read":
@@ -329,7 +329,7 @@ class WebBrowser(BaseTool):
             b64 = base64.b64encode(png).decode("ascii")
             return ToolResult(
                 output="[screenshot of the active tab; shown below]",
-                images=[b64],
+                media=[ToolMedia(kind="image", b64=b64, ref="", mime="image/png")],
                 data={"type": "screenshot", "bytes": len(png)},
             )
         if action == "eval":

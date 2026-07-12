@@ -5,6 +5,7 @@
 import asyncio
 
 import pytest
+
 from mote.common.schema.messages import UserMessage
 from mote.environment.agent_path import AgentPath
 from mote.environment.mailbox import CommKind, DeliveryMode, InterAgentCommunication

@@ -6,6 +6,7 @@ in ``_user_msg_with_media`` — previously each site re-ran the substring match.
 """
 
 import pytest
+
 from mote.common.const.llm import supports_pdf_input, supports_vision
 
 

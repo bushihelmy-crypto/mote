@@ -24,55 +24,27 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from mote.cli.consumers.render.builders import is_collapsible_tool
-from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_copy
-from mote.cli.consumers.textual.style import THEME_NAME, Palette, mote_theme, textual_css_vars
-from mote.cli.consumers.textual.widgets import (
-    ApprovalMarkerRow,
-    AssistantBlock,
-    CompactionSummaryRow,
-    ConversationCompactedRow,
-    ErrorRow,
-    FileDiffRow,
-    MediaRow,
-    NoticeRow,
-    PromptInput,
-    QuestionMarkerRow,
-    SessionListWidget,
-    StatusBar,
-    SystemReminderRow,
-    TaskProgressRow,
-    ToolCallWidget,
-    ToolGroupWidget,
-    UserMessageRow,
-)
-from mote.cli.contracts.view import (
-    APPROVAL_REQUESTED,
-    CONVERSATION_COMPACTED,
-    ERROR_RAISED,
-    FILE_DIFF_BLOCK,
-    MEDIA_BLOCK,
-    MESSAGE_BLOCK_COMPLETED,
-    MESSAGE_BLOCK_DELTA,
-    MESSAGE_BLOCK_STARTED,
-    NOTICE,
-    QUESTION_ASKED,
-    REASONING_DELTA,
-    RETRY_STATUS,
-    SESSION_LIST_SHOWN,
-    SYSTEM_REMINDER,
-    TASK_PROGRESS,
-    TOOL_CALL_COMPLETED,
-    TOOL_CALL_STARTED,
-    TRANSCRIPT_CLEARED,
-    USAGE_UPDATED,
-)
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Static
 from textual.worker import Worker, WorkerState
+
+from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_copy
+from mote.cli.consumers.textual.style import THEME_NAME, Palette, mote_theme, textual_css_vars
+from mote.cli.consumers.textual.surface import TextualSurface
+from mote.cli.consumers.textual.widgets import (
+    AssistantBlock,
+    FoldableRow,
+    PromptInput,
+    StatusBar,
+    ToolCallWidget,
+    ToolGroupWidget,
+)
+from mote.cli.consumers.transcript import TranscriptReducer, apply_ops
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 
 class ViewEventMessage(Message):
@@ -118,7 +90,9 @@ class MoteApp(App):
     BINDINGS = [
         ("ctrl+c", "interrupt", "Interrupt"),
         ("ctrl+d", "quit", "Quit"),
-        ("ctrl+o", "toggle_tool_details", "展开/折叠工具"),
+        # Localised at import under the default locale (Textual captures binding
+        # descriptions statically); the footer label follows the startup language.
+        ("ctrl+o", "toggle_tool_details", t(K.KEY_TOGGLE_TOOL)),
     ]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -126,14 +100,19 @@ class MoteApp(App):
         self._session_driver: Any = None
         self._port: Any = None
         self._worker: Optional[Worker] = None
+        # The single host-agnostic orchestration machine + this host's surface:
+        # ``on_view_event_message`` folds each event through the reducer and lands
+        # every resulting op on the surface (which mutates the widgets below).
+        self._reducer = TranscriptReducer()
+        self._surface = TextualSurface(self)
         # The currently-open streaming assistant block (None between blocks).
         self._open_block: Optional[AssistantBlock] = None
         # Tool widgets awaiting their completion event, keyed by tool_use_id.
         self._tool_widgets: dict[str, ToolCallWidget] = {}
-        # The open collapsible search/read group (claude-code collapseReadSearch):
-        # a run of consecutive Read/Grep/Glob calls coalesces into ONE
-        # ``ToolGroupWidget``. ``None`` between runs — any non-transparent event
-        # flushes it (see ``on_view_event_message`` / ``_flush_tool_group``).
+        # The open collapsible search/read group: a run of consecutive
+        # Read/Grep/Glob calls coalesces into ONE
+        # ``ToolGroupWidget``. ``None`` between runs — the reducer emits a
+        # ``flush_group`` op on any non-transparent event (see ``TextualSurface``).
         self._tool_group: Optional[ToolGroupWidget] = None
         # tool_use_id → the group that owns it, so a completion folds into the
         # right group (distinct from the standalone ``_tool_widgets`` map).
@@ -141,6 +120,11 @@ class MoteApp(App):
         # The global expand/collapse state for tool groups, toggled by ctrl+o.
         # New groups honour it so a mid-session toggle is sticky.
         self._tools_expanded = False
+        # The currently click-selected foldable tool row (None = none selected).
+        # While set, ctrl+o scopes to JUST this row (peek one call) instead of
+        # toggling every row; clicking it again — or a transcript clear — releases
+        # it back to the global toggle.
+        self._selected_tool: Optional[FoldableRow] = None
         # The most recent user turn prompt. A full-screen compaction clear wipes
         # the transcript, so we cache it to re-render as the "最近提问" key-info row
         # (the active question the post-compaction reply continues to answer).
@@ -262,7 +246,7 @@ class MoteApp(App):
         clipboard (OSC 52) and returns, leaving the exit-arm untouched.
 
         With **no** selection it falls through to the terminal-parity armed-flag
-        machine (the user chose to keep claude-code's double-press design): during
+        machine (a double-press design): during
         a turn Ctrl+C interrupts it and disarms; at an idle prompt the first press
         arms + shows a hint and the next *consecutive* press exits the TUI (via
         ``port.request_exit()`` → the pending ``read_turn`` resolves ``None`` → the
@@ -292,7 +276,7 @@ class MoteApp(App):
         from rich.text import Text
 
         try:
-            self._mount(Static(Text("(Press Ctrl+C again to exit)", style=Palette.DIM)))
+            self._mount(Static(Text(t(K.KEY_EXIT_HINT), style=Palette.DIM)))
         except Exception:  # noqa: BLE001 — transcript may not be mounted in a test
             pass
 
@@ -374,36 +358,11 @@ class MoteApp(App):
     # The single ViewEvent → widget choke (all mutation on the UI thread)
     # ------------------------------------------------------------------
     def on_view_event_message(self, message: ViewEventMessage) -> None:
-        ev = message.event
-        kind = getattr(ev, "kind", None)
-        # Any event other than a retry-status resolves an in-flight retry (a
-        # reply, tool, notice, or the final error), so wipe the transient
-        # countdown before rendering it — the retry line never persists.
-        if kind != RETRY_STATUS:
-            try:
-                self.query_one("#status", StatusBar).clear_retry()
-            except NoMatches:  # status bar may not be mounted yet
-                pass
-        # Break the open search/read group on ANY non-transparent event (assistant
-        # text, a non-collapsible tool, media, error, …). The grouped tools' own
-        # start/complete and status-only events (retry / usage / session-list) pass
-        # through so a run keeps coalescing. This is the single UI-thread choke, so
-        # the break lives here once rather than in every handler (claude-code
-        # breaks the run on the first non-collapsible message it scans).
-        if kind not in self._GROUP_TRANSPARENT:
-            self._flush_tool_group()
-        # Leave the ``✻ 思考中`` state on the first non-reasoning transcript event
-        # (a reply delta, a tool, …) — status-only events pass through so a live
-        # reasoning stream keeps its thinking label + elapsed timer.
-        if kind not in self._THINKING_TRANSPARENT:
-            self._set_thinking(False)
-        handler = self._DISPATCH.get(kind or "")
-        if handler is not None:
-            handler(self, ev)
-
-    def _flush_tool_group(self) -> None:
-        """End the open search/read group; the widget stays mounted. Idempotent."""
-        self._tool_group = None
+        # The single UI-thread choke: fold the event through the host-agnostic
+        # reducer (which owns ALL timing — retry clear, group break, thinking
+        # end, block/group routing) and land each resulting op on this host's
+        # surface via the shared dispatch (same code path the terminal driver runs).
+        apply_ops(self._reducer, self._surface, message.event)
 
     # -- transcript mounting helpers --
     def _transcript(self) -> VerticalScroll:
@@ -425,226 +384,39 @@ class MoteApp(App):
             self._mount(self._open_block)
         return self._open_block
 
-    # -- per-kind handlers --
-    def _on_block_started(self, ev: Any) -> None:
-        self._close_block()  # a new region opens; first delta creates the widget
+    def on_foldable_row_clicked(self, message: FoldableRow.Clicked) -> None:
+        """A tool row was clicked → make it the single selected row (toggle off if re-clicked).
 
-    def _on_block_delta(self, ev: Any) -> None:
-        self._ensure_block().append_delta(getattr(ev, "text", ""))
-        self._transcript().scroll_end(animate=False)
-
-    def _on_reasoning_delta(self, ev: Any) -> None:
-        # A reasoning (thinking) chunk: flag the ``✻ 思考中`` status state so the
-        # bar shows the distinct thinking label + live duration, then render the
-        # reasoning text like any other streamed block.
-        self._set_thinking(True)
-        self._on_block_delta(ev)
-
-    def _on_block_completed(self, ev: Any) -> None:
-        if getattr(ev, "role", "assistant") == "user":
-            # The user's own turn — mount a ``❯`` prompt row so it stays in the
-            # transcript (the PromptInput cleared on submit).
-            self._close_block()
-            markdown = getattr(ev, "markdown", "")
-            if markdown.strip():
-                self._last_user_prompt = markdown
-                self._mount(UserMessageRow(markdown))
+        Selecting a row scopes the next ``ctrl+o`` to just it; clicking the
+        already-selected row clears the selection so ``ctrl+o`` reverts to the
+        global expand/collapse. The distinct ``-selected`` background is driven by
+        the row's own ``selected`` reactive.
+        """
+        row = message.row
+        if self._selected_tool is row:
+            row.selected = False
+            self._selected_tool = None
             return
-        if getattr(ev, "streamed", False):
-            # Already rendered incrementally via the delta stream — just finalize
-            # the block if it's still open. If a tool call interleaved in the same
-            # turn it already closed (and rendered) the streamed block, so
-            # ``_open_block`` is None here and we must NOT re-render (that was the
-            # "text + tool call together" duplication).
-            if self._open_block is not None:
-                self._open_block.finalize()
-        elif getattr(ev, "markdown", "").strip():
-            block = AssistantBlock()
-            self._mount(block)
-            block.set_markdown(ev.markdown)
-        self._open_block = None
-        self._show_truncation(ev)
-
-    def _on_tool_started(self, ev: Any) -> None:
-        if is_collapsible_tool(getattr(ev, "tool_name", "")):
-            # A search/read call: open a group if none is running, then fold this
-            # call in. Consecutive collapsible calls all land in the same widget.
-            if self._tool_group is None:
-                self._close_block()
-                self._tool_group = ToolGroupWidget(expanded=self._tools_expanded)
-                self._mount(self._tool_group)
-            self._tool_group.add_started(ev)
-            tid = getattr(ev, "tool_use_id", None)
-            if tid:
-                self._grouped_tool_ids[tid] = self._tool_group
-            return
-        # A non-collapsible tool breaks any open group, then mounts standalone.
-        self._flush_tool_group()
-        self._close_block()
-        widget = ToolCallWidget(ev)
-        self._mount(widget)
-        if widget.tool_use_id:
-            self._tool_widgets[widget.tool_use_id] = widget
-
-    def _on_tool_completed(self, ev: Any) -> None:
-        tid = getattr(ev, "tool_use_id", None)
-        group = self._grouped_tool_ids.pop(tid, None) if tid else None
-        if group is not None:
-            # A grouped tool's result folds into its group (the detail lives
-            # inside, gated by ctrl+o) — no standalone row / truncation note.
-            group.complete(ev)
-            return
-        self._close_block()
-        widget = self._tool_widgets.pop(tid, None) if tid else None
-        if widget is not None:
-            widget.complete(ev)
-        else:  # no matching started widget — render a standalone completed row
-            from mote.cli.consumers.render.builders import tool_completed_text
-
-            self._mount(Static(tool_completed_text(ev)))
-        self._show_truncation(ev)
-
-    def _on_media(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(MediaRow(ev))
-
-    def _on_file_diff(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(FileDiffRow(ev))
-
-    def _on_task_progress(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(TaskProgressRow(ev))
-
-    def _on_notice(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(NoticeRow(ev))
-
-    def _on_system_reminder(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(SystemReminderRow(ev))
-
-    def _on_conversation_compacted(self, ev: Any) -> None:
-        # Unlike the terminal host (which keeps history in native scrollback),
-        # Textual is an alt-buffer app with NO scrollback — the pre-compaction rows
-        # are now stale (the model's context was rebuilt) and can't be scrolled
-        # back to anyway. So we mirror claude-code's fullscreen compaction: clear
-        # the transcript and re-render only the key info that bridges to what came
-        # before — the ✻ boundary, the engine's recap summary, and the last user
-        # prompt the post-compaction reply continues to answer.
-        self._close_block()
-        self._open_block = None
-        self._tool_widgets.clear()
-        self._grouped_tool_ids.clear()
-        self._tool_group = None
-        self._transcript().remove_children()
-        self._mount(ConversationCompactedRow(ev))
-        summary = getattr(ev, "summary", "") or ""
-        if summary.strip():
-            self._mount(CompactionSummaryRow(summary))
-        if self._last_user_prompt.strip():
-            self._mount(UserMessageRow(self._last_user_prompt))
-
-    def _on_error(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(ErrorRow(ev))
-
-    def _on_question(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(QuestionMarkerRow(ev))
-
-    def _on_approval(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(ApprovalMarkerRow(ev))
-
-    def _on_usage(self, ev: Any) -> None:
-        try:
-            self.query_one("#status", StatusBar).update_usage(ev)
-        except NoMatches:
-            pass
-
-    def _on_retry_status(self, ev: Any) -> None:
-        # Transient countdown lives only in the StatusBar — never mount a
-        # transcript row (that would persist the retry, contra CC).
-        try:
-            self.query_one("#status", StatusBar).set_retry(ev)
-        except NoMatches:
-            pass
-
-    def _on_session_list(self, ev: Any) -> None:
-        self._close_block()
-        self._mount(SessionListWidget(ev))
-
-    def _on_transcript_cleared(self, ev: Any) -> None:
-        # Drop the open streaming block and every mounted transcript row so the
-        # human sees a fresh screen (the agent's history was already reset).
-        self._open_block = None
-        self._tool_widgets.clear()
-        self._grouped_tool_ids.clear()
-        self._tool_group = None
-        self._transcript().remove_children()
-
-    def _show_truncation(self, ev: Any) -> None:
-        if not getattr(ev, "content_truncated", False):
-            return
-        from mote.cli.consumers.render.builders import RESULT_INDENT, fold_note, indent
-
-        self._mount(Static(indent(fold_note(ev), RESULT_INDENT)))
+        if self._selected_tool is not None:
+            self._selected_tool.selected = False
+        self._selected_tool = row
+        row.selected = True
 
     def action_toggle_tool_details(self) -> None:
-        """Ctrl+O: expand/collapse every search/read tool group (claude-code parity).
+        """Ctrl+O: expand/collapse folded tool rows.
 
-        Flips the sticky global state and re-renders each mounted group so the
-        human can peek at the folded tool detail, then hide it again. New groups
-        created afterward honour the current state.
+        With a row **selected** (clicked), scope the toggle to just that row so
+        the human peeks at one call's detail. With no selection, flip the sticky
+        global state and re-render every mounted :class:`FoldableRow` — search/read
+        groups AND detail-folding standalone calls (Bash/Terminal/WebBrowser) alike
+        — so new rows created afterward honour the current state.
         """
+        if self._selected_tool is not None:
+            self._selected_tool.set_expanded(not self._selected_tool.expanded)
+            return
         self._tools_expanded = not self._tools_expanded
-        for widget in self.query(ToolGroupWidget):
-            widget.set_expanded(self._tools_expanded)
-
-    # Events that DON'T break an open search/read group: the grouped tools' own
-    # start/complete, and status-only events that mutate no transcript row.
-    _GROUP_TRANSPARENT = frozenset(
-        {
-            TOOL_CALL_STARTED,
-            TOOL_CALL_COMPLETED,
-            RETRY_STATUS,
-            USAGE_UPDATED,
-            SESSION_LIST_SHOWN,
-        }
-    )
-
-    # Events that DON'T end the ``✻ 思考中`` reasoning state: the reasoning stream
-    # itself, and status-only events that mutate no transcript row.
-    _THINKING_TRANSPARENT = frozenset(
-        {
-            REASONING_DELTA,
-            USAGE_UPDATED,
-            RETRY_STATUS,
-        }
-    )
-
-    _DISPATCH = {
-        MESSAGE_BLOCK_STARTED: _on_block_started,
-        MESSAGE_BLOCK_DELTA: _on_block_delta,
-        REASONING_DELTA: _on_reasoning_delta,
-        MESSAGE_BLOCK_COMPLETED: _on_block_completed,
-        TOOL_CALL_STARTED: _on_tool_started,
-        TOOL_CALL_COMPLETED: _on_tool_completed,
-        MEDIA_BLOCK: _on_media,
-        FILE_DIFF_BLOCK: _on_file_diff,
-        TASK_PROGRESS: _on_task_progress,
-        NOTICE: _on_notice,
-        SYSTEM_REMINDER: _on_system_reminder,
-        CONVERSATION_COMPACTED: _on_conversation_compacted,
-        ERROR_RAISED: _on_error,
-        QUESTION_ASKED: _on_question,
-        APPROVAL_REQUESTED: _on_approval,
-        USAGE_UPDATED: _on_usage,
-        SESSION_LIST_SHOWN: _on_session_list,
-        RETRY_STATUS: _on_retry_status,
-        TRANSCRIPT_CLEARED: _on_transcript_cleared,
-    }
+        for row in self.query(FoldableRow):
+            row.set_expanded(self._tools_expanded)
 
 
 def run_textual(

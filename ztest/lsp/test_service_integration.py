@@ -13,6 +13,7 @@ import os
 import sys
 
 import pytest
+
 from mote.common.events import DiagnosticsEvent, EventBus, FileMutatedEvent
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.schema import LspConfig, LspServerConfig

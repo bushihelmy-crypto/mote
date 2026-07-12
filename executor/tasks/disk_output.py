@@ -1,6 +1,6 @@
 """Disk-backed output writer for background tasks with incremental reads.
 
-Aligned with Claude Code's ``diskOutput.ts``. Each task gets a file on disk;
+Each task gets a file on disk;
 a per-task async drain loop flushes a write queue so callers never block on
 IO.  Consumers read incrementally via ``get_delta(from_offset)`` or grab the
 tail with ``get_tail(max_bytes)``.
@@ -202,7 +202,7 @@ class DiskTaskOutput:
         if capped:
             self._capped = True
             # Notify the owner (e.g. BackgroundTaskPool) so it can kill the
-            # source task — aligned with Claude Code's output watchdog.
+            # source task via the output watchdog.
             if self._on_cap is not None:
                 try:
                     self._on_cap(self.task_id)

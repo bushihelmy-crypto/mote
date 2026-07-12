@@ -109,7 +109,7 @@ class LspServerInstance:
         """Open *path* on first sight (didOpen), else re-sync it (didChange).
 
         Returns the file's URI, or ``None`` when the doc can't be read / the
-        server is dead. Extracted from :meth:`did_save` so a *query* (Layer B
+        server is dead. Shared with :meth:`did_save` so a *query* (Layer B
         targets an untouched file the agent never edited) can open it too.
         """
         if not self.alive or self._endpoint is None:

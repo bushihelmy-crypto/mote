@@ -9,6 +9,7 @@ disqualifiers, ``<shell> -c`` unwrapping, and the git/find/sed flag guards.
 from __future__ import annotations
 
 import pytest
+
 from mote.executor.permission.classifier import classify_command
 
 

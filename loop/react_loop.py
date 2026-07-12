@@ -1,15 +1,15 @@
 """
 ReActLoop — the default think→act react cycle.
 
-Ported verbatim from Role._react / _think / _act / _finish_react. The loop owns
-its own iteration state (consecutive count) and reads/writes the shared `active`
-signal via injected callables, because `active` doubles as a tool→loop kill
-switch: the End tool (and ask_human's "stop") call Role.deactivate(), which must
-still be able to break this loop. Everything else is a plain component.
+The loop owns its own iteration state (consecutive count) and reads/writes the
+shared `active` signal via injected callables, because `active` doubles as a
+tool→loop kill switch: the End tool (and ask_user's "stop") call
+Role.deactivate(), which must still be able to break this loop. Everything else
+is a plain component.
 
 The loop also owns the observe step: pull from the msg_buffer, filter by
-watch/addresses, commit to the memory store (ContextManager). This was
-previously in Perception; now it's inlined here so the loop is self-contained.
+watch/addresses, commit to the memory store (ContextManager). It is inlined here
+so the loop is self-contained.
 """
 
 from __future__ import annotations
@@ -335,6 +335,14 @@ class ReActLoop(BaseLoop):
             if await self._observe(max_priority=MessagePriority.NEXT):
                 self._consecutive = 0
                 self._set_active(True)
+            # Budget gate — a run-limit sibling of max_react_loop. Checked before
+            # think so a hard cap halts the loop *before* any LLM access; the
+            # provider owns the spend read + threshold events (soft notice at
+            # 80%, hard stop at 100%). An unbudgeted agent returns PROCEED.
+            verdict = await self._context_provider.enforce_budget()
+            if verdict.stop:
+                rsp = AIMessage(content=verdict.message, sent_from=self.ctx.name, cause_by=CauseBy.RUN_COMMAND)
+                break
             # think
             has_todo = await self._step_think()
             if not has_todo:

@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """RoleSessionManager — session lifecycle behaviour (resume / fork) for a Role.
 
-Extracted from Role so the Role class stays focused on the run loop and its thin
-capability surface. Mirrors :class:`RoleCapabilities` / :class:`RoleStateController`:
+Owns session lifecycle behaviour so the Role class stays focused on the run loop
+and its thin capability surface. Mirrors :class:`RoleCapabilities` / :class:`RoleStateController`:
 this holder owns the *behaviour* that talks to the durable ``session/`` package —
 replaying a rollout back into live history, re-seeding the resource registry and
 the pending terminal/kernel/browser restores, and branching an independent

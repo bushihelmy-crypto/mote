@@ -39,7 +39,6 @@ class TestDefaults:
     def test_private_flags_default(self):
         st = RoleState()
         assert st._active is False
-        assert st._memory_ready is False
         assert st._file_read_state == {}
 
 

@@ -43,8 +43,8 @@ class ProviderNotFoundError(RouterError, NonRetryableError):
 class RouterControlValidationError(RouterError, NonRetryableError, ValueError):
     """A router-control hold target id is not among the registered models.
 
-    Inherits ``ValueError`` to preserve backward compatibility with existing
-    ``except ValueError`` handlers around control-target resolution.
+    Also inherits ``ValueError`` so ``except ValueError`` handlers around
+    control-target resolution treat it uniformly.
     """
 
     default_code: ClassVar[ErrorCode] = ErrorCode.ROUTER_CONTROL_INVALID

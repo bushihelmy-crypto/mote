@@ -1,14 +1,14 @@
 """Cost / token / usage accounting for the router LLM layer.
 
-A synthesis of Claude Code's per-model USD cost tracking and Codex's token-only
-context-window accounting, replacing the legacy ``common.utils.cost_manager``.
+Per-model USD cost tracking plus token-only context-window accounting for the
+router LLM layer.
 
 Public surface:
     - :class:`TokenUsage` / ``EMPTY_USAGE`` — normalized usage record + adapters.
     - :class:`ModelPricing`, :class:`PricingMode`, :func:`cost_of`,
       :func:`lookup_pricing` — cache-aware USD pricing.
     - :class:`CostTracker`, :class:`ModelUsage`, :class:`Costs` — session
-      aggregation (drop-in for the old ``CostManager``).
+      aggregation.
     - report helpers — :func:`format_total_cost`, :func:`format_model_usage`,
       :func:`final_output`, :func:`status_line_dict`, :func:`format_cost`.
 """

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
 from mote.router.ml.config import MODEL_BUNDLE_NAME, default_model_dir, load_runtime_config
 from mote.router.ml.engine import SquillaMLEngine
 from mote.router.ml.features import (

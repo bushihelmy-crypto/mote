@@ -9,6 +9,7 @@ so nothing leaks across tests.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.disk import writer
 
 

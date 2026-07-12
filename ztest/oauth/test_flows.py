@@ -9,8 +9,9 @@ import threading
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
 
-import mote.router.oauth.client as client_mod
 import pytest
+
+import mote.router.oauth.client as client_mod
 from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
 from mote.router.oauth.errors import OAuthConfigError, OAuthRefreshError
 from mote.router.oauth.flows import LoginCallbacks, run_auth_code_flow, run_device_code_flow

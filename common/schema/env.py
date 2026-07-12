@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# @Desc   : base environment
+# Base environment.
 
 import typing
 from abc import abstractmethod

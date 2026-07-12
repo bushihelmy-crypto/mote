@@ -1,9 +1,9 @@
-"""Settings config source — the Claude-style ``settings.local.json`` permission file.
+"""Settings config source — the standard ``settings.local.json`` permission file.
 
 Permission rules can be declared per-project in ``.mote/settings.local.json``,
 discovered by walking from the working directory up to the git root (plus a
 user-level ``~/.mote/settings.local.json``) — the same layering the skills / MCP
-subsystems use. The file shape mirrors Claude Code's ``settings.local.json``::
+subsystems use. The file shape follows the ``settings.local.json`` convention::
 
     {
       "permissions": {
@@ -36,7 +36,7 @@ from typing import List, Optional
 from mote.common.const.paths import load_mote_json_section, mote_layered_files
 from mote.common.schema import PermissionConfig
 
-#: The canonical settings file name (Claude-ecosystem convention). Lives under
+#: The canonical settings file name (a de-facto ecosystem convention). Lives under
 #: each project's ``.mote/`` dir and under ``~/.mote/``. The ``.local`` marker
 #: signals a git-ignored, machine-local overlay (see ``.gitignore``).
 SETTINGS_FILE_NAME = "settings.local.json"

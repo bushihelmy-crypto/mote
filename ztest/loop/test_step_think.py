@@ -3,7 +3,7 @@
 """Tests for ``ReActLoop._step_think`` — the single think primitive.
 
 Returns ``False`` immediately when the shared ``active`` signal is off (the
-``End`` tool / ask_human "stop" path); otherwise it asks the context provider to
+``End`` tool / ask_user "stop" path); otherwise it asks the context provider to
 ``prepare()`` the request, lazily ``resolve_llm()`` and hands everything to
 ``think_engine.start()``, returning ``True``.
 """

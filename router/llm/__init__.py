@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""LLM abstraction layer (formerly mote.provider)."""
+"""LLM abstraction layer."""
 
 from mote.router.llm.anthropic_api import AnthropicLLM
 from mote.router.llm.base_llm import BaseLLM

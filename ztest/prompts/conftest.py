@@ -4,7 +4,7 @@
 
 The prompts package is almost entirely pure functions over string templates,
 so the only collaborators that need faking are the four ``ThinkSubsystems``
-members PromptBuilder queries: ``config`` (only ``config.role`` is read),
+members PromptBuilder queries: ``config`` (only ``config.context`` is read),
 ``llm`` (only ``llm.model``), ``executor`` (two ``get_*_tool_schemas`` calls)
 and ``skill_manager`` (its optional ``injector``). Everything else is data the
 Role would push through ``ThinkInputs``.
@@ -67,23 +67,28 @@ class FakeSkillManager:
         self.injector = injector
 
 
-def make_role(
+def make_config(
     *,
-    ai_capability_models=("model-a", "model-b"),
-    enable_compressable_memory=False,
+    compaction_enabled=False,
     protected_recent_messages=8,
-    max_skill_tokens=2000,
+    bggraph_enabled=False,
+    skills_enabled=True,
+    response_language="chinese",
 ):
-    return SimpleNamespace(
-        ai_capability_models=list(ai_capability_models),
-        enable_compressable_memory=enable_compressable_memory,
+    """Minimal config stand-in.
+
+    PromptBuilder reads ``context.compaction`` / ``context.bggraph`` /
+    ``context.skills`` and ``models.response_language``.
+    """
+    compaction = SimpleNamespace(
+        enabled=compaction_enabled,
         protected_recent_messages=protected_recent_messages,
-        max_skill_tokens=max_skill_tokens,
     )
-
-
-def make_config(**role_kwargs):
-    return SimpleNamespace(role=make_role(**role_kwargs))
+    bggraph = SimpleNamespace(enabled=bggraph_enabled)
+    skills = SimpleNamespace(enabled=skills_enabled)
+    context = SimpleNamespace(compaction=compaction, bggraph=bggraph, skills=skills)
+    models = SimpleNamespace(response_language=response_language)
+    return SimpleNamespace(context=context, models=models)
 
 
 @pytest.fixture

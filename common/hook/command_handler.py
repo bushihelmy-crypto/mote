@@ -1,4 +1,4 @@
-"""External command hook handler — the CC/codex JSON stdin/stdout contract.
+"""External command hook handler — the JSON stdin/stdout contract.
 
 Spawns the configured shell command, writes the hook input as a single JSON
 line on stdin (newline-terminated so a ``read -r`` in a shell script works),
@@ -22,7 +22,7 @@ from mote.common.hook.types import EMPTY, HookInput, HookOutcome
 from mote.common.logs import logger
 
 # Fallback timeout (seconds) when neither the handler nor the caller specifies
-# one — mirrors Claude Code's default 60s hook budget.
+# one — a 60s default hook budget.
 DEFAULT_TIMEOUT = 60.0
 
 

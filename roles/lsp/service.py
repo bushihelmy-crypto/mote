@@ -11,7 +11,7 @@ on the **input** side and broadcasts diagnostics on the **output** side:
 - ``shutdown()`` : tear down all servers (called on session cleanup by the Role).
 
 It is an :class:`~mote.common.interface.ObservationSubscriber` on both edges: the
-executor no longer pokes it directly (it emits a ``FileMutatedEvent`` this
+executor does not poke it directly (it emits a ``FileMutatedEvent`` this
 service subscribes to), and the diagnostics it produces ride the bus as a
 ``DiagnosticsEvent`` (the :class:`DiagnosticsBuffer` accumulates them for
 next-turn context; other subscribers may react too). The emit is gated on a

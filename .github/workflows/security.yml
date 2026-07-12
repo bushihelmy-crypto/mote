@@ -1,0 +1,54 @@
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Weekly full audit (Mondays 06:00 UTC) so newly disclosed CVEs surface
+    # even when the code hasn't changed.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv-scanner:
+    # Static scan of manifests + source for known-vulnerable dependencies.
+    # No dependency install required, so it is fast and runs on every PR.
+    name: OSV scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        with:
+          scan-args: |-
+            --recursive
+            ./
+
+  pip-audit:
+    # Resolves the project's dependency tree and audits it against the PyPI
+    # advisory database. Heavier (installs the package), so limited to pushes
+    # to the default branch and the weekly schedule.
+    name: pip-audit
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Audit installed dependencies
+        run: |
+          pip install pip-audit
+          pip-audit --strict --desc

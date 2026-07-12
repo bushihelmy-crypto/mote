@@ -17,17 +17,15 @@ import re
 import sys
 from dataclasses import dataclass, field
 from string import Template
-from typing import Any, Optional
+from typing import Any
 
 from mote.common.base.command_channel import PROMPT_VAR_KEYS
 from mote.common.const import DEFAULT_WORKSPACE_ROOT
 from mote.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
 from mote.common.prompt.refs import assert_no_symbols
 from mote.common.prompt.role import (
-    CONSTRAINT_TEMPLATE,
     FRC_SECTION,
     LANGUAGE_SECTION,
-    PREFIX_TEMPLATE,
     SCRATCHPAD_SECTION,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     TASK_FINAL_OUTPUT_SECTION,
@@ -42,24 +40,15 @@ class ThinkInputs:
     Symmetric to Role.tool_capabilities(): a single explicit bundle the Role
     hands to PromptBuilder, so collect_context depends on this stable shape
     rather than reaching into the Role. Every field is a flat, pre-derived value
-    the Role pushes (identity strings, env clause, team listing, cwd, etc.); no
+    the Role pushes (identity strings, env clause, cwd, etc.); no
     nested Role objects leak through. No live collaborators here — those live in
     ThinkSubsystems.
     """
 
-    # Identity (flattened from RoleSchema so the Role pushes explicit values
-    # instead of handing over a nested schema object).
-    name: str = ""
-    profile: str = ""
-    goal: str = ""
-    constraints: str = ""
-    desc: str = ""
-    example: str = ""
-    instruction: str = ""
+    # No identity fields reach the rendered system prompt. name/profile drive
+    # message routing/signing on the Role, not the prompt, so they are not
+    # carried here.
 
-    env_desc: str = ""
-    other_role_names: str = ""
-    team_info: str = ""
     # Live cwd (follows `cd`) — feeds the per-turn ephemeral SR, never the
     # cacheable system prompt.
     working_dir: str = ""
@@ -68,7 +57,6 @@ class ThinkInputs:
     original_working_dir: str = ""
     project_root: Any = None
     memory_dir: Any = None
-    language: Optional[str] = None
     scratchpad_dir: Any = None
 
 
@@ -107,16 +95,10 @@ class ThinkContext:
     Populated by Role._collect_think_context().
     """
 
-    # Identity & domain (rendered; role_prefix/role_info are spliced from
-    # ThinkInputs by build_role_prefix / build_role_info).
-    role_info: str = ""
-    role_prefix: str = ""
-    team_info: str = ""
-
     # Environment
     env_section: str = ""
 
-    # Skills — the static loading guide only (the volatile index migrated to the
+    # Skills — the static loading guide only (the volatile index lives in the
     # per-turn SkillListingContextSource).
     skills_info: str = ""
 
@@ -138,7 +120,7 @@ class ThinkContext:
     # PROMPT_VAR_KEYS entry when no channel is wired.
     prompt_vars: dict = field(default_factory=lambda: {k: "" for k in PROMPT_VAR_KEYS})
 
-    # MEMORY.md content injected into the user prompt (CC injects the index via
+    # MEMORY.md content injected into the user prompt (the index is injected via
     # user context so a changing index never busts the system-prompt cache).
     memory_context: str = ""
 
@@ -187,42 +169,6 @@ class PromptBuilder:
         return system_prompt, user_prompt
 
     @staticmethod
-    def pick_summary_prompt(*, summary_prompt: str, recommend_prompt: str, need_recommend: bool) -> str:
-        """Return the session-summary prompt text for this run.
-
-        Picks the recommend-tagged prompt when ``need_recommend`` is set,
-        otherwise the plain summary prompt. Returns the prompt string only —
-        wrapping it into a message and appending to history is the Role's job
-        (the message-envelope concern lives in the Role, not the builder).
-        """
-        return recommend_prompt if need_recommend else summary_prompt
-
-    @staticmethod
-    def build_role_prefix(inputs: ThinkInputs) -> str:
-        """Render the role prefix (identity + optional env clause) from inputs.
-
-        Mirrors the old Role._get_role_prefix. When ``desc`` is set it wins
-        verbatim; otherwise the prefix is rendered from PREFIX_TEMPLATE (plus
-        CONSTRAINT_TEMPLATE when constraints exist). When the role lives in a
-        described env, an env clause is appended.
-        """
-        if inputs.desc:
-            return inputs.desc
-        prefix = Template(PREFIX_TEMPLATE).safe_substitute(profile=inputs.profile, name=inputs.name, goal=inputs.goal)
-        if inputs.constraints:
-            prefix += Template(CONSTRAINT_TEMPLATE).safe_substitute(constraints=inputs.constraints)
-        if inputs.env_desc:
-            prefix += f"You are in {inputs.env_desc} with roles({inputs.other_role_names})."
-        return prefix
-
-    @staticmethod
-    def build_role_info(role_prefix: str, team_info: str) -> str:
-        """Combine the role prefix with the team-member listing (if any)."""
-        if not team_info:
-            return role_prefix
-        return f"{role_prefix}\nYour team member:\n{team_info}"
-
-    @staticmethod
     def _section(heading: str, body: str) -> str:
         """Render '{heading}\\n{body}', or '' when body is empty/blank.
 
@@ -237,8 +183,6 @@ class PromptBuilder:
     def _system_substitutions(ctx: ThinkContext) -> dict:
         """Map ThinkContext fields to the system template's $placeholders."""
         return dict(
-            role_info=PromptBuilder._section("# Basic Info", ctx.role_info),
-            team_info=PromptBuilder._section("# Team", ctx.team_info),
             env_section=ctx.env_section,
             skills_info=ctx.skills_info,
             memory=ctx.memory,
@@ -288,8 +232,8 @@ class PromptBuilder:
 
     @staticmethod
     def _build_user_prompt(cmd_tpl: str, ctx: ThinkContext) -> str:
-        # The base template is empty by default (the old "# Current State" block
-        # moved to per-turn reminder sources), but a custom cmd_prompt is still
+        # The base template is empty by default (current-state facts flow through
+        # per-turn reminder sources instead), but a custom cmd_prompt is still
         # substituted so role-specific templates keep working.
         rendered = Template(cmd_tpl).safe_substitute(PromptBuilder._user_substitutions(ctx))
         # Assemble the trailing user prompt from its parts, blank-line separated,
@@ -307,7 +251,7 @@ class PromptBuilder:
         """Join non-empty sections, dropping None/blank entries.
 
         Helper for assembling a system prompt from independent section strings
-        (Claude Code style) instead of one monolithic template. A section that
+        instead of one monolithic template. A section that
         is None or empty/whitespace is skipped entirely.
         """
         return "\n".join(s for s in sections if s and s.strip())
@@ -322,20 +266,13 @@ class PromptBuilder:
 
         Args:
             inputs: The Role's published field set (RoleSchema + state-derived
-                values such as env clause, team listing, cwd, memory_dir, etc.).
+                values such as env clause, cwd, memory_dir, etc.).
             subsystems: The live collaborators PromptBuilder queries (config,
                 llm, executor, skill_manager).
         """
         config = subsystems.config
 
         ctx = ThinkContext()
-
-        # Splice the raw inputs into the rendered identity.
-        # role_info loads only the role's desc; empty desc => "" => _section
-        # renders nothing (no "# Basic Info" heading).
-        ctx.role_info = inputs.desc
-        # Team listing (rendered below role_info); empty => no "# Team" section.
-        ctx.team_info = inputs.team_info
 
         ctx.working_dir = inputs.working_dir
 
@@ -346,7 +283,7 @@ class PromptBuilder:
         # never busts the cacheable prefix. The static orientation on how to call
         # tools rides ${tool_usage_guide} (from the channel's prompt_vars) instead.
         # The static environment block (cwd / platform / model). Git working-tree
-        # state used to be appended here; it now flows through the per-turn
+        # state is deliberately not appended here; it flows through the per-turn
         # ephemeral-context bus (the turn_context layer) and lands in the user
         # prompt's <system-reminder>, so volatile git state never touches this
         # cacheable section.
@@ -359,14 +296,14 @@ class PromptBuilder:
             subsystems.model_name,
             working_dir=inputs.original_working_dir or ctx.working_dir,
         )
-        ctx.skills_info = PromptBuilder._make_skills_guide(subsystems.skill_manager)
+        ctx.skills_info = PromptBuilder._make_skills_guide(subsystems.skill_manager, config.context.skills.enabled)
 
         # Dynamic sections (below the cache boundary).
         ctx.memory, ctx.memory_context = PromptBuilder._make_memory(inputs.memory_dir)
-        ctx.language = PromptBuilder._make_language(inputs.language)
+        ctx.language = PromptBuilder._make_language(config.models.response_language)
         ctx.scratchpad = PromptBuilder._make_scratchpad(inputs.scratchpad_dir)
         ctx.frc, ctx.task_final_output = PromptBuilder._make_compaction_sections(config)
-        ctx.pipeline_section = PromptBuilder._make_pipeline_section(subsystems.executor)
+        ctx.pipeline_section = PromptBuilder._make_pipeline_section(config)
 
         # Per-turn ephemeral context (git / token pressure / background tasks /
         # LSP diagnostics) gathered by the turn_context bus and injected into the
@@ -374,7 +311,7 @@ class PromptBuilder:
         ctx.reminders = await PromptBuilder._make_reminders(subsystems.turn_context_bus, ctx.working_dir)
 
         # Protocol-specific prompt sections (command_guide) come from the active
-        # channel as ONE dict — the single source, replacing the old
+        # channel as ONE dict — the single source, rather than
         # fields-on-ThinkInputs + collect_context override blocks here. The
         # channel object is already in subsystems (we also read its lower below),
         # so there is no reason to pre-extract these into the pure-data
@@ -462,30 +399,22 @@ class PromptBuilder:
         keep_recent comes from protected_recent_messages. Returns ("", "")
         otherwise.
         """
-        rz = config.role
-        if not getattr(rz, "enable_compressable_memory", False):
+        compaction = config.context.compaction
+        if not getattr(compaction, "enabled", False):
             return "", ""
-        keep_recent = getattr(rz, "protected_recent_messages", 8)
+        keep_recent = getattr(compaction, "protected_recent_messages", 8)
         frc = Template(FRC_SECTION).safe_substitute(keep_recent=str(keep_recent))
         return frc, TASK_FINAL_OUTPUT_SECTION
 
     @staticmethod
-    def _make_pipeline_section(executor) -> str:
-        """Include the pipeline brief when pipeline tools or their controls exist.
+    def _make_pipeline_section(config) -> str:
+        """Include the pipeline brief when the bggraph engine is enabled in config.
 
-        Emitted when the role has any pipeline tool (compiled-graph backed,
-        listed under ``# Pipeline Tools``) or the ``resume_tasks`` / ``get_node_state``
-        control commands. ``get_tool_schemas`` now excludes pipeline tools, so
-        pipeline presence is read from ``get_pipeline_tool_schemas``.
+        Driven purely by ``config.context.bggraph.enabled`` — an explicit
+        capability switch — rather than by whether a pipeline tool happens to be
+        registered. Returns "" when disabled.
         """
-        schemas = executor.get_tool_schemas()
-        if isinstance(schemas, dict):
-            names = set(schemas.keys())
-        else:
-            names = {s.get("name", "") for s in schemas} if schemas else set()
-        get_pipeline = getattr(executor, "get_pipeline_tool_schemas", None)
-        has_pipeline = bool(get_pipeline()) if callable(get_pipeline) else False
-        if not has_pipeline and not ({"resume_tasks", "get_node_state"} & names):
+        if not getattr(config.context.bggraph, "enabled", False):
             return ""
         return BACKGROUND_PIPELINE_SECTION
 
@@ -505,12 +434,17 @@ class PromptBuilder:
         return "\n".join(lines)
 
     @staticmethod
-    def _make_skills_guide(skill_manager) -> str:
+    def _make_skills_guide(skill_manager, enabled: bool) -> str:
         """The static Skill Loading Guide for the system prompt.
 
-        Only the guide (constant per session) lives here; the volatile Skills
-        index is delivered per-turn by SkillListingContextSource.
+        Rendered only when the Skills subsystem is enabled in config
+        (``config.context.skills.enabled``) — the guide's presence is a
+        config-driven decision, not a function of whether any skill happens to
+        exist. Only the guide (constant per session) lives here; the volatile
+        Skills index is delivered per-turn by SkillListingContextSource.
         """
+        if not enabled:
+            return ""
         if skill_manager.injector:
             return skill_manager.injector.build_guide()
         return ""

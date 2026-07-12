@@ -68,7 +68,7 @@ class ThinkEngine(BaseThinkEngine):
         # Duplicate detection differs by protocol. XML compares raw response text;
         # native compares a structured-call signature (the text may be empty or
         # repeat while the calls differ), and on a hard repeat overrides the calls
-        # with a synthesized ask_human call.
+        # with a synthesized ask_user call.
         if tool_calls is None:
             rsp_hist = [mem.content for mem in self.memory.get()]
             content = await check_duplicates(

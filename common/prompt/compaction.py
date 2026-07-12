@@ -1,4 +1,4 @@
-"""Compaction prompt text — ported from Claude Code ``services/compact/prompt.ts``.
+"""Compaction prompt text.
 
 Pure text constants used by ``mote.context.prompt`` to build the autocompact
 summarization instructions. The assembly functions (get_compact_prompt,
@@ -6,7 +6,7 @@ get_partial_compact_prompt, format_compact_summary, ...) live in
 ``mote.context.prompt`` and import these constants.
 """
 
-# Aggressive no-tools preamble (CC NO_TOOLS_PREAMBLE). The summary turn must be
+# Aggressive no-tools preamble. The summary turn must be
 # plain text; a tool call would waste the single turn.
 NO_TOOLS_PREAMBLE = """CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
 

@@ -1,17 +1,16 @@
 """SpawnGate — the agent-spawn depth limit as a control-plane subscriber.
 
-The spawn-depth veto used to be a *direct call* wedged into
-``AgentControl.spawn_agent``::
+This subscriber puts the spawn-depth veto *on* the control plane rather than as a
+direct call wedged into ``AgentControl.spawn_agent``::
 
     if max_depth is not None and exceeds_agent_spawn_depth_limit(child_depth, max_depth):
         raise AgentLimitReached(...)
 
-That made it a hidden vetoer the runtime bus knew nothing about — exactly the
-shape the permission engine had before it moved onto the plane. This subscriber
-puts the gate *on* the control plane so it is a first-class, ordered, foldable
-influence: a new spawn policy (a cost ceiling, a per-role quota, a business-hours
-guard) is added by registering another control subscriber, not by threading more
-``if`` branches through the birth channel.
+A direct call would be a hidden vetoer the runtime bus knows nothing about. On
+the plane the gate is a first-class, ordered, foldable influence: a new spawn
+policy (a cost ceiling, a per-role quota, a business-hours guard) is added by
+registering another control subscriber, not by threading more ``if`` branches
+through the birth channel.
 
 * ``fail_mode = FAIL_CLOSED`` makes a crash/timeout in the gate **deny** the
   spawn rather than let an unbounded child through — a limit that "could not

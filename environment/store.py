@@ -15,8 +15,8 @@ the ``msg_buffer`` (``exclude=True`` on RoleState) and the per-runtime
 (``session/rollout.jsonl``) is the single truth source for history; it is written
 incrementally every turn. So materialize *strips* ``state.context.messages`` from
 ``role_dump`` (when a rollout exists), and rehydrate refills it via
-:func:`mote.session.replay`. This eliminates the old double-write of the full
-message history into the residency record.
+:func:`mote.session.replay`. This keeps the full message history from being
+written twice (rollout + residency record).
 
 ``MessageQueue.dump()`` is **async**, so :meth:`materialize` is async.
 ``ResidencyRecord`` is a plain JSON dict on disk (NOT a ``BaseSerialization``
@@ -136,7 +136,7 @@ class ResidencyStore:
         )
         self._base.mkdir(parents=True, exist_ok=True)
         # Atomic + ordered: a crash mid-write never leaves a half-written record
-        # (the old non-atomic write_text could corrupt it), and awaiting submit
+        # (a non-atomic write_text could corrupt it), and awaiting submit
         # guarantees the record is on disk before this returns.
         path = self._path(runtime.session_id)
         data = record.to_json().encode("utf-8")

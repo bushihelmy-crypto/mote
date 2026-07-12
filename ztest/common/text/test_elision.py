@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+
 from mote.common.text import Elision, ElisionStrategy, ElisionUnit, cap_head, cap_head_tail
 
 

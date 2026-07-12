@@ -1,32 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2023/5/5 23:08
-@Author  : alexanderwu
-@File    : openai.py
-@Modified By: mashenquan, 2023/11/21. Fix bug: ReadTimeout.
-@Modified By: mashenquan, 2023/12/1. Fix bug: Unclosed connection caused by openai 0.x.
-"""
 from __future__ import annotations
 
 import json
-import re
 import time
 from typing import Any, Optional, Union
 
 from json_repair import repair_json
-from mote.common.config.config.llm_config import LLMConfig, LLMType
-from mote.common.const import USE_CONFIG_TIMEOUT
-from mote.common.events import log_llm_stream
-from mote.common.exception import LLMEmptyResponseError, LLMResponseParseError, classify_llm_error, is_retryable
-from mote.common.logs import logger
-from mote.common.utils.common import CodeParser, decode_image, log_and_reraise
-from mote.common.utils.exceptions import handle_exception
-from mote.common.utils.token_counter import count_message_tokens, count_string_tokens, get_max_completion_tokens
-from mote.router.cost import CostTracker
-from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
-from mote.router.llm.constant import GENERAL_FUNCTION_SCHEMA
-from mote.router.llm.credentials import CredentialRotationMixin
-from mote.router.llm.llm_provider_registry import register_provider
 from openai import AsyncOpenAI, AsyncStream
 from openai._base_client import AsyncHttpxClientWrapper
 from openai.types import CompletionUsage, Image
@@ -35,6 +14,19 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
 from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+
+from mote.common.config.config.llm_config import LLMConfig, LLMType
+from mote.common.const import USE_CONFIG_TIMEOUT
+from mote.common.events import log_llm_stream
+from mote.common.exception import LLMEmptyResponseError, classify_llm_error, is_retryable
+from mote.common.logs import logger
+from mote.common.utils.common import decode_image, log_and_reraise
+from mote.common.utils.exceptions import handle_exception
+from mote.common.utils.token_counter import count_message_tokens, count_string_tokens, get_max_completion_tokens
+from mote.router.cost import CostTracker
+from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
+from mote.router.llm.credentials import CredentialRotationMixin
+from mote.router.llm.llm_provider_registry import register_provider
 
 # Models that reject standard chat params. Keyed by model name → the set of
 # request kwargs to drop. Data-driven so adding a model is a table edit, not a
@@ -319,85 +311,6 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
 
         rsp = await self._achat_completion(messages, timeout=self.get_timeout(timeout), raise_if_empty=raise_if_empty)
         return self.get_choice_text(rsp)
-
-    async def _achat_completion_function(
-        self, messages: list[dict], timeout: int = USE_CONFIG_TIMEOUT, **chat_configs
-    ) -> ChatCompletion:
-        messages = self.format_msg(messages)
-        kwargs = self._cons_kwargs(messages=messages, timeout=self.get_timeout(timeout), **chat_configs)
-        rsp: ChatCompletion = await self._acreate(**kwargs)
-        self._update_costs(rsp.usage)
-        return rsp
-
-    async def aask_code(self, messages: list[dict], timeout: int = USE_CONFIG_TIMEOUT, **kwargs) -> dict:
-        """Use function of tools to ask a code.
-        Note: Keep kwargs consistent with https://platform.openai.com/docs/api-reference/chat/create
-
-        Examples:
-        >>> llm = OpenAILLM()
-        >>> msg = [{'role': 'user', 'content': "Write a python hello world code."}]
-        >>> rsp = await llm.aask_code(msg)
-        # -> {'language': 'python', 'code': "print('Hello, World!')"}
-        """
-        if "tools" not in kwargs:
-            configs = {"tools": [{"type": "function", "function": GENERAL_FUNCTION_SCHEMA}]}
-            kwargs.update(configs)
-        rsp = await self._achat_completion_function(messages, **kwargs)
-        return self.get_choice_function_arguments(rsp)
-
-    def _parse_arguments(self, arguments: str) -> dict:
-        """parse arguments in openai function call"""
-        if "language" not in arguments and "code" not in arguments:
-            return {"language": "python", "code": arguments}
-
-        # 匹配language
-        language_pattern = re.compile(r'[\"\']?language[\"\']?\s*:\s*["\']([^"\']+?)["\']', re.DOTALL)
-        language_match = language_pattern.search(arguments)
-        language_value = language_match.group(1) if language_match else "python"
-
-        # 匹配code
-        code_pattern = r'(["\'`]{3}|["\'`])([\s\S]*?)\1'
-        try:
-            code_value = re.findall(code_pattern, arguments)[-1][-1]
-        except Exception:
-            code_value = None
-
-        if code_value is None:
-            raise LLMResponseParseError(f"Parse code error for {arguments}")
-        # arguments只有code的情况
-        return {"language": language_value, "code": code_value}
-
-    # @handle_exception
-    def get_choice_function_arguments(self, rsp: ChatCompletion) -> dict:
-        """Required to provide the first function arguments of choice.
-
-        :param dict rsp: same as in self.get_choice_function(rsp)
-        :return dict: return the first function arguments of choice, for example,
-            {'language': 'python', 'code': "print('Hello, World!')"}
-        """
-        message = rsp.choices[0].message
-        first_call = message.tool_calls[0] if message.tool_calls else None
-        if (
-            first_call is not None
-            and isinstance(first_call, ChatCompletionMessageToolCall)
-            and first_call.function.arguments is not None
-        ):
-            # reponse is code
-            try:
-                return json.loads(first_call.function.arguments, strict=False)
-            except json.decoder.JSONDecodeError:
-                return self._parse_arguments(first_call.function.arguments)
-        elif message.tool_calls is None and message.content is not None:
-            # reponse is code, fix openai tools_call respond bug,
-            # The response content is `code``, but it appears in the content instead of the arguments.
-            code_formats = "```"
-            if message.content.startswith(code_formats) and message.content.endswith(code_formats):
-                code = CodeParser.parse_code(text=message.content)
-                return {"language": "python", "code": code}
-            # reponse is message
-            return {"language": "markdown", "code": self.get_choice_text(rsp)}
-        else:
-            raise LLMResponseParseError(f"Failed to parse \n {rsp}\n")
 
     def get_choice_text(self, rsp: ChatCompletion) -> str:
         """Required to provide the first text of choice"""

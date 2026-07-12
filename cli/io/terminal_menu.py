@@ -31,7 +31,7 @@ _RESET = "\x1b[0m"
 # approval frame's rule + title carry the same amber the rich consumer uses for
 # the gated-action notice — a rich-free tint via ``ansi_fg(rgb=…)``.
 _AMBER_RGB = (150, 108, 30)
-# Fixed rule width — a light claude-code-style top border for the framed
+# Fixed rule width — a light top border for the framed
 # approval / ask blocks (the raw stream has no reliable terminal-width probe).
 _RULE_WIDTH = 48
 
@@ -44,7 +44,7 @@ def _dim(text: str) -> str:
 def _menu_lines(entries: Sequence[str], index: int, selected: Set[int], multi: bool) -> List[str]:
     """The select-menu block as raw-mode lines (``\\r\\n``), highlighting *index*.
 
-    claude-code look: a numbered list (the visible ``1.``/``2.`` mirror the
+    Numbered-list look: the visible ``1.``/``2.`` mirror the
     digit shortcuts), the active row marked by a brand-orange ``❯`` + orange
     label, inactive rows dimmed. In multi-select each real option carries a
     ``[x]``/``[ ]`` checkbox (the trailing "Other" row never does).
@@ -70,7 +70,7 @@ def _redraw_menu(entries: Sequence[str], index: int, selected: Set[int], multi: 
 def _option_lines(options: Sequence[tuple], index: int) -> List[str]:
     """The approval-option block as raw-mode lines (``\\r\\n``), highlighting *index*.
 
-    claude-code look: the active choice marked by a brand-orange ``❯`` +
+    The active choice marked by a brand-orange ``❯`` +
     orange label, inactive choices plain with a dim ``(shortcut)`` hint — the
     ``y``/``a``/``n``/``d`` letters are the jump-and-select affordance. *options*
     is a sequence of ``(outcome, label, shortcut)`` triples.

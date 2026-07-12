@@ -8,7 +8,7 @@ this module only deals with raw nested dicts.
 
 Merge semantics (best-of-both):
 - dict: recursive deep-merge (last writer wins per key).
-- list: union + dedupe, low-layer items first (Claude-style) — so permission
+- list: union + dedupe, low-layer items first — so permission
   allow/deny rules, mcp servers, additional dirs accumulate across layers.
 - scalar / type mismatch: higher layer wins.
 """

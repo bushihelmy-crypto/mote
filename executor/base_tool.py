@@ -40,7 +40,7 @@ class BaseTool(ABC):
       get_native_schema() only for dynamic params (e.g. MCP).
 
     Channel limitation (IMPORTANT):
-    - The legacy XML command protocol parses EVERY argument as a string — it does
+    - The XML command protocol parses EVERY argument as a string — it does
       not carry parameter types, so list/dict/model params arrive as raw strings
       there. Tools with structured (non-scalar) params therefore work correctly
       ONLY on the native tool-use channel. Keep tool params scalar if the tool
@@ -67,8 +67,7 @@ class BaseTool(ABC):
     # replaces the inline content with a <persisted-output> preview (see
     # mote.executor.tool_result_limit). The effective threshold is
     # this value clamped by the system-wide default; override per tool to allow
-    # larger (e.g. Read) or smaller (e.g. Sleep) results. Aligned with CC's
-    # per-tool `maxResultSizeChars`.
+    # larger (e.g. Read) or smaller (e.g. Sleep) results.
     max_result_size_chars: ClassVar[int] = DEFAULT_MAX_RESULT_SIZE_CHARS
 
     # Whether this tool keeps live, per-Role session state (a persistent shell,
@@ -139,7 +138,6 @@ class BaseTool(ABC):
 
     def cleanup_session(self, session_id: str) -> None:
         """Clean up per-session resources when a Role exits. Default no-op."""
-        pass
 
     # ------------------------------------------------------------------
     # Permission hooks (consumed by the PermissionEngine before call())

@@ -1,7 +1,7 @@
 """Agent control-plane tier exceptions (``mote.environment``).
 
 Port of the relevant ``CodexErr`` variants used by the multi-agent control
-plane (``codex-rs/core/src/agent``). Reparented onto :class:`MoteError` so
+plane (``codex-rs/core/src/agent``). Rooted on :class:`MoteError` so
 control-plane failures carry a stable :class:`ErrorCode` and serialize via
 ``to_dict()`` like every other typed error. The custom ``__init__`` signatures
 (``max_agents`` / ``agent_id`` / ``agent_path`` / ``reference``) are preserved

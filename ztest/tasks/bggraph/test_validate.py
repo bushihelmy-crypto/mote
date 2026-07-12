@@ -11,6 +11,7 @@ references against the state schema / known nodes.
 from __future__ import annotations
 
 import pytest
+
 from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState
 
 from .conftest import S, sync_node

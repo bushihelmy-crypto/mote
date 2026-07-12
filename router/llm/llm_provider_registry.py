@@ -1,10 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2023/12/19 17:26
-@Author  : alexanderwu
-@File    : llm_provider_registry.py
-"""
 from mote.common.base.singleton import Singleton
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.exception import ProviderNotFoundError

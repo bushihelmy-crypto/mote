@@ -1,10 +1,9 @@
-"""Glob tool — aligned with Claude Code's Glob (GlobTool, built on ripgrep).
+"""Glob tool — file-name pattern matching built on ripgrep.
 
 Fast file-name pattern matching that works on any codebase size. Prefers the
 ripgrep binary (`rg --files --glob`) when available and falls back to Python's
 `glob` module otherwise, so it works even where ripgrep isn't installed. The
-interface and defaults mirror Claude Code's tool so model behavior stays
-familiar:
+interface and defaults:
 
 - Two parameters: ``pattern`` (required, e.g. "**/*.js") and ``path`` (optional
   directory to search; defaults to the current working directory).
@@ -15,9 +14,9 @@ familiar:
   a note suggests narrowing the pattern or path. Paths are relativized to the
   working directory to save tokens.
 
-Differences from Claude Code's tool, by design:
-- The Python fallback does not honor .gitignore (ripgrep, with --no-ignore the
-  default in CC, also ignores it); it only applies the VCS/dir exclusions.
+Differences by design:
+- The Python fallback does not honor .gitignore (ripgrep, run with --no-ignore
+  by default, also ignores it); it only applies the VCS/dir exclusions.
 - No per-Role file-read ignore-pattern integration (this framework has no such
   list to consult).
 """
@@ -69,7 +68,7 @@ class Glob(BaseTool):
     aliases: ClassVar[list[str]] = ["Glob.run", "glob"]
     # Read-only pattern match: results are re-derivable by re-running the glob.
     reconstructable: ClassVar[bool] = True
-    # Glob can list many paths; allow a higher cap before persisting (CC).
+    # Glob can list many paths; allow a higher cap before persisting.
     max_result_size_chars: ClassVar[int] = 100_000
     description = GLOB_DESCRIPTION
     # get_cwd is the stable base for the default search root + output
@@ -154,7 +153,7 @@ class Glob(BaseTool):
     async def _run_ripgrep(self, rg: str, root: str, pattern: str) -> list[str]:
         """List files under root matching pattern via ripgrep, return abs paths.
 
-        Runs with cwd=root and no path argument (like CC) so ripgrep's --glob
+        Runs with cwd=root and no path argument so ripgrep's --glob
         matching is anchored relative to root; otherwise a path-relative glob
         such as "tools/*.py" would not match.
 

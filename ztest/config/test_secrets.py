@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 
 import pytest
+
 from mote.common.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
 from mote.common.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
 
@@ -34,29 +35,29 @@ def test_run_helper_nonzero_exit_is_empty():
 
 
 def test_resolve_fills_when_placeholder():
-    merged = {"api_key_helper": _echo_cmd("sk-real"), "llm": {"model": "x", "api_key": "sk-"}}
+    merged = {"models": {"api_key_helper": _echo_cmd("sk-real"), "default": {"model": "x", "api_key": "sk-"}}}
     out = resolve_api_key(merged, use_cache=False)
     assert out == "sk-real"
-    assert merged["llm"]["api_key"] == "sk-real"
+    assert merged["models"]["default"]["api_key"] == "sk-real"
 
 
 def test_resolve_skips_when_static_key_present():
-    merged = {"api_key_helper": _echo_cmd("sk-helper"), "llm": {"api_key": "sk-static-real"}}
+    merged = {"models": {"api_key_helper": _echo_cmd("sk-helper"), "default": {"api_key": "sk-static-real"}}}
     assert resolve_api_key(merged, use_cache=False) is None
-    assert merged["llm"]["api_key"] == "sk-static-real"
+    assert merged["models"]["default"]["api_key"] == "sk-static-real"
 
 
 def test_resolve_noop_without_helper():
-    merged = {"llm": {"api_key": "sk-"}}
+    merged = {"models": {"default": {"api_key": "sk-"}}}
     assert resolve_api_key(merged, use_cache=False) is None
-    assert merged["llm"]["api_key"] == "sk-"
+    assert merged["models"]["default"]["api_key"] == "sk-"
 
 
-def test_resolve_creates_llm_dict_when_missing():
-    merged = {"api_key_helper": _echo_cmd("sk-new")}
+def test_resolve_creates_default_dict_when_missing():
+    merged = {"models": {"api_key_helper": _echo_cmd("sk-new")}}
     out = resolve_api_key(merged, use_cache=False)
     assert out == "sk-new"
-    assert merged["llm"]["api_key"] == "sk-new"
+    assert merged["models"]["default"]["api_key"] == "sk-new"
 
 
 def test_helper_output_is_cached():

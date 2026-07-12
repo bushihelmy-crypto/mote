@@ -1,18 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2023/5/5 23:04
-@Author  : alexanderwu
-@File    : base_llm.py
-@Desc    : mashenquan, 2023/8/22. + try catch
-"""
 from __future__ import annotations
 
-import json
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Mapping, Optional, Union
 from uuid import uuid4
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
@@ -36,9 +33,6 @@ from mote.router.cost import Costs, CostTracker, TokenUsage
 from mote.router.llm.llm_response import LLMResponse, LLMToolCall
 from mote.router.llm.recovery import build_llm_strategies
 from mote.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
-from openai import AsyncOpenAI
-from pydantic import BaseModel
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 # Tenacity retry budget for a single LLM call (the transient-error RETRY tier).
 # Shared by the base ``acompletion_text`` and provider overrides so the retry
@@ -392,8 +386,8 @@ class BaseLLM(ABC):
         strategies = build_llm_strategies(
             compress=_compress,
             rotate=_rotate,
-            fallback=self._fallback_supplier,  # pyright: ignore[reportArgumentType]  # self-identity: dir!=pkg name
-            on_fallback=_on_fallback,  # pyright: ignore[reportArgumentType]  # self-identity: dir!=pkg name
+            fallback=self._fallback_supplier,
+            on_fallback=_on_fallback,
             transformers=transformers or None,
         )
         runner = RecoveryRunner(strategies)
@@ -409,7 +403,7 @@ class BaseLLM(ABC):
         def _before_sleep(retry_state) -> None:
             # tenacity fires this ONLY when it is about to sleep+re-issue (the
             # error was retryable and the budget isn't exhausted) — so it maps
-            # 1:1 to CC's transient "retrying in Ns" state. The final,
+            # 1:1 to the transient "retrying in Ns" state. The final,
             # budget-exhausted failure raises without a ``before_sleep`` and is
             # surfaced by the turn-level error path instead. Sync, fire-and-forget
             # (same spine path as streaming deltas), no-op when no bus is bound.
@@ -518,24 +512,6 @@ class BaseLLM(ABC):
             latency_ms=latency_ms,
         )
 
-    def _extract_assistant_rsp(self, context):
-        return "\n".join([i["content"] for i in context if i["role"] == "assistant"])
-
-    async def aask_batch(self, msgs: list, timeout=USE_CONFIG_TIMEOUT) -> str:
-        """Sequential questioning"""
-        context = []
-        for msg in msgs:
-            umsg = self._user_msg(msg)
-            context.append(umsg)
-            rsp_text = await self.acompletion_text(context, timeout=self.get_timeout(timeout))
-            context.append(self._assistant_msg(rsp_text))
-        return self._extract_assistant_rsp(context)
-
-    async def aask_code(
-        self, messages: Union[str, "Message", list[dict]], timeout=USE_CONFIG_TIMEOUT, **kwargs
-    ) -> dict:
-        raise NotImplementedError
-
     @abstractmethod
     async def _achat_completion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **kwargs) -> dict:
         """_achat_completion implemented by inherited class.
@@ -599,46 +575,6 @@ class BaseLLM(ABC):
     def get_choice_delta_text(self, rsp: dict) -> str:
         """Required to provide the first text of stream choice"""
         return rsp.get("choices", [{}])[0].get("delta", {}).get("content", "")
-
-    def get_choice_function(self, rsp: dict) -> dict:
-        """Required to provide the first function of choice
-        :param dict rsp: OpenAI chat.comletion respond JSON, Note "message" must include "tool_calls",
-            and "tool_calls" must include "function", for example:
-            {...
-                "choices": [
-                    {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": null,
-                        "tool_calls": [
-                        {
-                            "id": "call_Y5r6Ddr2Qc2ZrqgfwzPX5l72",
-                            "type": "function",
-                            "function": {
-                            "name": "execute",
-                            "arguments": "{\n  \"language\": \"python\",\n  \"code\": \"print('Hello, World!')\"\n}"
-                            }
-                        }
-                        ]
-                    },
-                    "finish_reason": "stop"
-                    }
-                ],
-                ...}
-        :return dict: return first function of choice, for exmaple,
-            {'name': 'execute', 'arguments': '{\n  "language": "python",\n  "code": "print(\'Hello, World!\')"\n}'}
-        """
-        return rsp["choices"][0]["message"]["tool_calls"][0]["function"]
-
-    def get_choice_function_arguments(self, rsp: dict) -> dict:
-        """Required to provide the first function arguments of choice.
-
-        :param dict rsp: same as in self.get_choice_function(rsp)
-        :return dict: return the first function arguments of choice, for example,
-            {'language': 'python', 'code': "print('Hello, World!')"}
-        """
-        return json.loads(self.get_choice_function(rsp)["arguments"], strict=False)
 
     def get_choice_tool_calls(self, rsp) -> list[dict]:
         """Normalize all tool calls in a completion to a provider-agnostic list.

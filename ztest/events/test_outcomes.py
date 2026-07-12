@@ -43,6 +43,11 @@ class _RespEvent(Rewritable):
     tool_response: str = ""
 
 
+@dataclass
+class _PromptEvent(Rewritable):
+    prompt: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
@@ -162,6 +167,28 @@ def test_prompt_outcome_stop_and_context():
     merged = PromptOutcome(additional_context=["a"]).merge(PromptOutcome(additional_context=["b"], stop=True))
     assert merged.additional_context == ["a", "b"]
     assert merged.is_blocking
+
+
+def test_prompt_outcome_merge_last_updated_prompt_wins():
+    merged = PromptOutcome(updated_prompt="a").merge(PromptOutcome(updated_prompt="b"))
+    assert merged.updated_prompt == "b"
+    # A None on the right keeps the left rewrite.
+    merged2 = PromptOutcome(updated_prompt="a").merge(PromptOutcome())
+    assert merged2.updated_prompt == "a"
+
+
+def test_prompt_outcome_rebind_threads_updated_prompt():
+    out = PromptOutcome(updated_prompt="<agent-vault:k>")
+    threaded = out.rebind(_PromptEvent(prompt="my raw secret"), by="secret-upload")
+    assert threaded.prompt == "<agent-vault:k>"
+    assert threaded.rewrites == (
+        Rewrite(field="prompt", before="my raw secret", after="<agent-vault:k>", by="secret-upload"),
+    )
+
+
+def test_prompt_outcome_rebind_no_rewrite_returns_event_unchanged():
+    ev = _PromptEvent(prompt="x")
+    assert PromptOutcome().rebind(ev, by="anyone") is ev
 
 
 def test_compact_outcome_cancel_and_context():

@@ -8,12 +8,11 @@ source of truth. The executor seam (``ToolExecutor.run_command``) is the single
 place that folds a neutral :class:`HookOutcome` back into a real
 ``PermissionDecision``.
 
-Two synthesized references:
-  * **Claude Code** — JSON-on-stdin/JSON-on-stdout contract, decision fields
-    (``decision``/``permissionDecision``/``continue``/``additionalContext``/
-    ``updatedInput``/``systemMessage``), aggregation precedence deny > ask > allow.
-  * **Codex** — the same Claude-style engine plus a legacy fire-and-forget notify
-    (subsumed here by the ``Stop`` event).
+The wire contract is JSON-on-stdin/JSON-on-stdout with decision fields
+(``decision``/``permissionDecision``/``continue``/``additionalContext``/
+``updatedInput``/``systemMessage``) and aggregation precedence deny > ask > allow.
+Codex compatibility adds a legacy fire-and-forget notify (subsumed here by the
+``Stop`` event).
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from mote.common.schema.permission_types import PermissionBehavior
 # Enumerations (Literals — no runtime enum machinery)
 # ---------------------------------------------------------------------------
 
-# The lifecycle events a hook may fire on (phase 1 set). CC/codex compatible
+# The lifecycle events a hook may fire on (phase 1 set). Codex-compatible
 # names so external command handlers stay drop-in.
 HookEvent = Literal[
     "PreToolUse",
@@ -54,12 +53,12 @@ HookBehavior = PermissionBehavior
 class HookInput:
     """The payload handed to a hook handler.
 
-    The common envelope mirrors Claude Code's hook input: identity + the event
-    name + the active permission mode, plus a free-form ``payload`` carrying the
-    per-event fields (tool_name/tool_input/tool_response, prompt, trigger, ...).
+    The common envelope holds the hook input: identity + the event name + the
+    active permission mode, plus a free-form ``payload`` carrying the per-event
+    fields (tool_name/tool_input/tool_response, prompt, trigger, ...).
 
-    ``to_json_dict`` renders the CC/codex wire shape (camelCase top-level keys
-    merged with the payload) used as the JSON stdin for command handlers.
+    ``to_json_dict`` renders the wire shape (camelCase top-level keys merged with
+    the payload) used as the JSON stdin for command handlers.
     """
 
     hook_event_name: str
@@ -72,7 +71,7 @@ class HookInput:
     def to_json_dict(self) -> dict:
         """Render the JSON object delivered on a command handler's stdin.
 
-        Top-level identity keys use the CC camelCase names; the per-event
+        Top-level identity keys use camelCase names; the per-event
         ``payload`` fields are merged in at the top level too (so a handler reads
         ``toolName``/``toolInput`` directly, matching the reference contract).
         """
@@ -139,7 +138,7 @@ def _behavior_rank(behavior: Optional[HookBehavior]) -> int:
 
 
 def fold(outcomes: Iterable[HookOutcome]) -> HookOutcome:
-    """Aggregate per-handler outcomes into one (CC/codex deny-wins fold).
+    """Aggregate per-handler outcomes into one (deny-wins fold).
 
     Precedence for ``behavior``: **deny > ask > allow**. A ``deny`` (or ``ask``)
     is immune to a later ``allow`` — once the result reaches a higher rank, a

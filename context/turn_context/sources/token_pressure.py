@@ -1,7 +1,7 @@
 """TokenPressureContextSource — warn when the context window is filling up.
 
 A proactive "secretary" feed: once the stored history crosses the warning
-threshold (CC ``calculateTokenWarningState``), nudge the model to write down
+threshold, nudge the model to write down
 anything it needs before older tool results get compacted away. Silent below the
 threshold so it costs nothing on a fresh conversation.
 

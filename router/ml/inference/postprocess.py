@@ -20,6 +20,7 @@ from dataclasses import asdict
 from types import SimpleNamespace
 
 import numpy as np
+
 from mote.router.ml.features import ContextMetadata
 from mote.router.ml.flags import compute_flags
 from mote.router.ml.inference.types import FinalDecision, InferenceRequest

@@ -117,8 +117,8 @@ class SelectableStatic(Static):
         Every URL span carries ``Style(link=url)`` (from the shared ``linkify`` /
         themed-markdown builders); the click event exposes it as ``event.style.link``
         for both markdown links and linkified plain text. We gate on ``event.ctrl``
-        so a plain click still starts a text selection (matching claude-code, where
-        the terminal only follows a link on Ctrl+click) and only intercept when the
+        so a plain click still starts a text selection (the terminal only
+        follows a link on Ctrl+click) and only intercept when the
         modifier is held AND the pointer is actually over a link span. Everything
         else falls through to the base handler so drag-select keeps working.
         """

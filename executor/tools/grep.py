@@ -1,9 +1,9 @@
-"""Grep tool — aligned with Claude Code's Grep (GrepTool, built on ripgrep).
+"""Grep tool — content search built on ripgrep.
 
-A powerful content search tool. Like Claude Code, this shells out to the
+A powerful content search tool. This shells out to the
 ripgrep binary (`rg`) for all text search — the walk happens in a separate OS
 process, so a huge tree can never block the event loop. The interface and
-defaults mirror Claude Code's tool so model behavior stays familiar:
+defaults:
 
 - Three output modes: ``files_with_matches`` (default), ``content``, ``count``.
 - VCS metadata dirs (.git/.svn/.hg/.bzr/.jj/.sl) are excluded automatically.
@@ -26,8 +26,8 @@ thread, with a deadline), it only runs when the query actually targets
 documents — a doc ``type``, a ``glob`` naming a document extension, or a search
 root that is itself a document file.
 
-Differences from Claude Code's tool, by design:
-- CC's ``-A/-B/-C/-n/-i`` flag names aren't valid Python identifiers, and this
+Differences by design:
+- The ``-A/-B/-C/-n/-i`` flag names aren't valid Python identifiers, and this
   framework derives the LLM schema from the ``call()`` signature, so they are
   spelled ``after_context/before_context/context/line_numbers/case_insensitive``
   (the docstring notes the rg equivalents).
@@ -166,8 +166,8 @@ def _find_ripgrep() -> Optional[str]:
     """Locate a usable ripgrep binary, or None if none is available.
 
     Probe order: system PATH -> our vendored binary -> other well-known
-    locations (including one vendored by Claude Code, kept only as a last
-    resort). A shell alias (e.g. `alias rg=...`) is NOT a real binary, so
+    locations (including one vendored by another globally-installed tool, kept
+    only as a last resort). A shell alias (e.g. `alias rg=...`) is NOT a real binary, so
     shutil.which may miss it; the explicit-path probes cover that.
     """
     found = shutil.which("rg")
@@ -178,7 +178,7 @@ def _find_ripgrep() -> Optional[str]:
         "/usr/bin/rg",
         "/usr/local/bin/rg",
         os.path.expanduser("~/.cargo/bin/rg"),
-        # Last resort: a ripgrep vendored by a globally-installed Claude Code.
+        # Last resort: a ripgrep vendored by another globally-installed tool.
         "/usr/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg",
     ]
     for path in candidates:
@@ -190,7 +190,7 @@ def _find_ripgrep() -> Optional[str]:
 def _split_glob(glob: str) -> list[str]:
     """Split a glob argument on whitespace/commas, preserving brace groups.
 
-    Mirrors CC: "*.{ts,tsx}" stays intact, while "*.js,*.ts" or "*.js *.ts"
+    "*.{ts,tsx}" stays intact, while "*.js,*.ts" or "*.js *.ts"
     become two patterns.
     """
     patterns: list[str] = []
@@ -224,7 +224,7 @@ class Grep(BaseTool):
     aliases: ClassVar[list[str]] = ["Grep.run", "grep", "search"]
     # Read-only search: results are re-derivable by re-running the query.
     reconstructable: ClassVar[bool] = True
-    # Grep output is usually compact; cap below the default (CC).
+    # Grep output is usually compact; cap below the default.
     max_result_size_chars: ClassVar[int] = 20_000
     description = GREP_DESCRIPTION
     # get_cwd is the stable base for the default search root + output

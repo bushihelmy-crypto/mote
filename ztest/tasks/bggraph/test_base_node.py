@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import pytest
+
 from mote.executor.tasks.bggraph import END, START, BaseNode, BgGraph, From, GraphParamTypeError, GraphState, Stage
 from mote.executor.tasks.types import BgTaskResult
 

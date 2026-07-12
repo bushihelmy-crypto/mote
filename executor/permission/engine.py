@@ -1,8 +1,8 @@
 """PermissionEngine — the runtime decision pipeline.
 
 Combines mode + rules + per-tool self-checks into a single allow/deny outcome
-for one tool call. Inspired by Claude Code's layered ``hasPermissionsToUseTool``
-flow, with bypass-immune deny/ask rules and an interactive ``ask`` resolution
+for one tool call. Uses a layered permission-check flow, with bypass-immune
+deny/ask rules and an interactive ``ask`` resolution
 routed through the Role's ``request_approval`` capability.
 
 The engine is intentionally infrastructure-only: it never imports tools. Callers
@@ -44,7 +44,7 @@ from mote.executor.permission.sandbox import SandboxGuard
 # An async callback that asks the human a question and returns their free-text
 # reply. Supplied by the Role (``request_approval`` capability); ``None`` when
 # no interactive channel exists.
-AskHuman = Callable[[str], Awaitable[str]]
+AskUser = Callable[[str], Awaitable[str]]
 
 
 class PermissionEngine:
@@ -54,12 +54,12 @@ class PermissionEngine:
         self,
         mode: PermissionMode,
         store: RuleStore,
-        ask_human: Optional[AskHuman] = None,
+        ask_user: Optional[AskUser] = None,
         sandbox: Optional[SandboxGuard] = None,
     ) -> None:
         self._mode = mode
         self._store = store
-        self._ask_human = ask_human
+        self._ask_user = ask_user
         self._sandbox = sandbox
 
     async def check(
@@ -156,7 +156,7 @@ class PermissionEngine:
             return PermissionDecision.allow("multi", "all paths allowed")
 
         # One consolidated prompt for every path that needs confirmation.
-        if self._ask_human is None:
+        if self._ask_user is None:
             blocked = ", ".join(ask_paths + escalation_paths)
             return PermissionDecision.deny(
                 "default",
@@ -167,7 +167,7 @@ class PermissionEngine:
         pending = ask_paths + escalation_paths
         reason = "; ".join(r for r in reasons if r) or "this action needs your approval"
         prompt = build_approval_prompt(tool_name, "\n  ".join(pending), reason)
-        reply = await self._ask_human(prompt)
+        reply = await self._ask_user(prompt)
         choice = parse_approval_response(reply)
 
         if choice == "deny":
@@ -336,14 +336,14 @@ class PermissionEngine:
         if verdict.allowed:
             return allowed
 
-        if self._ask_human is None:
+        if self._ask_user is None:
             return PermissionDecision.deny(
                 "sandbox",
                 verdict.reason,
                 message=f"'{tool_name}' blocked by sandbox: {verdict.reason} (no channel to escalate).",
             )
 
-        reply = await self._ask_human(build_escalation_prompt(tool_name, path, verdict.reason))
+        reply = await self._ask_user(build_escalation_prompt(tool_name, path, verdict.reason))
         choice = parse_approval_response(reply)
         if choice == "deny":
             return PermissionDecision.deny(
@@ -374,7 +374,7 @@ class PermissionEngine:
         session — a *prefix* rule for a single-segment command (so variations
         stop prompting), otherwise an exact-target rule.
         """
-        if self._ask_human is None:
+        if self._ask_user is None:
             return PermissionDecision.deny(
                 reason_type,
                 reason,
@@ -383,7 +383,7 @@ class PermissionEngine:
 
         rule, spec = self._suggested_allow_rule(tool_name, target, segments)
         prompt = build_approval_prompt(tool_name, target, reason, suggestion=spec)
-        reply = await self._ask_human(prompt)
+        reply = await self._ask_user(prompt)
         choice = parse_approval_response(reply)
 
         if choice == "deny":

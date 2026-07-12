@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for the settings config source (``executor.permission.settings_source``).
 
-Permission rules can be declared per-project in a Claude-style
+Permission rules can be declared per-project in a
 ``.mote/settings.local.json`` (``{"permissions": {"allow"/"deny"/"ask": [...]}}``),
 discovered by walking from cwd up to the git root plus a user-level
 ``~/.mote/settings.local.json``. These tests pin the loader's contract: the
@@ -18,6 +18,7 @@ the real ``.mote/settings.local.json`` files on disk.
 import json
 
 import pytest
+
 from mote.common.const import paths
 from mote.executor.permission import settings_source
 from mote.executor.permission.settings_source import SETTINGS_FILE_NAME, load_permission_rules, settings_paths

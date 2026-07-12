@@ -11,8 +11,9 @@ import base64
 import json
 import time
 
-import mote.router.oauth.client as client_mod
 import pytest
+
+import mote.router.oauth.client as client_mod
 from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
 from mote.router.oauth.client import OAuthClient
 from mote.router.oauth.errors import OAuthRefreshError

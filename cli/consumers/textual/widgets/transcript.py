@@ -19,12 +19,19 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
+from rich.console import Group
+from rich.text import Text
+from textual.message import Message
+from textual.reactive import reactive
+
 from mote.cli.consumers.render.builders import (
     RESULT_INDENT,
+    FoldMode,
     bullet_row,
     compaction_summary_text,
     conversation_compacted_text,
     file_change_caption,
+    fold_mode,
     indent,
     linkify,
     media_caption,
@@ -42,8 +49,8 @@ from mote.cli.consumers.render.builders import (
 from mote.cli.consumers.render.markdown import themed_markdown
 from mote.cli.consumers.textual.style import BULLET, NOTE, WARN, Palette
 from mote.cli.consumers.textual.widgets.base import SelectableStatic
-from rich.console import Group
-from rich.text import Text
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 
 class AssistantBlock(SelectableStatic):
@@ -102,29 +109,158 @@ def build_tool_parts(started: Any, completed: Any, *, blink: bool = False) -> li
     return parts
 
 
-class ToolCallWidget(SelectableStatic):
+class FoldableRow(SelectableStatic):
+    """A transcript row whose detail folds under the ``ctrl+o`` toggle.
+
+    The single home for the fold state + toggle entry point, so the host's
+    ``ctrl+o`` handler flips every mounted foldable row in ONE pass
+    (``self.query(FoldableRow)``) and never enumerates concrete widget types.
+    Subclasses (``ToolGroupWidget`` = coalesced search/read summary,
+    ``ToolCallWidget`` = per-call detail) own *what* the folded vs expanded view
+    looks like by implementing :meth:`_rebuild` to read :attr:`expanded`; they
+    call it once their own state is initialised.
+
+    A foldable row is also **clickable**: hovering it tints the background
+    (``:hover``) so the human sees it's interactive, and a plain click posts a
+    :class:`Clicked` message the host uses to *select* the row (distinct
+    ``-selected`` background). While a row is selected, ``ctrl+o`` scopes to just
+    that row instead of toggling every row (see ``MoteApp``), and a dim
+    ``ctrl+o 展开/折叠`` hint rides the row's bottom-right corner (the affordance
+    lives on the selected block now, not on the status bar). A coalesced
+    search/read run is ONE ``ToolGroupWidget``, so selecting it picks the whole
+    group together and shows a single hint under it.
+    """
+
+    #: Hover tint (interactive affordance) + a distinct band for the selected row.
+    #: These sit *behind* the row's own content segments (which are mostly
+    #: bg-transparent) so the shared builder colours still show through.
+    DEFAULT_CSS = """
+    FoldableRow:hover {
+        background: $boost;
+    }
+    FoldableRow.-selected {
+        background: $brand 25%;
+    }
+    """
+
+    #: Whether this row is the host's currently-selected one (drives ``-selected``).
+    selected: reactive[bool] = reactive(False)
+
+    class Clicked(Message):
+        """A foldable row was plain-clicked — the host selects it for scoped ctrl+o.
+
+        Bubbles to the app, whose ``on_foldable_row_clicked`` toggles the single
+        selection. Carries the concrete row so the handler needn't re-query.
+        """
+
+        def __init__(self, row: "FoldableRow") -> None:
+            super().__init__()
+            self.row = row
+
+    def __init__(self, *, expanded: bool = False, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.expanded = expanded
+        # The subclass' bare renderable (before the selected-row hint is layered
+        # on). Kept so toggling ``selected`` can re-decorate without a rebuild.
+        self._core: Any = ""
+
+    def watch_selected(self, value: bool) -> None:
+        """Toggle the ``-selected`` band + (re)layer the bottom-right ctrl+o hint."""
+        self.set_class(value, "-selected")
+        self._repaint()
+
+    @property
+    def _fold_hint(self) -> bool:
+        """Whether a selected-row should advertise ``ctrl+o`` (i.e. it truly folds)."""
+        return True
+
+    def update(self, renderable: Any = "") -> None:
+        """Store the subclass renderable, then paint it (plus the hint if selected).
+
+        Subclasses call ``self.update(...)`` from :meth:`_rebuild`; we intercept
+        so the currently-selected row gets its ``ctrl+o`` hint appended without
+        each subclass having to know about selection.
+        """
+        self._core = renderable
+        self._repaint()
+
+    def _repaint(self) -> None:
+        """Paint ``_core``, appending the dim bottom-right ctrl+o hint when selected.
+
+        NB: deliberately *not* named ``_render_content`` — that is a Textual
+        ``Widget`` internal that fills ``_render_cache`` (the strips ``get_selection``
+        reads); shadowing it would silently break copy/selection on every row.
+        """
+        core = self._core
+        if self.selected and self._fold_hint:
+            label = t(K.KEY_COLLAPSE_HINT) if self.expanded else t(K.KEY_EXPAND_HINT)
+            hint = Text(label, style=Palette.DIM, justify="right")
+            core = Group(core, hint)
+        super().update(core)
+
+    def set_expanded(self, flag: bool) -> None:
+        """Fold/unfold this row — re-renders only on an actual state change."""
+        if flag != self.expanded:
+            self.expanded = flag
+            self._rebuild()
+
+    async def _on_click(self, event: Any) -> None:
+        """Post :class:`Clicked` on a plain click so the host can select this row.
+
+        We do NOT call ``super()`` here: Textual walks the MRO itself and invokes
+        ``SelectableStatic._on_click`` (ctrl+click link nav) and ``Widget._on_click``
+        (double/triple-click text-select) on their own, so calling super would
+        double-invoke them. We only add row-selection, and only for a *plain*
+        click — a Ctrl+click is a link nav, and a click that ended a drag-select
+        (``text_selection`` set) is a copy gesture, neither of which should hijack
+        the selection.
+        """
+        if getattr(event, "ctrl", False):
+            return
+        if self.text_selection is not None:
+            return
+        self.post_message(self.Clicked(self))
+
+    def _rebuild(self) -> None:  # pragma: no cover - overridden by every subclass
+        raise NotImplementedError
+
+
+class ToolCallWidget(FoldableRow):
     """One tool invocation + its result, keyed by ``tool_use_id``.
 
     Built from the ``ToolCallStarted`` event; :meth:`complete` folds in the
     matching ``ToolCallCompleted`` (correlated by ``tool_use_id`` in the app) so
     the started line, optional body, result summary and structured detail
     (diff / table) render together as one transcript row.
+
+    A ``FoldMode.DETAIL`` call (Bash/Terminal/WebBrowser) is foldable: collapsed
+    (the default, gated by ``ctrl+o``) it keeps only the ``● Tool(headline)``
+    line and the ``⎿ summary`` result, hiding the command body + full output;
+    expanded it renders the full :func:`build_tool_parts`. Every other tool
+    ignores :attr:`expanded` and always renders in full.
     """
 
     #: The running bullet pulses at this cadence (secs) until the call completes.
     _BLINK_INTERVAL = 0.5
 
-    def __init__(self, ev: Any, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, ev: Any, *, expanded: bool = False, **kwargs: Any) -> None:
+        super().__init__(expanded=expanded, **kwargs)
         self.tool_use_id: Optional[str] = getattr(ev, "tool_use_id", None)
         self._started = ev
         self._completed: Any = None
         self._blink = False
         self._blink_timer: Any = None
+        self._folds_detail = fold_mode(getattr(ev, "tool_name", "")) is FoldMode.DETAIL
         self._rebuild()
 
+    @property
+    def _fold_hint(self) -> bool:
+        # Only detail-folding calls (Bash/Terminal/WebBrowser) toggle under ctrl+o;
+        # a standalone Read/Edit always renders full, so it shows no fold hint.
+        return self._folds_detail
+
     def on_mount(self) -> None:
-        # Pulse the running bullet until the result lands (claude-code's blink);
+        # Pulse the running bullet until the result lands (a blink);
         # a call that already completed before mount never starts the timer.
         if self._completed is None:
             self._blink_timer = self.set_interval(self._BLINK_INTERVAL, self._pulse)
@@ -144,15 +280,26 @@ class ToolCallWidget(SelectableStatic):
         self._rebuild()
 
     def _rebuild(self) -> None:
+        if self._folds_detail and not self.expanded:
+            # Folded: keep only the invocation line and (once done) the result
+            # summary, hiding the body + full output. The ctrl+o affordance shows
+            # only on the selected block (its bottom-right), not on every row.
+            ok = None if self._completed is None else bool(getattr(self._completed, "ok", True))
+            head = tool_started_text(self._started, ok=ok, blink=self._blink and self._completed is None)
+            if self._completed is None:
+                self.update(head)
+                return
+            self.update(Group(head, tool_completed_text(self._completed)))
+            return
         self.update(Group(*build_tool_parts(self._started, self._completed, blink=self._blink)))
 
 
-class ToolGroupWidget(SelectableStatic):
-    """A collapsed run of consecutive search/read tool calls (claude-code style).
+class ToolGroupWidget(FoldableRow):
+    """A collapsed run of consecutive search/read tool calls.
 
-    claude-code coalesces a run of consecutive ``Read``/``Grep``/``Glob`` calls
+    A run of consecutive ``Read``/``Grep``/``Glob`` calls coalesces
     into ONE collapsible line ("Searched for 2 patterns, read 1 file"); the run is
-    broken by any other transcript event (assistant text, a non-collapsible tool,
+    broken by any other transcript event (assistant text, a non-folding tool,
     etc.), handled in the app. Collapsed, this row shows the shared
     ``tool_group_summary_text`` one-liner; expanded (``ctrl+o``), it renders each
     tool via the shared :func:`build_tool_parts` so the detail matches a standalone
@@ -160,10 +307,9 @@ class ToolGroupWidget(SelectableStatic):
     """
 
     def __init__(self, *, expanded: bool = False, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(expanded=expanded, **kwargs)
         # Each entry is a mutable ``[started_event, completed_event | None]`` pair.
         self._entries: list[list] = []
-        self.expanded = expanded
         self._rebuild()
 
     def add_started(self, ev: Any) -> None:
@@ -178,21 +324,16 @@ class ToolGroupWidget(SelectableStatic):
                 break
         self._rebuild()
 
-    def set_expanded(self, flag: bool) -> None:
-        self.expanded = flag
-        self._rebuild()
-
     def _rebuild(self) -> None:
         if self.expanded:
             parts: list[Any] = []
             for started, completed in self._entries:
                 parts.extend(build_tool_parts(started, completed))
-            parts.append(Text(" (ctrl+o 折叠)", style=Palette.DIM))
             self.update(Group(*parts))
             return
         items = [(getattr(started, "tool_name", ""), getattr(started, "headline", "")) for started, _ in self._entries]
         active = any(completed is None for _, completed in self._entries)
-        self.update(tool_group_summary_text(items, active=active, expanded=False))
+        self.update(tool_group_summary_text(items, active=active))
 
 
 class UserMessageRow(SelectableStatic):
@@ -273,7 +414,7 @@ class SystemReminderRow(SelectableStatic):
 
 
 class ConversationCompactedRow(SelectableStatic):
-    """A dim ``✻ 对话已压缩`` boundary marker (claude-code's compacted line).
+    """A dim ``✻ 对话已压缩`` boundary marker for the compacted line.
 
     History was compacted (context filled up); the engine condensed earlier turns
     into a summary now at the top of the model's context. This row marks *where*
@@ -360,6 +501,7 @@ class SessionListWidget(SelectableStatic):
 __all__ = [
     "AssistantBlock",
     "build_tool_parts",
+    "FoldableRow",
     "ToolCallWidget",
     "ToolGroupWidget",
     "UserMessageRow",

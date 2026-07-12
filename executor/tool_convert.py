@@ -1,43 +1,8 @@
-import ast
 import inspect
-from typing import Optional
 
 from mote.common.utils.parse_docstring import GoogleDocstringParser, remove_spaces
 
 PARSER = GoogleDocstringParser
-
-
-def convert_code_to_tool_schema(obj, include: Optional[list[str]] = None) -> dict:
-    """Converts an object (function or class) to a tool schema by inspecting the object"""
-    docstring = inspect.getdoc(obj) or ""
-    # assert docstring, "no docstring found for the objects, skip registering"
-
-    schema: dict = {}
-    if inspect.isclass(obj):
-        schema = {"type": "class", "description": remove_spaces(docstring), "methods": {}}
-        for name, method in inspect.getmembers(obj, inspect.isfunction):
-            if name.startswith("_") and name != "__init__":  # skip private methodss
-                continue
-            if include and name not in include:
-                continue
-            # method_doc = inspect.getdoc(method)
-            method_doc = get_class_method_docstring(obj, name)
-            schema["methods"][name] = function_docstring_to_schema(method, method_doc or "")
-
-    elif inspect.isfunction(obj):
-        schema = function_docstring_to_schema(obj, docstring)
-
-    return schema
-
-
-def convert_code_to_tool_schema_ast(code: str) -> dict[str, dict]:
-    """Converts a code string to a ``{tool_name: schema}`` map by parsing with AST"""
-
-    visitor = CodeVisitor(code)
-    parsed_code = ast.parse(code)
-    visitor.visit(parsed_code)
-
-    return visitor.get_tool_schemas()
 
 
 def function_docstring_to_schema(fn_obj, docstring="") -> dict:
@@ -65,77 +30,3 @@ def function_docstring_to_schema(fn_obj, docstring="") -> dict:
     function_type = "function" if not inspect.iscoroutinefunction(fn_obj) else "async_function"
 
     return {"type": function_type, "description": overall_desc, "signature": str(signature), "parameters": param_desc}
-
-
-def get_class_method_docstring(cls, method_name):
-    """Retrieve a method's docstring, searching the class hierarchy if necessary."""
-    for base_class in cls.__mro__:
-        if method_name in base_class.__dict__:
-            method = base_class.__dict__[method_name]
-            if method.__doc__:
-                return method.__doc__
-    return None  # No docstring found in the class hierarchy
-
-
-class CodeVisitor(ast.NodeVisitor):
-    """Visit and convert the AST nodes within a code file to tool schemas"""
-
-    def __init__(self, source_code: str):
-        self.tool_schemas = {}  # {tool_name: tool_schema}
-        self.source_code = source_code
-
-    def visit_ClassDef(self, node):
-        class_schemas = {"type": "class", "description": remove_spaces(ast.get_docstring(node)), "methods": {}}
-        for body_node in node.body:
-            if isinstance(body_node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-                not body_node.name.startswith("_") or body_node.name == "__init__"
-            ):
-                func_schemas = self._get_function_schemas(body_node)
-                class_schemas["methods"].update({body_node.name: func_schemas})
-        class_schemas["code"] = ast.get_source_segment(self.source_code, node) or ""
-        self.tool_schemas[node.name] = class_schemas
-
-    def visit_FunctionDef(self, node):
-        self._visit_function(node)
-
-    def visit_AsyncFunctionDef(self, node):
-        self._visit_function(node)
-
-    def _visit_function(self, node):
-        if node.name.startswith("_"):
-            return
-        function_schemas = self._get_function_schemas(node)
-        function_schemas["code"] = ast.get_source_segment(self.source_code, node) or ""
-        self.tool_schemas[node.name] = function_schemas
-
-    def _get_function_schemas(self, node):
-        docstring = remove_spaces(ast.get_docstring(node) or "")
-        overall_desc, param_desc = PARSER.parse(docstring)
-        return {
-            "type": "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function",
-            "description": overall_desc,
-            "signature": self._get_function_signature(node),
-            "parameters": param_desc,
-        }
-
-    def _get_function_signature(self, node):
-        args = []
-        defaults = dict(zip([arg.arg for arg in node.args.args][-len(node.args.defaults) :], node.args.defaults))
-        for arg in node.args.args:
-            arg_str = arg.arg
-            if arg.annotation:
-                annotation = ast.unparse(arg.annotation)
-                arg_str += f": {annotation}"
-            if arg.arg in defaults:
-                default_value = ast.unparse(defaults[arg.arg])
-                arg_str += f" = {default_value}"
-            args.append(arg_str)
-
-        return_annotation = ""
-        if node.returns:
-            return_annotation = f" -> {ast.unparse(node.returns)}"
-
-        return f"({', '.join(args)}){return_annotation}"
-
-    def get_tool_schemas(self):
-        return self.tool_schemas

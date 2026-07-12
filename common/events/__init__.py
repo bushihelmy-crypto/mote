@@ -1,8 +1,8 @@
 """common.events — the unified agent event spine.
 
 One ordered async stream: producers ``emit`` events, subscribers consume them in
-priority order. Converges what used to be three separate mechanisms (stream
-sink, session recorder, hook fire-sites) onto a single decoupled bus.
+priority order. Converges three concerns (stream sink, session recorder, hook
+fire-sites) onto a single decoupled bus.
 
 Public surface:
   * :class:`EventBus` + the active-bus contextvar (:func:`set_bus` /
@@ -28,6 +28,7 @@ from mote.common.events.stream import log_llm_stream
 from mote.common.events.trace import current_span_id, span
 from mote.common.events.types import (
     AGENT_LIFECYCLE,
+    BUDGET,
     COMPACTION_CHECKPOINT,
     DIAGNOSTICS,
     FILE_CHANGED,
@@ -58,6 +59,7 @@ from mote.common.events.types import (
     USER_PROMPT_SUBMIT,
     AgentEvent,
     AgentLifecycleEvent,
+    BudgetEvent,
     CompactionCheckpointEvent,
     DiagnosticsEvent,
     FileChangedEvent,
@@ -114,6 +116,7 @@ __all__ = [
     # events
     "AgentEvent",
     "AgentLifecycleEvent",
+    "BudgetEvent",
     "SessionStartEvent",
     "SessionEndEvent",
     "TurnStartEvent",
@@ -169,6 +172,7 @@ __all__ = [
     "AGENT_LIFECYCLE",
     "SPAN_START",
     "SPAN_END",
+    "BUDGET",
     "USER_PROMPT_SUBMIT",
     "PRE_TOOL_USE",
     "POST_TOOL_USE",

@@ -105,11 +105,9 @@ class ToolRegistry(metaclass=Singleton):
 
     def all_tools(self) -> dict[str, type]:
         """Return all registered tool classes (deduplicated, primary name only)."""
-        seen = {}
-        for name, tool_cls in self._registry.items():
-            if tool_cls not in seen.values():
-                seen[tool_cls.name] = tool_cls
-        return seen
+        # Keying by primary name collapses every alias entry onto one slot, so
+        # each class appears exactly once regardless of how many names it holds.
+        return {tool_cls.name: tool_cls for tool_cls in self._registry.values()}
 
     def all_names(self, cls) -> list[str]:
         """Return all names a tool class responds to (primary + aliases)."""

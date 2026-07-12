@@ -1,13 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2024/1/4 16:32
-@Author  : alexanderwu
-@File    : context.py
-"""
 from __future__ import annotations
 
 from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.config.loader import load_config
@@ -15,7 +12,6 @@ from mote.common.config.meta_config import Config
 from mote.router.cost import CostTracker, PricingMode
 from mote.router.llm.base_llm import BaseLLM
 from mote.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
-from pydantic import BaseModel, ConfigDict, Field
 
 
 class Context(BaseModel):
@@ -57,10 +53,11 @@ class Context(BaseModel):
             return self.cost_manager
 
     def llm(self) -> BaseLLM:
-        """Build a BaseLLM for the default (``config.llm``) model."""
-        llm = create_llm_instance(self.config.llm)
+        """Build a BaseLLM for the default (``config.models.default``) model."""
+        default = self.config.models.default
+        llm = create_llm_instance(default)
         if llm.cost_manager is None:
-            llm.cost_manager = self._select_cost_manager(self.config.llm)
+            llm.cost_manager = self._select_cost_manager(default)
         return llm
 
     def llm_with_cost_manager_from_llm_config(self, llm_config: LLMConfig) -> BaseLLM:

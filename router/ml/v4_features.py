@@ -21,8 +21,9 @@ import re
 
 import joblib
 import numpy as np
-from mote.router.ml.bge_onnx import OnnxBGE
 from sklearn.decomposition import PCA
+
+from mote.router.ml.bge_onnx import OnnxBGE
 
 __all__ = [
     "extract_assistant_handcrafted",

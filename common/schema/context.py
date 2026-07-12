@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import BaseModel
+
 from mote.common.const.context import AUTOCOMPACT_BUFFER_TOKENS as _AUTOCOMPACT_BUFFER_TOKENS
 from mote.common.const.context import AUTOCOMPACT_KEEP_TAIL_MESSAGES as _AUTOCOMPACT_KEEP_TAIL_MESSAGES
 from mote.common.const.context import AUTOCOMPACT_KEEP_TAIL_TOKENS as _AUTOCOMPACT_KEEP_TAIL_TOKENS
@@ -16,7 +18,6 @@ from mote.common.const.context import MAX_OUTPUT_TOKENS_FOR_SUMMARY as _MAX_OUTP
 from mote.common.const.context import MICROCOMPACT_CLEAR_AT_LEAST_TOKENS as _MICROCOMPACT_CLEAR_AT_LEAST_TOKENS
 from mote.common.const.context import MICROCOMPACT_KEEP_RECENT as _MICROCOMPACT_KEEP_RECENT
 from mote.common.const.context import MICROCOMPACT_TRIGGER_THRESHOLD as _MICROCOMPACT_TRIGGER_THRESHOLD
-from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # ContextManagerConfig (from context/config.py)
@@ -58,7 +59,7 @@ class ContextManagerConfig(BaseModel):
 class TokenState:
     """A snapshot of where the conversation sits relative to the window.
 
-    Mirrors CC ``calculateTokenWarningState`` plus the autocompact decision.
+    Captures the token warning state plus the autocompact decision.
     """
 
     token_count: int

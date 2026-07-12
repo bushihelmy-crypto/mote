@@ -11,13 +11,10 @@ assert the rendered ``inspect.signature`` of locally-defined functions, which
 would be stringized (``'int'`` instead of ``int``) under PEP 563.
 """
 import pytest
+
 from mote.executor.agent_registry import AgentRegistry
 from mote.executor.mcp_adapter import MCPToolAdapter
-from mote.executor.tool_convert import (
-    convert_code_to_tool_schema,
-    convert_code_to_tool_schema_ast,
-    function_docstring_to_schema,
-)
+from mote.executor.tool_convert import function_docstring_to_schema
 
 # ---------------------------------------------------------------------------
 # tool_convert
@@ -56,60 +53,6 @@ class TestFunctionDocstringToSchema:
 
         schema = function_docstring_to_schema(fn, "")
         assert schema["parameters"] == ""
-
-
-class TestConvertCode:
-    def test_function_object(self):
-        def fn(x: str) -> str:
-            """Echo."""
-            return x
-
-        schema = convert_code_to_tool_schema(fn)
-        assert schema["type"] == "function"
-        assert schema["description"] == "Echo."
-
-    def test_class_object_collects_public_methods(self):
-        class Calc:
-            """A calculator."""
-
-            def add(self, a: int, b: int) -> int:
-                """Add.
-
-                Args:
-                    a: x.
-                    b: y.
-                """
-                return a + b
-
-            def _private(self):  # excluded
-                ...
-
-        schema = convert_code_to_tool_schema(Calc)
-        assert schema["type"] == "class"
-        assert "add" in schema["methods"]
-        assert "_private" not in schema["methods"]
-
-    def test_ast_parsing(self):
-        code = (
-            "def mul(a: int, b: int) -> int:\n"
-            '    """Multiply.\n\n'
-            "    Args:\n"
-            "        a: first.\n"
-            "        b: second.\n"
-            '    """\n'
-            "    return a * b\n"
-        )
-        schemas = convert_code_to_tool_schema_ast(code)
-        assert "mul" in schemas
-        assert schemas["mul"]["type"] == "function"
-        assert schemas["mul"]["signature"] == "(a: int, b: int) -> int"
-        # AST path additionally captures the source.
-        assert "code" in schemas["mul"]
-
-    def test_ast_async_function(self):
-        code = "async def go(x: str) -> str:\n    'Doc.'\n    return x\n"
-        schemas = convert_code_to_tool_schema_ast(code)
-        assert schemas["go"]["type"] == "async_function"
 
 
 # ---------------------------------------------------------------------------

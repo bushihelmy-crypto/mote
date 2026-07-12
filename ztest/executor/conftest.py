@@ -24,13 +24,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from mote.common.schema import ToolResultLimitConfig
 from mote.executor.base_tool import BaseTool
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_executor import ToolExecutor
 from mote.executor.tool_registry import ToolRegistry
 from mote.executor.tool_registry import registry as global_registry
-from mote.executor.tool_result import ToolError, ToolResult
+from mote.executor.tool_result import ToolError, ToolMedia, ToolResult
 
 # ---------------------------------------------------------------------------
 # Plain (unregistered) tools
@@ -100,7 +101,7 @@ class MediaTool(BaseTool):
     name = "Media"
 
     async def call(self, *, payload: str = "img") -> ToolResult:
-        return ToolResult(output="Read image (1KB)", images=[payload])
+        return ToolResult(output="Read image (1KB)", media=[ToolMedia(kind="image", b64=payload)])
 
 
 class StructuredResultTool(BaseTool):

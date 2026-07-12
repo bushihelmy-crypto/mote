@@ -1,5 +1,6 @@
-from mote.common.utils.yaml_model import YamlModel
 from pydantic import Field
+
+from mote.common.utils.yaml_model import YamlModel
 
 
 class LangfuseConfig(YamlModel):

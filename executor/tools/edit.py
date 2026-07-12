@@ -1,26 +1,26 @@
-"""Edit (update) file tool — aligned with Claude Code's Edit (FileEditTool).
+"""Edit (update) file tool.
 
 Performs exact string replacements in a file: ``old_string`` is located in the
 file and swapped for ``new_string`` (one occurrence by default, or every
 occurrence when ``replace_all`` is set). This is the in-place counterpart to the
 Write tool — prefer it when only part of a file changes.
 
-Behavior is ported from CC's FileEditTool so model usage stays familiar:
+Behavior:
 - Read-before-edit is enforced via the Role's shared file-read state
   (Role.get_file_read_mtime): an existing file must have been read this session
   and be unchanged on disk since that read. Skipped when unbound (no Role).
-- A forgiving match cascade (findActualString): exact match, then curly→straight
+- A forgiving match cascade: exact match, then curly→straight
   quote normalization, then tab↔space normalization, then both combined. This
   recovers matches when the model copies from Read output (tabs rendered as
   spaces) or the file uses typographic quotes.
 - When the match only succeeded after quote normalization, new_string's quotes
   are re-styled to the file's curly form so the edit preserves typography.
 - old_string == '' creates a new file (or fills an empty one) with new_string,
-  mirroring CC's create-via-edit path.
+  via the create-via-edit path.
 - The existing file's newline style (LF vs CRLF) is detected and preserved on
   write, the same as the Write tool.
 
-Differences from CC, by design: no LSP/skills/analytics/git-diff/file-history
+Differences by design: no LSP/skills/analytics/git-diff/file-history
 side effects, and encoding handling matches the Write tool (UTF-8) rather than
 round-tripping UTF-16.
 """
@@ -214,7 +214,7 @@ def _apply_edit(content: str, old_string: str, new_string: str, replace_all: boo
 
     When deleting (new_string == '') and old_string doesn't end with a newline
     but is followed by one in the file, the trailing newline is consumed too so
-    deletion doesn't leave a blank line (mirrors CC's applyEditToFile).
+    deletion doesn't leave a blank line.
     """
     count = -1 if replace_all else 1
     if new_string != "":
@@ -234,7 +234,7 @@ class Edit(FileMutatingTool):
     # The effect (edited file) is durable and re-readable, so the success-message
     # body can be cleared without losing recoverable information.
     reconstructable: ClassVar[bool] = True
-    # Success messages can echo a code snippet; allow a higher cap (CC).
+    # Success messages can echo a code snippet; allow a higher cap.
     max_result_size_chars: ClassVar[int] = 100_000
     description = EDIT_DESCRIPTION
 
@@ -355,7 +355,7 @@ class Edit(FileMutatingTool):
         """Handle the empty-old_string create path.
 
         Valid only when the file doesn't exist, or exists but is empty/whitespace
-        (mirrors CC's create-via-edit). Otherwise refuses to clobber content.
+        (the create-via-edit path). Otherwise refuses to clobber content.
         """
         old = ""
         if existed:

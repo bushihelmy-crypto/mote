@@ -7,8 +7,8 @@ engine classes (Role / Runtime / Control / Context / Schema / State /
 UserMessage / …). Everything else in the CLI (``app.py`` / ``driver.py``) reaches
 the engine exclusively through the module-level functions here.
 
-Deliberately **not** a Protocol / interface / IoC container. Following the CC
-reference (a mature UI↔engine split) we bind with a flat set of concrete
+Deliberately **not** a Protocol / interface / IoC container. Following a mature
+UI↔engine split, we bind with a flat set of concrete
 functions + injected callables — the seam is a *place*, not an abstraction. When
 the engine grows a new capability, one function lands here; the CLI stays blind
 to the concrete types.

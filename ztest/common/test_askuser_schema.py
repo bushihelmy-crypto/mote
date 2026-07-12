@@ -4,7 +4,7 @@
 
 The answer models are the backbone of the structured channel that replaced the
 lossy text round-trip: ``selected`` (chosen labels) and ``free_text`` (the
-"Other" text) live in separate fields, and ``display`` only rebuilds CC's
+"Other" text) live in separate fields, and ``display`` only rebuilds the
 ``"q"="a"`` string at the final formatting boundary. These tests pin the
 selection/free-text separation the old round-trip collapsed.
 """

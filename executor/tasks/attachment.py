@@ -1,7 +1,6 @@
 """Generate task attachments by polling running/completed background tasks.
 
-Aligned with Claude Code's ``framework.ts`` (``generateTaskAttachments`` /
-``applyTaskOffsetsAndEvictions``).  This module is standalone — it does **not**
+This module is standalone — it does **not**
 modify ``BackgroundTaskPool``, ``Role``, or the ``_observe()`` loop.
 
 The caller invokes ``TaskAttachmentGenerator.generate()`` before each LLM

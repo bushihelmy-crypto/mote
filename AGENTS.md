@@ -42,7 +42,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 
 - 在 `executor/tools/` 新建模块，定义 `@register_tool` 的 `BaseTool` 子类即可（`ToolRegistry.discover()` 包扫描自动发现，无需手动注册到 `__init__`）。
 - 用 `requires=(...)` **声明需要的能力名**；只有出现在 `Role.tool_capabilities()` 白名单里的能力才会被注入。**工具拿不到整个 `RoleState`/memory/env** —— 这是最小权限边界，别绕过。
-  - 现有能力白名单：`get_cwd, set_cwd, deactivate, ask_human, request_approval, reply_to_human, end_session, record_file_read, get_file_read_mtime, record_file_snapshot, wait_interruptible`。新增能力要同时在 `Role.tool_capabilities()` 注册。
+  - 现有能力白名单：`get_cwd, set_cwd, deactivate, ask_user, request_approval, reply_to_user, end_session, record_file_read, get_file_read_mtime, record_file_snapshot, wait_interruptible`。新增能力要同时在 `Role.tool_capabilities()` 注册。
 - 文件改写工具继承 `dependency/_file_base.py::FileMutatingTool`：自动做读后写校验、保留换行、写盘前 `record_file_snapshot`（before-image）。写盘前记得调 `_snapshot_pre_write(full_path)`。
 - 命令类工具（Bash/Terminal）的 `check_permissions` 要过 `permission/classifier.py`。
 - 工具返回 `ToolResult`（output/success/images/pdfs/...）。超大输出由 `tool_result_limit.py` 落盘换 `<persisted-output>`，别自己截断丢信息。
@@ -98,7 +98,7 @@ python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tas
 - 改了某子系统，至少跑该子系统 + 其直接依赖方的 ztest，确认无回归。
 - 已知预存问题（非新引入）：
   - `mote/ztest/prompts/*` 因测试自身 import 路径错误（`No module named 'prompts'`）收集失败，与应用代码无关。
-  - `role_utils.py` 原地 mutate 共享常量 `ASK_HUMAN_COMMAND` 会造成顺序依赖污染。
+  - `role_utils.py` 原地 mutate 共享常量 `ASK_USER_COMMAND` 会造成顺序依赖污染。
   - 本机 pytest/py3.11 偶发 `INTERNALERROR AST recursion depth mismatch`，用 `--tb=short`/`--tb=no` 规避。
 - 交互式 PTY/kernel 测试：多次调用必须包在**一个 `asyncio.run`** 里（conftest 每次 `run()` 开新 loop 会孤儿化 reader/channel），每个 test 用唯一 session_id + cleanup 防 singleton 泄漏。
 

@@ -6,7 +6,7 @@ whether a parsed rule matches a concrete tool call. Two pattern flavours:
   * **wildcard** (``fnmatch``): the familiar glob syntax (``*`` / ``?``) —
     e.g. ``Bash(git*)``, ``Bash(npm install)``, ``Write(/tmp/*)``. Matched
     against the call's permission-target string verbatim.
-  * **prefix** (trailing ``:*``, Claude Code style): ``Bash(git commit:*)``
+  * **prefix** (trailing ``:*``): ``Bash(git commit:*)``
     matches any command whose stable, env-stripped token prefix starts with
     ``git commit`` — so ``git commit -m "x"`` and ``git commit -a`` both match
     but ``git commit-tree`` does not. This is what an approved "always" grant

@@ -20,6 +20,8 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.const import USE_CONFIG_TIMEOUT
 from mote.common.events import log_llm_stream
@@ -31,7 +33,6 @@ from mote.router.cost import CostTracker, TokenUsage
 from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
@@ -312,8 +313,8 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
 
         Unlike the OpenAI-compatible providers (automatic prefix caching, no
         markers, no write cost), Anthropic caches only where an explicit
-        ``cache_control: {"type": "ephemeral"}`` breakpoint is placed. We mirror
-        Claude Code's strategy: at most three breakpoints, each protecting a
+        ``cache_control: {"type": "ephemeral"}`` breakpoint is placed. We use
+        a strategy of at most three breakpoints, each protecting a
         successively longer stable prefix, so one downstream change still leaves
         the earlier prefixes hitting the cache:
 

@@ -10,6 +10,7 @@ compat).
 from __future__ import annotations
 
 import pytest
+
 from mote.common.hook.types import HookOutcome
 from mote.roles import Role
 from mote.roles.role_schema import RoleSchema

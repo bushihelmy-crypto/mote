@@ -24,12 +24,12 @@ class TestToolResultDefaults:
         assert r.pdfs == []
         assert r.file_changes == []
 
-    def test_images_pdfs_independent_per_instance(self):
+    def test_media_independent_per_instance(self):
         a = ToolResult(output="a")
         b = ToolResult(output="b")
-        a.images.append("x")
-        a.pdfs.append("y")
+        a.media.append(ToolMedia(kind="image", b64="x"))
         # default_factory => no shared mutable default between instances.
+        assert b.media == []
         assert b.images == []
         assert b.pdfs == []
 
@@ -95,44 +95,59 @@ class TestFromToolReturn:
         assert r.output.startswith(ERROR_PREFIX)
 
 
-class TestMediaArtifacts:
+class TestMedia:
     def test_no_media_is_empty(self):
-        assert ToolResult(output="x").media_artifacts() == []
+        r = ToolResult(output="x")
+        assert r.media == []
+        assert r.images == []
+        assert r.pdfs == []
 
-    def test_image_with_path_recovers_ref(self):
+    def test_image_carries_kind_ref_b64(self):
+        # The producer stamps ref at the source — no path recovered from data.
         r = ToolResult(
             output="Read image ...",
-            images=["<b64>"],
-            data={"type": "image", "path": "/tmp/pic.png"},
+            media=[ToolMedia(kind="image", b64="<b64>", ref="/tmp/pic.png")],
         )
-        media = r.media_artifacts()
-        assert len(media) == 1
-        assert media[0].kind == "image"
-        assert media[0].ref == "/tmp/pic.png"
+        assert len(r.media) == 1
+        assert r.media[0].kind == "image"
+        assert r.media[0].ref == "/tmp/pic.png"
+        assert r.media[0].b64 == "<b64>"
+        # .images projects the base64 payloads grouped by kind.
+        assert r.images == ["<b64>"]
+        assert r.pdfs == []
 
-    def test_pdf_with_path_recovers_ref(self):
+    def test_pdf_carries_kind_ref_b64(self):
         r = ToolResult(
             output="Read PDF ...",
-            pdfs=["<b64>"],
-            data={"type": "pdf", "path": "/tmp/doc.pdf"},
+            media=[ToolMedia(kind="pdf", b64="<b64>", ref="/tmp/doc.pdf", mime="application/pdf")],
         )
-        media = r.media_artifacts()
-        assert len(media) == 1
-        assert media[0].kind == "pdf"
-        assert media[0].ref == "/tmp/doc.pdf"
+        assert len(r.media) == 1
+        assert r.media[0].kind == "pdf"
+        assert r.media[0].ref == "/tmp/doc.pdf"
+        assert r.media[0].mime == "application/pdf"
+        assert r.pdfs == ["<b64>"]
+        assert r.images == []
 
     def test_bytes_only_media_has_empty_ref(self):
-        # A screenshot carries base64 but no on-disk path (data has no "path").
-        r = ToolResult(output="[screenshot]", images=["<b64>"], data={"type": "screenshot"})
-        media = r.media_artifacts()
-        assert len(media) == 1
-        assert media[0].kind == "image"
-        assert media[0].ref == ""
+        # A screenshot carries base64 but no on-disk path.
+        r = ToolResult(output="[screenshot]", media=[ToolMedia(kind="image", b64="<b64>", ref="")])
+        assert len(r.media) == 1
+        assert r.media[0].kind == "image"
+        assert r.media[0].ref == ""
+        assert r.images == ["<b64>"]
 
-    def test_multiple_artifacts(self):
-        r = ToolResult(output="x", images=["<a>", "<b>"], pdfs=["<c>"])
-        media = r.media_artifacts()
-        assert [m.kind for m in media] == ["image", "image", "pdf"]
+    def test_images_pdfs_project_by_kind(self):
+        r = ToolResult(
+            output="x",
+            media=[
+                ToolMedia(kind="image", b64="<a>"),
+                ToolMedia(kind="image", b64="<b>"),
+                ToolMedia(kind="pdf", b64="<c>"),
+            ],
+        )
+        assert [m.kind for m in r.media] == ["image", "image", "pdf"]
+        assert r.images == ["<a>", "<b>"]
+        assert r.pdfs == ["<c>"]
 
 
 class TestReExports:

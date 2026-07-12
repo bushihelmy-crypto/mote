@@ -1,4 +1,4 @@
-"""Unified token-usage accounting — a synthesis of Codex and Claude Code.
+"""Unified token-usage accounting — a synthesis of Codex and Anthropic usage.
 
 ``TokenUsage`` is the single normalized record every provider's raw usage is
 mapped into before it reaches the :class:`~mote.router.cost.tracker.CostTracker`.
@@ -8,7 +8,7 @@ Its field set is the *union* of what the two reference agents track:
   ``total``) — note Codex folds cache *reads* into ``cached_input_tokens`` and
   never bills cache *writes* separately, and computes a single display metric
   ``blended_total = non_cached_input + output``.
-- Claude Code's Anthropic usage (``input``/``output`` plus the two distinct cache
+- Anthropic usage (``input``/``output`` plus the two distinct cache
   buckets ``cache_read_input_tokens`` and ``cache_creation_input_tokens``), which
   are priced at *different* rates (read cheap, write expensive).
 

@@ -16,7 +16,7 @@ def test_to_json_dict_carries_envelope_and_payload():
         payload={"tool_name": "Bash", "tool_input": {"command": "ls"}},
     )
     wire = hi.to_json_dict()
-    # Both snake_case and camelCase identity keys present (CC/codex compatible).
+    # Both snake_case and camelCase identity keys present (codex compatible).
     assert wire["hook_event_name"] == "PreToolUse"
     assert wire["hookEventName"] == "PreToolUse"
     assert wire["sessionId"] == "sid"

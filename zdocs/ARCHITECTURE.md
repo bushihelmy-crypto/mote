@@ -141,8 +141,8 @@ graph LR
 设计要点：
 
 - **静态 vs 运行态分离**：`RoleSchema`（配置）与 `RoleState`（运行快照）分开，序列化只需 dump 这两者（`role.py:108-123`），`Role` 自身无需可序列化。
-- **能力白名单是解耦关键**：工具想用 Role 的能力（如 `get_cwd`、`ask_human`、`wait_interruptible`）必须在 `tool_capabilities()` 中显式列出（`role.py:360-378`），`bind()` 只注入这些，永不 `getattr(role, ...)`。
-- **`active` 信号双重身份**：`state._active` 既是循环的迭代开关，又是工具→循环的"急停开关"——`End` 工具或 `ask_human("...stop")` 调 `deactivate()` 即可中断正在运行的循环（`role.py:380-395`、`role.py:410-413`）。
+- **能力白名单是解耦关键**：工具想用 Role 的能力（如 `get_cwd`、`ask_user`、`wait_interruptible`）必须在 `tool_capabilities()` 中显式列出（`role.py:360-378`），`bind()` 只注入这些，永不 `getattr(role, ...)`。
+- **`active` 信号双重身份**：`state._active` 既是循环的迭代开关，又是工具→循环的"急停开关"——`End` 工具或 `ask_user("...stop")` 调 `deactivate()` 即可中断正在运行的循环（`role.py:380-395`、`role.py:410-413`）。
 
 ---
 
@@ -204,7 +204,7 @@ sequenceDiagram
             end
             Loop->>Chan: record_turn(memory, rsp, executed)
             Loop->>Think: join()
-            Loop->>Loop: 后置检查（max_loop / 连续次数 → 可能 ask_human）
+            Loop->>Loop: 后置检查（max_loop / 连续次数 → 可能 ask_user）
         end
     end
     Loop-->>Role: rsp
@@ -267,7 +267,7 @@ graph TD
 设计要点：
 - **Role 不持有固定 LLM**：每一轮由循环经 router 解析出 `llm` 再传给 `ThinkEngine.start()`（`think_engine.py:34-37, 45-56`），同一 Role 可在不同请求间使用不同模型。
 - **think 是后台任务**：`start()` 仅 `create_task`，真正等待发生在 act 后的 `join()`（`think_engine.py:107-112`），为 think/act 并行留出空间。
-- **去重按协议分流**：XML 比对原始响应文本，Native 比对结构化调用签名，硬重复时合成一个 `ask_human` 调用兜底（`think_engine.py:80-98`）。
+- **去重按协议分流**：XML 比对原始响应文本，Native 比对结构化调用签名，硬重复时合成一个 `ask_user` 调用兜底（`think_engine.py:80-98`）。
 
 ---
 

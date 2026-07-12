@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.exception import ModelNotFoundError
 from mote.router.schema import RoutingRequest
@@ -193,13 +194,11 @@ class TestContextReducerInjection:
         assert compression_llm.context_reducer is None
         assert think_llm.context_reducer is sentinel
 
-    def test_summary_instance_keeps_reducer(self, router):
-        # SUMMARY is a top-level turn-end call (not nested inside compression),
-        # so it keeps its reducer — only COMPRESSION is withheld.
-        from mote.router.router import SUMMARY_TASK
-
+    def test_non_compression_task_keeps_reducer(self, router):
+        # A non-compression task is a top-level call (not nested inside
+        # compression), so it keeps its reducer — only COMPRESSION is withheld.
         sentinel = object()
         router.context_reducer = sentinel
-        router.map_task(SUMMARY_TASK, "strong")
-        llm = router.route_for_task(SUMMARY_TASK)
+        router.map_task("some-task", "strong")
+        llm = router.route_for_task("some-task")
         assert llm.context_reducer is sentinel

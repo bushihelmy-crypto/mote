@@ -14,6 +14,7 @@ import json
 import os
 
 import pytest
+
 from mote.common.const import TOOL_RESULT_RESOURCE_PATH
 from mote.common.const.tools import MAX_LINE_LENGTH
 from mote.executor.tool_result import ToolError, ToolResult
@@ -267,8 +268,9 @@ class TestReadImage:
         assert result.data["detail"] == "high"
 
     def test_large_image_is_downscaled_to_fit(self, workspace):
-        from mote.common.const.tools import MAX_IMAGE_DIMENSION
         from PIL import Image
+
+        from mote.common.const.tools import MAX_IMAGE_DIMENSION
 
         p = os.path.join(str(workspace), "big.png")
         Image.new("RGB", (4000, 2000), (123, 50, 200)).save(p)

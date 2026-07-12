@@ -29,8 +29,9 @@ console, so a terminal stream and the Textual app render byte-identically.
 
 from __future__ import annotations
 
-from mote.cli.consumers.render.palette import Palette
 from rich.theme import Theme
+
+from mote.cli.consumers.render.palette import Palette
 
 # Heading hierarchy: h1 is the brand accent; h2→h6 step toward the dim secondary
 # tone so nested outlines stay readable without shouting. h1's border colour is

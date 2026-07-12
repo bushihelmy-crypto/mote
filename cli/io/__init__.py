@@ -5,7 +5,7 @@
 ``ports`` defines the three inbound semantics (Interactive / Broadcast / Protocol)
 over one shared :class:`InputPort` base. ``terminal_io`` provides the terminal's
 :class:`InteractivePort` (stdin + two-stage SIGINT). ``human_channel`` adapts a
-Role's ``ask_human`` onto any port's ``ask``.
+Role's ``ask_user`` onto any port's ``ask``.
 """
 
 from __future__ import annotations

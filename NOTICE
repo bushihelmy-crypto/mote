@@ -1,0 +1,133 @@
+mote
+Copyright (c) 2023 MetaGPT (DeepWisdom)
+Copyright (c) 2026 mote contributors
+
+mote is licensed under the MIT License (see LICENSE).
+
+================================================================================
+THIRD-PARTY SOFTWARE NOTICES AND ATTRIBUTIONS
+================================================================================
+
+This product includes, references, ports, and/or adapts source code from the
+third-party projects listed below. Each project's full license text is kept in
+the zthird_party_licenses/ directory. Where noted, the incorporated code has been
+modified (e.g. ported from Rust/TypeScript to Python and integrated with this
+project's own permission, event, and context subsystems).
+
+--------------------------------------------------------------------------------
+1. OpenAI Codex
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/openai/codex
+   License  : Apache License 2.0  (zthird_party_licenses/codex.LICENSE.txt)
+   Copyright: Copyright 2025 OpenAI  (upstream NOTICE: zthird_party_licenses/codex.NOTICE.txt)
+   Modified : Yes — ported from Rust (codex-rs/*) to Python.
+   Used in  : environment/* (agent_path, control, mailbox, registry, runtime,
+              residency, limiter, store), executor/dependency/_apply_patch/*,
+              executor/tools/apply_patch.py, executor/permission/classifier.py,
+              sandbox/network/policy.py, and parts of the hook engine.
+
+--------------------------------------------------------------------------------
+2. open-code-review (OCR)
+--------------------------------------------------------------------------------
+   Upstream : @alibaba-group/open-code-review
+   License  : Apache License 2.0  (zthird_party_licenses/open-code-review.LICENSE.txt)
+   Copyright: Copyright the open-code-review authors (Alibaba Group)
+   Modified : Yes — adapted to Python.
+   Used in  : executor/tools/code_review/* (resolver, filter, plan, review_filter,
+              bundle).
+
+--------------------------------------------------------------------------------
+3. OpenSquilla
+--------------------------------------------------------------------------------
+   License  : Apache License 2.0  (zthird_party_licenses/opensquilla.LICENSE.txt)
+   Copyright: Copyright OpenSquilla contributors
+   Modified : Yes — adapted to Python.
+   Used in  : router/flags.py, router/strategy.py (squilla_router routing flags).
+
+--------------------------------------------------------------------------------
+4. CLI-Anything
+--------------------------------------------------------------------------------
+   License  : Apache License 2.0  (zthird_party_licenses/CLI-Anything.LICENSE.txt)
+   Copyright: Copyright the CLI-Anything project contributors
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+5. Agent Sandbox
+--------------------------------------------------------------------------------
+   License  : Apache License 2.0  (zthird_party_licenses/agent-sandbox.LICENSE.txt)
+   Copyright: Copyright the Agent Sandbox project contributors
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+6. browser-use
+--------------------------------------------------------------------------------
+   License  : MIT License  (zthird_party_licenses/browser-use.LICENSE.txt)
+   Copyright: Copyright (c) 2024 Gregor Zunic
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+7. codegraph
+--------------------------------------------------------------------------------
+   License  : MIT License  (zthird_party_licenses/codegraph.LICENSE.txt)
+   Copyright: Copyright (c) 2026 Colby Mchenry
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+8. Hermes (hermes-agent)
+--------------------------------------------------------------------------------
+   License  : MIT License  (zthird_party_licenses/hermes-agent.LICENSE.txt)
+   Copyright: Copyright (c) 2025 Nous Research
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+9. LangGraph
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/langchain-ai/langgraph
+   License  : MIT License  (zthird_party_licenses/langgraph.LICENSE.txt)
+   Copyright: Copyright (c) 2024 LangChain, Inc.
+   Modified : Yes.
+   Used in  : executor/tasks/bggraph/* (frontier-scheduler execution model).
+
+--------------------------------------------------------------------------------
+10. MarkItDown
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/microsoft/markitdown
+   License  : MIT License  (zthird_party_licenses/markitdown.LICENSE.txt)
+   Copyright: Copyright (c) Microsoft Corporation
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+11. MarkText
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/marktext/marktext
+   License  : MIT License  (zthird_party_licenses/marktext.LICENSE.txt)
+   Copyright: Copyright (c) 2017-present Luo Ran
+              Copyright (c) 2018-present MarkText Contributors
+   Modified : Yes.
+
+--------------------------------------------------------------------------------
+12. oh-my-claudecode
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/Yeachan-Heo/oh-my-claudecode
+   License  : MIT License  (zthird_party_licenses/oh-my-claudecode.LICENSE.txt)
+   Copyright: Copyright (c) 2025 Yeachan Heo
+   Modified : Yes — ported from TypeScript to Python.
+   Used in  : router/complexity.py, router/strategy.py (model-routing complexity
+              signals + scorer + rules engine).
+
+--------------------------------------------------------------------------------
+13. ripgrep
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/BurntSushi/ripgrep
+   License  : MIT License OR the Unlicense  (zthird_party_licenses/ripgrep.LICENSE.txt)
+   Copyright: Copyright (c) 2015 Andrew Gallant
+   Modified : No — the ripgrep 14.1.1 x86_64-linux binary is redistributed
+              unmodified under vendor/ripgrep/.
+
+================================================================================
+Notes
+================================================================================
+- Trademarks are the property of their respective owners. The names above are
+  used for attribution only and do not imply endorsement.
+- If you believe an attribution here is incorrect or incomplete, please open an
+  issue so it can be corrected.

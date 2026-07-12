@@ -16,6 +16,9 @@ import pytest
 
 pytest.importorskip("textual")
 
+from textual.widgets import Static
+from textual.worker import WorkerState
+
 from mote.cli.consumers.textual.app import MoteApp, ViewEventMessage
 from mote.cli.consumers.textual.widgets import (
     AssistantBlock,
@@ -39,8 +42,8 @@ from mote.cli.contracts.view import (
     ToolCallCompleted,
     ToolCallStarted,
 )
-from textual.widgets import Static
-from textual.worker import WorkerState
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 
 class _FakePort:
@@ -97,7 +100,7 @@ async def test_completed_nonstreamed_mounts_fresh_block():
 async def test_tool_started_then_completed_correlates_one_widget():
     app = MoteApp()
     async with app.run_test() as pilot:
-        # A non-collapsible tool (Bash) mounts a standalone ToolCallWidget; a
+        # A non-grouping tool (Bash) mounts a standalone ToolCallWidget; a
         # search/read tool would coalesce into a ToolGroupWidget instead.
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", tool_use_id="tu-1")))
         await pilot.pause()
@@ -133,8 +136,8 @@ async def test_consecutive_search_read_coalesce_into_one_group():
         # ``Static.update`` stashes the raw renderable in the mangled ``__content``;
         # our collapsed group updates it with the summary ``Text``.
         plain = group._Static__content.plain
-        assert "搜索 2 个模式" in plain
-        assert "读取 1 个文件" in plain
+        assert t(K.GROUP_SEARCH, count=2) in plain
+        assert t(K.GROUP_READ, count=1) in plain
         assert "…" not in plain  # all completed → not active
 
 
@@ -192,6 +195,134 @@ async def test_ctrl_o_toggles_tool_group_expansion():
 
 
 @pytest.mark.asyncio
+async def test_ctrl_o_toggles_standalone_bash_widget():
+    """A Bash call mounts collapsed; ctrl+o expands it, and a later Bash call
+    honours the now-expanded sticky state."""
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="b1")))
+        await pilot.pause()
+        bash = app.query(ToolCallWidget).first()
+        assert bash._folds_detail is True and bash.expanded is False
+        app.action_toggle_tool_details()
+        await pilot.pause()
+        assert app._tools_expanded is True and bash.expanded is True
+        # A NEW Bash call afterward honours the sticky expanded state.
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="pwd", tool_use_id="b2")))
+        await pilot.pause()
+        assert app.query(ToolCallWidget).last().expanded is True
+
+
+@pytest.mark.asyncio
+async def test_click_selects_tool_row_and_scopes_ctrl_o():
+    """Clicking a tool row selects it (distinct band); ctrl+o then toggles ONLY it."""
+    from mote.cli.consumers.textual.widgets import FoldableRow
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        # Two standalone Bash rows (both collapsed, detail-folding).
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="b1")))
+        app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="x", streamed=False)))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="pwd", tool_use_id="b2")))
+        await pilot.pause()
+        first, second = app.query(ToolCallWidget)
+        # Click (select) the first row.
+        app.on_foldable_row_clicked(FoldableRow.Clicked(first))
+        await pilot.pause()
+        assert app._selected_tool is first
+        assert first.selected is True and second.selected is False
+        # ctrl+o now scopes to the selected row only.
+        app.action_toggle_tool_details()
+        await pilot.pause()
+        assert first.expanded is True
+        assert second.expanded is False  # untouched
+        assert app._tools_expanded is False  # global sticky state not flipped
+
+
+@pytest.mark.asyncio
+async def test_click_moves_then_reclick_deselects():
+    """Clicking another row moves the selection; re-clicking the selected clears it."""
+    from mote.cli.consumers.textual.widgets import FoldableRow
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="b1")))
+        app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="x", streamed=False)))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="pwd", tool_use_id="b2")))
+        await pilot.pause()
+        first, second = app.query(ToolCallWidget)
+        app.on_foldable_row_clicked(FoldableRow.Clicked(first))
+        app.on_foldable_row_clicked(FoldableRow.Clicked(second))  # move selection
+        await pilot.pause()
+        assert app._selected_tool is second
+        assert first.selected is False and second.selected is True
+        app.on_foldable_row_clicked(FoldableRow.Clicked(second))  # re-click → deselect
+        await pilot.pause()
+        assert app._selected_tool is None
+        assert second.selected is False
+
+
+@pytest.mark.asyncio
+async def test_ctrl_o_stays_global_when_nothing_selected():
+    """With no row selected, ctrl+o keeps the global expand/collapse-all behaviour."""
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="b1")))
+        app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="x", streamed=False)))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="pwd", tool_use_id="b2")))
+        await pilot.pause()
+        first, second = app.query(ToolCallWidget)
+        assert app._selected_tool is None
+        app.action_toggle_tool_details()
+        await pilot.pause()
+        assert app._tools_expanded is True
+        assert first.expanded is True and second.expanded is True  # all toggled
+
+
+@pytest.mark.asyncio
+async def test_compaction_clears_tool_selection():
+    """A compaction wipes the transcript → the dangling selection is released."""
+    from mote.cli.consumers.textual.widgets import FoldableRow
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="b1")))
+        await pilot.pause()
+        row = app.query(ToolCallWidget).first()
+        app.on_foldable_row_clicked(FoldableRow.Clicked(row))
+        assert app._selected_tool is row
+        app.post_message(ViewEventMessage(ConversationCompacted(summary="", message_count=0)))
+        await pilot.pause()
+        assert app._selected_tool is None
+
+
+@pytest.mark.asyncio
+async def test_click_selects_whole_search_read_group_and_scopes_ctrl_o():
+    """Coalesced Read/Grep/Glob form ONE group → a click selects the whole unit."""
+    from mote.cli.consumers.textual.widgets import FoldableRow, ToolGroupWidget
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        # Three consecutive search/read calls coalesce into a single group row.
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="g1")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="g2")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Glob", headline="*.py", tool_use_id="g3")))
+        await pilot.pause()
+        groups = app.query(ToolGroupWidget)
+        assert len(groups) == 1
+        group = groups.first()
+        # Clicking the group selects it as one unit.
+        app.on_foldable_row_clicked(FoldableRow.Clicked(group))
+        await pilot.pause()
+        assert app._selected_tool is group and group.selected is True
+        assert group.expanded is False
+        # Scoped ctrl+o expands the whole group together.
+        app.action_toggle_tool_details()
+        await pilot.pause()
+        assert group.expanded is True
+
+
+@pytest.mark.asyncio
 async def test_notice_and_error_mount_rows():
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -212,7 +343,7 @@ async def test_retry_status_updates_statusbar_not_transcript():
         await pilot.pause()
         bar = app.query_one("#status", StatusBar)
         assert bar.retry_msg
-        assert "第 2/6 次重试" in bar.render().plain
+        assert t(K.RETRY_ATTEMPT, attempt=2, total=6) in bar.render().plain
         # No transcript row was mounted for the transient retry.
         assert len(app.query(NoticeRow)) == 0
 
@@ -240,7 +371,7 @@ async def test_reasoning_delta_flips_statusbar_to_thinking():
         await pilot.pause()
         bar = app.query_one("#status", StatusBar)
         assert bar.thinking is True
-        assert "思考中" in bar.render().plain
+        assert t(K.STATUS_THINKING) in bar.render().plain
 
 
 @pytest.mark.asyncio
@@ -279,8 +410,9 @@ async def test_submit_expands_multiline_paste_placeholder():
     placeholder, but ``on_input_submitted`` expands it via ``consume_value`` so the
     turn carries the real multi-line content.
     """
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     app = MoteApp()
     port = _FakePort(waiting=True)
@@ -413,6 +545,7 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
     so repeated copies looked doubled ("每行复制重复2次"); a native replace can't.
     """
     import textual.app as _ta
+
     from mote.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
@@ -437,6 +570,7 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
 async def test_non_wsl_copy_uses_osc52():
     """Off WSL (or over SSH) the portable OSC 52 base path is used."""
     import textual.app as _ta
+
     from mote.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
@@ -462,6 +596,7 @@ async def test_non_wsl_copy_uses_osc52():
 async def test_wsl_copy_falls_back_to_osc52_when_native_fails():
     """If the native write can't run (no ``powershell.exe``), OSC 52 still copies."""
     import textual.app as _ta
+
     from mote.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
@@ -533,7 +668,7 @@ async def test_submit_disarms_idle_exit():
 
 @pytest.mark.asyncio
 async def test_compaction_clears_transcript_and_preserves_key_info():
-    """Textual compaction mirrors claude-code's fullscreen clear + bridge recap.
+    """Textual compaction mirrors the fullscreen clear + bridge recap.
 
     The alt-buffer host has no scrollback, so a ``ConversationCompacted`` boundary
     wipes the now-stale pre-compaction rows and re-renders only the bridge: the ✻

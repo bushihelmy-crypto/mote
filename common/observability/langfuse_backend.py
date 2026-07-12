@@ -1,8 +1,7 @@
 """LangfuseBackend — the only SDK-touching tracer backend.
 
 Implements :class:`~mote.common.observability.tracing.TracerBackend` against
-the langfuse v3 client. The key difference from the old ``LangfuseSubscriber`` /
-``maybe_span`` pair is **explicit-parent nesting**: a child observation is
+the langfuse v3 client. Nesting is **explicit-parent**: a child observation is
 created off its parent *handle* (``parent_handle.start_observation(...)``) when
 one is present, else off the client — never from langfuse's ambient contextvar.
 The trace tree is therefore driven entirely by the IDs the spine carries, and

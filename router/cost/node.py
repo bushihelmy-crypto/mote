@@ -6,8 +6,8 @@ spawn lineage. A tracker keeps recording only its own usage (exactly the fresh-
 tracker behavior), so per-node attribution is preserved; subtree aggregates are
 computed on demand by walking the children.
 
-This replaces the old "point the child's tracker at the parent's shared tracker"
-rollup, which lost per-node attribution. It is naturally mode-safe: a FIREWORKS
+Pointing the child's tracker at a parent's shared tracker would lose per-node
+attribution; the mirror tree avoids that. It is naturally mode-safe: a FIREWORKS
 / FREE child builds its own differently-priced tracker in
 ``Context._select_cost_manager`` and that tracker is adopted as the node bucket
 unchanged — the parent's standard tracker is never polluted.

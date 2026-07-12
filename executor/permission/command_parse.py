@@ -12,7 +12,7 @@ evaluation). It does three things, all best-effort:
     binary runs — those poison any prefix we might extract; and
   * **extract** a stable command prefix (``git commit -m x`` -> ``git commit``)
     so an approval can be remembered as a prefix rule instead of the exact
-    string, the way Claude Code's ``getSimpleCommandPrefix`` works.
+    string.
 
 Everything degrades gracefully: an unparseable line (unbalanced quotes, ...)
 yields ``None`` from the structured helpers and ``[command]`` from

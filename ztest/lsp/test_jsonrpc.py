@@ -12,6 +12,7 @@ import asyncio
 import sys
 
 import pytest
+
 from mote.roles.lsp.jsonrpc import JsonRpcEndpoint, _parse_content_length
 
 aio = pytest.mark.asyncio

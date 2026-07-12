@@ -186,7 +186,7 @@ def test_rehydrate_provider_failure_is_swallowed():
 
 def test_rehydrate_provider_receives_preserved_tail():
     # The reducer must hand the preserved tail to the provider so it can dedup
-    # files that tail already shows (CC's collectReadToolFilePaths seam).
+    # files that tail already shows (the read-tool file-path collection seam).
     captured: dict = {}
 
     def provider(preserved):

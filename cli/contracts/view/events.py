@@ -156,10 +156,17 @@ class ToolCallCompleted(ViewEvent):
     content_truncated: bool = False
     full_ref: Optional[str] = None
     # How many *lines* the projector dropped from the rendered detail (0 = none /
-    # unknown). Lets a consumer show a precise "+N 行已折叠" fold hint (claude-code's
-    # "… +N lines") instead of a bare "folded" note. Distinct from ``full_ref``
+    # unknown). Lets a consumer show a precise "+N 行已折叠" fold hint (the
+    # "… +N lines" form) instead of a bare "folded" note. Distinct from ``full_ref``
     # (a hard truncation persisted to disk); both can coexist.
     hidden_lines: int = 0
+    # Structured failure facts (from the executor's ErrorReport; empty on success
+    # or when the event carries no structured error). Flat scalars only — the
+    # contract layer never imports the exception type (leaf discipline).
+    error_type: str = ""  # exception class name, e.g. "PermissionError"
+    error_code: str = ""  # stable ErrorCode string, e.g. "tool.permission_denied"
+    retryable: bool = False
+    recovery: str = ""  # one-line remediation hint, human-facing
 
 
 class MediaBlock(ViewEvent):
@@ -224,7 +231,7 @@ class ErrorRaised(ViewEvent):
 
 
 class QuestionAsked(ViewEvent):
-    """The agent asked the user a question (AskUserQuestion / ask_human)."""
+    """The agent asked the user a question (AskUserQuestion / ask_user)."""
 
     kind: ClassVar[str] = QUESTION_ASKED
     question: str = ""
@@ -319,7 +326,7 @@ class SessionListShown(ViewEvent):
 class RetryStatus(ViewEvent):
     """A transient LLM-retry countdown — a *temporary* display, not a transcript entry.
 
-    Mirrors Claude Code's self-updating "Retrying in Ns… (attempt X/Y)" line: the
+    A self-updating "Retrying in Ns… (attempt X/Y)" line: the
     consumer shows it in an erasable region (terminal ``Live(transient=True)`` /
     Textual ``StatusBar``) and **clears it the moment any other event arrives**
     (a stream token = retry succeeded; a final ``ErrorRaised`` = budget exhausted).
@@ -368,7 +375,7 @@ class ConversationCompacted(ViewEvent):
     mote's ``CompactionEngine`` rebuilds history when the context fills up,
     condensing earlier turns into a ``summary`` (the first message of the new
     history). This event surfaces that boundary so the human sees *why* the
-    transcript appears to jump — mirroring claude-code's dim
+    transcript appears to jump — mirroring the dim
     "✻ Conversation compacted" line. ``summary`` carries the model-generated
     recap (a media-capable host may reveal it on demand); ``message_count`` is
     the size of the rebuilt history. A terminal renders only a dim marker line.

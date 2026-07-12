@@ -8,7 +8,7 @@ transcript the way the raw-stdin terminal port did; instead the
 :class:`~mote.cli.io.textual_io.TextualPort` pushes one of these
 :class:`~textual.screen.ModalScreen` overlays and awaits its dismissal value:
 
-* :class:`QuestionScreen` — free-form ``ask`` (``AskUserQuestion`` / ``ask_human``);
+* :class:`QuestionScreen` — free-form ``ask`` (``AskUserQuestion`` / ``ask_user``);
   dismisses with the answer ``str`` (a bare option number maps to that option's
   label so numbered choices work like the terminal host).
 * :class:`ApprovalScreen` — a gated-action permission round-trip; dismisses with an
@@ -20,13 +20,16 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from mote.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
-from mote.cli.contracts.view.events import ApprovalDecision
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, SelectionList, Static
 from textual.widgets.selection_list import Selection
+
+from mote.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
+from mote.cli.contracts.view.events import ApprovalDecision
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 # Sentinel value for the auto-appended "Other" entry in the selection list.
 _OTHER_VALUE = -1
@@ -113,7 +116,7 @@ class QuestionScreen(ModalScreen[tuple]):
         with Vertical():
             yield Label(self._question, classes="q-title")
             if self._options:
-                hint = "Space 选择 · Enter 确认" if self._multi else "↑↓ 选择 · Enter 确认"
+                hint = t(K.HINT_SELECT_MULTI) if self._multi else t(K.HINT_SELECT_SINGLE)
                 yield Label(hint, classes="q-hint")
                 selections = [Selection(opt, i) for i, opt in enumerate(self._options)]
                 selections.append(Selection(self.OTHER_LABEL, _OTHER_VALUE))
@@ -124,7 +127,7 @@ class QuestionScreen(ModalScreen[tuple]):
             if self._options and self._multi:
                 submit.add_class("visible")
             yield submit
-            yield Label("Esc 取消", classes="q-foot")
+            yield Label(t(K.HINT_ESC_CANCEL), classes="q-foot")
 
     def on_mount(self) -> None:
         if self._options:
@@ -270,7 +273,7 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
                 )
                 yield Button(f"{PROMPT_SYMBOL} 3. No, tell me what to do (n · esc)", id="reject", variant="error")
                 yield Button(f"{PROMPT_SYMBOL} 4. No, never allow this (d)", id="always_deny", variant="warning")
-            yield Label("↑↓ 选择 · Enter 确认 · Esc 取消", classes="a-foot")
+            yield Label(t(K.HINT_SELECT_SINGLE_CANCEL), classes="a-foot")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.action_decide(event.button.id or "reject")

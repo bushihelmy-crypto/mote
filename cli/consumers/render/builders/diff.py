@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Console-free unified-diff colouriser (claude-code style).
+"""Console-free unified-diff colouriser (filled-bar style).
 
 Two entry points share the same parse → word-level pair → render pipeline:
 :func:`render_diff` (from raw diff *text* a shell produced) and
@@ -121,7 +121,7 @@ def _pair_word_level(rows: List[_Row]) -> None:
 
 
 def render_diff(diff_text: str) -> "Text":
-    """Colour a unified diff claude-code-style — the *text* entry point.
+    """Colour a unified diff with filled +/- bars — the *text* entry point.
 
     For a tool that only produced diff **text** (a shell ``git diff``, ``diff -u``
     — no structured old/new available): parse the unified diff and colourise it.

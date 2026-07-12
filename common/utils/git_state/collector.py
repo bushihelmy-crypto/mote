@@ -1,7 +1,7 @@
 """Read-only git working-tree state — for injection into the environment section.
 
-Filesystem-first (like Claude Code's gitFilesystem.ts): the current branch is read
-straight from ``.git/HEAD`` with no subprocess, while the porcelain status and the
+Filesystem-first: the current branch is read straight from ``.git/HEAD`` with no
+subprocess, while the porcelain status and the
 recent-commit list shell out to ``git`` (those need git's own semantics). Everything
 is best-effort: a missing repo, a missing ``git`` binary, or any failure degrades to
 ``None`` / empty fields rather than raising — this runs on the per-turn prompt-build

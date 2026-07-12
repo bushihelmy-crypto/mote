@@ -1,10 +1,10 @@
-"""Compaction prompts — ported from Claude Code ``services/compact/prompt.ts``.
+"""Compaction prompts.
 
 These build the instruction the model follows when autocompact summarizes the
 conversation, and the wrapper that turns the returned summary into the single
 user message that replaces the summarized history.
 
-Only the pieces autocompact needs are ported:
+Only the pieces autocompact needs are included:
 - ``BASE_COMPACT_PROMPT`` — summarize the *whole* conversation (no tail kept).
 - ``PARTIAL_COMPACT_UP_TO_PROMPT`` — summarize the earlier portion when a recent
   tail is preserved verbatim after the summary (our usual case).
@@ -31,7 +31,7 @@ from mote.common.prompt.compaction import (
 
 
 def get_compact_prompt(custom_instructions: str | None = None) -> str:
-    """Full-conversation summarization prompt (CC ``getCompactPrompt``)."""
+    """Full-conversation summarization prompt."""
     body = Template(_BASE_COMPACT_BODY).safe_substitute(analysis=_DETAILED_ANALYSIS_INSTRUCTION_BASE)
     prompt = NO_TOOLS_PREAMBLE + body
     if custom_instructions and custom_instructions.strip():
@@ -42,9 +42,8 @@ def get_compact_prompt(custom_instructions: str | None = None) -> str:
 def get_partial_compact_prompt(custom_instructions: str | None = None) -> str:
     """Earlier-portion summarization prompt when a recent tail is kept verbatim.
 
-    Ports CC ``getPartialCompactPrompt(direction='up_to')`` — the summary is
-    placed BEFORE the preserved tail, so it must read as a self-contained
-    prologue to messages it cannot see.
+    The summary is placed BEFORE the preserved tail, so it must read as a
+    self-contained prologue to messages it cannot see.
     """
     body = Template(_PARTIAL_UP_TO_BODY).safe_substitute(analysis=_DETAILED_ANALYSIS_INSTRUCTION_BASE)
     prompt = NO_TOOLS_PREAMBLE + body
@@ -59,7 +58,7 @@ _BLANKS_RE = re.compile(r"\n\n+")
 
 
 def format_compact_summary(summary: str) -> str:
-    """Strip the ``<analysis>`` scratchpad and unwrap ``<summary>`` (CC formatCompactSummary).
+    """Strip the ``<analysis>`` scratchpad and unwrap ``<summary>``.
 
     The model drafts in ``<analysis>`` (improves quality, no lasting value) then
     writes the real summary in ``<summary>``. We drop the former and replace the
@@ -82,7 +81,7 @@ def get_compact_user_summary_message(
     transcript_path: str | None = None,
     recent_messages_preserved: bool = False,
 ) -> str:
-    """Wrap a summary into the continued-session user message (CC getCompactUserSummaryMessage)."""
+    """Wrap a summary into the continued-session user message."""
     formatted = format_compact_summary(summary)
     base = (
         "This session is being continued from a previous conversation that ran "

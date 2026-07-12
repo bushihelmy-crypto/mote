@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 
 import pytest
+
 from mote.common.schema import PermissionConfig, SandboxConfig
 from mote.executor.permission.engine import PermissionEngine
 from mote.executor.permission.rule_store import RuleStore
@@ -22,15 +23,15 @@ pytestmark = pytest.mark.asyncio
 def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
     cfg = PermissionConfig(mode=mode, allow=allow or [], deny=deny or [], ask=ask or [])
     store = RuleStore.from_config(cfg)
-    ask_human = None
+    ask_user = None
     prompts: list[str] = []
     if reply is not None:
 
-        async def ask_human(prompt: str) -> str:  # noqa: E306
+        async def ask_user(prompt: str) -> str:  # noqa: E306
             prompts.append(prompt)
             return reply
 
-    eng = PermissionEngine(mode=mode, store=store, ask_human=ask_human)
+    eng = PermissionEngine(mode=mode, store=store, ask_user=ask_user)
     eng._test_prompts = prompts  # type: ignore[attr-defined]
     return eng
 
@@ -38,11 +39,11 @@ def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
 def sandboxed_engine(cwd, *, mode="bypass", reply=None):
     cfg = PermissionConfig(mode=mode)
     store = RuleStore.from_config(cfg)
-    ask_human = None
+    ask_user = None
     prompts: list[str] = []
     if reply is not None:
 
-        async def ask_human(prompt: str) -> str:  # noqa: E306
+        async def ask_user(prompt: str) -> str:  # noqa: E306
             prompts.append(prompt)
             return reply
 
@@ -50,7 +51,7 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None):
         SandboxConfig(mode="workspace-write", writable_roots=[]),
         get_cwd=lambda: cwd,
     )
-    eng = PermissionEngine(mode=mode, store=store, ask_human=ask_human, sandbox=guard)
+    eng = PermissionEngine(mode=mode, store=store, ask_user=ask_user, sandbox=guard)
     eng._test_prompts = prompts  # type: ignore[attr-defined]
     return eng
 
@@ -82,7 +83,7 @@ class TestFolding:
         assert d.behavior == "deny"
 
     async def test_no_channel_fails_closed(self):
-        # default mode, no ask_human => asks become a deny.
+        # default mode, no ask_user => asks become a deny.
         d = await engine("default").check_multi("ApplyPatch", targets=["/a.py", "/b.py"])
         assert d.behavior == "deny"
 

@@ -1,6 +1,7 @@
 """TokenUsage adapters + accumulation."""
-from mote.router.cost import EMPTY_USAGE, TokenUsage
 from openai.types import CompletionUsage
+
+from mote.router.cost import EMPTY_USAGE, TokenUsage
 
 
 def test_from_openai_dict_with_details():

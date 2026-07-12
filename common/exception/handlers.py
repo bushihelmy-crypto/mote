@@ -13,8 +13,7 @@ at the provider call site, it lets ``is_retryable`` and any future failover loop
 work off our own typed hierarchy + ``recovery`` hints rather than re-parsing
 vendor exceptions.
 
-``handle_exception`` is re-exported from ``mote.common.utils.exceptions``
-unchanged (kept in place to minimize churn).
+``handle_exception`` is re-exported from ``mote.common.utils.exceptions``.
 """
 
 from __future__ import annotations
@@ -149,7 +148,7 @@ def is_retryable(exc: BaseException | None) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
 
-    # Vendor fallback for un-migrated / third-party SDK exceptions: transport
+    # Vendor fallback for third-party SDK exceptions: transport
     # (APIConnectionError/APITimeoutError), throttling (RateLimitError) and
     # server-side 5xx (InternalServerError) are all transient. The OpenAI and
     # Anthropic SDKs expose the same class names with matching semantics.

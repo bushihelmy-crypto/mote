@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for HookManager._matches (port of CC matchesPattern)."""
+"""Tests for HookManager._matches (glob pattern matcher)."""
 from __future__ import annotations
 
 from mote.common.hook.manager import HookManager

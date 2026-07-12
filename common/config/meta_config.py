@@ -1,104 +1,61 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2024/1/4 01:25
-@Author  : alexanderwu
-@File    : meta_config.py
-"""
-from mote.common.config.config.exp_pool_config import ExperiencePoolConfig
-from mote.common.config.config.langfuse_config import LangfuseConfig
-from mote.common.config.config.llm_config import LLMConfig
+from pydantic import Field, model_validator
+
+from mote.common.config.config.context_config import ContextConfig
 from mote.common.config.config.mcp_config import MCPConfig
+from mote.common.config.config.models_config import ModelsConfig
 from mote.common.config.config.multimodal_config import MultimodalConfig
-from mote.common.config.config.role_config import RoleConfig
-from mote.common.config.config.sentry_config import SentryConfig
+from mote.common.config.config.observability_config import ObservabilityConfig
+from mote.common.config.config.secrets_config import SecretsConfig
+from mote.common.config.config.tools_config import ToolsConfig
+from mote.common.config.config.ui_config import UIConfig
 from mote.common.observability.langfuse_integration import init_langfuse
 from mote.common.utils.yaml_model import YamlModel
-from pydantic import Field, model_validator
 
 
 class Config(YamlModel):
-    """Configurations for Mote"""
+    """Configurations for Mote.
 
-    # Key Parameters
-    llm: LLMConfig
+    Grouped by concern: ``models`` (which LLMs run), ``tools`` (tool runtime
+    knobs), ``context`` (context engineering), ``multimodal`` (media services),
+    ``mcp`` (the MCP master switch — servers live in their own
+    ``mcp_config.json``, never here), ``observability`` (Sentry/Langfuse), ``ui``
+    (human display) and ``secrets`` (redaction/vault).
+    """
 
-    # Intelligent LLM routing. When True, the router picks a model per request
-    # from the registered model cards (ContextProvider triggers it in the react
-    # loop); when False, the configured `llm` is used as a fixed model.
-    enable_router: bool = False
+    # Which models run: the default LLM, per-task overrides, routing switch and
+    # the api-key helper.
+    models: ModelsConfig
 
-    # Context-compression model (autocompact summarization). Routed via the
-    # "compression" task so it can differ from the main llm; transport and
-    # credentials inherit from `llm` unless overridden.
-    compress_llm: LLMConfig = Field(default_factory=lambda: LLMConfig(model="claude-sonnet-4-8"))
+    # Tool-facing runtime knobs (proxy, browser locale).
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
-    # End-of-session summary model. Routed via the "summary" task so it can
-    # differ from the main llm; transport and credentials inherit from `llm`.
-    summary_llm: LLMConfig = Field(default_factory=lambda: LLMConfig(model="claude-sonnet-4-8"))
+    # Context engineering (compaction, code map, skills).
+    context: ContextConfig = Field(default_factory=ContextConfig)
 
-    # Global Proxy. Not used by LLM, but by other tools such as browsers.
-    proxy: str = ""
-
-    # Browser locale/region bundle for the WebBrowser stealth fingerprint:
-    # "auto" (default) infers zh vs en from the host env; "en" / "zh" force a
-    # coherent locale + timezone + Accept-Language. A per-role
-    # ``role_schema.browser_locale`` (when not "auto") overrides this. Keep it
-    # consistent with the ``proxy`` exit-IP region (a zh-CN locale on a US IP is
-    # itself a bot tell).
-    browser_locale: str = "auto"
-
-    # Optional shell command that prints an API key on stdout. Used to fill
-    # ``llm.api_key`` at load time only when no static/env key is present
-    # (precedence: env > static config > helper). Trusted layers only — the
-    # untrusted workdir layer cannot inject it (see CREDENTIAL_DENYLIST).
-    api_key_helper: str = ""
-
-    # Misc Parameters
-    repair_llm_output: bool = False
-
-    # Experience Pool Parameters
-    exp_pool: ExperiencePoolConfig = Field(default_factory=ExperiencePoolConfig)
-
-    # Role's configuration
-    role: RoleConfig = Field(default_factory=RoleConfig)
-
-    # MCP
-    mcp: MCPConfig = Field(default_factory=MCPConfig)
-
-    # Sentry
-    sentry: SentryConfig = Field(default_factory=SentryConfig)
-
-    # Langfuse LLM observability
-    langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
-
-    # Multimodal services (image/audio/music/video generation)
+    # Multimodal services (image/audio/music/video generation).
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
 
-    @model_validator(mode="after")
-    def apply_task_llm_defaults(self):
-        """Let the task-routed llms inherit transport/credentials from the main llm.
+    # MCP subsystem master switch (servers live in ``mcp_config.json``).
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
-        By default only the model differs (claude-sonnet-4-8) on the
-        compression/summary models; the endpoint, key, api type and version come
-        from the configured `llm` unless the user set them explicitly.
-        """
-        default = LLMConfig()
-        for task_llm in (self.compress_llm, self.summary_llm):
-            if task_llm.base_url == default.base_url:
-                task_llm.base_url = self.llm.base_url
-            if task_llm.api_key == default.api_key:
-                task_llm.api_key = self.llm.api_key
-            if task_llm.api_type == default.api_type:
-                task_llm.api_type = self.llm.api_type
-            if task_llm.api_version is None:
-                task_llm.api_version = self.llm.api_version
-        return self
+    # Error tracking (Sentry) + LLM tracing (Langfuse).
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+
+    # Human display layer (CLI) preferences — e.g. the display language. Purely
+    # human-facing; model-facing text (prompts, tool output) stays English.
+    ui: UIConfig = Field(default_factory=UIConfig)
+
+    # Secret redaction / vault (opt-in). Masks known secret values in tool output
+    # and vaults ``<secret>…</secret>`` uploads from the prompt before they reach
+    # the model.
+    secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
     @model_validator(mode="after")
     def activate_langfuse(self):
         """Idempotently activate Langfuse so env/client are ready before any
         LLM client is built. No-op (and no langfuse import) when disabled."""
 
-        init_langfuse(self.langfuse)
+        init_langfuse(self.observability.langfuse)
         return self

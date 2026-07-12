@@ -1,6 +1,6 @@
 """Session listing — discover resumable sessions cheaply (Phase 3).
 
-Claude Code "lite" strategy: never full-parse a rollout just to list it. For
+A "lite" strategy: never full-parse a rollout just to list it. For
 each ``{base}/{session_id}/rollout.jsonl`` we read only two small windows:
 
   * a HEAD window (first few lines) for the ``session_meta`` first line and the

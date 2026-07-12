@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for the ``.mote`` project-dir discovery helpers (``common.const.paths``).
 
-These pin the Claude-Code-aligned upward walk: from *cwd* up to (and including)
+These pin the upward walk: from *cwd* up to (and including)
 the git root, collect every existing ``<dir>/.mote/<subdir>`` (or file), returned
 **low→high precedence** (git root first, cwd last) so a closer directory can
 override a farther one. The walk stops at the git-root boundary so assets from a

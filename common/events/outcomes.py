@@ -167,8 +167,15 @@ class ToolResultOutcome(ControlOutcome):
 
 @dataclass
 class PromptOutcome(ControlOutcome):
-    """Context to prepend to the user prompt, or a stop that aborts the turn."""
+    """Rewrite the user prompt, prepend context, or stop to abort the turn.
 
+    ``updated_prompt`` replaces the submitted prompt text (the secret-upload
+    subscriber vaults ``<secret>…</secret>`` spans and substitutes placeholders here,
+    before the prompt reaches the model / history / logs); ``additional_context``
+    is prepended after any rewrite; ``stop`` aborts the turn.
+    """
+
+    updated_prompt: Optional[str] = None
     additional_context: list[str] = field(default_factory=list)
     stop: bool = False
     stop_reason: str = ""
@@ -179,10 +186,26 @@ class PromptOutcome(ControlOutcome):
 
     def merge(self, other: "PromptOutcome") -> "PromptOutcome":
         return PromptOutcome(
+            updated_prompt=_pick_last(self.updated_prompt, other.updated_prompt),
             additional_context=[*self.additional_context, *other.additional_context],
             stop=self.stop or other.stop,
             stop_reason=_pick_last(self.stop_reason, other.stop_reason) or "",
         )
+
+    def rebind(self, event, *, by: str = ""):
+        """Thread the rewritten prompt forward, recording the rewrite on the event.
+
+        Mirrors the two tool-rewrite outcomes: delegates to the event's generic
+        :meth:`~mote.common.events.rewrite.Rewritable.rewrite` so the before-image
+        and ``by`` attribution are captured atomically. A rewrite aimed at a
+        non-:class:`Rewritable` event fails loud (contained by the bus's
+        per-subscriber ``fail_mode``) rather than being silently dropped.
+        """
+        if self.updated_prompt is None:
+            return event
+        if not isinstance(event, Rewritable):
+            raise TypeError(f"{type(event).__name__} is not Rewritable")
+        return event.rewrite("prompt", self.updated_prompt, by=by)
 
 
 # ---------------------------------------------------------------------------

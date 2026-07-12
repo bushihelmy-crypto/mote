@@ -1,19 +1,18 @@
 """CostTracker — the session usage/cost aggregator.
 
-Synthesizes the three reference accounting models:
+Synthesizes the reference accounting models:
 
-- **Claude Code** — a per-model accumulator (``ModelUsage`` keyed by model name)
-  plus rolled-up session totals and a running USD cost. This is the primary
-  shape, because it answers "how much did each model cost me this session".
+- **Per-model accumulator** — keyed by model name, plus rolled-up session totals
+  and a running USD cost. This is the primary shape, because it answers "how much
+  did each model cost me this session".
 - **Codex** — a ``last_usage`` snapshot + context-window-remaining estimate, so
   callers can show "% of window left" without re-counting the whole history.
-- **Mote (legacy ``CostManager``)** — the ``Costs`` namedtuple, ``max_budget``,
-  and the ``update_cost`` / ``get_costs`` / ``get_total_*`` API, kept as a
-  drop-in shim so existing call sites (``base_llm``) need no behavioral change.
+- **Budget API** — the ``Costs`` namedtuple, ``max_budget``, and the
+  ``update_cost`` / ``get_costs`` / ``get_total_*`` methods that ``base_llm``
+  calls.
 
 A single :class:`CostTracker` instance is owned by ``Context`` and shared by the
-LLM clients it builds (one per pricing mode), exactly as the old ``CostManager``
-was.
+LLM clients it builds (one per pricing mode).
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from mote.router.cost.usage import TokenUsage
 
 
 class Costs(NamedTuple):
-    """Legacy 4-tuple kept for backward compatibility with ``base_llm.get_costs``."""
+    """Aggregate token/cost 4-tuple returned by ``base_llm.get_costs``."""
 
     total_prompt_tokens: int
     total_completion_tokens: int
@@ -49,7 +48,7 @@ BASELINE_TOKENS = 12_000
 
 @dataclass
 class ModelUsage:
-    """Per-model accumulator (Claude Code ``ModelUsage``)."""
+    """Per-model accumulator."""
 
     usage: TokenUsage = field(default_factory=TokenUsage)
     cost_usd: float = 0.0
@@ -120,15 +119,15 @@ class CostTracker:
                 logger.warning(f"cost on_record sink failed: {e}")
         return cost
 
-    # legacy alias used by the new richer call sites
+    # alias used by the richer call sites
     record = add
 
-    # ------------------------------------------------- legacy CostManager shim
+    # ----------------------------------------------- prompt/completion entry
     def update_cost(self, prompt_tokens: int, completion_tokens: int, model: str) -> None:
-        """Backward-compatible entry: build a TokenUsage and record it.
+        """Build a TokenUsage from raw prompt/completion counts and record it.
 
-        Mirrors the old ``CostManager.update_cost`` signature so any caller that
-        only has prompt/completion counts keeps working.
+        The convenience entry for any caller that only has prompt/completion
+        counts rather than a full ``TokenUsage``.
         """
         self.add(
             TokenUsage(

@@ -16,8 +16,9 @@ import os
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from mote.common.utils.yaml_model import YamlModel
 from pydantic import Field, model_validator
+
+from mote.common.utils.yaml_model import YamlModel
 
 
 class GrantType(str, Enum):

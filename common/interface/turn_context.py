@@ -38,6 +38,7 @@ class TurnContextPriority(IntEnum):
 
     TOOL_CATALOG = 5  # the available-commands catalogue — leads the reminder
     GIT = 10  # working-tree branch / status / recent commits
+    TEAM = 12  # multi-agent lineage — parent / siblings / children + session ids
     TOKEN = 20  # context-budget pressure note (only when near the limit)
     FOLD = 22  # count-based fold pressure — old tool results about to be cleared
     COMPACTION = 25  # a just-happened compaction's summary (one-shot)

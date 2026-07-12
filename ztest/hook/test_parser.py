@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for parse_command_output / parse_callback_result (CC/codex contract)."""
+"""Tests for parse_command_output / parse_callback_result (codex-compatible contract)."""
 from __future__ import annotations
 
 import json

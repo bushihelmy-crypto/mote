@@ -2,10 +2,9 @@
 
 Single home for every prompt/template/description string in the framework:
 
-- role: core Role system prompt, identity templates, dynamic sections, Mote info,
-  summary prompts, JSON-repair / ask-human helpers.
+- role: core Role system prompt, dynamic sections, JSON-repair / ask-human helpers.
 - memory: persistent file-based memory instructions + MEMORY.md context block.
-- compaction: autocompact summarization prompt text (CC port).
+- compaction: autocompact summarization prompt text.
 - output: XML command-block output format + over-long-turn status nudge.
 - agent: child-agent delegation task prompt, agent-tool section, example.
 - tools: model-facing tool descriptions + tool-result prompt text.
@@ -30,16 +29,12 @@ from mote.common.prompt.output import OUTPUT_SECTION, SUMMARIZE_STATUS_WHEN_CONS
 from mote.common.prompt.role import (
     CMD_EXPERIENCE_MASK,
     CMD_PROMPT,
-    CONSTRAINT_TEMPLATE,
     FRC_SECTION,
     JSON_REPAIR_PROMPT,
     LANGUAGE_SECTION,
-    PREFIX_TEMPLATE,
     ROLE_INSTRUCTION,
     SCRATCHPAD_SECTION,
     SUMMARIZE_PROBLEM_WHEN_DUPLICATE,
-    SUMMARY_PROMPT,
-    SUMMARY_WITH_RECOMMEND_PROMPT,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     TASK_FINAL_OUTPUT_SECTION,
@@ -49,17 +44,13 @@ __all__ = [
     # role
     "CMD_EXPERIENCE_MASK",
     "CMD_PROMPT",
-    "CONSTRAINT_TEMPLATE",
     "FRC_SECTION",
     "JSON_REPAIR_PROMPT",
     "LANGUAGE_SECTION",
-    "PREFIX_TEMPLATE",
     "ROLE_INSTRUCTION",
     "SCRATCHPAD_SECTION",
     "SUMMARIZE_PROBLEM_WHEN_DUPLICATE",
     "TASK_FINAL_OUTPUT_SECTION",
-    "SUMMARY_PROMPT",
-    "SUMMARY_WITH_RECOMMEND_PROMPT",
     "SYSTEM_PROMPT",
     "SYSTEM_PROMPT_DYNAMIC_BOUNDARY",
     # memory

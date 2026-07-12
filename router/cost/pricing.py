@@ -1,16 +1,16 @@
-"""Cache-aware USD pricing — Claude Code's model, bridged to Mote's tables.
+"""Cache-aware USD pricing, bridged to Mote's tables.
 
-Claude Code prices every token bucket independently (input / output / cache
+Prices every token bucket independently (input / output / cache
 *write* / cache *read*) at a per-million-token rate, because cache reads are an
 order of magnitude cheaper than fresh input and cache writes are ~25% dearer.
-Codex, by contrast, computes no dollars at all. We adopt CC's dollar model and
+Codex, by contrast, computes no dollars at all. We adopt this dollar model and
 feed it from Mote's existing ``TOKEN_COSTS`` (per-1k) so no rate is lost.
 
-Three pricing *modes* replace the old CostManager subclasses:
+Three pricing *modes*:
 
-- ``STANDARD``  — table lookup with cache-aware math (was ``CostManager``).
-- ``FIREWORKS`` — model-size graded rates (was ``FireworksCostManager``).
-- ``FREE``      — self-hosted / open models cost nothing (was ``TokenCostManager``).
+- ``STANDARD``  — table lookup with cache-aware math.
+- ``FIREWORKS`` — model-size graded rates.
+- ``FREE``      — self-hosted / open models cost nothing.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from mote.common.utils.token_counter import FIREWORKS_GRADE_TOKEN_COSTS, TOKEN_C
 
 # Anthropic-style derivation factors for models whose table only lists
 # input/output (no explicit cache rates): cache writes cost 1.25x fresh input,
-# cache reads cost 0.1x. Mirrors Claude Code's tier ratios.
+# cache reads cost 0.1x. Mirrors Anthropic's tier ratios.
 _CACHE_WRITE_FACTOR = 1.25
 _CACHE_READ_FACTOR = 0.1
 
@@ -54,7 +54,7 @@ class ModelPricing:
 # ---------------------------------------------------------------------------
 # Pricing table
 # ---------------------------------------------------------------------------
-# Explicit cache-aware rates for the headline models (Claude Code tiers, per
+# Explicit cache-aware rates for the headline models (per
 # Mtok). These take precedence over the bridged ``TOKEN_COSTS`` entries.
 _EXPLICIT_PRICING: dict[str, ModelPricing] = {
     # Claude 3.5/3.7/4.x Sonnet tier: 3 / 15 / 3.75 / 0.3
@@ -84,7 +84,7 @@ def _build_table() -> dict[str, ModelPricing]:
 
 PRICING: dict[str, ModelPricing] = _build_table()
 
-# Unknown models fall back to a mid-tier Sonnet-like rate (Claude Code uses a
+# Unknown models fall back to a mid-tier Sonnet-like rate (a
 # default tier rather than billing zero, so cost is never silently dropped).
 DEFAULT_UNKNOWN_PRICING = ModelPricing(3.0, 15.0, 3.75, 0.3)
 
@@ -118,7 +118,7 @@ def lookup_pricing(model: Optional[str]) -> tuple[ModelPricing, bool]:
 
 
 def _fireworks_pricing(model: str) -> ModelPricing:
-    """Model-size graded Fireworks rates (migrated FireworksCostManager).
+    """Model-size graded Fireworks rates.
 
     Fireworks bills by parameter-count band; the grade table is already per-Mtok.
     """

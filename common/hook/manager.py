@@ -4,11 +4,11 @@ Supports **both** handler forms:
   * **Python callbacks** registered programmatically via :meth:`register` (the
     SDK-style, zero-serialization path) — sync or async callables.
   * **External commands** declared in a ``HookConfig`` (the config-driven,
-    CC/codex JSON stdin/stdout contract path).
+    JSON stdin/stdout contract path).
 
 :meth:`fire` builds the :class:`HookInput`, selects the handlers whose matcher
-matches the event's match field (``_matches`` is a port of CC ``matchesPattern``),
-runs them all (callbacks in-process; commands via the command handler), and
+matches the event's match field (via ``_matches``), runs them all (callbacks
+in-process; commands via the command handler), and
 :func:`fold`\\s the results with deny > ask > allow precedence. It **never
 raises**: every handler is wrapped, and a failure is logged and skipped. When no
 handler matches, an ``EMPTY`` outcome is returned via a fast path.
@@ -34,7 +34,7 @@ from mote.common.logs import log_class, logger
 HookCallback = Callable[[HookInput], Union[None, dict, HookOutcome, Awaitable[Any]]]
 
 # Per-event payload key used as the matcher's query. Events absent from this map
-# have no match field and so always match (CC semantics).
+# have no match field and so always match.
 _MATCH_FIELD: dict[str, str] = {
     "PreToolUse": "tool_name",
     "PostToolUse": "tool_name",
@@ -80,7 +80,7 @@ class HookManager:
         self._callbacks.setdefault(event, []).append((matcher, fn))
 
     # ------------------------------------------------------------------
-    # Matching (port of CC ``matchesPattern``)
+    # Matching
     # ------------------------------------------------------------------
 
     @staticmethod

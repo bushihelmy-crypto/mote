@@ -5,8 +5,7 @@ recollection of what the older turns did, but the actual file bytes the model
 was working with are gone. This rehydrator re-reads the files the session most
 recently touched and re-injects their *current* on-disk bytes right after the
 summary, so the model resumes with a fresh view of its working set rather than
-relying on the summary's paraphrase (Claude Code's
-``createPostCompactFileAttachments``).
+relying on the summary's paraphrase.
 
 It is the eager sibling of the lazy advisory in
 ``CompactionNoticeContextSource`` ("re-read the relevant files if you need
@@ -20,10 +19,10 @@ once the running total would exceed the budget. It is injected into
 ``SummarizeReducer`` as a callable returning ``list[Message]``; a ``None``
 provider (standalone / test use) re-projects nothing.
 
-Dedup against the preserved tail (Claude Code's ``collectReadToolFilePaths``):
+Dedup against the preserved tail:
 the summarize reducer keeps a verbatim tail, and any file the tail *already*
 shows through a ``Read`` tool call is still fully visible to the model. Re-reading
-it here would just duplicate those bytes (CC measures this at up to ~25K tokens
+it here would just duplicate those bytes (measured at up to ~25K tokens
 per compaction). So ``project`` takes the preserved tail messages, extracts the
 paths their ``Read`` calls already surface, and skips re-reading those files —
 the freed budget goes to files the summary only paraphrased.
@@ -82,8 +81,8 @@ class FileRehydrator:
 
         ``preserved`` is the verbatim tail the summarize reducer keeps. Any file a
         ``Read`` call in that tail already surfaces is skipped — re-reading it here
-        would just duplicate bytes the model can already see (CC's
-        ``collectReadToolFilePaths`` dedup). ``None`` => no dedup (standalone use).
+        would just duplicate bytes the model can already see (path dedup).
+        ``None`` => no dedup (standalone use).
         """
         if self._touched_files is None:
             return []

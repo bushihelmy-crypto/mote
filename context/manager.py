@@ -3,11 +3,10 @@
 This is the integration point that finally wires the building blocks of this
 package into the Role react loop. It plays two roles at once:
 
-1. Message store (replaces the old ``Memory`` object). It owns the conversation
-   history, backed by ``RoleState.context`` (``LLMCallContext.messages``) so the
-   history survives checkpoint/recovery. It exposes the small slice of the old
-   ``Memory`` API the loop / channel / think-engine depend on: ``get`` /
-   ``add`` / ``add_batch`` / ``delete`` / ``count``.
+1. Message store. It owns the conversation history, backed by ``RoleState.context``
+   (``LLMCallContext.messages``) so the history survives checkpoint/recovery. It
+   exposes the small slice of the message-store API the loop / channel /
+   think-engine depend on: ``get`` / ``add`` / ``add_batch`` / ``delete`` / ``count``.
 
 2. Context orchestrator. Across the two history-level scopes it runs the cheap
    pass first then the expensive one:
@@ -84,7 +83,7 @@ class ContextManager(ObservationSubscriber):
         llm: Anything with ``async aask(msg, system_msgs=, stream=)`` — used by
             autocompact to summarize. May be None when only the message-store
             API is exercised (compaction then no-ops gracefully).
-        config: Tunable knobs; defaults reproduce Claude Code.
+        config: Tunable knobs; defaults reproduce the reference behavior.
         model: Model name for token math. Falls back to ``llm.model`` then a
             generic default.
         compactable: Names of tools whose result bodies may be folded/cleared
@@ -239,7 +238,7 @@ class ContextManager(ObservationSubscriber):
         return None
 
     # ------------------------------------------------------------------
-    # Message-store API (the slice of the old Memory the loop depends on)
+    # Message-store API (the slice of the store the loop depends on)
     # ------------------------------------------------------------------
 
     @property
@@ -254,8 +253,8 @@ class ContextManager(ObservationSubscriber):
     def get(self, k: int = 0) -> list[Message]:
         """Return the most-recent ``k`` messages (``k=0`` → all).
 
-        Matches the old ``Memory.get`` contract the react loop and think-engine
-        call: ``k`` slices the tail, ``0`` returns the whole history.
+        The contract the react loop and think-engine call: ``k`` slices the
+        tail, ``0`` returns the whole history.
         """
         if k <= 0:
             return list(self._context.messages)
@@ -340,7 +339,7 @@ class ContextManager(ObservationSubscriber):
         return True
 
     def token_state(self):
-        """Current token budget snapshot for the stored history (CC TokenState)."""
+        """Current token budget snapshot for the stored history (TokenState)."""
         return budget.evaluate(
             self._context.messages,
             self.model,
@@ -379,7 +378,7 @@ class ContextManager(ObservationSubscriber):
         returns ``stored_history + [user_prompt]``. The returned list is a fresh
         list (the caller may pass it straight to ``llm.aask`` / ``aask_tool``);
         the user prompt is NOT added to the stored history here — only the
-        request gets it, matching how the old loop assembled ``req``.
+        request gets it.
         """
         if manage:
             await self.manage_history()

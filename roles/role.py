@@ -1,13 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2023/5/11 14:42
-@Author  : alexanderwu
-@File    : role.py
-@Merged  : role.py + role_zero.py — single unified Role class.
-@Refactored: Remove Pydantic inheritance. Role is now a plain ABC class.
-"""
-
 from __future__ import annotations
 
 import os
@@ -72,7 +64,7 @@ class Role(BaseRole):
       - state: RoleState (runtime snapshot, serializable for checkpoint/recovery)
       - Lazy-init components: ThinkEngine, ToolExecutor, SkillManager, etc.
 
-    No longer inherits from Pydantic BaseModel. Construction is explicit via __init__.
+    Not a Pydantic BaseModel: construction is explicit via __init__.
     Serialization is handled by dump()/load() which delegate to RoleState (Pydantic).
     """
 
@@ -110,7 +102,7 @@ class Role(BaseRole):
         # state controller and the tool-capabilities holder). The Role keeps a
         # thin property surface that delegates onto this holder; the wiring logic
         # lives there. Role.__init__ constructs nothing but this holder.
-        self._components = RoleComponents(self)  # pyright: ignore[reportArgumentType]  # self-identity: dir!=pkg name
+        self._components = RoleComponents(self)
         # Guards firing SessionStart exactly once across this Role's run() calls.
         self._session_started = False
 
@@ -379,7 +371,7 @@ class Role(BaseRole):
             self.state.env.set_addresses(self, self.state.addresses)
 
     def get_cwd(self) -> str:
-        """Current working directory, aligned with Claude Code's getCwd().
+        """Current working directory.
 
         Capability surface for tools; the cwd fallback logic lives on the
         :class:`RoleStateController` (state ownership stays out of tools).
@@ -389,15 +381,15 @@ class Role(BaseRole):
     def set_cwd(self, path: str) -> None:
         """Set the stable working directory (framework API for an explicit switch).
 
-        No longer called by the Bash tool — a `cd` inside a command does not drift
-        the cwd (Codex-aligned: cwd is stable data). Retained as the capability for
-        a deliberate future directory-change entry point. Delegates to the state
+        Not called by the Bash tool — a `cd` inside a command does not drift
+        the cwd (Codex-aligned: cwd is stable data). The capability for a
+        deliberate directory-change entry point. Delegates to the state
         controller.
         """
         self._state_ctl.set_cwd(path)
 
     def record_file_read(self, path: str, mtime_ns: int) -> None:
-        """Record that a file was read, aligned with Claude Code's readFileState.
+        """Record that a file was read.
 
         The Read tool calls this after a successful read so the Write/Edit tools
         can later enforce read-before-overwrite and detect external
@@ -491,11 +483,11 @@ class Role(BaseRole):
             "get_cwd": self.get_cwd,
             "set_cwd": self.set_cwd,
             "deactivate": self.deactivate,
-            "ask_human": self.ask_human,
+            "ask_user": self.ask_user,
             "ask_user_question": self.ask_user_question,
             "get_bg_pool": self.get_bg_pool,
             "request_approval": self.request_approval,
-            "reply_to_human": self.reply_to_human,
+            "reply_to_user": self.reply_to_user,
             "end_session": self.end_session,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
@@ -533,7 +525,7 @@ class Role(BaseRole):
         """Write the shared active signal (used by the loop each iteration).
 
         `active` lives on RoleState — not inside the loop — because it doubles
-        as a tool→loop kill switch: the End tool and ask_human's "stop" call
+        as a tool→loop kill switch: the End tool and ask_user's "stop" call
         deactivate(), which must still break a loop that is mid-run.
         """
         self._state_ctl.set_active(value)
@@ -577,12 +569,12 @@ class Role(BaseRole):
         bundle the stealth fingerprint uses (only when ``browser_stealth`` is on).
         Resolution: an explicit per-role ``role_schema.browser_locale`` (anything
         other than "auto") wins, else it falls back to the global
-        ``config.browser_locale`` from config.yaml. When both are "auto" the
-        engine infers zh vs en from the host env.
+        ``config.tools.browser_locale`` from config.yaml. When both are "auto"
+        the engine infers zh vs en from the host env.
         """
         if self.role_schema.browser_locale != "auto":
             return self.role_schema.browser_locale
-        configured = getattr(self.config, "browser_locale", "") or ""
+        configured = self.config.tools.browser_locale or ""
         if configured:
             return configured
         return "auto"
@@ -594,8 +586,8 @@ class Role(BaseRole):
         session one exit IP (parsed engine-side into Playwright's launch proxy
         dict). Resolution order (first non-empty wins):
           1. per-role ``role_schema.browser_proxy``;
-          2. global ``config.proxy`` from config.yaml (documented there as the
-             proxy "for tools such as browsers");
+          2. global ``config.tools.proxy`` from config.yaml (documented there as
+             the proxy "for tools such as browsers");
           3. the ambient proxy env vars (``HTTPS_PROXY`` / ``HTTP_PROXY`` /
              ``ALL_PROXY``, case-insensitive) — so a shell that already exports a
              proxy routes the browser through it with no config. Playwright's
@@ -604,7 +596,7 @@ class Role(BaseRole):
         """
         if self.role_schema.browser_proxy:
             return self.role_schema.browser_proxy
-        configured = getattr(self.config, "proxy", "") or ""
+        configured = self.config.tools.proxy or ""
         if configured:
             return configured
         for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
@@ -613,13 +605,13 @@ class Role(BaseRole):
                 return value
         return ""
 
-    async def ask_human(self, question: str) -> str:
-        """Ask the human user a question and return their response.
+    async def ask_user(self, question: str) -> str:
+        """Ask the user a question and return their response.
 
         Only valid inside a MoteEnv. A trailing 'stop' deactivates the role.
         Capability surface; delegates to :class:`RoleCapabilities`.
         """
-        return await self._capabilities.ask_human(question)
+        return await self._capabilities.ask_user(question)
 
     async def ask_user_question(self, questions):
         """Ask the user structured multiple-choice questions; return structured answers.
@@ -637,13 +629,13 @@ class Role(BaseRole):
         """
         return await self._capabilities.request_approval(prompt)
 
-    async def reply_to_human(self, content: str) -> str:
-        """Reply to the human user with the provided content.
+    async def reply_to_user(self, content: str) -> str:
+        """Reply to the user with the provided content.
 
         Only valid inside a MoteEnv. Capability surface; delegates to
         :class:`RoleCapabilities`.
         """
-        return await self._capabilities.reply_to_human(content)
+        return await self._capabilities.reply_to_user(content)
 
     async def wait_interruptible(self, duration_seconds: float) -> tuple[float, bool]:
         """Sleep for up to *duration_seconds*, waking early on activity.
@@ -728,7 +720,7 @@ class Role(BaseRole):
                 working_dir=self.state.working_dir,
                 original_working_dir=self.state.original_working_dir,
                 project_root=self.state.project_root,
-                model=getattr(self.config.llm, "model", None),
+                model=getattr(self.config.models.default, "model", None),
                 role_class=f"{type(self).__module__}.{type(self).__qualname__}",
                 source="startup",
             )
@@ -765,6 +757,11 @@ class Role(BaseRole):
                     outcome = await self.event_bus.emit(UserPromptSubmitEvent(prompt=msg.content))
                     # ``None`` when no hook layer is wired (nothing to inject/veto).
                     if outcome is not None:
+                        # A rewrite (secret-upload vaulting) replaces the prompt
+                        # *before* context-prepend + storage, so the raw value
+                        # never reaches the model, history, or logs.
+                        if outcome.updated_prompt is not None:
+                            msg.content = outcome.updated_prompt
                         if outcome.additional_context:
                             injected = "\n".join(outcome.additional_context)
                             msg.content = f"{injected}\n{msg.content}" if msg.content else injected
@@ -778,11 +775,10 @@ class Role(BaseRole):
                     self.put_message(msg)
 
                 # Auto-continue budget (opt-in, default 0): a TurnEnd control
-                # subscriber may block the "stop" to force another turn (CC's
-                # Stop-hook semantics). The budget bounds it so a misbehaving
+                # subscriber may block the "stop" to force another turn
+                # (Stop-hook semantics). The budget bounds it so a misbehaving
                 # policy can never loop forever; with the default 0 (and no such
-                # subscriber wired) the loop runs exactly once — byte-identical
-                # to the old linear flow.
+                # subscriber wired) the loop runs exactly once.
                 auto_continue_budget = self.role_schema.max_auto_continue
                 rsp = None
                 while True:
@@ -810,13 +806,12 @@ class Role(BaseRole):
                 if isinstance(rsp, AIMessage):
                     rsp.with_agent(self.role_schema.display_name)
                 # Unify termination on "the end returns the rsp": the react loop's
-                # terminal reply IS the run's result. The End tool (summary agents)
-                # already populated ``last_end_output`` via ``end_session``; a native
-                # terminal (no End, ``use_summary=False``) leaves it empty, so feed it
-                # the terminal reply here. ``last_end_output`` is the single channel
-                # the ephemeral spawn read-back (``ChildAgentHandle.result``) reads, so
-                # a native child's output (e.g. a reviewer's final JSON) no longer
-                # falls through the gap between the returned rsp and the read channel.
+                # terminal reply IS the run's result. ``last_end_output`` is the
+                # single channel the ephemeral spawn read-back
+                # (``ChildAgentHandle.result``) reads, so feed it the terminal
+                # reply here — a child's output (e.g. a reviewer's final JSON)
+                # then never falls through the gap between the returned rsp and
+                # the read channel.
                 if not self.state.last_end_output:
                     self.state.last_end_output = getattr(rsp, "content", "") or ""
                 self.publish_message(rsp)
@@ -846,7 +841,7 @@ class Role(BaseRole):
         Thin delegator onto :class:`RoleSessionManager`; returns a fresh role of
         the same class resumed onto the inherited history, independent afterwards.
         """
-        return self._session_manager.fork()  # pyright: ignore[reportReturnType]  # self-identity: dir!=pkg name
+        return self._session_manager.fork()
 
     def _should_auto_continue(self, turn_outcome: Optional[Any], budget: int) -> bool:
         """Decide whether the run loop should force another turn.
@@ -878,7 +873,7 @@ class Role(BaseRole):
 
         Returns the folded :class:`TurnOutcome` so the run loop can honor an
         auto-continue policy: a control subscriber may ``block`` the turn end
-        (block the stop) to force another turn (CC Stop-hook semantics). Returns
+        (block the stop) to force another turn (Stop-hook semantics). Returns
         ``None`` when there is no bus, the emit failed, or nothing maps TurnEnd
         (never continue).
         """
@@ -895,7 +890,7 @@ class Role(BaseRole):
                 TurnEndEvent(
                     turn_id=uuid4().hex,
                     working_dir=self.state.working_dir,
-                    model=getattr(self.config.llm, "model", None),
+                    model=getattr(self.config.models.default, "model", None),
                     token_state=token_state,
                 )
             )
@@ -965,4 +960,4 @@ class Role(BaseRole):
         self._components._wire_collaborators()
 
         self.skill_manager.ensure_ready()
-        await self.executor.init_mcp(self.role_schema.mcps)
+        await self.executor.init_mcp(self.role_schema.mcps, enabled=self.config.mcp.enabled)

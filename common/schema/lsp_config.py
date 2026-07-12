@@ -6,8 +6,7 @@ service. The service itself lives in ``mote.roles.lsp``; this is only the
 declarative shape: which language servers to launch, keyed by the file
 extensions they handle.
 
-Backward compatibility: a Role with ``lsp=None`` (the default) runs with no LSP
-layer. ``LspConfig.enabled`` gives an explicit master switch even when servers
+Default: a Role with ``lsp=None`` (the default) runs with no LSP layer. ``LspConfig.enabled`` gives an explicit master switch even when servers
 are declared, so the whole subsystem can be toggled without dropping config.
 """
 

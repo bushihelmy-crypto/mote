@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for the MCP config source (``executor.mcp.config_source``).
 
-MCP servers are defined in their own Claude-style ``mcp_config.json`` file
+MCP servers are defined in their own standard ``mcp_config.json`` file
 (``{"mcpServers": {name: {...}}}``), NOT the layered ``config.yaml``. These
 tests pin the loader's contract: the map shape parses, transport is *inferred*
 (``url`` => SSE, ``command`` => STDIO), presence means enabled, and every bad
@@ -16,6 +16,7 @@ real ``.mote/mcp.json`` files on disk.
 import json
 
 import pytest
+
 from mote.common.config.config.mcp_config import MCPTransportType
 from mote.common.const import paths
 from mote.executor.mcp import config_source

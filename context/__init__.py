@@ -10,7 +10,7 @@ The tool-level scope (per-tool result-size caps + disk persistence) lives in
 ``mote.executor.tool_result_limit``.
 
 The ``ContextManager`` facade orchestrates the history scopes and owns the
-stored conversation (replacing the old ``Memory`` object).
+stored conversation.
 """
 
 from __future__ import annotations

@@ -12,8 +12,7 @@ initialized module.
 
 from mote.common.base.agent import BaseAgent
 from mote.common.base.command_channel import CommandChannel
-from mote.common.base.loop import BaseLoop, LoopContext
-from mote.common.base.postprocess_plugin import BasePostProcessPlugin
+from mote.common.base.loop import PROCEED, BaseLoop, BudgetVerdict, LoopContext
 from mote.common.base.role import BaseRole
 from mote.common.base.singleton import Singleton
 from mote.common.base.think_engine import BaseThinkEngine
@@ -24,7 +23,8 @@ __all__ = [
     "BaseAgent",
     "BaseLoop",
     "LoopContext",
+    "BudgetVerdict",
+    "PROCEED",
     "BaseThinkEngine",
     "CommandChannel",
-    "BasePostProcessPlugin",
 ]

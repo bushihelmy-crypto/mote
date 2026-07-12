@@ -11,9 +11,6 @@ class TestDefaults:
         s = RoleSchema()
         assert s.name == "Zero"
         assert s.profile == "Role"
-        assert s.goal == ""
-        assert s.constraints == ""
-        assert s.role_id == ""
 
     def test_protocol_default_is_native(self):
         assert RoleSchema().command_protocol == "native"
@@ -29,18 +26,14 @@ class TestDefaults:
         assert s.agents == []
         assert s.skills == []
 
-    def test_memory_summary_defaults(self):
+    def test_memory_defaults(self):
         s = RoleSchema()
         assert s.enable_memory is True
-        assert s.use_summary is True
         assert s.enable_router is False
 
     def test_behavior_flag_defaults(self):
         s = RoleSchema()
-        assert s.delegated_from == ""
         assert s.observe_all_msg_from_buffer is True
-        # ClassVar — not a model field, shared default
-        assert s.need_end_recommendations_tag is False
 
     def test_prompt_templates_populated(self):
         s = RoleSchema()
@@ -49,11 +42,6 @@ class TestDefaults:
         # assembled from per-turn context (memory + reminder sources), so the base
         # command template is intentionally empty.
         assert s.cmd_prompt == ""
-        # instruction defaults to "" by design — it is populated per-skill at
-        # assembly time (see roles/capabilities.py), not from a constant template.
-        assert s.instruction == ""
-        assert s.summary_prompt
-        assert s.summary_with_recommend_prompt
 
 
 class TestDisplayName:
@@ -71,20 +59,16 @@ class TestOverrides:
     def test_kwargs_override_defaults(self):
         s = RoleSchema(
             name="Cleo",
-            goal="ship it",
+            profile="Shipper",
             tools=["Read", "Write"],
             max_react_loop=7,
             command_protocol="xml",
         )
         assert s.name == "Cleo"
-        assert s.goal == "ship it"
+        assert s.profile == "Shipper"
         assert s.tools == ["Read", "Write"]
         assert s.max_react_loop == 7
         assert s.command_protocol == "xml"
-
-    def test_need_recommendations_is_classvar_not_field(self):
-        # Being a ClassVar, it must not appear as a serialized model field.
-        assert "need_end_recommendations_tag" not in RoleSchema.model_fields
 
     def test_round_trip_model_dump_validate(self):
         s = RoleSchema(name="Dee", tools=["Bash"])

@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# @Desc   : gym-style (reinforcement-learning) environment interface
-
 """RL / gym-style environment surface, decoupled from the orchestration core.
 
 These types model the classic OpenAI Gym / Gymnasium episode interface
@@ -16,8 +14,9 @@ from abc import abstractmethod
 from enum import IntEnum
 from typing import Any, Optional
 
-from mote.common.schema.env import BaseEnvironment
 from pydantic import BaseModel, ConfigDict, Field
+
+from mote.common.schema.env import BaseEnvironment
 
 
 class BaseEnvActionType(IntEnum):

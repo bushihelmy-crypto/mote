@@ -33,12 +33,13 @@ from __future__ import annotations
 
 import re
 
-from mote.cli.consumers.render.theme import MARKDOWN_THEME
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markdown import BlockQuote, Heading, Markdown
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
+
+from mote.cli.consumers.render.theme import MARKDOWN_THEME
 
 # Bare http(s) URL, used to autolink URLs typed as plain prose. CommonMark only
 # linkifies ``[text](url)`` / ``<url>`` — a bare URL stays literal — so we wrap
@@ -91,15 +92,15 @@ class BrandHeading(Heading):
         yield text
 
 
-# claude-code prefixes each blockquote line with a thin ``▎`` (U+258E, left
+# The reference look prefixes each blockquote line with a thin ``▎`` (U+258E, left
 # one-quarter block) bar and italicises the quoted text. rich's own ``BlockQuote``
 # already draws a left bar, but with the heavier ``▌`` (half block) and no italic —
-# so we subclass it to match claude-code's lighter, italic look.
+# so we subclass it to match that lighter, italic look.
 BLOCKQUOTE_BAR = "\u258e"  # ▎
 
 
 class BrandBlockQuote(BlockQuote):
-    """A :class:`~rich.markdown.BlockQuote` with claude-code's thin ``▎`` bar + italic.
+    """A :class:`~rich.markdown.BlockQuote` with a thin ``▎`` bar + italic.
 
     rich renders a blockquote as its children prefixed by a ``▌ `` half-block bar;
     we keep that structure (render children to lines, prefix each) but swap in the

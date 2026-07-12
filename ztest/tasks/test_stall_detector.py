@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from mote.executor.tasks import BgStatus, StallDetector, TaskMeta
 from mote.executor.tasks.stall_detector import _matches_interactive_prompt
 

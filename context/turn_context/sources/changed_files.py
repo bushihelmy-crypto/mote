@@ -8,7 +8,7 @@ formatter, a git operation, a build step — the agent's cached view goes stale
 without it noticing. This source compares each tracked file's current on-disk
 mtime against the recorded one and, per turn, injects a ``<system-reminder>``
 naming the files that changed, so the model knows to re-read before trusting its
-memory of them (Claude Code's ``getChangedFiles``).
+memory of them.
 
 The agent's own edits do NOT trip this: the Edit/Write tools refresh the read
 state to the just-written mtime, so only external changes surface.

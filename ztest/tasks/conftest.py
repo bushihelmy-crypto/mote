@@ -21,6 +21,7 @@ import asyncio
 from typing import Optional
 
 import pytest
+
 from mote.common.schema import MessageQueue
 from mote.executor.tasks import BackgroundTaskPool
 

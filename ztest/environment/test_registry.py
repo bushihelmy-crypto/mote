@@ -5,6 +5,7 @@
 import uuid
 
 import pytest
+
 from mote.environment.agent_path import AgentPath
 from mote.environment.exceptions import AgentLimitReached
 from mote.environment.registry import (

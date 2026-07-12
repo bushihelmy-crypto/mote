@@ -13,6 +13,9 @@ from __future__ import annotations
 from typing import Any
 
 from mote.cli.commands.registry import register_command
+from mote.common.i18n import current_locale
+from mote.common.i18n import keys as K
+from mote.common.i18n import locales, negotiate_and_set, set_locale, t
 
 
 @register_command("help", help="show this help", aliases=("h", "?"))
@@ -123,6 +126,30 @@ async def cmd_clear(ctx: Any, _arg: str) -> None:
     ctx.notice(f"cleared conversation ({cleared} messages).\n", level="success")
 
 
+@register_command("lang", help="show or switch the display language: /lang [auto|en|zh]")
+async def cmd_lang(ctx: Any, arg: str) -> None:
+    """Show the active display language, or switch it (``auto`` re-reads the env).
+
+    New output + the status bar pick up the new locale immediately (both render
+    through ``t()``); already-scrolled history keeps its prior wording.
+    """
+    codes = ", ".join(locales())
+    requested = arg.strip()
+    if not requested:
+        ctx.notice(t(K.LANG_CURRENT, code=current_locale().code) + "\n")
+        ctx.notice(t(K.LANG_AVAILABLE, codes=codes) + "\n")
+        return
+    lowered = requested.lower()
+    if lowered == "auto":
+        loc = negotiate_and_set(config_language="auto")
+    elif lowered in locales():
+        loc = set_locale(lowered)
+    else:
+        ctx.notice(t(K.LANG_UNKNOWN, code=requested, codes=codes) + "\n")
+        return
+    ctx.notice(t(K.LANG_SWITCHED, code=loc.code) + "\n", level="success")
+
+
 __all__ = [
     "cmd_help",
     "cmd_exit",
@@ -135,4 +162,5 @@ __all__ = [
     "cmd_sessions",
     "cmd_resume",
     "cmd_clear",
+    "cmd_lang",
 ]

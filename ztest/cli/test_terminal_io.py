@@ -16,6 +16,7 @@ import asyncio
 import io
 
 import pytest
+
 from mote.cli.io.terminal_io import TerminalPort
 from mote.cli.io.terminal_menu import _menu_lines, _option_lines
 
@@ -240,7 +241,7 @@ async def test_ask_parked_routes_via_single_reader():
 
 
 # --------------------------------------------------------------------------
-# ask_questions — structured select + free-text combo (claude-code parity)
+# ask_questions — structured select + free-text combo
 # --------------------------------------------------------------------------
 
 
@@ -319,7 +320,7 @@ async def test_ask_questions_ctrl_c_returns_empty_answer():
 
 
 # --------------------------------------------------------------------------
-# Menu chrome — claude-code-aligned brand-orange marker + numbered rows
+# Menu chrome — brand-orange marker + numbered rows
 # --------------------------------------------------------------------------
 
 # Brand orange (``Palette.BRAND`` = #d77757) as a truecolor SGR; the active row
@@ -389,7 +390,7 @@ async def test_ask_without_options_is_plain_text():
 
 
 # --------------------------------------------------------------------------
-# decide_approval — interactive arrow-key menu (claude-code parity)
+# decide_approval — interactive arrow-key menu
 # --------------------------------------------------------------------------
 
 

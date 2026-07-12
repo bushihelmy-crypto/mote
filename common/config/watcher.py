@@ -4,7 +4,7 @@
 
 Watches the on-disk config files that feed the layer stack and rebuilds the
 typed :class:`Config` when any of them change, firing an ``on_reload`` callback
-(claude-code uses chokidar for the same effect). Implemented with plain mtime
+(chokidar achieves the same effect elsewhere). Implemented with plain mtime
 polling so it adds no third-party dependency and stays trivially testable via
 :meth:`ConfigWatcher.poll_once`.
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 from string import Template
 
 import pytest
+
 from mote.common import prompt as R
 from mote.common.prompt.refs import Sym, UnknownSymbolError, find_symbols
 from mote.parser.native_channel import NativeToolChannel

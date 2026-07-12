@@ -33,6 +33,7 @@ from mote.cli.contracts.view.events import (
     MessageBlockCompleted,
     MessageBlockDelta,
     MessageBlockStarted,
+    Notice,
     RetryStatus,
     SystemReminder,
     TaskProgress,
@@ -43,6 +44,7 @@ from mote.cli.contracts.view.events import (
 from mote.cli.view.reminders import _is_system_reminder, _summarize_reminder
 from mote.cli.view.summaries import _result_summary
 from mote.common.events.types import (
+    BUDGET,
     COMPACTION_CHECKPOINT,
     LLM_ERROR,
     LLM_RETRY,
@@ -105,39 +107,6 @@ _EXT_LEXER = {
     ".cpp": "cpp",
     ".java": "java",
 }
-
-# Legacy failure heuristic — the fallback for events that predate the structured
-# ``success`` field (P0). The projector now reads ``event.success`` when present
-# (the executor's ToolResult fact, carried verbatim on PostToolUseEvent) and only
-# falls back to sniffing these prefixes when the field is absent. Once the core
-# always stamps ``success`` this fallback becomes dead code and can be deleted.
-_FAILURE_PREFIXES = ("[PERMISSION DENIED]", "Error", "Traceback", "[PostToolUse]")
-
-
-# Sentinel distinguishing "event carries no ``success`` field" (legacy → sniff
-# prefixes) from a real ``success=False`` fact. ``getattr`` default cannot be a
-# plain bool because both True and False are meaningful outcomes.
-_NO_SUCCESS_FIELD = object()
-
-# Sentinel distinguishing "event carries no ``media`` field" (legacy → sniff the
-# ``Read image`` prefix) from an empty ``media`` list (a real non-media result).
-_NO_MEDIA_FIELD = object()
-
-
-def _judge_failed(event: Any, text: str) -> bool:
-    """Did this tool call fail? Read the structured fact; else sniff (legacy).
-
-    The executor already computed success on the ``ToolResult`` and (once the
-    core P0 lands) carries it verbatim as ``event.success`` — the honest fact,
-    which correctly treats a successful output that happens to start with
-    ``Error:`` as a success. When the field is absent (an event built before the
-    core change), fall back to the prefix heuristic so behaviour is unchanged.
-    """
-    success = getattr(event, "success", _NO_SUCCESS_FIELD)
-    if success is not _NO_SUCCESS_FIELD:
-        return not success
-    return text.lstrip().startswith(_FAILURE_PREFIXES)
-
 
 _MAX_BODY_LINES = 30
 _MAX_RESULT_CHARS = 200
@@ -261,12 +230,15 @@ def _extract_full_ref(text: str) -> Optional[str]:
 
 
 def _looks_like_diff(text: str) -> bool:
-    """Heuristic: does this tool output read as a unified diff?
+    """Does this tool *output text* read as a unified diff?
 
+    A text classifier for tools whose **output is itself diff text** — ``git
+    diff`` / ``diff`` / ``patch`` — where the payload is a unified diff and there
+    is no structured change to carry. Orthogonal to the ``file_changes`` path
+    (Edit/Write, which ship the structured ``old``/``new`` change *fact* as a
+    ``FileDiffBlock``): the two cover disjoint tools and both are terminal.
     Conservative — only the two unambiguous shapes: a ``--- / +++`` file-header
-    pair, or a ``@@ … @@`` hunk header. This is the one result-classification the
-    projector can honestly make *today* from a string payload; media/table kinds
-    wait for the framework to surface structured tool results.
+    pair, or a ``@@ … @@`` hunk header.
     """
     saw_minus_header = False
     for line in text.splitlines():
@@ -339,8 +311,23 @@ class ViewProjector:
                 )
             ]
 
+        if name == BUDGET:
+            # A budget threshold was crossed. Both the soft warning and the
+            # hard stop reuse the existing Notice row (no dedicated widget);
+            # the text distinguishes them and the recorder persists it via the
+            # durable observer. Level stays "warning" — Notice has no "error".
+            spend = getattr(event, "spend", 0.0) or 0.0
+            limit = getattr(event, "limit", 0.0) or 0.0
+            stopped = bool(getattr(event, "stopped", False))
+            if stopped:
+                text = f"Budget cap reached (${spend:.2f} / ${limit:.2f}). Stopping — no further model calls."
+            else:
+                pct = int((getattr(event, "fraction", 0.0) or 0.0) * 100)
+                text = f"Budget warning: {pct}% of cap used (${spend:.2f} / ${limit:.2f})."
+            return [Notice(text=text, level="warning")]
+
         if name == LLM_RETRY:
-            # A transient, self-clearing retry countdown (CC's "Retrying in Ns…").
+            # A transient, self-clearing retry countdown (the "Retrying in Ns…" line).
             # Carries the coordinates verbatim; the consumer owns the erasable UI.
             return [
                 RetryStatus(
@@ -356,7 +343,7 @@ class ViewProjector:
             # History was compacted (context filled up): the engine rebuilt the
             # transcript, condensing earlier turns into ``summary`` (the new first
             # message). Surface a boundary marker so the human sees why the
-            # transcript jumps — claude-code's dim "✻ Conversation compacted".
+            # transcript jumps — a dim "✻ Conversation compacted" marker.
             messages = getattr(event, "messages", None) or []
             return [
                 ConversationCompacted(
@@ -370,7 +357,7 @@ class ViewProjector:
             # (above), and the *final*, budget-exhausted failure is rendered once via
             # the turn-level ``runtime.last_error → ErrorRaised`` path (driver). Mapping
             # LLM_ERROR here too would spam a red line per attempt + duplicate the final
-            # error, which is exactly the CC-divergent noise this change removes.
+            # error, which is exactly the noise this change removes.
             return []
 
         # Everything else (session/turn/file/span/...) is not part of
@@ -457,9 +444,7 @@ class ViewProjector:
 
         Media (images/PDFs a tool produced) rides on the event as structured
         ``ToolMedia`` facts (``event.media``), so we fold one ``MediaBlock`` per
-        artifact — image **and** pdf — without sniffing the output text. When the
-        field is absent (a legacy event predating the core change) we fall back to
-        the old ``"Read image …"`` prefix heuristic so behaviour is unchanged.
+        artifact — image **and** pdf — without sniffing the output text.
         """
         completed = self._complete_tool_event(event)
         out: List[ViewEvent] = [completed]
@@ -501,16 +486,13 @@ class ViewProjector:
         The honest, structured path: the executor mirrored the ToolResult's
         image/pdf artifacts onto the event, each with a local ``ref`` (file path)
         when the tool read from disk. We resolve the path (so a host renders the
-        file) and set ``alt`` for text-only degrade. Falls back to the legacy
-        prefix sniff only when the field is entirely absent.
+        file) and set ``alt`` for text-only degrade. Absent/empty ``media`` means
+        the result carries no media (an honest empty, not a fallback).
         """
-        media = getattr(event, "media", _NO_MEDIA_FIELD)
-        if media is _NO_MEDIA_FIELD:
-            legacy = ViewProjector._legacy_image_block(event)
-            return [legacy] if legacy is not None else []
+        media = getattr(event, "media", None) or []
         tool_use_id = getattr(event, "tool_use_id", None)
         blocks: List[MediaBlock] = []
-        for m in cast("list[Any]", media) or []:
+        for m in cast("list[Any]", media):
             kind = getattr(m, "kind", "") or "image"
             raw_ref = getattr(m, "ref", "") or ""
             ref = os.path.abspath(os.path.expanduser(str(raw_ref))) if raw_ref else ""
@@ -525,27 +507,6 @@ class ViewProjector:
                 )
             )
         return blocks
-
-    @staticmethod
-    def _legacy_image_block(event: Any) -> Optional[MediaBlock]:
-        """Pre-``event.media`` fallback: sniff a ``Read``-on-image result's text."""
-        if (getattr(event, "tool_name", "") or "") != "Read":
-            return None
-        response = getattr(event, "tool_response", None)
-        text = response if isinstance(response, str) else ("" if response is None else str(response))
-        if not text.lstrip().startswith("Read image "):
-            return None
-        tool_input = getattr(event, "tool_input", None) or {}
-        path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-        if not path:
-            return None
-        resolved = os.path.abspath(os.path.expanduser(str(path)))
-        return MediaBlock(
-            media_kind="image",
-            ref=resolved,
-            alt=os.path.basename(resolved) or "image",
-            tool_use_id=getattr(event, "tool_use_id", None),
-        )
 
     def _complete_tool_event(self, event: Any) -> ToolCallCompleted:
         """Fold a ``PostToolUse`` into a ``ToolCallCompleted``, dispatched by shape.
@@ -562,11 +523,11 @@ class ViewProjector:
         text = response if isinstance(response, str) else ("" if response is None else str(response))
         full_ref = _extract_full_ref(text)
 
-        if _judge_failed(event, text):
-            return self._complete_failed(name, tool_use_id, text, full_ref)
-        # Prefer a CC-style count summary ("读取 42 行" / "找到 3 个文件") computed
+        if not getattr(event, "success", True):
+            return self._complete_failed(name, tool_use_id, text, full_ref, getattr(event, "error", None))
+        # Prefer a per-tool count summary ("读取 42 行" / "找到 3 个文件") computed
         # once per tool; fall back to the raw first line for tools with no honest
-        # count (Bash/terminal/unknown), mirroring claude-code.
+        # count (Bash/terminal/unknown).
         summary = _result_summary(name, event, text) or _first_nonempty_line(text)
         if not summary:
             summary = "(no output)"
@@ -578,9 +539,15 @@ class ViewProjector:
 
     @staticmethod
     def _complete_failed(
-        name: str, tool_use_id: Optional[str], text: str, full_ref: Optional[str]
+        name: str, tool_use_id: Optional[str], text: str, full_ref: Optional[str], error: Optional[Any]
     ) -> ToolCallCompleted:
-        """A failed result: the error text folded to a few lines, char-capped."""
+        """A failed result: the error text folded to a few lines, char-capped.
+
+        When the executor attached a structured ``ErrorReport`` (``event.error``)
+        its code/type/retryable/recovery are read off as flat scalars so a host
+        can render machine-reasonable failure facts. ``error is None`` leaves them
+        empty — the plain-text summary alone (behaviour equivalent to today).
+        """
         detail, hidden = _fold_lines(text.strip(), _MAX_FAILURE_LINES)
         truncated = hidden > 0
         if len(detail) > _MAX_RESULT_CHARS:
@@ -594,6 +561,10 @@ class ViewProjector:
             content_truncated=truncated or full_ref is not None,
             full_ref=full_ref,
             hidden_lines=hidden,
+            error_type=getattr(error, "error", "") or "",
+            error_code=str(getattr(error, "code", "") or ""),
+            retryable=bool(getattr(error, "retryable", False)),
+            recovery=getattr(error, "recovery", "") or "",
         )
 
     @staticmethod
@@ -602,8 +573,9 @@ class ViewProjector:
     ) -> ToolCallCompleted:
         """A diff-shaped result: ship the body as a ``diff`` detail (+/- colorizable).
 
-        The one result-kind classification honestly available today; all other
-        kinds (table/media) await structured framework tool results.
+        The text-diff terminal path (``git diff`` / ``diff`` output), orthogonal to
+        the structured ``file_changes`` → ``FileDiffBlock`` path (Edit/Write): this
+        one carries the tool's diff *text*, that one the ``old``/``new`` change fact.
         """
         detail, hidden = _fold_lines(text.strip(), _MAX_DETAIL_LINES)
         return ToolCallCompleted(

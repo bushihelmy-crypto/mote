@@ -127,8 +127,8 @@ class CodeMap:
         (``imported_by``) is sourced from it — the whole-repo importer set for a
         file's module candidates — instead of the touched-set-scoped query. It
         takes the set of module-name candidates and returns importer abspaths;
-        the callee's own path is filtered out here. ``None`` preserves the
-        original touched-set-only behavior (backward compatible).
+        the callee's own path is filtered out here. ``None`` keeps the query
+        touched-set-only.
         """
         abs_files = [os.path.abspath(f) for f in files]
         self.ensure_all_fresh(abs_files)

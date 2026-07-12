@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+
 from mote.common.config.diagnostics import unknown_key_paths
 from mote.common.config.loader import load_config
 from mote.common.config.meta_config import Config
@@ -13,20 +14,20 @@ from mote.common.exception import UnknownConfigKeysError
 
 def test_unknown_key_paths_flags_top_level_and_nested():
     data = {
-        "llm": {"model": "x", "bogus_field": 1},  # nested unknown
-        "proxy": "p",  # known scalar
+        "models": {"default": {"model": "x", "bogus_field": 1}},  # nested unknown
+        "tools": {"proxy": "p"},  # known scalar
         "totally_unknown": True,  # top-level unknown
     }
     unknown = set(unknown_key_paths(data, Config))
     assert "totally_unknown" in unknown
-    assert "llm.bogus_field" in unknown
+    assert "models.default.bogus_field" in unknown
     # known keys are not reported
-    assert "proxy" not in unknown
-    assert "llm.model" not in unknown
+    assert "tools.proxy" not in unknown
+    assert "models.default.model" not in unknown
 
 
 def test_unknown_key_paths_empty_for_clean_config():
-    data = {"llm": {"model": "x"}, "proxy": "p", "enable_router": True}
+    data = {"models": {"default": {"model": "x"}, "router_enabled": True}, "tools": {"proxy": "p"}}
     assert unknown_key_paths(data, Config) == []
 
 
@@ -38,14 +39,14 @@ def test_unknown_subtree_not_descended():
 
 def test_strict_load_raises_on_unknown_key():
     with pytest.raises(UnknownConfigKeysError) as exc:
-        load_config(programmatic={"llm": {"model": "x"}, "nope_not_a_field": 1}, strict=True)
+        load_config(programmatic={"models": {"default": {"model": "x"}}, "nope_not_a_field": 1}, strict=True)
     assert "nope_not_a_field" in str(exc.value)
     assert "nope_not_a_field" in exc.value.unknown_paths
 
 
 def test_lenient_load_ignores_unknown_key():
-    cfg = load_config(programmatic={"llm": {"model": "x"}, "nope_not_a_field": 1})
-    assert cfg.llm.model == "x"
+    cfg = load_config(programmatic={"models": {"default": {"model": "x"}}, "nope_not_a_field": 1})
+    assert cfg.models.default.model == "x"
     assert not hasattr(cfg, "nope_not_a_field")
 
 
@@ -53,7 +54,7 @@ def test_format_report_includes_layers_and_provenance():
     report = format_report()
     assert "# Config layers" in report
     assert "# Effective values and their source" in report
-    assert "llm.model" in report
+    assert "models.default.model" in report
 
 
 def test_format_report_redacts_secrets():

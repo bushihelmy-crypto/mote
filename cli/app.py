@@ -23,6 +23,7 @@ from mote.cli.contracts.base import BaseProjector
 from mote.cli.driver import SessionDriver
 from mote.cli.io.terminal_io import TerminalPort
 from mote.cli.view.projector import ViewProjector
+from mote.common.i18n import negotiate_and_set
 
 
 def build_app(
@@ -48,6 +49,13 @@ def build_app(
     """
     if config is None:
         config = backend.load_config(model)
+
+    # Resolve the human display locale once, at assembly time, before any consumer
+    # renders a line: config.ui.language ("auto" → host LANG/LC_*), then env. This
+    # covers both hosts (Textual routes through build_app too). We deliberately do
+    # NOT call locale.setlocale() — only our own process-scoped active locale.
+    negotiate_and_set(config_language=getattr(getattr(config, "ui", None), "language", None))
+
     context = backend.build_context(config)
 
     # Default to the shell's launch directory so the agent starts where the user

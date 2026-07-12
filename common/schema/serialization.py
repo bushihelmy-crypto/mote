@@ -6,15 +6,14 @@ from pydantic import BaseModel, model_serializer, model_validator
 
 
 class BaseSerialization(BaseModel, extra="forbid"):
-    """
-    PolyMorphic subclasses Serialization / Deserialization Mixin
-    - First of all, we need to know that pydantic is not designed for polymorphism.
-    - If Engineer is subclass of Role, it would be serialized as Role. If we want to serialize it as Engineer, we need
-        to add `class name` to Engineer. So we need Engineer inherit SerializationMixin.
+    """Polymorphic subclass serialization / deserialization mixin.
 
-    More details:
-    - https://docs.pydantic.dev/latest/concepts/serialization/
-    - https://github.com/pydantic/pydantic/discussions/7008 discuss about avoid `__get_pydantic_core_schema__`
+    Pydantic is not designed for polymorphism: a subclass dumped through a base
+    annotation loses its concrete type. This mixin appends a
+    ``__module_class_name`` tag on dump and, on validate, looks the tag up in a
+    subclass registry to reconstruct the concrete type.
+
+    See https://docs.pydantic.dev/latest/concepts/serialization/.
     """
 
     __is_polymorphic_base = False

@@ -8,6 +8,7 @@ findings — no real Role / LLM / git. Exercises the ring+batch topology
 from __future__ import annotations
 
 import pytest
+
 from mote.executor.tasks.bggraph import END, START, BgGraph
 from mote.executor.tools.code_review import nodes as nodes_mod
 from mote.executor.tools.code_review.format import Finding

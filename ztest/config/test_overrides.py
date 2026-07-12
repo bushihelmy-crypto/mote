@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+
 from mote.common.config.overrides import ConfigOverrides, parse_cli_overrides, parse_override_value, set_nested
 
 
@@ -46,17 +47,16 @@ def test_parse_cli_overrides_empty_is_empty():
 def test_config_overrides_to_layer_dict_maps_known_fields():
     ov = ConfigOverrides(model="m", api_key="k", base_url="u", proxy="p", enable_router=True)
     assert ov.to_layer_dict() == {
-        "llm": {"model": "m", "api_key": "k", "base_url": "u"},
-        "proxy": "p",
-        "enable_router": True,
+        "models": {"default": {"model": "m", "api_key": "k", "base_url": "u"}, "router_enabled": True},
+        "tools": {"proxy": "p"},
     }
 
 
 def test_config_overrides_extra_deep_merges_and_wins():
-    ov = ConfigOverrides(model="m", extra={"llm": {"temperature": 0.2}, "embedding": {"api_type": "x"}})
+    ov = ConfigOverrides(model="m", extra={"models": {"default": {"temperature": 0.2}}, "tools": {"proxy": "x"}})
     out = ov.to_layer_dict()
-    assert out["llm"] == {"model": "m", "temperature": 0.2}
-    assert out["embedding"] == {"api_type": "x"}
+    assert out["models"]["default"] == {"model": "m", "temperature": 0.2}
+    assert out["tools"] == {"proxy": "x"}
 
 
 def test_config_overrides_empty_is_empty_dict():

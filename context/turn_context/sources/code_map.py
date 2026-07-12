@@ -80,7 +80,7 @@ class CodeMapContextSource(ObservationSubscriber):
         # P2: duck-typed provider of files surfaced by a Grep/Glob match but not
         # read in full. Merged into the map's file set so a searched-but-unopened
         # file's structure (defines + intent) can guide "what should I read".
-        # None -> the map reflects only the read trajectory (backward compatible).
+        # None -> the map reflects only the read trajectory.
         self._get_glimpsed_files = get_glimpsed_files
         # Owned directly (same context layer). Long-lived: holds the extractor's
         # mtime cache + the SQLite store across turns, so re-parsing is lazy.
@@ -95,7 +95,7 @@ class CodeMapContextSource(ObservationSubscriber):
         self._repo_index = repo_index
         # F1: duck-typed ``{abspath: mtime_ns_when_last_read}`` provider (the same
         # seam ChangedFilesContextSource reads). None -> self-description always
-        # renders (fully backward compatible).
+        # renders.
         self._get_read_state = get_read_state
         # P3: opportunistic symbol-level callers. When on (and an LSP facade is
         # wired), a *calm* row's public top-level symbols get their real call
@@ -176,7 +176,7 @@ class CodeMapContextSource(ObservationSubscriber):
             return None
 
         # Layer C: whole-repo reverse deps when a repo index is wired; else the
-        # touched-set-scoped query (backward compatible).
+        # touched-set-scoped query.
         repo_importers = getattr(self._repo_index, "importers", None) if self._repo_index else None
         try:
             neighborhoods = self._map.neighborhood(files, repo_importers=repo_importers)
@@ -269,7 +269,7 @@ class CodeMapContextSource(ObservationSubscriber):
         in context when there is no read entry (surfaced purely as a dependency) or
         the recorded mtime is stale (edited since last read — Feature 3 wants to
         re-show it *and* flag the interface risk). With no ``get_read_state`` the
-        frontier stays empty → self-description always renders (backward compatible).
+        frontier stays empty → self-description always renders.
         """
         if self._get_read_state is None:
             return

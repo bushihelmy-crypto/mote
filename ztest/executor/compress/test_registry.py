@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+
 from mote.executor.compress.cargo import CargoCompressor
 from mote.executor.compress.git import GitCompressor
 from mote.executor.compress.pip import PipCompressor

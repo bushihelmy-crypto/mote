@@ -1,9 +1,9 @@
 """PermissionSubscriber — the permission gate as a control-plane subscriber.
 
-The permission engine used to be a *direct call* wedged into ``run_command``
-right after the ``PreToolUse`` emit. That made it a hidden second vetoer the bus
-knew nothing about. This subscriber puts the gate *on* the control plane so it is
-a first-class, ordered, foldable influence — exactly like the hook layer — while
+This subscriber puts the permission gate *on* the control plane rather than
+wedging it as a direct call into ``run_command`` after the ``PreToolUse`` emit
+(which would make it a hidden second vetoer the bus knew nothing about). On the
+plane it is a first-class, ordered, foldable influence — exactly like the hook layer — while
 the engine itself stays tool-free (it only ever sees the tiny
 :class:`~mote.common.schema.PermissionFacts` bundle the executor resolves).
 

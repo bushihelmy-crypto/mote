@@ -1,4 +1,4 @@
-"""Hook output parsing — port of the CC/codex stdout + exit-code contract.
+"""Hook output parsing — the stdout + exit-code contract.
 
 Two entry points turn a handler's result into a neutral :class:`HookOutcome`:
 
@@ -12,7 +12,7 @@ Two entry points turn a handler's result into a neutral :class:`HookOutcome`:
     ``None`` (passthrough), a dict (same keys as the JSON contract), or a
     :class:`HookOutcome` returned directly.
 
-JSON field mapping (Claude Code semantics):
+JSON field mapping:
   * ``decision``: ``approve`` -> allow, ``block`` -> deny
   * ``hookSpecificOutput.permissionDecision``: ``allow``/``deny``/``ask`` (more
     specific; overrides ``decision``)
@@ -44,7 +44,7 @@ def _coerce_context(value: Any) -> list[str]:
 
 
 def _outcome_from_obj(obj: dict) -> HookOutcome:
-    """Map a decoded JSON/dict object onto a HookOutcome (CC field contract)."""
+    """Map a decoded JSON/dict object onto a HookOutcome (field contract)."""
     outcome = HookOutcome()
 
     # Coarse decision (least specific).
@@ -92,7 +92,7 @@ def _outcome_from_obj(obj: dict) -> HookOutcome:
 
 def parse_command_output(stdout: str, stderr: str, exit_code: int) -> HookOutcome:
     """Turn a command handler's (stdout, stderr, exit_code) into a HookOutcome."""
-    # Exit 2 is the CC/codex "blocking" signal: deny, reason from stderr.
+    # Exit 2 is the "blocking" signal: deny, reason from stderr.
     if exit_code == 2:
         reason = (stderr or "").strip()
         return HookOutcome(behavior="deny", system_message=reason)

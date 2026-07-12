@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from mote.common.const import TOOL_CALLS
 from mote.common.schema import ThinkResult, UserMessage
 from mote.think.think_engine import ThinkEngine
@@ -86,7 +87,7 @@ class TestXMLChannel:
         assert engine.result.content == "fresh thought"
 
     @pytest.mark.asyncio
-    async def test_hard_repeat_triggers_ask_human(self):
+    async def test_hard_repeat_triggers_ask_user(self):
         # Same response present 3x in recent history -> ask-human override.
         dup = "I will look at the file again"
         mem = FakeMemory([UserMessage(content=dup) for _ in range(3)])
@@ -95,7 +96,7 @@ class TestXMLChannel:
         await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s", llm=llm)
         await engine.join()
         # Overrides with a synthesized AskUserQuestion call (the registered tool),
-        # not the unregistered ask_human (which the loop would filter out).
+        # not the unregistered ask_user (which the loop would filter out).
         assert "AskUserQuestion" in engine.result.content
         # The dedup path asks the LLM a second time to summarize the problem.
         assert len(llm.aask_calls) == 2
@@ -157,9 +158,9 @@ class TestNativeChannel:
         assert engine.result.tool_calls == [{"id": "1", "command_name": "Read", "args": {"path": "a"}}]
 
     @pytest.mark.asyncio
-    async def test_hard_repeat_overrides_with_ask_human(self):
+    async def test_hard_repeat_overrides_with_ask_user(self):
         # Same call signature 3x in history -> override with a synthesized
-        # AskUserQuestion call (the registered tool, not unregistered ask_human).
+        # AskUserQuestion call (the registered tool, not unregistered ask_user).
         sig = [{"name": "Editor", "args": {"path": "a"}}]
         mem = FakeMemory(history_with_calls(sig, sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
@@ -187,14 +188,14 @@ class TestNativeChannel:
 
     @pytest.mark.asyncio
     async def test_end_call_repeat_not_overridden(self):
-        # "end" repeats are legitimate and skipped by the dedup guard.
-        sig = [{"name": "end", "args": {}}]
+        # "End" repeats are legitimate and skipped by the dedup guard.
+        sig = [{"name": "End", "args": {}}]
         mem = FakeMemory(history_with_calls(sig, sig, sig))
-        llm = FakeLLM(tool_response=make_tool_response(("1", "end", {})))
+        llm = FakeLLM(tool_response=make_tool_response(("1", "End", {})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "end"}], llm=llm)
+        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "End"}], llm=llm)
         await engine.join()
-        assert engine.result.tool_calls[0]["command_name"] == "end"
+        assert engine.result.tool_calls[0]["command_name"] == "End"
 
 
 class TestTaskLifecycle:

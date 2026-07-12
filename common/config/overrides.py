@@ -13,15 +13,17 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
-from mote.common.config.layers import deep_merge
 from pydantic import BaseModel, ConfigDict, Field
+
+from mote.common.config.layers import deep_merge
 
 
 def parse_override_value(raw: str) -> Any:
     """Parse a raw string into a typed value via YAML, falling back to the string.
 
-    So ``enable_router=true`` -> ``True``, ``llm.max_token=8000`` -> ``8000``,
-    ``llm.model=claude-opus`` -> ``"claude-opus"``. An empty string stays ``""``.
+    So ``models.router_enabled=true`` -> ``True``, ``models.default.max_token=8000``
+    -> ``8000``, ``models.default.model=claude-opus`` -> ``"claude-opus"``. An empty
+    string stays ``""``.
     """
     if raw == "":
         return ""
@@ -84,19 +86,22 @@ class ConfigOverrides(BaseModel):
     def to_layer_dict(self) -> Dict[str, Any]:
         """Render the overrides as a nested dict ready to merge as a layer."""
         data: Dict[str, Any] = {}
-        llm: Dict[str, Any] = {}
+        models: Dict[str, Any] = {}
+        default: Dict[str, Any] = {}
         if self.model is not None:
-            llm["model"] = self.model
+            default["model"] = self.model
         if self.api_key is not None:
-            llm["api_key"] = self.api_key
+            default["api_key"] = self.api_key
         if self.base_url is not None:
-            llm["base_url"] = self.base_url
-        if llm:
-            data["llm"] = llm
-        if self.proxy is not None:
-            data["proxy"] = self.proxy
+            default["base_url"] = self.base_url
+        if default:
+            models["default"] = default
         if self.enable_router is not None:
-            data["enable_router"] = self.enable_router
+            models["router_enabled"] = self.enable_router
+        if models:
+            data["models"] = models
+        if self.proxy is not None:
+            data["tools"] = {"proxy": self.proxy}
         if self.extra:
             data = deep_merge(data, self.extra)
         return data

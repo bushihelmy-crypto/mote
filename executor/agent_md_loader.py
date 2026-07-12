@@ -1,6 +1,6 @@
 """Markdown-defined agents — ``.mote/agents/*.md`` → registered agent types.
 
-Claude-Code-aligned: a project (or the user) can declare a spawnable subagent by
+A project (or the user) can declare a spawnable subagent by
 dropping a Markdown file with YAML frontmatter under ``.mote/agents/`` (walked
 from cwd up to the git root) or ``~/.mote/agents/``. Each file becomes a
 ``(BaseAgent, Role)`` subclass registered in the :mod:`agent_registry`, so the
@@ -43,7 +43,7 @@ def _normalize_tools(raw) -> Optional[List[str]]:
     """Turn a frontmatter ``tools`` value into a tool-name list, or None for 'all'.
 
     Accepts a comma-separated string or a list. ``'*'`` / empty / absent means
-    "inherit the full toolbox" (None), matching Claude Code's agent semantics.
+    "inherit the full toolbox" (None).
     """
     if raw is None:
         return None
@@ -104,7 +104,7 @@ def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type]:
             if model and child_config is not None:
                 try:
                     child_config = child_config.model_copy(deep=True)
-                    child_config.llm.model = model
+                    child_config.models.default.model = model
                 except Exception:  # noqa: BLE001 — model override is best-effort
                     child_config = config
             Role.__init__(self, role_schema=schema, state=state, context=context, config=child_config)

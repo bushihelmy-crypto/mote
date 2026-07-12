@@ -1,5 +1,5 @@
 # https://editorconfig.org
-# Top-most EditorConfig file for the mote-agent repo.
+# Top-most EditorConfig file for the mote repo.
 root = true
 
 # Defaults for every file: LF line endings, UTF-8, trim trailing space,

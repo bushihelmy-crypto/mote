@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
 from mote.common.logs import logger
 
 

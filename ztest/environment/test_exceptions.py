@@ -3,6 +3,7 @@
 """Tests for control-plane exceptions."""
 
 import pytest
+
 from mote.environment.exceptions import (
     AgentControlError,
     AgentLimitReached,
