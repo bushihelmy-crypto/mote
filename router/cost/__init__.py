@@ -1,0 +1,70 @@
+"""Cost / token / usage accounting for the router LLM layer.
+
+A synthesis of Claude Code's per-model USD cost tracking and Codex's token-only
+context-window accounting, replacing the legacy ``common.utils.cost_manager``.
+
+Public surface:
+    - :class:`TokenUsage` / ``EMPTY_USAGE`` — normalized usage record + adapters.
+    - :class:`ModelPricing`, :class:`PricingMode`, :func:`cost_of`,
+      :func:`lookup_pricing` — cache-aware USD pricing.
+    - :class:`CostTracker`, :class:`ModelUsage`, :class:`Costs` — session
+      aggregation (drop-in for the old ``CostManager``).
+    - report helpers — :func:`format_total_cost`, :func:`format_model_usage`,
+      :func:`final_output`, :func:`status_line_dict`, :func:`format_cost`.
+"""
+
+from metagpt.router.cost.node import CostNode
+from metagpt.router.cost.pricing import (
+    DEFAULT_UNKNOWN_PRICING,
+    PRICING,
+    ModelPricing,
+    PricingMode,
+    cost_of,
+    lookup_pricing,
+    resolve_pricing,
+)
+from metagpt.router.cost.report import (
+    final_output,
+    format_cost,
+    format_cost_tree,
+    format_model_usage,
+    format_total_cost,
+    status_line_dict,
+)
+from metagpt.router.cost.tracker import (
+    BASELINE_TOKENS,
+    CostTracker,
+    Costs,
+    ModelUsage,
+    context_window_for,
+)
+from metagpt.router.cost.usage import EMPTY_USAGE, TokenUsage
+
+__all__ = [
+    # usage
+    "TokenUsage",
+    "EMPTY_USAGE",
+    # pricing
+    "ModelPricing",
+    "PricingMode",
+    "PRICING",
+    "DEFAULT_UNKNOWN_PRICING",
+    "cost_of",
+    "lookup_pricing",
+    "resolve_pricing",
+    # tracker
+    "CostTracker",
+    "ModelUsage",
+    "Costs",
+    "BASELINE_TOKENS",
+    "context_window_for",
+    # node (fleet cost mirror tree)
+    "CostNode",
+    # report
+    "format_cost",
+    "format_cost_tree",
+    "format_model_usage",
+    "format_total_cost",
+    "final_output",
+    "status_line_dict",
+]

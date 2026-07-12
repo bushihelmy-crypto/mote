@@ -1,0 +1,231 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Unit tests for :class:`metagpt.parser.xml_channel.XmlCommandChannel`.
+
+``iter_commands`` runs the *real* XML lexer (``parse_commands2`` ->
+``PythonObjectParser``), so the inputs here are genuine XML command blocks in
+the documented OUTPUT_SECTION shape. ``record_turn`` is exercised against the
+channel directly; the think round is faked via :class:`FakeThinkEngine`.
+"""
+from __future__ import annotations
+
+import pytest
+
+from metagpt.common.base import CommandChannel
+from metagpt.common.const import IMAGES, PDFS
+from metagpt.common.prompt.output import XML_COMMAND_GUIDE
+from metagpt.parser.xml_channel import XmlCommandChannel
+
+from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
+
+
+def xml_command(name: str, **args: str) -> str:
+    """Render a single XML command block in the OUTPUT_SECTION shape."""
+    body = "".join(f"<{k}>\n{v}\n</{k}>\n" for k, v in args.items())
+    return f"<{name}>\n{body}</{name}>"
+
+
+class TestContract:
+    def test_is_command_channel(self):
+        assert isinstance(XmlCommandChannel(), CommandChannel)
+
+    def test_prompt_vars_command_guide_is_xml_guide_with_end_marker(self):
+        guide = XmlCommandChannel().prompt_vars()["command_guide"]
+        assert guide == XML_COMMAND_GUIDE
+        assert "<end></end>" in guide
+
+    def test_prompt_vars_covers_required_keys(self):
+        from metagpt.common.base.command_channel import PROMPT_VAR_KEYS
+
+        assert set(XmlCommandChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
+
+    def test_react_result_carries_orchestration_phrasing(self):
+        # XML overrides react_result with the <end></end>-era "mark finished"
+        # contract, embedding the joined outputs.
+        result = XmlCommandChannel().react_result("OUT")
+        assert "please mark my task as finished" in result
+        assert "OUT" in result
+
+
+class TestJoinCommandOutputs:
+    def test_joins_executed_outputs_with_blank_lines(self):
+        from metagpt.common.base.command_channel import join_command_outputs
+
+        executed = [{"output": "a"}, {"output": "b"}]
+        assert join_command_outputs(executed) == "a\n\nb"
+
+    def test_empty_yields_no_commands_notice(self):
+        from metagpt.common.base.command_channel import (
+            NO_VALID_COMMANDS,
+            join_command_outputs,
+        )
+
+        assert join_command_outputs([]) == NO_VALID_COMMANDS
+
+    def test_lower_renders_ctl_finish_as_end_marker(self):
+        # Under XML, the CTL_FINISH symbol materializes the <end></end> mechanic.
+        from metagpt.common.prompt.refs import CTL_FINISH
+
+        out = XmlCommandChannel().lower(f"Only {CTL_FINISH} when done.")
+        assert "<end></end>" in out
+
+    def test_lower_renders_capability_symbols_as_dotted_names(self):
+        from metagpt.common.prompt.refs import CAP_READ
+
+        out = XmlCommandChannel().lower(f"Use {CAP_READ} first.")
+        assert "Editor.read" in out
+
+    def test_tool_specs_is_none(self):
+        # Text channel passes no native specs to the LLM.
+        assert XmlCommandChannel().tool_specs(object()) is None
+
+
+class TestIterCommands:
+    @pytest.mark.asyncio
+    async def test_parses_single_command(self):
+        rsp = "Some thoughts...\n" + xml_command("Read", path="a.py")
+        engine = FakeThinkEngine(content=rsp)
+        cmds = await collect(XmlCommandChannel(), engine, {"Read"})
+        assert len(cmds) == 1
+        assert cmds[0]["command_name"] == "Read"
+        assert cmds[0]["args"] == {"path": "a.py"}
+        # XML has no provider tool-call id, and the loop fields are filled in.
+        assert cmds[0]["id"] is None
+        assert cmds[0]["status"] == "running"
+        assert cmds[0]["error_msg"] == ""
+
+    @pytest.mark.asyncio
+    async def test_parses_multiple_commands_in_order(self):
+        rsp = (
+            "think\n"
+            + xml_command("Read", path="a.py")
+            + "\nthink more\n"
+            + xml_command("Glob", pattern="*.py")
+        )
+        engine = FakeThinkEngine(content=rsp)
+        cmds = await collect(XmlCommandChannel(), engine, {"Read", "Glob"})
+        assert [c["command_name"] for c in cmds] == ["Read", "Glob"]
+        assert cmds[0]["args"] == {"path": "a.py"}
+        assert cmds[1]["args"] == {"pattern": "*.py"}
+
+    @pytest.mark.asyncio
+    async def test_command_with_multiple_args(self):
+        rsp = xml_command("Edit", file="x.py", old="a", new="b")
+        engine = FakeThinkEngine(content=rsp)
+        cmds = await collect(XmlCommandChannel(), engine, {"Edit"})
+        assert cmds[0]["args"] == {"file": "x.py", "old": "a", "new": "b"}
+
+    @pytest.mark.asyncio
+    async def test_unknown_command_filtered_by_valid_names(self):
+        # The lexer skips function tags not in valid_names; an all-unknown
+        # response parses to no commands -> "No valid commands found" -> yields none.
+        rsp = xml_command("Nope", x="1")
+        engine = FakeThinkEngine(content=rsp)
+        assert await collect(XmlCommandChannel(), engine, {"Read"}) == []
+
+    @pytest.mark.asyncio
+    async def test_known_kept_unknown_dropped(self):
+        rsp = xml_command("Read", path="a.py") + "\n" + xml_command("Nope", x="1")
+        engine = FakeThinkEngine(content=rsp)
+        cmds = await collect(XmlCommandChannel(), engine, {"Read"})
+        assert [c["command_name"] for c in cmds] == ["Read"]
+
+    @pytest.mark.asyncio
+    async def test_empty_content_yields_nothing(self):
+        assert await collect(XmlCommandChannel(), FakeThinkEngine(content=""), {"Read"}) == []
+
+    @pytest.mark.asyncio
+    async def test_none_content_yields_nothing(self):
+        engine = FakeThinkEngine(content="", tool_calls=None)
+        engine.result.content = None  # simulate a missing-content result
+        assert await collect(XmlCommandChannel(), engine, {"Read"}) == []
+
+    @pytest.mark.asyncio
+    async def test_plain_text_without_commands_yields_nothing(self):
+        # No XML command tags + ignore_text -> parser finds nothing to run.
+        engine = FakeThinkEngine(content="just some prose, no commands here")
+        assert await collect(XmlCommandChannel(), engine, {"Read"}) == []
+
+    @pytest.mark.asyncio
+    async def test_joins_when_not_done(self):
+        rsp = xml_command("Read", path="a.py")
+        engine = FakeThinkEngine(content=rsp, done=False)
+        await collect(XmlCommandChannel(), engine, {"Read"})
+        assert engine.join_calls == 1
+        assert engine.done is True
+
+    @pytest.mark.asyncio
+    async def test_does_not_join_when_done(self):
+        engine = FakeThinkEngine(content=xml_command("Read", path="a.py"), done=True)
+        await collect(XmlCommandChannel(), engine, {"Read"})
+        assert engine.join_calls == 0
+
+
+class TestRecordTurn:
+    @pytest.mark.asyncio
+    async def test_records_assistant_and_merged_outputs(self):
+        memory = FakeMemory()
+        executed = [
+            executed_command(name="Read", output="out-1"),
+            executed_command(name="Glob", output="out-2"),
+        ]
+        await XmlCommandChannel().record_turn(memory, "<Read>...</Read>", executed)
+        # XML records exactly two messages: assistant text + one merged user msg.
+        assert len(memory.messages) == 2
+        assert memory.messages[0].content == "<Read>...</Read>"
+        assert memory.messages[1].content == "out-1\n\nout-2"
+
+    @pytest.mark.asyncio
+    async def test_single_output_not_joined(self):
+        memory = FakeMemory()
+        await XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="solo")])
+        assert memory.messages[1].content == "solo"
+
+    @pytest.mark.asyncio
+    async def test_no_executed_records_placeholder_user_message(self):
+        memory = FakeMemory()
+        await XmlCommandChannel().record_turn(memory, "rsp", [])
+        assert len(memory.messages) == 2
+        assert "No valid commands found" in memory.messages[1].content
+
+    @pytest.mark.asyncio
+    async def test_assistant_records_raw_command_rsp(self):
+        memory = FakeMemory()
+        await XmlCommandChannel().record_turn(memory, "the raw text", [executed_command(output="x")])
+        assert memory.messages[0].content == "the raw text"
+
+
+class TestRecordTurnMedia:
+    @pytest.mark.asyncio
+    async def test_appends_media_message(self):
+        memory = FakeMemory()
+        executed = [executed_command(output="placeholder", images=["IMG"], pdfs=["PDF"])]
+        await XmlCommandChannel().record_turn(memory, "rsp", executed)
+        # assistant + merged-outputs + media.
+        assert len(memory.messages) == 3
+        media = memory.messages[-1]
+        assert media.metadata[IMAGES] == ["IMG"]
+        assert media.metadata[PDFS] == ["PDF"]
+
+    @pytest.mark.asyncio
+    async def test_no_media_no_extra_message(self):
+        memory = FakeMemory()
+        await XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="x")])
+        assert len(memory.messages) == 2
+
+
+class TestTerminalDefault:
+    @pytest.mark.asyncio
+    async def test_is_terminal_default_false(self):
+        # XML signals "done" via an End command (handled by the loop), so the
+        # channel itself never reports a terminal turn.
+        assert await XmlCommandChannel().is_terminal(FakeThinkEngine(content="x")) is False
+
+    def test_turn_signature_is_response_text(self):
+        engine = FakeThinkEngine(content="the response")
+        assert XmlCommandChannel().turn_signature(engine) == "the response"
+
+    def test_turn_signature_empty_when_no_content(self):
+        engine = FakeThinkEngine(content="")
+        engine.result.content = None
+        assert XmlCommandChannel().turn_signature(engine) == ""

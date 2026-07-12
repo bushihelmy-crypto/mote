@@ -1,0 +1,32 @@
+"""metagpt.common.hook — opt-in agent-lifecycle hook subsystem.
+
+A bottom-layer package (imports only stdlib + ``common``) so any layer may use
+it directly. Synthesizes the Claude Code + Codex hook engines: matcher groups,
+the JSON stdin/stdout command contract, deny > ask > allow aggregation, plus an
+in-process Python callback path native to an embeddable framework.
+
+The neutral :class:`HookOutcome` is folded into a real ``PermissionDecision`` at
+the executor seam (``ToolExecutor.run_command``) — this package never imports
+the executor.
+"""
+
+from metagpt.common.hook.manager import HookCallback, HookManager
+from metagpt.common.hook.types import (
+    EMPTY,
+    HookBehavior,
+    HookEvent,
+    HookInput,
+    HookOutcome,
+    fold,
+)
+
+__all__ = [
+    "HookManager",
+    "HookCallback",
+    "HookEvent",
+    "HookBehavior",
+    "HookInput",
+    "HookOutcome",
+    "EMPTY",
+    "fold",
+]
