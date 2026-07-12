@@ -2,10 +2,9 @@
 
 The engine is what a caller (``ContextManager.manage_history`` for threshold
 reductions, recovery for reactive ones) actually talks to. It owns the event
-choreography that used to be inlined in ``manage_history`` — PreCompact (veto /
-custom-instructions), and, on a successful summarize, CompactionCheckpoint +
-PostCompact — so that logic lives in exactly one place regardless of who raised
-the request. The pipeline underneath decides *how* to reduce; the engine wraps
+choreography around a reduction — PreCompact (veto / custom-instructions), and,
+on a successful summarize, CompactionCheckpoint + PostCompact — so that logic
+lives in exactly one place regardless of who raised the request. The pipeline underneath decides *how* to reduce; the engine wraps
 it with *when to announce it*.
 """
 

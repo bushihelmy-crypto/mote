@@ -3,17 +3,17 @@
 """Tests for mote.think.prompt_builder — PromptBuilder + ThinkContext.
 
 PromptBuilder is a stateless assembler: every method is a pure function over
-ThinkInputs / ThinkContext / the four subsystems. The tests cover the identity
-splice (build_role_prefix / build_role_info), the system & user prompt
-assembly (placeholder substitution + cache-boundary removal + memory/reminder
-injection), each ``_make_*`` section builder, and the full collect_context()
-integration through the duck-typed fakes in conftest.
+ThinkInputs / ThinkContext / the four subsystems. The tests cover the system &
+user prompt assembly (placeholder substitution + cache-boundary removal +
+memory/reminder injection), each ``_make_*`` section builder, and the full
+collect_context() integration through the duck-typed fakes in conftest.
 """
 from __future__ import annotations
 
 import asyncio
 
 import pytest
+
 from mote.common import prompt as R
 from mote.common.base.command_channel import PROMPT_VAR_KEYS
 from mote.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems
@@ -44,67 +44,14 @@ class _FakeChannel:
 class TestDataclasses:
     def test_think_inputs_defaults(self):
         ti = ThinkInputs()
-        assert ti.name == "" and ti.profile == "" and ti.goal == ""
+        assert ti.working_dir == ""
         assert ti.memory_dir is None
 
     def test_think_context_defaults(self):
         tc = ThinkContext()
-        assert tc.role_info == ""
+        assert tc.env_section == ""
         # The protocol fills default to empty strings until a channel supplies them.
         assert tc.prompt_vars == {k: "" for k in PROMPT_VAR_KEYS}
-
-
-# --------------------------------------------------------------------------
-# Identity splice
-# --------------------------------------------------------------------------
-class TestBuildRolePrefix:
-    def test_desc_wins_verbatim(self):
-        ti = ThinkInputs(desc="I am the boss.", profile="X", name="Y", goal="Z")
-        assert PromptBuilder.build_role_prefix(ti) == "I am the boss."
-
-    def test_renders_from_prefix_template(self):
-        ti = ThinkInputs(profile="Engineer", name="Bob", goal="ship")
-        out = PromptBuilder.build_role_prefix(ti)
-        assert "Engineer" in out and "Bob" in out and "ship" in out
-
-    def test_appends_constraints(self):
-        ti = ThinkInputs(profile="E", name="B", goal="g", constraints="be terse")
-        out = PromptBuilder.build_role_prefix(ti)
-        assert "be terse" in out
-
-    def test_appends_env_clause(self):
-        ti = ThinkInputs(profile="E", name="B", goal="g", env_desc="the office", other_role_names="Carol")
-        out = PromptBuilder.build_role_prefix(ti)
-        assert "the office" in out
-        assert "Carol" in out
-
-    def test_no_env_clause_without_env_desc(self):
-        ti = ThinkInputs(profile="E", name="B", goal="g")
-        assert "You are in" not in PromptBuilder.build_role_prefix(ti)
-
-
-class TestBuildRoleInfo:
-    def test_no_team_returns_prefix(self):
-        assert PromptBuilder.build_role_info("PREFIX", "") == "PREFIX"
-
-    def test_with_team_appends_listing(self):
-        out = PromptBuilder.build_role_info("PREFIX", "- Bob: Eng")
-        assert out.startswith("PREFIX")
-        assert "Your team member:" in out
-        assert "- Bob: Eng" in out
-
-
-# --------------------------------------------------------------------------
-# Summary prompt picker
-# --------------------------------------------------------------------------
-class TestPickSummaryPrompt:
-    def test_picks_recommend_when_needed(self):
-        out = PromptBuilder.pick_summary_prompt(summary_prompt="plain", recommend_prompt="rec", need_recommend=True)
-        assert out == "rec"
-
-    def test_picks_plain_otherwise(self):
-        out = PromptBuilder.pick_summary_prompt(summary_prompt="plain", recommend_prompt="rec", need_recommend=False)
-        assert out == "plain"
 
 
 # --------------------------------------------------------------------------
@@ -124,18 +71,18 @@ class TestJoinSections:
 # --------------------------------------------------------------------------
 class TestBuildSystemPrompt:
     def test_substitutes_and_strips_boundary(self):
-        ctx = ThinkContext(role_info="ROLE")
+        ctx = ThinkContext(env_section="ENVBLOCK")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
-        assert "ROLE" in sys_p
+        assert "ENVBLOCK" in sys_p
         # boundary marker removed
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in sys_p
         # no unresolved placeholders for the keys we mapped
-        assert "${role_info}" not in sys_p
+        assert "${env_section}" not in sys_p
 
     def test_missing_placeholder_tolerated(self):
         # safe_substitute: a template with an unknown $foo is left intact, no raise.
         ctx = ThinkContext()
-        out = PromptBuilder._build_system_prompt("hello $unknown ${role_info}", ctx)
+        out = PromptBuilder._build_system_prompt("hello $unknown ${env_section}", ctx)
         assert "$unknown" in out
 
 
@@ -169,9 +116,9 @@ class TestBuildUserPrompt:
 
 class TestBuildTuple:
     def test_build_returns_pair(self):
-        ctx = ThinkContext(role_info="ROLE", working_dir="/w")
+        ctx = ThinkContext(env_section="ENVBLOCK", working_dir="/w")
         sys_p, usr_p = PromptBuilder.build(R.SYSTEM_PROMPT, R.CMD_PROMPT, ctx)
-        assert "ROLE" in sys_p
+        assert "ENVBLOCK" in sys_p
         assert isinstance(usr_p, str)
 
 
@@ -185,11 +132,11 @@ class TestSubstitutionMaps:
         # The static protocol sections come from ctx.prompt_vars (command_guide /
         # tool_usage_guide), merged in via **ctx.prompt_vars.
         ctx = ThinkContext(
-            role_info="r",
+            env_section="ENVBLOCK",
             prompt_vars={"command_guide": "CG", "tool_usage_guide": "TUG"},
         )
         d = PromptBuilder._system_substitutions(ctx)
-        assert d["role_info"] == "# Basic Info\nr"
+        assert d["env_section"] == "ENVBLOCK"
         assert d["command_guide"] == "CG"
         assert d["tool_usage_guide"] == "TUG"
 
@@ -292,12 +239,12 @@ class TestMakeScratchpad:
 
 class TestMakeCompactionSections:
     def test_inactive_returns_empty_pair(self):
-        cfg = make_config(enable_compressable_memory=False)
+        cfg = make_config(compaction_enabled=False)
         assert PromptBuilder._make_compaction_sections(cfg) == ("", "")
 
     def test_active_emits_all_sections(self):
         cfg = make_config(
-            enable_compressable_memory=True,
+            compaction_enabled=True,
             protected_recent_messages=5,
         )
         frc, final_output = PromptBuilder._make_compaction_sections(cfg)
@@ -323,12 +270,17 @@ class TestMakeSkillsGuide:
     (see ztest/turn_context/test_skill_listing)."""
 
     def test_no_injector_returns_empty(self):
-        assert PromptBuilder._make_skills_guide(FakeSkillManager(injector=None)) == ""
+        assert PromptBuilder._make_skills_guide(FakeSkillManager(injector=None), True) == ""
 
     def test_with_injector_returns_guide(self):
         inj = FakeInjector(guide="SKILL_GUIDE")
-        out = PromptBuilder._make_skills_guide(FakeSkillManager(injector=inj))
+        out = PromptBuilder._make_skills_guide(FakeSkillManager(injector=inj), True)
         assert out == "SKILL_GUIDE"
+
+    def test_disabled_returns_empty_even_with_injector(self):
+        inj = FakeInjector(guide="SKILL_GUIDE")
+        out = PromptBuilder._make_skills_guide(FakeSkillManager(injector=inj), False)
+        assert out == ""
 
 
 # --------------------------------------------------------------------------
@@ -345,11 +297,10 @@ class TestCollectContext:
         )
 
     def test_basic_assembly(self):
-        inputs = ThinkInputs(profile="Eng", name="Bob", goal="ship", desc="I am Bob the engineer")
+        inputs = ThinkInputs(working_dir="/work")
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         assert isinstance(ctx, ThinkContext)
-        # collect_context loads role_info from the role's desc verbatim.
-        assert ctx.role_info == "I am Bob the engineer"
+        assert ctx.working_dir == "/work"
 
     # The volatile tool catalog is no longer built into the system prompt /
     # ThinkContext — it rides the per-turn ToolCatalogContextSource (XML) or the
@@ -368,8 +319,10 @@ class TestCollectContext:
         assert ctx.memory_context == ""
 
     def test_language_and_scratchpad(self):
-        inputs = ThinkInputs(language="Chinese", scratchpad_dir="/sp")
-        ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
+        # Language now flows from config.models.response_language, not ThinkInputs.
+        inputs = ThinkInputs(scratchpad_dir="/sp")
+        cfg = make_config(response_language="Chinese")
+        ctx = run(PromptBuilder.collect_context(inputs, self._subsystems(config=cfg)))
         assert "Chinese" in ctx.language
         assert "/sp" in ctx.scratchpad
 
@@ -397,19 +350,16 @@ class TestCollectContext:
         assert ctx.reminders == ""
 
     def test_compaction_sections_active(self):
-        cfg = make_config(enable_compressable_memory=True)
+        cfg = make_config(compaction_enabled=True)
         ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(config=cfg)))
         assert ctx.frc
         assert ctx.task_final_output
 
     def test_end_to_end_build_from_collected_context(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("mem-idx", encoding="utf-8")
-        inputs = ThinkInputs(
-            profile="Eng", name="Bob", goal="ship", desc="I am Bob", working_dir="/work", memory_dir=tmp_path
-        )
+        inputs = ThinkInputs(working_dir="/work", memory_dir=tmp_path)
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         sys_p, usr_p = PromptBuilder.build(R.SYSTEM_PROMPT, R.CMD_PROMPT, ctx)
-        assert "I am Bob" in sys_p
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in sys_p
         assert usr_p.startswith("# MEMORY.md")
         # cwd no longer rides the tail; the env block in the system prompt carries

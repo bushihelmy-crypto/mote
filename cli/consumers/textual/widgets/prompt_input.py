@@ -15,9 +15,12 @@ import os
 import re
 from typing import Any, Optional
 
-from mote.cli.consumers.textual.style import PROMPT_SYMBOL
 from textual.binding import Binding
 from textual.widgets import Input
+
+from mote.cli.consumers.textual.style import PROMPT_SYMBOL
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 
 class PromptInput(Input):
@@ -31,7 +34,7 @@ class PromptInput(Input):
     ``event.text.splitlines()[0]``, silently dropping the rest of a multi-line
     paste (a traceback / code block). Embedding the raw ``\\n`` in ``value`` isn't
     an option either — the single-line renderer emits the literal newline and
-    corrupts the layout + cursor. So (mirroring claude-code) a multi-line paste
+    corrupts the layout + cursor. So a multi-line paste
     is replaced in the visible field by a compact one-line **placeholder token**
     while the real text is stashed in ``_pastes``; :meth:`consume_value` expands
     the tokens back to the full multi-line text on submit. Single-line pastes use
@@ -43,8 +46,8 @@ class PromptInput(Input):
     escapes/quotes; a dropped **image** (png/jpg/jpeg/gif/webp) is staged as a
     base64 attachment and shown as a ``[image #N: name]`` token (sent to the model
     as multimodal content on submit — see :meth:`consume_images`), and any other
-    file inserts its bare path so the agent can ``Read`` it (mirrors claude-code's
-    drop-to-mention).
+    file inserts its bare path so the agent can ``Read`` it (a drop-to-mention
+    gesture).
 
     **Esc clears the field.** A single ``Esc`` empties the prompt (and the paste
     store) — the main input has no other use for the key.
@@ -68,7 +71,7 @@ class PromptInput(Input):
     _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
     def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("placeholder", "Type a message… (/help for commands)")
+        kwargs.setdefault("placeholder", t(K.PROMPT_PLACEHOLDER))
         super().__init__(**kwargs)
         # token -> real multi-line text, for pastes staged as placeholders.
         self._pastes: dict[str, str] = {}

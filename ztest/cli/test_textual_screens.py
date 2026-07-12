@@ -17,9 +17,10 @@ import pytest
 
 pytest.importorskip("textual")
 
+from textual.app import App
+
 from mote.cli.consumers.textual.screens import QuestionScreen
 from mote.cli.consumers.textual.style import textual_css_vars
-from textual.app import App
 
 
 class _ScreenHarness(App):

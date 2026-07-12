@@ -6,11 +6,12 @@ RoleSchema — static configuration, determined at deploy time.
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal, Optional
+from typing import Literal, Optional
 
-from mote.common.prompt.role import CMD_PROMPT, ROLE_INFO, SUMMARY_PROMPT, SUMMARY_WITH_RECOMMEND_PROMPT, SYSTEM_PROMPT
-from mote.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
 from pydantic import BaseModel, ConfigDict, Field
+
+from mote.common.prompt.role import CMD_PROMPT, SYSTEM_PROMPT
+from mote.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
 
 
 class RoleSchema(BaseModel):
@@ -19,32 +20,20 @@ class RoleSchema(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # --- Identity ---
+    # ``name``/``profile`` drive message routing + signing (display_name) on the
+    # Role/bus. Neither reaches the rendered system prompt.
     name: str = "Zero"
     profile: str = "Role"
-    goal: str = ""
-    constraints: str = ""
-    desc: str = ""
-    role_id: str = ""
-    role_info: str = ROLE_INFO
-    example: str = ""
-    instruction: str = ""
 
     # --- Prompt templates ---
     system_prompt: str = SYSTEM_PROMPT
     cmd_prompt: str = CMD_PROMPT
-    team_info: str = ""
-    # End-of-session summary prompts (consumed by Role.end_session). Kept on the
-    # schema like the other deploy-time templates so a Role can override the
-    # summary voice without patching role imports. The "with recommend"
-    # variant is selected when need_end_recommendations_tag is set.
-    summary_prompt: str = SUMMARY_PROMPT
-    summary_with_recommend_prompt: str = SUMMARY_WITH_RECOMMEND_PROMPT
 
     # --- Command protocol ---
     # How the Role exchanges commands with the LLM:
-    #   "xml"    -> legacy text protocol (XML command blocks + OUTPUT_SECTION)
+    #   "xml"    -> text protocol (XML command blocks + OUTPUT_SECTION)
     #   "native" -> provider-native tool-use (JSON-Schema tool specs + tool_calls)
-    # Defaults to "xml" for backward compatibility (model-agnostic).
+    # Defaults to "native"; "xml" is the model-agnostic fallback.
     command_protocol: Literal["xml", "native"] = "native"
     # Note: the native tool-spec envelope (OpenAI vs Anthropic) is NOT configured
     # here — it is inferred from the LLM config at runtime, since it must match
@@ -53,6 +42,12 @@ class RoleSchema(BaseModel):
     # --- Loop control ---
     max_react_loop: int = 50
     max_consecutive_react_limit: int = 10
+    # Hard per-agent budget cap in USD, keyed off this agent's own accrued spend
+    # (``context.cost_manager.total_cost``). A sibling run-limit to max_react_loop:
+    # at 80% the loop surfaces a soft CLI notice (once), at 100% it stops before
+    # the next think — no further LLM access. ``0.0`` disables the gate entirely
+    # (opt-in; the default), so an unbudgeted agent triggers neither threshold.
+    max_cost: float = 0.0
     # Which strategies the graph's per-turn factories build. Each is a key into a
     # builder registry in RoleComponents: ``loop_kind`` selects the react-loop
     # class ("react" -> the standard think→act ReActLoop) and ``think_kind`` the
@@ -62,7 +57,7 @@ class RoleSchema(BaseModel):
     loop_kind: str = "react"
     think_kind: str = "default"
     # Auto-continue budget: max times a TurnEnd control subscriber may block the
-    # "stop" to force another turn (CC Stop-hook semantics). 0 disables the seam
+    # "stop" to force another turn (Stop-hook semantics). 0 disables the seam
     # entirely — the run loop executes exactly once per call (the default).
     max_auto_continue: int = 0
 
@@ -95,17 +90,16 @@ class RoleSchema(BaseModel):
     # the user for confirmation. Set ``mode="bypass"`` (or specific allow rules)
     # to loosen this, or build a custom PermissionConfig for finer control.
     permissions: Optional[PermissionConfig] = Field(default_factory=PermissionConfig)
-    language: str = "chinese"
     # --- Hooks ---
     # Opt-in agent-lifecycle hooks (command handlers). When None (default) and
     # no callbacks are registered programmatically, no hook layer is engaged
-    # (legacy behavior). Python callbacks are registered on the HookManager, not
+    # (the default). Python callbacks are registered on the HookManager, not
     # declared here.
     hooks: Optional[HookConfig] = None
 
     # --- LSP ---
     # Opt-in language-server diagnostics. When None (default), no LSP layer is
-    # engaged (legacy behavior). Set an LspConfig (with servers) to launch
+    # engaged. Set an LspConfig (with servers) to launch
     # language servers lazily on relevant file edits and surface diagnostics
     # back into context at the next turn boundary.
     lsp: Optional[LspConfig] = None
@@ -180,15 +174,12 @@ class RoleSchema(BaseModel):
     # consistent with ``browser_locale`` / timezone so the fingerprint agrees.
     browser_proxy: str = ""
 
-    # --- Memory / summary config ---
+    # --- Memory config ---
     enable_memory: bool = True
-    use_summary: bool = True
     enable_router: bool = False
 
     # --- Behavior flags ---
-    delegated_from: str = ""
     observe_all_msg_from_buffer: bool = True
-    need_end_recommendations_tag: ClassVar[bool] = False
 
     # --- Derived properties ---
     @property

@@ -16,8 +16,11 @@ from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import pytest
+
 from mote.cli.contracts.view import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
 from mote.cli.driver import SessionDriver, _format_turn_error
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 # --------------------------------------------------------------------------
 # Fakes
@@ -184,7 +187,7 @@ def test_announce_tools_flags_builtin_count():
     ev = drv._projector.delivered_sync[-1]
     assert isinstance(ev, Notice)
     assert "\u2691" in ev.text
-    assert "3 个工具" in ev.text
+    assert t(K.DRIVER_TOOLS_LOADED, count=3) in ev.text
     assert "MCP" not in ev.text
 
 

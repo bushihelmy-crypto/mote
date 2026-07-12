@@ -6,9 +6,9 @@ not a COMPACTABLE_TOOL, so microcompact never folds it. A body only vanishes whe
 autocompact discards the head; the registry then re-projects the still-sticky
 bodies right after the summary so the model keeps its loaded capabilities.
 
-This mirrors claude-code's ``createSkillAttachmentIfNeeded`` over the
-``getInvokedSkillsForAgent`` side-store: most-recent-first, per-unit truncation
-keeping the head, whole-unit drop once the total budget is exceeded.
+This handles skill attachment over the invoked-skills side-store:
+most-recent-first, per-unit truncation keeping the head, whole-unit drop once
+the total budget is exceeded.
 
 Pure in-memory (not persisted to rollout): resume rebuilds it by scanning the
 replayed history for RESOURCE_STICKY messages (see Role.resume_session).
@@ -19,7 +19,7 @@ from mote.common.resource.unit import ResourceUnit
 from mote.common.schema import ResourceMessage
 from mote.common.utils.prompt_sanitizer import count_tokens, truncate_to_tokens
 
-# cc budget constants (src/services/compact.ts:133-134): each re-projected unit
+# budget constants: each re-projected unit
 # is truncated (head-kept) to at most PER_UNIT tokens; units are added
 # most-recent-first until the running total would exceed TOTAL, after which the
 # remaining (older) units are dropped whole.

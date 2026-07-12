@@ -12,6 +12,7 @@ from mote.context.turn_context.sources.fold_pressure import FoldPressureContextS
 from mote.context.turn_context.sources.git import GitContextSource
 from mote.context.turn_context.sources.skill_activation import SkillActivationContextSource
 from mote.context.turn_context.sources.skill_listing import SkillListingContextSource
+from mote.context.turn_context.sources.team import TeamContextSource
 from mote.context.turn_context.sources.timestamp import TimestampContextSource
 from mote.context.turn_context.sources.token_pressure import TokenPressureContextSource
 from mote.context.turn_context.sources.tool_catalog import ToolCatalogContextSource
@@ -24,6 +25,7 @@ __all__ = [
     "GitContextSource",
     "SkillActivationContextSource",
     "SkillListingContextSource",
+    "TeamContextSource",
     "TimestampContextSource",
     "TokenPressureContextSource",
     "ToolCatalogContextSource",

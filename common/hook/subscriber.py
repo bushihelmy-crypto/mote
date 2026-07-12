@@ -3,7 +3,7 @@
 The hook layer is preserved intact; this thin subscriber is the single seam that
 feeds it. It is the **adapter** between two vocabularies:
 
-* the CC/codex-shaped :class:`HookOutcome` that ``HookManager.fire`` folds
+* the :class:`HookOutcome` that ``HookManager.fire`` folds
   (behavior / updated_args / updated_response / additional_context / stop / ...),
   which stays the hook layer's own DTO, and
 * the bus's **typed per-event outcomes** (``ToolCallOutcome`` / ``PromptOutcome``
@@ -18,7 +18,7 @@ contribute no outcome (``None``).
 The whole per-event mapping lives in one table, :data:`_BINDINGS`, keyed by the
 event's ``name`` discriminator — the same key the bus routes on and that
 ``handles`` is derived from. Each :class:`_HookBinding` co-locates the three
-facts about an event that used to be split across two parallel ``isinstance``
+facts about an event that would otherwise be split across two parallel ``isinstance``
 chains: which hook to fire, how to build its payload, and how to project the
 folded outcome back. Adding a control event is then a single table row, and the
 routing/payload/projection for an event can never drift out of sync.

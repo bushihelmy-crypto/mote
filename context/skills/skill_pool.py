@@ -31,7 +31,7 @@ class SkillPool:
         self._skills: dict[str, SkillDefinition] = {}
         self._parser = MarkdownMetaParser()
         # ``source_dirs`` (lowest-priority first) is the canonical input; the
-        # legacy ``builtin_dir`` kwarg is kept for back-compat (single layer).
+        # ``builtin_dir`` kwarg is an accepted single-layer alternative.
         if source_dirs is not None:
             self._source_dirs: list[Path] = list(source_dirs)
         elif builtin_dir is not None:
@@ -43,7 +43,7 @@ class SkillPool:
     def builtin_dir(self) -> Path:
         """The lowest-priority (first) source directory.
 
-        Retained for back-compat; prefer :attr:`source_dirs`.
+        A single-directory convenience accessor; prefer :attr:`source_dirs`.
         """
         return self._source_dirs[0]
 
@@ -115,7 +115,7 @@ class SkillPool:
                 instructions=doc.content,
                 source_path=skill_md,
                 metadata=meta,
-                # claude-code-aligned frontmatter (accepts both hyphenated and
+                # supported frontmatter (accepts both hyphenated and
                 # snake_case keys; all optional with safe defaults).
                 when_to_use=meta.get("when_to_use", meta.get("when-to-use", "")),
                 context=meta.get("context", "inline"),

@@ -1,8 +1,9 @@
 from enum import Enum
 from typing import Optional
 
-from mote.common.utils.yaml_model import YamlModel
 from pydantic import Field, model_validator
+
+from mote.common.utils.yaml_model import YamlModel
 
 
 class MCPTransportType(str, Enum):
@@ -54,25 +55,15 @@ class MCPServerConfig(YamlModel):
 
 
 class MCPConfig(YamlModel):
-    """MCP configuration"""
+    """MCP subsystem master switch (mirrors the Skills master switch).
 
-    default_server: MCPServerConfig = Field(default_factory=MCPServerConfig, description="Internal server")
-    servers: list[MCPServerConfig] = Field(default_factory=list, description="List of MCP servers")
+    The *servers* themselves are never configured here — they live in their own
+    standard ``mcp_config.json`` (discovered by
+    ``executor.mcp.config_source.load_mcp_servers``). This section carries only
+    the global on/off toggle: when ``enabled`` the subsystem engages and every
+    server present in ``mcp_config.json`` is loaded, exactly as
+    ``context.skills.enabled`` engages the Skills index. A role may still opt in
+    to specific servers via ``role_schema.mcps`` even with the switch off.
+    """
 
-    @model_validator(mode="after")
-    def validate_unique_server_names(self):
-        """Validate that all server names are unique"""
-        if not self.servers:
-            return self
-
-        seen_names = set()
-        for server in self.servers:
-            if server.name in seen_names:
-                raise ValueError(f"Duplicate mcp server name found: {server.name}")
-            seen_names.add(server.name)
-
-        return self
-
-    def has_enabled_servers(self) -> bool:
-        """Check if there is at least one enabled server"""
-        return any(server.enabled for server in self.servers)
+    enabled: bool = Field(default=False, description="MCP master switch.")

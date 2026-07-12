@@ -13,8 +13,9 @@
 """
 from __future__ import annotations
 
-import mote.parser as parser_pkg
 import pytest
+
+import mote.parser as parser_pkg
 from mote.common.config.config.llm_config import LLMType
 from mote.parser import NativeToolChannel, XmlCommandChannel, infer_native_tool_provider, make_command_channel
 
@@ -35,7 +36,7 @@ class TestInferNativeToolProvider:
         # The regression: a Claude model reached through an OpenAI-compatible
         # gateway must still emit OpenAI-shaped tools (the gateway translates),
         # otherwise the malformed ``tools`` are dropped and the model improvises.
-        cfg = _LLMConfig("claude-opus-4-6", api_type=LLMType.OPENAI, base_url="https://newapi.deepwisdom.ai/v1")
+        cfg = _LLMConfig("claude-opus-4-6", api_type=LLMType.OPENAI, base_url="https://gateway.example.com/v1")
         assert infer_native_tool_provider(cfg) == "openai"
 
     @pytest.mark.parametrize("model", ["gpt-4", "gpt-4o", "o1-mini", "gemini-pro", "deepseek-chat"])

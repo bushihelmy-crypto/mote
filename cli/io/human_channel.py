@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``PortHumanChannel`` — env adapter routing ``Role.ask_human`` to an InputPort.
+"""``PortHumanChannel`` — env adapter routing ``Role.ask_user`` to an InputPort.
 
-``Role.ask_human`` (the capability behind the ``AskUserQuestion`` tool) delegates
-to ``state.env.ask_human(...)``. This is the §8 successor of the old
+``Role.ask_user`` (the capability behind the ``AskUserQuestion`` tool) delegates
+to ``state.env.ask_user(...)``. This is the §8 successor of the old
 ``_ConsoleHumanChannel``: instead of hard-wiring the REPL console, it routes to
 any :class:`~mote.cli.contracts.interface.ports.InputPort` (terminal / Web / IM share the same
 ``ask`` contract, §2.5), so the human channel is uniform across platforms.
@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 # The PermissionEngine renders approval questions with these markers (see
 # ``mote/executor/permission/prompts.py``) and then routes the *free-text*
-# reply back through ``request_approval`` → ``ask_human``. We intercept those
+# reply back through ``request_approval`` → ``ask_user``. We intercept those
 # prompts here and drive the port's structured ``decide_approval`` selector
 # instead of a raw text input, mapping the choice back to a reply the engine's
 # ``parse_approval_response`` understands ("yes" / "always" / "no").
@@ -77,7 +77,7 @@ def _parse_approval_prompt(text: str) -> Optional[_ApprovalRequest]:
 
 
 class PortHumanChannel:
-    """Minimal env adapter: ``ask_human`` → ``port.ask``; everything else inert."""
+    """Minimal env adapter: ``ask_user`` → ``port.ask``; everything else inert."""
 
     # The provider reads ``env.desc`` / ``env.role_names()`` / ``env.roles`` when
     # building the role prefix + team info; all three are inert for a single
@@ -92,7 +92,7 @@ class PortHumanChannel:
     def role_names(self) -> list:
         return []
 
-    async def ask_human(self, question: str, sent_from: Any = None) -> str:
+    async def ask_user(self, question: str, sent_from: Any = None) -> str:
         # Approval prompts (rendered by the PermissionEngine and routed through
         # ``request_approval`` → here) drive the port's structured selector rather
         # than a free-text input, then map the choice back to the engine's reply
@@ -108,7 +108,7 @@ class PortHumanChannel:
     async def ask_user_question(self, questions: Any, sent_from: Any = None) -> Any:
         """Route structured multiple-choice questions to the port's ``ask_questions``.
 
-        The structured counterpart of ``ask_human`` behind the ``AskUserQuestion``
+        The structured counterpart of ``ask_user`` behind the ``AskUserQuestion``
         tool: a full round-trip (down as display, back up as structured answers)
         with zero text parsing. Ports that predate ``ask_questions`` degrade
         per-question through the plain ``ask``, still building structured answers.
@@ -157,7 +157,7 @@ class PortHumanChannel:
         """
         return await self._port.decide_approval(self._ctx, request)
 
-    async def reply_to_human(self, content: str, sent_from: Any = None) -> str:
+    async def reply_to_user(self, content: str, sent_from: Any = None) -> str:
         return ""
 
     def set_addresses(self, role: Any, addresses: Any) -> None:  # noqa: D401 — no-op

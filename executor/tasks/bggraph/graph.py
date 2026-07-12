@@ -229,17 +229,15 @@ class BgGraph:
         self._validate_params()
         self._reducers = derive_reducers(self.state_schema)
 
-        # ignores below: pyright sees Self@BgGraph vs BgGraph as distinct because the
-        # checkout dir (mote-agent) != package name (mote); harmless self-identity noise.
-        return _build_executor(self)  # pyright: ignore[reportArgumentType]
+        return _build_executor(self)
 
     # --- resume (delegates to engine) ---
 
     def resume(self, state: GraphState, from_nodes: list[str], run_state: Any = None) -> BgTaskResult:
-        return _resume(self, state, from_nodes, run_state)  # pyright: ignore[reportArgumentType]
+        return _resume(self, state, from_nodes, run_state)
 
     def resume_skip(self, state: GraphState, skip_nodes: list[str], run_state: Any = None) -> BgTaskResult:
-        return _resume_skip(self, state, skip_nodes, run_state)  # pyright: ignore[reportArgumentType]
+        return _resume_skip(self, state, skip_nodes, run_state)
 
     def resume_skip_and_from(
         self,
@@ -248,7 +246,7 @@ class BgGraph:
         from_nodes: list[str],
         run_state: Any = None,
     ) -> BgTaskResult:
-        return _rsaf(self, state, skip_nodes, from_nodes, run_state)  # pyright: ignore[reportArgumentType]
+        return _rsaf(self, state, skip_nodes, from_nodes, run_state)
 
     @property
     def stage_summary(self) -> str:

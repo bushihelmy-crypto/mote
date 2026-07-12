@@ -1,10 +1,10 @@
 """Single authority for filesystem-path <-> ``file://`` URI conversion and the
 compact relative-path display used across the framework.
 
-Three tiny pure helpers used to live copy-pasted in unrelated leaves that could
-not import each other (AGENTS.md layering):
+Three tiny pure helpers homed here so unrelated leaves that cannot import each
+other (AGENTS.md layering) share one implementation:
 
-- ``uri_to_path`` / ``path_to_uri`` were duplicated verbatim in
+- ``uri_to_path`` / ``path_to_uri`` are needed by both
   ``roles/lsp/server.py`` (the LSP transport) and ``context/code_map/__init__.py``
   (the low ``context`` layer, which must NOT import ``roles``). LSP
   ``Location.uri`` values arrive as ``file://`` URIs and get turned back into

@@ -17,6 +17,7 @@ across tests; each test still tears its terminal down to free the subprocess.
 from __future__ import annotations
 
 import pytest
+
 from mote.executor.dependency._terminal import HeadTailBuffer
 from mote.executor.tool_result import ToolError
 from mote.executor.tools.terminal import Terminal

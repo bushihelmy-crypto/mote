@@ -1,7 +1,7 @@
 """Sleep tool — lets the agent pause without consuming LLM inference.
 
-Aligned with Claude Code's ``SleepTool``: the agent specifies a
-``duration_seconds`` and the framework blocks the coroutine for that long. The
+The agent specifies a ``duration_seconds`` and the framework blocks the
+coroutine for that long. The
 sleep is **interruptible** — if a new message arrives in the agent's message
 buffer (user input, background-task notification, etc.) or a background task
 completes, the sleep ends early so the agent can react immediately.
@@ -47,7 +47,7 @@ class Sleep(BaseTool):
     name = "Sleep"
     aliases = ["sleep"]
     requires = ("wait_interruptible",)
-    # Sleep returns a one-line status; cap tiny (CC).
+    # Sleep returns a one-line status; cap tiny.
     max_result_size_chars: ClassVar[int] = 1_000
 
     # Injected from Role by bind(): Role.wait_interruptible.

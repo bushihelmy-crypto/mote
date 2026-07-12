@@ -1,15 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2024/1/4 10:18
-@Author  : alexanderwu
-@File    : YamlModel.py
-"""
 from pathlib import Path
 from typing import Dict, Optional
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 
 class YamlModel(BaseModel):
@@ -34,15 +29,3 @@ class YamlModel(BaseModel):
         """Dump YamlModel instance to yaml file"""
         with open(file_path, "w", encoding=encoding) as file:
             yaml.dump(self.model_dump(), file)
-
-
-class YamlModelWithoutDefault(YamlModel):
-    """YamlModel without default values"""
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_not_default_config(cls, values):
-        """Check if there is any default config in config2.yaml"""
-        if any(["YOUR" in v for v in values]):
-            raise ValueError("Please set your config in config2.yaml")
-        return values

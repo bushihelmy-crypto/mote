@@ -11,6 +11,7 @@ these tests to keep them fast.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.exception import RetryableToolError, ToolError
 from mote.executor.tool_retry import retryable_tool
 

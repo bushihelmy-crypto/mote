@@ -4,8 +4,8 @@ One log per session at::
 
     {base_dir}/{session_id}/rollout.jsonl
 
-Append-only JSONL is the canonical, crash-safe record (Codex ``rollout`` +
-Claude Code transcript). The first line is always a ``session_meta`` event;
+Append-only JSONL is the canonical, crash-safe record (Codex ``rollout``).
+The first line is always a ``session_meta`` event;
 every subsequent line is one event.
 
 SessionLog now **composes a** :class:`~mote.common.disk.Journal` for the

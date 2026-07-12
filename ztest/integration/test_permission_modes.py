@@ -8,7 +8,7 @@ the coarse :class:`PermissionMode` stances and the interactive ``ask`` path:
 * ``acceptEdits`` / ``bypass`` auto-allow a mutating tool with no allow rule.
 * ``plan`` / ``dontAsk`` block a mutating tool (the latter fails closed).
 * an ``ask`` rule routes through the Role's ``request_approval`` capability ->
-  ``MoteEnv.ask_human`` -> the human-input channel; a "yes" runs the tool and a
+  ``MoteEnv.ask_user`` -> the human-input channel; a "yes" runs the tool and a
   "no" denies it.
 
 Only the LLM (scripted) and, for the ask tests, the human-input channel are
@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 
 import pytest
+
 from mote.common.schema import PermissionConfig
 from mote.environment.mote.mote_env import MoteEnv
 
@@ -118,12 +119,12 @@ async def test_allow_rule_overrides_plan(make_role, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Interactive ask path (request_approval -> env.ask_human -> human channel)
+# Interactive ask path (request_approval -> env.ask_user -> human channel)
 # ---------------------------------------------------------------------------
 
 
 def _patch_human_input(monkeypatch, reply: str) -> None:
-    """Make ``MoteEnv.ask_human`` resolve to a fixed human reply."""
+    """Make ``MoteEnv.ask_user`` resolve to a fixed human reply."""
     import mote.environment.mote.mote_env as mote_env
 
     async def _fake(question):  # signature matches get_human_input(question)

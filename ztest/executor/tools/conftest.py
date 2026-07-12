@@ -9,14 +9,14 @@ The real tools only ever touch:
   point at a per-test ``tmp_path`` workspace and ``chdir`` into so relative
   paths and ``os.getcwd()`` are predictable;
 - a handful of narrow Role capabilities (cwd accessors, the shared file-read
-  state, ``wait_interruptible``, ``end_session``, ``ask_human``,
-  ``reply_to_human``), all provided here by ``CapRole`` — a configurable fake
+  state, ``wait_interruptible``, ``end_session``, ``ask_user``,
+  ``reply_to_user``), all provided here by ``CapRole`` — a configurable fake
   Role that publishes an explicit ``tool_capabilities()`` allowlist exactly like
   the real Role, so ``BaseTool.bind`` injects only what each tool declares.
 
 Helpers:
 - ``CapRole`` — fake Role; tracks cwd + an in-memory file-read-state dict, lets
-  tests script ``ask_human``/``end_session`` replies.
+  tests script ``ask_user``/``end_session`` replies.
 - ``bind`` — bind a tool to a session + role (returns the tool).
 - ``run`` — drive a (bound) tool's ``async call(**kwargs)`` to completion.
 - ``workspace`` — a tmp dir the test cwd is switched into.
@@ -28,6 +28,7 @@ import os
 from typing import Any, Callable, Optional
 
 import pytest
+
 from mote.executor.base_tool import BaseTool
 
 # ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ class CapRole:
         self.browser_proxy: str = ""
         # Scriptable human/session behaviour.
         self.ask_reply = ask_reply
-        self.ask_questions: list[str] = []  # records every prompt sent to ask_human
+        self.ask_questions: list[str] = []  # records every prompt sent to ask_user
         # AskUserQuestion structured channel: a callable(items) -> AskUserQuestionAnswers
         # (or a pre-built AskUserQuestionAnswers). ``ask_question_items`` records
         # the typed questions each call received.
@@ -189,7 +190,7 @@ class CapRole:
             self.tool_sessions[key] = value
 
     # --- human / session ---
-    async def ask_human(self, question: str) -> str:
+    async def ask_user(self, question: str) -> str:
         self.ask_questions.append(question)
         return self.ask_reply
 
@@ -209,7 +210,7 @@ class CapRole:
             return answers
         return AskUserQuestionAnswers()
 
-    async def reply_to_human(self, content: str) -> str:
+    async def reply_to_user(self, content: str) -> str:
         return content
 
     async def end_session(self) -> str:
@@ -248,9 +249,9 @@ class CapRole:
             "get_browser_proxy": self.get_browser_proxy,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
-            "ask_human": self.ask_human,
+            "ask_user": self.ask_user,
             "ask_user_question": self.ask_user_question,
-            "reply_to_human": self.reply_to_human,
+            "reply_to_user": self.reply_to_user,
             "end_session": self.end_session,
             "wait_interruptible": self.wait_interruptible,
             "get_sandbox_runtime": self.get_sandbox_runtime,

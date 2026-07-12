@@ -10,7 +10,7 @@ new backend, never a spine change.
 Event → backend mapping:
 
 * :class:`SpanStartEvent`  -> ``backend.start_span`` (parent threaded by handle),
-  stored by ``span_id``. The legacy ``trace_steps`` knob is preserved *here* at
+  stored by ``span_id``. The ``trace_steps`` knob is applied *here* at
   the exporter boundary: when off, non-root spans (``parent_span_id is not None``)
   are skipped — root spans + generations still export.
 * :class:`SpanEndEvent`    -> pop + ``backend.end_span`` (no-op if unknown).

@@ -1,11 +1,11 @@
 """
 Memory prompt — persistent, file-based memory system for a Role.
 
-Aligned with Claude Code's auto-memory prompt (individual mode). The memory
-module itself is not yet implemented in Mote; this file prepares the prompt
-so the behavioral contract is ready when the storage/injection layer lands.
+An auto-memory prompt (individual mode). The memory module itself is not yet
+implemented in Mote; this file prepares the prompt so the behavioral contract
+is ready when the storage/injection layer lands.
 
-Two-part split (mirrors Claude Code's main-session design):
+Two-part split:
 
   1. MEMORY_INSTRUCTIONS — the *behavioral rules* (taxonomy, how/when to save
      and recall). Static: goes into the system prompt, where it stays cacheable

@@ -200,7 +200,7 @@ def test_transient_error_retries_then_succeeds(monkeypatch):
     # Distinct request_ids per attempt.
     assert cap.requests[0].request_id != cap.requests[1].request_id
     # One LLMRetryEvent fired from before_sleep (the pending re-issue), carrying
-    # the CC-style countdown coordinates. The eventual success emits no retry.
+    # the countdown coordinates. The eventual success emits no retry.
     assert len(cap.retries) == 1
     retry = cap.retries[0]
     assert retry.attempt == 1
@@ -241,6 +241,6 @@ def test_transient_error_exhausts_budget_then_reraises(monkeypatch):
     assert cap.responses == []
     # before_sleep fires only on a *pending* re-issue, so the final,
     # budget-exhausted failure emits NO retry event (it re-raises directly).
-    # This mirrors CC: no transient "retrying" line for the terminal failure.
+    # No transient "retrying" line for the terminal failure.
     assert len(cap.retries) == LLM_RETRY_ATTEMPTS - 1
     assert [r.attempt for r in cap.retries] == list(range(1, LLM_RETRY_ATTEMPTS))

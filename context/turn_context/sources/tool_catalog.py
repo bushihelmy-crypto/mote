@@ -1,10 +1,10 @@
 """ToolCatalogContextSource — the volatile tool catalog, per turn (XML mode).
 
-The tool *catalog* (built-in / MCP / pipeline schemas) used to live in the
-cacheable system prompt. But tools hot-reload (an MCP server connects, a pipeline
+The tool *catalog* (built-in / MCP / pipeline schemas) is kept out of the
+cacheable system prompt: tools hot-reload (an MCP server connects, a pipeline
 compiles, a built-in tool is gated on/off mid-session), and any change to the
 catalog would bust the whole cached prompt prefix. So the volatile *list* is
-delivered per-turn in the user prompt's ``<system-reminder>`` instead, while the
+delivered per-turn in the user prompt's ``<system-reminder>``, while the
 *static usage guide* (how to call tools, that MCP names are ``server:tool``, that
 MCP may fail — constant per session) stays in the system prompt as the channel's
 ``${tool_usage_guide}``.
@@ -82,9 +82,15 @@ class ToolCatalogContextSource(ObservationSubscriber):
         self,
         get_executor: Callable[[], Optional[_CatalogExecutor]],
         get_channel: Callable[[], Optional[_CatalogChannel]],
+        mcp_enabled: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._get_executor = get_executor
         self._get_channel = get_channel
+        # Optional MCP master-switch gate (``config.mcp.enabled``). When supplied
+        # and False, MCP schemas are dropped from the catalog — on top of the
+        # original logic (an empty MCP map self-suppresses that block anyway).
+        # None → gate on the original logic alone (backwards-compatible).
+        self._mcp_enabled = mcp_enabled
         # Names already surfaced in a prior turn — the incremental frontier.
         self._sent_names: set[str] = set()
 
@@ -114,7 +120,12 @@ class ToolCatalogContextSource(ObservationSubscriber):
             return None
 
         builtin = executor.get_tool_schemas() or {}
-        mcp = executor.get_mcp_tool_schemas() or {}
+        # MCP master switch off → drop the whole MCP block, so the reminder never
+        # lists MCP tools even if adapters happen to be bound.
+        if self._mcp_enabled is not None and not self._mcp_enabled():
+            mcp = {}
+        else:
+            mcp = executor.get_mcp_tool_schemas() or {}
         pipeline = executor.get_pipeline_tool_schemas() or {}
 
         current = set(builtin) | set(mcp) | set(pipeline)

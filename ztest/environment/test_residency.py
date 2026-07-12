@@ -12,6 +12,7 @@ test with ``capacity == 1`` to force eviction (codex reaches the same state via
 import types
 
 import pytest
+
 from mote.common.schema.queue import MessageQueue
 from mote.environment.exceptions import AgentLimitReached
 from mote.environment.residency import Residency, ResidencySlot

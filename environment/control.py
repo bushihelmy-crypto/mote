@@ -117,7 +117,7 @@ class AgentControl:
         self._event_bus = EventBus()
         self._event_bus.subscribe(LogSubscriber())
         # The spawn-depth veto runs on this runtime bus as a fail-closed control
-        # subscriber (see spawn_agent), replacing the old inline depth check.
+        # subscriber (see spawn_agent), not an inline depth check.
         self._event_bus.subscribe(SpawnGate())
         self._store = store if store is not None else ResidencyStore()
         # Bind self as the ambient plane around every turn so a deep spawn site
@@ -408,8 +408,8 @@ class AgentControl:
     def _build_spawn_context(self, spec: SpawnSpec, child_path: AgentPath) -> SpawnContext:
         """Gather the parent's cwd / config / cost tracker for the child factory.
 
-        ``parent_cost_tracker`` is now optional context (a skill_fork shares the
-        parent's context directly); the cost mirror tree no longer relies on it.
+        ``parent_cost_tracker`` is optional context (a skill_fork shares the
+        parent's context directly); the cost mirror tree does not rely on it.
         """
         parent_cwd: Optional[str] = None
         parent_config = None

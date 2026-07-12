@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Tests for the human-interaction tools (``mote.executor.tools.human``).
 
-Covers AskHuman + ReplyToHuman (thin delegations to the ask_human /
-reply_to_human Role capabilities) and AskUserQuestion (the CC port that now runs
+Covers AskUser + ReplyToUser (thin delegations to the ask_user /
+reply_to_user Role capabilities) and AskUserQuestion (which runs
 an end-to-end *structured* round-trip: questions go out as typed items, answers
 come back as ``AskUserQuestionAnswers`` with ``selected`` labels + ``free_text``
 kept in separate fields — no text rendering / parsing). CapRole fakes the
@@ -12,9 +12,10 @@ structured channel with scriptable answers.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 from mote.executor.tool_result import ToolError, ToolResult
-from mote.executor.tools.human import AskHuman, AskUserQuestion, ReplyToHuman
+from mote.executor.tools.human import AskUser, AskUserQuestion, ReplyToUser
 
 from .conftest import CapRole, bind, run
 
@@ -23,19 +24,19 @@ def _call(tool, **kwargs):
     return run(tool.call(**kwargs))
 
 
-class TestAskHuman:
+class TestAskUser:
     def test_returns_human_reply(self, workspace):
         role = CapRole(ask_reply="the answer is 42")
-        tool = bind(AskHuman(), role)
+        tool = bind(AskUser(), role)
         out = _call(tool, question="what is the answer?")
         assert out == "the answer is 42"
         assert role.ask_questions == ["what is the answer?"]
 
 
-class TestReplyToHuman:
+class TestReplyToUser:
     def test_echoes_content(self, workspace):
         role = CapRole()
-        tool = bind(ReplyToHuman(), role)
+        tool = bind(ReplyToUser(), role)
         out = _call(tool, content="here is my reply")
         assert out == "here is my reply"
 

@@ -1,15 +1,12 @@
 """Tool tier exceptions.
 
-``ToolError`` keeps its name and semantics: it is the exception every tool
-raises to signal a recoverable failure, caught by ``ToolExecutor`` and turned
-into ``ToolResult(success=False)``. It is re-exported from
-``mote.executor.tool_result`` so the hundreds of existing ``raise
-ToolError(...)`` call sites are automatically upgraded to typed errors without
-edits.
+``ToolError`` is the exception every tool raises to signal a recoverable
+failure, caught by ``ToolExecutor`` and turned into ``ToolResult(success=False)``.
+It is re-exported from ``mote.executor.tool_result`` so tool code can raise it
+from there.
 
-``NonRetryableToolError`` additionally inherits ``ValueError`` to preserve
-backward compatibility with code that catches ``ValueError`` and with the MCP
-retry predicate's historical behavior.
+``NonRetryableToolError`` additionally inherits ``ValueError`` so code that
+catches ``ValueError`` and the MCP retry predicate treat it as non-retryable.
 """
 
 from __future__ import annotations
@@ -63,8 +60,8 @@ class ToolPermissionDeniedError(ToolError):
 class NonRetryableToolError(ToolError, ValueError):
     """A tool error that should never be retried.
 
-    Inherits ``ValueError`` for backward compatibility with existing
-    ``except ValueError`` handlers and the MCP retry logic.
+    Also inherits ``ValueError`` so ``except ValueError`` handlers and the MCP
+    retry logic treat it as non-retryable.
     """
 
     default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_NON_RETRYABLE

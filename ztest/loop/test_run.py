@@ -10,6 +10,8 @@ path (End tool), the background-pool wait branch, and the two post-checks
 from __future__ import annotations
 
 import pytest
+
+from mote.common.base import BudgetVerdict
 from mote.common.schema import CauseBy, UserMessage
 
 from .conftest import FakeBgPool, FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
@@ -233,7 +235,7 @@ async def test_run_consecutive_limit_asks_human(make_loop):
     assert any("User's extra instruction:" in m.content for m in b.memory.messages)
 
 
-async def test_run_consecutive_limit_breaks_without_ask_human(make_loop):
+async def test_run_consecutive_limit_breaks_without_ask_user(make_loop):
     # Same climb, but no AskUserQuestion capability -> the loop simply breaks.
     channel = FakeChannel(commands=[])
     executor = FakeExecutor()
@@ -275,7 +277,7 @@ async def test_run_max_loop_reached_yes_resets(make_loop):
     assert rsp is not None
 
 
-async def test_run_max_loop_reached_breaks_without_ask_human(make_loop):
+async def test_run_max_loop_reached_breaks_without_ask_user(make_loop):
     channel = FakeChannel(commands=[])
     executor = FakeExecutor()
     b = make_loop(
@@ -292,3 +294,37 @@ async def test_run_max_loop_reached_breaks_without_ask_human(make_loop):
     assert [c for c in executor.calls if c["name"] == "AskUserQuestion"] == []
     # Ran exactly up to the cap, then broke.
     assert len(channel.recorded_turns) == 10
+
+
+async def test_run_budget_stop_halts_before_think(make_loop):
+    # A hard-cap verdict must break the loop *before* any think: the engine is
+    # never started and no command runs. The verdict message becomes the reply.
+    channel = FakeChannel(commands=[{"id": "t1", "command_name": "Read", "args": {}}])
+    executor = FakeExecutor(results={"Read": FakeResult(output="data")})
+    b = make_loop(channel=channel, executor=executor, max_react_loop=9)
+    b.provider.budget_verdict = BudgetVerdict(stop=True, message="budget-halt")
+    _news(b)
+
+    rsp = await b.loop.run()
+
+    assert b.provider.enforce_budget_calls == 1
+    assert b.provider.prepare_calls == 0  # never assembled a think request
+    assert b.think_engine.start_calls == []  # never touched the LLM
+    assert executor.calls == []  # never acted
+    assert rsp.content == "budget-halt"
+    assert rsp.cause_by == CauseBy.RUN_COMMAND.value
+
+
+async def test_run_budget_proceed_allows_normal_act(make_loop):
+    # The default PROCEED verdict is transparent: the loop thinks + acts as usual
+    # and consults the gate on the turn it ran.
+    channel = FakeChannel(commands=[{"id": "t1", "command_name": "Read", "args": {}}])
+    executor = FakeExecutor(results={"Read": FakeResult(output="data")})
+    b = make_loop(channel=channel, executor=executor, max_react_loop=1, max_consecutive_react_limit=99)
+    _news(b)
+
+    rsp = await b.loop.run()
+
+    assert b.provider.enforce_budget_calls == 1
+    assert [c["name"] for c in executor.calls] == ["Read"]
+    assert "data" in rsp.content

@@ -7,9 +7,9 @@ A single, extensible hierarchy rooted at :class:`MoteError`:
   vendor exception tuples (see :func:`is_retryable`).
 - Every concrete error carries a stable :class:`ErrorCode` and serializes via
   ``to_dict()``.
-- The four legacy exceptions (``ToolError``, ``NonRetryableToolError``,
-  ``EnvKeyNotFoundError``, ``NoMoneyException``) are reparented here and
-  re-exported from their original modules for backward compatibility.
+- ``ToolError``, ``NonRetryableToolError``, ``EnvKeyNotFoundError`` and
+  ``NoMoneyException`` are rooted in this hierarchy and also re-exported from
+  the modules that raise them.
 """
 
 from __future__ import annotations
@@ -45,10 +45,8 @@ from mote.common.exception.graph import (
 # ``from mote.common.utils.exceptions import handle_exception``; both
 # ``common.utils`` (re-exports only ``token_counter`` → tiktoken/loguru) and
 # ``common.utils.exceptions`` (imports only ``common.logs``) are pure leaves, so this
-# pulls in neither ``config2`` nor ``llm_config``. (Historically ``common.utils``
-# re-exported ``Singleton``/``read_docx`` which dragged config2 in, forcing a PEP 562
-# lazy ``__getattr__`` here; that re-export was dropped, so the cycle is gone and the
-# helpers are now plain top-level imports.)
+# pulls in neither ``config2`` nor ``llm_config`` — the helpers are plain top-level
+# imports with no import cycle.
 from mote.common.exception.handlers import classify_llm_error, handle_exception, is_retryable
 from mote.common.exception.llm import (
     ContextWindowExceededError,

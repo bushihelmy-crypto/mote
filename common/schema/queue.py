@@ -11,9 +11,10 @@ from enum import Enum
 from json import JSONDecodeError
 from typing import List, Optional
 
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializeAsAny
+
 from mote.common.logs import logger
 from mote.common.schema.messages import Message
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializeAsAny
 
 
 class MessagePriority(int, Enum):

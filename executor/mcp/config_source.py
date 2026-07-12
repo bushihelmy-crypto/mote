@@ -1,21 +1,21 @@
-"""MCP server config source — the Claude-style ``mcpServers`` JSON file.
+"""MCP server config source — the standard ``mcpServers`` JSON file.
 
 MCP server definitions live in their *own* file, ``.mote/mcp.json``, discovered
 per-project by walking from the working directory up to the git root (plus a
 user-level ``~/.mote/mcp.json``) — NOT in the layered ``config.yaml``. This is
 deliberate:
 
-* **Ecosystem standard.** Claude Desktop / Cursor / Cline / VS Code all use the
+* **Ecosystem standard.** Cursor / Cline / VS Code and other MCP clients all use the
   same ``{"mcpServers": {name: {...}}}`` shape, so a user can paste a community
   server block verbatim — zero translation.
 * **Per-project + user layering.** The ``<dir>/.mote/mcp.json`` walk mirrors the
-  skills subsystem (Claude-Code-aligned ``getProjectDirsUpToHome``): a closer
+  skills subsystem: a closer
   file overrides a farther one, and ``~/.mote/mcp.json`` is the lowest layer.
 * **Hot-reload seam.** A single, well-known file name is the natural thing for
   the file watcher to observe; a change re-inits MCP without touching the rest
   of the config (see ``executor.reload_mcp``).
-* **Map kills a validator.** The server name is the map key, so uniqueness is
-  structural — the old ``MCPConfig.validate_unique_server_names`` is unneeded.
+* **Map makes a validator unnecessary.** The server name is the map key, so
+  uniqueness is structural — no explicit uniqueness validator is needed.
 
 The transport ``type`` is *inferred*, never declared: a ``command`` means STDIO,
 a ``url`` means SSE. Presence in the map means enabled; delete an entry to
@@ -35,7 +35,7 @@ from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportTy
 from mote.common.const.paths import load_mote_json_section, mote_layered_files
 from mote.common.logs import logger
 
-#: The canonical MCP config file name (Claude-ecosystem convention). Lives under
+#: The canonical MCP config file name (the de-facto MCP convention). Lives under
 #: each project's ``.mote/`` dir and under ``~/.mote/``.
 MCP_CONFIG_FILE_NAME = "mcp.json"
 
@@ -51,7 +51,7 @@ def mcp_config_paths(cwd: Optional[Path] = None) -> List[Path]:
 
 
 def _to_server_config(name: str, spec: dict) -> Optional[MCPServerConfig]:
-    """Adapt one Claude-style server entry into an :class:`MCPServerConfig`.
+    """Adapt one standard server entry into an :class:`MCPServerConfig`.
 
     Transport is inferred from the shape: a ``url`` => SSE, else a ``command``
     => STDIO. An entry with neither is malformed and dropped (logged). Presence
@@ -88,7 +88,7 @@ def load_mcp_servers(cwd: Optional[Path] = None) -> List[MCPServerConfig]:
 
     Files are read low→high (``~/.mote/mcp.json`` then the git-root→cwd walk);
     a later (closer-to-cwd) file's server of the same name overrides an earlier
-    one. Each entry is adapted from the Claude-style ``{"mcpServers": {...}}``
+    one. Each entry is adapted from the standard ``{"mcpServers": {...}}``
     map. Best-effort throughout: bad files / entries are dropped, never raised.
     """
     merged: dict[str, dict] = {}

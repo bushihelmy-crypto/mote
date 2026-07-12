@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 
 import pytest
+
 from mote.executor.tasks import BgStatus, TaskAttachment, TaskAttachmentGenerator, TaskMeta, format_attachment_xml
 
 

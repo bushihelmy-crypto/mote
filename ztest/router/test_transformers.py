@@ -7,6 +7,7 @@ import base64
 import io
 
 import pytest
+
 from mote.common.exception import (
     LLMImageTooLargeError,
     LLMInvalidRequestStateError,

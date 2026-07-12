@@ -8,7 +8,7 @@ here. Skill bodies are never inlined into the prompt — they load on demand via
 the ``Skill`` tool.
 
 When the index would blow the token budget it degrades in three tiers
-(full description → half description → name only), mirroring claude-code.
+(full description → half description → name only).
 """
 
 from typing import Optional

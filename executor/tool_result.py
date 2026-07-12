@@ -5,26 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mote.common.const.tools import ERROR_PREFIX  # noqa: F401 (re-export for backward compat)
+from mote.common.const.tools import ERROR_PREFIX  # noqa: F401 (re-exported here)
 
-# ToolError now lives in the global exception system; re-exported here so the
-# hundreds of ``from mote.executor.tool_result import ToolError`` /
-# ``raise ToolError(...)`` call sites are unchanged and auto-upgraded to typed.
-from mote.common.exception import ErrorReport, ToolError  # noqa: F401 (re-export for backward compat)
+# ToolError lives in the global exception system; re-exported here so tool code
+# can ``from mote.executor.tool_result import ToolError`` and raise it.
+from mote.common.exception import ErrorReport, ToolError  # noqa: F401 (re-exported here)
 
 
 @dataclass
 class ToolMedia:
     """A media artifact a tool produced (image / pdf), as a *structured fact*.
 
-    Carried on ``PostToolUseEvent`` so the view layer folds it into a media block
-    without sniffing the output text or reverse-engineering a path from the tool
-    input. ``ref`` is a local file path when the tool read from disk (Read);
-    empty when the artifact exists only as bytes streamed to the model (a web
-    screenshot), in which case a text host degrades to ``kind``/``alt``.
+    The single authoritative record of one media product: the producer stamps
+    it in one place with ``kind`` + ``b64`` payload + ``ref`` + ``mime``. Carried
+    on ``PostToolUseEvent`` so the view layer folds it into a media block without
+    sniffing the output text or reverse-engineering a path from the tool input.
+    ``ref`` is a local file path when the tool read from disk (Read); empty when
+    the artifact exists only as bytes streamed to the model (a web screenshot),
+    in which case a text host degrades to ``kind``/``alt``.
     """
 
     kind: str = "image"  # image | pdf
+    b64: str = ""  # base64 payload (no data: prefix); byte-only artifacts too
     ref: str = ""  # local file path when available (else "")
     mime: Optional[str] = None
 
@@ -56,9 +58,12 @@ class ToolResult:
             goes into the tool_result message (e.g. "Read image (42KB)").
         success: Whether the tool execution succeeded.
         data: Optional raw structured data for hooks/downstream consumers.
-        images: Base64-encoded images to surface to the model as a supplemental
-            multimodal message. Each entry is a base64 string (no data: prefix).
-        pdfs: Base64-encoded PDF documents, surfaced the same way as images.
+        media: Structured media artifacts this tool produced, each a
+            ``ToolMedia(kind, b64, ref, mime)``. The single authoritative field
+            for media — the producer stamps ``ref`` at the source, eliminating
+            any need to sniff a path from ``data``. The ``images``/``pdfs``
+            properties project the base64 payloads grouped by kind for the LLM
+            multimodal path.
         file_changes: Structured file modifications this tool made, each a
             ``FileChange(path, old, new)``. The view layer renders these
             directly (side-by-side on a rich host, coloured diff on a text
@@ -67,7 +72,7 @@ class ToolResult:
         error: Structured failure record on a non-success result. Set by the
             executor from the raised exception (``ErrorReport.from_exception``);
             ``output`` is the rendered ``<error>`` block of this same report.
-            ``None`` on success or for legacy ``ToolResult(success=False)``
+            ``None`` on success or for plain ``ToolResult(success=False)``
             results that only carry an ``output`` string.
         terminate: Whether this result should end the react loop, not just fail
             the call. Set by the executor when a PreToolUse control outcome
@@ -96,32 +101,22 @@ class ToolResult:
     output: str
     success: bool = True
     data: Any = field(default=None, repr=False)
-    images: list[str] = field(default_factory=list)
-    pdfs: list[str] = field(default_factory=list)
+    media: list[ToolMedia] = field(default_factory=list)
     file_changes: list[FileChange] = field(default_factory=list)
     error: Optional[ErrorReport] = None
     terminate: bool = False
     retention: Optional[str] = None
     resource_path: Optional[str] = None
 
-    def media_artifacts(self) -> list[ToolMedia]:
-        """Describe this result's media as structured ``ToolMedia`` facts.
+    @property
+    def images(self) -> list[str]:
+        """Base64 payloads of the image media, for the LLM multimodal path."""
+        return [m.b64 for m in self.media if m.kind == "image"]
 
-        One entry per base64 image/pdf. A ``ref`` (local file path) is recovered
-        from ``data["path"]`` when the tool read from disk (Read stamps it), so a
-        host can render the file directly; artifacts that exist only as bytes (a
-        web screenshot) carry an empty ``ref`` and degrade to a labelled line.
-        Keeping this projection here means the ToolResult shape is known in one
-        place — the event/view layers consume ``ToolMedia``, never the raw fields.
-        """
-        info = self.data if isinstance(self.data, dict) else {}
-        path = info.get("path") or ""
-        out: list[ToolMedia] = []
-        for _ in self.images:
-            out.append(ToolMedia(kind="image", ref=str(path)))
-        for _ in self.pdfs:
-            out.append(ToolMedia(kind="pdf", ref=str(path)))
-        return out
+    @property
+    def pdfs(self) -> list[str]:
+        """Base64 payloads of the pdf media, for the LLM multimodal path."""
+        return [m.b64 for m in self.media if m.kind == "pdf"]
 
     @classmethod
     def from_tool_return(cls, raw: Any) -> "ToolResult":

@@ -5,8 +5,7 @@ Lives in ``common/schema`` alongside the other declarative role policies so
 service. The service itself lives in ``mote.environment.watching``; this is
 only the declarative shape: which roots to watch and how often to poll.
 
-Backward compatibility: a Role with ``file_watch=None`` (the default) runs with
-no watcher. ``FileWatchConfig.enabled`` is an explicit master switch so the
+Default: a Role with ``file_watch=None`` (the default) runs with no watcher. ``FileWatchConfig.enabled`` is an explicit master switch so the
 subsystem can be toggled without dropping config.
 """
 

@@ -4,8 +4,9 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from mote.common.utils import count_string_tokens
 from pydantic import BaseModel, Field, field_validator
+
+from mote.common.utils import count_string_tokens
 
 NAME_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 
@@ -19,7 +20,7 @@ class SkillDefinition(BaseModel):
     """Represents a single Skill parsed from a SKILL.md file.
 
     The first four fields (name/description/globs/instructions) are the
-    original schema; the rest mirror claude-code's SKILL.md frontmatter
+    original schema; the rest mirror the SKILL.md frontmatter
     (when_to_use / context / allowed-tools / model / effort / argument-hint /
     disable_model_invocation / paths) and all carry defaults so older skills
     keep parsing unchanged.
@@ -33,7 +34,7 @@ class SkillDefinition(BaseModel):
     token_count: int = 0
     metadata: dict = Field(default_factory=dict)
 
-    # --- claude-code-aligned frontmatter (all optional) ---
+    # --- supported frontmatter (all optional) ---
     # Trigger description shown in the index (when the model should reach for
     # this skill). Complements ``description``.
     when_to_use: str = ""
@@ -72,7 +73,7 @@ class SkillDefinition(BaseModel):
     def activation_patterns(self) -> list[str]:
         """All path patterns that conditionally activate this skill.
 
-        Merges ``paths`` and the legacy ``globs`` (deduped, order-preserving).
+        Merges ``paths`` and the ``globs`` alias (deduped, order-preserving).
         """
         seen: set[str] = set()
         merged: list[str] = []

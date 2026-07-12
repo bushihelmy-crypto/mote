@@ -36,6 +36,7 @@ from collections import deque
 from typing import Any, Optional, Sequence, Union
 
 import pytest
+
 from mote.router.llm.llm_response import LLMResponse, LLMToolCall
 
 # ---------------------------------------------------------------------------

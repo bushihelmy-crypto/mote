@@ -21,9 +21,9 @@ This reducer simply *consumes* that segment flag — it never re-derives the
 judgment. Conversational results (AskUserQuestion) and sticky resource bodies
 (re-projected capability bodies) are never touched.
 
-This is the same count-gated fold the old ``microcompact`` did, now expressed as
-a pluggable reducer. It mutates ``Message.content`` in place (the point: shrink
-what is kept) and reports the freed-token count.
+A count-gated fold expressed as a pluggable reducer. It mutates
+``Message.content`` in place (the point: shrink what is kept) and reports the
+freed-token count.
 """
 
 from __future__ import annotations

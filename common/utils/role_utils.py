@@ -4,35 +4,9 @@ import json
 from datetime import datetime
 from typing import Optional, Tuple
 
-from mote.common.const import IMAGES, PDFS, USE_ENCODED_MEDIA
 from mote.common.prompt.role import SUMMARIZE_PROBLEM_WHEN_DUPLICATE
-from mote.common.schema import Message, UserMessage
-from mote.common.utils.common import extract_and_encode_images, extract_and_encode_pdfs
+from mote.common.schema import UserMessage
 from mote.common.utils.stream_xml import LexerState, PythonObjectParser
-
-
-def attach_media(memory: list[Message], k: int = 3) -> list[Message]:
-    for message in memory:
-        if USE_ENCODED_MEDIA in message.metadata and message.metadata[USE_ENCODED_MEDIA]:
-            # backward compatibility: check if message.metadata[USE_ENCODED_MEDIA] is True
-            images = extract_and_encode_images(message.content)
-            if images:
-                message.add_metadata(IMAGES, images[:k])
-            pdfs = extract_and_encode_pdfs(message.content)
-            if pdfs:
-                message.add_metadata(PDFS, pdfs[:k])
-    return memory
-
-
-def detach_media(memory: list[Message]) -> list[Message]:
-    for message in memory:
-        if USE_ENCODED_MEDIA in message.metadata and message.metadata[USE_ENCODED_MEDIA]:
-            # backward compatibility: check if message.metadata[USE_ENCODED_MEDIA] is True
-            if IMAGES in message.metadata:
-                del message.metadata[IMAGES]
-            if PDFS in message.metadata:
-                del message.metadata[PDFS]
-    return memory
 
 
 def _ask_user_question_args(problem: str) -> dict:
@@ -40,7 +14,7 @@ def _ask_user_question_args(problem: str) -> dict:
 
     The duplicate-detection guard asks the human for help by synthesizing a
     tool call. It must target a tool the Role actually has registered:
-    ``AskUserQuestion`` (the ask_human/Ask tool is not in the default toolset),
+    ``AskUserQuestion`` (the ask_user/Ask tool is not in the default toolset),
     otherwise the call is filtered out as an unknown command and the loop spins
     without ever executing or terminating.
 
@@ -67,7 +41,7 @@ def _ask_user_question_args(problem: str) -> dict:
 
 async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str], llm, check_window: int = 10) -> str:
     past_rsp = rsp_hist[-check_window:]
-    if command_rsp in past_rsp and '"command_name": "end"' not in command_rsp:
+    if command_rsp in past_rsp and '"command_name": "End"' not in command_rsp:
         # Normal response with thought contents are highly unlikely to reproduce
         # If an identical response is detected, it is a bad response, mostly due to LLM repeating generated content
         # In this case, ask human for help and regenerate
@@ -88,8 +62,8 @@ async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str
             # guidance wrapper, which would be echoed back as a bloated result
             # key.
             command = [{"command_name": "AskUserQuestion", "args": _ask_user_question_args(problem)}]
-            ask_human_command = "```json\n" + json.dumps(command, indent=4, ensure_ascii=False) + "\n```"
-            return ask_human_command
+            ask_user_command = "```json\n" + json.dumps(command, indent=4, ensure_ascii=False) + "\n```"
+            return ask_user_command
     return command_rsp
 
 
@@ -118,15 +92,15 @@ async def check_duplicate_calls(
     Native tool-use messages carry no rich thought text, so the text guard in
     check_duplicates does not apply. Instead we compare a stable signature of this
     turn's calls (name + args, order-insensitive) against recent turns' signatures.
-    On a hard 3x repeat (excluding terminal-only / end turns) we ask the human for
-    help by returning a synthesized ask_human call list; otherwise return None to
+    On a hard 3x repeat (excluding terminal-only / End turns) we ask the human for
+    help by returning a synthesized ask_user call list; otherwise return None to
     signal "no override — keep the original calls".
     """
     if not command_calls:
         return None
     names = {c.get("command_name") for c in command_calls}
-    # end and pure-terminal repeats are legitimate (e.g. deploy loops); skip them.
-    if "end" in names:
+    # End and pure-terminal repeats are legitimate (e.g. deploy loops); skip them.
+    if "End" in names:
         return None
     if "Terminal" in names and "Editor" not in names:
         return None

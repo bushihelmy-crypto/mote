@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
+
 from mote.router.ml.flags import RoutingFlags
 
 ROUTE_CLASSES = ["R0", "R1", "R2", "R3"]

@@ -10,6 +10,8 @@ from datetime import datetime
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from pydantic import BaseModel, Field, SerializeAsAny, create_model, field_serializer, field_validator
+
 from mote.common.const import (
     AGENT,
     CACHE_INTENT,
@@ -29,12 +31,6 @@ from mote.common.logs import logger
 from mote.common.schema.document import CauseBy, Resource
 from mote.common.utils.common import CodeParser, any_to_str, any_to_str_set, import_class
 from mote.common.utils.exceptions import handle_exception
-from mote.common.utils.serialize import (
-    actionoutout_schema_to_mapping,
-    actionoutput_mapping_to_str,
-    actionoutput_str_to_mapping,
-)
-from pydantic import BaseModel, Field, SerializeAsAny, create_model, field_serializer, field_validator
 
 if TYPE_CHECKING:
     # Type-only import: `common.schema` is a low layer and must not import the
@@ -65,11 +61,7 @@ class Message(BaseModel):
     @classmethod
     def check_instruct_content(cls, ic: Any) -> Any:
         if ic and isinstance(ic, dict) and "class" in ic:
-            if "mapping" in ic:
-                mapping = actionoutput_str_to_mapping(ic["mapping"])
-                actionnode_class = import_class("ActionNode", "mote.common.utils.action_node")
-                ic_obj = actionnode_class.create_model_class(class_name=ic["class"], mapping=mapping)
-            elif "module" in ic:
+            if "module" in ic:
                 ic_obj = import_class(ic["class"], ic["module"])
             else:
                 raise KeyError("missing required key to init Message.instruct_content from dict")
@@ -102,13 +94,7 @@ class Message(BaseModel):
         ic_dict = None
         if ic:
             schema = ic.model_json_schema()
-            ic_type = str(type(ic))
-            if "<class 'mote.common.utils.action_node" in ic_type:
-                mapping = actionoutout_schema_to_mapping(schema)
-                mapping = actionoutput_mapping_to_str(mapping)
-                ic_dict = {"class": schema["title"], "mapping": mapping, "value": ic.model_dump()}
-            else:
-                ic_dict = {"class": schema["title"], "module": ic.__module__, "value": ic.model_dump()}
+            ic_dict = {"class": schema["title"], "module": ic.__module__, "value": ic.model_dump()}
         return ic_dict
 
     def __init__(self, content: str = "", **data: Any):

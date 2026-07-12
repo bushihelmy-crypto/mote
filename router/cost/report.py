@@ -2,7 +2,7 @@
 
 Two reference styles are reproduced:
 
-- **Claude Code** — the ``/cost`` block (total USD + per-model breakdown) and the
+- **Detailed** — the ``/cost`` block (total USD + per-model breakdown) and the
   status-line JSON (``cost`` + ``context_window`` objects piped to a user's
   status command).
 - **Codex** — the terse end-of-run ``FinalOutput`` line
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 def format_cost(cost: float) -> str:
-    """Claude Code's adaptive precision: 2 dp above $0.50, else 4 dp."""
+    """Adaptive precision: 2 dp above $0.50, else 4 dp."""
     return f"${cost:.2f}" if cost >= 0.5 else f"${cost:.4f}"
 
 
@@ -41,7 +41,7 @@ def format_model_usage(tracker: CostTracker) -> str:
 
 
 def format_total_cost(tracker: CostTracker) -> str:
-    """The Claude Code ``/cost`` summary block."""
+    """The ``/cost`` summary block."""
     total = tracker.total_token_usage()
     estimated = " (includes estimated cost for unknown models)" if tracker.has_unknown_model_cost else ""
     return (
@@ -88,7 +88,7 @@ def format_cost_tree(root: "CostNode") -> str:
 
 
 def status_line_dict(tracker: CostTracker, model: Optional[str] = None) -> dict:
-    """Claude Code status-line JSON: ``cost`` + ``context_window`` objects."""
+    """Status-line JSON: ``cost`` + ``context_window`` objects."""
     total = tracker.total_token_usage()
     ctx = tracker.context_remaining(model)
     return {

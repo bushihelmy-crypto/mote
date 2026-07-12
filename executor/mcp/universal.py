@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from fastmcp import Client
+
 from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
 from mote.common.exception import ToolNotFoundError
 from mote.common.logs import logger
@@ -49,7 +50,7 @@ class UniversalMCP:
 
         if servers is None:
             # MCP servers are defined in their own ``mcp_config.json`` (the
-            # Claude-ecosystem shape), not the layered ``config.yaml``. Every
+            # de-facto MCP shape), not the layered ``config.yaml``. Every
             # entry present there is enabled (presence == enabled).
             all_servers = load_mcp_servers()
             if server_names is not None:

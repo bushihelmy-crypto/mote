@@ -1,10 +1,10 @@
-"""Read file tool — aligned with Claude Code's Read (FileReadTool).
+"""Read file tool.
 
 Reads a file from the local filesystem. Text files return contents with
 ``cat -n`` style line numbers (``offset``/``limit`` select a slice). Images are
 returned as a textual placeholder plus the actual bytes as supplemental
-multimodal content (ToolResult.images / .pdfs), mirroring CC's approach of
-sending media as a separate block rather than inside the tool_result string.
+multimodal content (ToolResult.images / .pdfs), sending media as a separate
+block rather than inside the tool_result string.
 Jupyter notebooks are flattened to readable text.
 
 Rich documents (PDF / Word / Excel) are read two ways, chosen by ``mode``:
@@ -14,9 +14,9 @@ Rich documents (PDF / Word / Excel) are read two ways, chosen by ``mode``:
   ``report.pdf:42`` is read with ``offset=42`` — Grep→Read offsets line up.
   Works for PDF, Word and Excel.
 - ``"visual"`` (PDF only): the raw bytes are sent to the model as supplemental
-  ``pdfs`` content, like CC's PDF reading.
+  ``pdfs`` content.
 
-Differences from Claude Code's tool, by design:
+Differences by design:
 - Images are downscaled to fit MAX_IMAGE_DIMENSION (longest edge) before being
   shown to the model, mirroring codex's view_image "high" detail. The original
   format and ICC/EXIF (orientation) metadata are preserved on re-encode. Pass
@@ -26,15 +26,14 @@ Differences from Claude Code's tool, by design:
 - Notebooks are rendered to text (cells + outputs) rather than structured cells,
   since this framework's tool result is text + media, not arbitrary blocks.
 - Dedup state is kept per tool instance (one instance per Role/session) instead
-  of a shared readFileState. The short-circuit is gated on ContextVisibility
+  of a shared file-read state. The short-circuit is gated on ContextVisibility
   (via the ``is_resource_visible`` capability): a file whose earlier read has
   been folded/erased from context is re-read in full rather than pointed back at
   a cleared body, honouring the ``reconstructable`` promise that a read result is
   always recoverable on demand.
 
-The shape (offset is 1-indexed, default 2000-line cap, per-line length cap,
-size guard, blocked device paths, empty/short-file reminders) mirrors the CC
-tool so model behavior stays familiar.
+The shape: offset is 1-indexed, default 2000-line cap, per-line length cap,
+size guard, blocked device paths, empty/short-file reminders.
 """
 from __future__ import annotations
 
@@ -57,7 +56,7 @@ from mote.executor.base_tool import BaseTool
 from mote.executor.dependency._document import document_lines, extract_document_text, is_document
 from mote.executor.dependency._paths import resolve_path
 from mote.executor.tool_registry import register_tool
-from mote.executor.tool_result import ToolError, ToolResult
+from mote.executor.tool_result import ToolError, ToolMedia, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise/return site).
@@ -197,7 +196,7 @@ def _is_blocked_device(path: str) -> bool:
 
 
 def _add_line_numbers(lines: list[str], start_line: int) -> str:
-    """Format lines with right-aligned line numbers, CC `cat -n` arrow style."""
+    """Format lines with right-aligned line numbers, `cat -n` arrow style."""
     out = []
     for i, line in enumerate(lines):
         num = str(i + start_line)
@@ -261,7 +260,7 @@ class Read(BaseTool):
     # Read-only observation: the file can always be re-read, so a cleared result
     # body is recoverable on demand.
     reconstructable: ClassVar[bool] = True
-    # Read can return large files; allow a higher cap before persisting (CC).
+    # Read can return large files; allow a higher cap before persisting.
     max_result_size_chars: ClassVar[int] = 100_000
     description = READ_DESCRIPTION
     # Records each successful read into the Role's shared file-read state so the
@@ -600,10 +599,9 @@ class Read(BaseTool):
         b64 = base64.b64encode(final_bytes).decode("ascii")
         return ToolResult(
             output=_MSG_IMAGE_OUTPUT.format(path=file_path, ext=ext, size=size, note=note),
-            images=[b64],
+            media=[ToolMedia(kind="image", b64=b64, ref=full_path)],
             data={
                 "type": "image",
-                "path": full_path,
                 "size": size,
                 "detail": detail,
                 "sent_bytes": len(final_bytes),
@@ -673,8 +671,8 @@ class Read(BaseTool):
             raise ToolError(_MSG_CANNOT_READ.format(path=file_path, error=e))
         return ToolResult(
             output=_MSG_PDF_OUTPUT.format(path=file_path, size=size),
-            pdfs=[b64],
-            data={"type": "pdf", "path": full_path, "size": size},
+            media=[ToolMedia(kind="pdf", b64=b64, ref=full_path, mime="application/pdf")],
+            data={"type": "pdf", "size": size},
         )
 
     def _read_notebook(self, file_path, full_path) -> str:
@@ -693,8 +691,8 @@ class Read(BaseTool):
         """Return (selected_lines, total_line_count, truncated_line_count).
 
         Iterates the file line by line so only selected lines are retained in
-        memory; lines outside the range are counted but discarded (mirrors CC's
-        streaming reader).
+        memory; lines outside the range are counted but discarded (streaming
+        reader).
         """
         end_line = start_line + (limit if limit is not None else DEFAULT_MAX_LINES)
         selected: list[str] = []

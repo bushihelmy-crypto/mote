@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 from mote.common.base import CommandChannel
 from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS, TOOL_RESULT_RESOURCE_PATH
 from mote.parser.native_channel import NativeToolChannel

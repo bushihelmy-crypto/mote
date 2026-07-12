@@ -64,6 +64,7 @@ from mote.context.turn_context import (
     GitContextSource,
     SkillActivationContextSource,
     SkillListingContextSource,
+    TeamContextSource,
     TimestampContextSource,
     TokenPressureContextSource,
     ToolCatalogContextSource,
@@ -72,6 +73,7 @@ from mote.context.turn_context import (
 from mote.environment.watching import FileWatchService
 from mote.executor.mcp.config_source import mcp_config_paths
 from mote.executor.permission.sandbox import ResourceGuard, SandboxGuard, build_runtime
+from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
 from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
 from mote.executor.tool_executor import ToolExecutor
 from mote.loop import BaseLoop, ReActLoop
@@ -203,6 +205,7 @@ class RoleComponents:
             ComponentSpec("lsp_service", _build_lsp_service, available=_lsp_available),
             ComponentSpec("diagnostics_buffer", lambda ctx: DiagnosticsBuffer(), available=_lsp_available),
             ComponentSpec("sandbox_runtime", _build_sandbox_runtime, available=_sandbox_available),
+            ComponentSpec("secret_store", _build_secret_store, available=_secrets_available),
             # --- session-log-backed recorders (eager dep: session_log) ------
             ComponentSpec("file_snapshot_recorder", _build_file_snapshot_recorder),
             ComponentSpec("terminal_state_recorder", _build_terminal_state_recorder),
@@ -322,6 +325,11 @@ class RoleComponents:
         return self._graph.get("sandbox_runtime")
 
     @property
+    def secret_store(self):
+        """The shared encrypted secret vault, or ``None`` when secrets are off."""
+        return self._graph.get("secret_store")
+
+    @property
     def repo_index(self):
         return self._graph.get("repo_index")
 
@@ -439,8 +447,15 @@ class RoleComponents:
         of sync with what renders.
         """
         hook_manager = self.hook_manager
+        # One shared vault drives both secret subscribers (input + output); the
+        # bus is a single spine across role + executor, so a PostToolUse from the
+        # executor reaches the RedactionSubscriber wired here. ``None`` when the
+        # secrets layer is off (both entries drop at the end).
+        secret_store = self.secret_store
         subs = [
             HookSubscriber(hook_manager) if hook_manager is not None else None,
+            SecretUploadSubscriber(secret_store) if secret_store is not None else None,
+            RedactionSubscriber(secret_store) if secret_store is not None else None,
             RecorderSubscriber(self.session_log),
             LogSubscriber(),
             TracingSubscriber(LangfuseBackend(), trace_steps=step_tracing_enabled()) if is_enabled() else None,
@@ -662,7 +677,8 @@ class RoleComponents:
         if executor is None:
             return
         try:
-            if await executor.reload_mcp(self._role.role_schema.mcps):
+            enabled = self._role.config.mcp.enabled
+            if await executor.reload_mcp(self._role.role_schema.mcps, enabled=enabled):
                 logger.debug("RoleComponents: MCP hot-reloaded after an mcp_config.json change")
         except Exception as exc:  # noqa: BLE001 — a bad reload must not break the watcher
             logger.warning(f"RoleComponents: MCP hot-reload failed: {exc}")
@@ -694,7 +710,7 @@ def _skill_source_dirs(role, cfg) -> list:
 
     Bundled package skills are the lowest layer; the conventional
     ``~/.mote/skills`` (user) dir and the per-project ``<dir>/.mote/skills`` dirs
-    (discovered by walking from cwd up to the git root, Claude-Code-aligned) and
+    (discovered by walking from cwd up to the git root) and
     any configured ``extra_dirs`` stack above them (later overrides earlier for
     same-named skills).
     """
@@ -709,13 +725,14 @@ def _skill_source_dirs(role, cfg) -> list:
 
 
 def _build_skill_manager(ctx) -> SkillManager:
-    cfg = ctx.role.config.role.skills
-    # Per-role opt-in: a role that *lists* skills engages the subsystem even when
-    # the global master switch is off (``cfg.enabled or bool(skills)``).
+    cfg = ctx.role.config.context.skills
+    # The Skills subsystem engages purely on the config switch — a role that
+    # *lists* skills does not implicitly turn it on. ``config.context.skills.enabled``
+    # is the single gate.
     skills = ctx.role.role_schema.skills
     return SkillManager(
         skills=skills,
-        enabled=cfg.enabled or bool(skills),
+        enabled=cfg.enabled,
         source_dirs=_skill_source_dirs(ctx.role, cfg),
     )
 
@@ -735,7 +752,7 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
     )
 
     # Wire the disk-cap kill switch so an output that blows the size cap cancels
-    # its task (mirrors Claude Code's #killedForSize).
+    # its task.
     def _cancel_on_cap(tid: str) -> None:
         pool.cancel_for_cap(tid)
 
@@ -753,7 +770,7 @@ def _build_session_log(ctx) -> "SessionLog":
             working_dir=role.state.working_dir,
             original_working_dir=role.state.original_working_dir,
             project_root=role.state.project_root,
-            model=getattr(role.config.llm, "model", None),
+            model=getattr(role.config.models.default, "model", None),
             role_class=f"{type(role).__module__}.{type(role).__qualname__}",
         )
     )
@@ -763,7 +780,7 @@ def _build_session_log(ctx) -> "SessionLog":
 def _build_command_channel(ctx) -> CommandChannel:
     return make_command_channel(
         ctx.role.role_schema.command_protocol,
-        provider=infer_native_tool_provider(ctx.role.config.llm),
+        provider=infer_native_tool_provider(ctx.role.config.models.default),
     )
 
 
@@ -813,7 +830,7 @@ def _repo_index_available(role, state) -> bool:
     Layer C's reverse-dep freshness rides the same FileChanged signal the watcher
     fires, so it is gated on the watcher being configured — no separate config
     knob. When off, ``CodeMapContextSource`` falls back to touched-set-scoped
-    ``used by:`` (backward compatible).
+    ``used by:``.
 
     Additionally gated on the cwd being inside a real git repo, mirroring the
     file-watch base-root rule (see ``_build_file_watch_service``): outside a repo
@@ -848,6 +865,43 @@ def _sandbox_available(role, state) -> bool:
     permissions = role.role_schema.permissions
     cfg = permissions.runtime if permissions is not None else None
     return cfg is not None and cfg.enabled
+
+
+def _secrets_available(role, state) -> bool:
+    """The secret redaction/upload seam is wired iff ``config.secrets.enabled``."""
+    cfg = getattr(role.config, "secrets", None)
+    return bool(cfg is not None and cfg.enabled)
+
+
+def _primary_config_path(cwd) -> Optional[Path]:
+    """The highest-precedence config file on disk (what the user edits), or None.
+
+    Points the vault's config auto-sync at a concrete file so a runtime edit is
+    picked up by mtime; best-effort — an empty discovery just disables auto-sync.
+    """
+    try:
+        files = discover_source_files(Path(cwd))
+    except Exception:  # noqa: BLE001 — discovery is best-effort
+        return None
+    return files[-1].path if files else None
+
+
+def _build_secret_store(ctx):
+    """The one encrypted secret vault, shared by both secret subscribers.
+
+    Built only when ``config.secrets.enabled``. Seeds on construct: the vault's
+    config section auto-syncs (hot, by mtime) from the highest-precedence
+    config.yaml, and the persisted user tier is decrypted from disk. The cipher /
+    key source is the configured strategy (``secrets.cipher``).
+    """
+    from mote.common.secrets.cipher import build_cipher
+    from mote.common.secrets.store import SecretStore, secrets_path
+
+    secrets_cfg = ctx.role.config.secrets
+    cipher = build_cipher(secrets_cfg)
+    vault_path = Path(secrets_cfg.vault_path) if secrets_cfg.vault_path else secrets_path()
+    config_path = _primary_config_path(ctx.role.get_cwd())
+    return SecretStore(cipher, vault_path=vault_path, config_path=config_path)
 
 
 def _build_sandbox_runtime(ctx):
@@ -923,9 +977,10 @@ def _build_browser_state_recorder(ctx) -> "BrowserStateRecorder":
 def _build_executor(ctx) -> ToolExecutor:
     all_tools = ctx.role.role_schema.mcps + ctx.role.role_schema.tools
     # Auto-expose the ``Skill`` bridge tool when the skills subsystem is engaged
-    # (the single on-demand entry point for invoking project skills) — including
-    # the per-role opt-in where a role lists skills with the global switch off.
-    # Read from the built manager so the "enabled" decision lives in one place.
+    # (the single on-demand entry point for invoking project skills). Engagement
+    # is the config switch alone (``config.context.skills.enabled``) — listing
+    # skills does not implicitly turn it on. Read from the built manager so the
+    # "enabled" decision lives in one place.
     # Mirrors Terminal's "always-on when relevant" wiring: appended, then deduped
     # so an explicit declaration is harmless and order is preserved.
     if ctx.dep("skill_manager").enabled:
@@ -938,6 +993,10 @@ def _build_executor(ctx) -> ToolExecutor:
         permission_config=ctx.role.role_schema.permissions,
         bus=ctx.dep("event_bus"),  # eager: the bus is a pure leaf
         get_bg_pool=ctx.defer("bg_pool"),  # deferred: only pulled on first submit
+        # bggraph switch: off → pipeline tools (MediaPipeline, etc.) are never
+        # bound, so neither askllm's native tool set nor the CLI's XML catalog
+        # computes them. Mirrors the skills/mcp config-gated engagement.
+        pipelines_enabled=ctx.role.config.context.bggraph.enabled,
     )
 
 
@@ -965,7 +1024,7 @@ def _build_context_manager(ctx) -> ContextManager:
     return ContextManager(
         role.state.context,
         llm=ctx.dep("router").route_for_task(COMPRESSION_TASK),
-        model=getattr(role.config.llm, "model", None),
+        model=getattr(role.config.models.default, "model", None),
         bus=ctx.dep("event_bus"),
         sticky_provider=registry.project,
         rehydrate_provider=rehydrator.project,
@@ -1006,8 +1065,17 @@ def _build_turn_context_sources(ctx) -> list:
         ToolCatalogContextSource(
             get_executor=ctx.defer("executor"),
             get_channel=ctx.defer("command_channel"),
+            mcp_enabled=lambda: role.config.mcp.enabled,
         ),
         GitContextSource(get_cwd=lambda: role.state.working_dir or None),
+        # Multi-agent lineage: parent / siblings / direct children + session ids,
+        # read live from the control-plane registry. Incremental + persisted
+        # (dual-role: resets its frontier on PostCompactEvent). Self-suppresses
+        # with no plane bound or nothing new to announce.
+        TeamContextSource(
+            get_session_id=lambda: role.state.session_id,
+            get_context=lambda: role.context,
+        ),
         # NOTE: no per-turn cwd reminder. `working_dir` is now a STABLE base that
         # never drifts with `cd` (Codex-aligned) and equals the startup dir the
         # system prompt's env block already cites — a per-turn reminder would just
@@ -1034,7 +1102,8 @@ def _build_turn_context_sources(ctx) -> list:
         # The steady Skills index (what skills exist), token-capped.
         SkillListingContextSource(
             get_injector=lambda: components.skill_manager.injector,
-            max_tokens=role.config.role.max_skill_tokens,
+            max_tokens=role.config.context.skills.max_tokens,
+            is_enabled=lambda: role.config.context.skills.enabled,
         ),
         # External-edit freshness: flags tracked files changed on disk since the
         # agent last read them. Self-suppresses when nothing changed.
@@ -1059,7 +1128,7 @@ def _build_turn_context_sources(ctx) -> list:
             repo_index=ctx.dep("repo_index"),
             get_read_state=components._read_state,
             get_glimpsed_files=components._glimpsed_files,
-            surface_callers=role.config.role.code_map_surface_callers,
+            surface_callers=role.config.context.code_map.surface_callers,
         ),
     ]
     # LSP diagnostics: the buffer is itself the turn-context source (dual-role —
@@ -1181,7 +1250,7 @@ def _build_think_subsystems_factory(ctx) -> Callable[[], ThinkSubsystems]:
         role = ctx.role
         return ThinkSubsystems(
             config=role.config,
-            model_name=getattr(role.config.llm, "model", "") or "",
+            model_name=getattr(role.config.models.default, "model", "") or "",
             executor=ctx.dep("executor"),
             skill_manager=ctx.dep("skill_manager"),
             turn_context_bus=ctx.dep("turn_context_bus"),

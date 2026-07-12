@@ -48,12 +48,10 @@ def build_child_role(
     schema = RoleSchema(
         name=name,
         profile=name,
-        goal="Assist the code-review pipeline.",
         command_protocol="native",
         tools=["Read", "Grep", "Glob"] if tools is None else list(tools),
         permissions=PermissionConfig(mode="bypass"),
         system_prompt=system_prompt,
-        use_summary=False,
         enable_memory=False,
         # No durable session artifacts for these ephemeral leaf agents.
         record_file_history=False,

@@ -7,10 +7,19 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Optional
 
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.node_status import BgStatus
+
+if TYPE_CHECKING:
+    from mote.executor.tool_result import ToolResult
+
+# Complete model-facing sentence for a submitted background task, kept as one
+# template so the wording lives in a single place (fill via ``.format(...)``).
+_MSG_BG_SUBMITTED = (
+    "Background task '{name}' submitted{task_ref}. Running asynchronously — you will be notified when it completes."
+)
 
 
 class TaskType(str, Enum):
@@ -151,6 +160,44 @@ class BgTaskResult:
             graph_meta=graph_meta,
         )
 
+    # --- Settlement -----------------------------------------------------------
+
+    def to_tool_result(self, pool: Any, tool_name: str) -> "ToolResult":
+        """Settle this background return into a ``ToolResult`` for the executor.
+
+        Owns the whole bg branch for ``ToolExecutor.run_command``: submit the
+        poll to *pool* when both a
+        ``poll_factory`` and a pool are present, then shape the model-facing
+        output by mode —
+
+          - FOREGROUND: the immediate result only (no background work).
+          - BACKGROUND: a "submitted, notified on completion" notice naming the
+            task (with its ``task_id`` when the pool returned one).
+          - HYBRID: the immediate result while the poll continues in the bg.
+
+        Always ``success=True``; the ``BgTaskResult`` rides on ``data`` so the
+        caller (Role._act) can drive background submission. *tool_name* is the
+        fallback label when this result declares no ``command_name``.
+        """
+        from mote.executor.tool_result import ToolResult
+
+        task_id = None
+        if self.poll_factory is not None and pool is not None:
+            task_id = pool.submit(
+                self.poll_factory,
+                command_name=self.command_name or tool_name,
+                graph_meta=self.graph_meta,
+                progress=True,
+            )
+
+        if self.mode == BgTaskMode.BACKGROUND:
+            task_ref = f" (task_id: {task_id})" if task_id is not None else ""
+            output = _MSG_BG_SUBMITTED.format(name=self.command_name or tool_name, task_ref=task_ref)
+        else:
+            # FOREGROUND / HYBRID — surface the immediate result (None → "").
+            output = str(self.result) if self.result is not None else ""
+        return ToolResult(output=output, success=True, data=self)
+
 
 @dataclass
 class TaskMeta:
@@ -170,7 +217,7 @@ class TaskMeta:
     error: Optional[dict] = None  # ErrorReport.as_dict form on a FAILED task
     notified: bool = False  # True after _on_done pushes BackgroundTaskNotification
     output_path: Optional[str] = None  # disk path for task output (set by TaskOutputStore)
-    task_type: str = TaskType.COROUTINE  # default coroutine, backward compatible
+    task_type: str = TaskType.COROUTINE  # default coroutine
     task_kind: Optional[str] = None  # shell sub-type: "bash" / "monitor"
     agent_id: Optional[str] = None  # owning agent ID
     _output_capped: bool = False  # True when killed by disk output cap

@@ -5,14 +5,13 @@
 The Role's collaborators (LLM router, tool executor, context manager, event bus,
 session log, the opt-in hook/LSP/sandbox/file-watch layers, the per-turn context
 bus, …) form a dependency graph: some are pure leaves, some read a handful of
-siblings while building. Historically each was a hand-written lazy ``@property``
-that read its siblings directly and cached into a slot — which meant nothing
-*structurally* prevented a construction cycle (a getter reading a sibling that
+siblings while building. A hand-written lazy ``@property`` per component (each
+reading its siblings directly and caching into a slot) would leave nothing to
+*structurally* prevent a construction cycle (a getter reading a sibling that
 reads it back would stack-overflow or double-build) or a getter mutating a
 sibling as a hidden side-effect.
 
-This module replaces that ad-hoc pattern with one declarative registry and one
-resolver:
+This module uses one declarative registry and one resolver instead:
 
 - A component is a :class:`ComponentSpec` — a ``name``, a pure ``build`` function
   of a :class:`BuildContext`, and an optional ``available`` predicate (opt-in

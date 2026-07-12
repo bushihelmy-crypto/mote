@@ -10,6 +10,7 @@ exercises the constructor's registry-prebind path using the
 from __future__ import annotations
 
 import pytest
+
 from mote.common.exception import ToolValidationError
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.schema import ToolResultLimitConfig
@@ -209,9 +210,9 @@ class TestResultLimiting:
             name = "BigMedia"
 
             async def call(self):
-                from mote.executor.tool_result import ToolResult
+                from mote.executor.tool_result import ToolMedia, ToolResult
 
-                return ToolResult(output="z" * 60_000, images=["img"])
+                return ToolResult(output="z" * 60_000, media=[ToolMedia(kind="image", b64="img")])
 
         ex = make_executor(BigMedia())
         result = await ex.run_command("BigMedia", {})
@@ -332,6 +333,62 @@ class TestPipelineFiltering:
     async def test_all_schemas_include_pipeline(self):
         ex = make_executor(EchoTool(), self._pipeline_tool())
         assert set(ex.get_all_tool_schemas()) == {"Echo", "Pipe"}
+
+
+class TestPipelinesEnabledGate:
+    """The bggraph master switch (``config.context.bggraph.enabled``) gates
+    pipeline tool *loading* at construction: off → the pipeline tool is never
+    bound, so it appears in no schema view (neither askllm's native set nor the
+    XML catalog). Non-pipeline tools are unaffected."""
+
+    def _register_pipeline_cls(self, registry, name="RegPipe"):
+        from mote.executor.tasks.bggraph.marker import mark_pipeline_executor
+
+        async def _exec(**state):
+            return None
+
+        class RegPipelineTool(BaseTool):
+            def __init__(self):
+                super().__init__()
+                # Wiring a compiled executor onto the instance is what makes it a
+                # pipeline (the gate inspects instance attributes post-bind).
+                self._executor = mark_pipeline_executor(_exec)
+
+            async def call(self, **kwargs):
+                return None
+
+        RegPipelineTool.name = name
+        registry.register(RegPipelineTool)
+        return RegPipelineTool
+
+    async def test_switch_off_skips_pipeline_tool(self, restore_global_registry):
+        self._register_pipeline_cls(restore_global_registry)
+        ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=False)
+        # Never bound → absent from every schema view.
+        assert ex.get_pipeline_tool_schemas() == {}
+        assert "RegPipe" not in ex.get_all_tool_schemas()
+        assert "RegPipe" not in ex._tools
+
+    async def test_switch_on_loads_pipeline_tool(self, restore_global_registry):
+        self._register_pipeline_cls(restore_global_registry)
+        ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=True)
+        assert set(ex.get_pipeline_tool_schemas()) == {"RegPipe"}
+
+    async def test_switch_off_keeps_non_pipeline_tools(self, restore_global_registry):
+        from mote.executor.base_tool import BaseTool as _BT
+
+        class PlainTool(_BT):
+            name = "Plain"
+
+            async def call(self, **kwargs):
+                return None
+
+        restore_global_registry.register(PlainTool)
+        self._register_pipeline_cls(restore_global_registry)
+        ex = ToolExecutor("sess", tools=["Plain", "RegPipe"], pipelines_enabled=False)
+        # The non-pipeline tool is still bound; only the pipeline one is dropped.
+        assert "Plain" in ex.get_tool_schemas()
+        assert "RegPipe" not in ex.get_all_tool_schemas()
 
 
 class TestConstructorAndCleanup:
@@ -688,11 +745,13 @@ class TestReloadMcp:
     bus so the volatile views refresh. The native channel just rebuilds tool_specs."""
 
     def _patch(self, monkeypatch, tools):
-        from mote.executor import tool_executor as te
+        # UniversalMCP is constructed inside the McpLifecycle collaborator, so the
+        # fake is swapped in there (the executor delegates its MCP slot to it).
+        from mote.executor import mcp_lifecycle
 
         _FakeMcp.next_tools = list(tools)
         _FakeMcp.cleanups = 0
-        monkeypatch.setattr(te, "UniversalMCP", _FakeMcp)
+        monkeypatch.setattr(mcp_lifecycle, "UniversalMCP", _FakeMcp)
 
     def _recorder_bus(self):
         from mote.common.events import EventBus
@@ -713,18 +772,20 @@ class TestReloadMcp:
         bus.subscribe(rec)
         return bus, rec
 
-    async def test_noop_when_no_mcps_declared(self, monkeypatch):
+    async def test_noop_when_switch_off(self, monkeypatch):
+        # The ``config.mcp.enabled`` switch is the sole gate: with it off, a
+        # reload is a no-op even when the role lists servers.
         self._patch(monkeypatch, ["server:a"])
         ex = make_executor(EchoTool())
         assert await ex.reload_mcp(None) is False
-        assert await ex.reload_mcp([]) is False
+        assert await ex.reload_mcp(["server"]) is False
         # No MCP adapters were ever wired.
         assert ex.get_mcp_tool_schemas() == {}
 
     async def test_reload_registers_current_config(self, monkeypatch):
         self._patch(monkeypatch, ["server:a", "server:b"])
         ex = make_executor(EchoTool())
-        assert await ex.reload_mcp(["server"]) is True
+        assert await ex.reload_mcp(["server"], enabled=True) is True
         assert set(ex.get_mcp_tool_schemas()) == {"server:a", "server:b"}
         # Built-in tools are untouched by an MCP reload.
         assert "Echo" in ex.get_tool_schemas()
@@ -734,18 +795,18 @@ class TestReloadMcp:
         # where b is gone and c is added — the stale adapter must not survive.
         self._patch(monkeypatch, ["server:a", "server:b"])
         ex = make_executor(EchoTool())
-        await ex.reload_mcp(["server"])
+        await ex.reload_mcp(["server"], enabled=True)
 
         _FakeMcp.next_tools = ["server:a", "server:c"]
-        await ex.reload_mcp(["server"])
+        await ex.reload_mcp(["server"], enabled=True)
         assert set(ex.get_mcp_tool_schemas()) == {"server:a", "server:c"}
 
     async def test_reload_tears_down_old_manager(self, monkeypatch):
         self._patch(monkeypatch, ["server:a"])
         ex = make_executor(EchoTool())
-        await ex.reload_mcp(["server"])  # first: no prior manager to clean up
+        await ex.reload_mcp(["server"], enabled=True)  # first: no prior manager to clean up
         assert _FakeMcp.cleanups == 0
-        await ex.reload_mcp(["server"])  # second: the first manager is dropped
+        await ex.reload_mcp(["server"], enabled=True)  # second: the first manager is dropped
         assert _FakeMcp.cleanups == 1
 
     async def test_emits_tools_changed_event_with_removed(self, monkeypatch):
@@ -754,11 +815,11 @@ class TestReloadMcp:
         self._patch(monkeypatch, ["server:a", "server:b"])
         bus, rec = self._recorder_bus()
         ex = ToolExecutor("sess", tools=None, bus=bus)
-        await ex.reload_mcp(["server"])  # wires {a, b}, removed=[] (nothing prior)
+        await ex.reload_mcp(["server"], enabled=True)  # wires {a, b}, removed=[] (nothing prior)
 
         # Second reload drops b, so its name is announced as removed.
         _FakeMcp.next_tools = ["server:a"]
-        await ex.reload_mcp(["server"])
+        await ex.reload_mcp(["server"], enabled=True)
 
         changed = [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
         assert len(changed) == 2
@@ -770,5 +831,5 @@ class TestReloadMcp:
         self._patch(monkeypatch, ["server:a"])
         ex = make_executor(EchoTool())
         for _ in range(3):
-            await ex.reload_mcp(["server"])
+            await ex.reload_mcp(["server"], enabled=True)
         assert set(ex.get_mcp_tool_schemas()) == {"server:a"}

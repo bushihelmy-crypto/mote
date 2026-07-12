@@ -3,12 +3,13 @@
 """Secret resolution: fetch the API key from an external helper command.
 
 Keeping long-lived secrets out of config files is best practice (codex stores
-them in ``auth.json``/keyring; claude-code resolves env > ``apiKeyHelper`` >
-keychain). This module implements the helper-script path: when ``llm.api_key``
-is absent or a placeholder *and* an ``api_key_helper`` command is configured,
-the command is run and its stdout becomes the key.
+them in ``auth.json``/keyring; a common resolution order is env > ``apiKeyHelper``
+> keychain). This module implements the helper-script path: when
+``models.default.api_key`` is absent or a placeholder *and* a
+``models.api_key_helper`` command is configured, the command is run and its
+stdout becomes the key.
 
-Precedence is therefore: env (already merged into ``llm.api_key``) > static
+Precedence is therefore: env (already merged into the key) > static
 config key > helper output. The helper only runs to fill a gap, never to
 override an explicit key. Results are cached per-command with a short TTL so a
 key is not re-fetched on every load.
@@ -76,26 +77,29 @@ def run_api_key_helper(command: str, *, use_cache: bool = True) -> str:
 
 
 def resolve_api_key(merged: Dict[str, Any], *, use_cache: bool = True) -> Optional[str]:
-    """Fill ``merged['llm']['api_key']`` from the helper when needed (in place).
+    """Fill ``merged['models']['default']['api_key']`` from the helper (in place).
 
-    No-op unless a top-level ``api_key_helper`` is configured and the current
-    ``llm.api_key`` is missing/placeholder. Returns the fetched key (or ``None``
-    if nothing changed) for diagnostics/testing.
+    No-op unless ``models.api_key_helper`` is configured and the current
+    ``models.default.api_key`` is missing/placeholder. Returns the fetched key
+    (or ``None`` if nothing changed) for diagnostics/testing.
     """
-    helper = merged.get("api_key_helper")
+    models = merged.get("models")
+    if not isinstance(models, dict):
+        return None
+    helper = models.get("api_key_helper")
     if not helper or not isinstance(helper, str):
         return None
-    llm = merged.get("llm")
-    current = llm.get("api_key") if isinstance(llm, dict) else None
+    default = models.get("default")
+    current = default.get("api_key") if isinstance(default, dict) else None
     if not _needs_fill(current):
         return None
     key = run_api_key_helper(helper, use_cache=use_cache)
     if not key:
         return None
-    if not isinstance(llm, dict):
-        llm = {}
-        merged["llm"] = llm
-    llm["api_key"] = key
+    if not isinstance(default, dict):
+        default = {}
+        models["default"] = default
+    default["api_key"] = key
     return key
 
 

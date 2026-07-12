@@ -1,11 +1,11 @@
 """Centralized Langfuse activation — code-noninvasive, default-off.
 
 All langfuse imports are lazy (inside functions) so the framework runs without
-langfuse installed when tracing is disabled. This module now owns only
+langfuse installed when tracing is disabled. This module owns only
 *activation*: it reads config, sets the ``LANGFUSE_*`` env vars, constructs the
 client, and exposes the enabled / step-tracing flags.
 
-Instrumentation moved onto the spine: spans are emitted by the framework-native
+Instrumentation lives on the spine: spans are emitted by the framework-native
 ``span`` contextmanager (:mod:`mote.common.events.trace`) as
 ``SpanStart``/``SpanEnd`` events, and LLM generations as request/response/error
 events. A backend-agnostic :class:`~mote.common.observability.tracing.TracingSubscriber`

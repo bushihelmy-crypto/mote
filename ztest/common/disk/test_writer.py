@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from mote.common.disk.writer import DiskWriter
 
 

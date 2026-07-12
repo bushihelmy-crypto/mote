@@ -83,13 +83,14 @@ RESOURCE_REPORT = "resource_report"
 AGENT_LIFECYCLE = "agent_lifecycle"
 SPAN_START = "span_start"
 SPAN_END = "span_end"
+BUDGET = "budget"
 
 
 # ---------------------------------------------------------------------------
 # Rewrite provenance — a control subscriber may rewrite a mutable field of a
 # control event (tool args, tool output). :class:`Rewrite`/:class:`Rewritable`
 # live in the ``common/events/rewrite.py`` leaf (so ``outcome_type`` can bind
-# events to outcomes without a cycle); re-exported here for back-compat.
+# events to outcomes without a cycle); re-exported here for convenience.
 # ---------------------------------------------------------------------------
 
 
@@ -110,7 +111,7 @@ class SessionStartEvent:
     project_root: str = ""
     model: Optional[str] = None
     role_class: Optional[str] = None
-    source: str = "startup"  # CC SessionStart "source" matcher (startup|resume|...)
+    source: str = "startup"  # SessionStart "source" matcher (startup|resume|...)
 
     name: ClassVar[str] = SESSION_START
 
@@ -248,7 +249,7 @@ class LLMRetryEvent:
     just failed, the total budget, and the chosen back-off) so a CLI can render
     a transient "retrying in Ns" line. The final, budget-exhausted failure does
     NOT emit this (no ``before_sleep`` fires); it surfaces via the turn-level
-    error path instead — mirroring Claude Code's transient-retry UX.
+    error path instead — the transient-retry UX.
     """
 
     request_id: str = ""
@@ -398,6 +399,26 @@ class TaskProgressEvent:
 
 
 @dataclass
+class BudgetEvent:
+    """An agent crossed a spend threshold against its configured budget cap.
+
+    Emitted by :class:`ContextProvider.enforce_budget` on the observation plane
+    (fire-and-forget) when this agent's own accrued spend crosses the soft
+    warning line (``stopped=False``, once) or the hard cap (``stopped=True``,
+    once). The loop reads the returned verdict to actually halt; this event is
+    purely for the UI/recorder to surface + persist the milestone. Only emitted
+    when a positive ``max_cost`` is configured — an unbudgeted agent is silent.
+    """
+
+    spend: float = 0.0  # USD accrued by this agent so far
+    limit: float = 0.0  # configured max_cost cap (USD)
+    fraction: float = 0.0  # spend / limit at emit time
+    stopped: bool = False  # True once the hard cap halted the loop
+
+    name: ClassVar[str] = BUDGET
+
+
+@dataclass
 class ResourceReportEvent:
     """A non-streaming resource observation a reporter pushed to the UI.
 
@@ -475,8 +496,16 @@ class SpanEndEvent:
 
 
 @dataclass
-class UserPromptSubmitEvent:
-    """The user submitted a prompt for this turn."""
+class UserPromptSubmitEvent(Rewritable):
+    """The user submitted a prompt for this turn.
+
+    :class:`Rewritable`: a control subscriber may rewrite ``prompt`` (the
+    secret-upload subscriber vaults ``<secret>…</secret>`` spans and substitutes
+    placeholders) by returning ``PromptOutcome.updated_prompt``; the bus threads
+    that forward with :meth:`Rewritable.rewrite` (``field="prompt"``) so a later
+    subscriber sees the already-rewritten prompt and the change is recorded in
+    ``rewrites``, mirroring how :class:`PreToolUseEvent` threads ``updated_args``.
+    """
 
     prompt: str = ""
 
@@ -636,6 +665,7 @@ __all__ = [
     "AGENT_LIFECYCLE",
     "SPAN_START",
     "SPAN_END",
+    "BUDGET",
     # rewrite provenance
     "Rewrite",
     "Rewritable",
@@ -659,6 +689,7 @@ __all__ = [
     "DiagnosticsEvent",
     "RecoveryEvent",
     "TaskProgressEvent",
+    "BudgetEvent",
     "ResourceReportEvent",
     "AgentLifecycleEvent",
     "SpanStartEvent",

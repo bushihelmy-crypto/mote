@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Console-free rich *builders* — the shared renderables both rich hosts reuse.
 
-These focus on :func:`render_diff`, the claude-code-style unified-diff colouriser:
+These focus on :func:`render_diff`, the unified-diff colouriser:
 a line-number gutter, filled +/- colour bars, cyan ``@@`` hunk headers, and
 word-level highlight of only the spans that actually changed within a matched
 -/+ pair. The builders are console-free (they return a ``rich.Text``), so the
@@ -15,22 +15,27 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
 from mote.cli.consumers.render.builders import (
     _HAS_RICH,
+    FoldMode,
     compaction_summary_text,
+    fold_mode,
     format_usage_line,
     interpolate_color,
-    is_collapsible_tool,
     linkify,
     render_diff,
     render_file_change,
     render_image,
     shimmer_text,
     sparkline,
+    tool_completed_text,
     tool_group_summary_text,
     tool_started_text,
 )
 from mote.cli.consumers.render.palette import Palette
+from mote.common.i18n import keys as K
+from mote.common.i18n import t as i18n_t
 
 pytestmark = pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 
@@ -247,10 +252,10 @@ def test_compaction_summary_shows_short_recap_verbatim():
 def test_compaction_summary_folds_long_recap_with_count():
     body = "\n".join(f"l{i}" for i in range(20))
     t = compaction_summary_text(body, max_lines=12)
-    # 12 kept lines + one "… +8 行" fold tail.
+    # 12 kept lines + one fold tail (FOLD_MORE_LINES with the 8 hidden lines).
     assert "l0" in t.plain and "l11" in t.plain
     assert "l12" not in t.plain
-    assert "… +8 行" in t.plain
+    assert i18n_t(K.FOLD_MORE_LINES, count=8) in t.plain
 
 
 def test_compaction_summary_empty_is_empty_text():
@@ -258,54 +263,62 @@ def test_compaction_summary_empty_is_empty_text():
 
 
 # --------------------------------------------------------------------------
-# consecutive search/read tool grouping (claude-code collapseReadSearch)
+# consecutive search/read tool grouping
 # --------------------------------------------------------------------------
 
 
-def test_is_collapsible_tool_covers_search_and_read():
-    assert is_collapsible_tool("Read")
-    assert is_collapsible_tool("Grep")
-    assert is_collapsible_tool("Glob")
-    assert not is_collapsible_tool("Write")
-    assert not is_collapsible_tool("Edit")
-    assert not is_collapsible_tool("Bash")
+def test_fold_mode_classifies_group_detail_and_none():
+    # GROUP: search/read coalesce into one count summary.
+    assert fold_mode("Read") is FoldMode.GROUP
+    assert fold_mode("Grep") is FoldMode.GROUP
+    assert fold_mode("Glob") is FoldMode.GROUP
+    # DETAIL: per-call body+output fold (distinct command identity).
+    assert fold_mode("Bash") is FoldMode.DETAIL
+    assert fold_mode("Terminal") is FoldMode.DETAIL
+    assert fold_mode("WebBrowser") is FoldMode.DETAIL
+    assert fold_mode("Skill") is FoldMode.DETAIL
+    # NONE: always rendered in full.
+    assert fold_mode("Write") is FoldMode.NONE
+    assert fold_mode("Edit") is FoldMode.NONE
+    assert fold_mode("Unknown") is FoldMode.NONE
 
 
 def test_tool_group_summary_counts_search_and_read():
     items = [("Grep", "foo"), ("Glob", "*.py"), ("Read", "/a.py")]
-    t = tool_group_summary_text(items, active=False, expanded=False)
-    assert "搜索 2 个模式" in t.plain
-    assert "读取 1 个文件" in t.plain
+    t = tool_group_summary_text(items, active=False)
+    assert i18n_t(K.GROUP_SEARCH, count=2) in t.plain
+    assert i18n_t(K.GROUP_READ, count=1) in t.plain
 
 
 def test_tool_group_summary_dedupes_read_paths():
-    # The same file read twice counts once (claude-code Set dedupe).
+    # The same file read twice counts once (Set dedupe).
     items = [("Read", "/a.py"), ("Read", "/a.py"), ("Read", "/b.py")]
-    t = tool_group_summary_text(items, active=False, expanded=False)
-    assert "读取 2 个文件" in t.plain
-    assert "搜索" not in t.plain  # no search calls → no search phrase
+    t = tool_group_summary_text(items, active=False)
+    assert i18n_t(K.GROUP_READ, count=2) in t.plain
+    # No search calls → only the read phrase, so no list separator joining two.
+    assert i18n_t(K.LIST_SEP) not in t.plain
 
 
 def test_tool_group_summary_active_appends_ellipsis():
     items = [("Read", "/a.py")]
-    active = tool_group_summary_text(items, active=True, expanded=False)
-    idle = tool_group_summary_text(items, active=False, expanded=False)
+    active = tool_group_summary_text(items, active=True)
+    idle = tool_group_summary_text(items, active=False)
     assert "…" in active.plain
     assert "…" not in idle.plain
 
 
-def test_tool_group_summary_toggle_hint_reflects_state():
+def test_tool_group_summary_has_no_inline_toggle_hint():
+    # The ctrl+o affordance is unified on the status bar — never on the row.
     items = [("Read", "/a.py")]
-    assert "ctrl+o 展开" in tool_group_summary_text(items, active=False, expanded=False).plain
-    assert "ctrl+o 折叠" in tool_group_summary_text(items, active=False, expanded=True).plain
+    assert "ctrl+o" not in tool_group_summary_text(items, active=False).plain
 
 
 def test_tool_group_summary_empty_items_is_empty_text():
-    assert tool_group_summary_text([], active=False, expanded=False).plain == ""
+    assert tool_group_summary_text([], active=False).plain == ""
 
 
 # --------------------------------------------------------------------------
-# format_usage_line — claude-code ` │ ` field separator
+# format_usage_line — ` │ ` field separator
 # --------------------------------------------------------------------------
 
 
@@ -409,3 +422,39 @@ def test_tool_bullet_turns_green_on_success_red_on_failure():
     ev = SimpleNamespace(title=None, tool_name="Bash", headline="ls")
     assert _bullet_style(tool_started_text(ev, ok=True)) == Palette.SUCCESS
     assert _bullet_style(tool_started_text(ev, ok=False)) == Palette.ERROR
+
+
+# --------------------------------------------------------------------------
+# tool completion summary — structured failure suffix ([ErrorType] · retryable)
+# --------------------------------------------------------------------------
+
+
+def _completed(**over):
+    base = dict(ok=True, summary="done", error_type="", retryable=False)
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_tool_completed_failure_appends_error_type_suffix():
+    ev = _completed(ok=False, summary="denied", error_type="PermissionError")
+    assert " [PermissionError]" in tool_completed_text(ev).plain
+    # Not retryable → no retryable tag.
+    assert "retryable" not in tool_completed_text(ev).plain
+
+
+def test_tool_completed_failure_appends_retryable_tag():
+    ev = _completed(ok=False, summary="overloaded", error_type="LLMOverloadedError", retryable=True)
+    plain = tool_completed_text(ev).plain
+    assert "[LLMOverloadedError]" in plain
+    assert "· retryable" in plain
+
+
+def test_tool_completed_success_has_no_error_suffix():
+    ev = _completed(ok=True, summary="ok", error_type="")
+    assert "[" not in tool_completed_text(ev).plain
+
+
+def test_tool_completed_failure_without_error_type_has_no_suffix():
+    # A failure with no structured error_type renders the summary alone.
+    ev = _completed(ok=False, summary="boom", error_type="")
+    assert tool_completed_text(ev).plain.endswith("boom")

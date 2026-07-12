@@ -15,18 +15,6 @@ from string import Template
 from mote.common import prompt as R
 
 
-class TestIdentityTemplates:
-    def test_prefix_template_formats(self):
-        out = Template(R.PREFIX_TEMPLATE).safe_substitute(profile="Engineer", name="Bob", goal="ship")
-        assert "Engineer" in out
-        assert "Bob" in out
-        assert "ship" in out
-
-    def test_constraint_template_formats(self):
-        out = Template(R.CONSTRAINT_TEMPLATE).safe_substitute(constraints="be terse")
-        assert "be terse" in out
-
-
 class TestSystemPromptBoundary:
     def test_boundary_marker_present(self):
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY in R.SYSTEM_PROMPT
@@ -44,7 +32,6 @@ class TestSystemPromptBoundary:
     def test_expected_placeholders_below_boundary(self):
         below = R.SYSTEM_PROMPT.split(R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[1]
         for ph in (
-            "${role_info}",
             "${command_guide}",
             "${tool_usage_guide}",
             "${memory}",
@@ -86,13 +73,6 @@ class TestAgentPrompts:
 
 
 class TestMiscConstants:
-    def test_summary_prompts_nonempty(self):
-        assert R.SUMMARY_PROMPT.strip()
-        assert R.SUMMARY_WITH_RECOMMEND_PROMPT.strip()
-
-    def test_recommend_prompt_mentions_tag(self):
-        assert "<recommendations>" in R.SUMMARY_WITH_RECOMMEND_PROMPT
-
     def test_summarize_duplicate_has_language_field(self):
         out = R.SUMMARIZE_PROBLEM_WHEN_DUPLICATE.format(language="Chinese")
         assert "Chinese" in out

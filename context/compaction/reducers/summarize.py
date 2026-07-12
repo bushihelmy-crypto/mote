@@ -1,24 +1,23 @@
 """SummarizeReducer (LLM) — summarize the head, keep a verbatim tail.
 
-The expensive strategy (the former ``autocompact``): when cheaper folding did not
-free enough, ask the LLM to write a structured summary of the older turns, then
-rebuild the history as ``[pinned] + [summary] + [sticky] + tail``.
+The expensive strategy: when cheaper folding did not free enough, ask the LLM to
+write a structured summary of the older turns, then rebuild the history as
+``[pinned] + [summary] + [sticky] + tail``.
 
-The one behavioral fix over the old code: the head/tail split now goes through
-:meth:`Transcript.split_keep_tail`, which only ever cuts on a segment boundary.
-The old flat ``_split_keep_tail`` cut by raw message index and could land between
-an assistant ``tool_use`` and its ``tool_result`` — the resulting orphaned
-``tool_result`` in the kept tail made Anthropic 400. That is now impossible.
+The head/tail split goes through :meth:`Transcript.split_keep_tail`, which only
+ever cuts on a segment boundary, so it can never land between an assistant
+``tool_use`` and its ``tool_result`` (an orphaned ``tool_result`` in the kept
+tail would make Anthropic 400).
 
-Preserved from ``autocompact``:
+Safeguards:
 - the circuit breaker (stop after N consecutive summarize failures),
 - ``sticky_provider`` re-projection (loaded capability bodies survive the head
   being discarded — re-inserted right after the summary),
 - partial vs full compact-prompt selection (a tail is kept → partial "up_to").
 
-Added: ``rehydrate_provider`` re-projection (the recent working-set files re-read
-from disk — re-inserted after the sticky bodies) so the model resumes with a
-fresh view of the files it was editing, not just the summary's paraphrase.
+``rehydrate_provider`` re-projection re-reads the recent working-set files from
+disk (re-inserted after the sticky bodies) so the model resumes with a fresh
+view of the files it was editing, not just the summary's paraphrase.
 """
 
 from __future__ import annotations

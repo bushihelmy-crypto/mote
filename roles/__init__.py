@@ -1,10 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2023/5/11 14:43
-@Author  : alexanderwu
-@File    : __init__.py
-"""
 
 # Side-effect import: registers the concrete read-only child-Role builder into
 # the common-layer holder so the executor can build helper agents without

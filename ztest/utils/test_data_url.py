@@ -8,6 +8,7 @@ shape and the sniff-vs-declared media-type precedence, previously duplicated
 import base64
 
 import pytest
+
 from mote.common.utils.common import build_data_url, parse_data_url, resolve_image_media_type
 
 # Minimal byte payloads carrying the magic numbers sniff_image_media_type reads.

@@ -1,7 +1,7 @@
 MIT License
 
 Copyright (c) 2023 MetaGPT (DeepWisdom)
-Copyright (c) 2026 mote-agent contributors
+Copyright (c) 2026 mote contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,3 +20,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+This software incorporates, references, and/or adapts code from third-party
+projects. Their copyright notices and license texts are provided in the NOTICE
+file and the zthird_party_licenses/ directory, and continue to apply to the
+respective portions of the code.

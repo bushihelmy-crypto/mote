@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# The parse function: https://deepwisdom.feishu.cn/wiki/Rh8hwd7IXitJzwkhDm7caYvonxg
 
 import asyncio
 import re
@@ -114,7 +113,7 @@ class PythonObjectParser(BaseModel):
             if self.state != LexerState.SEARCH_FUNCTION:
                 raise ValueError("Invalid XML")
             if not self.functions:
-                tokens = self._make_ask_human()
+                tokens = self._make_ask_user()
             else:
                 # If the queue receives None, it indicates that there is no more data, and the parsing should be terminated.
                 tokens = [("end_array", None), EOS]
@@ -310,7 +309,7 @@ class PythonObjectParser(BaseModel):
                 return "\n".join(lines[0 : ix + 1])
         return ""
 
-    def _make_ask_human(self):
+    def _make_ask_user(self):
         if self.ignore_text:
             self.rcv_buf = ""
             return [EOS]
@@ -319,7 +318,7 @@ class PythonObjectParser(BaseModel):
             ("start_map", None),
             ("map_key", "command_name"),
             ("start_string", None),
-            ("string", "reply_to_human"),
+            ("string", "reply_to_user"),
             ("end_string", None),
             ("map_key", "args"),
             ("start_map", None),

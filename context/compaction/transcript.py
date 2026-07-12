@@ -6,9 +6,8 @@ one class of bug *physically unrepresentable*: an assistant turn that invoked
 tools plus **all** of that turn's ``tool_result`` messages form a single atomic
 ``TOOL_GROUP`` segment, and the only cut the Transcript exposes
 (:meth:`split_keep_tail`) always lands on a segment boundary. So a summarize /
-drop can never separate a ``tool_use`` from its ``tool_result`` — the exact
-mistake the old flat ``autocompact._split_keep_tail`` made, which sent an orphan
-``tool_result`` to Anthropic and 400'd.
+drop can never separate a ``tool_use`` from its ``tool_result`` — which would
+otherwise send an orphan ``tool_result`` to Anthropic and 400.
 
 Segment kinds:
 

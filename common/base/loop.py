@@ -47,6 +47,25 @@ class LoopContext:
     observe_all: bool = True
 
 
+@dataclass(frozen=True)
+class BudgetVerdict:
+    """The budget gate's ruling for one react turn.
+
+    Returned by ``ContextProvider.enforce_budget`` and read by the loop before
+    each think. ``stop=True`` means this agent hit its hard cap: the loop must
+    halt *before* touching the LLM and surface ``message`` as its final reply.
+    ``stop=False`` (the default) means proceed — whether or not a soft warning
+    was surfaced this turn (the warning is a side-effect on the bus, not a halt).
+    """
+
+    stop: bool = False
+    message: str = ""
+
+
+#: A verdict that never halts — the common case (no cap, or under budget).
+PROCEED = BudgetVerdict()
+
+
 class BaseLoop(ABC):
     """A replaceable agent-loop strategy.
 

@@ -1,7 +1,7 @@
 """Envelope formatting for the unified per-turn ephemeral context block.
 
 All sources' rendered blocks are merged into a single ``<system-reminder>``
-envelope (Claude Code's wrapper tag for ephemeral, request-only context). The
+envelope (the wrapper tag for ephemeral, request-only context). The
 bus owns ordering; this module owns the wire shape.
 """
 

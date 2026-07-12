@@ -10,8 +10,9 @@ and that PostCompact fires after a compaction with the summary.
 """
 from __future__ import annotations
 
-import mote.context.budget as token_budget
 import pytest
+
+import mote.context.budget as token_budget
 from mote.common.events import EventBus
 from mote.common.hook.manager import HookManager
 from mote.common.hook.subscriber import HookSubscriber

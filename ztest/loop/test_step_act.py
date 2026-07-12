@@ -15,6 +15,7 @@ Key behaviours:
 from __future__ import annotations
 
 import pytest
+
 from mote.common.schema import CauseBy
 
 from .conftest import FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine

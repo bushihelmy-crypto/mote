@@ -6,8 +6,8 @@
 2. task map  (``route_for_task``) : caller declares a task; a map picks a model.
 3. intelligent (``aroute``)       : a pluggable Strategy picks from request signals.
 
-Replaces the old ``LLM()`` factory; the module-level ``LLM()`` here keeps
-byte-for-byte behavior compatibility with that factory.
+The module-level ``LLM()`` helper here is a thin convenience constructor over
+the router.
 """
 from __future__ import annotations
 
@@ -25,21 +25,13 @@ from mote.router.strategy import RoutingStrategy, RuleBasedStrategy
 if TYPE_CHECKING:
     from mote.common.interface import ContextReducer
 
-# field name of the default named model in Config
-DEFAULT_MODEL_NAME = "llm"
+# name of the default model card (``config.models.default``).
+DEFAULT_MODEL_NAME = "default"
 
-# Built-in routing tasks (imported by callers, e.g. Role/ContextManager).
+# Built-in routing tasks (imported by callers, e.g. Role/ContextManager). These
+# are the conventional keys of ``config.models.tasks``; each task's LLMConfig is
+# registered as a card named by the task, so the task-map is name==task.
 COMPRESSION_TASK = "compression"  # ContextManager autocompact summarization
-SUMMARY_TASK = "summary"  # Role.end_session summary
-
-# Built-in task -> the Config LLMConfig field name that serves it. Each task is
-# wired into ``task_map`` (in _auto_register_from_config) when its card exists.
-# Add a new task-routed model by declaring its LLMConfig field on Config and a
-# single row here — no code branch needed.
-DEFAULT_TASK_MODELS: dict[str, str] = {
-    COMPRESSION_TASK: "compress_llm",
-    SUMMARY_TASK: "summary_llm",
-}
 
 
 class LLMVariant(Enum):
@@ -80,7 +72,7 @@ class LLMRouter:
         task_map: Optional[dict[str, str]] = None,
     ):
         # lazy import keeps router.py free of a hard Context dependency at import
-        # time (mirrors the old factory constructing Context() on demand).
+        # time; the Context is constructed here on demand.
 
         self.context: "Context" = context or Context()
         self.strategy: RoutingStrategy = strategy or RuleBasedStrategy()
@@ -97,20 +89,18 @@ class LLMRouter:
 
     # ------------------------------------------------------------------ setup
     def _auto_register_from_config(self) -> None:
-        """Register every ``LLMConfig``-typed field on ``context.config``.
+        """Register the default model + every task-routed model on ``config.models``.
 
-        Field name becomes the model name; ``llm`` is also the default.
+        ``models.default`` becomes the ``"default"`` card (and the router default);
+        each entry in ``models.tasks`` becomes a card named by its task and is
+        wired into ``task_map`` so the task routes to it (name == task).
         """
-        config = self.context.config
-        for field_name in type(config).model_fields:
-            value = getattr(config, field_name, None)
-            if isinstance(value, LLMConfig):
-                self._cards[field_name] = ModelCard(name=field_name, llm_config=value)
+        models = self.context.config.models
+        self._cards[DEFAULT_MODEL_NAME] = ModelCard(name=DEFAULT_MODEL_NAME, llm_config=models.default)
+        for task, llm_config in models.tasks.items():
+            self._cards[task] = ModelCard(name=task, llm_config=llm_config)
+            self.task_map.setdefault(task, task)
         self._default = DEFAULT_MODEL_NAME
-        # Default task map: built-in tasks route to their named cards when present.
-        for task, model_name in DEFAULT_TASK_MODELS.items():
-            if model_name in self._cards:
-                self.task_map.setdefault(task, model_name)
 
     def register(
         self,
@@ -224,12 +214,12 @@ class LLMRouter:
     def route(self, *, name: Optional[str] = None, llm_config: Optional[LLMConfig] = None) -> BaseLLM:
         """Explicit routing: give an LLMConfig, a name, or neither (default).
 
-        Equivalent to the old ``LLM()`` factory when given ``llm_config`` / nothing.
+        With ``llm_config`` (or nothing) this builds a ``BaseLLM`` directly.
         """
         if llm_config is not None:
             # This branch bypasses ``_build`` (fresh, uncached instance), so the
             # COMPRESS reducer must be stamped here too — the main think path
-            # routes per-request through here with ``role.config.llm``.
+            # routes per-request through here with ``role.config.models.default``.
             instance = self.context.llm_with_cost_manager_from_llm_config(llm_config)
             instance.context_reducer = self.context_reducer
             return instance
@@ -243,9 +233,8 @@ class LLMRouter:
 
         The COMPRESSION task's instance is built reducer-less (the ``COMPRESSION``
         variant) so the ContextManager's summarize reducer — which runs on it —
-        cannot re-enter the COMPRESS recovery loop. Other tasks (incl. SUMMARY, a
-        top-level turn-end call that is not nested inside compression) keep the
-        reducer so their own overflows still shrink+re-issue.
+        cannot re-enter the COMPRESS recovery loop. Other tasks keep the reducer
+        so their own overflows still shrink+re-issue.
         """
         variant = LLMVariant.COMPRESSION if task == COMPRESSION_TASK else LLMVariant.THINK
         name = self.task_map.get(task)
@@ -284,9 +273,8 @@ class LLMRouter:
 
 # --------------------------------------------------------------- module-level
 def LLM(llm_config: Optional[LLMConfig] = None, context: Optional["Context"] = None) -> BaseLLM:
-    """Drop-in replacement for the old factory ``LLM``.
+    """Build a ``BaseLLM`` from config, or the default llm when no config.
 
-    Behavior is identical: default llm when no config, else build from config.
     A router is a cheap, context-scoped object, so build one per call (its own
     instance cache lives for the returned LLM's resolution); no module state.
     """

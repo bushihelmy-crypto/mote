@@ -1,9 +1,9 @@
-"""Human interaction commands — ask_human, reply_to_human, AskUserQuestion."""
+"""Human interaction commands — ask_user, reply_to_user, AskUserQuestion."""
 from __future__ import annotations
 
 from typing import Awaitable, Callable
 
-from mote.common.prompt.tools import ASK_HUMAN_DESCRIPTION, ASK_USER_QUESTION_PROMPT, REPLY_TO_HUMAN_DESCRIPTION
+from mote.common.prompt.tools import ASK_USER_DESCRIPTION, ASK_USER_QUESTION_PROMPT, REPLY_TO_USER_DESCRIPTION
 from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput, AskUserQuestionItem
 from mote.executor.base_tool import BaseTool
 from mote.executor.tool_registry import register_tool
@@ -15,49 +15,49 @@ _MSG_INVALID_QUESTIONS = "Error: invalid questions — {error}"
 
 
 @register_tool
-class AskHuman(BaseTool):
-    """Ask the human user a question and wait for their response."""
+class AskUser(BaseTool):
+    """Ask the user a question and wait for their response."""
 
     name = "Ask"
-    aliases = ["AskHuman"]
-    description = ASK_HUMAN_DESCRIPTION
-    requires = ("ask_human",)
+    aliases = ["AskUser"]
+    description = ASK_USER_DESCRIPTION
+    requires = ("ask_user",)
 
-    # Injected from Role by bind(): Role.ask_human.
-    ask_human: Callable[[str], Awaitable[str]]
+    # Injected from Role by bind(): Role.ask_user.
+    ask_user: Callable[[str], Awaitable[str]]
 
     async def call(self, *, question: str) -> str:
-        """Ask the human user a question.
+        """Ask the user a question.
 
         Args:
-            question: The question to ask the human user.
+            question: The question to ask the user.
         """
-        return await self.ask_human(question)
+        return await self.ask_user(question)
 
 
 @register_tool
-class ReplyToHuman(BaseTool):
-    """Reply to the human user with the content provided."""
+class ReplyToUser(BaseTool):
+    """Reply to the user with the content provided."""
 
     name = "Reply"
-    aliases = ["ReplyToHuman"]
-    description = REPLY_TO_HUMAN_DESCRIPTION
-    requires = ("reply_to_human",)
+    aliases = ["ReplyToUser"]
+    description = REPLY_TO_USER_DESCRIPTION
+    requires = ("reply_to_user",)
 
-    # Injected from Role by bind(): Role.reply_to_human.
-    reply_to_human: Callable[[str], Awaitable[str]]
+    # Injected from Role by bind(): Role.reply_to_user.
+    reply_to_user: Callable[[str], Awaitable[str]]
 
     async def call(self, *, content: str) -> str:
-        """Reply to the human user.
+        """Reply to the user.
 
         Args:
-            content: The content to reply to the human user.
+            content: The content to reply to the user.
         """
-        return await self.reply_to_human(content)
+        return await self.reply_to_user(content)
 
 
 # ---------------------------------------------------------------------------
-# AskUserQuestion — multiple-choice questions (ported from Claude Code)
+# AskUserQuestion — multiple-choice questions
 # ---------------------------------------------------------------------------
 
 
@@ -87,7 +87,7 @@ class AskUserQuestion(BaseTool):
         The answers come back structured (``selected`` labels + ``free_text`` per
         question, kept in separate fields), so a numeric or multi-line free-text
         answer is never misread as an option index or misaligned across
-        questions. ``output`` (the CC summary) enters history; ``data`` (the
+        questions. ``output`` (the summary) enters history; ``data`` (the
         structured answers, ``repr=False``) is available to downstream consumers
         without entering history.
 
@@ -111,14 +111,14 @@ class AskUserQuestion(BaseTool):
 
         The native channel delivers ``questions`` as plain dicts, so we run it
         through ``AskUserQuestionInput`` to get pydantic's min/max + uniqueness
-        checks (mirrors CC's Zod schema) and typed access downstream.
+        checks (via a schema) and typed access downstream.
         """
         try:
             return AskUserQuestionInput.model_validate({"questions": questions}).questions
         except Exception as e:  # noqa: BLE001 — surface a clean failure to the model
             raise ToolError(_MSG_INVALID_QUESTIONS.format(error=e))
 
-    # --- Result formatting (verbatim CC wording) -----------------------------
+    # --- Result formatting -----------------------------
 
     @staticmethod
     def _format_result(answers: AskUserQuestionAnswers) -> str:

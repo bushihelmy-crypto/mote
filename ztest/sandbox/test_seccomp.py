@@ -16,6 +16,7 @@ import os
 import shutil
 
 import pytest
+
 from mote.sandbox import seccomp
 from mote.sandbox.runtime import SandboxRuntime
 

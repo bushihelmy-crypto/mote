@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Optional
 
 import pytest
+
 from mote.common.const import TOOL_CALL_ID, TOOL_CALLS
 from mote.common.schema import AIMessage, Message, UserMessage
 

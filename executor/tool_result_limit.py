@@ -1,16 +1,14 @@
-"""Per-tool result size limiting — ported from Claude Code.
+"""Per-tool result size limiting.
 
-When a single tool produces output larger than its cap, CC does not silently
-drop it: it writes the *full* output to a session-scoped file on disk and
-replaces the inline content with a short ``<persisted-output>`` preview that
-names the file. The model keeps a pointer to the full result and a leading
+When a single tool produces output larger than its cap, the output is not
+silently dropped: the *full* output is written to a session-scoped file on disk
+and the inline content is replaced with a short ``<persisted-output>`` preview
+that names the file. The model keeps a pointer to the full result and a leading
 slice, instead of a blunt mid-string truncation.
 
-This module mirrors CC ``toolResultStorage.ts`` for the single-tool path
-(``maybePersistLargeToolResult`` + ``persistToolResult`` +
-``buildLargeToolResultMessage`` + ``generatePreview``). The per-*message*
-aggregate budget (``enforceToolResultBudget``) is a separate CC feature and is
-not ported here.
+This module handles the single-tool path (persist + build message + generate
+preview). The per-*message* aggregate budget is a separate feature and is
+not handled here.
 
 Lives in ``executor`` (not ``context``) because it is a tool-execution
 concern: it runs at the single ``ToolExecutor.run_command`` chokepoint on one
@@ -45,10 +43,9 @@ PathLike = Union[str, Path]
 
 
 def persistence_threshold(declared_max_result_size_chars: int) -> int:
-    """Effective persist threshold for a tool — CC ``getPersistenceThreshold``.
+    """Effective persist threshold for a tool.
 
-    A tool's own declared cap, clamped by the system-wide default. (The CC
-    GrowthBook override is omitted — there is no flag service here.) ``inf``
+    A tool's own declared cap, clamped by the system-wide default. ``inf``
     is a hard opt-out for tools that bound themselves by other means.
     """
     if declared_max_result_size_chars == float("inf"):
@@ -57,7 +54,7 @@ def persistence_threshold(declared_max_result_size_chars: int) -> int:
 
 
 def generate_preview(content: str, max_bytes: int) -> tuple[str, bool]:
-    """Return ``(preview, has_more)`` — CC ``generatePreview``.
+    """Return ``(preview, has_more)``.
 
     Truncates at the last newline within *max_bytes* when that newline lands
     past the halfway point (avoids cutting mid-line); otherwise cuts at the
@@ -83,8 +80,7 @@ def _tool_result_path(session_id: str, result_id: str, base_dir: PathLike | None
 
 
 def _build_persisted_message(filepath: str, original_size: int, preview: str, has_more: bool) -> str:
-    """Wrap a preview in the ``<persisted-output>`` envelope — CC
-    ``buildLargeToolResultMessage``."""
+    """Wrap a preview in the ``<persisted-output>`` envelope."""
     message = f"{PERSISTED_OUTPUT_OPEN_TAG}\n"
     message += f"Output too large ({format_file_size(original_size)}). Full output saved to: {filepath}\n\n"
     message += f"Preview (first {format_file_size(PREVIEW_SIZE_BYTES)}):\n"
@@ -94,12 +90,13 @@ def _build_persisted_message(filepath: str, original_size: int, preview: str, ha
     return message
 
 
-def _persist(output: str, result_id: str, session_id: str, base_dir: PathLike | None) -> str | None:
+def persist_result(output: str, result_id: str, session_id: str, base_dir: PathLike | None) -> str | None:
     """Write *output* to disk; return its filepath, or None on failure.
 
-    Idempotent like CC: a result id is unique per invocation and its content
+    Idempotent: a result id is unique per invocation and its content
     deterministic, so an already-written file is reused rather than rewritten
-    (keeps repeated turns byte-identical).
+    (keeps repeated turns byte-identical). Public so the compression layer can
+    stash a full original under its own id namespace via the same primitive.
     """
     path = _tool_result_path(session_id, result_id, base_dir)
     try:
@@ -138,7 +135,7 @@ def enforce_tool_result_limit(
 ) -> str:
     """Cap a single tool's *output*, persisting the full result when too large.
 
-    Mirrors CC ``maybePersistLargeToolResult`` for the per-tool path:
+    Persists a large result for the per-tool path:
 
     - Output at/under the effective threshold is returned unchanged.
     - Already-persisted output (starts with ``<persisted-output>``) is left
@@ -171,7 +168,7 @@ def enforce_tool_result_limit(
         return output
 
     if persist:
-        filepath = _persist(output, result_id, session_id, base_dir)
+        filepath = persist_result(output, result_id, session_id, base_dir)
         if filepath is not None:
             preview, has_more = generate_preview(output, PREVIEW_SIZE_BYTES)
             return _build_persisted_message(filepath, len(output), preview, has_more)

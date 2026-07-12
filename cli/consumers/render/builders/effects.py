@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """shimmer 微光 + sparkline 图表: animated / data mini-renderables.
 
-claude-code's spinner sweeps a bright band across the "working" label (a shimmer
+The spinner sweeps a bright band across the "working" label (a shimmer
 / 微光), computed frame-by-frame; and it draws sub-cell block bars. Both are pure
 functions of their inputs (the frame counter / the value list), so they live here
 as console-free builders the Textual host drives from its 0.1s heartbeat.
@@ -25,7 +25,7 @@ def _hex_to_rgb(color: str) -> Tuple[int, int, int]:
 def interpolate_color(a: str, b: str, t: float) -> str:
     """Linearly blend two ``#rrggbb`` colours → ``#rrggbb`` at fraction ``t`` (0→a, 1→b).
 
-    Mirrors claude-code's ``interpolateColor`` (per-channel lerp). ``t`` is clamped
+    Per-channel colour lerp. ``t`` is clamped
     to ``[0, 1]`` so an out-of-range frame can't produce a bogus byte.
     """
     t = 0.0 if t < 0 else 1.0 if t > 1 else t
@@ -49,7 +49,7 @@ def shimmer_text(
 ) -> "Text":
     """A shimmering label — a bright band sweeping left-to-right across *text*.
 
-    Mirrors claude-code's ``useShimmerAnimation``/``GlimmerMessage``: the band
+    The band
     centre advances one cell per *frame*, brightest at the centre and fading to
     *base* within ``±radius`` cells (colours blended via :func:`interpolate_color`).
     The cycle length is ``len(text) + pad`` so the band runs off the right edge and
@@ -78,7 +78,7 @@ _SPARK_BLOCKS = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 
 
 def sparkline(values: Any, *, style: str = Palette.DIM) -> "Text":
-    """A one-line ``▁▂▃▅█`` mini bar-chart of *values* (claude-code block glyphs).
+    """A one-line ``▁▂▃▅█`` mini bar-chart of *values* (sub-cell block glyphs).
 
     Each value maps to one of eight sub-cell block heights, scaled between the
     series min and max so the shape reads as a trend regardless of magnitude. A

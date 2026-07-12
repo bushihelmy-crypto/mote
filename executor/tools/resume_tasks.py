@@ -146,7 +146,7 @@ class ResumeTasks(BaseTool):
         graph = gm.graph_ref if gm else None
         state = meta.state_snapshot
         # Authoritative per-node records (truth source for what is already done).
-        # Falls back to the legacy completed_nodes set for pre-run_state tasks.
+        # Falls back to the completed_nodes set for tasks saved without run_state.
         run_state = meta.run_state
 
         # Apply overrides to the graph state before resuming. Validate keys

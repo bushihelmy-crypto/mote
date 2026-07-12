@@ -9,11 +9,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union, cast
 
+from pydantic import BaseModel, Field
+
 from mote.common.const import SERDESER_PATH
 from mote.common.schema.serialization import BaseSerialization
 from mote.common.utils.common import aread, read_json_file, write_json_file
 from mote.common.utils.exceptions import handle_exception
-from pydantic import BaseModel, Field
 
 
 class CauseBy(str, Enum):

@@ -1,11 +1,10 @@
 """Single authority for the framework's XML-ish envelope markers.
 
 The framework wraps ephemeral / persisted content in a handful of angle-bracket
-sentinel tags the model reads (and the CLI later peels back off). The tag
-*literals* used to live in three unrelated places — the write side
+sentinel tags the model reads (and the CLI later peels back off). This module
+homes the tag *literals* once in the bottom ``common`` layer, so the write side
 (``context/turn_context/format.py``), the read side (``cli/view/reminders.py``),
-and inline in ``executor/tools/read.py`` — so a change on one side silently
-desynced the others. This module homes them once in the bottom ``common`` layer.
+and ``executor/tools/read.py`` cannot silently desync.
 
 Zero dependencies beyond the stdlib; no I/O, no provider shapes, no rendering.
 """
@@ -14,7 +13,7 @@ from __future__ import annotations
 from typing import Iterable
 
 # --- <system-reminder>: ephemeral, request-only per-turn context envelope -----
-# Claude-Code's wrapper for content the model sees each turn but that is NOT
+# The wrapper for content the model sees each turn but that is NOT
 # stored in history. The turn-context bus writes it; the CLI projector detects &
 # peels it to fold injected context apart from the human's own typed prompt.
 SYSTEM_REMINDER_OPEN = "<system-reminder>"

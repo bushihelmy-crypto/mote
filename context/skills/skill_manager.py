@@ -1,8 +1,7 @@
 """SkillManager — Skills subsystem lifecycle management.
 
-Extracted from Role to decouple skill init/inject from the core role class.
-Role holds a lazy ``skill_manager`` property that delegates all skill-related
-bookkeeping here.
+Decouples skill init/inject from the core role class. Role holds a lazy
+``skill_manager`` property that delegates all skill-related bookkeeping here.
 """
 
 from __future__ import annotations
@@ -22,9 +21,9 @@ class SkillManager:
     Takes a declarative include filter (``skills``) plus an ``enabled`` master
     switch and an optional list of layered ``source_dirs``:
 
-    - ``enabled`` gates the whole subsystem. When ``None`` (legacy default) it
-      is inferred from a non-empty ``skills`` list, preserving the old
-      "empty list = disabled" behaviour.
+    - ``enabled`` gates the whole subsystem. When ``None`` (the default) it
+      is inferred from a non-empty ``skills`` list, so an empty list means
+      "disabled".
     - When enabled, skills are auto-discovered across all ``source_dirs``;
       a non-empty ``skills`` list narrows that to an include filter (empty list
       = load everything discovered).
@@ -40,7 +39,7 @@ class SkillManager:
         source_dirs: Optional[list[Path]] = None,
     ):
         self._skills = skills
-        # Legacy inference: with no explicit master switch, a non-empty skills
+        # Inference: with no explicit master switch, a non-empty skills
         # list means "enabled" (and an empty one "disabled").
         self._enabled = bool(skills) if enabled is None else enabled
         self._source_dirs = source_dirs

@@ -1,0 +1,24 @@
+# Normalize line endings: store as LF in the repo, check out native on Windows.
+* text=auto eol=lf
+
+# Shell scripts must stay LF even on Windows checkouts.
+*.sh text eol=lf
+
+# Vendored / third-party code: exclude from language stats and diffs.
+vendor/** linguist-vendored
+zthird_party_licenses/** linguist-vendored
+
+# Machine-generated files: collapse diffs and drop from language stats.
+.secrets.baseline linguist-generated=true
+
+# Binary assets — never treat as text (no CRLF munging, no textual diff).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.pkl binary
+*.faiss binary
+*.onnx binary
+*.mo binary

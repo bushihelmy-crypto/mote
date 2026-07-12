@@ -1,14 +1,13 @@
 """Session persistence — the append-only durable session log (Phase 1).
 
 Records an agent session's lifecycle to a crash-safe JSONL rollout (Codex
-``rollout`` + Claude Code transcript synthesis). The truth source for future
+``rollout`` synthesis). The truth source for future
 resume/list. Core pieces:
 
 * :mod:`events` — the tagged-union event schema + line (de)serialization.
 * :class:`SessionLog` — append-only JSONL writer/reader keyed by session_id.
 * :class:`RecorderSubscriber` — the event-bus subscriber that streams the
-  agent's lifecycle events to a :class:`SessionLog` (replaces the old
-  ``SessionRecorder`` sink injected into ``ContextManager``).
+  agent's lifecycle events to a :class:`SessionLog`.
 """
 
 from mote.session.browser_state import BrowserStateRecorder

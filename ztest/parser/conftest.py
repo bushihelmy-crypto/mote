@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import pytest
+
 from mote.common.schema import Message, ThinkResult
 
 

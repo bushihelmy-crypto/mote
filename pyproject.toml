@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mote"
+version = "1.1.0"
+description = "A composable, event-driven, layered agent runtime framework (think/act ReAct loop, multi-agent runtime, unified LLM routing, permission sandbox)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE", "zthird_party_licenses/*"]
+authors = [{ name = "mote contributors" }]
+keywords = ["agent", "llm", "react", "framework", "multi-agent", "tool-use"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+dependencies = [
+    # Core runtime
+    "pydantic>=2",
+    "PyYAML",
+    "loguru",
+    "tenacity",
+    "filelock",
+    "chardet",
+    "json-repair",
+    "cryptography",
+    "keyring",
+    # Async / HTTP
+    "anyio",
+    "aiofiles",
+    "aiohttp",
+    "httpx",
+    "httpx-sse",
+    "requests",
+    "requests-unixsocket",
+    # LLM providers & protocols
+    "openai",
+    "anthropic",
+    "tiktoken",
+    "mcp",
+    "fastmcp",
+    # Terminal UI
+    "rich",
+    "textual",
+    # Tokenizers / ML routing
+    "numpy",
+    "scikit-learn",
+    "lightgbm",
+    "joblib",
+    "onnxruntime",
+    "sentence-transformers",
+    "tokenizers",
+    # Browser tool
+    "playwright",
+    # Notebook / Python tool
+    "jupyter-client",
+    # Media pipeline (documents, images, PDFs)
+    "pillow",
+    "python-docx",
+    "openpyxl",
+    "pypdf",
+    "PyPDF2",
+    "PyMuPDF",
+    "pdfminer.six",
+    "markdownify",
+    # Observability
+    "langfuse",
+    "sentry-sdk",
+    # Linux-only seccomp hardening for the sandbox
+    "pyseccomp; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "isort", "flake8", "pyright", "pre-commit"]
+
+[project.scripts]
+mote = "mote.cli.__main__:main"
+
+[tool.setuptools]
+# packages / package-dir are computed imperatively in setup.py so the current
+# directory is exposed as the top-level ``mote`` package (see setup.py).
+
+[tool.pytest.ini_options]
+testpaths = ["ztest"]
+# ztest/prompts collects under its own import path (not the mote package) and
+# fails to import; it is unrelated to application code, so skip it.
+addopts = "-q --ignore=ztest/prompts"

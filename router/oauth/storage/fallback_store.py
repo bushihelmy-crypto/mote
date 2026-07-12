@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Keyring -> file fallback credential store (Claude Code pattern).
+"""Keyring -> file fallback credential store.
 
 Prefers the OS keyring for secrecy; transparently degrades to the file store
 when keyring is unavailable or errors at runtime.

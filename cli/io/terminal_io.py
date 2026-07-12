@@ -11,7 +11,7 @@ The port owns only inbound concerns:
 * the two-stage Ctrl+C state machine (mid-turn → interrupt callback; idle →
   double-press-to-exit) — an armed-flag state machine (NOT a wall-clock window:
   the arm persists until the user submits input, so a deliberate second press
-  always exits), aligned with codex / claude-code;
+  always exits), aligned with codex;
 * ``read_turn()`` (one turn per non-empty line; ``None`` on EOF / exit);
 * ``ask()`` routing an ``AskUserQuestion`` to stdin, keeping a SINGLE reader so
   a foreground ask and a parked main-loop read never race for the same line.
@@ -29,7 +29,7 @@ import signal
 import sys
 from typing import Any, Callable, Optional
 
-# claude-code-style raw-mode menu decoration. The port writes raw strings to a
+# Raw-mode menu decoration. The port writes raw strings to a
 # plain stream (never imports ``rich``), so it reuses the rich-free truecolor
 # ``ansi_fg`` (brand orange, mirrors ``Palette.BRAND``) plus a dim (bright-black)
 # wrap for inactive numbers/hints — matching the consumer's ``❯`` figure so a
@@ -47,6 +47,8 @@ from mote.cli.io.terminal_menu import (
     _redraw_option_lines,
     _render_option_lines,
 )
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 # After a lone ESC byte we wait this long for the rest of a CSI arrow sequence
 # (``ESC [ A/B``). A real arrow key sends all three bytes back-to-back, so a short
@@ -102,7 +104,7 @@ class TerminalPort:
         # Idle Ctrl+C exit-arm: the first idle press arms it (and warns); the next
         # *consecutive* press exits. Reset when the user submits input (NOT by a
         # wall-clock timer) so a deliberate second press always exits, however
-        # long the user takes to press it (aligned with claude-code / IPython).
+        # long the user takes to press it (aligned with IPython).
         self._sigint_armed = False
         self._should_exit = False
         # An interrupted turn may stage its prompt here so the next ``read_turn``
@@ -158,7 +160,7 @@ class TerminalPort:
         self._write(self._prompt)
 
     # ------------------------------------------------------------------
-    # SIGINT: two-stage state machine (aligned with cc)
+    # SIGINT: two-stage state machine
     # ------------------------------------------------------------------
     def _on_sigint(self) -> None:
         if self._is_turn_running():
@@ -343,7 +345,7 @@ class TerminalPort:
         return data.rstrip("\n")
 
     # ------------------------------------------------------------------
-    # ask — interactive select + free-text combo (claude-code parity)
+    # ask — interactive select + free-text combo
     # ------------------------------------------------------------------
     _OTHER_LABEL = "Other (type your own answer)"
 
@@ -360,11 +362,11 @@ class TerminalPort:
         """
         entries = list(labels) + [self._OTHER_LABEL]
         other_index = len(entries) - 1
-        # Light claude-code frame: a brand-orange top rule + bold question, then
+        # Light frame: a brand-orange top rule + bold question, then
         # the navigable rows, then a dim keyboard-hint footer.
         self._write("\n" + ansi_fg("\u2500" * _RULE_WIDTH) + "\n")
         self._write(f"{ansi_fg(question, bold=True)}\n")
-        hint = "Space 选择 · Enter 确认 · Esc 取消" if multi else "↑↓ 选择 · Enter 确认 · Esc 取消"
+        hint = t(K.HINT_SELECT_MULTI_CANCEL) if multi else t(K.HINT_SELECT_SINGLE_CANCEL)
         self._write(f"{_dim(hint)}\n\n")
 
         index = 0
@@ -480,7 +482,7 @@ class TerminalPort:
         return await self._read_nav_key(lambda ch: "space" if ch == " " else (ch if ch.isdigit() else None))
 
     # Approval choices, in display order: ``(outcome, label, shortcut)``. The
-    # shortcut key jumps to *and* selects the option (claude-code parity).
+    # shortcut key jumps to *and* selects the option.
     _APPROVAL_OPTIONS = (
         ("accept", "Yes", "y"),
         ("always_allow", "Yes, and don\u2019t ask again for similar actions", "a"),
@@ -491,7 +493,7 @@ class TerminalPort:
     async def decide_approval(self, ctx: Any, request: Any) -> Any:
         """Prompt for a gated action and map the choice to an ``ApprovalDecision``.
 
-        On a real tty this renders a claude-code-style arrow-key menu: ↑/↓ (or
+        On a real tty this renders an arrow-key menu: ↑/↓ (or
         ``k``/``j``) move the highlight, Enter selects, the ``y``/``a``/``n``/``d``
         shortcuts jump-and-select, Esc / Ctrl+C / EOF reject (the safe default).
         When stdin isn't an interactive terminal (tests, pipes) it degrades to the
@@ -515,7 +517,7 @@ class TerminalPort:
         return ApprovalDecision(approval_id=approval_id, outcome=outcome)
 
     # ------------------------------------------------------------------
-    # Approval — interactive arrow-key menu (claude-code parity)
+    # Approval — interactive arrow-key menu
     # ------------------------------------------------------------------
     def _can_interactive_select(self) -> bool:
         """True when we can drive a raw-mode selectable menu on this stdin/stdout.
@@ -550,7 +552,7 @@ class TerminalPort:
         shortcuts = {sc: i for i, (_out, _lbl, sc) in enumerate(options)}
         # Header + preview render in cooked mode (plain ``\n``); the option block
         # below renders in raw mode and is the only region we redraw in place.
-        # Light claude-code frame: an amber top rule, the bold amber gated-action
+        # Light frame: an amber top rule, the bold amber gated-action
         # title, the dim command preview, then a neutral "proceed?" prompt.
         amber = lambda t, bold=False: ansi_fg(t, _AMBER_RGB, bold=bold)  # noqa: E731
         self._write("\n" + amber("\u2500" * _RULE_WIDTH) + "\n")

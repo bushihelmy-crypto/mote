@@ -1,7 +1,11 @@
 # Controls what goes into the source distribution (sdist).
 include LICENSE
+include NOTICE
 include README.md
 include ruff.toml
+
+# Third-party license texts (see NOTICE for attributions).
+recursive-include zthird_party_licenses *.txt
 
 # Ship non-Python data files that the package needs at runtime.
 recursive-include router *.yaml

@@ -16,6 +16,7 @@ Key facts the fixtures encode:
 from __future__ import annotations
 
 import pytest
+
 from mote.roles import Role
 
 
@@ -95,11 +96,11 @@ class FakeEnv:
     def publish_message(self, msg):
         self.published.append(msg)
 
-    async def ask_human(self, question, sent_from=None):
+    async def ask_user(self, question, sent_from=None):
         self.human_questions.append((question, sent_from))
         return self.human_response
 
-    async def reply_to_human(self, content, sent_from=None):
+    async def reply_to_user(self, content, sent_from=None):
         self.human_replies.append((content, sent_from))
         return "delivered"
 

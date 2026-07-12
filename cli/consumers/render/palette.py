@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Colour tokens + glyphs — the single source of truth for every rich host's look.
 
-Aligned with claude-code's aesthetic (brand-orange accent, light bullet +
+Aligned with a light terminal aesthetic (brand-orange accent, light bullet +
 tree-branch layout instead of heavy boxes). Every rich-based host — the scrolling
 :class:`~mote.cli.consumers.terminal.consumer.TerminalConsumer` and the
 full-screen :class:`~mote.cli.consumers.textual.app.MoteApp` (and, in future,
@@ -10,9 +10,9 @@ the same Textual app served over the web) — reads its colours and figures from
 here, so the "look" is tuned in ONE neutral place that depends on no host.
 
 Colours are hex strings (``rich`` accepts ``#rrggbb``); each maps to a
-claude-code theme token so the hosts read the same way:
+named theme token so the hosts read the same way:
 
-* ``BRAND``   — the accent orange (claude-code ``claude`` ``rgb(215,119,87)``),
+* ``BRAND``   — the accent orange (``rgb(215,119,87)``),
   used for the assistant/tool bullet and tool names.
 * ``SUCCESS`` / ``ERROR`` / ``WARNING`` — status colours (``rgb(44,122,57)`` /
   ``rgb(171,43,63)`` / ``rgb(150,108,30)``).
@@ -20,7 +20,7 @@ claude-code theme token so the hosts read the same way:
   ``rgb(255,168,180)``).
 * ``DIM`` — secondary / folded-affordance text.
 
-Glyphs mirror claude-code's figure set: ``●`` marks an assistant turn / a tool
+Glyphs use a light figure set: ``●`` marks an assistant turn / a tool
 invocation, ``⎿`` prefixes a tool's result line (the implied tree branch).
 
 This module is intentionally rich-free and ANSI-free — pure string/data tokens —
@@ -31,7 +31,7 @@ from __future__ import annotations
 
 
 class Palette:
-    """claude-code-aligned colour tokens (hex, rich-compatible)."""
+    """Brand-aligned colour tokens (hex, rich-compatible)."""
 
     BRAND = "#d77757"  # accent orange — assistant/tool bullet, tool names
     SHIMMER = "#f59575"  # lighter brand — the moving shimmer band + running pulse
@@ -41,7 +41,7 @@ class Palette:
     DIM = "#a8a8a8"  # secondary text, folded affordance, usage line (brightened)
     DIFF_ADD = "#69db7c"  # diff added line — bright fg on the add bar
     DIFF_DEL = "#ffa8b4"  # diff removed line — bright fg on the del bar
-    # Filled diff bars (claude-code look): a dark tinted background spans the
+    # Filled diff bars: a dark tinted background spans the
     # whole changed line; a brighter "emph" background highlights the exact
     # word-level spans that actually changed within a -/+ pair.
     DIFF_ADD_BG = "#12291b"  # add line background (dark green)
@@ -53,7 +53,7 @@ class Palette:
     LINK = "#4a9eda"  # clickable URL (cyan, underlined by the linkifier)
 
 
-# Glyphs (claude-code figure set).
+# Glyphs (light figure set).
 BULLET = "\u25cf"  # ● — assistant turn / tool invocation marker
 BRANCH = "\u23bf"  # ⎿ — tool result branch (implied tree)
 CHECK = "\u2713"  # ✓ — success
@@ -64,10 +64,10 @@ MEDIA = "\u29c9"  # ⧉ — media reference
 WARN = "\u26a0"  # ⚠ — approval gate
 RETRY = "\u27f3"  # ⟳ — transient LLM-retry countdown
 NOTE = "\u2691"  # ⚑ — framework-injected system-reminder context
-COMPACT = "\u273b"  # ✻ — conversation history was compacted (claude-code marker)
+COMPACT = "\u273b"  # ✻ — conversation history was compacted
 SCISSORS = "\u2702"  # ✂ — hard truncation (output too large, persisted to disk)
 
-# Prompt glyph (claude-code uses the heavier ``❯`` chevron, not ``›``). The
+# Prompt glyph (the heavier ``❯`` chevron, not ``›``). The
 # host-specific decoration (ANSI colour for the terminal port, ``$brand`` border
 # for the textual input) is applied by each host; the bare symbol lives here so
 # both read the same figure.

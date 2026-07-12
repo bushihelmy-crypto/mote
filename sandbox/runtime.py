@@ -14,7 +14,7 @@ Owns the lifecycle of the OS-level sandbox for one Role session:
     :class:`SandboxViolation`\\s.
   * :meth:`shutdown` — stop the proxy. Idempotent.
 
-Degradation (mirrors Claude Code): when the requested backend is unavailable,
+Degradation: when the requested backend is unavailable,
 ``fail_if_unavailable`` decides between a hard ``RuntimeError`` and a silent
 passthrough (the command runs unsandboxed, with a warning logged).
 

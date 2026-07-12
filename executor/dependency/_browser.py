@@ -546,7 +546,7 @@ def _html_to_markdown(
     # Scrub any leftover percent-encoding (e.g. surviving link/image URLs when
     # the caller opted in) — matches browser-use's cleanup pass.
     md = re.sub(r"%[0-9A-Fa-f]{2}", "", md)
-    # Collapse 3+ blank lines and trailing spaces the way the old walker did.
+    # Collapse 3+ blank lines and trailing spaces.
     md = re.sub(r"\n{3,}", "\n\n", md)
     md = re.sub(r"[ \t]+\n", "\n", md)
     return md.strip()
@@ -1051,8 +1051,8 @@ class BrowserSession:
         Extracts cleaned HTML (stripping chrome — nav/footer/script/forms/… —
         and hidden nodes) in the page, then converts it to Markdown with the
         ``markdownify`` library — far more agent-friendly than a raw innerText
-        dump, and (unlike the old hand-rolled walker) it lays out div/section
-        based pages across proper lines instead of collapsing to one line.
+        dump, and it lays out div/section based pages across proper lines
+        instead of collapsing to one line.
         Falls back to body innerText (then raw HTML) if extraction or
         conversion fails on an unusual page / when ``markdownify`` is absent.
 
@@ -1153,7 +1153,7 @@ class BrowserSession:
         suffix = f" (last error: {last_err})" if last_err else ""
         raise ToolError(_MSG_WAIT_TIMED_OUT.format(timeout_ms=timeout_ms, target=expression, suffix=suffix))
 
-    async def assist(self, prompt: str, *, ask_human, headless: bool) -> str:
+    async def assist(self, prompt: str, *, ask_user, headless: bool) -> str:
         """Pause automation and ask the human to supply something only they can.
 
         For things the model must not invent or cannot obtain on its own — the
@@ -1166,7 +1166,7 @@ class BrowserSession:
 
         * **Headless** (the safe default — no visible window): we capture a
           screenshot, write it to ``{cwd}/.agent_browser/assist_<ts>.png``, and
-          send ``ask_human`` a prompt naming that file plus the page URL. If what
+          send ``ask_user`` a prompt naming that file plus the page URL. If what
           we need is on the page (a QR / graphical captcha) the user opens the
           image (e.g. ``explorer.exe`` on WSL2) to read it; if it is off the page
           (an emailed / SMS code, the user's own phone or email) they just reply
@@ -1179,7 +1179,7 @@ class BrowserSession:
         **not** fill any field itself. The model uses ``type`` / ``fill_form``
         afterward with whatever the user supplies.
 
-        ``ask_human`` (the role's human text channel — text only) and
+        ``ask_user`` (the role's human text channel — text only) and
         ``headless`` are passed in by the tool shell so the engine stays free of
         any Role reference, like the rest of these methods.
         """
@@ -1190,11 +1190,11 @@ class BrowserSession:
                 f"Current page: {page.url}\n"
                 f"Complete this in the browser window, then reply to continue."
             )
-            reply = await ask_human(question)  # blocks until the user replies
+            reply = await ask_user(question)  # blocks until the user replies
             return f"[resumed by user] now at {page.url}\nuser said: {reply}"
 
         # Headless: no window to hand off, so screenshot the page to disk and
-        # ask the user. ask_human is text-only, hence the file path. The value
+        # ask the user. ask_user is text-only, hence the file path. The value
         # may be on the page (open the image to read it) or off it (an emailed /
         # SMS code, the user's own phone or email) — they just reply either way.
         shot_path = await self._save_assist_screenshot()
@@ -1207,7 +1207,7 @@ class BrowserSession:
             f"with the value (e.g. the SMS / email code, your phone or email) to "
             f"continue."
         )
-        reply = await ask_human(question)  # blocks until the user replies
+        reply = await ask_user(question)  # blocks until the user replies
         return f"[user replied] now at {page.url}\n" f"screenshot: {shot_path}\n" f"user said: {reply}"
 
     async def _save_assist_screenshot(self) -> str:

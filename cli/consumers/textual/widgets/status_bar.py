@@ -14,12 +14,15 @@ import random
 import time
 from typing import Any, Optional
 
-from mote.cli.consumers.render.builders import USAGE_SEP, shimmer_text, sparkline
-from mote.cli.consumers.textual.style import COMPACT, RETRY, Palette
-from mote.common.text import format_token_count as _format_tok
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widgets import Static
+
+from mote.cli.consumers.render.builders import USAGE_SEP, shimmer_text, sparkline
+from mote.cli.consumers.textual.style import COMPACT, RETRY, Palette
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
+from mote.common.text import format_token_count as _format_tok
 
 
 class StatusBar(Static):
@@ -40,9 +43,10 @@ class StatusBar(Static):
     """
 
     _SPINNER = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
-    # Rotating activity verbs (claude-code shows "Working…/Fixing…/…"); one is
-    # picked when a turn begins so the label doesn't flicker mid-turn.
-    _VERBS = ("思考中", "处理中", "工作中", "构建中", "推理中", "琢磨中")
+    # Rotating activity-verb *keys* (shows "Working…/Fixing…/…"); one
+    # is picked when a turn begins so the label doesn't flicker mid-turn, and the
+    # key is translated at render time so ``/lang`` re-localises it live.
+    _VERBS = K.STATUS_VERB_KEYS
 
     model: reactive[str] = reactive("")
     total_tokens: reactive[int] = reactive(0)
@@ -50,11 +54,11 @@ class StatusBar(Static):
     context_pct: reactive[Optional[float]] = reactive(None)
     running: reactive[bool] = reactive(False)
     # Whether the model is currently *reasoning* (a ``ReasoningDelta`` stream). The
-    # working label then reads ``✻ 思考中…`` instead of a generic verb (claude-code's
+    # working label then reads ``✻ 思考中…`` instead of a generic verb (a
     # distinct "Thinking…" state), still with the live elapsed counter.
     thinking: reactive[bool] = reactive(False)
     _frame: reactive[int] = reactive(0)
-    # Transient LLM-retry countdown (CC's "Retrying in Ns…"). ``retry_msg`` empty
+    # Transient LLM-retry countdown (the "Retrying in Ns…" line). ``retry_msg`` empty
     # => not retrying; ``retry_secs`` ticks down to 0. Cleared on any other event.
     retry_msg: reactive[str] = reactive("")
     retry_secs: reactive[float] = reactive(0.0)
@@ -103,7 +107,9 @@ class StatusBar(Static):
     def set_retry(self, ev: Any) -> None:
         """Show the transient retry countdown (from a ``RetryStatus`` event)."""
         etype = getattr(ev, "error_type", "") or "error"
-        self.retry_msg = f"LLM 请求失败（{etype}）· 第 {getattr(ev, 'attempt', 0)}" f"/{getattr(ev, 'max_attempts', 0)} 次重试"
+        failed = t(K.RETRY_FAILED, error_type=etype)
+        attempt = t(K.RETRY_ATTEMPT, attempt=getattr(ev, "attempt", 0), total=getattr(ev, "max_attempts", 0))
+        self.retry_msg = f"{failed}· {attempt}"
         self.retry_secs = max(0.0, (getattr(ev, "delay_ms", 0.0) or 0.0) / 1000.0)
 
     def clear_retry(self) -> None:
@@ -140,11 +146,11 @@ class StatusBar(Static):
             text.append(f"{RETRY} ", style=f"bold {Palette.WARNING}")
             text.append(self.retry_msg, style=Palette.WARNING)
             text.append(" · ", style=Palette.DIM)
-            text.append(f"{int(self.retry_secs + 0.999)}s 后重试…", style=f"bold {Palette.BRAND}")
+            text.append(t(K.RETRY_COUNTDOWN, secs=int(self.retry_secs + 0.999)), style=f"bold {Palette.BRAND}")
             return text
         # Each field is its own ``Text`` so the live "working" segment can carry
         # brand colour while the metrics stay dim; joined by the shared ` │ `
-        # separator (claude-code's status-line rule).
+        # separator (the status-line rule).
         segments: list[Text] = []
         if self.running or self.thinking:
             segments.append(self._working_text())
@@ -158,8 +164,11 @@ class StatusBar(Static):
             segments.append(Text(f"${self.cost_usd:.4f}", style=Palette.DIM))
         if self.context_pct is not None:
             segments.append(Text(f"ctx {self.context_pct * 100:.0f}%", style=Palette.DIM))
+        # The ctrl+o affordance moved OFF the bar onto the selected tool block's
+        # bottom-right corner (see ``FoldableRow``), so the bar shows only metrics
+        # — falling back to a dim ``就绪`` idle marker when there's nothing to show.
         if not segments:
-            return Text("ready", style=Palette.DIM)
+            return Text(t(K.STATUS_IDLE), style=Palette.DIM)
         out = Text()
         for i, seg in enumerate(segments):
             if i:
@@ -171,16 +180,16 @@ class StatusBar(Static):
         """The live ``⠋ 工作中… (12s · 3.4k tok)`` activity segment with a shimmer.
 
         The label is a shimmering (微光) sweep — a bright band moving across the
-        spinner+verb text, brand→light each frame (claude-code's ``GlimmerMessage``)
+        spinner+verb text, brand→light each frame (a glimmer sweep)
         — with a dim ``(elapsed · tokens)`` tail so the human sees the turn is
         progressing. During a reasoning stream it reads ``✻ 思考中`` instead, the
         distinct "thinking" state. The band + elapsed advance as the ``_frame``
         reactive repaints the bar.
         """
         if self.thinking:
-            label = f"{COMPACT} 思考中"
+            label = f"{COMPACT} " + t(K.STATUS_THINKING)
         else:
-            label = f"{self._SPINNER[self._frame % len(self._SPINNER)]} {self._verb}"
+            label = f"{self._SPINNER[self._frame % len(self._SPINNER)]} {t(self._verb)}"
         text = shimmer_text(label, self._frame)
         text.append("…", style=Palette.DIM)
         meta: list[str] = []

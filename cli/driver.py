@@ -39,6 +39,8 @@ from mote.cli.contracts.view import (
     TranscriptCleared,
 )
 from mote.cli.io.human_channel import PortHumanChannel
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 from mote.common.logs import logger
 
 
@@ -146,7 +148,7 @@ class SessionDriver:
         builtin = backend.role_tool_count(self._role)
         if not builtin:
             return
-        self.notice(f"\u2691 已加载 {builtin} 个工具")
+        self.notice("\u2691 " + t(K.DRIVER_TOOLS_LOADED, count=builtin))
 
     def _take_turn_images(self) -> list:
         """Drain the port's staged image attachments for this turn (Textual only).

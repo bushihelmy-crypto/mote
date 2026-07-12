@@ -3,12 +3,12 @@
 Lives in ``common/schema`` (alongside ``tool_config.py``) and is kept
 dependency-free (only stdlib typing/dataclasses) so any layer — tools, the
 permission engine, the config schema, the hook layer — can import these as the
-single source of truth without circular imports. This mirrors how Claude Code
-isolates ``src/types/permissions.ts`` from the permission engine; the runtime
-enforcement logic stays in ``mote.executor.permission``.
+single source of truth without circular imports. Pure permission types stay
+isolated from the permission engine; the runtime enforcement logic stays in
+``mote.executor.permission``.
 
 Two orthogonal concepts live here:
-  * **Mode** — the coarse stance toward asking the user (Claude Code semantics).
+  * **Mode** — the coarse stance toward asking the user.
   * **Rule / Behavior** — fine-grained allow/deny/ask matching of a tool call.
 
 The runtime decision pipeline (see ``executor/permission/engine.py``) combines
@@ -23,7 +23,7 @@ from typing import Literal, Optional
 # Enumerations (kept as Literals — no runtime enum machinery needed)
 # ---------------------------------------------------------------------------
 
-# Coarse stance, borrowed from Claude Code's permission modes:
+# Coarse stance, one of the following permission modes:
 #   default      -> ask the user for anything not pre-authorized
 #   acceptEdits  -> auto-allow filesystem-mutating tools (Edit/Write/...)
 #   plan         -> read-only preview: deny anything that would act
@@ -34,7 +34,7 @@ PermissionMode = Literal["default", "acceptEdits", "plan", "bypass", "dontAsk"]
 # The three terminal behaviors of a rule / decision.
 PermissionBehavior = Literal["allow", "deny", "ask"]
 
-# How long a user-granted approval lasts (fusion of CC + Codex):
+# How long a user-granted approval lasts:
 #   once    -> this call only (no rule stored)
 #   session -> remembered for the rest of this session (in-memory rule)
 #   persist -> written back to durable config (phase 2; treated as session now)

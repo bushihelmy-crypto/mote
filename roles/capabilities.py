@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """RoleCapabilities — the rich tool-facing capability implementations.
 
-Extracted from Role so the Role class stays focused on orchestration. Mirrors
+Owns the rich capability behaviour so the Role class stays focused on orchestration. Mirrors
 :class:`RoleStateController`: this holder owns the *behaviour* behind the
 capabilities that need the Role's subsystems (human I/O via the env,
 interruptible sleep, the end-of-session summary, skill forks, the background
@@ -24,12 +24,8 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
-from mote.common.schema import AIMessage, UserMessage
-from mote.common.utils.report import RecommendReporter, ThoughtReporter
-from mote.common.utils.role_utils import attach_media, detach_media
+from mote.common.schema import UserMessage
 from mote.roles.role_state import RoleState
-from mote.router.router import SUMMARY_TASK
-from mote.think.prompt_builder import PromptBuilder
 
 if TYPE_CHECKING:
     from mote.context.skills.skill_pool import SkillPool
@@ -96,7 +92,9 @@ class RoleCapabilities:
         """
         role = self._role
         child_schema = role.role_schema.model_copy(deep=True)
-        child_schema.instruction = instructions
+        # Carry the rendered skill body into the child's system prompt (the only
+        # channel that reaches the model — see RoleSchema identity notes).
+        child_schema.system_prompt = f"{child_schema.system_prompt}\n\n{instructions}"
         child_schema.tools = list(allowed_tools or [])
         # A fork skill is a bounded subtask, not a delegating orchestrator: drop
         # MCP/agent/skill declarations so it cannot spawn its own children.
@@ -108,9 +106,9 @@ class RoleCapabilities:
         if model and child_config is not None:
             try:
                 child_config = child_config.model_copy(deep=True)
-                child_config.llm.model = model
+                child_config.models.default.model = model
                 if effort:
-                    child_config.llm.reasoning_effort = effort
+                    child_config.models.default.reasoning_effort = effort
             except Exception:  # noqa: BLE001 — model override is best-effort
                 child_config = role._config
 
@@ -215,8 +213,8 @@ class RoleCapabilities:
     # Human I/O (only valid inside a MoteEnv)
     # ------------------------------------------------------------------
 
-    async def ask_human(self, question: str) -> str:
-        """Ask the human user a question and return their response.
+    async def ask_user(self, question: str) -> str:
+        """Ask the user a question and return their response.
 
         Only valid inside a MoteEnv. A trailing 'stop' deactivates the role.
         """
@@ -228,7 +226,7 @@ class RoleCapabilities:
         if env is None:
             return _MSG_NOT_IN_MOTE_ENV
 
-        response = await env.ask_human(question, sent_from=role.role_schema.name)
+        response = await env.ask_user(question, sent_from=role.role_schema.name)
         if response.strip().lower().endswith(("stop", "<stop>")):
             response += _MSG_STOP_SUFFIX
             role.deactivate()
@@ -237,10 +235,10 @@ class RoleCapabilities:
     async def ask_user_question(self, questions):
         """Ask the user structured multiple-choice questions; return structured answers.
 
-        The structured sibling of :meth:`ask_human` behind the ``AskUserQuestion``
-        tool. Deliberately does NOT apply ask_human's trailing 'stop' → deactivate
+        The structured sibling of :meth:`ask_user` behind the ``AskUserQuestion``
+        tool. Deliberately does NOT apply ask_user's trailing 'stop' → deactivate
         kill switch: a structured selection is not a control channel, so the stop
-        semantics stay on the plain ``ask_human`` / ``AskHuman`` path.
+        semantics stay on the plain ``ask_user`` / ``AskUser`` path.
         """
         from mote.common.schema import AskUserQuestionAnswers
 
@@ -254,7 +252,7 @@ class RoleCapabilities:
         """Ask the human to approve a tool call and return their raw reply.
 
         The interactive channel for the PermissionEngine's ``ask`` decisions.
-        Unlike ask_human(), this does NOT treat a trailing 'stop' as a kill
+        Unlike ask_user(), this does NOT treat a trailing 'stop' as a kill
         switch — an approval prompt should never silently deactivate the Role.
         Outside a MoteEnv there is no channel, so it returns "" and the engine
         fails closed (denies).
@@ -263,10 +261,10 @@ class RoleCapabilities:
         env = role.state.env
         if env is None:
             return ""
-        return await env.ask_human(prompt, sent_from=role.role_schema.name)
+        return await env.ask_user(prompt, sent_from=role.role_schema.name)
 
-    async def reply_to_human(self, content: str) -> str:
-        """Reply to the human user with the provided content.
+    async def reply_to_user(self, content: str) -> str:
+        """Reply to the user with the provided content.
 
         Only valid inside a MoteEnv.
         """
@@ -278,7 +276,7 @@ class RoleCapabilities:
         if env is None:
             return _MSG_NOT_IN_MOTE_ENV
 
-        return await env.reply_to_human(content, sent_from=role.role_schema.name)
+        return await env.reply_to_user(content, sent_from=role.role_schema.name)
 
     # ------------------------------------------------------------------
     # Loop coordination
@@ -320,40 +318,12 @@ class RoleCapabilities:
         return round(time.time() - start, 1), interrupted
 
     async def end_session(self) -> str:
-        """End the current session and produce a summary if configured."""
-        role = self._role
-        role.deactivate()
+        """End the current session.
 
-        memory = role.context_manager
-        # Full managed history: kept boundary-safe (paired tool_use/tool_result)
-        # and under budget by manage_history each turn. A tail slice here could
-        # strand an orphan tool_result at the head → Anthropic 400.
-        messages = memory.get()
-        # The loop publishes this turn's think result to state the moment the
-        # think task drains, so we read the assistant's final text off state
-        # rather than reaching into the (now per-turn, stateless) think engine.
-        result = role.state.last_think_result
-        if not result.is_empty:
-            messages = messages + [AIMessage(content=result.content)]
-        messages = attach_media(messages)
-
-        outputs = ""
-        if role.role_schema.use_summary:
-            need_recommend = role.role_schema.need_end_recommendations_tag
-            reporter_cls = RecommendReporter if need_recommend else ThoughtReporter
-            summary_prompt = PromptBuilder.pick_summary_prompt(
-                summary_prompt=role.role_schema.summary_prompt,
-                recommend_prompt=role.role_schema.summary_with_recommend_prompt,
-                need_recommend=need_recommend,
-            )
-            summary_messages = messages + [UserMessage(content=summary_prompt)]
-            # Peripheral (non-loop) call: routed via the "summary" task so it can
-            # use a cheaper/different model than the main llm.
-            summary_llm = role.router.route_for_task(SUMMARY_TASK)
-            async with reporter_cls() as reporter:
-                await reporter.async_report({"type": "summary"})
-                outputs = await summary_llm.aask(summary_messages)
-
-        role.state.last_end_output = outputs
-        detach_media(messages)
-        return outputs
+        Deactivates the Role so the run loop terminates. The terminal reply is
+        captured into ``state.last_end_output`` by the run loop's post-loop
+        finalization (see Role.run), which is the single channel an ephemeral
+        spawn's read-back reads — so returning "" here is fine.
+        """
+        self._role.deactivate()
+        return ""

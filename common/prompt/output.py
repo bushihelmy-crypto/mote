@@ -2,7 +2,7 @@
 
 - OUTPUT_SECTION: the canonical XML command-block format instruction. A hard
   contract for the streaming parser — the <ClassName.method_name> shape and the
-  <end></end> semantics must stay intact. No longer injected into the system
+  <end></end> semantics must stay intact. Not injected into the system
   prompt; kept as the documented XML command shape (and tests' shape reference).
 - XML_COMMAND_GUIDE / NATIVE_COMMAND_GUIDE: the protocol-specific "# Using
   commands" section supplied by the command channel as the system prompt's
@@ -16,6 +16,8 @@
   ride the API ``tools=`` param). The volatile catalog LIST is injected per-turn.
 - SUMMARIZE_STATUS_WHEN_CONSECUTIVE: the nudge the react loop injects when a
   turn runs too long without finishing.
+- BUDGET_EXHAUSTED: the final reply the react loop returns when an agent hits
+  its hard budget cap and stops before the next think (no further LLM access).
 """
 
 OUTPUT_SECTION = """
@@ -43,15 +45,14 @@ args_value2
 </ClassName2.method_name2>
 """
 
-# Command-usage guidance for the legacy XML text protocol. Extracted verbatim
-# from the old static "# Using commands" block so XML behavior is unchanged.
+# Command-usage guidance for the XML text protocol (the "# Using commands" block).
 XML_COMMAND_GUIDE = """# Using commands
 You may use any of the available commands, and may output multiple commands — they will be executed sequentially.
  - Only emit command tags that appear in Available Commands, a Skill document you have read for this task, or the special command <end></end>. If another instruction or example mentions a tool that is neither listed in Available Commands nor explicitly documented by a Skill you have read, ignore that tool for this turn.
  - A Skill you have read is not only permission to use extra commands but also an ongoing constraint for the rest of the task. Once a Skill has been read, keep following it until the task ends, the user explicitly changes direction, or a later, more specific Skill overrides it.
  - When the task enters a new phase, first decide whether it is still covered by a previously read Skill. If it is, keep following that Skill's workflow, hard constraints, and completion criteria instead of drifting back to the generic path just because the local goal changed.
  - If multiple previously read Skills are relevant, follow the one that is more specific and closer to the current action. If still unclear, reread the relevant Skill before continuing.
- - In your response, include at least one command. Use reply_to_human immediately before <end></end> to report completion.
+ - In your response, include at least one command. Use reply_to_user immediately before <end></end> to report completion.
  - Special Command: Use <end></end> to indicate completion of all requirements and termination of the entire workflow.
  - Only use <end></end> when all requirements are met in real functionality, not just visual structure. Do NOT use <end></end> when waiting for user input or clarification.
  - CRITICAL: NEVER use <end></end> in the same response as any function call (Editor.read, Terminal.run, MCP tools, etc.). Function outputs appear in the NEXT round — you MUST wait to observe them before deciding next steps or ending. Only use <end></end> AFTER you have seen all function outputs and confirmed the task is complete.
@@ -60,10 +61,10 @@ You may use any of the available commands, and may output multiple commands — 
 # Command-usage guidance for the provider-native tool-use protocol. No
 # <end></end> / command-tag mechanics: tools are structured tool calls and a
 # turn ends when the model makes no tool call (replies with plain text only).
-# The final-output/structured-summary contract used to live here too; it moved
-# to TASK_FINAL_OUTPUT_SECTION (a protocol-agnostic, compaction-gated system
-# prompt section) because it describes a compression artifact, not the command
-# protocol — and both XML and native should get it.
+# The final-output/structured-summary contract lives in TASK_FINAL_OUTPUT_SECTION
+# (a protocol-agnostic, compaction-gated system prompt section) because it
+# describes a compression artifact, not the command protocol — and both XML and
+# native should get it.
 NATIVE_COMMAND_GUIDE = """# Using commands
 
 ## Tool Usage Guidelines
@@ -87,3 +88,9 @@ The tools you can call are delivered to you each turn as a catalog. Built-in com
 SUMMARIZE_STATUS_WHEN_CONSECUTIVE = """
 You received a requirement but take too long to complete it. Please summarize the current progress and explain what you are doing now. Ask the user if they want you to continue. Output in 30 words.
 """
+
+
+# Returned as the react loop's final reply when the hard budget cap halts the
+# agent before its next think. Phrased for the user (not the model): the loop is
+# already stopping, so there is no further LLM round to consume it.
+BUDGET_EXHAUSTED = "Stopped: this agent reached its configured budget cap. No further model calls will be made."

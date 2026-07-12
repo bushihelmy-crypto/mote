@@ -2,7 +2,7 @@
 
 A fork starts a fresh session whose history is seeded from a *parent* session at
 its current state, while recording the lineage so the two stay linked. This is
-the durable counterpart of Claude Code's branch/checkout and Codex's fork: the
+the durable counterpart of Codex's fork: the
 child gets its own ``rollout.jsonl`` (independent truth source) but its
 ``session_meta`` carries ``parent_session_id`` pointing back at the origin.
 

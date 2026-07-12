@@ -1,7 +1,7 @@
 """ContextProvider — assembles everything one think() cycle needs.
 
-Extracted from Role so the react loop never reaches into the Role to build a
-think request. ContextProvider is a stateful Role subsystem: it holds RoleState
+Owns think-request assembly so the react loop never reaches into the Role to
+build a think request. ContextProvider is a stateful Role subsystem: it holds RoleState
 (for env views, memory, project_root) and the live collaborators PromptBuilder
 queries, and produces a ThinkRequest — the complete input set for
 ThinkEngine.start().
@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mote.common.base import LoopContext
+from mote.common.base import PROCEED, BudgetVerdict, LoopContext
+from mote.common.events import BudgetEvent
+from mote.common.prompt.output import BUDGET_EXHAUSTED
 from mote.roles.context_provider.base import BaseContextProvider
 from mote.roles.context_provider.request import ThinkRequest
 from mote.router.schema import RoutingRequest
@@ -43,6 +45,11 @@ class ContextProvider(BaseContextProvider):
 
     def __init__(self, role: "Role"):
         self._role = role
+        # Budget-gate latches: each threshold event fires at most once per run,
+        # so a soft warning isn't re-emitted every think once spend stays above
+        # 80%, and the hard-stop event isn't re-emitted after the loop halts.
+        self._budget_warned = False
+        self._budget_stopped = False
 
     # ------------------------------------------------------------------
     # Property forwarders — read the live value off the Role on demand.
@@ -59,14 +66,14 @@ class ContextProvider(BaseContextProvider):
     async def resolve_llm(self, messages=None):
         """Resolve the think LLM via the router (the conduit for flag + llmconfig).
 
-        - ``config.enable_router`` True → intelligent routing from the request
-          messages (the router picks a model card per request).
-        - Otherwise → the fixed configured ``config.llm``.
+        - ``config.models.router_enabled`` True → intelligent routing from the
+          request messages (the router picks a model card per request).
+        - Otherwise → the fixed configured ``config.models.default``.
         """
         role = self._role
-        if role.config.enable_router and messages:
+        if role.config.models.router_enabled and messages:
             return await role.router.aroute(RoutingRequest(messages=messages))
-        return role.router.route(llm_config=role.config.llm)
+        return role.router.route(llm_config=role.config.models.default)
 
     @property
     def _executor(self):
@@ -108,15 +115,50 @@ class ContextProvider(BaseContextProvider):
             observe_all=schema.observe_all_msg_from_buffer,
         )
 
+    #: Soft-warning threshold — surface a CLI notice once spend crosses this
+    #: fraction of the cap (the hard cap is 1.0).
+    _BUDGET_WARN_FRACTION = 0.8
+
+    async def enforce_budget(self) -> BudgetVerdict:
+        """Rule on this agent's own spend against ``schema.max_cost``.
+
+        Reads this agent's accrued spend (``context.cost_manager.total_cost``)
+        against the configured cap. Emits — on the observation plane, so it can
+        only inform the UI/recorder, never fold the turn — a soft ``BudgetEvent``
+        once at 80% and a hard-stop ``BudgetEvent`` once at 100%, each latched so
+        it fires at most once per run. Returns a stop verdict only when the hard
+        cap is crossed. A non-positive cap disables the gate: return ``PROCEED``
+        immediately, emitting nothing, so an unbudgeted agent is silent.
+        """
+        limit = self._schema.max_cost
+        if limit <= 0:
+            return PROCEED
+
+        spend = self._role.context.cost_manager.total_cost
+        fraction = spend / limit
+
+        if spend >= limit:
+            if not self._budget_stopped:
+                self._budget_stopped = True
+                await self._role.event_bus.observe(
+                    BudgetEvent(spend=spend, limit=limit, fraction=fraction, stopped=True)
+                )
+            return BudgetVerdict(stop=True, message=BUDGET_EXHAUSTED)
+
+        if fraction >= self._BUDGET_WARN_FRACTION and not self._budget_warned:
+            self._budget_warned = True
+            await self._role.event_bus.observe(BudgetEvent(spend=spend, limit=limit, fraction=fraction, stopped=False))
+        return PROCEED
+
     async def prepare(self) -> ThinkRequest:
         """Build the full ThinkEngine.start() input set for this cycle.
 
-        Pipeline (moved verbatim from Role._think's glue): collect context →
-        render prompts → assemble the request from the managed history + the
-        rendered command prompt → resolve tool specs from the command channel.
+        Pipeline: collect context → render prompts → assemble the request from
+        the managed history + the rendered command prompt → resolve tool specs
+        from the command channel.
 
         The request is built by the ContextManager: it runs the history-level
-        compaction passes (microcompact → autocompact) over the stored history,
+        compaction passes (fold then summarize) over the stored history,
         then returns ``managed_history + [user_prompt]`` (the command prompt is
         appended to the request only, never stored) — proper context-window
         management, not a crude tail truncation.
@@ -140,24 +182,12 @@ class ContextProvider(BaseContextProvider):
     def _think_inputs(self) -> ThinkInputs:
         """The field set published for one think() cycle — pure data.
 
-        One explicit bundle of flat identity values (unpacked from RoleSchema)
-        plus the values derived from state (env clause, team listing, cwd,
-        project root, output format). PromptBuilder reads from this snapshot
-        instead of reaching into the Role or its schema.
+        One explicit bundle of the state-derived values (cwd, project root)
+        PromptBuilder reads from instead of reaching into the Role or its schema.
+        No identity fields flow through — name/profile drive routing/signing on
+        the Role, not the prompt.
         """
-        schema = self._schema
         return ThinkInputs(
-            name=schema.name,
-            profile=schema.profile,
-            goal=schema.goal,
-            constraints=schema.constraints,
-            desc=schema.desc,
-            example=schema.example,
-            instruction=schema.instruction,
-            language=schema.language,
-            env_desc=self._env_desc(),
-            other_role_names=self._other_role_names(),
-            team_info=self._team_info(),
             working_dir=self._get_cwd(),
             original_working_dir=self._state.original_working_dir,
             project_root=self._state.project_root,
@@ -171,24 +201,3 @@ class ContextProvider(BaseContextProvider):
         pure reader: it never assembles subsystems itself.
         """
         return self._role._components.make_think_subsystems()
-
-    def _env_desc(self) -> str:
-        """The env description used in the role prefix, or "" if none."""
-        if self._state.env and self._state.env.desc:
-            return self._state.env.desc
-        return ""
-
-    def _other_role_names(self) -> str:
-        """Comma-joined names of the other roles in the env, or "" if none."""
-        if not (self._state.env and self._state.env.desc):
-            return ""
-        all_roles = self._state.env.role_names()
-        return ", ".join([r for r in all_roles if r != self._schema.name])
-
-    def _team_info(self) -> str:
-        if not self._state.env:
-            return ""
-        lines = []
-        for role in self._state.env.roles.values():
-            lines.append(f"{role.name}: {role.role_schema.profile}, {role.role_schema.goal}")
-        return "\n".join(lines)

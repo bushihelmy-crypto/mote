@@ -9,11 +9,12 @@ from urllib.parse import unquote, urlparse, urlunparse
 from uuid import UUID, uuid4
 
 from aiohttp import ClientSession, UnixConnector
+from pydantic import BaseModel, Field, PrivateAttr
+
 from mote.common.const import MOTE_REPORTER_DEFAULT_URL
 from mote.common.events import LLMStreamDeltaEvent, ResourceReportEvent, current_bus, observe_event, observe_event_sync
 from mote.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority, SyncObserver
 from mote.common.logs import logger
-from pydantic import BaseModel, Field, PrivateAttr
 
 if typing.TYPE_CHECKING:
     from mote.roles.role import Role
@@ -73,7 +74,6 @@ class BlockType(str, Enum):
     THOUGHT = "Thought"
     ACTION = "Action"
     WEBSEARCH = "WebSearch"
-    RECOMMEND = "Recommend"
     ARTIFACTS = "Artifacts"
     ACTION_DATA = "ActionData"
 
@@ -259,12 +259,6 @@ class ThoughtReporter(ObjectReporter):
     block: Literal[BlockType.THOUGHT] = BlockType.THOUGHT
 
 
-class RecommendReporter(ObjectReporter):
-    """Reporter for recommendation items."""
-
-    block: Literal[BlockType.RECOMMEND] = BlockType.RECOMMEND
-
-
 class ArtifactsReporter(ObjectReporter):
     """Reporter for object resources to Artifacts Block."""
 
@@ -272,11 +266,11 @@ class ArtifactsReporter(ObjectReporter):
 
 
 def _build_report_payload(event) -> dict:
-    """Reconstruct the legacy ``_format_data`` HTTP payload from an event.
+    """Build the HTTP report payload from an event.
 
-    Keeps the wire contract identical to the old direct POST: the value is
-    normalized (BaseModel → ``model_dump``, Path → str), a ``"path"`` report
-    is absolutized, and block/uuid/role/extra are carried through.
+    The value is normalized (BaseModel → ``model_dump``, Path → str), a
+    ``"path"`` report is absolutized, and block/uuid/role/extra are carried
+    through.
     """
     value = event.value
     if isinstance(value, BaseModel):

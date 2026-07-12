@@ -10,6 +10,7 @@ prompt-matrix invariants live in test_protocol_isolation.py.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.prompt.refs import (
     CAP_READ,
     CTL_FINISH,

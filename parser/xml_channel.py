@@ -1,4 +1,4 @@
-"""XmlCommandChannel — legacy text protocol with XML command blocks."""
+"""XmlCommandChannel — text protocol with XML command blocks."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 class XmlCommandChannel(CommandChannel):
-    """Legacy text protocol: XML command blocks parsed out of the response text."""
+    """Text protocol: XML command blocks parsed out of the response text."""
 
     def vocabulary(self) -> dict:
         # Surfaces for the XML text protocol: <end></end> as the task terminator,
@@ -27,7 +27,7 @@ class XmlCommandChannel(CommandChannel):
             Sym.CTL_SEPARATE_STEPS: "in separate command blocks",
             Sym.CAP_READ: "Editor.read",
             Sym.CAP_WRITE: "Editor.write",
-            Sym.CAP_REPLY: "reply_to_human",
+            Sym.CAP_REPLY: "reply_to_user",
         }
 
     def prompt_vars(self) -> dict[str, str]:

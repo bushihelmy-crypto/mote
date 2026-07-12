@@ -8,6 +8,17 @@ exclude: '^ztest/.*/fixtures/'
 repos:
   - repo: local
     hooks:
+      # Auto-remove unused imports before isort/black reflow. ztest is excluded
+      # (mirrors flake8/pyright): test files intentionally carry unused imports.
+      # __init__ imports are preserved (re-exports / side-effect registration).
+      - id: autoflake
+        name: autoflake
+        entry: python -m autoflake
+        language: system
+        types: [python]
+        exclude: '^ztest/'
+        args: [--in-place, --remove-all-unused-imports, --ignore-init-module-imports]
+
       - id: isort
         name: isort
         entry: python -m isort
@@ -46,3 +57,23 @@ repos:
         types: [python]
         exclude: '^ztest/'
         require_serial: true
+
+      # Secret scanning: fail on any high-entropy string / credential not already
+      # in .secrets.baseline. Rebuild the baseline after a verified false positive:
+      #   detect-secrets scan --exclude-files '^vendor/' > .secrets.baseline
+      - id: detect-secrets
+        name: detect-secrets
+        entry: detect-secrets-hook --baseline .secrets.baseline
+        language: system
+        types: [text]
+        exclude: '^(vendor/|\.secrets\.baseline$)'
+
+      # Regression guard (zero-dependency pygrep): block legacy-origin identifiers
+      # and old-style @Author/@Time/@File header tags from creeping back in. The
+      # LICENSE/NOTICE (required upstream MIT attribution) and this config are exempt.
+      - id: no-legacy-traces
+        name: block legacy project traces
+        language: pygrep
+        types: [text]
+        entry: '(?i)\b(metagpt|deepwisdom|agentframe|mgx)\b|@(Author|Time|File|Desc|Modified)\b'
+        exclude: '^(LICENSE|NOTICE|\.pre-commit-config\.yaml|\.secrets\.baseline)$'

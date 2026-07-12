@@ -6,12 +6,12 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-import mote
 from loguru import logger
 
+import mote
+
 #: The per-project config directory name. All project-local mote assets
-#: (skills / agents / mcp.json / settings.local.json) live under ``<dir>/.mote``,
-#: mirroring Claude Code's ``.claude`` convention but keeping mote's own name.
+#: (skills / agents / mcp.json / settings.local.json) live under ``<dir>/.mote``.
 MOTE_DIR_NAME = ".mote"
 
 
@@ -61,12 +61,12 @@ TOOL_SCHEMA_PATH = MOTE_ROOT / "mote/tools/schemas"
 
 
 # ============================================================================
-# ``.mote`` project-dir discovery (Claude-Code-aligned)
+# ``.mote`` project-dir discovery
 # ----------------------------------------------------------------------------
 # Skills / agents / mcp / settings are discovered by walking from the working
 # directory *up* to the git root, collecting every ``<dir>/.mote/<subdir>`` that
-# exists (mirrors Claude Code's ``getProjectDirsUpToHome``). Stopping at the git
-# root prevents assets from parent directories outside the repo from leaking in.
+# exists. Stopping at the git root prevents assets from parent directories
+# outside the repo from leaking in.
 # ============================================================================
 def user_mote_dir(subdir: str) -> Path:
     """The user-level ``~/.mote/<subdir>`` location (lowest project-band layer)."""
@@ -80,8 +80,7 @@ def mote_project_dirs(subdir: str, cwd: Optional[Path] = None) -> List[Path]:
     stopping at (and including) the git root — or, when *cwd* is not inside a
     repo, at the filesystem root. Returned **low→high precedence** (git root
     first, *cwd* last), so a caller can let a closer-to-cwd directory override a
-    farther one. Mirrors Claude Code's per-project upward walk with a git-root
-    boundary.
+    farther one. Uses a per-project upward walk with a git-root boundary.
 
     Best-effort and side-effect-free: only directories that actually exist are
     returned; the list may be empty.

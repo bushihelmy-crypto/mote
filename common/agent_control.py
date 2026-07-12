@@ -116,9 +116,9 @@ class SpawnContext:
     agent_path: Optional[Any] = None  # AgentPath (duck-typed to avoid the import)
     cwd: Optional[str] = None
     config: Optional[Any] = None
-    # Optional: the parent's CostTracker. The cost mirror tree no longer relies
-    # on this (it adopts the child's own tracker as its node bucket); kept so a
-    # factory that shares the parent's tracker (skill_fork) still can.
+    # Optional: the parent's CostTracker. The cost mirror tree does not rely on
+    # this (it adopts the child's own tracker as its node bucket); present so a
+    # factory that shares the parent's tracker (skill_fork) can.
     parent_cost_tracker: Optional[Any] = None
     parent_session_id: str = ""
 

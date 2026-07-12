@@ -13,10 +13,13 @@ compaction markers, the session table and the usage line.
 from __future__ import annotations
 
 import re
+from enum import Enum
 from typing import Any, List, Optional, Tuple
 
 from mote.cli.consumers.render.builders._rich import Padding, Syntax, Table, Text, box
 from mote.cli.consumers.render.palette import BRANCH, CHECK, CROSS, MEDIA, PLAY, SKIP, Palette
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 # Continuation indents (spaces) so wrapped/detail lines align under the glyph
 # that introduces them: assistant/markdown under ``BULLET `` (2), a tool's
@@ -25,7 +28,7 @@ CONTENT_INDENT = 2
 RESULT_INDENT = 4
 
 # The dim field separator between status-line parts (model │ tokens │ cost │ ctx),
-# mirroring claude-code's ` │ ` vertical rule. Shared so both hosts divide the
+# the ` │ ` vertical rule. Shared so both hosts divide the
 # same way (terminal via ``format_usage_line``, Textual via ``StatusBar.render``).
 USAGE_SEP = " \u2502 "
 
@@ -144,7 +147,7 @@ def linkify(text: str, *, base_style: str = "") -> "Text":
 def tool_started_text(ev: Any, *, ok: Optional[bool] = None, blink: bool = False) -> "Text":
     """Compose the ``● Tool(headline)`` invocation line (bullet added by caller).
 
-    The bullet is coloured by run state (claude-code's status glyph): brand while
+    The bullet is coloured by run state (the status glyph): brand while
     the call is in flight (``ok is None``), success-green once it completes ok, and
     error-red when it fails. While running, ``blink`` (toggled by the host's
     heartbeat) brightens the bullet to :data:`Palette.SHIMMER` for a subtle pulse.
@@ -166,12 +169,25 @@ def tool_started_text(ev: Any, *, ok: Optional[bool] = None, blink: bool = False
 
 
 def tool_completed_text(ev: Any) -> "Text":
-    """Compose the ``  ⎿  summary`` result line, coloured by success."""
+    """Compose the ``  ⎿  summary`` result line, coloured by success.
+
+    On a failure that carries a structured ``error_type`` (from the executor's
+    ``ErrorReport``, projected onto the completion), a dim ``[ErrorType]`` suffix
+    is appended — plus ``· retryable`` when the failure is retryable — so the
+    human sees the machine-classified cause next to the summary. Absent
+    ``error_type`` leaves the line unchanged.
+    """
     style = Palette.SUCCESS if ev.ok else Palette.ERROR
     summary = ev.summary or ("(no output)" if ev.ok else "failed")
     line = Text()
     line.append("  " + BRANCH + " ", style=Palette.DIM)
     line.append(summary, style=style)
+    error_type = getattr(ev, "error_type", "") or ""
+    if not ev.ok and error_type:
+        suffix = f" [{error_type}]"
+        if getattr(ev, "retryable", False):
+            suffix += " · retryable"
+        line.append(suffix, style=Palette.DIM)
     return line
 
 
@@ -215,7 +231,7 @@ def fold_note_str(ev: Any) -> str:
       persisted the whole thing to disk (``tool_result_limit``); point the human
       at that path with a ✂ scissors marker.
     * ``hidden_lines > 0`` — the projector dropped whole lines from the rendered
-      detail; show the exact count ("… +N 行已折叠", claude-code's "+N lines").
+      detail; show the exact count ("… +N 行已折叠", a "+N lines" affordance).
     * otherwise — content was clipped in a way with no line count (a single long
       line word-capped, or a summary char-capped); a generic "内容已折叠".
     """
@@ -224,10 +240,10 @@ def fold_note_str(ev: Any) -> str:
     full_ref = getattr(ev, "full_ref", None)
     hidden = getattr(ev, "hidden_lines", 0) or 0
     if full_ref:
-        return f"{SCISSORS} 输出过大已截断，完整见 {full_ref}"
+        return f"{SCISSORS} " + t(K.FOLD_FULL_REF, ref=full_ref)
     if hidden > 0:
-        return f"… +{hidden} 行已折叠"
-    return "… 内容已折叠"
+        return t(K.FOLD_HIDDEN_LINES, count=hidden)
+    return t(K.FOLD_CONTENT)
 
 
 def fold_note(ev: Any) -> "Text":
@@ -312,32 +328,55 @@ def task_progress_text(ev: Any) -> "Text":
     return line
 
 
-# --- consecutive search/read tool grouping (claude-code collapseReadSearch) ---
-# claude-code coalesces a *run* of consecutive collapsible tool calls into one
-# line ("Searched for 2 patterns, read 1 file"), expandable with ctrl+o; a
-# non-collapsible tool (Edit/Write) or assistant text breaks the run. The grouped
-# tools are search = Grep/Glob (a pattern query) and read = Read (a file). We keep
-# the classification + count phrasing HERE as a pure, host-agnostic builder so the
-# grouping look never diverges and a future terminal adoption is a closed change.
+# --- tool-row fold classification (the single source of truth) ------------
+# How a tool's transcript row folds under the global ctrl+o toggle. Two GENUINELY
+# different behaviours (not one thing with a flag), plus "never folds":
+#
+#   GROUP  — coalesce a *run* of consecutive calls into ONE count summary line
+#            ("搜索 2 个模式，读取 1 个文件"), a collapsed read/search summary.
+#            The individual call's identity doesn't matter (search = Grep/Glob,
+#            read = Read); a non-folding tool or assistant text breaks the run.
+#   DETAIL — fold *this* call's body+output behind its ``● Tool(headline)`` line
+#            (Bash/Terminal/WebBrowser). Each command's identity matters, so the
+#            calls are NOT merged — every call keeps its own row.
+#   NONE   — always rendered in full (Edit/Write/…).
+#
+# This classifier is a pure, host-agnostic builder so both rich hosts (and a
+# future terminal adoption) share one definition; the search/read *count*
+# phrasing below keeps the Grep/Glob vs Read split for the summary.
 _GROUP_SEARCH = {"Grep", "Glob"}
 _GROUP_READ = {"Read"}
+_FOLD_DETAIL = {"Bash", "Terminal", "WebBrowser", "Skill"}
 
 
-def is_collapsible_tool(name: str) -> bool:
-    """Whether *name* is a search/read tool that coalesces into a group."""
-    return name in _GROUP_SEARCH or name in _GROUP_READ
+class FoldMode(Enum):
+    """How a tool row folds under ctrl+o — see the classifier notes above."""
+
+    NONE = "none"
+    GROUP = "group"
+    DETAIL = "detail"
 
 
-def tool_group_summary_text(items: Any, *, active: bool, expanded: bool) -> "Text":
+def fold_mode(name: str) -> FoldMode:
+    """Classify how tool *name*'s transcript row folds (the single source of truth)."""
+    if name in _GROUP_SEARCH or name in _GROUP_READ:
+        return FoldMode.GROUP
+    if name in _FOLD_DETAIL:
+        return FoldMode.DETAIL
+    return FoldMode.NONE
+
+
+def tool_group_summary_text(items: Any, *, active: bool) -> "Text":
     """The one-line ``● 搜索 N 个模式，读取 M 个文件`` summary of a collapsed group.
 
     *items* is a list of ``(tool_name, path)`` tuples (one per grouped tool call).
     The **search** count is the number of Grep/Glob calls; the **read** count is
     the number of *unique* Read file paths — a repeat of the same path counts once
-    (mirroring claude-code's ``Set`` dedupe), while a path-less Read counts
+    (a set-based dedupe), while a path-less Read counts
     individually. ``active`` (any tool still in flight) appends a progressive
-    ``…``; a dim ``(ctrl+o 展开/折叠)`` hint tells the human the row toggles. Empty
-    *items* (or no search/read among them) → empty ``Text`` (nothing to show).
+    ``…``. The ctrl+o toggle affordance is a single unified hint on the status
+    bar, not repeated on each row. Empty *items* (or no search/read among them)
+    → empty ``Text`` (nothing to show).
     """
     from mote.cli.consumers.render.palette import BULLET
 
@@ -356,21 +395,20 @@ def tool_group_summary_text(items: Any, *, active: bool, expanded: bool) -> "Tex
     read = len(read_paths) + read_pathless
     parts: List[str] = []
     if search:
-        parts.append(f"搜索 {search} 个模式")
+        parts.append(t(K.GROUP_SEARCH, count=search))
     if read:
-        parts.append(f"读取 {read} 个文件")
+        parts.append(t(K.GROUP_READ, count=read))
     if not parts:
         return text
     text.append(BULLET + " ", style=Palette.BRAND)
-    text.append("，".join(parts), style=Palette.DIM)
+    text.append(t(K.LIST_SEP).join(parts), style=Palette.DIM)
     if active:
         text.append("…", style=Palette.DIM)
-    text.append(f" (ctrl+o {'折叠' if expanded else '展开'})", style=Palette.DIM)
     return text
 
 
 def conversation_compacted_text(ev: Any) -> "Text":
-    """The dim ``✻ 对话已压缩`` boundary marker (claude-code's compacted line).
+    """The dim ``✻ 对话已压缩`` boundary marker (the compacted line).
 
     Marker-only by design (the summary body stays in the model's context, not the
     human transcript): shows *that* history was condensed and, when known, how
@@ -380,9 +418,9 @@ def conversation_compacted_text(ev: Any) -> "Text":
 
     count = getattr(ev, "message_count", 0) or 0
     line = Text()
-    line.append(f"{COMPACT} 对话已压缩", style=Palette.DIM)
+    line.append(f"{COMPACT} " + t(K.COMPACT_COMPACTED), style=Palette.DIM)
     if count:
-        line.append(f" (保留 {count} 条消息)", style=Palette.DIM)
+        line.append(f" ({t(K.COMPACT_KEPT, count=count)})", style=Palette.DIM)
     return line
 
 
@@ -412,7 +450,7 @@ def compaction_summary_text(summary: str, *, max_lines: int = _COMPACT_SUMMARY_M
         text.append(ln, style=Palette.DIM)
     hidden = len(lines) - len(shown)
     if hidden > 0:
-        text.append(f"\n… +{hidden} 行", style=Palette.DIM)
+        text.append("\n" + t(K.FOLD_MORE_LINES, count=hidden), style=Palette.DIM)
     return text
 
 
@@ -460,7 +498,7 @@ def format_usage_line(ev: Any) -> str:
         parts.append(f"ctx {ev.context_pct * 100:.0f}%")
     elif ev.context_used is not None and ev.context_window:
         parts.append(f"ctx {ev.context_used:,}/{ev.context_window:,}")
-    # ``│`` (U+2502) field separator — claude-code's status-line look (dim in
+    # ``│`` (U+2502) field separator — the status-line look (dim in
     # both hosts). A vertical rule reads as a divider far better than spaces.
     return USAGE_SEP.join(parts)
 
@@ -477,7 +515,8 @@ __all__ = [
     "linkify",
     "tool_started_text",
     "tool_completed_text",
-    "is_collapsible_tool",
+    "FoldMode",
+    "fold_mode",
     "tool_group_summary_text",
     "notice_style",
     "render_result_detail",

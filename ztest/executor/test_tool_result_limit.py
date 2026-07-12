@@ -10,6 +10,7 @@ via the ``base_dir`` argument.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, PREVIEW_SIZE_BYTES
 from mote.executor.tool_result_limit import (
     enforce_tool_result_limit,

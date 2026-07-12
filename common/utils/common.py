@@ -1,14 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2023/4/29 16:07
-@Author  : alexanderwu
-@File    : common.py
-@Modified By: mashenquan, 2023-11-1. According to Chapter 2.2.2 of RFC 116:
-        Add generic class-to-string and object-to-string conversion functionality.
-@Modified By: mashenquan, 2023/11/27. Bug fix: `parse_recipient` failed to parse the recipient in certain GPT-3.5
-        responses.
-"""
 from __future__ import annotations
 
 import ast
@@ -16,16 +7,11 @@ import asyncio
 import base64
 import binascii
 import contextlib
-import functools
 import importlib
 import inspect
 import json
-import os
 import re
-import time
 import traceback
-from asyncio import iscoroutinefunction
-from datetime import datetime
 from functools import partial
 from io import BytesIO
 from pathlib import Path
@@ -35,12 +21,13 @@ import aiofiles
 import chardet
 import fitz
 import requests
-from mote.common.logs import logger
-from mote.common.utils.exceptions import handle_exception
-from mote.common.utils.remote import remotable
 from PIL import Image
 from pydantic_core import to_jsonable_python
 from tenacity import RetryCallState, RetryError
+
+from mote.common.logs import logger
+from mote.common.utils.exceptions import handle_exception
+from mote.common.utils.remote import remotable
 
 
 class CodeParser:
@@ -54,22 +41,20 @@ class CodeParser:
 
     @classmethod
     def parse_blocks(cls, text: str):
-        # 首先根据"##"将文本分割成不同的block
+        # Split the text into blocks on the "##" heading marker.
         blocks = text.split("##")
 
-        # 创建一个字典，用于存储每个block的标题和内容
+        # Map each block's title to its content.
         block_dict = {}
 
-        # 遍历所有的block
         for block in blocks:
-            # 如果block不为空，则继续处理
             if block.strip() == "":
                 continue
             if "\n" not in block:
                 block_title = block
                 block_content = ""
             else:
-                # 将block的标题和内容分开，并分别去掉前后的空白字符
+                # Split off the title from the content, trimming surrounding whitespace.
                 block_title, block_content = block.split("\n", 1)
             block_dict[block_title.strip()] = block_content.strip()
 
@@ -258,50 +243,6 @@ async def aread(filename: str | Path, encoding="utf-8") -> str:
     return content
 
 
-def encode_image(
-    image_path_or_pil: Union[Path, "Image.Image", str], encoding: str = "utf-8", resize: int = 1568
-) -> str:
-    """encode image from file or PIL.Image into base64 with optional resize"""
-    # Load image to PIL if it's not already a PIL Image
-    if isinstance(image_path_or_pil, Image.Image):
-        image_pil = image_path_or_pil
-    else:
-        if isinstance(image_path_or_pil, str):
-            image_path_or_pil = Path(image_path_or_pil)
-        if not image_path_or_pil.exists():
-            raise FileNotFoundError(f"{image_path_or_pil} not exists")
-        with open(str(image_path_or_pil), "rb") as image_file:
-            bytes_data = image_file.read()
-        image_pil = Image.open(BytesIO(bytes_data))
-
-    # Check image size and resize if needed
-    width, height = image_pil.size
-    max_size = max(width, height)
-    if max_size > resize:
-        # Calculate new dimensions maintaining aspect ratio
-        new_width = round(width * resize / max_size)
-        new_height = round(height * resize / max_size)
-        image_pil = image_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-    # Save to buffer and encode
-    buffer = BytesIO()
-    # convert to WebP
-    if image_pil.mode == "P":
-        image_pil = image_pil.convert("RGBA")  # Convert palette mode images to RGBA format
-
-    elif image_pil.mode == "CMYK":
-        image_pil = image_pil.convert("RGB")  # Convert CMYK mode images to RGB format
-
-    # Ensure compatible mode for JPEG
-    if image_pil.mode not in ("RGB", "L"):
-        image_pil = image_pil.convert("RGB")
-
-    image_pil.save(buffer, format="JPEG", quality=90)
-    bytes_data = buffer.getvalue()
-
-    return base64.b64encode(bytes_data).decode(encoding)
-
-
 def decode_image(img_url_or_b64: str) -> "Image.Image":
     """decode image from url or base64 into PIL.Image"""
     if img_url_or_b64.startswith("http"):
@@ -314,40 +255,6 @@ def decode_image(img_url_or_b64: str) -> "Image.Image":
         img_data = BytesIO(base64.b64decode(b64_data))
         img = Image.open(img_data)
     return img
-
-
-def extract_image_paths(content: str) -> list[str]:
-    # We require that the path must have a space preceding it, like "xxx /an/absolute/path.jpg xxx"
-    pattern = r"[^\s]+\.(?:png|jpe?g|gif|bmp|tiff|PNG|JPE?G|GIF|BMP|TIFF)"
-    image_paths = re.findall(pattern, content)
-    return image_paths
-
-
-def extract_and_encode_images(content: str) -> list[str]:
-    images = []
-    for path in extract_image_paths(content):
-        if os.path.exists(path):
-            images.append(encode_image(path))
-    return images
-
-
-def extract_pdf_paths(content: str) -> list[str]:
-    # Require a non-whitespace path ending with .pdf or .PDF
-    pattern = r"[^\s]+\.(?:pdf|PDF)"
-    return re.findall(pattern, content)
-
-
-def extract_and_encode_pdfs(content: str) -> list[str]:
-    """Extract local PDF file paths from content and encode as base64 strings.
-
-    Note: we only encode if the path exists locally to avoid network fetch.
-    """
-    pdfs: list[str] = []
-    for path in extract_pdf_paths(content):
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                pdfs.append(base64.b64encode(f.read()).decode("utf-8"))
-    return pdfs
 
 
 def sniff_image_media_type(b64_data: str) -> Optional[str]:
@@ -479,47 +386,9 @@ def log_and_reraise(retry_state: RetryCallState):
     outcome = retry_state.outcome
     assert outcome is not None, "log_and_reraise called before any attempt completed"
     logger.error(f"Retry attempts exhausted. Last exception: {outcome.exception()}")
-    logger.warning(
-        """
-Recommend going to https://deepwisdom.feishu.cn/wiki/MsGnwQBjiif9c3koSJNcYaoSnu4#part-XdatdVlhEojeAfxaaEZcMV3ZniQ
-See FAQ 5.8
-"""
-    )
     exc = outcome.exception()
     assert exc is not None, "log_and_reraise invoked on a successful outcome"
     raise exc
-
-
-def log_time(method):
-    """A time-consuming decorator for printing execution duration."""
-
-    def before_call():
-        start_time, cpu_start_time = time.perf_counter(), time.process_time()
-        logger.debug(f"[{method.__name__}] started at: " f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        return start_time, cpu_start_time
-
-    def after_call(start_time, cpu_start_time):
-        end_time, cpu_end_time = time.perf_counter(), time.process_time()
-        logger.debug(
-            f"[{method.__name__}] ended. "
-            f"Time elapsed: {end_time - start_time:.4} sec, CPU elapsed: {cpu_end_time - cpu_start_time:.4} sec"
-        )
-
-    @functools.wraps(method)
-    def timeit_wrapper(*args, **kwargs):
-        start_time, cpu_start_time = before_call()
-        result = method(*args, **kwargs)
-        after_call(start_time, cpu_start_time)
-        return result
-
-    @functools.wraps(method)
-    async def timeit_wrapper_async(*args, **kwargs):
-        start_time, cpu_start_time = before_call()
-        result = await method(*args, **kwargs)
-        after_call(start_time, cpu_start_time)
-        return result
-
-    return timeit_wrapper_async if iscoroutinefunction(method) else timeit_wrapper
 
 
 # Conventional exit code reported for a command killed by timeout (aligns with

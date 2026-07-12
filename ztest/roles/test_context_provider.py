@@ -70,39 +70,6 @@ class TestLoopContext:
         assert cp.loop_context().max_react_loop == before + 5
 
 
-class TestEnvDerivedStrings:
-    def test_env_desc_empty_without_env(self, role):
-        assert role.context_provider._env_desc() == ""
-
-    def test_env_desc_returns_env_desc(self, role):
-        role.set_env(FakeEnv(desc="the world"))
-        assert role.context_provider._env_desc() == "the world"
-
-    def test_other_role_names_empty_without_env(self, role):
-        assert role.context_provider._other_role_names() == ""
-
-    def test_other_role_names_excludes_self(self, role):
-        bob = Role(name="Bob")
-        carol = Role(name="Carol")
-        env = FakeEnv(desc="team", roles={"Bob": bob, "Carol": carol})
-        role.set_env(env)
-        names = role.context_provider._other_role_names()
-        assert "Bob" in names and "Carol" in names
-        assert role.name not in names
-
-    def test_team_info_empty_without_env(self, role):
-        assert role.context_provider._team_info() == ""
-
-    def test_team_info_lists_roles(self, role):
-        bob = Role(name="Bob", profile="Eng", goal="build")
-        env = FakeEnv(desc="team", roles={"Bob": bob})
-        role.set_env(env)
-        info = role.context_provider._team_info()
-        assert "Bob" in info
-        assert "Eng" in info
-        assert "build" in info
-
-
 class TestResolveLLM:
     def test_fixed_model_when_router_disabled(self, role):
         role.role_schema.enable_router = False  # config flag read via role.config
@@ -115,14 +82,14 @@ class TestResolveLLM:
         # With routing on but no messages, the provider must use the fixed model
         # (it never invokes the async router without signals to route on).
         sentinel = object()
-        monkeypatch.setattr(role.config, "enable_router", True, raising=False)
+        monkeypatch.setattr(role.config.models, "router_enabled", True)
         monkeypatch.setattr(role.router, "route", lambda *, name=None, llm_config=None: sentinel)
         out = asyncio.run(role.context_provider.resolve_llm(messages=None))
         assert out is sentinel
 
     def test_routes_when_enabled_with_messages(self, role, monkeypatch):
         sentinel = object()
-        monkeypatch.setattr(role.config, "enable_router", True, raising=False)
+        monkeypatch.setattr(role.config.models, "router_enabled", True)
 
         async def fake_aroute(request):
             assert request.messages  # signals were forwarded

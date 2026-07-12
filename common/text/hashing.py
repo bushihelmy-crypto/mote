@@ -3,8 +3,8 @@
 The code-map extractor (which persists a per-file ``content_hash``) and the
 whole-repo indexer (which recomputes hashes to diff for staleness) MUST agree on
 the exact hashing recipe — otherwise every scan would see every file as stale.
-That agreement used to live in a comment ("Must match CodeMapExtractor's hash
-exactly"); homing it in one function makes the contract code-enforced instead.
+Homing the recipe in one function makes that contract code-enforced rather than
+a comment both sites must remember to honor.
 """
 from __future__ import annotations
 

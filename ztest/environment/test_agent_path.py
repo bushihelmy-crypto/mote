@@ -3,8 +3,9 @@
 """Tests for AgentPath — ported from agent_path.rs ``mod tests``."""
 
 import pytest
-from mote.environment.agent_path import AgentPath
 from pydantic import BaseModel
+
+from mote.environment.agent_path import AgentPath
 
 
 def test_root_has_expected_name():

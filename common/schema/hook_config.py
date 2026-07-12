@@ -3,10 +3,9 @@
 Lives in ``common/schema`` alongside ``permission_config.py`` so ``RoleSchema``
 (which declares it) can reference it without importing the hook engine. The
 engine itself lives in ``mote.common.hook``; this is only the declarative
-shape (the Claude Code ``HooksSchema``: per-event lists of matcher groups).
+shape: per-event lists of matcher groups.
 
-Backward compatibility: a Role with ``hooks=None`` (the default) runs with no
-hook layer. Python callbacks are NOT declared here — they are registered
+Default: a Role with ``hooks=None`` (the default) runs with no hook layer. Python callbacks are NOT declared here — they are registered
 programmatically on the ``HookManager`` (the SDK-style path).
 """
 
@@ -18,7 +17,7 @@ from pydantic import BaseModel, Field
 
 
 class HookCommandHandler(BaseModel):
-    """One external command handler (CC/codex JSON stdin/stdout contract).
+    """One external command handler (JSON stdin/stdout contract).
 
     The command receives the hook input as a JSON line on stdin and may
     influence the host via its exit code (2 = block) and/or JSON on stdout.
@@ -41,7 +40,7 @@ class HookCommandHandler(BaseModel):
 
 
 class HookMatcherGroup(BaseModel):
-    """A matcher + the handlers that run when it matches (CC matcher group).
+    """A matcher + the handlers that run when it matches.
 
     ``matcher`` is matched against the event's match field (e.g. the tool name
     for PreToolUse): ``None``/``*`` = all, ``A|B`` = exact pipe list, else regex.
@@ -55,7 +54,7 @@ class HookMatcherGroup(BaseModel):
 class HookConfig(BaseModel):
     """Per-Role hook policy, declared on :class:`RoleSchema`.
 
-    ``events`` is keyed by event name (CC ``HooksSchema`` shape)::
+    ``events`` is keyed by event name::
 
         events = {
             "PreToolUse": [HookMatcherGroup(matcher="Bash", handlers=[...])],

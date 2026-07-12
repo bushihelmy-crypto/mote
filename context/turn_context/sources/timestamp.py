@@ -1,11 +1,11 @@
 """TimestampContextSource — surface the current local time, per turn.
 
-The wall-clock time used to be baked into the user prompt's ``current_state`` line
-(``prompt_builder._user_substitutions``), which meant every turn carried a fresh,
-second-precision timestamp on the request tail. This source moves that fact into
-the structured per-turn ``<system-reminder>`` envelope instead, alongside the other
-ephemeral context, so the tail's volatile content is collected in one place rather
-than hand-spliced into the command template.
+The wall-clock time is surfaced through the structured per-turn
+``<system-reminder>`` envelope, alongside the other ephemeral context, rather than
+baked into the user prompt's ``current_state`` line (which would put a fresh,
+second-precision timestamp on the request tail every turn). This keeps the tail's
+volatile content collected in one place rather than hand-spliced into the command
+template.
 
 Ephemeral (request-only): a timestamp is meaningful only on the turn it is shown;
 it is never persisted into history (persisting it would move the prefix-cache fork

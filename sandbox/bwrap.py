@@ -12,7 +12,7 @@ tree, then ``exec``s the inner command inside it. Our confinement recipe:
     workspace (+ session-granted dirs).
   * ``--ro-bind <p> <p>`` per readonly override — re-pin sensitive paths
     (``.git`` / ``config.yaml`` / ``.agent_sessions``) read-only even though
-    they sit inside a writable root (anti-escape; mirrors Codex/CC).
+    they sit inside a writable root (anti-escape; mirrors Codex).
   * ``--tmpfs /tmp`` — a private, writable scratch /tmp.
   * ``--unshare-net`` — only when the policy asks (P1 default leaves net shared
     and relies on proxy env injection; see ``network/netns.py``).

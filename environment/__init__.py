@@ -4,9 +4,8 @@
 
 A session-scoped control plane with hierarchical agent paths, per-agent
 mailboxes with turn-atomic delivery, a concurrency limiter, and LRU residency
-(idle agents unloaded to disk and rehydrated on demand). Replaces the old
-single-broadcast-bus environment semantics: agents talk to the control plane,
-not a broadcast loop.
+(idle agents unloaded to disk and rehydrated on demand). Agents talk to the
+control plane, not a broadcast loop.
 
 Faithful Python/asyncio port of ``codex-rs/core/src/agent/*``.
 """

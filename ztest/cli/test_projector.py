@@ -12,6 +12,7 @@ the most coverage.
 from __future__ import annotations
 
 import pytest
+
 from mote.cli.view import (
     BaseProjector,
     Capabilities,
@@ -27,9 +28,12 @@ from mote.cli.view import (
     ToolCallStarted,
     ViewProjector,
 )
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 from .conftest import (
     RecordingConsumer,
+    ev_budget,
     ev_compaction,
     ev_delta,
     ev_error,
@@ -267,7 +271,7 @@ def test_post_tool_short_output_no_hidden_lines():
 
 
 # --------------------------------------------------------------------------
-# CC-style per-tool count summaries ("读取 N 行" / "找到 N 个文件" …)
+# per-tool count summaries ("读取 N 行" / "找到 N 个文件" …)
 # --------------------------------------------------------------------------
 
 
@@ -279,54 +283,54 @@ def _numbered(n: int) -> str:
 def test_summary_read_counts_numbered_lines():
     p = ViewProjector()
     out = p.project(ev_post_tool("Read", _numbered(42), success=True))
-    assert out[0].summary == "读取 42 行"
+    assert out[0].summary == t(K.SUMMARY_READ_LINES, count=42)
 
 
 def test_summary_read_image_and_pdf():
     p = ViewProjector()
     img = p.project(ev_post_tool("Read", "Read image /a.png (png, 100 bytes; x). Shown below.", success=True))
-    assert img[0].summary == "读取图片"
+    assert img[0].summary == t(K.SUMMARY_READ_IMAGE)
     pdf = p.project(ev_post_tool("Read", "Read PDF /a.pdf (100 bytes). Shown below.", success=True))
-    assert pdf[0].summary == "读取 PDF"
+    assert pdf[0].summary == t(K.SUMMARY_READ_PDF)
 
 
 def test_summary_grep_files_mode():
     p = ViewProjector()
     out = p.project(ev_post_tool("Grep", "Found 3 files\n/a:1\n/b:2\n/c:3", success=True))
-    assert out[0].summary == "找到 3 个文件"
+    assert out[0].summary == t(K.SUMMARY_FOUND_FILES, count=3)
 
 
 def test_summary_grep_count_mode():
     p = ViewProjector()
     out = p.project(ev_post_tool("Grep", "/a:5\n/b:2\n\nFound 7 total occurrences across 2 files", success=True))
-    assert out[0].summary == "找到 7 处匹配，共 2 个文件"
+    assert out[0].summary == t(K.SUMMARY_GREP_MATCHES_FILES, matches=7, files=2)
 
 
 def test_summary_grep_content_mode_counts_lines():
     p = ViewProjector()
     out = p.project(ev_post_tool("Grep", "/a:1:foo\n/a:5:bar\n/b:3:baz", success=True))
-    assert out[0].summary == "找到 3 处匹配"
+    assert out[0].summary == t(K.SUMMARY_GREP_MATCHES, count=3)
 
 
 def test_summary_grep_no_match():
     p = ViewProjector()
     out = p.project(ev_post_tool("Grep", "No files found", success=True))
-    assert out[0].summary == "无匹配"
+    assert out[0].summary == t(K.SUMMARY_NO_MATCHES)
 
 
 def test_summary_glob_counts_paths_dropping_truncation_note():
     p = ViewProjector()
     body = "/a.py\n/b.py\n(Results are truncated. Consider using a more specific path or pattern.)"
     out = p.project(ev_post_tool("Glob", body, success=True))
-    assert out[0].summary == "找到 2 个文件"
+    assert out[0].summary == t(K.SUMMARY_FOUND_FILES, count=2)
 
 
 def test_summary_write_created_and_updated():
     p = ViewProjector()
     created = p.project(ev_post_tool("Write", "Created /a.py (42 lines, 100 bytes written).", success=True))
-    assert created[0].summary == "新建 42 行"
+    assert created[0].summary == t(K.SUMMARY_CREATED_LINES, count=42)
     updated = p.project(ev_post_tool("Write", "Updated /a.py (3 lines, 10 bytes written).", success=True))
-    assert updated[0].summary == "更新 3 行"
+    assert updated[0].summary == t(K.SUMMARY_UPDATED_LINES, count=3)
 
 
 def test_summary_edit_reports_added_removed_from_file_changes():
@@ -337,7 +341,7 @@ def test_summary_edit_reports_added_removed_from_file_changes():
     out = p.project(
         ev_post_tool("Edit", "The file /a.py has been updated successfully.", success=True, file_changes=fc)
     )
-    assert out[0].summary == "更新 +2 -1 行"
+    assert out[0].summary == t(K.SUMMARY_EDIT_ADDED_REMOVED, added=2, removed=1)
 
 
 def test_summary_edit_create_is_all_additions():
@@ -348,11 +352,11 @@ def test_summary_edit_create_is_all_additions():
     out = p.project(
         ev_post_tool("Edit", "The file /n.py has been created successfully.", success=True, file_changes=fc)
     )
-    assert out[0].summary == "新建 3 行"
+    assert out[0].summary == t(K.SUMMARY_CREATED_LINES, count=3)
 
 
 def test_summary_bash_falls_back_to_first_line():
-    # Bash has no honest count → keep the raw first output line (claude-code parity).
+    # Bash has no honest count → keep the raw first output line.
     p = ViewProjector()
     out = p.project(ev_post_tool("Bash", "hello world\nsecond line", success=True))
     assert out[0].summary == "hello world"
@@ -369,15 +373,6 @@ def test_compaction_folds_to_conversation_compacted():
     assert ev.message_count == 4
 
 
-def test_post_tool_failure_detected_by_prefix_legacy_fallback():
-    """Legacy events (no ``success`` field) still fall back to prefix-sniffing."""
-    p = ViewProjector()
-    out = p.project(ev_post_tool("Bash", "Error: command not found"))
-    done = out[0]
-    assert done.ok is False
-    assert "Error: command not found" in done.summary
-
-
 def test_post_tool_failure_read_from_structured_success():
     """When the event carries ``success=False``, that fact drives ``ok`` — no sniff."""
     p = ViewProjector()
@@ -385,6 +380,42 @@ def test_post_tool_failure_read_from_structured_success():
     done = out[0]
     assert done.ok is False
     assert "boom" in done.summary
+
+
+def test_post_tool_failure_fills_structured_error_fields():
+    """A failed call carrying an ``ErrorReport`` bleeds its facts onto the completion.
+
+    The projector reads code/type/retryable/recovery off ``event.error`` as flat
+    scalars (never importing the exception type) so a host can render machine-
+    reasonable failure facts alongside the plain-text summary.
+    """
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        error="PermissionError",
+        code="tool.permission_denied",
+        retryable=False,
+        recovery="request access then retry",
+    )
+    p = ViewProjector()
+    out = p.project(ev_post_tool("Bash", "denied", success=False, error=report))
+    done = out[0]
+    assert done.ok is False
+    assert done.error_type == "PermissionError"
+    assert done.error_code == "tool.permission_denied"
+    assert done.retryable is False
+    assert done.recovery == "request access then retry"
+
+
+def test_post_tool_failure_without_error_leaves_fields_empty():
+    """A failure with no structured ``error`` degrades to empty fields (summary stays)."""
+    p = ViewProjector()
+    out = p.project(ev_post_tool("Bash", "boom", success=False))
+    done = out[0]
+    assert done.ok is False
+    assert "boom" in done.summary
+    assert (done.error_type, done.error_code, done.recovery) == ("", "", "")
+    assert done.retryable is False
 
 
 def test_post_tool_success_output_starting_with_error_not_misjudged():
@@ -498,37 +529,6 @@ def test_post_tool_media_ref_without_path_degrades():
     assert media[0].alt == "image"
 
 
-def test_post_tool_read_image_emits_media_block_legacy():
-    """Legacy fallback: with no ``media`` field the ``"Read image "`` prefix sniff
-    still resolves the path from ``tool_input`` and emits a block (behaviour
-    unchanged for events predating the structured-media change)."""
-    from mote.cli.contracts.view import MediaBlock
-
-    p = ViewProjector()
-    out = p.project(
-        ev_post_tool(
-            "Read",
-            "Read image /tmp/pic.png (png, 42 bytes). Shown below.",
-            tool_input={"file_path": "/tmp/pic.png"},
-        )
-    )
-    assert isinstance(out[0], ToolCallCompleted)
-    media = [e for e in out if isinstance(e, MediaBlock)]
-    assert len(media) == 1
-    assert media[0].media_kind == "image"
-    assert media[0].ref == "/tmp/pic.png"
-    assert media[0].tool_use_id == "tu-1"
-
-
-def test_post_tool_read_text_emits_no_media_block():
-    """A normal (non-image) ``Read`` yields only the ToolCallCompleted (legacy)."""
-    from mote.cli.contracts.view import MediaBlock
-
-    p = ViewProjector()
-    out = p.project(ev_post_tool("Read", "some file contents", tool_input={"file_path": "/tmp/a.txt"}))
-    assert not any(isinstance(e, MediaBlock) for e in out)
-
-
 def test_post_tool_file_diff_block_from_structured_change():
     """A structured ``FileChange`` folds into a ``FileDiffBlock`` (no text sniff).
 
@@ -596,12 +596,76 @@ def test_post_tool_no_file_changes_emits_no_diff_block():
     assert not any(isinstance(e, FileDiffBlock) for e in out)
 
 
+def test_git_diff_text_classifies_as_diff_without_file_diff_block():
+    """``git diff`` output is diff *text* → ``result_kind=diff``, no structured block.
+
+    The text-diff classifier (``_looks_like_diff``) and the structured
+    ``file_changes`` path are orthogonal: a tool whose *output* is a unified diff
+    carries no ``old``/``new`` fact, so it takes the text path and emits no
+    ``FileDiffBlock``.
+    """
+    from mote.cli.contracts.view import RESULT_KIND_DIFF, FileDiffBlock
+
+    p = ViewProjector()
+    body = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new"
+    out = p.project(ev_post_tool("Bash", body, success=True))
+    done = out[0]
+    assert done.result_kind == RESULT_KIND_DIFF
+    assert not any(isinstance(e, FileDiffBlock) for e in out)
+
+
+def test_structured_change_emits_block_without_text_diff_classification():
+    """Edit's structured change → ``FileDiffBlock``, and the completion stays plain.
+
+    The other side of the orthogonality: Edit ships ``old``/``new`` as a
+    ``FileDiffBlock`` while its ``tool_response`` ("updated successfully") is *not*
+    diff text, so the completion is classified ``plain`` — the text-diff path is
+    not triggered for a structured change.
+    """
+    from mote.cli.contracts.view import RESULT_KIND_PLAIN, FileDiffBlock
+    from mote.executor.tool_result import FileChange
+
+    p = ViewProjector()
+    out = p.project(
+        ev_post_tool(
+            "Edit",
+            "The file /tmp/a.py has been updated successfully.",
+            success=True,
+            file_changes=[FileChange(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")],
+        )
+    )
+    done = out[0]
+    assert done.result_kind == RESULT_KIND_PLAIN
+    diffs = [e for e in out if isinstance(e, FileDiffBlock)]
+    assert len(diffs) == 1
+
+
 def test_task_progress_fold():
     p = ViewProjector()
     out = p.project(ev_progress(stage="build", status="running", detail="step 1"))
     tp = out[0]
     assert isinstance(tp, TaskProgress)
     assert (tp.stage, tp.status, tp.detail) == ("build", "running", "step 1")
+
+
+def test_budget_soft_warning_folds_to_notice():
+    p = ViewProjector()
+    out = p.project(ev_budget(spend=8.0, limit=10.0, fraction=0.8, stopped=False))
+    assert len(out) == 1
+    n = out[0]
+    assert isinstance(n, Notice)
+    assert n.level == "warning"
+    assert "80%" in n.text and "warning" in n.text.lower()
+
+
+def test_budget_hard_stop_folds_to_notice():
+    p = ViewProjector()
+    out = p.project(ev_budget(spend=10.5, limit=10.0, fraction=1.05, stopped=True))
+    assert len(out) == 1
+    n = out[0]
+    assert isinstance(n, Notice)
+    assert n.level == "warning"
+    assert "Stopping" in n.text and "$10.50" in n.text
 
 
 def test_llm_error_folds_to_nothing():

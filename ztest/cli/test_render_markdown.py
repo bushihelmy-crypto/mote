@@ -20,11 +20,12 @@ import pytest
 
 pytest.importorskip("rich")
 
-from mote.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
-from mote.cli.consumers.render.palette import Palette
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
+
+from mote.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
+from mote.cli.consumers.render.palette import Palette
 
 # ``Palette.BRAND`` (#d77757) emitted as a truecolor foreground SGR.
 _BRAND_SGR = "38;2;215;119;87"
@@ -76,7 +77,7 @@ def test_block_quote_is_dim_not_richs_magenta():
 
 
 def test_block_quote_uses_thin_bar_and_italic_not_richs_half_block():
-    # claude-code marks a quote with the thin ``▎`` bar + italic text, not rich's
+    # The renderer marks a quote with the thin ``▎`` bar + italic text, not rich's
     # heavier ``▌`` half-block. The bar is present, the half-block is gone, and the
     # quoted body carries the italic SGR (``3``).
     out = _render("> a quoted line")

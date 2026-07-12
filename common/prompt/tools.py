@@ -210,15 +210,14 @@ lines so the edit can be located unambiguously.
 
 AGENT_DESCRIPTION = "Spawn a typed child agent for bounded subtasks."
 
-END_DESCRIPTION = "End the current task and produce a final summary."
+END_DESCRIPTION = "End the current task. Your last message stands as the final reply."
 
-ASK_HUMAN_DESCRIPTION = "Use this when you fail the current task or if you are unsure of the situation encountered."
+ASK_USER_DESCRIPTION = "Use this when you fail the current task or if you are unsure of the situation encountered."
 
-REPLY_TO_HUMAN_DESCRIPTION = "Reply to human user with the content provided."
+REPLY_TO_USER_DESCRIPTION = "Reply to the user with the content provided."
 
-# AskUserQuestion long-form description (ported verbatim from Claude Code's
-# AskUserQuestionTool/prompt.ts). The parameter schema is defined as pydantic
-# models in mote.schema (AskUserQuestionInput).
+# AskUserQuestion long-form description. The parameter schema is defined as
+# pydantic models in mote.schema (AskUserQuestionInput).
 ASK_USER_QUESTION_PROMPT = """Use this tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions

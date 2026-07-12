@@ -1,20 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Time    : 2024/1/4 16:33
-@Author  : alexanderwu
-@File    : llm_config.py
-"""
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from urllib.parse import urlparse
+
+from pydantic import field_validator, model_validator
 
 from mote.common.config.config.oauth_config import OAuthProviderConfig
 from mote.common.const import LLM_API_TIMEOUT
 from mote.common.exception import MissingAPIKeyError
 from mote.common.utils.yaml_model import YamlModel
-from pydantic import field_validator, model_validator
 
 
 class LLMType(Enum):
@@ -55,6 +52,12 @@ class LLMConfig(YamlModel):
     # and resolves api_key from the brand's env vars — all only when the user
     # left those fields empty (explicit values always win). Configs without
     # ``provider`` behave exactly as before.
+    #
+    # The sentinel ``"auto"`` asks mote to infer the brand at load time from the
+    # strongest available signal — an explicit ``base_url`` host, then a ``model``
+    # name hint, then a brand API key present in the environment (see
+    # :func:`detect_provider`). When nothing is recognisable it falls back to the
+    # plain default path (as if ``provider`` were unset).
     provider: Optional[str] = None
 
     # A single key, or a list of keys to rotate through on auth/billing failures
@@ -62,7 +65,6 @@ class LLMConfig(YamlModel):
     api_key: Union[str, List[str]] = "sk-"
     api_type: LLMType = LLMType.OPENAI
     base_url: str = "https://api.openai.com/v1"
-    api_version: Optional[str] = None
 
     # Opt-in OAuth: when set, the bearer token is obtained/refreshed from an
     # OAuth token endpoint instead of using the static ``api_key``. Leaving this
@@ -72,20 +74,11 @@ class LLMConfig(YamlModel):
     model: Optional[str] = None  # also stands for DEPLOYMENT_NAME
     pricing_plan: Optional[str] = None  # Cost Settlement Plan Parameters.
 
-    # For Chat Completion
+    # For Chat Completion. Only the two knobs the provider clients actually send
+    # on the wire (``max_tokens`` + ``temperature``); the remaining OpenAI
+    # sampling params were never plumbed through ``_cons_kwargs`` and are omitted.
     max_token: int = 4096
     temperature: float = 0.0
-    top_p: float = 1.0
-    top_k: int = 0
-    repetition_penalty: float = 1.0
-    stop: Optional[str] = None
-    presence_penalty: float = 0.0
-    frequency_penalty: float = 0.0
-    best_of: Optional[int] = None
-    n: Optional[int] = None
-    stream: bool = False
-    logprobs: Optional[bool] = None  # https://cookbook.openai.com/examples/using_logprobs
-    top_logprobs: Optional[int] = None
     timeout: int = 600
 
     # For Network
@@ -112,6 +105,14 @@ class LLMConfig(YamlModel):
         """
         if not isinstance(values, dict) or not values.get("provider"):
             return values
+        if str(values["provider"]).strip().lower() == "auto":
+            detected = detect_provider(values)
+            if not detected:
+                # Nothing recognisable — behave as if ``provider`` were unset so
+                # the plain default path (and any explicit fields) stay intact.
+                values["provider"] = None
+                return values
+            values["provider"] = detected
         values = apply_provider_preset(values)
         if not cls._api_key_is_valid(values.get("api_key")):
             env_key = get_env_api_key(values["provider"])
@@ -354,6 +355,58 @@ def apply_provider_preset(values: dict) -> dict:
         if isinstance(oauth, dict) and not oauth.get("provider"):
             oauth["provider"] = preset.oauth_provider
     return values
+
+
+# Model-name substring -> brand, used to infer ``provider: auto`` when neither
+# an explicit base_url host nor an environment key gives a signal. Only
+# unambiguous hints for brands that have a catalog preset are listed.
+_MODEL_BRAND_HINTS: List[Tuple[str, str]] = [
+    ("claude", "anthropic"),
+    ("deepseek", "deepseek"),
+    ("moonshot", "moonshot"),
+    ("kimi", "moonshot"),
+    ("mistral", "mistral"),
+    ("grok", "xai"),
+    ("gpt", "openai"),
+]
+
+
+def _url_host(url: str) -> str:
+    """Return the lowercased hostname of ``url`` (empty when unparseable)."""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def detect_provider(values: Mapping[str, Any], environ: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """Infer a concrete brand for ``provider: auto`` from base_url/model/env.
+
+    Priority (most explicit first): an explicit ``base_url`` whose host matches a
+    catalog preset (exact or subdomain), then a ``model`` name hint, then the
+    first brand whose API-key env var is set. Returns a brand name in
+    :data:`PROVIDER_CATALOG`, or ``None`` when nothing is recognisable (the caller
+    then keeps the plain default path).
+    """
+    environ = os.environ if environ is None else environ
+
+    host = _url_host(values.get("base_url") or "")
+    if host:
+        for name, preset in PROVIDER_CATALOG.items():
+            preset_host = _url_host(preset.base_url)
+            if preset_host and (host == preset_host or host.endswith("." + preset_host)):
+                return name
+
+    model = (values.get("model") or "").lower()
+    for hint, name in _MODEL_BRAND_HINTS:
+        if hint in model:
+            return name
+
+    for name, preset in PROVIDER_CATALOG.items():
+        if any(environ.get(k) for k in preset.env_keys):
+            return name
+
+    return None
 
 
 def find_env_keys(provider: str) -> Optional[List[str]]:

@@ -1,7 +1,6 @@
 """Context compaction — the unified reduction pipeline.
 
-Three orthogonal concerns, cleanly separated (unlike the old flat
-``microcompact();autocompact()`` chain):
+Three orthogonal concerns, cleanly separated:
 
 - **L0 ``transcript``** — what the conversation *is*: a segmentation that makes
   the tool_call↔tool_result pairing atomic, so a cut can never break it.

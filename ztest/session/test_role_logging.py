@@ -11,6 +11,7 @@ exercised elsewhere; here we drive the seams directly to stay offline.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.schema import ResourceMessage, UserMessage
 from mote.roles import Role
 

@@ -13,7 +13,7 @@ A :class:`ReductionRequest` unifies both behind one description of *intent*:
   head-drop is allowed as a last resort).
 - ``reason`` — why the request was raised (for tracing / future policy).
 
-The engine + pipeline consume this request; the caller no longer picks a
+The engine + pipeline consume this request; the caller does not pick a
 mechanism, it only states the goal.
 """
 

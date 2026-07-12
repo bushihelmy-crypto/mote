@@ -12,6 +12,7 @@ command (mirroring the native channel's ``json_repair`` fallback).
 from __future__ import annotations
 
 import pytest
+
 from mote.common.utils.role_utils import loads_xml, parse_commands2
 
 PATCH = "*** Begin Patch\n*** Add File: a.py\n+x\n*** End Patch"

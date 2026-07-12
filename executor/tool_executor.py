@@ -3,8 +3,8 @@
 """
 ToolExecutor — unified command dispatch & execution engine.
 
-Extracted from Role to separate "what to execute" (Role._think)
-from "how to execute" (ToolExecutor.run_command).
+Separates "what to execute" (Role._think) from "how to execute"
+(ToolExecutor.run_command).
 
 Design:
 - All tools are BaseTool instances, resolved from the tool registry.
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from typing import Any, Callable, Mapping, cast
+from typing import TYPE_CHECKING, Any, Callable, Mapping, cast
 
 from mote.common.events import EventBus, FileMutatedEvent, PostToolUseEvent, PreToolUseEvent, ToolsChangedEvent, span
 from mote.common.events.outcomes import ToolCallOutcome
@@ -33,36 +33,26 @@ from mote.common.exception import (
     render_error_block,
 )
 from mote.common.logs import log_class, logger
-from mote.common.schema import (
-    DEFAULT_MAX_RESULT_SIZE_CHARS,
-    PERSISTED_OUTPUT_OPEN_TAG,
-    PermissionConfig,
-    PermissionFacts,
-    ToolResultLimitConfig,
-)
+from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, PermissionFacts, ToolResultLimitConfig
 from mote.common.text import plural
 from mote.executor import tool_result_limit
 from mote.executor.base_executor import BaseToolExecutor
-from mote.executor.compress import compress_output
-from mote.executor.mcp.universal import UniversalMCP
-from mote.executor.mcp_adapter import MCPToolAdapter
+from mote.executor.compress.tool_output import compress_tool_result
+from mote.executor.mcp_lifecycle import McpLifecycle
 from mote.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
 from mote.executor.permission.sandbox import SandboxGuard
 from mote.executor.tasks.bggraph.marker import is_pipeline_tool
-from mote.executor.tasks.types import BgTaskMode, BgTaskResult
+from mote.executor.tasks.types import BgTaskResult
+from mote.executor.tool_catalog import ToolCatalog
 from mote.executor.tool_registry import registry as tool_registry
 from mote.executor.tool_result import ToolResult
-from mote.executor.tool_spec_adapter import to_native_tool_specs
+
+if TYPE_CHECKING:
+    from mote.executor.mcp.universal import UniversalMCP
 
 # Signature params that are framework plumbing, never LLM-facing arguments.
 # (``*args``/``**kwargs`` are detected by parameter *kind*, not by name.)
 _NON_ARG_PARAMS = frozenset({"self", "cls"})
-
-# Complete model-facing message sentences, hoisted to module-top templates so the
-# wording lives in one place (fill via ``.format(...)`` at the return site).
-_MSG_BG_SUBMITTED = (
-    "Background task '{name}' submitted{task_ref}. " "Running asynchronously — you will be notified when it completes."
-)
 
 
 def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any]) -> None:
@@ -77,7 +67,7 @@ def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any])
     whose parameters are not statically known) — this is the natural gate that
     limits validation to tools with a statically-declared signature.
 
-    Type checking is intentionally NOT performed: the legacy XML command
+    Type checking is intentionally NOT performed: the XML command
     protocol delivers every argument as a string (e.g. ``timeout="300"``), so
     enforcing declared types would reject valid XML-channel calls; the native
     tool-use channel's API already validates inputs against the JSON schema.
@@ -172,10 +162,13 @@ class ToolExecutor(BaseToolExecutor):
         bus: EventBus | None = None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
         get_bg_pool: Callable[[], Any] | None = None,
+        pipelines_enabled: bool = True,
     ) -> None:
         self._session_id = session_id
-        self._mcp: UniversalMCP | None = None
-        self._tools: dict[str, Any] = {}  # name -> BaseTool instance (static + dynamic)
+        # Two collaborators carry the split state: the catalog owns the bound-tool
+        # map + schema views, the lifecycle owns the MCP slot.
+        self._catalog = ToolCatalog()
+        self._mcp_lifecycle = McpLifecycle()
         self._get_bg_pool = get_bg_pool
         # The event spine (``common.events.EventBus``) is always present: every
         # tool call emits PreToolUse / PostToolUse / FileMutated around it, and
@@ -195,21 +188,21 @@ class ToolExecutor(BaseToolExecutor):
         # here via ``recovery_strategies`` with no further wiring.
         self._recovery_runner = RecoveryRunner(recovery_strategies or {})
         # Tool-result size limiting knobs (per-tool cap + disk persistence). A
-        # default config reproduces CC's out-of-the-box behavior.
+        # default config reproduces the out-of-the-box behavior.
         self._limit_config = limit_config or ToolResultLimitConfig()
 
         # Permission engine. Built ONLY when a Role opts in with a
-        # PermissionConfig — otherwise None and run_command behaves exactly as
-        # before (no approval layer), preserving backward compatibility.
+        # PermissionConfig — otherwise None and run_command runs with no
+        # approval layer.
         self._permission_engine: PermissionEngine | None = None
         if permission_config is not None:
-            ask_human = None
+            ask_user = None
             get_cwd = None
             if role is not None:
                 # The interactive approval channel + cwd accessor are published
                 # via the Role's capability allowlist (never via getattr).
                 caps = role.tool_capabilities()
-                ask_human = caps.get("request_approval")
+                ask_user = caps.get("request_approval")
                 get_cwd = caps.get("get_cwd")
             # The sandbox boundary (axis B) is orthogonal to the approval mode.
             # Built only when a SandboxConfig is supplied — otherwise no
@@ -220,7 +213,7 @@ class ToolExecutor(BaseToolExecutor):
             self._permission_engine = PermissionEngine(
                 mode=permission_config.mode,
                 store=RuleStore.from_config(permission_config),
-                ask_human=ask_human,
+                ask_user=ask_user,
                 sandbox=sandbox,
             )
             # Put the gate ON the control plane, after the hook subscriber, so it
@@ -236,17 +229,25 @@ class ToolExecutor(BaseToolExecutor):
         # Pre-bind declared static tools
         if tools:
             bound: dict[type, Any] = {}  # tool_cls -> instance (dedup)
+            skipped: set[type] = set()  # pipeline tools gated off (dedup)
             for name in tools:
                 tool_cls = tool_registry.get(name)
-                if tool_cls is None:
+                if tool_cls is None or tool_cls in skipped:
                     continue
                 if tool_cls not in bound:
                     instance = tool_cls()
                     instance.bind(session_id, role=role)
+                    # Pipeline tools (compiled BgGraph backed) load only when the
+                    # bggraph switch is on. Off → never bound, so neither the
+                    # native tool set (askllm) nor the XML catalog (CLI) ever sees
+                    # them. Detected post-bind since the compiled-executor stamp
+                    # lives on the instance, not the class.
+                    if not pipelines_enabled and is_pipeline_tool(instance):
+                        skipped.add(tool_cls)
+                        continue
                     bound[tool_cls] = instance
                 # Register under all names (primary + aliases)
-                for n in tool_registry.all_names(tool_cls):
-                    self._tools[n] = bound[tool_cls]
+                self._catalog.register(bound[tool_cls], tool_registry.all_names(tool_cls))
 
     def register_tool_instance(self, tool: Any, names: list[str]) -> None:
         """Register an already-constructed BaseTool instance under given names.
@@ -259,8 +260,7 @@ class ToolExecutor(BaseToolExecutor):
             tool: A BaseTool instance.
             names: All names (primary + aliases) that route to this instance.
         """
-        for name in names:
-            self._tools[name] = tool
+        self._catalog.register(tool, names)
 
     async def deregister_tool(self, name: str) -> bool:
         """Remove a bound tool by any of its names — aliases and resources together.
@@ -277,37 +277,37 @@ class ToolExecutor(BaseToolExecutor):
 
         Returns True when a tool was removed, False when ``name`` is unbound (no-op).
         """
-        tool = self._tools.get(name)
+        tool = self._catalog.get(name)
         if tool is None:
             return False
         # Every alias routing to the SAME instance goes together (by identity, so
         # aliases pointing at other tools are untouched).
-        removed = [n for n, t in self._tools.items() if t is tool]
-        for n in removed:
-            del self._tools[n]
+        removed = self._catalog.names_for(tool)
+        self._catalog.remove(removed)
         # Reclaim per-session resources, mirroring cleanup() for this one instance.
-        try:
-            tool.cleanup_session(self._session_id)
-        except Exception as exc:  # noqa: BLE001 — teardown must not raise
-            logger.debug(f"ToolExecutor: cleanup_session for {name} failed: {exc}")
+        self._cleanup_tool_session(tool, name)
         # Announce so views refresh. Pure observation (no control fold) — the live
         # _tools map is already the source of truth; this only says it changed and
         # carries the post-change facts consumers need (which names went away, the
         # fresh reconstructable set) so no consumer needs a back-ref to the executor.
-        try:
-            await self._bus.observe(
-                ToolsChangedEvent(
-                    removed=removed,
-                    reconstructable=sorted(self.reconstructable_tool_names()),
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 — a notice never breaks the removal
-            logger.debug(f"ToolExecutor: ToolsChangedEvent for {name} not delivered: {exc}")
+        await self._safe_observe(
+            ToolsChangedEvent(removed=removed, reconstructable=sorted(self.reconstructable_tool_names())),
+            ctx=f"ToolsChangedEvent for {name} not delivered",
+        )
         return True
+
+    @property
+    def _tools(self) -> dict[str, Any]:
+        """The live name→instance map, delegated to the catalog.
+
+        Kept as a read accessor so external introspection (and tests) can do
+        ``name in executor._tools`` without reaching into the collaborator.
+        """
+        return self._catalog.tools
 
     def _get_tool(self, name: str):
         """Resolve a tool by name. Returns the BaseTool instance, or None."""
-        return self._tools.get(name)
+        return self._catalog.get(name)
 
     async def run_command(
         self,
@@ -338,7 +338,7 @@ class ToolExecutor(BaseToolExecutor):
 
         tool = self._get_tool(name)
         if tool is None:
-            available = list(self._tools.keys())
+            available = self._catalog.names()
             return await self._reject(
                 name,
                 args,
@@ -415,29 +415,13 @@ class ToolExecutor(BaseToolExecutor):
                 # PostToolUse hook may still rewrite/annotate/block it.
                 return await self._settle(name, args, _failed_result(e), result_id)
 
-            # BgTaskResult: dispatch based on explicit mode.
+            # BgTaskResult owns its own settlement: it submits the poll (when a
+            # pool exists) and shapes the mode-specific output. The executor just
+            # supplies the pool + fallback name and settles the returned result.
             if isinstance(raw, BgTaskResult):
-                # Submit poll to background pool if present
-                task_id = None
-                if raw.poll_factory is not None and self._get_bg_pool is not None:
-                    pool = self._get_bg_pool()
-                    if pool is not None:
-                        task_id = pool.submit(
-                            raw.poll_factory,
-                            command_name=raw.command_name or name,
-                            graph_meta=raw.graph_meta,
-                            progress=True,
-                        )
-
-                if raw.mode == BgTaskMode.FOREGROUND:
-                    output = str(raw.result) if raw.result is not None else ""
-                elif raw.mode == BgTaskMode.BACKGROUND:
-                    task_ref = f" (task_id: {task_id})" if task_id is not None else ""
-                    output = _MSG_BG_SUBMITTED.format(name=raw.command_name or name, task_ref=task_ref)
-                else:
-                    # HYBRID — immediate result + bg continues
-                    output = str(raw.result)
-                return await self._settle(name, args, ToolResult(output=output, success=True, data=raw), result_id)
+                pool = self._get_bg_pool() if self._get_bg_pool is not None else None
+                result = raw.to_tool_result(pool, name)
+                return await self._settle(name, args, result, result_id)
 
             # Normalize the raw return into a ToolResult. A returned ToolResult is
             # used as-is; a plain value is always treated as success — failure is
@@ -487,10 +471,24 @@ class ToolExecutor(BaseToolExecutor):
             tool_response=result.output,
             success=result.success,
             error=result.error,
-            media=result.media_artifacts(),
+            media=result.media,
             file_changes=result.file_changes,
             tool_use_id=result_id,
         )
+
+    async def _safe_observe(self, event, *, ctx: str) -> None:
+        """Fan a fire-and-forget notice to the bus, swallowing any delivery error.
+
+        The trailing notices (tool-catalog churn, file-mutation, not-ran
+        lifecycle-end) are pure observation — they only announce a change the
+        live ``_tools`` map / result already reflects. A subscriber that fails
+        must never mask or break the operation the notice trails, so any error
+        is logged at debug and dropped. ``ctx`` names the site for the log line.
+        """
+        try:
+            await self._bus.observe(event)
+        except Exception as exc:  # noqa: BLE001 — a notice never breaks the caller
+            logger.debug(f"ToolExecutor: {ctx}: {exc}")
 
     async def _reject(self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None) -> ToolResult:
         """Close the lifecycle for a call whose tool **never ran**.
@@ -498,14 +496,14 @@ class ToolExecutor(BaseToolExecutor):
         Used by the pre-execution exits (unknown tool / pre-flight hook or
         permission deny). The PostToolUse event is fanned to **observers only**
         (``observe``): the front-end still gets its one lifecycle-end event (the
-        row closes) but no hook control fires (CC-aligned: PostToolUse does not
+        row closes) but no hook control fires (PostToolUse does not
         fire when PreToolUse blocked the call). The ``terminate`` marker on the
         failed result is preserved. Best-effort — a notice never masks the failure.
         """
-        try:
-            await self._bus.observe(self._post_event(name, args, result, result_id))
-        except Exception as exc:  # noqa: BLE001 — never mask the failure
-            logger.debug(f"ToolExecutor: not-ran notice for {name} not delivered: {exc}")
+        await self._safe_observe(
+            self._post_event(name, args, result, result_id),
+            ctx=f"not-ran notice for {name} not delivered",
+        )
         return result
 
     async def _settle(self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None) -> ToolResult:
@@ -513,8 +511,8 @@ class ToolExecutor(BaseToolExecutor):
         or BgTask).
 
         The PostToolUse event goes on the **control plane** (``emit``), so a
-        PostToolUse hook may rewrite/annotate/block the result (CC-aligned:
-        PostToolUse hooks fire on tool errors too). Then the mutated-filesystem
+        PostToolUse hook may rewrite/annotate/block the result (PostToolUse
+        hooks fire on tool errors too). Then the mutated-filesystem
         notice, semantic compression and the size cap run over the settled result.
         """
         outcome = await self._bus.emit(self._post_event(name, args, result, result_id))
@@ -529,119 +527,35 @@ class ToolExecutor(BaseToolExecutor):
         if result.success and tool is not None and getattr(tool, "mutates_filesystem", False):
             path = tool.permission_target(args)
             if path:
-                try:
-                    await self._bus.emit(FileMutatedEvent(path=path, tool=name))
-                except Exception as exc:  # noqa: BLE001 — never break the tool call
-                    logger.debug(f"ToolExecutor: FileMutatedEvent emit for {path} failed: {exc}")
+                # A fan-out event (no control subscriber maps it) — observe, not
+                # emit, so it goes straight to observers as the pure notice it is.
+                await self._safe_observe(
+                    FileMutatedEvent(path=path, tool=name),
+                    ctx=f"FileMutatedEvent for {path} not delivered",
+                )
 
         # Semantic compression runs BEFORE the size cap: it structurally shrinks
         # known verbose output (git/pytest/ruff) while stashing the full original
         # on disk for retrieval. The cap then bounds whatever remains. Both are
         # fail-safe and never touch ``result.success``.
-        result = self._compress_result(result, name, args)
+        result = compress_tool_result(result, name, args, session_id=self._session_id, config=self._limit_config)
         return self._limit_result(result, name, result_id)
-
-    def _compress_result(self, result: ToolResult, name: str, args: dict[str, Any]) -> ToolResult:
-        """Structurally compress a shell tool's output when it is understood.
-
-        Applied only for the shell tools (Bash/Terminal, plus a Jupyter
-        ``!shell`` magic), where the LLM-issued command is known, and only when
-        :func:`compress_output` recognises the command family and produces
-        something smaller. On success the *full*
-        original output is persisted to disk (a ``-raw-`` id namespace, distinct
-        from the size-cap persistence) and a marker line naming that file is
-        prepended, so the model can ``Read`` the exact original on demand.
-
-        Fail-safe: media results, empty/already-persisted output, and the
-        config-off case are skipped; ``result.success`` is never modified so a
-        failed command's exit signal is preserved.
-        """
-        cfg = self._limit_config
-        if not cfg.enable_output_compression or not result.output:
-            return result
-        # Media goes to the model verbatim; never rewrite it.
-        if result.images or result.pdfs:
-            return result
-        # Already wrapped by the size-cap layer on a prior turn — leave it.
-        if result.output.startswith(PERSISTED_OUTPUT_OPEN_TAG):
-            return result
-
-        command = self._command_for_compression(name, args)
-        if not command:
-            return result
-
-        outcome = compress_output(
-            command,
-            result.output,
-            min_chars=cfg.compression_min_output_chars,
-            max_input_chars=cfg.compression_max_input_chars,
-        )
-        if not outcome.applied:
-            return result
-
-        # Persist the full original first, so the marker can name its path. The
-        # ``raw-`` id namespace keeps it distinct from the size-cap's own file.
-        raw_id = f"raw-{uuid.uuid4().hex}"
-        full_path = tool_result_limit._persist(result.output, raw_id, self._session_id, None)
-        location = f"; full output: {full_path}" if full_path else ""
-        marker = f"[compressed: {outcome.label}; saved {outcome.saved_chars} chars{location}]"
-        logger.debug(
-            f"ToolExecutor: compressed {name} output via {outcome.label} "
-            f"({outcome.original_chars} -> {outcome.compressed_chars} chars)"
-        )
-        result.output = f"{marker}\n{outcome.text}"
-        return result
-
-    def _command_for_compression(self, name: str, args: dict[str, Any]) -> str | None:
-        """Best-effort command line for routing a shell tool's output.
-
-        Bash carries the exact command in ``args["command"]``. Terminal drives a
-        persistent PTY; its ``args["input"]`` may be interactive keystrokes, so
-        only the first line is used as a routing hint (``command_prefix`` is
-        tolerant, and an unrecognised prefix simply skips compression).
-
-        Jupyter runs *Python code*, not shell commands, so it is only routed for
-        an IPython ``!shell`` magic on the first line (``!pytest`` / ``!git
-        diff``): the leading ``!`` is stripped and the rest treated as a command.
-        A plain-Python first line yields ``None`` — never sniffed as a command,
-        so ordinary ``print()`` output is never mistaken for pytest/lint output.
-
-        Any other tool returns ``None`` (not compressed).
-        """
-        if name == "Bash":
-            command = args.get("command")
-            return command if isinstance(command, str) else None
-        if name == "Terminal":
-            value = args.get("input")
-            if isinstance(value, str) and value.strip():
-                return value.splitlines()[0]
-            return None
-        if name in ("Jupyter", "Python"):
-            code = args.get("code")
-            if not isinstance(code, str):
-                return None
-            first = code.splitlines()[0].strip() if code.splitlines() else ""
-            # Only an IPython ``!shell`` magic is a real command; strip the ``!``.
-            if first.startswith("!"):
-                return first[1:].strip() or None
-            return None
-        return None
 
     def _limit_result(self, result: ToolResult, name: str, result_id: str | None) -> ToolResult:
         """Cap a tool result's text per the tool's declared size limit.
 
-        Mirrors CC's per-tool persistence: when the text output exceeds the
-        tool's effective threshold, the full output is written to disk and the
-        inline content is replaced by a ``<persisted-output>`` preview. Skipped
-        when disabled, when the result carries media (images/PDFs go to the
-        model as-is, like CC), or when the output is short.
+        Per-tool persistence: when the text output exceeds the tool's effective
+        threshold, the full output is written to disk and the inline content is
+        replaced by a ``<persisted-output>`` preview. Skipped when disabled, when
+        the result carries media (images/PDFs go to the model as-is), or when the
+        output is short.
         """
         cfg = self._limit_config
         if not cfg.enable_tool_result_limit or not result.output:
             return result
-        # Media results are sent to the model verbatim (CC skips persistence for
+        # Media results are sent to the model verbatim (persistence is skipped for
         # image/PDF tool_result blocks).
-        if result.images or result.pdfs:
+        if result.media:
             return result
 
         tool = self._get_tool(name)
@@ -657,83 +571,27 @@ class ToolExecutor(BaseToolExecutor):
         return result
 
     # ------------------------------------------------------------------
-    # Schema introspection
+    # Schema introspection — thin delegations to the tool catalog
     # ------------------------------------------------------------------
-
-    def _is_mcp_tool(self, tool) -> bool:
-        """Return True if the tool is a runtime-discovered MCP adapter."""
-        return isinstance(tool, MCPToolAdapter)
-
-    def _is_pipeline_tool(self, tool) -> bool:
-        """Return True if the tool is backed by a compiled BgGraph pipeline."""
-        return is_pipeline_tool(tool)
-
-    def _category(self, tool) -> str:
-        """Classify a tool into one of three categories.
-
-        MCP adapters and pipeline tools are runtime/graph-backed and are listed
-        in their own system-prompt sections ("# MCP Tools" / "# Pipeline
-        Tools"); everything else is a built-in command. MCP is checked first
-        since an MCP adapter never wires a compiled graph.
-        """
-        if self._is_mcp_tool(tool):
-            return "mcp"
-        if self._is_pipeline_tool(tool):
-            return "pipeline"
-        return "builtin"
-
-    def _schemas_for(self, category: str | None) -> dict[str, dict]:
-        """Collect deduplicated tool schemas.
-
-        Filters to ``category`` when given; ``None`` returns every category.
-        """
-        schemas: dict[str, dict] = {}
-        seen_ids: set[int] = set()
-        for tool in self._tools.values():
-            if id(tool) in seen_ids:
-                continue
-            seen_ids.add(id(tool))
-            if category is not None and self._category(tool) != category:
-                continue
-            schema = tool.tool_schema()
-            schemas[schema["name"]] = schema
-        return schemas
 
     def get_tool_schemas(self) -> dict[str, dict]:
         """Return schemas for built-in tools only (excludes MCP and pipeline).
 
-        Returns:
-            dict mapping primary tool name -> schema dict.
-            Deduplicates aliases so each tool appears once.
+        dict mapping primary tool name -> schema dict; aliases deduped.
         """
-        return self._schemas_for("builtin")
+        return self._catalog.schemas_for("builtin")
 
     def get_mcp_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for MCP tools only.
-
-        Returns:
-            dict mapping namespaced tool name (server:tool) -> schema dict.
-            Deduplicates aliases so each tool appears once.
-        """
-        return self._schemas_for("mcp")
+        """Return schemas for MCP tools only (namespaced ``server:tool`` names)."""
+        return self._catalog.schemas_for("mcp")
 
     def get_pipeline_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for pipeline tools only (compiled-graph backed).
-
-        Returns:
-            dict mapping primary tool name -> schema dict.
-            Deduplicates aliases so each tool appears once.
-        """
-        return self._schemas_for("pipeline")
+        """Return schemas for pipeline tools only (compiled-graph backed)."""
+        return self._catalog.schemas_for("pipeline")
 
     def get_all_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for all declared tools (built-in + MCP + pipeline).
-
-        Returns:
-            dict mapping primary tool name -> schema dict.
-            Deduplicates aliases so each tool appears once.
-        """
-        return self._schemas_for(None)
+        """Return schemas for all declared tools (built-in + MCP + pipeline)."""
+        return self._catalog.schemas_for(None)
 
     def reconstructable_tool_names(self) -> frozenset[str]:
         """Names (primary + aliases) of bound tools whose results are re-derivable.
@@ -741,129 +599,105 @@ class ToolExecutor(BaseToolExecutor):
         A tool self-declares this via the ``reconstructable`` ClassVar (see
         :class:`~mote.executor.base_tool.BaseTool`). The compaction pipeline
         folds/clears only these tools' result bodies, since the information is
-        recoverable (re-read the file, re-run the query). Every name a tool routes
-        under is included so the Transcript matches whichever alias the model used.
+        recoverable (re-read the file, re-run the query).
         """
-        names: set[str] = set()
-        for name, tool in self._tools.items():
-            if getattr(tool, "reconstructable", False):
-                names.add(name)
-        return frozenset(names)
+        return self._catalog.reconstructable_names()
 
     def get_native_tool_specs(self, provider: str = "anthropic") -> list[dict]:
         """Return native tool-use specs for all declared tools (static + MCP).
 
-        Each tool contributes a {name, description, input_schema} record (via
-        BaseTool.native_schema / MCPToolAdapter.native_schema), wrapped into the
-        provider envelope. Deduplicates aliases like get_tool_schemas().
-
-        This is the native-protocol counterpart to get_tool_schemas() and is
-        NOT used by the XML path — it exists for the native tool-use channel.
+        Each tool contributes a {name, description, input_schema} record wrapped
+        into the provider envelope. The native-protocol counterpart to
+        get_tool_schemas(); not used by the XML path.
         """
-
-        native: dict[str, dict] = {}
-        seen_ids: set[int] = set()
-        for tool in self._tools.values():
-            if id(tool) in seen_ids:
-                continue
-            seen_ids.add(id(tool))
-            schema = tool.native_schema()
-            native[schema["name"]] = schema
-        return to_native_tool_specs(native, provider=provider)
+        return self._catalog.native_specs(provider)
 
     # ------------------------------------------------------------------
     # MCP lifecycle
     # ------------------------------------------------------------------
 
-    async def init_mcp(self, mcps: list[str] | None = None) -> None:
+    async def init_mcp(self, mcps: list[str] | None = None, *, enabled: bool = False) -> None:
         """Initialize MCP servers and register discovered tools as adapters.
 
-        Args:
-            mcps: Server names to initialize (from Role.mcps).
-                  If empty/None, no-op.
-        """
-        if not mcps:
-            return
-        if self._mcp is not None:
-            return  # already initialized
-        self._mcp = UniversalMCP()
-        await self._mcp.initialize(server_names=mcps)
-        self._mcp.register_tools(self)
+        Mirrors the Skills master switch: the subsystem engages purely on the
+        global ``config.mcp.enabled`` switch — a role that lists servers does not
+        implicitly turn it on. With the switch on and no per-role list, every
+        server in ``mcp_config.json`` is loaded; a role's ``mcps`` list narrows
+        to those names.
 
-    async def reload_mcp(self, mcps: list[str] | None = None) -> bool:
+        Args:
+            mcps: Server names to initialize (from Role.mcps). None/empty means
+                  "all servers" when ``enabled``.
+            enabled: The global MCP master switch (the sole gate).
+        """
+        if not enabled:
+            return
+        if self._mcp_lifecycle.active:
+            return  # already initialized
+        await self._mcp_lifecycle.bind(mcps or None, self)
+
+    async def reload_mcp(self, mcps: list[str] | None = None, *, enabled: bool = False) -> bool:
         """Re-initialize MCP from the current ``mcp_config.json`` (hot-reload).
 
         The reentrant sibling of :meth:`init_mcp`, driven by the file watcher
         when ``mcp_config.json`` changes (mirrors skill hot-reload). Tears the
-        old MCP adapters out of the ``_tools`` map by identity, drops the old
-        clients, then re-runs discovery against the freshly read config and
-        re-registers whatever is now defined. A single ``ToolsChangedEvent``
-        carries the removed names so the volatile views refresh: the per-turn
-        tool catalog drops them from its incremental frontier (so a server that
-        is still present is re-announced next turn with any new schema), and the
-        native channel simply rebuilds ``tool_specs`` on the next request.
+        old MCP adapters out of the catalog by identity, drops the old clients,
+        then re-runs discovery against the freshly read config and re-registers
+        whatever is now defined. A single ``ToolsChangedEvent`` carries the
+        removed names so the volatile views refresh: the per-turn tool catalog
+        drops them from its incremental frontier (so a server that is still
+        present is re-announced next turn with any new schema), and the native
+        channel simply rebuilds ``tool_specs`` on the next request.
 
         Best-effort and non-throwing. Returns True when a reload ran, False when
-        it was a no-op (no ``mcps`` declared for this role).
+        it was a no-op (subsystem off: the ``config.mcp.enabled`` switch is off).
         """
-        if not mcps:
+        if not enabled:
             return False
 
         # Snapshot the currently-bound MCP adapter names before teardown, so we
-        # can announce exactly what went away (identity-deduped like cleanup()).
-        removed: list[str] = []
+        # can announce exactly what went away, reclaiming each unique instance's
+        # session once (identity-deduped like cleanup()).
+        removed = self._catalog.mcp_names()
         seen_ids: set[int] = set()
-        for name, tool in self._tools.items():
-            if self._category(tool) != "mcp":
-                continue
-            removed.append(name)
+        for name in removed:
+            tool = self._catalog.get(name)
             if id(tool) not in seen_ids:
                 seen_ids.add(id(tool))
-                try:
-                    tool.cleanup_session(self._session_id)
-                except Exception as exc:  # noqa: BLE001 — teardown must not raise
-                    logger.debug(f"ToolExecutor: cleanup_session for {name} failed: {exc}")
-        for name in removed:
-            del self._tools[name]
+                self._cleanup_tool_session(tool, name)
+        self._catalog.remove(removed)
 
         # Drop the old MCP manager (closes its clients) and rebuild from disk.
-        if self._mcp is not None:
-            await self._mcp.cleanup_clients()
-        self._mcp = UniversalMCP()
-        await self._mcp.initialize(server_names=mcps)
-        self._mcp.register_tools(self)
+        await self._mcp_lifecycle.teardown()
+        await self._mcp_lifecycle.bind(mcps or None, self)
 
         # Announce the churn so volatile views refresh (same contract as
         # deregister_tool). Report the removed names — the catalog re-announces
         # any that re-registered; native rebuilds tool_specs regardless.
-        try:
-            await self._bus.observe(
-                ToolsChangedEvent(
-                    removed=removed,
-                    reconstructable=sorted(self.reconstructable_tool_names()),
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 — a notice never breaks the reload
-            logger.debug(f"ToolExecutor: ToolsChangedEvent after MCP reload not delivered: {exc}")
+        await self._safe_observe(
+            ToolsChangedEvent(removed=removed, reconstructable=sorted(self.reconstructable_tool_names())),
+            ctx="ToolsChangedEvent after MCP reload not delivered",
+        )
         return True
 
     @property
-    def mcp(self) -> UniversalMCP | None:
-        return self._mcp
+    def mcp(self) -> "UniversalMCP | None":
+        return self._mcp_lifecycle.mcp
 
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
+    def _cleanup_tool_session(self, tool: Any, name: str) -> None:
+        """Reclaim one tool's per-session resources; a teardown never raises."""
+        try:
+            tool.cleanup_session(self._session_id)
+        except Exception as exc:  # noqa: BLE001 — teardown must not raise
+            logger.debug(f"ToolExecutor: cleanup_session for {name} failed: {exc}")
+
     async def cleanup(self) -> None:
         """Clean up all tool sessions and MCP clients. Called when Role exits."""
-        seen = set()
-        for tool in self._tools.values():
-            if id(tool) not in seen:
-                seen.add(id(tool))
-                tool.cleanup_session(self._session_id)
-        self._tools.clear()
-
-        if self._mcp is not None:
-            await self._mcp.cleanup_clients()
-            self._mcp = None
+        for tool in self._catalog.iter_unique():
+            tool.cleanup_session(self._session_id)
+        self._catalog.clear()
+        await self._mcp_lifecycle.teardown()

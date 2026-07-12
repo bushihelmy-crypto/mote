@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Coroutine, Optional, Sequence
 
+from pydantic import BaseModel, ConfigDict
+
 # Graph execution exceptions are unified under the global exception package;
 # re-exported here so existing ``from .types import GraphRouterError`` (etc.)
 # call sites within the bggraph package keep working.
@@ -31,7 +33,6 @@ from mote.common.exception import (  # noqa: F401
     GraphRecursionError,
     GraphRouterError,
 )
-from pydantic import BaseModel, ConfigDict
 
 # ---------------------------------------------------------------------------
 # Sentinels / well-known node names
@@ -133,10 +134,10 @@ class GraphRunState:
 
     @classmethod
     def ensure(cls, graph: Any, state: Any, run_state: Optional["GraphRunState"]) -> "GraphRunState":
-        """Return *run_state* when present, else infer one (legacy fallback).
+        """Return *run_state* when present, else infer one (fallback).
 
         Live runs always thread their authoritative ``run_state`` in; this only
-        bridges callers (older snapshots / tests) that have none, recovering a
+        bridges callers (snapshots / tests) that have none, recovering a
         best-effort state via :meth:`infer_from_state`.
         """
         if run_state is not None:

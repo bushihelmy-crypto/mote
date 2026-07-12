@@ -7,22 +7,23 @@ without importing the executor package.
 
 from __future__ import annotations
 
-from mote.common.text import PERSISTED_OUTPUT_CLOSE, PERSISTED_OUTPUT_OPEN
 from pydantic import BaseModel
 
+from mote.common.text import PERSISTED_OUTPUT_CLOSE, PERSISTED_OUTPUT_OPEN
+
 # ---------------------------------------------------------------------------
-# Tool-level constants (CC ``constants/toolLimits.ts``)
+# Tool-level constants
 # ---------------------------------------------------------------------------
 
 # System-wide default cap on a single tool result, in characters. A tool may
 # declare a lower (or higher) value via ``BaseTool.max_result_size_chars``.
 DEFAULT_MAX_RESULT_SIZE_CHARS: int = 50_000
 
-# Conservative bytes-per-token estimate (CC ``BYTES_PER_TOKEN``).
+# Conservative bytes-per-token estimate.
 BYTES_PER_TOKEN: int = 4
 
 # When a tool result is persisted to disk, this many leading bytes are kept
-# inline as a preview (CC ``PREVIEW_SIZE_BYTES``).
+# inline as a preview.
 PREVIEW_SIZE_BYTES: int = 2_000
 
 # XML-ish envelope wrapping a persisted tool result's inline preview. The literal
@@ -31,7 +32,7 @@ PREVIEW_SIZE_BYTES: int = 2_000
 PERSISTED_OUTPUT_OPEN_TAG: str = PERSISTED_OUTPUT_OPEN
 PERSISTED_OUTPUT_CLOSE_TAG: str = PERSISTED_OUTPUT_CLOSE
 
-# Per-tool default caps, aligned with CC's per-tool ``maxResultSizeChars``.
+# Per-tool default caps on result size, in characters.
 # Keyed by the Mote tool's primary name. Tools not listed fall back to
 # DEFAULT_MAX_RESULT_SIZE_CHARS. (A tool can also override via its class attr.)
 TOOL_MAX_RESULT_SIZE_CHARS: dict[str, int] = {

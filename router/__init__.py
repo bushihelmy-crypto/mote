@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Router package — LLM routing system (replaces the old LLM factory)."""
+"""Router package — LLM routing system."""
 from mote.router.complexity import (
     ComplexitySignals,
     ContextSignals,

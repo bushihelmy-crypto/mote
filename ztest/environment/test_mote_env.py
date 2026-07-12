@@ -5,6 +5,7 @@
 import types
 
 import pytest
+
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.queue import MessageQueue
 from mote.environment.base_env import AgentEnvironment
@@ -48,7 +49,7 @@ def test_repr():
 
 
 @pytest.mark.asyncio
-async def test_ask_human_uses_input_hook(monkeypatch):
+async def test_ask_user_uses_input_hook(monkeypatch):
     import mote.environment.mote.mote_env as mod
 
     async def fake_input(prompt):
@@ -56,14 +57,14 @@ async def test_ask_human_uses_input_hook(monkeypatch):
 
     monkeypatch.setattr(mod, "get_human_input", fake_input)
     env = MoteEnv()
-    rsp = await env.ask_human("what now?")
+    rsp = await env.ask_user("what now?")
     assert rsp == "Human response: answer to: what now?"
 
 
 @pytest.mark.asyncio
-async def test_reply_to_human_acknowledges():
+async def test_reply_to_user_acknowledges():
     env = MoteEnv()
-    rsp = await env.reply_to_human("done!")
+    rsp = await env.reply_to_user("done!")
     assert "SUCCESS" in rsp
 
 

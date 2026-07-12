@@ -10,7 +10,7 @@ for delivery into context it:
 - only surfaces files whose diagnostics changed since the last drain, so the
   model isn't re-shown identical errors turn after turn.
 
-Modeled on Claude Code's ``LSPDiagnosticRegistry`` (LRU dedup + volume limit).
+An LRU dedup + volume-limited diagnostic registry.
 Pure data + bookkeeping; no I/O, no LSP knowledge beyond the diagnostic shape.
 """
 
@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Volume caps, mirroring Claude Code's defaults.
+# Volume caps.
 _MAX_PER_FILE = 10
 _MAX_TOTAL = 30
 

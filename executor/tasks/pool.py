@@ -4,7 +4,7 @@ Manages asyncio.Task lifecycle and pushes completion notifications
 into the agent's msg_buffer so the existing _observe() loop picks
 them up automatically.
 
-Notification design (aligned with Claude Code's ``<task-notification>``):
+Notification design (built around a ``<task-notification>`` envelope):
     Each completion pushes a ``BackgroundTaskNotification`` (subclass of
     ``UserMessage``) that carries both a human-readable ``content`` string
     **and** machine-readable structured fields (``task_id``, ``command_name``,
@@ -284,8 +284,7 @@ class BackgroundTaskPool:
         """Cancel a task because its output exceeded the disk size cap.
 
         Sets a flag so ``_on_done`` includes the cap reason in ``result``,
-        then delegates to :meth:`cancel`.  Aligned with Claude Code's
-        ``#killedForSize`` flag in ``ShellCommand.ts``.
+        then delegates to :meth:`cancel`.
         """
         meta = self._meta.get(task_id)
         if meta is not None:
@@ -503,7 +502,7 @@ class BackgroundTaskPool:
         result: Optional[str] = None,
         output_path: Optional[str] = None,
     ) -> str:
-        """Build a ``<task-notification>`` XML envelope aligned with Claude Code."""
+        """Build a ``<task-notification>`` XML envelope."""
         lines = [
             "<task-notification>",
             f"<task-id>{task_id}</task-id>",
@@ -514,7 +513,7 @@ class BackgroundTaskPool:
         if result is not None:
             lines.append(f"<result>{_escape_xml(result)}</result>")
         # Surface the disk output path so the model can Read the full log on
-        # demand (the inline <result> is truncated). Aligned with Claude Code's
+        # demand (the inline <result> is truncated), following the
         # "prefer Read on the task output file path" direction.
         if output_path is not None:
             lines.append(f"<output-path>{_escape_xml(output_path)}</output-path>")

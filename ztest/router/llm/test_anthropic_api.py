@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.events import EventBus, LLMStreamDeltaEvent, set_bus
 from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
@@ -545,6 +546,7 @@ class TestErrorClassification:
     def test_anthropic_status_errors_mapped(self):
         import anthropic
         import httpx
+
         from mote.common.exception import LLMAuthenticationError, LLMBadRequestError, classify_llm_error
         from mote.common.exception.handlers import is_retryable
 

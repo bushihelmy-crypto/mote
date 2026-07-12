@@ -4,8 +4,8 @@ local FFmpeg composer for the final video.
 The generators are thin wrappers around the platform's async task API:
   POST submit → GET poll → collect URLs.
 
-They replace the old run_rollout creators with zero legacy deps.
-Each `generate_*` method returns a ``BgTaskResult`` compatible with the bggraph
+They have no heavy dependencies. Each `generate_*` method returns a
+``BgTaskResult`` compatible with the bggraph
 Stage(submit, poll) contract used by media_pipeline/nodes.py.
 
 ``FfmpegComposer`` stitches the generated clips, narration and background music
@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 import aiohttp
+
 from mote.common.config.loader import load_config
 from mote.common.exception import RecoveryAction, RecoveryRunner
 from mote.common.exception.media import MediaGenerationError, PermanentMediaGenerationError, classify_media_failure

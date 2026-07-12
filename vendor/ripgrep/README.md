@@ -1,6 +1,6 @@
 # Vendored ripgrep
 
-The `Grep` tool (`metagpt/executor/tools/grep.py`) shells out to the ripgrep
+The `Grep` tool (`mote/executor/tools/grep.py`) shells out to the ripgrep
 binary. To avoid depending on a ripgrep that happens to be on `PATH` (or one
 vendored by another tool), a static build is checked in here.
 

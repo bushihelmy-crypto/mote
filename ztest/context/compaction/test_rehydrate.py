@@ -127,7 +127,7 @@ def test_directory_path_skipped(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# preserved-tail dedup (CC's collectReadToolFilePaths)
+# preserved-tail dedup (read-tool file-path collection)
 # ---------------------------------------------------------------------------
 
 

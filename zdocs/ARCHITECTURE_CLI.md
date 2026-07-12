@@ -64,7 +64,7 @@ Mote 的 `common/events/` 已经实现了多消费者解耦里**最难的那一�
 | 项目 | 关键模式 | 本设计的吸收 / 扬弃 |
 |------|---------|------------------|
 | **codex** | 两层协议：细粒度 `EventMsg` → 粗粒度 `ThreadItem`（`event_mapping.rs` 居中翻译）；**每个前端都是 app-server 客户端**，无特权路径 | 吸收「投影器居中翻译」「无特权路径」。**扬弃**「连人用 TUI 也走 app-server」的极致统一——那会让人类表现污染机器协议，或被迫加进程层（见 §4 为何**两个协议**而非一个） |
-| **claude-code** | 核心是 async generator 产出类型化 message union；单个 `handleMessageFromStream` 解码函数坐在流与渲染 sink 之间 | 投影器是唯一的解码/折叠点；消费者只认折叠后的契约 |
+| **流式 Agent CLI** | 核心是 async generator 产出类型化 message union；单个解码函数坐在流与渲染 sink 之间 | 投影器是唯一的解码/折叠点；消费者只认折叠后的契约 |
 | **hermes-agent** | 表现层专用事件词汇 + `BasePlatformAdapter`（可「吃掉」渲染不了的事件）+ 单例 registry 自注册 | 消费者声明 `capabilities`、可吃掉/降级事件；registry 自注册，新通道零核心改动 |
 
 ---

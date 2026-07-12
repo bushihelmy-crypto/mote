@@ -14,8 +14,8 @@ Relationship to ``SandboxConfig`` (also in ``permission_config.py``):
     the executor wraps the command in ``bwrap`` (filesystem + pid namespaces),
     applies process hardening, and routes network through a local proxy.
 
-Backward compatibility: ``runtime=None`` (the default on ``PermissionConfig``)
-keeps the old behavior — no OS-level sandbox, only the logical boundary.
+Default: ``runtime=None`` (the default on ``PermissionConfig``) means no
+OS-level sandbox, only the logical boundary.
 """
 from __future__ import annotations
 

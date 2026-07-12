@@ -19,6 +19,8 @@ import random
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Optional
 
+from pydantic import TypeAdapter, ValidationError
+
 from mote.common.exception import RecoveryAction, RecoveryRunner
 from mote.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
 from mote.executor.tasks.bggraph.channels import apply_updates
@@ -46,7 +48,6 @@ from mote.executor.tasks.bggraph.types import (
     Stage,
 )
 from mote.executor.tasks.types import BgTaskResult, GraphMeta
-from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from mote.executor.tasks.bggraph.graph import BgGraph
@@ -216,7 +217,7 @@ async def _run_one_node(
     # Field/channel state sync: a node returns a dict of field updates which is
     # merged into the declared state fields (reducer channels combine, plain
     # fields are last-value). ``None`` means "no update". A non-dict return is a
-    # wiring bug (un-migrated node) and fails loudly.
+    # wiring bug (a node returning the wrong shape) and fails loudly.
     if result is None:
         result = {}
     if not isinstance(result, dict):

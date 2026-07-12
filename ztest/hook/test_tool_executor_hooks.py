@@ -10,6 +10,7 @@ With no hook_manager the executor behaves exactly as before.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.events import EventBus
 from mote.common.hook.manager import HookManager
 from mote.common.hook.subscriber import HookSubscriber
@@ -313,7 +314,7 @@ def _build_with(*subs):
 
 async def test_raise_reaches_control_plane():
     """(a) A raised failure now traverses PostToolUse on the CONTROL plane —
-    a hook / control subscriber fires on the tool error (CC-aligned)."""
+    a hook / control subscriber fires on the tool error."""
     control = _ControlRecorder()
     bus = _build_with(control)
     ex = ToolExecutor("sess", tools=None, bus=bus)

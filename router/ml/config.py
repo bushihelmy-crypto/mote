@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+
 from mote.common.const.paths import CONFIG_ROOT
 
 # Phase-3 inference bundle name (matches the rsync'd cache dir).

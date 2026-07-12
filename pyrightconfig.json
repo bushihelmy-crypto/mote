@@ -1,12 +1,10 @@
 {
   "//": "Phase 0 baseline config. See zdocs/pyright-zero-debt-plan.md.",
   "//include": "This dir IS the `mote` package (setup.py maps package_dir={mote: .}).",
-  "//extraPaths": "'.pyright' holds the mote symlink; see //pyright-resolve. Previously '..' but that broke when the checkout dir was renamed away from 'mote'. Lets pyright resolve`mote.*` self-imports via the parent dir.",
-  "//pyright-resolve": "'.pyright/mote' is an in-repo symlink to the repo root, so pyright resolves mote.* self-imports regardless of the checkout dir name (mote, mote-agent, ...). It is excluded below so the symlink isn't scanned twice.",
+  "//extraPaths": "'..' lets pyright resolve `mote.*` self-imports via the parent dir (the checkout dir is named `mote`, matching the package).",
   "//pythonVersion": "Tracks the actual dev/runtime env (3.11), not the >=3.9 floor in setup.py; 3.9 surfaces ~93 extra 3.10+ syntax errors -- revisit when the 3.9-support question is settled.",
   "include": ["."],
   "exclude": [
-    ".pyright",
     "ztest",
     "zdocs",
     "build",
@@ -14,7 +12,7 @@
     "**/__pycache__",
     "**/*.egg-info"
   ],
-  "extraPaths": [".pyright"],
+  "extraPaths": [".."],
   "typeCheckingMode": "basic",
   "pythonVersion": "3.11",
 

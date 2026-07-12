@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+
 from mote.common.exception.media import MediaGenerationError, PermanentMediaGenerationError
 from mote.executor.tasks.bggraph import END, START, BgGraph
 from mote.executor.tools.media_pipeline.creators import FfmpegComposer, _summarize_poll_results

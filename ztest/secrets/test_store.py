@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Tests for the encrypted two-section vault (``common/secrets/store.py``).
+
+Covers the store's three tiers and their invariants: config auto-sync (hot on
+mtime), persisted user secrets, in-memory session secrets; encrypted
+persist/reload; section-isolated writes (a config reseed never clobbers user
+secrets); and fail-open reads (an undecryptable / malformed vault is empty, never
+a crash).
+"""
+from __future__ import annotations
+
+import os
+import stat
+
+from mote.common.secrets.cipher import AesGcmCipher
+from mote.common.secrets.store import SecretStore
+
+_API_KEY = "sk-proj-abc123SUPERsecretVALUE456"
+
+
+def _cipher() -> AesGcmCipher:
+    return AesGcmCipher(bytes(range(32)))
+
+
+def _write_config(path, api_key: str) -> None:
+    path.write_text(f"llm:\n  api_key: {api_key}\n  model: gpt-4o\nserver:\n  port: 8080\n")
+
+
+def _bump_mtime(path) -> None:
+    """Force a distinct mtime so refresh's mtime guard fires deterministically."""
+    st = path.stat()
+    os.utime(path, (st.st_atime + 2, st.st_mtime + 2))
+
+
+class TestConfigHarvest:
+    def test_config_secrets_seeded_into_map(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_config(cfg, _API_KEY)
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        assert store.as_map() == {_API_KEY: "<secret:llm.api_key>"}
+
+    def test_nested_secret_leaf_detected(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("langfuse:\n  secret_key: lf-secretkey-abcdef123456\n")
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        assert "<secret:langfuse.secret_key>" in store.as_map().values()
+
+    def test_no_config_path_means_no_config_tier(self, tmp_path):
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
+        assert store.as_map() == {}
+
+
+class TestUserAndSession:
+    def test_named_secret_persists_and_reloads(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault)
+        label = store.add_user_secret("tg-token", "1234567890:AAnamedtokenvalue")
+        assert label == "<agent-vault:tg-token>"
+        # A fresh store over the same encrypted file recovers it.
+        reloaded = SecretStore(_cipher(), vault_path=vault)
+        assert reloaded.as_map() == {"1234567890:AAnamedtokenvalue": "<agent-vault:tg-token>"}
+
+    def test_session_secret_is_memory_only(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault)
+        label = store.add_session_secret("anon-secret-value-123")
+        assert label.startswith("<agent-vault:session-")
+        assert "anon-secret-value-123" in store.as_map()
+        # Not written to disk — a fresh store does not know it.
+        reloaded = SecretStore(_cipher(), vault_path=vault)
+        assert "anon-secret-value-123" not in reloaded.as_map()
+
+    def test_vault_file_is_encrypted_on_disk(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault)
+        store.add_user_secret("k", "plaintext-should-not-appear-raw")
+        raw = vault.read_bytes()
+        assert b"plaintext-should-not-appear-raw" not in raw
+
+    def test_vault_written_0600(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault)
+        store.add_user_secret("k", "some-secret-value")
+        assert stat.S_IMODE(os.stat(vault).st_mode) == 0o600
+
+
+class TestSectionIsolation:
+    def test_config_reseed_preserves_user_secrets(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_config(cfg, _API_KEY)
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault, config_path=cfg)
+        store.add_user_secret("mine", "my-persisted-secret-value")
+
+        # Edit config → reseed config section; user section must survive.
+        _write_config(cfg, "sk-proj-DIFFERENTsecret999")
+        _bump_mtime(cfg)
+        m = store.as_map()
+        assert "my-persisted-secret-value" in m  # user secret intact
+        assert "sk-proj-DIFFERENTsecret999" in m  # new config value present
+        assert _API_KEY not in m  # old config value gone
+
+
+class TestHotReload:
+    def test_config_edit_reseeds_without_restart(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_config(cfg, _API_KEY)
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        assert _API_KEY in store.as_map()
+
+        new_key = "sk-proj-rotatedKEY-0987654321"
+        _write_config(cfg, new_key)
+        _bump_mtime(cfg)
+        m = store.as_map()
+        assert new_key in m
+        assert _API_KEY not in m
+
+    def test_external_vault_write_is_reloaded(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        store_a = SecretStore(_cipher(), vault_path=vault)
+        store_b = SecretStore(_cipher(), vault_path=vault)
+        # store_a writes a named secret; store_b sees it on next refresh (mtime).
+        store_a.add_user_secret("shared", "shared-secret-value-xyz")
+        _bump_mtime(vault)
+        assert "shared-secret-value-xyz" in store_b.as_map()
+
+
+class TestFailOpen:
+    def test_undecryptable_vault_is_empty(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        # A vault encrypted with one key, opened with another → empty (no crash).
+        SecretStore(AesGcmCipher(bytes(32)), vault_path=vault).add_user_secret("k", "v-secret-value")
+        other = SecretStore(AesGcmCipher(b"\x02" * 32), vault_path=vault)
+        assert other.as_map() == {}
+
+    def test_garbage_vault_is_empty(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        vault.write_bytes(b"not an encrypted blob")
+        store = SecretStore(_cipher(), vault_path=vault)
+        assert store.as_map() == {}
+
+    def test_malformed_config_ignored(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("this: : : not: valid: yaml: [")
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        assert store.as_map() == {}

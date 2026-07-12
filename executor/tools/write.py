@@ -1,19 +1,19 @@
-"""Write file tool — aligned with Claude Code's Write (FileWriteTool).
+"""Write file tool.
 
 Writes ``content`` to a file on the local filesystem, creating the file (and any
 missing parent directories) or overwriting it if it already exists. The result
 reports whether the file was created or updated and how many lines/bytes were
-written, mirroring CC so model behavior stays familiar.
+written.
 
-Differences from Claude Code's tool, by design:
+Differences by design:
 - Read-before-overwrite is enforced via the Role's shared file-read state
-  (Role.get_file_read_mtime, the analogue of CC's readFileState): an existing
+  (Role.get_file_read_mtime): an existing
   file must have been read this session, and must not have changed on disk since
   that read, before it can be overwritten. When the tool is used unbound (no
   Role injected the capability), the check is skipped so it still works in
   isolation/tests.
 - When overwriting, the existing file's newline style (LF vs CRLF) and text
-  encoding are detected and preserved, the same way CC round-trips line endings,
+  encoding are detected and preserved, round-tripping line endings,
   so writes don't silently rewrite every line of a CRLF file.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ class Write(FileMutatingTool):
     # The effect (file on disk) is durable and re-readable, so the success-message
     # body can be cleared without losing recoverable information.
     reconstructable: ClassVar[bool] = True
-    # Success messages can echo file content; allow a higher cap (CC).
+    # Success messages can echo file content; allow a higher cap.
     max_result_size_chars: ClassVar[int] = 100_000
     description = WRITE_DESCRIPTION
 

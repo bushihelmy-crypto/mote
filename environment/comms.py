@@ -5,8 +5,7 @@
 The lineage tree (``AgentRegistry``) answers *who spawned whom*; the communication
 graph answers *who can talk to whom*. They are **orthogonal**: an agent's place in
 the spawn tree says nothing about which named channels it listens on or which
-addresses route to it. This module owns the routing state that used to live
-ad-hoc inside ``AgentEnvironment``:
+addresses route to it. This module owns the routing state:
 
   * **addresses** — ``session_id -> {address}`` index (codex address map). A
     message's ``send_to`` set is matched against these to find recipients.

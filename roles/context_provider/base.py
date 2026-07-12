@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from mote.common.base import LoopContext
+from mote.common.base import BudgetVerdict, LoopContext
 from mote.roles.context_provider.request import ThinkRequest
 
 if TYPE_CHECKING:
@@ -45,4 +45,15 @@ class BaseContextProvider(ABC):
         Triggered lazily by the loop when an LLM is actually needed. When
         intelligent routing is enabled the router picks a model from the request
         signals (``messages``); otherwise the configured fixed model is used.
+        """
+
+    @abstractmethod
+    async def enforce_budget(self) -> BudgetVerdict:
+        """Rule on this agent's spend against its configured budget cap.
+
+        Called by the loop before each think. Reads the agent's own accrued
+        spend against the schema's ``max_cost`` cap, surfaces a soft warning on
+        the observation plane once at 80% and a hard-stop event once at 100%,
+        and returns a :class:`BudgetVerdict`. An unbudgeted agent
+        (``max_cost <= 0``) always returns ``PROCEED`` without emitting.
         """

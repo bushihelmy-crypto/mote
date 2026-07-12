@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for ``mote.context.budget`` — the window-aware threshold math.
 
-Covers token counting, the window/buffer/threshold helpers (incl. CC's
+Covers token counting, the window/buffer/threshold helpers (incl. the
 window-scaled buffer tiers) and ``evaluate`` (the warning / error / autocompact /
 blocking state, ``tokens_freed`` subtraction, the autocompact-disabled branch and
 ``percent_left``).
@@ -14,6 +14,7 @@ hand-computed thresholds rather than the machine's real token counts.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.const.context import (
     AUTOCOMPACT_BUFFER_TOKENS,
     ERROR_THRESHOLD_BUFFER_TOKENS,

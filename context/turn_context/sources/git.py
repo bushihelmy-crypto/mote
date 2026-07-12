@@ -11,7 +11,7 @@ Instead a snapshot is captured at exactly two moments and surfaced once each:
 Between those events the block is silent. The rendered text says so plainly
 ("point-in-time snapshot ... run ``git status`` for the current state"), handing
 the responsibility for *current* state back to the model rather than pretending
-the framework tracks it live. This mirrors Claude Code's "snapshot in time, will
+the framework tracks it live. This follows a "snapshot in time, will
 not update during the conversation" contract and avoids both the per-turn ``git``
 subprocess cost and the false-freshness trap of a change-gated live feed.
 

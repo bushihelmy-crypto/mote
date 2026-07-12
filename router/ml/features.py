@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
+
 from mote.router.ml.trajectory import Trajectory, classify
 
 # ---------------------------------------------------------------------------
@@ -227,7 +228,7 @@ class ContextMetadata:
 def extract_context_features(ctx: ContextMetadata | None) -> np.ndarray:
     """Extract 10-dimensional context feature vector.
 
-    Returns all zeros when ctx is None (backward compat).
+    Returns all zeros when ctx is None.
     """
     feats = np.zeros(CONTEXT_DIMS, dtype=np.float32)
     if ctx is None:

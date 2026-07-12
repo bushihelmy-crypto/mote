@@ -1,7 +1,7 @@
-"""Token accounting and context-window state — ported from Claude Code.
+"""Token accounting and context-window state.
 
-Wraps Mote's existing ``count_message_tokens`` / ``TOKEN_MAX`` with the
-window-aware threshold math from CC's ``autoCompact.ts``: effective window,
+Wraps Mote's existing ``count_message_tokens`` / ``TOKEN_MAX`` with
+window-aware threshold math: effective window,
 autocompact buffer scaling, and the warning / error / blocking / should-compact
 state used by the loop and UI.
 
@@ -70,8 +70,7 @@ def context_window(model: str) -> int:
 def effective_window(model: str, *, summary_reserve: int | None = None) -> int:
     """Usable window after reserving room for a compaction summary's output.
 
-    Mirrors CC ``getEffectiveContextWindowSize``: full window minus the tokens
-    a summary completion may need.
+    Full window minus the tokens a summary completion may need.
     """
     reserve = summary_reserve if summary_reserve is not None else MAX_OUTPUT_TOKENS_FOR_SUMMARY
     return context_window(model) - reserve
@@ -80,7 +79,7 @@ def effective_window(model: str, *, summary_reserve: int | None = None) -> int:
 def autocompact_buffer(model: str) -> int:
     """Safety buffer below the effective window, scaled by window size.
 
-    Mirrors CC ``getAutocompactBufferTokens``: larger windows reserve more.
+    Larger windows reserve more.
     """
     window = effective_window(model)
     if window >= 800_000:
@@ -109,8 +108,7 @@ def evaluate(
         messages: Stored history or a built request.
         model: Model name (drives the window + thresholds).
         autocompact_enabled: When False, thresholds are measured against the
-            full effective window rather than the autocompact threshold (CC
-            ``calculateTokenWarningState`` branch).
+            full effective window rather than the autocompact threshold.
         tokens_freed: Tokens a prior cheaper pass (microcompact) already
             reclaimed; subtracted before comparing to thresholds.
         observed_tokens: The server-reported token count for the last request

@@ -198,7 +198,7 @@ class MetaUpdateEvent:
 class FileSnapshotEvent:
     """A before-image snapshot of a file the agent is about to mutate.
 
-    Records the file's pre-write state (Claude Code ``fileHistory`` style): the
+    Records the file's pre-write state (file-history style): the
     content itself is stored content-addressed in the session blob store and
     referenced here by ``pre_hash`` (``None`` when the file did not yet exist,
     i.e. a create). This is the truth source for diff / undo / rollback.

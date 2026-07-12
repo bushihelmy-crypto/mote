@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """AgentEnvironment — the BaseEnvironment face over the agent control plane.
 
-This is the bridge between the legacy single-bus ``BaseEnvironment`` contract
+This is the bridge between the single-bus ``BaseEnvironment`` contract
 (``add_role`` / ``publish_message`` / ``roles`` / ``run``) and the codex-style
 control plane built in this package. There is **no broadcast loop**: roles are
 registered as :class:`AgentRuntime` instances on an :class:`AgentControl`, and
@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Set
 
+from pydantic import ConfigDict, PrivateAttr
+
 from mote.common.exception import AgentNotFound
 from mote.common.logs import logger
 from mote.common.schema import Message
@@ -31,7 +33,6 @@ from mote.environment.control import AgentControl
 from mote.environment.registry import AgentMetadata
 from mote.environment.runtime import AgentRuntime
 from mote.environment.store import ResidencyStore
-from pydantic import ConfigDict, PrivateAttr
 
 
 class AgentEnvironment(BaseEnvironment):
@@ -148,7 +149,7 @@ class AgentEnvironment(BaseEnvironment):
     # ------------------------------------------------------------------
     # Human channel (only MoteEnv has a real one; default is "unsupported")
     # ------------------------------------------------------------------
-    async def ask_human(self, question: str, sent_from: Optional[Any] = None) -> str:
+    async def ask_user(self, question: str, sent_from: Optional[Any] = None) -> str:
         """Default: this environment has no human channel."""
         return "Not in MoteEnv, command will not be executed."
 
@@ -164,7 +165,7 @@ class AgentEnvironment(BaseEnvironment):
 
         return AskUserQuestionAnswers()
 
-    async def reply_to_human(self, content: str, sent_from: Optional[Any] = None) -> str:
+    async def reply_to_user(self, content: str, sent_from: Optional[Any] = None) -> str:
         """Default: this environment has no human channel."""
         return "Not in MoteEnv, command will not be executed."
 

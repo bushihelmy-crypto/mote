@@ -19,6 +19,7 @@ Skipped entirely when Playwright / its Chromium browser is unavailable.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.text import cap_head_tail
 from mote.executor.dependency._browser import TEXT_MAX_CHARS
 from mote.executor.tools.web_browser import WebBrowser
@@ -814,7 +815,7 @@ class TestAssist:
         """Headless assist screenshots the page to disk, then asks the user.
 
         No visible window is needed: the engine captures a PNG, writes it under
-        ``{cwd}/.agent_browser/``, and the ask_human prompt names that file so
+        ``{cwd}/.agent_browser/``, and the ask_user prompt names that file so
         the user can open it, read the code/QR, and reply. We assert the file
         was written and that the prompt carries both our instruction and the
         path, then that the user's reply comes back.

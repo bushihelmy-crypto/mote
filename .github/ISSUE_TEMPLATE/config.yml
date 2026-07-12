@@ -1,0 +1,6 @@
+# Require issues to use one of the structured templates above.
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/bushihelmy-crypto/Mote-Agent/security/advisories/new
+    about: Please report security issues privately (see SECURITY.md) — do not open a public issue.

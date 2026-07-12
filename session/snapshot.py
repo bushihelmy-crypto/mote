@@ -1,6 +1,6 @@
 """File-history snapshots — before-image capture for the session (Phase 1).
 
-Claude Code's ``fileHistory`` synthesis: just before a file-mutating tool
+File-history synthesis: just before a file-mutating tool
 (Write/Edit) overwrites a file, the *current* on-disk content is
 captured as a content-addressed blob and a :class:`FileSnapshotEvent` is
 appended to the same ``rollout.jsonl`` as the session's other events. That gives

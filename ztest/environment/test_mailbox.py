@@ -5,6 +5,7 @@
 import asyncio
 
 import pytest
+
 from mote.environment.agent_path import AgentPath
 from mote.environment.mailbox import (
     MAILBOX_AUTHOR_PATH,

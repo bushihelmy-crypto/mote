@@ -11,8 +11,8 @@ Split into its own leaf so ``event.outcome_type`` can bind each control event to
 its outcome without a cycle: the outcome layer needs :class:`Rewritable` (to test
 whether a rewrite target is rewritable) while the event layer imports the outcome
 types — routing both through this stdlib-only leaf breaks the ``types → outcomes
-→ types`` loop. Re-exported from ``common/events/types.py`` so existing importers
-keep the old path.
+→ types`` loop. Re-exported from ``common/events/types.py`` so importers can
+reach it from there too.
 
 Leaf module: imports only ``dataclasses``/``typing``.
 """

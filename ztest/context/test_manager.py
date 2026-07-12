@@ -18,6 +18,7 @@ configs so the real gates fire on tiny inputs.
 from __future__ import annotations
 
 import pytest
+
 from mote.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
 from mote.context import ContextManager
 

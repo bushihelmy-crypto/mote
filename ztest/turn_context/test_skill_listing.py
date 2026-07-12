@@ -75,6 +75,30 @@ class TestSilent:
         assert run(_source(inj).render()) is None
 
 
+class TestEnabledGate:
+    def test_switch_off_never_renders(self):
+        # Master switch off (``config.context.skills.enabled`` False) → the index
+        # never renders, even with a healthy injector holding indexable skills.
+        inj = _FakeInjector([_FakeSkill("alpha")])
+        src = SkillListingContextSource(get_injector=lambda: inj, is_enabled=lambda: False)
+        assert run(src.render()) is None
+        # No frontier bookkeeping happens while gated off.
+        assert src._sent_names == set()
+
+    def test_switch_on_renders_as_usual(self):
+        inj = _FakeInjector([_FakeSkill("alpha")])
+        src = SkillListingContextSource(get_injector=lambda: inj, is_enabled=lambda: True)
+        out = run(src.render())
+        assert out is not None
+        assert "alpha" in out
+
+    def test_no_gate_falls_back_to_original_logic(self):
+        # is_enabled None → gate on injector/skills alone (backwards-compatible).
+        inj = _FakeInjector([_FakeSkill("alpha")])
+        src = SkillListingContextSource(get_injector=lambda: inj)
+        assert run(src.render()) is not None
+
+
 class TestFirstTurn:
     def test_emits_full_index(self):
         inj = _FakeInjector([_FakeSkill("alpha"), _FakeSkill("beta")])

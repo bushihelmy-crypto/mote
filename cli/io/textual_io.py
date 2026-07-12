@@ -172,7 +172,7 @@ class TextualPort:
 
         Unlike ``App.push_screen_wait`` (which requires an active Textual worker),
         the callback form is legal from any coroutine on the app's loop — which is
-        exactly where the agent task calling ``ask_human`` runs.
+        exactly where the agent task calling ``ask_user`` runs.
         """
         if self._app is None:
             return None

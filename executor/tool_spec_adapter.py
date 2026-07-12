@@ -6,15 +6,17 @@ structured JSON Schema for each tool's parameters. This module builds that JSON
 Schema from a tool's ``call()`` signature + Google-style docstring, then wraps
 it into the provider-specific envelope (Anthropic / OpenAI).
 
-Pure functions, zero side effects, and NOT wired into any running path — the
-XML protocol never calls this. It exists so the native-tool-use channel (and
-its tests) can prove our tools are losslessly expressible as native specs.
+Pure functions, zero side effects — the schema builder for the native-tool-use
+channel. ``build_json_schema`` backs :meth:`BaseTool.get_native_schema` (each
+tool's ``input_schema``) and ``to_native_tool_specs`` backs
+:meth:`ToolExecutor.get_native_tool_specs` (the provider envelope). The XML
+command protocol does not use this module; it describes tools as free-form text.
 
 Usage:
     from mote.executor.tool_spec_adapter import build_json_schema, to_native_tool_specs
 
     schema = build_json_schema(MyTool.call)              # {type:object, properties, required}
-    specs = to_native_tool_specs(executor.get_tool_schemas_native(), "anthropic")
+    specs = to_native_tool_specs({name: native_schema}, "anthropic")  # provider envelope
 """
 from __future__ import annotations
 
@@ -23,8 +25,9 @@ import types
 import typing
 from typing import Any, Callable, Union
 
-from mote.common.utils.docstring import parse_section
 from pydantic import BaseModel
+
+from mote.common.utils.docstring import parse_section
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types
 # but maps to JSON Schema's "object" (not the parser's internal "map").

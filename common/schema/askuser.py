@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
 
-# CC's chip-width limit on a question's `header` (used in the schema description).
+# Chip-width limit on a question's `header` (used in the schema description).
 ASK_USER_QUESTION_CHIP_WIDTH = 12
 
 
@@ -28,7 +28,7 @@ class AskUserQuestionOption(BaseModel):
 
 
 class AskUserQuestionItem(BaseModel):
-    """A single multiple-choice question (mirrors Claude Code's Zod schema)."""
+    """A single multiple-choice question."""
 
     question: str = Field(
         description=(
@@ -91,9 +91,8 @@ class AskUserQuestionAnswer(BaseModel):
     """A single question's answer — selection and free text kept separate.
 
     ``selected`` (chosen option labels) and ``free_text`` (the "Other" text) are
-    stored in distinct fields — exactly the information the old text round-trip
-    collapsed. A numeric or multi-line free-text answer can never be misread as
-    an option index or misaligned across questions.
+    stored in distinct fields. A numeric or multi-line free-text answer can never
+    be misread as an option index or misaligned across questions.
     """
 
     header: str = ""
@@ -107,7 +106,7 @@ class AskUserQuestionAnswer(BaseModel):
 
     @property
     def display(self) -> str:
-        """Rebuild CC's ``"q"="a"`` answer string at the formatting boundary."""
+        """Rebuild the ``"q"="a"`` answer string at the formatting boundary."""
         parts = list(self.selected)
         if self.free_text:
             parts.append(self.free_text)

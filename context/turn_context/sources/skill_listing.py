@@ -1,7 +1,7 @@
 """SkillListingContextSource — the steady Skills index, per turn.
 
-The model-invocable, non-conditional Skills index used to live entirely in the
-cacheable system prompt. But skills hot-reload (a ``SKILL.md`` add/remove
+The model-invocable, non-conditional Skills index is kept out of the
+cacheable system prompt: skills hot-reload (a ``SKILL.md`` add/remove
 re-scans the pool), and any change to the index would bust the whole cached
 prompt prefix. So the volatile *index* is delivered per-turn in the user
 prompt's ``<system-reminder>`` instead, while the *static loading guide* (how to
@@ -58,13 +58,23 @@ class SkillListingContextSource:
         get_injector: Callable[[], Optional[_SkillInjector]],
         *,
         max_tokens: int = 2000,
+        is_enabled: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._get_injector = get_injector
         self._max_tokens = max_tokens
+        # Optional master-switch gate (``config.context.skills.enabled``). When
+        # supplied and False, the index never renders — on top of the original
+        # self-suppression (no injector / no skills). None → gate on the original
+        # logic alone (backwards-compatible).
+        self._is_enabled = is_enabled
         # Names already surfaced in a prior turn — the incremental frontier.
         self._sent_names: set[str] = set()
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
+        # Master switch off → never render, regardless of injector state.
+        if self._is_enabled is not None and not self._is_enabled():
+            return None
+
         injector = self._get_injector() if self._get_injector else None
         if injector is None:
             return None

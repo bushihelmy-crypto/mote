@@ -14,11 +14,14 @@ import pytest
 
 pytest.importorskip("textual")
 
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
+
 from mote.cli.consumers.textual.style import textual_css_vars
 from mote.cli.consumers.textual.widgets import AssistantBlock, StatusBar, ToolCallWidget, UserMessageRow
 from mote.cli.contracts.view import RetryStatus, ToolCallCompleted, ToolCallStarted, UsageUpdated
-from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 
 
 class _Harness(App):
@@ -40,6 +43,28 @@ class _Harness(App):
     async def add(self, widget):
         await self.query_one("#box", VerticalScroll).mount(widget)
         return widget
+
+
+def _widget_text(widget) -> str:
+    """Render a transcript widget's *current* renderable to plain text.
+
+    ``get_selection`` reads the compositor's ``_render_cache``, which the headless
+    pilot doesn't reliably paint for ``Group``-rendering rows. So we unwrap the
+    ``RichVisual`` ``Static.render`` returns and print its inner renderable through
+    a plain rich ``Console`` — deterministic, compositor-independent, and it sees
+    the same content (fold state + any selected-row ``ctrl+o`` hint) the user does.
+    """
+    import io
+
+    from rich.console import Console
+    from textual.visual import RichVisual
+
+    visual = widget.render()
+    renderable = visual._renderable if isinstance(visual, RichVisual) else visual
+    console = Console(width=80, file=io.StringIO())
+    with console.capture() as cap:
+        console.print(renderable)
+    return cap.get()
 
 
 @pytest.mark.asyncio
@@ -92,6 +117,45 @@ async def test_tool_widget_with_diff_detail_renders():
 
 
 @pytest.mark.asyncio
+async def test_bash_widget_collapsed_hides_detail_then_expands():
+    """A Bash call folds its output: collapsed shows only the headline + ⎿
+    summary (no per-row hint until selected); expanded reveals the full output."""
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Bash", title="Bash", headline="run tests", tool_use_id="b-1")
+        widget = await pilot.app.add(ToolCallWidget(started))  # collapsed by default
+        assert widget._folds_detail is True and widget.expanded is False
+        widget.complete(
+            ToolCallCompleted(tool_name="Bash", tool_use_id="b-1", summary="2146 passed", detail="SECRETOUTPUT")
+        )
+        await pilot.pause()
+        collapsed = _widget_text(widget)
+        assert "2146 passed" in collapsed  # ⎿ summary kept
+        assert "SECRETOUTPUT" not in collapsed  # output folded away
+        assert "ctrl+o" not in collapsed  # no per-row hint until the row is selected
+        # ctrl+o expands → the full output detail appears (still no hint unselected).
+        widget.set_expanded(True)
+        await pilot.pause()
+        expanded = _widget_text(widget)
+        assert "SECRETOUTPUT" in expanded
+        assert "ctrl+o" not in expanded
+
+
+@pytest.mark.asyncio
+async def test_noncollapsible_widget_ignores_expanded_flag():
+    """A Read/Edit call is not detail-collapsible: set_expanded is inert and the
+    full detail always renders (no ctrl+o hint)."""
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Read", title="Read", headline="a.py", tool_use_id="r-1")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        assert widget._folds_detail is False
+        widget.complete(ToolCallCompleted(tool_name="Read", tool_use_id="r-1", summary="12 lines", detail="FILEBODY"))
+        widget.set_expanded(False)  # no-op for a non-collapsible tool
+        await pilot.pause()
+        text = _widget_text(widget)
+        assert "FILEBODY" in text and "ctrl+o" not in text
+
+
+@pytest.mark.asyncio
 async def test_assistant_block_markdown_is_selectable():
     """A Markdown-rendering block yields selectable text (Textual would return None).
 
@@ -131,8 +195,9 @@ async def test_tool_widget_group_is_selectable():
 @pytest.mark.asyncio
 async def test_unrendered_selectable_static_returns_none():
     """Before any render (no strip cache) selection extraction is a safe no-op."""
-    from mote.cli.consumers.textual.widgets import SelectableStatic
     from textual.selection import Selection
+
+    from mote.cli.consumers.textual.widgets import SelectableStatic
 
     widget = SelectableStatic("never rendered")
     assert widget.get_selection(Selection(None, None)) is None
@@ -243,8 +308,9 @@ async def test_partial_selection_copies_only_selected_text():
 
 @pytest.mark.asyncio
 async def test_user_message_row_mounts_with_text():
-    from mote.cli.consumers.render.builders import user_message_row
     from rich.console import Console
+
+    from mote.cli.consumers.render.builders import user_message_row
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(UserMessageRow("fix the bug in foo.py"))
@@ -284,7 +350,7 @@ async def test_status_bar_set_retry_shows_countdown():
         assert bar.retry_secs == pytest.approx(3.0)
         rendered = bar.render().plain
         assert "\u27f3" in rendered  # ⟳ retry glyph (not the ⚠ approval gate)
-        assert "第 2/6 次重试" in rendered
+        assert t(K.RETRY_ATTEMPT, attempt=2, total=6) in rendered
         assert "LLMOverloadedError" in rendered
 
 
@@ -305,7 +371,7 @@ async def test_status_bar_clear_retry_restores_normal_line():
         bar.clear_retry()
         assert bar.retry_msg == ""
         assert bar.retry_secs == 0.0
-        assert "重试" not in bar.render().plain
+        assert "\u27f3" not in bar.render().plain  # ⟳ retry glyph gone
 
 
 @pytest.mark.asyncio
@@ -330,7 +396,8 @@ async def test_status_bar_working_shows_verb_elapsed_and_tokens():
         bar.update_usage(UsageUpdated(total_tokens=3400, model="gpt-4"))
         bar.running = True  # watch_running stamps start time + picks a verb
         plain = bar.render().plain
-        assert bar._verb in plain  # a rotating activity verb
+        # ``_verb`` now holds an i18n message-id; the bar renders its translation.
+        assert t(bar._verb) in plain  # a rotating activity verb
         assert "…" in plain
         assert "0s" in plain  # live elapsed counter (just started)
         assert "3.4k tok" in plain  # compact live token count
@@ -346,6 +413,22 @@ async def test_status_bar_idle_resets_elapsed():
         assert bar._run_started > 0.0
         bar.running = False
         assert bar._run_started == 0.0
+
+
+@pytest.mark.asyncio
+async def test_status_bar_no_longer_carries_ctrl_o_hint():
+    """The ctrl+o affordance moved onto the selected tool block — off the bar.
+
+    Idle the bar shows only the dim ``就绪`` marker (no ctrl+o hint), and with
+    metrics it shows only those metrics (no ctrl+o text)."""
+    async with _Harness().run_test() as pilot:
+        bar = await pilot.app.add(StatusBar())
+        assert bar.render().plain == t(K.STATUS_IDLE)  # idle: ready marker, no hint
+        assert "ctrl+o" not in bar.render().plain
+        bar.update_usage(UsageUpdated(total_tokens=3400, model="gpt-4"))
+        plain = bar.render().plain
+        assert "ctrl+o" not in plain
+        assert "3,400 tok" in plain and "gpt-4" in plain
 
 
 def test_format_tok_compacts_counts():
@@ -370,7 +453,7 @@ async def test_status_bar_thinking_shows_reasoning_label():
         bar = await pilot.app.add(StatusBar())
         bar.set_thinking(True)
         plain = bar.render().plain
-        assert "思考中" in plain
+        assert t(K.STATUS_THINKING) in plain
         assert COMPACT in plain  # ✻ thinking marker leads the label (not the ⠋ spinner)
 
 
@@ -380,7 +463,7 @@ async def test_status_bar_thinking_clears_back_to_idle():
         bar = await pilot.app.add(StatusBar())
         bar.set_thinking(True)
         bar.set_thinking(False)
-        assert "思考中" not in bar.render().plain
+        assert t(K.STATUS_THINKING) not in bar.render().plain
 
 
 @pytest.mark.asyncio
@@ -442,8 +525,9 @@ async def test_prompt_multiline_paste_stashes_placeholder_and_expands():
     drops everything after the first line of a paste. ``PromptInput`` instead
     stages the real text behind a compact placeholder and expands it on submit.
     """
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -469,8 +553,9 @@ async def test_prompt_carriage_return_paste_is_multiline():
     deciding, so the block is stashed behind a placeholder and ``consume_value``
     yields the FULL text with proper ``\\n`` newlines (not just the first line).
     """
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -486,8 +571,9 @@ async def test_prompt_carriage_return_paste_is_multiline():
 @pytest.mark.asyncio
 async def test_prompt_singleline_paste_inserts_verbatim():
     """A single-line paste keeps Textual's default behaviour (no placeholder)."""
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -502,8 +588,9 @@ async def test_prompt_singleline_paste_inserts_verbatim():
 @pytest.mark.asyncio
 async def test_prompt_paste_mixed_with_typed_text_expands_inline():
     """A placeholder embedded among typed text expands in place on submit."""
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -528,8 +615,9 @@ async def test_prompt_base_paste_handler_is_prevented():
     paste leaves ONLY the placeholder (no leaked first line) and the event was
     marked prevented.
     """
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -550,8 +638,9 @@ async def test_prompt_dropped_file_path_is_cleaned(tmp_path):
     Terminals report a drop as a shell-escaped/quoted absolute path; ``_on_paste``
     recognises an existing path and strips the escapes so the agent can read it.
     """
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     dropped = tmp_path / "a file (1).txt"
     dropped.write_text("hi", encoding="utf-8")
@@ -572,8 +661,9 @@ async def test_prompt_dropped_file_path_is_cleaned(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_nonexistent_path_falls_through_to_text(tmp_path):
     """A slash-leading string that isn't an existing file stays ordinary text."""
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -586,8 +676,9 @@ async def test_prompt_nonexistent_path_falls_through_to_text(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_escape_clears_field():
     """A single Esc empties the prompt and drops any staged paste text."""
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -617,8 +708,9 @@ async def test_prompt_dropped_image_is_staged_as_token(tmp_path):
     behind an ``[image #n: name]`` token so ``consume_images`` can attach it to
     the turn while the visible field stays a one-liner.
     """
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -642,8 +734,9 @@ async def test_prompt_dropped_image_is_staged_as_token(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_consume_images_drops_removed_tokens(tmp_path):
     """An image whose token was deleted from the field is not sent."""
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -660,8 +753,9 @@ async def test_prompt_consume_images_drops_removed_tokens(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_dropped_nonimage_file_stays_a_path(tmp_path):
     """A dropped non-image file is still inserted as a (cleaned) path, not staged."""
-    from mote.cli.consumers.textual.widgets import PromptInput
     from textual.events import Paste
+
+    from mote.cli.consumers.textual.widgets import PromptInput
 
     doc = tmp_path / "notes.txt"
     doc.write_text("hi", encoding="utf-8")
@@ -783,16 +877,17 @@ async def test_conversation_compacted_row_renders_marker():
         row = await pilot.app.add(ConversationCompactedRow(ConversationCompacted(summary="recap", message_count=5)))
         plain = row._Static__content.plain
         assert COMPACT in plain
-        assert "对话已压缩" in plain
-        assert "保留 5 条消息" in plain
+        assert t(K.COMPACT_COMPACTED) in plain
+        assert t(K.COMPACT_KEPT, count=5) in plain
 
 
 @pytest.mark.asyncio
 async def test_error_row_linkifies_bare_url():
     """A URL in an error message becomes a clickable link span (inside the bullet_row)."""
+    from rich.console import Console
+
     from mote.cli.consumers.textual.widgets import ErrorRow
     from mote.cli.contracts.view import ErrorRaised
-    from rich.console import Console
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(ErrorRow(ErrorRaised(text="failed: https://example.com/err")))
@@ -832,11 +927,161 @@ async def test_ctrl_click_on_link_opens_url():
         assert event.stopped is True  # consumed, so no selection starts
 
 
+def _click_spy(widget):
+    """Record ``FoldableRow.Clicked`` posts while still delegating to the real
+    ``post_message`` — a non-delegating stub would swallow Textual's shutdown
+    messages and hang ``run_test`` teardown."""
+    from mote.cli.consumers.textual.widgets import FoldableRow
+
+    posted: list = []
+    original = widget.post_message
+
+    def spy(message):
+        if isinstance(message, FoldableRow.Clicked):
+            posted.append(message)
+        return original(message)
+
+    widget.post_message = spy  # type: ignore[assignment]
+    return posted
+
+
+@pytest.mark.asyncio
+async def test_foldable_row_plain_click_posts_selected():
+    """A plain click on a tool row posts a ``Clicked`` message (host selects it)."""
+    from rich.style import Style
+    from textual.events import Click
+
+    from mote.cli.consumers.textual.widgets import FoldableRow
+
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="c-1")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        posted = _click_spy(widget)
+        event = Click(
+            widget=widget,
+            x=0,
+            y=0,
+            delta_x=0,
+            delta_y=0,
+            button=1,
+            shift=False,
+            meta=False,
+            ctrl=False,
+            style=Style(),
+        )
+        await widget._on_click(event)
+        assert len(posted) == 1
+        assert isinstance(posted[0], FoldableRow.Clicked)
+        assert posted[0].row is widget
+
+
+@pytest.mark.asyncio
+async def test_foldable_row_ctrl_click_does_not_select():
+    """Ctrl+click is a link-nav gesture, not a row select → no ``Clicked``."""
+    from rich.style import Style
+    from textual.events import Click
+
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="c-2")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        posted = _click_spy(widget)
+        event = Click(
+            widget=widget,
+            x=0,
+            y=0,
+            delta_x=0,
+            delta_y=0,
+            button=1,
+            shift=False,
+            meta=False,
+            ctrl=True,
+            style=Style(),
+        )
+        await widget._on_click(event)
+        assert posted == []
+
+
+@pytest.mark.asyncio
+async def test_foldable_row_click_after_drag_select_does_not_select():
+    """A click that ended a drag-select (text_selection set) is a copy gesture,
+    not a row select — so it posts no ``Clicked``."""
+    from rich.style import Style
+    from textual.events import Click
+    from textual.selection import Selection
+
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="c-3")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        await pilot.pause()
+        widget.screen.selections = {widget: Selection(None, None)}  # a live text selection
+        posted = _click_spy(widget)
+        event = Click(
+            widget=widget,
+            x=0,
+            y=0,
+            delta_x=0,
+            delta_y=0,
+            button=1,
+            shift=False,
+            meta=False,
+            ctrl=False,
+            style=Style(),
+        )
+        await widget._on_click(event)
+        assert posted == []
+
+
+@pytest.mark.asyncio
+async def test_foldable_row_selected_reactive_toggles_class():
+    """The ``selected`` reactive drives the ``-selected`` CSS class (its band)."""
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="c-4")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        assert not widget.has_class("-selected")
+        widget.selected = True
+        await pilot.pause()
+        assert widget.has_class("-selected")
+        widget.selected = False
+        await pilot.pause()
+        assert not widget.has_class("-selected")
+
+
+@pytest.mark.asyncio
+async def test_selected_foldable_row_shows_ctrl_o_hint_bottom_right():
+    """A selected detail-folding row grows a dim ctrl+o hint (its bottom-right);
+    deselecting it removes the hint again."""
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="h-1")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        await pilot.pause()
+        assert "ctrl+o" not in _widget_text(widget)  # unselected → none
+        widget.selected = True
+        await pilot.pause()
+        assert t(K.KEY_EXPAND_HINT) in _widget_text(widget)  # collapsed → advertises expand
+        widget.set_expanded(True)  # expanded → the hint flips to collapse
+        await pilot.pause()
+        assert t(K.KEY_COLLAPSE_HINT) in _widget_text(widget)
+        widget.selected = False
+        await pilot.pause()
+        assert "ctrl+o" not in _widget_text(widget)
+
+
+@pytest.mark.asyncio
+async def test_selected_nonfolding_row_shows_no_hint():
+    """A standalone Read (always full, never folds) shows no ctrl+o hint even selected."""
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Read", headline="a.py", tool_use_id="h-2")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        widget.selected = True
+        await pilot.pause()
+        assert "ctrl+o" not in _widget_text(widget)
+
+
 @pytest.mark.asyncio
 async def test_plain_click_on_link_does_not_open_url():
     """A plain (no-ctrl) click over a link does NOT open it — selection wins.
 
-    Matches claude-code: the terminal only follows a link on Ctrl+click, so a
+    The terminal only follows a link on Ctrl+click, so a
     plain click here must fall through to the base handler (starting a drag
     selection) instead of navigating.
     """
