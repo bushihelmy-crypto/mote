@@ -1,0 +1,185 @@
+# ============================================================================
+# Mote 配置示例（config.example.yaml）
+# ----------------------------------------------------------------------------
+# 用法：复制到用户级配置路径再按需修改
+#     cp config.example.yaml ~/.mote/config.yaml
+#
+# 配置分层加载优先级（低 -> 高，高者覆盖低者）：
+#   defaults < system < user < project < workdir < profile < env < cli < programmatic < managed
+#   - defaults      : pydantic 字段默认值（无文件）
+#   - system        : /etc/mote/config.yaml (+ config.d/*.yaml)          —— 受信任
+#   - user          : ~/.mote/config.yaml（旧名 ~/.mote/config2.yaml）    —— 受信任
+#   - project       : <包目录>/config.yaml                                —— 受信任
+#   - workdir       : <cwd>/.mote/config.yaml    —— 不受信任，凭据字段会被剥离
+#   - profile       : ~/.mote/<name>.config.yaml（MOTE_PROFILE=name 选择）—— 受信任
+#   - env           : 环境变量 MOTE_*，例:
+#                     MOTE_MODELS__DEFAULT__BASE_URL=... -> models.default.base_url
+#                     （__ 分隔层级；值按 YAML 解析：true / 8000 / ...）
+#   - cli           : 运行时 -c key=value
+#   - managed       : /etc/mote/managed.config.yaml —— 管理员策略，锁定其下所有层
+#
+# 唯一必填项是 `models.default`（且需可用的 api_key 或 oauth）；其余均有默认值，
+# 按需取消注释覆盖即可。
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# models —— 模型选择（default 必填、任务级覆盖、路由开关、api_key_helper）
+# ----------------------------------------------------------------------------
+models:
+  # 主模型（必填）。每个请求默认走这里，除非被路由到 tasks 下的某个模型。
+  default:
+    # 单个 key，或一个 key 列表（在鉴权/计费失败时轮换，recovery=ROTATE_CREDENTIAL）。
+    api_key: "sk-your-api-key-here"  # pragma: allowlist secret
+    # 传输协议（wire）：anthropic 走原生 Messages API；其余走 OpenAI 兼容客户端。
+    # 可选值：openai / anthropic / deepseek / moonshot / mistral / yi /
+    #          open_router / siliconflow / fireworks / open_llm
+    api_type: anthropic
+    base_url: "https://api.anthropic.com"
+    model: "claude-opus-4-8"
+    max_token: 64000
+    temperature: 0.0
+    timeout: 600
+    calc_usage: true          # 统计并结算 token 用量
+    use_prompt_cache: true     # Anthropic 提示缓存断点（仅原生 Anthropic 路径生效）
+
+    # —— 品牌预设（可选）——
+    # 设置 provider 后，仅在你留空时用品牌目录补全 base_url + api_type，并从
+    # 品牌的环境变量解析 api_key（显式值始终优先）。"auto" 让 mote 从 base_url /
+    # model 名 / 环境变量中自动推断品牌。
+    # 已知品牌：openai / anthropic / deepseek / moonshot / mistral / yi /
+    #   open_router / siliconflow / fireworks / open_llm / groq / xai / together /
+    #   nvidia / cerebras / zai / minimax / dashscope / zhipuai / stepfun /
+    #   baichuan / perplexity / github-copilot
+    # provider: "anthropic"
+
+    # —— 网络代理（可选，仅此 LLM 客户端用）——
+    # proxy: "http://127.0.0.1:7890"
+
+    # —— OAuth（可选）——设置后用 OAuth token 取代静态 api_key。
+    # oauth:
+    #   provider: "anthropic"
+
+  # 智能路由：true 时按请求从注册的 model cards 选模型；false 用上面固定的 default。
+  router_enabled: false
+
+  # 强制回复语言。设置后系统提示的 # Language 段要求模型始终用该语言回复，
+  # 与用户输入语言无关；留空则镜像用户语言。
+  response_language: "chinese"
+
+  # 打印 api key 到 stdout 的 shell 命令（仅受信任层生效）。
+  # 仅当没有静态/环境变量 key 时用于填充 default.api_key（env > 静态 > helper）。
+  # api_key_helper: ""
+
+  # 任务级模型覆盖（键为路由任务名）。默认仅 model 不同，transport/凭据继承自 default。
+  # 内置任务：compression、summary（默认均为 claude-sonnet-4-8）。
+  # tasks:
+  #   compression:
+  #     model: "claude-sonnet-4-8"
+  #   summary:
+  #     model: "claude-sonnet-4-8"
+
+# ----------------------------------------------------------------------------
+# tools —— 工具运行时（代理 / 浏览器地区）。注意与 models.default.proxy 区分：
+# 这里是给浏览器等工具用的，LLM 客户端用 models.default.proxy。
+# ----------------------------------------------------------------------------
+tools:
+  # 全局代理（供浏览器等工具用，非 LLM）。留空则回退到环境变量 HTTP(S)_PROXY，再无则直连。
+  proxy: ""
+  # 浏览器地区身份（stealth 指纹用）：auto | en | zh。与代理出口 IP 地区保持一致
+  #（zh-CN locale 配美国 IP 是明显的 bot 特征）。
+  browser_locale: "auto"
+
+# ----------------------------------------------------------------------------
+# context —— 上下文工程（压缩 / 代码地图 / 技能 / 后台流水线）
+# ----------------------------------------------------------------------------
+context:
+  compaction:
+    # 自适应压缩记忆（prompt-only）：开启后 think-engine 才会注入
+    # FRC / summarize / Task Final Output 段，告知模型旧工具结果会被清理。
+    enabled: false
+    # FRC 段声明保留的最近消息数（与折叠实际保留数对齐）。
+    protected_recent_messages: 8
+  code_map:
+    # 通过 LSP references 主动展示公共符号的调用方（foo called by: a.py）。
+    # 需配置 LSP 层，默认关闭（会增加 LSP references 开销）。
+    surface_callers: false
+  skills:
+    enabled: false             # P0 技能子系统总开关
+    max_tokens: 2000            # 技能索引注入的 token 上限
+    include_user_dir: true      # 扫描 ~/.mote/skills 的用户级技能
+    include_project_dir: true   # 扫描 <dir>/.mote/skills（cwd→git-root 向上查找）
+    extra_dirs: []              # 额外的最高优先级技能目录
+  bggraph:
+    # 渲染 # Background Pipelines 系统提示段，告知模型某些工具会异步跑多步节点图
+    #（返回 task_id、可暂停等待决策）。
+    enabled: false
+
+# ----------------------------------------------------------------------------
+# mcp —— MCP 主开关。服务器本身不在这里配置，而在各自的 mcp_config.json 声明
+#（由 executor.mcp.config_source.load_mcp_servers 发现）。
+# ----------------------------------------------------------------------------
+mcp:
+  enabled: false               # 开启后加载 mcp_config.json 中的全部服务器
+
+# ----------------------------------------------------------------------------
+# multimodal —— 多模态生成服务（图像 / 音频 / 音乐 / 视频）
+# 仅 media-pipeline 工具消费这些配置；未使用则可整体留空。
+# ----------------------------------------------------------------------------
+multimodal:
+  image_generation:
+    api_key: ""
+    base_url: ""
+    model: "gpt-image-1.5"
+  audio_generation:
+    api_key: ""
+    base_url: ""
+    model: "eleven_v3"
+  music_generation:
+    api_key: ""
+    base_url: ""
+    model: ""
+    response_format: "url"
+  video_generation:
+    api_key: ""
+    base_url: ""
+    text_to_video_model: "wan2.6-t2v"
+    reference_guided_video_model: "wan2.6-i2v"
+
+# ----------------------------------------------------------------------------
+# observability —— 错误追踪（Sentry）+ LLM 链路追踪（Langfuse）。均默认关闭，
+# 为可选依赖，仅在 enabled 时导入。
+# ----------------------------------------------------------------------------
+observability:
+  sentry:
+    enabled: false
+    dsn: ""
+    environment: "algo-debug"
+    send_default_pii: true      # 是否收集 IP 等用户信息
+    # extra_data: {}            # 附加到 Sentry 事件的额外字段（如 user_id、chat_id）
+  langfuse:
+    enabled: false
+    host: "https://cloud.langfuse.com"
+    public_key: ""
+    secret_key: ""
+    sample_rate: 1.0            # 采样率（LANGFUSE_SAMPLE_RATE）
+    trace_steps: true           # 发出 think/act/tool span（第三层）
+
+# ----------------------------------------------------------------------------
+# ui —— 人机显示层（仅影响给人看的文本；模型面向文本始终为英文）
+# ----------------------------------------------------------------------------
+ui:
+  # 显示语言：auto（从 LC_ALL/LC_MESSAGES/LANG 推断）| en | zh | ...
+  language: "auto"
+
+# ----------------------------------------------------------------------------
+# secrets —— 密钥脱敏 / 保险库（默认关闭；关闭时完全不接入脱敏/上传接缝）
+# ----------------------------------------------------------------------------
+secrets:
+  enabled: false
+  # 保险库密钥/加密策略名。aes = AES-256-GCM，密钥文件 ~/.mote/vault.key。
+  cipher: "aes"
+  # 覆盖加密保险库文件位置（默认 ~/.mote/secrets.json）。
+  # vault_path: null
+  # 覆盖人工编辑的明文命名密钥文件位置（默认 ~/.mote/secrets_config.json）。
+  # 扁平 {name: value} JSON，按 mtime 热同步进加密保险库。
+  # secrets_config_path: null
