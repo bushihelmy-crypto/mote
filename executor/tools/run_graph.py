@@ -31,9 +31,26 @@ _MSG_NESTED_GRAPH = (
 )
 
 RUN_GRAPH_DESCRIPTION = """\
-Orchestrate multiple tool calls as one declarative graph — for-loops (map), \
-if/else branching, and parallel execution — in a single call, instead of \
-issuing the tool calls yourself one turn at a time.
+Orchestrate multiple tool calls as one declarative graph — map (batch/fan-out), \
+if/else branching, and parallel execution — in a single call.
+
+Principle: whatever reduces to `for` + `if` — a mechanical, repetitive \
+workflow — belongs in a graph. When the task is looping over a collection or \
+branching on a condition (`map` nodes and `when` edges are exactly that `for` \
+and `if`), express it as a graph and let this tool run it, rather than \
+re-improvising the calls yourself turn by turn. The engine then guarantees the \
+flow — the loop can't silently skip or duplicate items, the branch is evaluated \
+the same way every time, dependent steps stay ordered, independent ones run in \
+parallel — so execution is reliable and repeatable.
+
+Prefer it for: fan-out (the SAME tool over every item in a collection, via \
+`map`); fixed pipelines (each step's input is a known function of earlier \
+outputs); conditional routing (pick between tools on a prior result); and pure \
+data-shaping between steps (filter/reshape/aggregate, via `compute`).
+
+Skip it when a single tool call suffices, or when your next step genuinely \
+depends on reading/judging an intermediate result before you can decide — issue \
+those one turn at a time.
 
 Submit `graph` (a GraphSpec) and `inputs` (the values for its declared inputs).
 
@@ -89,7 +106,7 @@ The unmatched branch's node never runs, so a $ref to it in `output` is null.
 `output` is a binding tree resolved against the final state and returned. A \
 ref into a branch that was skipped resolves to null (not an error).
 
-Principles (get these right or the call fails):
+Hard rules (violate → the call fails):
   - Every `{"$input": x}` MUST be declared in `graph.inputs` first.
   - `compute` reads data ONLY via `args` (bound as locals) — never embed a \
 `$ref`/`$input` inside the `expr` string; put it in `args` and use the name.

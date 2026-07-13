@@ -201,6 +201,9 @@ class ResumeTasks(BaseTool):
         # graph_meta so the pool re-snapshots its run_state (the object the new
         # driver mutates) onto the task meta for the next resume / query.
         assert bg_result.poll_factory is not None, "resumed task must yield a poll factory"
+        # ``resubmit`` retires the stale resume marker (the model has acted on
+        # it) and resets the push-once bookkeeping so the next terminal
+        # re-registers a fresh result pointer.
         pool.resubmit(task_id, bg_result.poll_factory, graph_meta=bg_result.graph_meta)
 
         return _MSG_RESUMED.format(task_id=task_id)

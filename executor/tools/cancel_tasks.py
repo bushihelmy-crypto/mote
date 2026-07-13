@@ -61,6 +61,10 @@ class CancelTasks(BaseTool):
         if not success:
             return _MSG_CANCEL_DONE.format(task_id=task_id, status="finished")
 
+        # Cancelling is a consume: the model acted on the task, so retire its
+        # re-projected result/marker and let the meta be reaped.
+        pool.mark_retrieved(task_id)
+
         cancel_reason = reason or "user requested"
 
         return _MSG_CANCEL_SUCCESS.format(

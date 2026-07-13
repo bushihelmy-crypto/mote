@@ -21,6 +21,7 @@ from xml.sax.saxutils import escape as _escape_xml
 
 from mote.common.logs import log_class, logger
 from mote.common.schema import CauseBy, MessagePriority, ToolResultLimitConfig
+from mote.common.schema.node_status import PAUSE_STATUSES
 from mote.executor.tasks.types import BackgroundTaskNotification, BgStatus, GraphMeta, PollFactory, TaskMeta, TaskType
 
 if TYPE_CHECKING:
@@ -63,6 +64,8 @@ class BackgroundTaskPool:
         wake: Optional[Callable[[], None]] = None,
         session_id: str = "",
         limit_config: Optional[ToolResultLimitConfig] = None,
+        on_terminal_result: Optional[Callable[[TaskMeta], None]] = None,
+        retire_result: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._msg_buffer = msg_buffer
         # Result-limit policy — the SAME contract the synchronous ToolExecutor
@@ -86,6 +89,18 @@ class BackgroundTaskPool:
         # via :meth:`set_wake` because the runtime wiring may arrive after the
         # pool is constructed.
         self._wake = wake
+        # Push-once result survival + consume-driven GC. A task's whole-task
+        # terminal (graph result / agent summary / pause marker) is a push-once
+        # signal the model must eventually consume; the live notification can be
+        # summarized away by autocompact, so ``on_terminal_result`` registers the
+        # result as a re-projectable ResourceUnit and ``retire_result`` unloads it
+        # once consumed. Both are late-bound (via :meth:`set_on_terminal_result` /
+        # :meth:`set_retire_result`) because the Role wiring — which owns the
+        # ResourceRegistry — may be installed after this pool is constructed, and
+        # the pool must not import Role (no upward coupling): it only holds the
+        # ``Callable`` seams.
+        self._on_terminal_result = on_terminal_result
+        self._retire_result = retire_result
         # Optional disk-output store. When present, graph tasks submitted with
         # ``progress=True`` get a per-task output sink so node-level
         # ``report_progress`` events land on disk and surface as
@@ -188,6 +203,24 @@ class BackgroundTaskPool:
         """
         self._wake = wake
 
+    def set_on_terminal_result(self, cb: Optional[Callable[[TaskMeta], None]]) -> None:
+        """Bind (or rebind) the whole-task-terminal result callback.
+
+        Called once per task at its terminal (in ``_on_done``) with the task's
+        :class:`TaskMeta`; the Role wires this to register the push-once result
+        as a re-projectable ResourceUnit. Late-bound (see ``__init__``) because
+        the Role owns the registry and may wire after construction.
+        """
+        self._on_terminal_result = cb
+
+    def set_retire_result(self, cb: Optional[Callable[[str], None]]) -> None:
+        """Bind (or rebind) the consume→retire callback.
+
+        Called with a ``task_id`` when the model consumes a task's result
+        (:meth:`mark_retrieved`); the Role wires this to unload the ResourceUnit.
+        """
+        self._retire_result = cb
+
     def has_pending(self) -> bool:
         """Return *True* if there are still running tasks."""
         return bool(self._tasks)
@@ -283,6 +316,50 @@ class BackgroundTaskPool:
         """Return metadata for all tracked tasks (running + recently completed)."""
         return list(self._meta.values())
 
+    def mark_retrieved(self, task_id: str) -> None:
+        """Record that the model has consumed a task's push-once result.
+
+        The consume tools (GetNodeState / resume / cancel) call this on a
+        *successful* consume. It flips ``meta.retrieved``, retires the
+        re-projected ResourceUnit (so it stops re-surfacing after compaction),
+        and reaps the now-fully-consumed meta from the tracking dict — the "real
+        consume" half of the double-safety recycle. Unknown ids are ignored.
+        """
+        meta = self._meta.get(task_id)
+        if meta is None:
+            return
+        # A resumable pause is NOT consumed by mere inspection — its resume
+        # marker must keep re-surfacing until the task is actually resumed
+        # (``resubmit`` flips it to RUNNING first, so the resume path reaches
+        # here with a non-pause status and does retire the old marker).
+        if meta.status in PAUSE_STATUSES:
+            return
+        meta.retrieved = True
+        if self._retire_result is not None:
+            try:
+                self._retire_result(task_id)
+            except Exception as exc:  # noqa: BLE001 — retire is best-effort
+                logger.debug(f"BackgroundTaskPool: retire_result failed for {task_id}: {exc}")
+        self._maybe_reap_meta(task_id, meta)
+
+    def _maybe_reap_meta(self, task_id: str, meta: TaskMeta) -> None:
+        """Drop a fully-consumed terminal task's meta so ``_meta`` stays bounded.
+
+        Reaped only when the task is genuinely done with: consumed
+        (``retrieved``), no longer running (absent from ``_tasks``), and not a
+        resumable pause (a pause keeps its snapshot for ``resume_tasks``, so it
+        survives even if ``retrieved`` — resume clears the pause first). This is
+        the shared reap point for both the consume path and the round-based
+        recycle.
+        """
+        if not meta.retrieved:
+            return
+        if task_id in self._tasks:
+            return
+        if meta.status in PAUSE_STATUSES:
+            return
+        self._meta.pop(task_id, None)
+
     def cancel(self, task_id: str) -> bool:
         """Cancel a running background task.
 
@@ -371,6 +448,17 @@ class BackgroundTaskPool:
         meta.end_time = None
         meta.result = None
         meta.notified = False
+        # A resumed run produces a fresh terminal, so reset the push-once
+        # bookkeeping: retire the now-stale pointer (a pause marker or a prior
+        # result) so it stops re-surfacing while the task runs again, and clear
+        # the flags so the next terminal re-registers a fresh result pointer.
+        if meta.registered_resource and self._retire_result is not None:
+            try:
+                self._retire_result(task_id)
+            except Exception as exc:  # noqa: BLE001 — retire is best-effort
+                logger.debug(f"BackgroundTaskPool: retire_result failed on resubmit for {task_id}: {exc}")
+        meta.registered_resource = False
+        meta.retrieved = False
         meta.retry_count += 1
 
         coro = poll_factory()
@@ -769,6 +857,25 @@ class BackgroundTaskPool:
         # terminal code. The agent sees exactly one terminal, no dedup needed.
         self.deliver(notification)
 
+        # Register the push-once result for post-compaction re-projection. This
+        # runs AFTER deliver (the live notification is the model's first sight of
+        # the result); the registered pointer only re-surfaces once compaction
+        # discards that notification. Best-effort — a registration failure must
+        # never break the completion path. Idempotent via ``registered_resource``
+        # so a resubmit→re-terminal does not double-load; skipped when the model
+        # already consumed the task (e.g. cancelled a running one) — no point
+        # re-projecting a result that was already acted on.
+        if (
+            self._on_terminal_result is not None
+            and meta is not None
+            and not meta.registered_resource
+            and not meta.retrieved
+        ):
+            try:
+                self._on_terminal_result(meta)
+            except Exception as exc:  # noqa: BLE001 — registration is best-effort
+                logger.debug(f"BackgroundTaskPool: on_terminal_result failed for {task_id}: {exc}")
+
         # Resolve every registered one-shot completion future (fan-out
         # broadcast). Iterate a snapshot so a re-entrant completion is safe;
         # each resolved/cancelled future removes itself via _discard_waiter.
@@ -776,5 +883,9 @@ class BackgroundTaskPool:
             if not fut.done():
                 fut.set_result(None)
 
-        # Remove from tracking dict
+        # Remove from tracking dict, then reap the meta if the task was already
+        # consumed before its terminal (a cancel of a running task marks
+        # ``retrieved`` before ``_on_done`` fires) — keeps ``_meta`` bounded.
         self._tasks.pop(task_id, None)
+        if meta is not None:
+            self._maybe_reap_meta(task_id, meta)

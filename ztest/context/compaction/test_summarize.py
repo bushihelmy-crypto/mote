@@ -139,6 +139,34 @@ def test_sticky_reprojected_after_summary():
     assert sticky_idx > summary_idx
 
 
+def test_task_result_pointer_reprojected_after_summary():
+    # The push-once bg-task pointer survives compaction via the SAME
+    # sticky_provider seam: a ResourceRegistry.project projects the registered
+    # task_result unit, which must land after the summary (so the model is
+    # re-reminded of a result the discarded notification once carried).
+    from mote.common.resource import ResourceRegistry, build_task_result_pointer
+
+    registry = ResourceRegistry()
+    pointer = build_task_result_pointer(
+        task_id="bg_3",
+        command_name="code review",
+        status="success",
+        summary="code review finished (success).",
+        result="found 2 issues",
+    )
+    registry.load(id="bg_3", kind="task_result", content=pointer, sticky=True)
+
+    t = Transcript.from_messages([text_msg(f"m{i}") for i in range(8)])
+    _, out = _reduce(t, sticky_provider=registry.project)
+    contents = [m.content or "" for m in out.transcript.to_messages()]
+    joined = "\n".join(contents)
+    assert "<task-result>" in joined
+    assert "bg_3" in joined
+    summary_idx = next(i for i, c in enumerate(contents) if "SUMMARY" in c)
+    ptr_idx = next(i for i, c in enumerate(contents) if "<task-result>" in c)
+    assert ptr_idx > summary_idx
+
+
 def test_sticky_provider_failure_is_swallowed():
     def boom():
         raise RuntimeError("provider down")

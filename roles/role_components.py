@@ -47,8 +47,8 @@ from mote.common.logs import logger
 from mote.common.observability.langfuse_backend import LangfuseBackend
 from mote.common.observability.langfuse_integration import is_enabled, step_tracing_enabled
 from mote.common.observability.tracing import TracingSubscriber
-from mote.common.resource import ResourceRegistry
-from mote.common.schema import SandboxConfig
+from mote.common.resource import ResourceRegistry, build_task_result_pointer
+from mote.common.schema import PAUSE_STATUSES, TERMINAL_STATUSES, BgStatus, SandboxConfig
 from mote.common.utils.git_state import find_git_root
 from mote.common.utils.report import ReporterSubscriber
 from mote.context import ContextManager, ContextVisibility
@@ -744,12 +744,13 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
     # so the only notification the agent ever sees is the whole-task completion
     # push from ``_on_done`` — meaning a long-running graph never wakes a Sleep
     # mid-flight on node completions.
-    output_store = TaskOutputStore(session_id=ctx.role.state.session_id)
+    role = ctx.role
+    output_store = TaskOutputStore(session_id=role.state.session_id)
     pool = BackgroundTaskPool(
-        msg_buffer=ctx.role.state.msg_buffer,
+        msg_buffer=role.state.msg_buffer,
         output_store=output_store,
         wake=ctx.state.pending_task_completion_wake,
-        session_id=ctx.role.state.session_id,
+        session_id=role.state.session_id,
     )
 
     # Wire the disk-cap kill switch so an output that blows the size cap cancels
@@ -758,6 +759,39 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
         pool.cancel_for_cap(tid)
 
     output_store.set_on_cap(_cancel_on_cap)
+
+    # Push-once result survival: at each whole-task terminal, register the result
+    # (or a resumable-pause marker) as a ``task_result`` ResourceUnit so it is
+    # re-projected after an autocompaction discards the live notification. The
+    # matching retire callback unloads it when the model consumes the result
+    # (via ``pool.mark_retrieved`` from the consume tools). The pool holds only
+    # these ``Callable`` seams — it never imports Role (no upward coupling).
+    def _on_terminal(meta) -> None:
+        status_value = meta.status.value if isinstance(meta.status, BgStatus) else str(meta.status)
+        if meta.status in PAUSE_STATUSES:
+            # Resumable pause: a resume marker (no produced value yet).
+            content = build_task_result_pointer(
+                task_id=meta.task_id,
+                command_name=meta.command_name,
+                status=status_value,
+                summary=f"{meta.command_name} paused ({status_value}), awaiting a decision.",
+            )
+        elif meta.status in TERMINAL_STATUSES:
+            content = build_task_result_pointer(
+                task_id=meta.task_id,
+                command_name=meta.command_name,
+                status=status_value,
+                summary=f"{meta.command_name} finished ({status_value}).",
+                result=meta.result,
+                output_path=meta.output_path,
+            )
+        else:
+            return  # neither terminal nor pause — nothing to register
+        role._capabilities.register_task_result(meta.task_id, content)
+        meta.registered_resource = True
+
+    pool.set_on_terminal_result(_on_terminal)
+    pool.set_retire_result(role.resource_registry.unload)
     return pool
 
 

@@ -145,6 +145,39 @@ async def test_resume_rebuilds_resource_registry(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resume_rebuilds_task_result_pointer_with_kind(tmp_path, monkeypatch):
+    from mote.common.const import RESOURCE_KIND
+    from mote.router.llm.context import Context
+
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
+
+    # A push-once bg-task pointer rides the SAME sticky-resource seam: it is
+    # recorded as a task_result ResourceMessage, so resume must rebuild it under
+    # kind="task_result" (not the "skill" default) so per-kind budgeting / round
+    # reaping continue to apply after a restart.
+    role_a = Role(name="A", context=Context())
+    role_a._components._wire_spine()
+    sid = role_a.session_id
+    await role_a.context_manager.add(
+        ResourceMessage(
+            "<task-result><task-id>bg_3</task-id></task-result>",
+            resource_id="bg_3",
+            resource_kind="task_result",
+        )
+    )
+
+    role_b = Role(name="B", context=Context())
+    role_b.state.session_id = sid
+    assert role_b.resume_session() is True
+    registry = role_b.resource_registry
+    assert "bg_3" in registry
+    (m,) = registry.project(model="gpt-4")
+    assert m.resource_kind == "task_result"
+    assert m.metadata[RESOURCE_KIND] == "task_result"
+    assert "<task-result>" in m.content
+
+
+@pytest.mark.asyncio
 async def test_resume_skips_non_resource_messages(tmp_path, monkeypatch):
     from mote.router.llm.context import Context
 

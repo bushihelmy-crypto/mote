@@ -255,3 +255,15 @@ class TaskMeta:
     run_state: Optional[Any] = field(default=None, repr=False)
     retry_count: int = 0
     max_restarts: int = 3
+
+    # --- push-once result survival + consume/GC ---
+    # ``registered_resource`` is an idempotency guard: True once ``_on_done``'s
+    # terminal callback has registered this task's push-once result (graph
+    # terminal / agent summary / pause marker) as a ResourceUnit for
+    # post-compaction re-projection, so a resubmit→re-terminal does not double-load.
+    registered_resource: bool = False
+    # ``retrieved`` marks that the model has actually *consumed* the result
+    # (inspected via GetNodeState / resumed / cancelled). A consumed result is
+    # unloaded from the registry and its meta is eligible for reaping — the
+    # "real consume" half of the double-safety (the other half is round-based reap).
+    retrieved: bool = False

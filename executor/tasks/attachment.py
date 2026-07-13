@@ -16,14 +16,13 @@ from xml.sax.saxutils import escape as _escape_xml
 
 from mote.common.const.tasks import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
 from mote.common.exception import ErrorReport, render_error_block
+from mote.common.schema.node_status import TERMINAL_STATUSES as _TERMINAL_STATUSES
 from mote.common.text import format_elapsed
 from mote.executor.tasks.types import BgStatus
 
 if TYPE_CHECKING:
     from mote.executor.tasks.disk_output import TaskOutputStore
     from mote.executor.tasks.pool import BackgroundTaskPool
-
-_TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})
 
 
 # ------------------------------------------------------------------

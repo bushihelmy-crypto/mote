@@ -123,6 +123,8 @@ WaitInterruptible: TypeAlias = Callable[[float], Awaitable[tuple[float, bool]]]
 GetSkillPool: TypeAlias = Callable[[], "Optional[SkillPool]"]
 RunSkillFork: TypeAlias = Callable[..., Awaitable[str]]
 RegisterResource: TypeAlias = Callable[..., None]
+RegisterTaskResult: TypeAlias = Callable[[str, str], None]
+RetireTaskResult: TypeAlias = Callable[[str], None]
 
 # ---------------------------------------------------------------------------
 # OS-level sandbox runtime (command-execution tools)
@@ -180,6 +182,8 @@ class CapabilityMap(TypedDict):
     get_skill_pool: GetSkillPool
     run_skill_fork: RunSkillFork
     register_resource: RegisterResource
+    register_task_result: RegisterTaskResult
+    retire_task_result: RetireTaskResult
     get_sandbox_runtime: GetSandboxRuntime
     dispatch_tool: DispatchTool
     list_tool_names: ListToolNames

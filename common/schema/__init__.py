@@ -95,6 +95,7 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     # node_status
     "BgStatus": ("node_status", "BgStatus"),
     "PAUSE_STATUSES": ("node_status", "PAUSE_STATUSES"),
+    "TERMINAL_STATUSES": ("node_status", "TERMINAL_STATUSES"),
     # think
     "ThinkResult": ("think", "ThinkResult"),
 }

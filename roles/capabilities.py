@@ -171,6 +171,26 @@ class RoleCapabilities:
         """
         self._role.resource_registry.load(id=id, kind=kind, content=content)
 
+    def register_task_result(self, task_id: str, content: str) -> None:
+        """Register a background task's push-once result for re-projection.
+
+        The pool's terminal callback calls this so a graph terminal / agent
+        summary / pause marker survives an autocompaction that discards the live
+        ``BackgroundTaskNotification`` — the registry re-projects the ``content``
+        pointer right after the summary until the model consumes (and unloads)
+        it or the round cap recycles it. Best-effort dict write; does not raise.
+        """
+        self._role.resource_registry.load(id=task_id, kind="task_result", content=content, sticky=True)
+
+    def retire_task_result(self, task_id: str) -> None:
+        """Stop re-projecting a task result once the model has consumed it.
+
+        Called when a consume tool (GetNodeState / resume / cancel) reports the
+        result was acted on: unload from the registry so future projections skip
+        it. Idempotent — unloading an absent id is a no-op.
+        """
+        self._role.resource_registry.unload(task_id)
+
     def record_terminal_state(self, cwd: str, env: dict, unset: list, *, tool: str = "") -> None:
         """Record the persistent terminal's final cwd + env diff into the rollout.
 

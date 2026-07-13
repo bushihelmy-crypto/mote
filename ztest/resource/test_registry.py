@@ -1,6 +1,12 @@
 """ResourceRegistry: load/unload/get_all + budgeted most-recent-first projection."""
 from mote.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.common.resource import POST_COMPACT_MAX_TOKENS_PER_UNIT, POST_COMPACT_TOKEN_BUDGET, ResourceRegistry
+from mote.common.resource import (
+    POST_COMPACT_MAX_ROUNDS,
+    POST_COMPACT_MAX_TOKENS_PER_UNIT,
+    POST_COMPACT_PER_KIND_BUDGET,
+    POST_COMPACT_TOKEN_BUDGET,
+    ResourceRegistry,
+)
 from mote.common.resource.registry import _project_one
 from mote.common.resource.unit import ResourceUnit
 from mote.common.schema import ResourceMessage
@@ -104,3 +110,72 @@ def test_project_one_header_format():
     m = _project_one(unit, "BODY")
     assert m.content.startswith("# Skill: simplify (loaded earlier, preserved across compaction)")
     assert m.content.endswith("BODY")
+
+
+# --- per-kind sub-budget + round-based reap -----------------------------------
+
+
+def _tokens_line_body(n_tokens: int) -> str:
+    """A body of roughly *n_tokens* (~1 token per short line)."""
+    return "\n".join(f"tok{i}" for i in range(n_tokens))
+
+
+def test_per_kind_budget_does_not_starve_other_kinds():
+    """A flood of one capped kind (task_result) cannot crowd out a skill body."""
+    r = ResourceRegistry()
+    sub_cap = POST_COMPACT_PER_KIND_BUDGET["task_result"]
+    # Load one skill (oldest) then many big task_results (newer) that together
+    # far exceed the task_result sub-cap.
+    r._units["skill1"] = ResourceUnit(id="skill1", kind="skill", content="SKILLBODY", invoked_at=0.0)
+    body = _tokens_line_body(sub_cap - 200)
+    for k in range(5):
+        r._units[f"t{k}"] = ResourceUnit(id=f"t{k}", kind="task_result", content=body, invoked_at=float(k + 1))
+    projected = r.project()
+    kinds = [m.resource_kind for m in projected]
+    # The skill still projects despite the task_result flood (no starvation).
+    assert "skill" in kinds
+    # task_result is bounded by its own sub-cap — not every one gets in.
+    assert kinds.count("task_result") < 5
+
+
+def test_per_kind_over_budget_skips_not_breaks():
+    """A task_result over its sub-cap is skipped, but scanning continues to a
+    later (older) skill unit — i.e. skip, not break."""
+    r = ResourceRegistry()
+    sub_cap = POST_COMPACT_PER_KIND_BUDGET["task_result"]
+    big = _tokens_line_body(sub_cap + 500)  # single unit already over the sub-cap
+    # Newest is the over-cap task_result; older is a small skill.
+    r._units["big_task"] = ResourceUnit(id="big_task", kind="task_result", content=big, invoked_at=2.0)
+    r._units["skill1"] = ResourceUnit(id="skill1", kind="skill", content="S", invoked_at=1.0)
+    ids = [m.resource_id for m in r.project()]
+    # The oversized task_result exceeds its per-kind cap after truncation? It is
+    # truncated to PER_UNIT first; if still over sub-cap it is skipped. Either
+    # way the skill (scanned after) must still appear — proving skip, not break.
+    assert "skill1" in ids
+
+
+def test_round_reap_recycles_task_result_but_never_skill():
+    """A task_result unit unloads after exceeding its max-rounds cap; a skill,
+    having no cap, projects forever."""
+    r = ResourceRegistry()
+    cap = POST_COMPACT_MAX_ROUNDS["task_result"]
+    r.load(id="t1", kind="task_result", content="RESULT", sticky=True)
+    r.load(id="s1", kind="skill", content="SKILL", sticky=True)
+    # Project cap+1 times; on the projection that pushes rounds past the cap the
+    # task_result is reaped afterward.
+    for _ in range(cap + 1):
+        r.project()
+    assert "t1" not in r  # recycled after exceeding the round cap
+    assert "s1" in r  # skill never reaped by rounds
+    # Keep projecting: the skill still comes through.
+    ids = [m.resource_id for m in r.project()]
+    assert ids == ["s1"]
+
+
+def test_task_result_projection_carries_kind():
+    r = ResourceRegistry()
+    r.load(id="bg_3", kind="task_result", content="<task-result>…</task-result>", sticky=True)
+    (m,) = r.project()
+    assert m.resource_kind == "task_result"
+    assert m.metadata[RESOURCE_KIND] == "task_result"
+    assert m.resource_id == "bg_3"

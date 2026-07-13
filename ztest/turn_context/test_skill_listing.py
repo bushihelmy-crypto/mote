@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.interface import EphemeralContextSource
+from mote.common.events import PostCompactEvent
+from mote.common.interface import EphemeralContextSource, ObservationSubscriber
 from mote.context.turn_context import SkillListingContextSource
 
 
@@ -53,6 +54,12 @@ def _source(injector):
 class TestProtocol:
     def test_is_ephemeral_context_source(self):
         assert isinstance(_source(_FakeInjector([])), EphemeralContextSource)
+
+    def test_is_observation_subscriber(self):
+        # Dual-role: it must be an ObservationSubscriber so the roster wiring
+        # (RoleComponents._build_event_subscribers) subscribes it to the bus and
+        # it can reset its frontier on PostCompactEvent.
+        assert isinstance(_source(_FakeInjector([])), ObservationSubscriber)
 
     def test_save_to_context_true(self):
         # It is persisted to history once per turn (not request-only ephemeral).
@@ -140,3 +147,27 @@ class TestIncremental:
         inj._skills = [_FakeSkill("alpha")]  # beta unloaded
         # Nothing new to add → silent (removals are not re-announced).
         assert run(src.render()) is None
+
+
+class TestPostCompactReset:
+    def test_post_compact_resets_frontier_and_resends_full(self):
+        inj = _FakeInjector([_FakeSkill("alpha"), _FakeSkill("beta")])
+        src = _source(inj)
+        run(src.render())  # first turn: full index
+        assert run(src.render()) is None  # steady: nothing new
+
+        run(src.handle(PostCompactEvent()))  # compaction condensed the index away
+        assert src._sent_names == set()
+
+        out = run(src.render())  # next turn re-sends the WHOLE index
+        assert out is not None
+        assert "## Available Skills" in out  # full render, not the delta header
+        assert "alpha" in out and "beta" in out
+        assert "New Skills available" not in out
+
+    def test_handle_ignores_other_events(self):
+        inj = _FakeInjector([_FakeSkill("alpha")])
+        src = _source(inj)
+        run(src.render())
+        run(src.handle(object()))  # unrelated event → no reset
+        assert src._sent_names == {"alpha"}

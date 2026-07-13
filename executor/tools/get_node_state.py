@@ -158,7 +158,7 @@ def _record_header(rec, *, self_loop: bool = False) -> str:
 
 @register_tool
 class GetNodeState(BaseTool):
-    name = "GetNodeState"
+    name = "GetNodeStates"
     aliases = ["get_node_state"]
     description = (
         "Inspect the per-node execution state of a background graph pipeline. "
@@ -205,7 +205,9 @@ class GetNodeState(BaseTool):
 
         wanted_fields = _as_list(fields)
         if wanted_fields:
-            return self._render_fields(task_id, meta, wanted_fields)
+            out = self._render_fields(task_id, meta, wanted_fields)
+            pool.mark_retrieved(task_id)
+            return out
 
         run_state = pool.get_run_state(task_id)
         if run_state is None:
@@ -220,13 +222,17 @@ class GetNodeState(BaseTool):
 
         requested = _as_list(nodes)
         if not requested:
-            return self._render_overview(task_id, meta, run_state, graph)
+            out = self._render_overview(task_id, meta, run_state, graph)
+            pool.mark_retrieved(task_id)
+            return out
 
         if graph is not None:
             for n in requested:
                 if n not in graph._nodes:
                     raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=list(graph._nodes.keys())))
-        return self._render_details(task_id, meta, run_state, graph, requested)
+        out = self._render_details(task_id, meta, run_state, graph, requested)
+        pool.mark_retrieved(task_id)
+        return out
 
     def _render_overview(self, task_id, meta, run_state, graph=None) -> str:
         lines = [
