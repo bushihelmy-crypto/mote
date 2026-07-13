@@ -284,3 +284,44 @@ class TestGetNodeState:
         assert "Node 'work'" in result
         assert "activations" in result
         assert "not retries" in result
+
+
+class TestConsumeMarksRetrieved:
+    """A successful inspect consumes the push-once result: it flips ``retrieved``
+    and retires the re-projected pointer. An error path (raise) does not.
+    """
+
+    async def test_successful_overview_marks_retrieved_and_retires(self, pool):
+        retired: list[str] = []
+        pool.set_retire_result(retired.append)
+
+        g = _failing_graph()
+        res = await g.compile()(x=5)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
+        await pool.wait_all()
+
+        tool = _make_tool(pool)
+        await tool.call(task_id=tid)  # successful overview
+
+        meta = pool.get_task_info(tid)
+        # meta reaped after consume (retrieved + not running + terminal), so the
+        # retire callback is the observable signal that the consume fired.
+        assert retired == [tid]
+        assert meta is None or meta.retrieved is True
+
+    async def test_error_path_does_not_mark_retrieved(self, pool):
+        retired: list[str] = []
+        pool.set_retire_result(retired.append)
+
+        g = _detail_graph()
+        res = await g.compile()(x=5)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=10, graph_meta=res.graph_meta)
+        await pool.wait_all()
+
+        tool = _make_tool(pool)
+        with pytest.raises(ToolError, match="Unknown state field"):
+            await tool.call(task_id=tid, fields=["nonexistent"])
+
+        # The failed consume must NOT retire the pointer nor flip retrieved.
+        assert retired == []
+        assert pool.get_task_info(tid).retrieved is False

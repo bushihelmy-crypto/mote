@@ -26,6 +26,20 @@ from mote.common.utils.prompt_sanitizer import count_tokens, truncate_to_tokens
 POST_COMPACT_MAX_TOKENS_PER_UNIT = 5_000
 POST_COMPACT_TOKEN_BUDGET = 25_000
 
+# Per-kind sub-budgets (tokens) layered *under* the global budget: a kind listed
+# here may not consume more than its own cap across a single projection, so a
+# flood of one kind (e.g. many background task results) can never starve another
+# (e.g. loaded Skill bodies). A kind absent from this map has no sub-cap — it is
+# bounded only by the global budget, preserving the original skill behavior.
+POST_COMPACT_PER_KIND_BUDGET: dict[str, int] = {"task_result": 8_000}
+
+# Per-kind projection-lifetime caps: a unit of this kind is unloaded once it has
+# been re-projected more than ``rounds`` times without being consumed — the
+# round-based half of the double-safety recycle (the other half is explicit
+# ``unload`` on consume). A kind absent from this map is never reaped by round
+# count (a Skill body sticks until explicitly unloaded).
+POST_COMPACT_MAX_ROUNDS: dict[str, int] = {"task_result": 6}
+
 
 class ResourceRegistry:
     """Holds loaded ResourceUnits and re-projects the sticky ones after compaction."""
@@ -62,9 +76,20 @@ class ResourceRegistry:
         dropping whole units once the running total would exceed the budget.
         ``model`` is accepted for signature symmetry with the token subsystem; the
         shared approximate tokenizer is model-agnostic here.
+
+        Two budget layers apply: a per-kind sub-cap
+        (``POST_COMPACT_PER_KIND_BUDGET``) that a kind may not exceed — over it,
+        the unit is *skipped* and scanning continues (a per-kind flood cannot
+        starve other kinds) — and the global ``POST_COMPACT_TOKEN_BUDGET`` that
+        *breaks* the scan (older units dropped whole). Every unit actually
+        projected has its ``projection_rounds`` bumped; kinds with a
+        ``POST_COMPACT_MAX_ROUNDS`` cap are unloaded once they exceed it, so an
+        unconsumed task result recycles itself after a bounded number of turns.
         """
         out: list[ResourceMessage] = []
         used = 0
+        per_kind_used: dict[str, int] = {}
+        projected_ids: list[str] = []
         for unit in self.get_all():
             if not unit.sticky:
                 continue
@@ -72,11 +97,30 @@ class ResourceRegistry:
             if count_tokens(body) > POST_COMPACT_MAX_TOKENS_PER_UNIT:
                 body = truncate_to_tokens(body, POST_COMPACT_MAX_TOKENS_PER_UNIT)
             cost = count_tokens(body)
+            sub_cap = POST_COMPACT_PER_KIND_BUDGET.get(unit.kind)
+            if sub_cap is not None and per_kind_used.get(unit.kind, 0) + cost > sub_cap:
+                # This kind is over its own sub-budget: skip THIS unit but keep
+                # scanning so other kinds still project (no cross-kind starvation).
+                continue
             if used + cost > POST_COMPACT_TOKEN_BUDGET:
-                # Over budget: drop this and every remaining (older) unit.
+                # Over the global budget: drop this and every remaining (older) unit.
                 break
             used += cost
+            if sub_cap is not None:
+                per_kind_used[unit.kind] = per_kind_used.get(unit.kind, 0) + cost
+            unit.projection_rounds += 1
+            projected_ids.append(unit.id)
             out.append(_project_one(unit, body))
+        # Round-based reap: a projected unit whose kind has a max-rounds cap and
+        # has now exceeded it is unloaded so it recycles itself after a bounded
+        # number of unconsumed projections.
+        for uid in projected_ids:
+            unit = self._units.get(uid)
+            if unit is None:
+                continue
+            cap = POST_COMPACT_MAX_ROUNDS.get(unit.kind)
+            if cap is not None and unit.projection_rounds > cap:
+                self._units.pop(uid, None)
         return out
 
 
@@ -94,4 +138,6 @@ __all__ = [
     "ResourceRegistry",
     "POST_COMPACT_MAX_TOKENS_PER_UNIT",
     "POST_COMPACT_TOKEN_BUDGET",
+    "POST_COMPACT_PER_KIND_BUDGET",
+    "POST_COMPACT_MAX_ROUNDS",
 ]

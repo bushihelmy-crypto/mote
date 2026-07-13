@@ -32,3 +32,8 @@ class BgStatus(str, Enum):
 # cancel gates test "is this a resumable pause?" from one authoritative place
 # instead of re-listing the members.
 PAUSE_STATUSES = frozenset({BgStatus.WAITING_FOR_ROUTE, BgStatus.STALLED})
+
+# Whole-task *terminal* statuses — a task that has genuinely finished (as opposed
+# to a resumable pause). Single authoritative source so the attachment generator,
+# the push-once result registration, and any reap gate all agree on "done".
+TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})

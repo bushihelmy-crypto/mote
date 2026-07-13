@@ -516,6 +516,8 @@ class Role(BaseRole):
             "get_skill_pool": self.get_skill_pool,
             "run_skill_fork": self.run_skill_fork,
             "register_resource": self._capabilities.register_resource,
+            "register_task_result": self._capabilities.register_task_result,
+            "retire_task_result": self._capabilities.retire_task_result,
             "get_sandbox_runtime": self.get_sandbox_runtime,
             "dispatch_tool": self.dispatch_tool,
             "list_tool_names": self.list_tool_names,

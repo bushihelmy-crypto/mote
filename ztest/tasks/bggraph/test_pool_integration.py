@@ -380,3 +380,157 @@ class TestPoolResultLimitPolicy:
         # Disabled → whole error block, never persisted.
         assert not meta.result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
         assert "YYYY" in meta.result
+
+
+def _wire_registry(pool):
+    """Wire a real ResourceRegistry into *pool* the way ``_build_bg_pool`` does.
+
+    Registers a ``task_result`` pointer on every terminal / pause via the
+    late-bound ``on_terminal_result`` callback, and retires it via the
+    ``retire_result`` callback. Returns the registry so a test can assert what
+    survived compaction.
+    """
+    from mote.common.resource import ResourceRegistry, build_task_result_pointer
+    from mote.common.schema import PAUSE_STATUSES, TERMINAL_STATUSES
+
+    registry = ResourceRegistry()
+
+    def _on_terminal(meta) -> None:
+        status_value = meta.status.value if isinstance(meta.status, BgStatus) else str(meta.status)
+        if meta.status in PAUSE_STATUSES:
+            content = build_task_result_pointer(
+                task_id=meta.task_id,
+                command_name=meta.command_name,
+                status=status_value,
+                summary=f"{meta.command_name} paused ({status_value}), awaiting a decision.",
+            )
+        elif meta.status in TERMINAL_STATUSES:
+            content = build_task_result_pointer(
+                task_id=meta.task_id,
+                command_name=meta.command_name,
+                status=status_value,
+                summary=f"{meta.command_name} finished ({status_value}).",
+                result=meta.result,
+                output_path=meta.output_path,
+            )
+        else:
+            return
+        registry.load(id=meta.task_id, kind="task_result", content=content, sticky=True)
+        meta.registered_resource = True
+
+    pool.set_on_terminal_result(_on_terminal)
+    pool.set_retire_result(registry.unload)
+    return registry
+
+
+class TestPushOnceResultRegistration:
+    """The pool's late-bound terminal callback registers a push-once result as a
+    ``task_result`` ResourceUnit (so it re-projects after compaction); consuming
+    it (``mark_retrieved``) retires the unit and reaps the meta; a pause registers
+    a resume-marker that survives mere inspection.
+    """
+
+    async def test_success_terminal_registers_task_result_pointer(self, pool, store, msg_buffer):
+        registry = _wire_registry(pool)
+        g = _media_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None, progress=True)
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.SUCCESS
+        assert meta.registered_resource is True
+        # The registry now carries a re-projectable pointer for this task.
+        assert tid in registry
+        (m,) = registry.project()
+        assert m.resource_kind == "task_result"
+        assert m.resource_id == tid
+        assert "<task-result>" in m.content
+        assert "success" in m.content
+
+    async def test_pause_registers_resume_marker(self, pool, store, msg_buffer):
+        registry = _wire_registry(pool)
+        g = _llm_pause_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll_factory,
+            res.command_name,
+            timeout=None,
+            progress=True,
+            graph_meta=res.graph_meta,
+        )
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.WAITING_FOR_ROUTE
+        assert tid in registry
+        (m,) = registry.project()
+        # A pause marker has a resume-hint and no produced result body.
+        assert "<resume-hint>" in m.content
+        assert "<result>" not in m.content
+
+    async def test_mark_retrieved_retires_pointer_and_reaps_meta(self, pool, store, msg_buffer):
+        registry = _wire_registry(pool)
+        g = _media_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None, progress=True)
+        await pool.wait_all()
+        assert tid in registry
+
+        # The model consumes the result (e.g. via GetNodeState / cancel).
+        pool.mark_retrieved(tid)
+
+        # Pointer retired (stops re-surfacing) and meta reaped (bounded _meta).
+        assert tid not in registry
+        assert registry.project() == []
+        assert pool.get_task_info(tid) is None
+
+    async def test_paused_task_not_reaped_even_after_mark_retrieved(self, pool, store, msg_buffer):
+        registry = _wire_registry(pool)
+        g = _llm_pause_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll_factory,
+            res.command_name,
+            timeout=None,
+            progress=True,
+            graph_meta=res.graph_meta,
+        )
+        await pool.wait_all()
+        assert pool.get_task_info(tid).status == BgStatus.WAITING_FOR_ROUTE
+
+        # Inspection is not a consume for a pause: the resume marker + meta must
+        # survive so resume_tasks can still act on it.
+        pool.mark_retrieved(tid)
+
+        assert pool.get_task_info(tid) is not None
+        assert tid in registry  # resume marker still re-projects
+
+    async def test_resume_retires_stale_marker_and_reregisters_on_next_terminal(self, pool, store, msg_buffer):
+        registry = _wire_registry(pool)
+        g = _llm_pause_graph()
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll_factory,
+            res.command_name,
+            timeout=None,
+            progress=True,
+            graph_meta=res.graph_meta,
+        )
+        await pool.wait_all()
+        assert tid in registry  # pause marker registered
+
+        async def resumed():
+            return "resumed-result"
+
+        # resubmit retires the stale pause marker and resets the register guard.
+        pool.resubmit(tid, lambda: resumed(), progress=False)
+        assert tid not in registry  # stale marker retired on resubmit
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.SUCCESS
+        # The fresh terminal re-registers a new result pointer under same id.
+        assert tid in registry
+        (m,) = registry.project()
+        assert "resumed-result" in m.content

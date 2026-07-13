@@ -19,3 +19,8 @@ class ResourceUnit:
     content: str
     sticky: bool = True
     invoked_at: float = field(default_factory=time.monotonic)
+    # Number of post-compaction re-projections this unit has actually taken part
+    # in. Used by kinds with a bounded projection lifetime (e.g. a task result the
+    # model never consumed): once it exceeds the kind's ``POST_COMPACT_MAX_ROUNDS``
+    # cap the registry unloads it. A Skill body sets no cap so it never reaps.
+    projection_rounds: int = 0

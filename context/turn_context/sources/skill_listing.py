@@ -11,6 +11,17 @@ The first turn emits the full index; every later turn emits only the
 (the model simply stops seeing them; a stale attempt fails cleanly and
 re-searches via ``Skill(query=...)``).
 
+Push→pull bridge in one object (like :class:`ToolCatalogContextSource`, whose
+incremental frontier is identical): as an
+:class:`~mote.common.interface.ObservationSubscriber` it catches
+:class:`~mote.common.events.PostCompactEvent` off the bus and resets the
+frontier, so the turn after a compaction re-emits the *full* index (the earlier
+full listing was persisted into history and condensed away with the rest of the
+pre-compaction history — without the reset ``_sent_names`` would still believe
+every skill was announced and the index would be silently, permanently lost).
+As an :class:`~mote.common.interface.EphemeralContextSource` it renders the
+index once per think() cycle.
+
 Duck-typed (mirrors :class:`SkillActivationContextSource`): it holds a single
 callable so the low ``context`` layer never imports the skill manager or the
 Role. ``get_injector()`` yields the live :class:`SkillInjector` (or ``None`` when
@@ -21,7 +32,8 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Optional, Protocol
 
-from mote.common.interface import TurnContextPriority
+from mote.common.events import PostCompactEvent
+from mote.common.interface import ObservationSubscriber, TurnContextPriority
 
 
 class _IndexedSkill(Protocol):
@@ -44,7 +56,7 @@ class _SkillInjector(Protocol):
         ...
 
 
-class SkillListingContextSource:
+class SkillListingContextSource(ObservationSubscriber):
     """Emits the steady Skills index per turn, incrementally after the first."""
 
     name = "skill_listing"
@@ -69,6 +81,17 @@ class SkillListingContextSource:
         self._is_enabled = is_enabled
         # Names already surfaced in a prior turn — the incremental frontier.
         self._sent_names: set[str] = set()
+
+    async def handle(self, event) -> None:
+        """Reset the incremental frontier after a compaction (re-emit the full index).
+
+        The prior full listing was persisted into history and condensed away by
+        the compaction, so the model no longer has it; clearing ``_sent_names``
+        makes the next render re-emit the whole index. All other events ignored.
+        """
+        if isinstance(event, PostCompactEvent):
+            self._sent_names = set()
+        return None
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
         # Master switch off → never render, regardless of injector state.

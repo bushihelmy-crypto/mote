@@ -373,3 +373,39 @@ class TestCancelTasks:
         tool = _make_cancel_tool(pool)
         result = await tool.call(task_id=tid)
         assert "user requested" in result
+
+    async def test_cancel_marks_retrieved_and_retires(self, pool):
+        """A successful cancel is a consume: it retires the re-projected marker."""
+        retired: list[str] = []
+        pool.set_retire_result(retired.append)
+
+        gate = asyncio.Event()
+
+        async def slow():
+            await gate.wait()
+
+        tid = pool.submit(lambda: slow(), "slow-task", timeout=None)
+        await asyncio.sleep(0)
+
+        tool = _make_cancel_tool(pool)
+        result = await tool.call(task_id=tid)
+        assert "cancelled" in result.lower()
+        # Cancel consumed the task → retire fired, retrieved flipped.
+        assert retired == [tid]
+        assert pool.get_task_info(tid).retrieved is True
+
+    async def test_failed_cancel_does_not_retire(self, pool):
+        """Cancelling an already-finished task returns 'already' and does not retire."""
+        retired: list[str] = []
+        pool.set_retire_result(retired.append)
+
+        async def instant():
+            return "done"
+
+        tid = pool.submit(lambda: instant(), "fast-task", timeout=5)
+        await pool.wait_all()
+
+        tool = _make_cancel_tool(pool)
+        result = await tool.call(task_id=tid)
+        assert "already" in result.lower()
+        assert retired == []
