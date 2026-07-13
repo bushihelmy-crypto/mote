@@ -328,10 +328,13 @@ class TestEventSubscriberRoster:
         assert any(isinstance(s, HookSubscriber) for s in subs)
 
     def test_secret_subscribers_absent_when_secrets_disabled(self, role):
-        # config.secrets.enabled defaults False → neither secret subscriber wired
-        # and the shared store getter is None (no vault touched).
+        # secrets disabled → neither secret subscriber wired and the shared store
+        # getter is None (no vault touched). Force-disable rather than rely on the
+        # default so the test is hermetic even when the dev's ~/.mote/config.yaml
+        # turns the layer on.
         from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
 
+        role.config.secrets.enabled = False
         subs = _wired_subscribers(role)
         assert not any(isinstance(s, (SecretUploadSubscriber, RedactionSubscriber)) for s in subs)
         assert role._components.secret_store is None
@@ -856,6 +859,9 @@ class TestCapabilities:
             "run_skill_fork",
             "register_resource",
             "get_sandbox_runtime",
+            "dispatch_tool",
+            "list_tool_names",
+            "list_graph_tool_names",
         }
 
     def test_capability_values_are_bound_methods(self):

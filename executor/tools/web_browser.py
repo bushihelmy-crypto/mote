@@ -25,11 +25,23 @@ torn down with it.
 from __future__ import annotations
 
 import base64
-from typing import Any, Awaitable, Callable, ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
 from mote.common.logs import logger
 from mote.common.prompt.tools import WEB_BROWSER_DESCRIPTION
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import (
+    AskUser,
+    GetBrowserHeadless,
+    GetBrowserLocale,
+    GetBrowserProxy,
+    GetBrowserStealth,
+    GetCwd,
+    GetToolSession,
+    RecordBrowserState,
+    SetToolSession,
+    TakePendingBrowserRestore,
+)
 from mote.executor.dependency._browser import BrowserSession
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError, ToolMedia, ToolResult
@@ -97,26 +109,26 @@ class WebBrowser(BaseTool):
 
     # Injected from Role by bind(): the cwd accessor + the per-Role tool-session
     # store (where the live BrowserSession is kept across calls).
-    get_cwd: Callable[[], str] = staticmethod(lambda: "")
-    get_tool_session: Callable[[str], Any]
-    set_tool_session: Callable[[str, Any], None]
+    get_cwd: GetCwd = staticmethod(lambda: "")
+    get_tool_session: GetToolSession
+    set_tool_session: SetToolSession
     # Capability accessor returning the role's ``browser_headless`` flag (True =>
     # run headless, the default). Defaults to a True stub so a tool bound without
     # a Role (unit tests) launches headless.
-    get_browser_headless: Callable[[], bool] = staticmethod(lambda: True)
+    get_browser_headless: GetBrowserHeadless = staticmethod(lambda: True)
     # Capability accessor returning the role's ``browser_stealth`` flag (True =>
     # apply opt-in anti-bot-detection). Defaults to a False stub so a tool bound
     # without a Role (unit tests) launches with no fingerprint overrides.
-    get_browser_stealth: Callable[[], bool] = staticmethod(lambda: False)
+    get_browser_stealth: GetBrowserStealth = staticmethod(lambda: False)
     # Capability accessor returning the role's ``browser_locale`` setting
     # ("auto"/"en"/"zh"), selecting the stealth fingerprint's locale bundle.
     # Defaults to an "auto" stub so a tool bound without a Role (unit tests)
     # lets the engine infer the locale from the host env.
-    get_browser_locale: Callable[[], str] = staticmethod(lambda: "auto")
+    get_browser_locale: GetBrowserLocale = staticmethod(lambda: "auto")
     # Capability accessor returning the role's ``browser_proxy`` URL (empty =>
     # direct connection). Defaults to an empty stub so a tool bound without a
     # Role (unit tests) connects directly.
-    get_browser_proxy: Callable[[], str] = staticmethod(lambda: "")
+    get_browser_proxy: GetBrowserProxy = staticmethod(lambda: "")
     # Capability accessors for session-resume browser-state restore:
     #   record_browser_state — persist (urls, active, storage_state) into the
     #     rollout after an action settles (so resume can re-open the tabs).
@@ -124,14 +136,14 @@ class WebBrowser(BaseTool):
     #     (or None); applied once when a fresh browser launches.
     # Both default to no-op stubs so a tool bound without a Role (unit tests)
     # still runs (no recording, no restore).
-    record_browser_state: Callable[..., None] = staticmethod(lambda *a, **k: None)
-    take_pending_browser_restore: Callable[[], Optional[dict]] = staticmethod(lambda: None)
+    record_browser_state: RecordBrowserState = staticmethod(lambda *a, **k: None)
+    take_pending_browser_restore: TakePendingBrowserRestore = staticmethod(lambda: None)
 
     # Human text channel (Role.ask_user): used by the ``assist`` action to pause
     # automation and let the user complete a step only a person can do (scan a
     # login QR code, enter an SMS / 2FA code). Defaults to a no-op stub returning
     # "" so a tool bound without a Role (unit tests) still runs.
-    ask_user: Callable[[str], Awaitable[str]] = staticmethod(lambda q: _noop_ask(q))
+    ask_user: AskUser = staticmethod(lambda q: _noop_ask(q))
 
     async def _ensure_session(self) -> BrowserSession:
         """Return this Role's live browser, launching a fresh one if needed.

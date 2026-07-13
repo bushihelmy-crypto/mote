@@ -19,10 +19,11 @@ from mote.executor.tasks.bggraph import (
     START,
     BgGraph,
     GraphBatchFailureError,
+    GraphPause,
     GraphRecursionError,
     GraphRouterError,
     GraphState,
-    LlmPauseResult,
+    PauseReason,
     Stage,
 )
 from mote.executor.tasks.bggraph.report import (
@@ -88,7 +89,8 @@ __all__ = [
     "BgGraph",
     "GraphState",
     "Stage",
-    "LlmPauseResult",
+    "GraphPause",
+    "PauseReason",
     "START",
     "END",
     "GraphRouterError",

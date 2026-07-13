@@ -46,6 +46,8 @@ class CodeReview(BaseTool):
         "If neither commit nor refs are given, the working-tree diff (git diff "
         "HEAD) is reviewed."
     )
+    # Body is a compiled bggraph — run_graph must not nest it inside another graph.
+    is_graph_tool = True
 
     def __init__(self):
         super().__init__()

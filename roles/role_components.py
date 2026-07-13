@@ -744,11 +744,12 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
     # so the only notification the agent ever sees is the whole-task completion
     # push from ``_on_done`` — meaning a long-running graph never wakes a Sleep
     # mid-flight on node completions.
-    output_store = TaskOutputStore()
+    output_store = TaskOutputStore(session_id=ctx.role.state.session_id)
     pool = BackgroundTaskPool(
         msg_buffer=ctx.role.state.msg_buffer,
         output_store=output_store,
         wake=ctx.state.pending_task_completion_wake,
+        session_id=ctx.role.state.session_id,
     )
 
     # Wire the disk-cap kill switch so an output that blows the size cap cancels
@@ -891,17 +892,24 @@ def _build_secret_store(ctx):
 
     Built only when ``config.secrets.enabled``. Seeds on construct: the vault's
     config section auto-syncs (hot, by mtime) from the highest-precedence
-    config.yaml, and the persisted user tier is decrypted from disk. The cipher /
+    config.yaml, the human-edited ``secrets_config.json`` file section hot-syncs
+    the same way, and the persisted user tier is decrypted from disk. The cipher /
     key source is the configured strategy (``secrets.cipher``).
     """
     from mote.common.secrets.cipher import build_cipher
-    from mote.common.secrets.store import SecretStore, secrets_path
+    from mote.common.secrets.store import SecretStore, secrets_config_path, secrets_path
 
     secrets_cfg = ctx.role.config.secrets
     cipher = build_cipher(secrets_cfg)
     vault_path = Path(secrets_cfg.vault_path) if secrets_cfg.vault_path else secrets_path()
+    secrets_file = Path(secrets_cfg.secrets_config_path) if secrets_cfg.secrets_config_path else secrets_config_path()
     config_path = _primary_config_path(ctx.role.get_cwd())
-    return SecretStore(cipher, vault_path=vault_path, config_path=config_path)
+    return SecretStore(
+        cipher,
+        vault_path=vault_path,
+        config_path=config_path,
+        secrets_config_file=secrets_file,
+    )
 
 
 def _build_sandbox_runtime(ctx):

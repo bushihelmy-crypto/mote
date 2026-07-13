@@ -19,6 +19,16 @@ import pytest
 
 from mote.cli.io.terminal_io import TerminalPort
 from mote.cli.io.terminal_menu import _menu_lines, _option_lines
+from mote.cli.view.approval import approval_options
+from mote.common.i18n import use_locale
+
+
+@pytest.fixture(autouse=True)
+def _en_locale():
+    # The approval chrome now renders through i18n (default locale is zh); these
+    # tests assert the English wording, so pin the locale for the module.
+    with use_locale("en"):
+        yield
 
 
 class FakeReader:
@@ -354,7 +364,7 @@ def test_select_menu_multi_shows_checkboxes_but_not_on_other():
 
 def test_approval_menu_chrome_marks_active_orange_dim_shortcuts():
     port, _buf = make_interactive_port([])
-    lines = _option_lines(port._APPROVAL_OPTIONS, 0)
+    lines = _option_lines(approval_options(), 0)
     # Active choice: brand-orange bold ❯ + inline shortcut.
     assert _ORANGE in lines[0] and "\u276f Yes (y)" in lines[0]
     # Inactive choices: plain label with a dim ``(shortcut)`` hint.

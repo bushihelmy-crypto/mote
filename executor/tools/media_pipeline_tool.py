@@ -55,6 +55,8 @@ class MediaPipeline(BaseTool):
         "background music is ducked under the narration, and audio is trimmed to "
         "the video length. Output: promo_dir/promo-{width}x{height}.mp4."
     )
+    # Body is a compiled bggraph — run_graph must not nest it inside another graph.
+    is_graph_tool = True
 
     def __init__(self):
         super().__init__()

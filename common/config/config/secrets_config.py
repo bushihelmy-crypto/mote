@@ -28,3 +28,11 @@ class SecretsConfig(YamlModel):
         default=None,
         description="Override the encrypted vault file location (default ~/.mote/secrets.json).",
     )
+    secrets_config_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override the plaintext, human-edited named-secret file location "
+            "(default ~/.mote/secrets_config.json). A flat {name: value} JSON; "
+            "edits/deletes hot-sync into the encrypted vault by mtime."
+        ),
+    )

@@ -37,9 +37,13 @@ index 1111111..2222222 100644
 
 
 async def _run(graph: BgGraph, **inputs):
-    res = await graph.compile()(**inputs)
-    assert _is_bg_task_result(res)
-    return await res.poll_factory()
+    # White-box: run inline via ``arun`` and dump the *full* final state so these
+    # topology/reducer tests can inspect intermediate fields (findings/remaining/
+    # kept_findings). The background poll path narrows the success result to the
+    # declared ``Output`` (report only) — that narrowing is covered by
+    # test_output_fields.py and ``test_compile_narrows_to_report`` below.
+    state = await graph.arun(**inputs)
+    return state.model_dump()
 
 
 @pytest.fixture
@@ -167,6 +171,17 @@ class TestRingBatch:
             report="",
         )
         assert len(patched["reviewed"]) == 5
+        assert "found 5 issues" in out["report"]
+
+    async def test_compile_narrows_to_report(self, patched):
+        # The background poll path returns only the declared ``Output`` field
+        # (``report``) — intermediate scratch (findings/remaining/kept_findings)
+        # never leaks into what is pushed to the model on success.
+        g = build_code_review_graph()
+        res = await g.compile()(repo_dir="/repo", batch_size=2, fmt="text")
+        assert _is_bg_task_result(res)
+        out = await res.poll_factory()
+        assert set(out) == {"report"}
         assert "found 5 issues" in out["report"]
 
 

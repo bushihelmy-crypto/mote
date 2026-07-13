@@ -28,6 +28,7 @@ from mote.common.schema import UserMessage
 from mote.roles.role_state import RoleState
 
 if TYPE_CHECKING:
+    from mote.common.schema.permission_types import ApprovalChoice, ApprovalRequest
     from mote.context.skills.skill_pool import SkillPool
     from mote.executor.tasks import BackgroundTaskPool
     from mote.roles.role import Role
@@ -248,20 +249,22 @@ class RoleCapabilities:
             return AskUserQuestionAnswers()
         return await env.ask_user_question(questions, sent_from=role.role_schema.name)
 
-    async def request_approval(self, prompt: str) -> str:
-        """Ask the human to approve a tool call and return their raw reply.
+    async def request_approval(self, request: "ApprovalRequest") -> "ApprovalChoice":
+        """Ask the human to approve a gated tool call; return their decision.
 
         The interactive channel for the PermissionEngine's ``ask`` decisions.
-        Unlike ask_user(), this does NOT treat a trailing 'stop' as a kill
-        switch — an approval prompt should never silently deactivate the Role.
-        Outside a MoteEnv there is no channel, so it returns "" and the engine
-        fails closed (denies).
+        Takes a language-neutral :class:`ApprovalRequest` and returns one of the
+        three :data:`ApprovalChoice` outcomes — the display wording lives in the
+        env's front-end (the port selector under i18n, or the console fallback).
+        Unlike ask_user(), this does NOT treat any reply as a kill switch — an
+        approval should never silently deactivate the Role. Outside a MoteEnv
+        there is no channel, so it fails closed ("deny") and the engine denies.
         """
         role = self._role
         env = role.state.env
         if env is None:
-            return ""
-        return await env.ask_user(prompt, sent_from=role.role_schema.name)
+            return "deny"
+        return await env.request_approval(request, sent_from=role.role_schema.name)
 
     async def reply_to_user(self, content: str) -> str:
         """Reply to the user with the provided content.

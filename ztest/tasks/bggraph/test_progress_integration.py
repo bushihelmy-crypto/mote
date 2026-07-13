@@ -17,11 +17,12 @@ announced "image generation complete" while the image node was only ever
 * A graph whose nodes never all finish MUST NOT produce a ``task success``
   terminal push.
 * A cancelled node pushes ``cancelled`` — never ``success``.
-* Positive control: a graph that genuinely completes DOES push a
-  ``node_completed`` (a per-node mid-flight terminal) — proving the harness
-  captures real successes (so the negatives above are meaningful, not vacuous).
-  The whole-task ``task success`` terminal is *not* delivered by the writer
-  (``pool._on_done`` owns that one terminal); it lands on disk instead.
+* Positive control: a graph that genuinely completes records a
+  ``node_completed`` on disk (proving the harness captures real successes, so
+  the negatives above are meaningful, not vacuous) — but does NOT push it. Node
+  success is progress, not a decision, so it is disk-only; the whole-task
+  ``task success`` terminal is delivered once by ``pool._on_done`` (also not by
+  the writer). The writer's only mid-flight push is a node *failure*.
 """
 from __future__ import annotations
 
@@ -84,7 +85,7 @@ def _media_pipeline_graph(node_fn) -> BgGraph:
 # ---------------------------------------------------------------------------
 
 
-def test_completed_graph_pushes_node_completed_and_task_success():
+def test_completed_graph_records_success_on_disk_without_pushing():
     h = _Harness()
 
     async def _run():
@@ -100,17 +101,16 @@ def test_completed_graph_pushes_node_completed_and_task_success():
 
     contents = h.buffer_contents()
     blob = "\n".join(contents)
-    # The node really finished → a per-node ``node_completed`` push lands
-    # (a mid-flight terminal the pool's ``_on_done`` cannot see).
-    assert "node_completed" in blob
-    # ...but the whole-task ``task success`` terminal is NOT delivered by the
-    # writer — ``pool._on_done`` is the sole producer of that one terminal.
-    # It still lands on disk (the rich DAG snapshot reaches the agent via the
-    # task-attachment source of truth).
-    assert "task success" not in blob
-    assert any("task success" in line for line in h.disk)
-    # Disk log records the success for the node.
+    # The node really finished → its ``node_completed`` is recorded on disk...
+    assert any("node_completed" in line for line in h.disk)
     assert any("[image] success" in line for line in h.disk)
+    # ...but node success is disk-only (progress, not a decision), so NOTHING is
+    # pushed here: neither the node completion nor the whole-task terminal (the
+    # latter is delivered once by pool._on_done, not the writer).
+    assert "node_completed" not in blob
+    assert "task success" not in blob
+    # The whole-task terminal's rich DAG snapshot still lands on disk.
+    assert any("task success" in line for line in h.disk)
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +145,9 @@ def test_stuck_running_node_never_reports_completion():
     mid = asyncio.run(_run())
 
     blob = "\n".join(mid)
-    # While only RUNNING, the START push may be present but NOTHING claiming the
-    # node or the task finished.
+    # While only RUNNING, nothing is delivered at all (START is disk-only now,
+    # node success/failure haven't happened) — and in particular NOTHING claims
+    # the node or the task finished.
     assert "node_completed" not in blob
     assert "task success" not in blob
     assert "[image] success" not in blob
@@ -182,11 +183,14 @@ def test_cancelled_node_pushes_cancelled_not_success():
 
     contents = h.buffer_contents()
     blob = "\n".join(contents)
-    # A cancelled node IS a push-worthy terminal — it surfaces as cancelled.
-    assert "cancelled" in blob
-    # ...but it is never reported as a success/completion.
-    assert "success" not in blob
-    assert "node_completed" not in blob
+    # A cancelled node is disk-only now (not a decision point the writer pushes;
+    # the whole-task cancel terminal is delivered once by pool._on_done). It is
+    # recorded on disk as cancelled...
+    assert any("cancelled" in line for line in h.disk)
+    # ...and is never pushed at all, and never reported as a success/completion.
+    assert blob == ""
+    assert not any("[image] success" in line for line in h.disk)
+    assert not any("node_completed" in line for line in h.disk)
     # Run-state status reflects the cancel; it never produced a result.
     assert run_state.get("image").status == BgStatus.CANCELLED
     assert getattr(state, "image", None) is None

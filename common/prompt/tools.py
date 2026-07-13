@@ -104,7 +104,13 @@ GREP_DESCRIPTION = (
 # --- Execution tools -------------------------------------------------------
 
 BASH_DESCRIPTION = (
-    "Runs a bash command. Use the `workdir` param to run in a subdirectory; a " "`cd` does not persist across calls."
+    "Runs a bash command. Use the `workdir` param to run in a subdirectory; a "
+    "`cd` does not persist across calls. Optionally pass `inputs` (an object) to "
+    "feed typed values into the command: the whole object is exported as the "
+    "$INPUTS env var (JSON), and each scalar entry with an identifier-safe key is "
+    "also exported as its own env var. If the command's stdout is valid JSON it "
+    "is parsed into the structured result (so a caller can index into it), else "
+    "the structured result is the raw stdout text."
 )
 
 PYTHON_DESCRIPTION = (

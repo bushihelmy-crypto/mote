@@ -41,7 +41,7 @@ import base64
 import io
 import json
 import os
-from typing import Callable, ClassVar, Optional
+from typing import ClassVar, Optional
 
 from mote.common.const.tools import (
     DEFAULT_MAX_LINES,
@@ -53,6 +53,7 @@ from mote.common.const.tools import (
 from mote.common.prompt.tools import FILE_UNCHANGED_STUB, READ_DESCRIPTION
 from mote.common.text import count_noun, system_reminder, verb_agree
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetCwd, IsResourceVisible, RecordFileRead
 from mote.executor.dependency._document import document_lines, extract_document_text, is_document
 from mote.executor.dependency._paths import resolve_path
 from mote.executor.tool_registry import register_tool
@@ -274,9 +275,9 @@ class Read(BaseTool):
 
     # Injected from Role by bind(): Role.record_file_read, Role.get_cwd,
     # Role.is_resource_visible.
-    record_file_read: Callable[[str, int], None]
-    get_cwd: Callable[[], str]
-    is_resource_visible: Callable[[str], bool]
+    record_file_read: RecordFileRead
+    get_cwd: GetCwd
+    is_resource_visible: IsResourceVisible
 
     def __init__(self) -> None:
         super().__init__()

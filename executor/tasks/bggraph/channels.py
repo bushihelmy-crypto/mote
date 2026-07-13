@@ -17,6 +17,44 @@ import inspect
 from typing import Any, Callable, Optional
 
 
+class Output:
+    """Marker for a state field that is part of the graph's *declared output*.
+
+    Attach it in a field's ``Annotated`` metadata, exactly like a reducer::
+
+        class ReviewState(GraphState):
+            report: Annotated[str, Output] = ""   # the graph's result
+            raw_diff: str = ""                    # intermediate, not returned
+
+    On success the engine returns only the ``Output``-marked fields (see
+    :func:`derive_output_fields` / ``_collect_finish_result``) instead of the
+    whole state, so inputs and intermediate scratch never leak into the result
+    pushed to the model. It is a bare sentinel (no config) so ``Annotated[T,
+    Output]`` and ``Annotated[T, Output()]`` both work — :func:`_is_output`
+    accepts the class or an instance.
+    """
+
+
+def _is_output(obj: Any) -> bool:
+    """True if *obj* is the :class:`Output` marker (the class or an instance)."""
+    return obj is Output or isinstance(obj, Output)
+
+
+def derive_output_fields(schema: type) -> set[str]:
+    """Names of fields carrying the :class:`Output` marker in their metadata.
+
+    Scans ``schema.model_fields[name].metadata`` the same way
+    :func:`derive_reducers` does. An empty set means the schema declares no
+    output, and callers fall back to returning the whole state (back-compat).
+    """
+    fields: set[str] = set()
+    model_fields = getattr(schema, "model_fields", {})
+    for name, field_info in model_fields.items():
+        if any(_is_output(meta) for meta in getattr(field_info, "metadata", ())):
+            fields.add(name)
+    return fields
+
+
 def _is_reducer(obj: Any) -> bool:
     """True if *obj* is a reducer: a callable taking exactly 2 positional args.
 

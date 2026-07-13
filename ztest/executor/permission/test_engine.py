@@ -22,15 +22,27 @@ from mote.executor.permission.sandbox import SandboxGuard
 pytestmark = pytest.mark.asyncio
 
 
+# The engine's ``ask_user`` now returns a structured ``ApprovalChoice`` (the
+# display layer owns all human wording). Tests still express intent in the old
+# yes/always/no vocabulary for readability; this maps it to the choice the
+# engine consumes.
+_REPLY_TO_CHOICE = {
+    "yes": "allow_once",
+    "always": "allow_session",
+    "no": "deny",
+}
+
+
 def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
     """Build an engine with a canned (optional) approval reply."""
     cfg = PermissionConfig(mode=mode, allow=allow or [], deny=deny or [], ask=ask or [])
     store = RuleStore.from_config(cfg)
     ask_user = None
     if reply is not None:
+        choice = _REPLY_TO_CHOICE.get(reply, reply)
 
-        async def ask_user(_prompt: str) -> str:  # noqa: E306
-            return reply
+        async def ask_user(_request) -> str:  # noqa: E306
+            return choice
 
     return PermissionEngine(mode=mode, store=store, ask_user=ask_user)
 
@@ -41,9 +53,10 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None, writable_roots=None):
     store = RuleStore.from_config(cfg)
     ask_user = None
     if reply is not None:
+        choice = _REPLY_TO_CHOICE.get(reply, reply)
 
-        async def ask_user(_prompt: str) -> str:  # noqa: E306
-            return reply
+        async def ask_user(_request) -> str:  # noqa: E306
+            return choice
 
     guard = SandboxGuard(
         SandboxConfig(mode="workspace-write", writable_roots=writable_roots or []),
@@ -212,15 +225,15 @@ class TestStickyPrefix:
     async def test_prompt_shows_suggested_prefix_rule(self):
         seen = {}
 
-        async def ask_user(prompt: str) -> str:
-            seen["prompt"] = prompt
-            return "no"
+        async def ask_user(request) -> str:
+            seen["request"] = request
+            return "deny"
 
         cfg = PermissionConfig(mode="default")
         store = RuleStore.from_config(cfg)
         eng = PermissionEngine(mode="default", store=store, ask_user=ask_user)
         await eng.check("Bash", target="git commit -m foo", segments=["git commit -m foo"])
-        assert "Bash(git commit:*)" in seen["prompt"]
+        assert seen["request"].suggestion == "Bash(git commit:*)"
 
 
 class TestSandbox:

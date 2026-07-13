@@ -25,11 +25,19 @@ torn down with it.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, ClassVar, Optional
+from typing import ClassVar
 
 from mote.common.logs import logger
 from mote.common.prompt.tools import PYTHON_DESCRIPTION
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import (
+    GetCwd,
+    GetSandboxRuntime,
+    GetToolSession,
+    RecordKernelState,
+    SetToolSession,
+    TakePendingKernelRestore,
+)
 from mote.executor.dependency._kernel import DEFAULT_TIMEOUT_S, KernelSession
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError
@@ -65,13 +73,13 @@ class Python(BaseTool):
     # working directory on first use) + the per-Role tool-session store (where
     # the live KernelSession is kept, so it persists across calls and is owned
     # by the Role rather than a process-global singleton).
-    get_cwd: Callable[[], str]
-    get_tool_session: Callable[[str], Any]
-    set_tool_session: Callable[[str, Any], None]
+    get_cwd: GetCwd
+    get_tool_session: GetToolSession
+    set_tool_session: SetToolSession
     # Capability accessor returning the session's SandboxRuntime, or None when no
     # OS-level sandbox is configured. Defaults to a no-runtime stub so a tool
     # bound without a Role (some unit tests) still runs un-sandboxed.
-    get_sandbox_runtime: Callable[[], Any] = staticmethod(lambda: None)
+    get_sandbox_runtime: GetSandboxRuntime = staticmethod(lambda: None)
     # Capability accessors for session-resume kernel-state restore:
     #   record_kernel_state — persist (cwd, env diff, unset) into the rollout
     #     after a cell settles at idle (so resume can re-seed a kernel).
@@ -79,8 +87,8 @@ class Python(BaseTool):
     #     (or None); applied once when a fresh kernel starts.
     # Both default to no-op stubs so a tool bound without a Role (unit tests)
     # still runs (no recording, no restore).
-    record_kernel_state: Callable[..., None] = staticmethod(lambda *a, **k: None)
-    take_pending_kernel_restore: Callable[[], Optional[dict]] = staticmethod(lambda: None)
+    record_kernel_state: RecordKernelState = staticmethod(lambda *a, **k: None)
+    take_pending_kernel_restore: TakePendingKernelRestore = staticmethod(lambda: None)
 
     async def _ensure_session(self) -> KernelSession:
         """Return this Role's live kernel, starting a fresh one if needed.

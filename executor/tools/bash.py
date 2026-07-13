@@ -17,23 +17,67 @@ never sees RoleState or memory, and it never writes cwd back.
 """
 from __future__ import annotations
 
+import json
 import os
-from typing import Callable, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 from mote.common.prompt.tools import BASH_DESCRIPTION
 from mote.common.schema.permission_types import PermissionDecision
 from mote.common.utils.common import aexecute
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetCwd, GetSandboxRuntime
 from mote.executor.permission.classifier import classify_command
 from mote.executor.permission.command_parse import segment_strings
 from mote.executor.tool_registry import register_tool
-from mote.executor.tool_result import ToolError
+from mote.executor.tool_result import ToolError, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).
 _MSG_COMMAND_REQUIRED = "Error: 'command' argument is required."
 _MSG_WORKDIR_NOT_EXIST = "Error: workdir does not exist: {workdir}"
 _MSG_EXEC_FAILED = "Error executing command: {error}"
+
+# The env var carrying the whole ``inputs`` object as JSON.
+_INPUTS_ENV = "INPUTS"
+
+
+def _inputs_to_env(inputs: dict) -> dict[str, str]:
+    """Project ``inputs`` into shell env vars.
+
+    The whole object is JSON-encoded under ``$INPUTS`` (so nested/complex values
+    are always reachable); on top of that, every scalar entry with an
+    identifier-safe key is also exported as its own env var for direct shell use
+    (``$name``). Scalars are stringified shell-idiomatically — a bool becomes
+    ``true``/``false``, numbers their decimal form, a string verbatim. Non-scalar
+    entries (dict/list/None) are reachable only via ``$INPUTS``.
+    """
+    env: dict[str, str] = {_INPUTS_ENV: json.dumps(inputs, default=str)}
+    for key, value in inputs.items():
+        if not (isinstance(key, str) and key.isidentifier()) or key == _INPUTS_ENV:
+            continue
+        if isinstance(value, bool):
+            env[key] = "true" if value else "false"
+        elif isinstance(value, str):
+            env[key] = value
+        elif isinstance(value, (int, float)):
+            env[key] = str(value)
+        # dict / list / None: only via $INPUTS.
+    return env
+
+
+def _structured(stdout: str) -> Any:
+    """The structured result for a caller: parsed JSON if stdout is JSON, else text.
+
+    Lets a graph ``$ref`` index into a command that emits JSON, while a plain
+    text command still yields its (clean) stdout string. Empty stdout -> None.
+    """
+    clean = stdout.rstrip("\n") if stdout else ""
+    if not clean:
+        return None
+    try:
+        return json.loads(clean)
+    except (ValueError, TypeError):
+        return clean
 
 
 @register_tool
@@ -54,11 +98,11 @@ class Bash(BaseTool):
 
     # Injected from Role by bind() — the stable-cwd accessor plus the optional
     # OS-level sandbox runtime accessor, never RoleState or memory.
-    get_cwd: Callable[[], str]
+    get_cwd: GetCwd
     # Capability accessor returning the session's SandboxRuntime, or None when
     # no OS-level sandbox is configured. Defaults to a no-runtime stub so a
     # tool bound without a Role (some unit tests) still runs un-sandboxed.
-    get_sandbox_runtime: Callable[[], object] = staticmethod(lambda: None)
+    get_sandbox_runtime: GetSandboxRuntime = staticmethod(lambda: None)
 
     def permission_target(self, args: dict) -> str:
         """The command string — matched against ``Bash(pattern)`` rules."""
@@ -92,11 +136,25 @@ class Bash(BaseTool):
             return PermissionDecision.allow("tool_check", assessment.reason)
         return None
 
-    async def call(self, *, command: str, timeout: float = 300.0, workdir: str = "") -> str:
+    async def call(
+        self,
+        *,
+        command: str,
+        inputs: dict[str, Any] | None = None,
+        timeout: float = 300.0,
+        workdir: str = "",
+    ) -> ToolResult:
         """Execute a bash command against the session's stable working directory.
 
         Args:
             command: The bash command to execute.
+            inputs: Optional object of typed values to feed the command. The whole
+                object is exported as the ``$INPUTS`` env var (JSON); each scalar
+                entry with an identifier-safe key is also exported as its own env
+                var (``$name``) for direct shell use. This is how a graph node
+                hands upstream values to a command. Being a structured (non-scalar)
+                param, it is carried only on the native tool-use channel — omit it
+                (the command runs unchanged) when driving Bash over the XML protocol.
             timeout: Maximum seconds to wait for the command (default 300). On
                 timeout the command is terminated and whatever output it produced
                 so far is returned (rather than raising), mirroring codex.
@@ -106,6 +164,13 @@ class Bash(BaseTool):
                 command does NOT persist across calls (the cwd is a stable value,
                 not shell state), so ``workdir`` is the way to scope a command to
                 another directory.
+
+        Returns:
+            A ``ToolResult`` whose ``output`` is the human-readable stdout /
+            stderr / exit-code text and whose ``data`` is the *structured*
+            result: the command's stdout parsed as JSON when it is valid JSON,
+            else the raw stdout string — so a downstream graph ``$ref`` can
+            index into it.
         """
         if not command or not command.strip():
             raise ToolError(_MSG_COMMAND_REQUIRED)
@@ -129,6 +194,11 @@ class Bash(BaseTool):
         # historical un-sandboxed path.
         runtime = self.get_sandbox_runtime() if self.get_sandbox_runtime is not None else None
 
+        # inputs -> env: only build a full env (process env + injected vars) when
+        # inputs are given; otherwise pass None so the subprocess inherits the
+        # parent env exactly as before (no behavioural change for plain calls).
+        env = {**os.environ, **_inputs_to_env(inputs)} if inputs else None
+
         try:
             # return_partial_on_timeout=True always yields the 4-tuple
             # (rc, stdout, stderr, timed_out); narrow the declared union.
@@ -137,6 +207,7 @@ class Bash(BaseTool):
                 await aexecute(
                     command,
                     working_dir=run_cwd,
+                    env=env,
                     wait=True,
                     timeout=timeout,
                     return_partial_on_timeout=True,
@@ -156,7 +227,7 @@ class Bash(BaseTool):
             parts.append(stderr)
         if not timed_out and rc:
             parts.append(f"[exit code: {rc}]")
-        return "\n".join(parts) if parts else ""
+        return ToolResult(output="\n".join(parts) if parts else "", data=_structured(stdout))
 
     def cleanup_session(self, session_id: str) -> None:
         """No persistent process to tear down; aexecute spawns per-call."""

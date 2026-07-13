@@ -130,10 +130,10 @@ class TestInline:
         assert "BODY" in result
 
     def test_inline_registration_noop_when_unbound(self, builtin_dir):
-        # No register_resource capability injected -> silent no-op (still returns).
+        # No register_resource capability injected -> the class default no-op
+        # stub handles it (silent, still returns the rendered body).
         write_skill(builtin_dir, "alpha", instructions="BODY")
         tool = _make_tool(_pool(builtin_dir, ["alpha"]))
-        assert not hasattr(tool, "register_resource")
         result = asyncio.run(tool.call(name="alpha"))
         assert "BODY" in result
 

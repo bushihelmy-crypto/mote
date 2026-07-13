@@ -20,6 +20,7 @@ rows live in the prompt, never the full bodies.
 from __future__ import annotations
 
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetCwd, GetSkillPool, RegisterResource, RunSkillFork
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError
 
@@ -48,6 +49,14 @@ class Skill(BaseTool):
     # ``register_resource`` registers an inline body so it survives compaction.
     requires = ("get_cwd", "get_skill_pool", "run_skill_fork", "register_resource")
 
+    # Injected from Role by bind(). ``register_resource`` defaults to a no-op stub
+    # so the tool keeps working when bound without a Role (standalone / tests) —
+    # inline-body re-projection is best-effort bookkeeping, not core behavior.
+    get_cwd: GetCwd
+    get_skill_pool: GetSkillPool
+    run_skill_fork: RunSkillFork
+    register_resource: RegisterResource = staticmethod(lambda **k: None)
+
     async def call(self, *, name: str = "", arguments: str = "", query: str = "") -> str:
         """Invoke a skill by ``name``, or search skills with ``query``.
 
@@ -58,7 +67,7 @@ class Skill(BaseTool):
             query: Keywords to search skills by, when ``name`` is unknown.
                 Returns matching index rows instead of running a skill.
         """
-        pool = self.get_skill_pool()  # type: ignore[attr-defined]
+        pool = self.get_skill_pool()
         if pool is None or pool.get_skill_count() == 0:
             raise ToolError(_MSG_NO_SKILLS)
 
@@ -80,7 +89,7 @@ class Skill(BaseTool):
         rendered = self._render(skill, arguments)
 
         if skill.context == "fork":
-            summary = await self.run_skill_fork(  # type: ignore[attr-defined]
+            summary = await self.run_skill_fork(
                 instructions=rendered,
                 arguments=arguments,
                 allowed_tools=list(skill.allowed_tools),
@@ -99,15 +108,12 @@ class Skill(BaseTool):
     def _register_resource(self, name: str, rendered: str) -> None:
         """Register a loaded inline skill body for post-compaction re-projection.
 
-        Best-effort and non-throwing: no-op when unbound (no Role injected the
-        ``register_resource`` capability), so the tool keeps working standalone
-        and in tests.
+        Best-effort and non-throwing: the ``register_resource`` capability
+        defaults to a no-op stub when unbound (no Role), so the tool keeps
+        working standalone and in tests.
         """
-        register = getattr(self, "register_resource", None)
-        if register is None:
-            return
         try:
-            register(id=name, kind="skill", content=rendered)
+            self.register_resource(id=name, kind="skill", content=rendered)
         except Exception:  # never let bookkeeping break the tool result
             pass
 

@@ -1,8 +1,8 @@
 """Core data types for :mod:`mote.executor.bggraph`.
 
 This module is deliberately dependency-light (``common`` + stdlib only) so that
-it can be imported by the pool layer for the ``_LLM_ROUTE_SENTINEL`` marker
-without pulling in the engine / graph builder.
+it can be imported by the pool layer for the :class:`GraphPause` marker without
+pulling in the engine / graph builder.
 
 The execution model is aligned with **langgraph transitions** (forward frontier
 super-steps), *not* a static topological DAG:
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Awaitable, Callable, Coroutine, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict
@@ -42,22 +43,43 @@ START = "__start__"
 END = "__end__"
 
 
-@dataclass
-class LlmPauseResult:
-    """Returned by the driver coroutine when the graph pauses on an LLM edge.
+class PauseReason(str, Enum):
+    """Why the driver coroutine paused instead of reaching a terminal.
 
-    Carries the pause state needed for resume so the pool can snapshot it
-    and ``resubmit`` can pick up execution from where it left off.
+    Both reasons produce the SAME resumable snapshot (state / completed /
+    run_state) and travel the SAME machinery (pool snapshot → ``resume_tasks``);
+    they differ only in what decision the model must make:
+
+    * ``LLM_ROUTE`` — the frontier hit an LLM edge: the model picks a route
+      (``resume_tasks(from_node=...)``).
+    * ``STALL`` — the frontier drained with a blocked AND-join (a waiting-edge
+      whose target can never fire because a source is unreachable): a deadlock
+      the model must break (re-run / skip the missing upstream, or accept the
+      partial result). Without this the run would silently report SUCCESS with
+      the join's downstream never executed.
     """
 
+    LLM_ROUTE = "llm_route"
+    STALL = "stall"
+
+
+@dataclass
+class GraphPause:
+    """Returned by the driver coroutine when the graph pauses (not terminal).
+
+    One reason-tagged snapshot for every pause: the pool maps :attr:`reason` to
+    a resumable :class:`BgStatus` and saves the snapshot; ``resume_tasks`` picks
+    execution up from where it left off. Reason-specific context rides alongside
+    (``edge`` for an LLM route, ``stalled_nodes`` for a deadlock) so one type
+    carries both without a parallel class hierarchy.
+    """
+
+    reason: PauseReason
     state: Any  # GraphState with intermediate results
     completed: set  # nodes that finished before pause
-    edge: Any  # _LlmEdge that triggered the pause
     run_state: Any = None  # GraphRunState — authoritative per-node records
-
-
-# Keep old name as a type reference for isinstance checks.
-_LLM_ROUTE_SENTINEL = LlmPauseResult
+    edge: Any = None  # _LlmEdge that triggered an LLM_ROUTE pause
+    stalled_nodes: tuple[str, ...] = ()  # blocked AND-join targets for a STALL
 
 
 # ---------------------------------------------------------------------------

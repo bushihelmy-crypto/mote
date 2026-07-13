@@ -193,10 +193,34 @@ class BgTaskResult:
         if self.mode == BgTaskMode.BACKGROUND:
             task_ref = f" (task_id: {task_id})" if task_id is not None else ""
             output = _MSG_BG_SUBMITTED.format(name=self.command_name or tool_name, task_ref=task_ref)
+            # For a graph pipeline, return the graph structure (stage-summary)
+            # up front as the tool's own value — the model sees the topology at
+            # submit time instead of waiting for a "task started" push. Node
+            # progress is disk-only from here; only a node failure or an
+            # LLM-route pause will push a new react turn.
+            summary = self._graph_stage_summary()
+            if summary:
+                output = f"{output}\nstage-summary:\n{summary}"
         else:
             # FOREGROUND / HYBRID — surface the immediate result (None → "").
             output = str(self.result) if self.result is not None else ""
         return ToolResult(output=output, success=True, data=self)
+
+    def _graph_stage_summary(self) -> str:
+        """The graph's layered stage-summary, or ``""`` for a non-graph task.
+
+        Only bggraph pipelines carry a ``graph_meta`` with a ``graph_ref`` that
+        exposes ``stage_summary``; a plain background coroutine has neither, so
+        this returns ``""`` and the caller appends nothing.
+        """
+        gm = self.graph_meta
+        graph = gm.graph_ref if gm is not None else None
+        if graph is None:
+            return ""
+        try:
+            return graph.stage_summary or ""
+        except Exception:  # noqa: BLE001 — a summary failure must not break submit
+            return ""
 
 
 @dataclass

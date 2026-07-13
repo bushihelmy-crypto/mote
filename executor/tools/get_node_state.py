@@ -14,16 +14,13 @@ bggraph engine and snapshotted onto the task meta. Two modes:
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Callable
 
 from mote.common.text import collapse_whitespace
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetBgPool
 from mote.executor.tasks.types import BgStatus
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError
-
-if TYPE_CHECKING:
-    from mote.executor.tasks import BackgroundTaskPool
 
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_NO_RUN_STATE = (
@@ -181,7 +178,7 @@ class GetNodeState(BaseTool):
     requires = ("get_bg_pool",)
 
     # Injected from Role by bind(): Role.get_bg_pool.
-    get_bg_pool: Callable[[], "BackgroundTaskPool"]
+    get_bg_pool: GetBgPool
 
     async def call(
         self,

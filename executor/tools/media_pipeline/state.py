@@ -1,7 +1,9 @@
 """State schema for the media production pipeline graph."""
 from __future__ import annotations
 
-from mote.executor.tasks.bggraph import GraphState
+from typing import Annotated
+
+from mote.executor.tasks.bggraph import GraphState, Output
 
 
 class MediaPipelineState(GraphState):
@@ -29,13 +31,17 @@ class MediaPipelineState(GraphState):
     promo_dir: str = ""  # Remotion project path
 
     # --- Node outputs (merged by field name; downstream nodes read these) ---
-    image: dict = {}  # image node output
-    audio: dict = {}  # audio node output
-    music: dict = {}  # music node output
-    video: dict = {}  # video node output
+    # The produced assets + the final compose are the graph's declared output
+    # (returned on success). ``template_init_out`` (dir prep) and
+    # ``render_gate_out`` (an internal gate summary) are scaffolding, not
+    # deliverables, so they are left unmarked.
+    image: Annotated[dict, Output] = {}  # image node output
+    audio: Annotated[dict, Output] = {}  # audio node output
+    music: Annotated[dict, Output] = {}  # music node output
+    video: Annotated[dict, Output] = {}  # video node output
     template_init_out: dict = {}  # template_init node output
     render_gate_out: dict = {}  # render_gate node summary
-    promo_out: dict = {}  # promo_render (FFmpeg compose) output
+    promo_out: Annotated[dict, Output] = {}  # promo_render (FFmpeg compose) output
 
     # --- Intermediate ---
     durations: dict = {}  # {"audio": [...], "music": [...]}

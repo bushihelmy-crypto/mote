@@ -11,15 +11,14 @@ parameter overrides (**kwargs applied to the graph state).
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any
 
+from mote.common.schema.node_status import PAUSE_STATUSES
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetBgPool
 from mote.executor.tasks.types import BgStatus
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError
-
-if TYPE_CHECKING:
-    from mote.executor.tasks import BackgroundTaskPool
 
 # Messages aligned with the design doc (§9)
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
@@ -93,7 +92,7 @@ class ResumeTasks(BaseTool):
     requires = ("get_bg_pool",)
 
     # Injected from Role by bind(): Role.get_bg_pool.
-    get_bg_pool: Callable[[], "BackgroundTaskPool"]
+    get_bg_pool: GetBgPool
 
     async def call(
         self,
@@ -127,14 +126,15 @@ class ResumeTasks(BaseTool):
         if meta.status in (BgStatus.SUCCESS, BgStatus.RUNNING):
             return _MSG_TASK_ALREADY_DONE.format(task_id=task_id, status=meta.status)
 
-        # LLM routing does not count toward restart budget
-        is_routing = meta.status == BgStatus.WAITING_FOR_ROUTE
+        # A pause (LLM route or deadlock stall) is not a failed run, so resuming
+        # from one does not count toward the restart budget.
+        is_pause = meta.status in PAUSE_STATUSES
 
         from_nodes = _as_list(from_node)
         skip_nodes = _as_list(skip_node)
 
         # Check restart budget (skip_node bypasses the limit — it's not a "restart")
-        if not is_routing and not skip_nodes:
+        if not is_pause and not skip_nodes:
             if meta.retry_count >= meta.max_restarts:
                 return _MSG_MAX_RESTARTS.format(
                     task_id=task_id,

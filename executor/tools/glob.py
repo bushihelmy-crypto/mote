@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import glob as _glob_mod
 import os
-from typing import Callable, ClassVar
+from typing import ClassVar
 
 from mote.common.const.tools import GLIMPSE_EXTENSIONS, GLIMPSE_RECORD_LIMIT
 from mote.common.const.tools import GLOB_DEFAULT_LIMIT as DEFAULT_LIMIT
@@ -33,6 +33,7 @@ from mote.common.const.tools import SEARCH_TIMEOUT, VCS_DIRECTORIES_TO_EXCLUDE
 from mote.common.prompt.tools import GLOB_DESCRIPTION
 from mote.common.text import display_path
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetCwd, RecordFileGlimpsed
 from mote.executor.dependency._paths import base_cwd, resolve_path
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError
@@ -77,8 +78,8 @@ class Glob(BaseTool):
     requires = ("get_cwd", "record_file_glimpsed")
 
     # Injected from Role by bind(): Role.get_cwd, Role.record_file_glimpsed.
-    get_cwd: Callable[[], str]
-    record_file_glimpsed: Callable[[str], None]
+    get_cwd: GetCwd
+    record_file_glimpsed: RecordFileGlimpsed
 
     def _base_cwd(self) -> str:
         """The stable base dir for default root / relativization (unbound: cwd)."""

@@ -31,6 +31,7 @@ from mote.executor.tasks.bggraph.notify import (
     _MSG_SKIPPING,
     push_llm_route_notification,
     push_node_notification,
+    push_stall_notification,
     push_started_notification,
     push_terminal_notification,
 )
@@ -40,11 +41,12 @@ from mote.executor.tasks.bggraph.types import (
     BgStatus,
     GraphBatchFailureError,
     GraphParamTypeError,
+    GraphPause,
     GraphRecursionError,
     GraphRouterError,
     GraphRunState,
     GraphState,
-    LlmPauseResult,
+    PauseReason,
     Stage,
 )
 from mote.executor.tasks.types import BgTaskResult, GraphMeta
@@ -296,9 +298,49 @@ def successors(
 
 
 def _collect_finish_result(graph: "BgGraph", state: GraphState) -> Any:
-    # Field/channel model: the run result is the full final state (langgraph
-    # ``.invoke()`` semantics), not a per-finish-node slot value.
-    return state.model_dump()
+    # The run result is the graph's *declared output* — only the fields marked
+    # ``Annotated[T, Output]`` (``graph._output_fields``). This keeps inputs and
+    # intermediate scratch out of what is returned / pushed to the model on
+    # success. A graph that declares no output falls back to the full final
+    # state (langgraph ``.invoke()`` semantics), preserving old behaviour.
+    dump = state.model_dump()
+    output_fields = getattr(graph, "_output_fields", None)
+    if not output_fields:
+        return dump
+    return {name: dump[name] for name in output_fields if name in dump}
+
+
+def _detect_stall(graph: "BgGraph", completed: set, trigger_count: dict) -> tuple[str, ...]:
+    """Names of AND-join targets that are deadlocked once the frontier drains.
+
+    A stall is a *blocked waiting-edge*: its target never fired because some
+    source can never arrive. This is the ONLY runtime-representable deadlock —
+    plain / conditional / LLM edges always route somewhere, and an unselected
+    conditional branch simply stays PENDING but *unreachable* (no partial
+    arrival), so it is not a stall. A waiting-edge target is stalled when:
+
+    * it has not completed (would be redundant otherwise), and
+    * not all of its sources have completed (so the join cannot fire), and
+    * at least one source *has* arrived — a partial arrival is the fingerprint
+      of a real deadlock (an edge with zero arrivals belongs to a branch the
+      graph simply never entered, which is normal, not a stall).
+
+    Returns the stalled target names (empty tuple = clean finish). Checked only
+    after ``running`` drains with no error, so it cannot race live nodes.
+    """
+    stalled: list[str] = []
+    for we in graph._waiting_edges:
+        if we.to_node in completed:
+            continue
+        arrived = trigger_count.get(we.to_node, set())
+        sources = set(we.sources)
+        if arrived and not sources.issubset(arrived):
+            stalled.append(we.to_node)
+    # Stable, de-duplicated order (a target may appear on multiple waiting-edges).
+    seen: dict[str, None] = {}
+    for name in stalled:
+        seen.setdefault(name, None)
+    return tuple(seen)
 
 
 async def _cancel_running(running: dict) -> None:
@@ -424,7 +466,13 @@ async def _run_driver(
     except _LlmPauseSignal:
         await _cancel_running(running)
         push_llm_route_notification(pause_edge, state, graph)
-        return LlmPauseResult(state=state, completed=completed, edge=pause_edge, run_state=run_state)
+        return GraphPause(
+            reason=PauseReason.LLM_ROUTE,
+            state=state,
+            completed=completed,
+            edge=pause_edge,
+            run_state=run_state,
+        )
     except (GraphRecursionError, GraphRouterError) as e:
         await _cancel_running(running)
         fatal = e
@@ -457,6 +505,23 @@ async def _run_driver(
             run_state=run_state,
         )
         raise error
+
+    # Frontier drained with no error. Before declaring SUCCESS, check for a
+    # deadlocked AND-join: a waiting-edge whose target never fired because a
+    # source can never arrive. That is a genuine pause (a decision the model
+    # must make), NOT a terminal — reporting SUCCESS here would hide a join's
+    # downstream never running. Routes through the same pause snapshot as an
+    # LLM edge so ``resume_tasks`` picks it up identically.
+    stalled_nodes = _detect_stall(graph, completed, trigger_count)
+    if stalled_nodes:
+        push_stall_notification(graph, state, stalled_nodes, completed=completed, run_state=run_state)
+        return GraphPause(
+            reason=PauseReason.STALL,
+            state=state,
+            completed=completed,
+            run_state=run_state,
+            stalled_nodes=stalled_nodes,
+        )
 
     result = _collect_finish_result(graph, state)
     push_terminal_notification(

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, P
 from xml.sax.saxutils import escape as _escape_xml
 
 from mote.common.logs import log_class, logger
-from mote.common.schema import CauseBy, MessagePriority
+from mote.common.schema import CauseBy, MessagePriority, ToolResultLimitConfig
 from mote.executor.tasks.types import BackgroundTaskNotification, BgStatus, GraphMeta, PollFactory, TaskMeta, TaskType
 
 if TYPE_CHECKING:
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 from mote.common.const.tasks import DEFAULT_MAX_CONCURRENCY as _DEFAULT_MAX_CONCURRENCY
 from mote.common.const.tasks import DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT
 from mote.common.const.tasks import DEFAULT_WAIT_COMPLETION_TIMEOUT as _DEFAULT_WAIT_COMPLETION_TIMEOUT
-from mote.common.const.tasks import MAX_RESULT_LEN as _MAX_RESULT_LEN
 from mote.common.const.tasks import MAX_TASK_OUTPUT_BYTES_DISPLAY as _OUTPUT_CAP_DISPLAY
 from mote.common.events import current_bus, set_bus
 from mote.common.exception import (
@@ -44,7 +43,8 @@ from mote.common.exception import (
     render_error_block,
 )
 from mote.executor.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
-from mote.executor.tasks.bggraph.types import LlmPauseResult
+from mote.executor.tasks.bggraph.types import GraphPause, PauseReason
+from mote.executor.tool_result_limit import enforce_tool_result_limit
 
 
 @log_class(
@@ -61,8 +61,23 @@ class BackgroundTaskPool:
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
         output_store: "Optional[TaskOutputStore]" = None,
         wake: Optional[Callable[[], None]] = None,
+        session_id: str = "",
+        limit_config: Optional[ToolResultLimitConfig] = None,
     ) -> None:
         self._msg_buffer = msg_buffer
+        # Result-limit policy — the SAME contract the synchronous ToolExecutor
+        # applies to a tool's output. A background result is the deferred tail of
+        # a tool result: same policy, different transport (a
+        # ``BackgroundTaskNotification`` instead of a ``ToolResult``). Sharing the
+        # config type (defaulted identically) means the ``enable``/``persist``
+        # toggles + size cap are honored on both transports, so a large whole-task
+        # result or a large error block persists+previews here exactly as it would
+        # on the sync path — no second policy to keep in sync.
+        self._limit_config = limit_config or ToolResultLimitConfig()
+        # Owning session id — scopes the on-disk path when a large whole-task
+        # *result* is persisted (via ``enforce_tool_result_limit``). Empty falls
+        # back to the shared ``default`` bucket, same as the tool-result path.
+        self._session_id = session_id
         # Runtime wake callback. ``msg_buffer.push`` wakes mid-turn waiters
         # (its built-in new-message signal), but the scheduler driver parks
         # *between* turns on a separate ``wake_event``; pushing alone won't
@@ -512,9 +527,10 @@ class BackgroundTaskPool:
         ]
         if result is not None:
             lines.append(f"<result>{_escape_xml(result)}</result>")
-        # Surface the disk output path so the model can Read the full log on
-        # demand (the inline <result> is truncated), following the
-        # "prefer Read on the task output file path" direction.
+        # Surface the streaming stdout log path so the model can Read the full
+        # process log on demand. This is the task's *process* output, distinct
+        # from the ``<result>`` produced value (which persists to its own
+        # ``.tool_results`` file when large) — both pointers can coexist.
         if output_path is not None:
             lines.append(f"<output-path>{_escape_xml(output_path)}</output-path>")
         lines.append("</task-notification>")
@@ -561,6 +577,38 @@ class BackgroundTaskPool:
             return
         self._wake_runtime()
 
+    def _limit_block(self, output: str, command_name: str, task_id: str) -> str:
+        """Apply the shared result-limit policy to a terminal text block.
+
+        The single scoping point for a background task's outgoing text — the
+        SUCCESS result *and* every error/timeout/cancel block route through here,
+        so both transports (sync tool + bg task) obey one policy:
+
+        - ``enable_tool_result_limit`` off → the block is passed through whole
+          (no cap, no persistence), same as the ToolExecutor's early-out.
+        - otherwise the block is capped at ``default_max_result_size_chars``;
+          over the threshold it is persisted to a session-scoped
+          ``.tool_results`` file (when ``persist_large_tool_results``) and
+          replaced by a ``<persisted-output>`` preview, else head-truncated with
+          a dropped-size notice.
+
+        Result-scoping only — compression + media handling stay in
+        ``ToolExecutor._settle`` (genuinely sync-tool-transport concerns), so
+        there is no upward coupling of the pool onto the executor.
+        """
+        cfg = self._limit_config
+        if not cfg.enable_tool_result_limit or not output:
+            return output
+        return enforce_tool_result_limit(
+            output,
+            command_name,
+            result_id=f"task-{task_id}",
+            session_id=self._session_id,
+            max_result_size_chars=cfg.default_max_result_size_chars,
+            persist=cfg.persist_large_tool_results,
+            base_dir=self._output_store.base_dir if self._output_store is not None else None,
+        )
+
     def _on_done(self, task_id: str, command_name: str, task: asyncio.Task) -> None:
         """Synchronous callback invoked by the event loop when a task finishes.
 
@@ -589,7 +637,7 @@ class BackgroundTaskPool:
             # structured <error> block as every other terminal outcome.
             report = ErrorReport.from_exception(BackgroundTaskCancelledError(cancel_msg))
             error_dict = report.as_dict()
-            result = render_error_block(report)[:_MAX_RESULT_LEN]
+            result = self._limit_block(render_error_block(report), command_name, task_id)
         else:
             exc = task.exception()
             if exc is not None:
@@ -601,7 +649,7 @@ class BackgroundTaskPool:
                     # the uniform block + machine-readable report.
                     report = ErrorReport.from_exception(BackgroundTaskTimeoutError(summary))
                     error_dict = report.as_dict()
-                    result = render_error_block(report)[:_MAX_RESULT_LEN]
+                    result = self._limit_block(render_error_block(report), command_name, task_id)
                     # Snapshot graph state on timeout so the task can be resumed
                     # from where it stalled. Unlike a driver-raised failure, the
                     # bare asyncio.TimeoutError is raised by wait_for *outside*
@@ -625,7 +673,7 @@ class BackgroundTaskPool:
                     # readable report rides along on the notification's `error`.
                     report = ErrorReport.from_exception(exc)
                     error_dict = report.as_dict()
-                    result = render_error_block(report)[:_MAX_RESULT_LEN]
+                    result = self._limit_block(render_error_block(report), command_name, task_id)
                     summary = f"{command_name} failed."
                     # Snapshot state on failure (not only on LLM pause) so the
                     # graph can be resumed from where it broke. The driver
@@ -641,9 +689,18 @@ class BackgroundTaskPool:
                             meta.state_snapshot = graph_state
             else:
                 raw = task.result()
-                if isinstance(raw, LlmPauseResult):
-                    status = BgStatus.WAITING_FOR_ROUTE
-                    summary = f"{command_name} paused, waiting for route selection."
+                if isinstance(raw, GraphPause):
+                    # A pause is resumable, not terminal: the driver returns a
+                    # reason-tagged snapshot instead of a result. Both reasons
+                    # ride the same save-for-resume path; only the status label
+                    # and summary differ. ``resume_tasks`` reads the snapshot to
+                    # pick up execution (route selection or deadlock break).
+                    if raw.reason == PauseReason.STALL:
+                        status = BgStatus.STALLED
+                        summary = f"{command_name} stalled: a join is deadlocked, a decision is needed."
+                    else:
+                        status = BgStatus.WAITING_FOR_ROUTE
+                        summary = f"{command_name} paused, waiting for route selection."
                     # Save pause state to meta for resume.
                     meta = self._meta.get(task_id)
                     if meta is not None:
@@ -653,11 +710,17 @@ class BackgroundTaskPool:
                             meta.run_state = raw.run_state
                 else:
                     status = BgStatus.SUCCESS
-                    # Deliver the full result in the notification (no truncation):
-                    # a truncated result forced the model to poll GetNodeState to
-                    # piece the output back together. Handing it the whole result
-                    # up front lets it act in one shot.
-                    result = str(raw) if raw is not None else "(no output)"
+                    # A whole-task result is a tool output like any other, so it
+                    # rides the SAME size-limit primitive the ToolExecutor uses
+                    # on the synchronous path: under the threshold it is inlined
+                    # whole (lets the model act in one shot); over it, the full
+                    # result is persisted to a session-scoped ``.tool_results``
+                    # file and the inline ``<result>`` becomes a
+                    # ``<persisted-output>`` preview + path. That result file is
+                    # distinct from the streaming stdout log at ``output_path``
+                    # (process log vs. produced value) — both pointers coexist.
+                    raw_result = str(raw) if raw is not None else "(no output)"
+                    result = self._limit_block(raw_result, command_name, task_id)
                     summary = f"{command_name} completed successfully."
                     # Snapshot the final graph state on success too (not only on
                     # failure/timeout/pause) so GetNodeState can inspect the

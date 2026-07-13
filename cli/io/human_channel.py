@@ -8,6 +8,14 @@ to ``state.env.ask_user(...)``. This is the §8 successor of the old
 any :class:`~mote.cli.contracts.interface.ports.InputPort` (terminal / Web / IM share the same
 ``ask`` contract, §2.5), so the human channel is uniform across platforms.
 
+Approvals ride the same uniformity: ``request_approval`` receives a structured
+:class:`~mote.common.schema.permission_types.ApprovalRequest` from the engine
+and drives the port's ``decide_approval`` selector directly, mapping the
+returned :class:`ApprovalDecision` outcome back to the engine's
+:data:`~mote.common.schema.permission_types.ApprovalChoice` vocabulary. No prose
+is assembled or parsed — the localized display wording lives entirely in the
+port/consumer layer (under i18n).
+
 The single-agent driver has no multi-role environment, so address registration
 and message publishing the Role might call on its env are inert no-ops; an empty
 ``desc`` / ``roles`` short-circuits the provider's "other roles" / "team info"
@@ -16,64 +24,18 @@ prefixes entirely.
 
 from __future__ import annotations
 
-import re
-from typing import Any, Optional
+import asyncio
+from typing import Any
 
-# The PermissionEngine renders approval questions with these markers (see
-# ``mote/executor/permission/prompts.py``) and then routes the *free-text*
-# reply back through ``request_approval`` → ``ask_user``. We intercept those
-# prompts here and drive the port's structured ``decide_approval`` selector
-# instead of a raw text input, mapping the choice back to a reply the engine's
-# ``parse_approval_response`` understands ("yes" / "always" / "no").
-_APPROVAL_MARKERS = ("[APPROVAL REQUIRED]", "[SANDBOX ESCALATION]")
-
-# Map a structured ApprovalDecision.outcome to the engine's free-text reply.
-_OUTCOME_TO_REPLY = {
-    "accept": "yes",
-    "always_allow": "always",
-    "reject": "no",
-    "always_deny": "no",
+# Map a structured ApprovalDecision.outcome to the engine's ApprovalChoice.
+# ``always_deny`` currently collapses to a plain deny (no persistent deny rule
+# yet); when that lands it maps to its own choice.
+_OUTCOME_TO_CHOICE = {
+    "accept": "allow_once",
+    "always_allow": "allow_session",
+    "reject": "deny",
+    "always_deny": "deny",
 }
-
-
-class _ApprovalRequest:
-    """Lightweight request shape the ports' ``decide_approval`` reads.
-
-    Mirrors the fields ``TerminalPort`` / ``TextualPort`` pull off the request
-    (``action`` / ``risk`` / ``args_preview`` / ``approval_id``) so an
-    engine-rendered approval prompt can drive the same selector UI as a
-    first-class ``ApprovalRequested`` event.
-    """
-
-    def __init__(self, *, action: str, risk: str, args_preview: str, approval_id: str = "") -> None:
-        self.action = action
-        self.risk = risk
-        self.args_preview = args_preview
-        self.approval_id = approval_id
-
-
-def _parse_approval_prompt(text: str) -> Optional[_ApprovalRequest]:
-    """Turn an engine approval prompt into an ``_ApprovalRequest``, or ``None``.
-
-    Extracts the tool name for the headline action and keeps the full prompt
-    body (minus the trailing "Reply 'yes'…" instruction line, which the selector
-    replaces with its own options) as the preview.
-    """
-    stripped = text.lstrip()
-    if not stripped.startswith(_APPROVAL_MARKERS):
-        return None
-    escalation = stripped.startswith("[SANDBOX ESCALATION]")
-    m = re.search(r"tool '([^']+)'", stripped)
-    tool = m.group(1) if m else "action"
-    action = f"escalate: {tool}" if escalation else f"run: {tool}"
-    # Drop the final "Reply 'yes' … 'no'." instruction line; the menu supplies it.
-    lines = [ln for ln in text.splitlines() if not ln.strip().lower().startswith("reply ")]
-    preview = "\n".join(lines).strip()
-    return _ApprovalRequest(
-        action=action,
-        risk="high" if escalation else "medium",
-        args_preview=preview,
-    )
 
 
 class PortHumanChannel:
@@ -88,22 +50,23 @@ class PortHumanChannel:
     def __init__(self, port: Any, *, ctx: Any = None):
         self._port = port  # any InputPort (has ``async ask(ctx, question) -> str``)
         self._ctx = ctx
+        # One console, one reader: serialize every human prompt so concurrent
+        # callers queue instead of interleaving. This matters once a tool can
+        # fan out parallel work that each raises a prompt (e.g. ``run_graph``'s
+        # map / AND-join branches dispatching approval-gated or AskUserQuestion
+        # tools at once) — the port's single-reader guard coordinates only with
+        # the main-loop reader, not two prompts against each other, so without
+        # this lock their ``_write`` output interleaves and the second clobbers
+        # the port's parked-waiter slot. A plain (non-reentrant) lock is safe:
+        # each guarded method is one leaf round-trip and never nests another.
+        self._prompt_lock = asyncio.Lock()
 
     def role_names(self) -> list:
         return []
 
     async def ask_user(self, question: str, sent_from: Any = None) -> str:
-        # Approval prompts (rendered by the PermissionEngine and routed through
-        # ``request_approval`` → here) drive the port's structured selector rather
-        # than a free-text input, then map the choice back to the engine's reply
-        # vocabulary. Non-approval questions fall through to the plain ``ask``.
-        approval = _parse_approval_prompt(question)
-        if approval is not None and hasattr(self._port, "decide_approval"):
-            decision = await self._port.decide_approval(self._ctx, approval)
-            outcome = getattr(decision, "outcome", "reject")
-            return _OUTCOME_TO_REPLY.get(outcome, "no")
-
-        return await self._port.ask(self._ctx, question)
+        async with self._prompt_lock:
+            return await self._port.ask(self._ctx, question)
 
     async def ask_user_question(self, questions: Any, sent_from: Any = None) -> Any:
         """Route structured multiple-choice questions to the port's ``ask_questions``.
@@ -113,9 +76,10 @@ class PortHumanChannel:
         with zero text parsing. Ports that predate ``ask_questions`` degrade
         per-question through the plain ``ask``, still building structured answers.
         """
-        if hasattr(self._port, "ask_questions"):
-            return await self._port.ask_questions(self._ctx, questions)
-        return await self._degrade_ask_questions(questions)
+        async with self._prompt_lock:
+            if hasattr(self._port, "ask_questions"):
+                return await self._port.ask_questions(self._ctx, questions)
+            return await self._degrade_ask_questions(questions)
 
     async def _degrade_ask_questions(self, questions: Any) -> Any:
         """Loss-free per-question fallback for ports without ``ask_questions``.
@@ -146,16 +110,21 @@ class PortHumanChannel:
             except TypeError:
                 return await self._port.ask(self._ctx, question)
 
-    async def request_approval(self, request: Any, sent_from: Any = None) -> Any:
-        """Route a gated action to the port for a structured approval decision.
+    async def request_approval(self, request: Any, sent_from: Any = None) -> str:
+        """Drive the port's structured approval selector; return an ``ApprovalChoice``.
 
-        The inbound half of the ``ApprovalRequested`` contract. This exists so a
-        Role capability can gate an action uniformly across platforms; wiring the
-        *framework* side (a permission-engine callback → this method) is pending
-        until the agent spine surfaces an approval AgentEvent — the contract is
-        laid down now so the round-trip is not a later retrofit.
+        The inbound half of the ``request_approval`` capability: the engine hands
+        us a language-neutral :class:`ApprovalRequest`, we route it straight to
+        the port's ``decide_approval`` (which renders the localized selector and
+        returns an :class:`ApprovalDecision`), then map its outcome back to the
+        engine's :data:`ApprovalChoice`. A port with no selector fails closed.
         """
-        return await self._port.decide_approval(self._ctx, request)
+        async with self._prompt_lock:
+            if not hasattr(self._port, "decide_approval"):
+                return "deny"
+            decision = await self._port.decide_approval(self._ctx, request)
+            outcome = getattr(decision, "outcome", "reject")
+            return _OUTCOME_TO_CHOICE.get(outcome, "deny")
 
     async def reply_to_user(self, content: str, sent_from: Any = None) -> str:
         return ""

@@ -33,6 +33,7 @@ from mote.cli.consumers.render.builders import (
     file_change_caption,
     fold_mode,
     indent,
+    is_rejection,
     linkify,
     media_caption,
     notice_style,
@@ -53,37 +54,6 @@ from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
 
-class AssistantBlock(SelectableStatic):
-    """A streaming assistant (or reasoning) markdown block.
-
-    Accumulates deltas in ``_buf`` and re-renders the whole markdown on each
-    ``append_delta`` — Textual handles the incremental repaint, so there is no
-    need for the terminal consumer's block-boundary ``Live`` region.
-    """
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._buf = ""
-
-    def append_delta(self, text: str) -> None:
-        if not text:
-            return
-        self._buf += text
-        self._rebuild()
-
-    def set_markdown(self, markdown: str) -> None:
-        """Replace the buffer wholesale (non-streamed completed block)."""
-        self._buf = markdown or ""
-        self._rebuild()
-
-    def finalize(self) -> None:
-        self._rebuild()
-
-    def _rebuild(self) -> None:
-        if self._buf.strip():
-            self.update(bullet_row(BULLET, themed_markdown(self._buf), style=Palette.BRAND))
-
-
 def build_tool_parts(started: Any, completed: Any, *, blink: bool = False) -> list:
     """Assemble the renderable parts for one tool call (started + optional completed).
 
@@ -96,7 +66,9 @@ def build_tool_parts(started: Any, completed: Any, *, blink: bool = False) -> li
     bullet (the host toggles it each heartbeat).
     """
     ok = None if completed is None else bool(getattr(completed, "ok", True))
-    parts: list[Any] = [tool_started_text(started, ok=ok, blink=blink and completed is None)]
+    parts: list[Any] = [
+        tool_started_text(started, ok=ok, blink=blink and completed is None, rejected=is_rejection(completed))
+    ]
     body = tool_body_syntax(started)
     if body is not None:
         parts.append(indent(body, RESULT_INDENT))
@@ -207,22 +179,77 @@ class FoldableRow(SelectableStatic):
     async def _on_click(self, event: Any) -> None:
         """Post :class:`Clicked` on a plain click so the host can select this row.
 
-        We do NOT call ``super()`` here: Textual walks the MRO itself and invokes
-        ``SelectableStatic._on_click`` (ctrl+click link nav) and ``Widget._on_click``
-        (double/triple-click text-select) on their own, so calling super would
-        double-invoke them. We only add row-selection, and only for a *plain*
-        click — a Ctrl+click is a link nav, and a click that ended a drag-select
-        (``text_selection`` set) is a copy gesture, neither of which should hijack
-        the selection.
+        A Ctrl+click is a link nav, so it defers to ``SelectableStatic._on_click``
+        (the URL-open handler) via ``super()``; a click that ended a drag-select
+        (``text_selection`` set) is a copy gesture we leave to the base handler.
+        Only a *plain* click adds row-selection — and there we do NOT call super,
+        since Textual's own ``Widget._on_click`` (double/triple-click text-select)
+        walks the MRO on its own.
         """
-        if getattr(event, "ctrl", False):
-            return
-        if self.text_selection is not None:
+        if getattr(event, "ctrl", False) or self.text_selection is not None:
+            await super()._on_click(event)
             return
         self.post_message(self.Clicked(self))
 
     def _rebuild(self) -> None:  # pragma: no cover - overridden by every subclass
         raise NotImplementedError
+
+
+class AssistantBlock(FoldableRow):
+    """A streaming assistant (or reasoning) markdown block.
+
+    Accumulates deltas in ``_buf`` and re-renders the whole markdown on each
+    ``append_delta`` — Textual handles the incremental repaint, so there is no
+    need for the terminal consumer's block-boundary ``Live`` region.
+
+    As a :class:`FoldableRow` the block is click-selectable and folds under
+    ``ctrl+o`` just like a tool row: collapsed it keeps only the first line plus a
+    dim ``… +N 行`` tail, expanded it renders the full markdown. It starts
+    **expanded** — a fresh reply/reasoning block must stay readable while it
+    streams — and only collapses on an explicit toggle (global ``ctrl+o`` or a
+    click-select scoped ``ctrl+o``).
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        # Default expanded: the block must stay fully visible while it streams;
+        # ctrl+o (global or scoped to a click-selected block) folds it afterwards.
+        super().__init__(expanded=True, **kwargs)
+        self._buf = ""
+
+    def append_delta(self, text: str) -> None:
+        if not text:
+            return
+        self._buf += text
+        self._rebuild()
+
+    def set_markdown(self, markdown: str) -> None:
+        """Replace the buffer wholesale (non-streamed completed block)."""
+        self._buf = markdown or ""
+        self._rebuild()
+
+    def finalize(self) -> None:
+        self._rebuild()
+
+    @property
+    def _fold_hint(self) -> bool:
+        # Only advertise the ctrl+o affordance when there's more than one line to
+        # hide — folding a single-line reply would be a visual no-op.
+        return len(self._buf.strip().splitlines()) > 1
+
+    def _rebuild(self) -> None:
+        if not self._buf.strip():
+            return
+        if self.expanded:
+            self.update(bullet_row(BULLET, themed_markdown(self._buf), style=Palette.BRAND))
+            return
+        # Folded: the first line rendered as markdown + a dim "… +N 行" tail so a
+        # long block collapses to one glanceable line (same fold wording as the
+        # compaction recap).
+        lines = self._buf.strip().splitlines()
+        head = themed_markdown(lines[0])
+        hidden = len(lines) - 1
+        renderable = head if hidden <= 0 else Group(head, Text(t(K.FOLD_MORE_LINES, count=hidden), style=Palette.DIM))
+        self.update(bullet_row(BULLET, renderable, style=Palette.BRAND))
 
 
 class ToolCallWidget(FoldableRow):
@@ -233,11 +260,11 @@ class ToolCallWidget(FoldableRow):
     the started line, optional body, result summary and structured detail
     (diff / table) render together as one transcript row.
 
-    A ``FoldMode.DETAIL`` call (Bash/Terminal/WebBrowser) is foldable: collapsed
-    (the default, gated by ``ctrl+o``) it keeps only the ``● Tool(headline)``
-    line and the ``⎿ summary`` result, hiding the command body + full output;
-    expanded it renders the full :func:`build_tool_parts`. Every other tool
-    ignores :attr:`expanded` and always renders in full.
+    Every tool call is foldable under ``ctrl+o``: collapsed (following the global
+    toggle) it keeps only the ``● Tool(headline)`` line and the ``⎿ summary``
+    result, hiding the command body + full output / structured detail; expanded it
+    renders the full :func:`build_tool_parts`. (Search/read runs coalesce into a
+    :class:`ToolGroupWidget` instead, so they never reach here.)
     """
 
     #: The running bullet pulses at this cadence (secs) until the call completes.
@@ -285,7 +312,12 @@ class ToolCallWidget(FoldableRow):
             # summary, hiding the body + full output. The ctrl+o affordance shows
             # only on the selected block (its bottom-right), not on every row.
             ok = None if self._completed is None else bool(getattr(self._completed, "ok", True))
-            head = tool_started_text(self._started, ok=ok, blink=self._blink and self._completed is None)
+            head = tool_started_text(
+                self._started,
+                ok=ok,
+                blink=self._blink and self._completed is None,
+                rejected=is_rejection(self._completed),
+            )
             if self._completed is None:
                 self.update(head)
                 return
@@ -478,7 +510,7 @@ class ApprovalMarkerRow(SelectableStatic):
         action = getattr(ev, "action", None) or getattr(ev, "tool_name", None) or "action"
         line = Text()
         line.append(BULLET + " ", style=Palette.WARNING)
-        line.append(f"{WARN} approval required ", style=f"bold {Palette.WARNING}")
+        line.append(f"{WARN} {t(K.APPROVAL_REQUIRED)} ", style=f"bold {Palette.WARNING}")
         line.append(f"[{getattr(ev, 'risk', 'medium')}] ", style=Palette.DIM)
         line.append(action, style=Palette.WARNING)
         super().__init__(line, **kwargs)

@@ -55,6 +55,11 @@ CATALOG: Dict[str, str] = {
     K.SUMMARY_EDIT_REMOVED: "更新 -{count} 行",
     K.SUMMARY_UPDATED: "已更新",
     K.SUMMARY_REPLACED: "替换 {count} 处",
+    # Tool outcomes
+    K.TOOL_REJECTED: "已被用户拒绝",
+    K.RESULT_NO_OUTPUT: "（无输出）",
+    K.RESULT_FAILED: "失败",
+    K.RESULT_RETRYABLE: "可重试",
     # Driver
     K.DRIVER_TOOLS_LOADED: "已加载 {count} 个工具",
     # Prompt input
@@ -64,12 +69,29 @@ CATALOG: Dict[str, str] = {
     K.KEY_EXPAND_HINT: "ctrl+o 展开",
     K.KEY_COLLAPSE_HINT: "ctrl+o 折叠",
     K.KEY_EXIT_HINT: "（再次按 Ctrl+C 退出）",
+    # Approval gate
+    K.APPROVAL_REQUIRED: "需要审批",
+    K.APPROVAL_PROCEED: "是否继续？",
+    K.APPROVAL_ACTION_RUN: "运行：{tool}",
+    K.APPROVAL_ACTION_ESCALATE: "越权：{tool}",
+    K.APPROVAL_OPT_YES: "是",
+    K.APPROVAL_OPT_ALWAYS: "是，且不再询问同类操作",
+    K.APPROVAL_OPT_NO: "否，并告诉我该怎么做（esc）",
+    K.APPROVAL_OPT_NEVER: "否，且永不允许此操作",
+    K.APPROVAL_TYPED_HINT: "[y]是 / [n]否 / [a]总是 / [d]永不？",
+    K.APPROVAL_REASON_ASK_RULE: "有 ask 规则要求确认",
+    K.APPROVAL_REASON_DEFAULT: "此操作需要你的批准",
+    K.APPROVAL_SUGGESTION: "总是允许则本会话放行 {rule}",
     # Interactive select hints
     K.HINT_SELECT_MULTI: "Space 选择 · Enter 确认",
     K.HINT_SELECT_SINGLE: "↑↓ 选择 · Enter 确认",
     K.HINT_SELECT_MULTI_CANCEL: "Space 选择 · Enter 确认 · Esc 取消",
     K.HINT_SELECT_SINGLE_CANCEL: "↑↓ 选择 · Enter 确认 · Esc 取消",
     K.HINT_ESC_CANCEL: "Esc 取消",
+    K.SELECT_OTHER: "其他（输入你自己的答案）",
+    K.SELECT_FREE_TEXT_PROMPT: "输入你的答案：",
+    K.SELECT_ANSWER_PLACEHOLDER: "你的答案…",
+    K.SELECT_SUBMIT: "提交",
     # /lang command
     K.LANG_CURRENT: "当前语言：{code}",
     K.LANG_AVAILABLE: "可用语言：{codes}",

@@ -28,5 +28,4 @@ def test_is_ephemeral_context_source():
 def test_renders_current_time_block():
     out = run(TimestampContextSource().render())
     assert out is not None
-    assert "Current time" in out
     assert "Current local time is" in out

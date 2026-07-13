@@ -12,10 +12,11 @@ capability; this tool stays a thin trigger.
 """
 from __future__ import annotations
 
-from typing import Awaitable, Callable, ClassVar
+from typing import ClassVar
 
 from mote.common.utils.report import ArtifactsReporter
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import WaitInterruptible
 from mote.executor.tool_registry import register_tool
 
 # Long default (10 min) is fine: the sleep is interruptible, so the agent wakes
@@ -51,7 +52,7 @@ class Sleep(BaseTool):
     max_result_size_chars: ClassVar[int] = 1_000
 
     # Injected from Role by bind(): Role.wait_interruptible.
-    wait_interruptible: Callable[[float], Awaitable[tuple[float, bool]]]
+    wait_interruptible: WaitInterruptible
 
     async def call(self, *, duration_seconds: float = _DEFAULT_SLEEP_SECONDS) -> str:
         """Wait for a duration, interruptible by new messages/task completion.

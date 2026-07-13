@@ -56,54 +56,67 @@ _FMT_PROGRESS = "[{stage}] {status}: {detail}"
 
 MAX_RESULT_DISPLAY_CHARS = 99999999
 
-# The single authoritative definition of which progress events are worth
+# The single authoritative definition of which *mid-flight* (per-node) progress
+# events, emitted from inside the running graph coroutine, are worth
 # interrupting the agent with — i.e. pushed into the msg_buffer to earn a new
-# react turn (as opposed to merely appended to the task's disk output). Mirrors
-# the terminal ``BgStatus`` values plus ``waiting_for_route`` (an LLM pause that
-# needs the model to pick a route). The graph-level START marker is handled
-# separately in :func:`_is_push_worthy`.
-_PUSH_WORTHY_STATUSES = frozenset({"success", "failed", "cancelled", "timeout", "waiting_for_route"})
+# react turn (as opposed to merely appended to the task's disk output).
+#
+# Only a node **failure** qualifies: it is a decision point (the model must
+# GetNodeState / resume_tasks or ask the user), so it wakes the agent
+# immediately. Everything else the writer sees is disk-only:
+#   * node ``success`` (``node_completed``) — progress, not a decision; the
+#     final result is delivered once by the whole-task terminal (``_on_done``),
+#   * the graph START marker — the tool's own return value already carries the
+#     stage-summary, so no separate "task started" push is needed,
+#   * mid-flight ``running`` updates.
+# The other decision point — an LLM-route pause (``waiting_for_route``) — and
+# every whole-task terminal (success / failed / timeout / cancelled) are pushed
+# solely by ``pool._on_done`` (see :func:`_is_task_terminal`), not the writer.
+_PUSH_WORTHY_STATUSES = frozenset({"failed"})
 
 
 def _is_push_worthy(stage: str, status: str) -> bool:
-    """Whether a progress event should be pushed to msg_buffer + wake the agent.
+    """Whether a *mid-flight* progress event should wake the agent.
 
-    Two cases push:
-
-    * the graph-level START marker (``stage == END`` with status ``"running"``)
-      — a lightweight "task started" heads-up, or
-    * a terminal / LLM-route status — the node finished (success / failed /
-      cancelled / timeout) or a route decision is pending.
-
-    Everything else (e.g. a mid-flight node ``running`` update) only lands on
-    disk and is *not* pushed.
+    Only a per-node failure pushes (a decision point). Node success, the START
+    marker and ``running`` updates are disk-only. Whole-task terminals and the
+    route pause are pushed by ``pool._on_done``, not from here (the writer's
+    ``_is_task_terminal`` gate excludes them regardless).
     """
 
-    if stage == END and status == "running":
-        return True
     return status in _PUSH_WORTHY_STATUSES
 
 
 # Terminal statuses that, at the graph level (``stage == END``), mean the whole
-# task has ended. ``waiting_for_route`` is a whole-task outcome too (the task
-# returns an ``LlmPauseResult``) regardless of stage. Excludes the START marker
-# (``stage == END`` with ``running``) and per-node terminals (``stage`` is a
-# node name), which are mid-flight events — not the one whole-task terminal.
+# task has ended. A pause (``waiting_for_route`` / ``stalled``) is a whole-task
+# outcome too (the driver returns a ``GraphPause``) regardless of stage — see
+# ``_GRAPH_PAUSE_STATUSES`` below. Excludes the START marker (``stage == END``
+# with ``running``) and per-node terminals (``stage`` is a node name), which are
+# mid-flight events — not the one whole-task outcome.
 _GRAPH_TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled", "timeout"})
 
 
-def _is_task_terminal(stage: str, status: str) -> bool:
-    """Whether a push-worthy event is the *one* whole-task terminal.
+# Whole-task pause statuses — a pause is not terminal (the task keeps its
+# snapshot for resume) but IS a whole-task outcome owned by ``pool._on_done``,
+# so the writer must not also deliver it. Two reasons share this: an LLM-route
+# pause (``waiting_for_route``) and a deadlocked-join stall (``stalled``).
+_GRAPH_PAUSE_STATUSES = frozenset({"waiting_for_route", "stalled"})
 
-    Used by the writer to *exclude* whole-task terminals from delivery (the
-    graph terminal and the route pause are owned solely by ``pool._on_done``),
-    so only the START marker and per-node mid-flight events are pushed from
-    inside the coroutine. Distinguishes the graph-level terminal (``stage ==
-    END`` with a terminal status) and the route pause (``waiting_for_route``)
-    from mid-flight node events.
+
+def _is_task_terminal(stage: str, status: str) -> bool:
+    """Whether a push-worthy event is the *one* whole-task outcome.
+
+    Used by the writer to *exclude* whole-task outcomes from delivery (the graph
+    terminal and every pause are owned solely by ``pool._on_done``), so only the
+    START marker and per-node mid-flight events are pushed from inside the
+    coroutine. Distinguishes the graph-level terminal (``stage == END`` with a
+    terminal status) and a pause (``waiting_for_route`` / ``stalled``) from
+    mid-flight node events. (Despite the name, "terminal" here means "the one
+    whole-task outcome push" — a pause is one such outcome even though the task
+    is resumable, not ended.)
     """
 
-    if status == "waiting_for_route":
+    if status in _GRAPH_PAUSE_STATUSES:
         return True
     return stage == END and status in _GRAPH_TERMINAL_STATUSES
 
@@ -133,18 +146,20 @@ def make_progress_writer(
     1. **disk** (always) — *append* renders every line to the task's output, the
        source of truth behind ``<task-attachment>`` blocks. Typically
        ``lambda line: store.append(task_id, line)``.
-    2. **deliver** (when *deliver* is given) — for *non-terminal* push-worthy
-       events (the graph START marker + per-node mid-flight terminals; see
-       :func:`_is_push_worthy` minus :func:`_is_task_terminal`) builds a
-       structured :class:`BackgroundTaskNotification` and hands it to *deliver*
-       (the pool's single push+wake choke point), so a finished node earns a new
-       react turn. The *one* whole-task terminal (graph terminal / route pause)
-       is deliberately NOT delivered here — ``pool._on_done`` is its sole
-       producer (it also covers the interruption case where this coroutine is
-       cancelled before its terminal code runs). The rich DAG snapshot the
-       writer renders for that terminal still reaches the agent via the disk
-       append (sink 1). The writer is agnostic to *how* delivery happens (no
-       msg_buffer / wake here): the pool owns that and injects ``deliver``.
+    2. **deliver** (when *deliver* is given) — for a *mid-flight node failure*
+       only (see :func:`_is_push_worthy` minus :func:`_is_task_terminal`) builds
+       a structured :class:`BackgroundTaskNotification` and hands it to *deliver*
+       (the pool's single push+wake choke point), so a failed node earns a new
+       react turn (a decision point: GetNodeState / resume_tasks / ask the user).
+       Node *success* (``node_completed``) and the graph START marker are NOT
+       delivered — they only land on disk; the final result reaches the agent
+       once via the whole-task terminal. The *one* whole-task terminal (graph
+       terminal / route pause) is likewise NOT delivered here — ``pool._on_done``
+       is its sole producer (it also covers the interruption case where this
+       coroutine is cancelled before its terminal code runs). The rich DAG
+       snapshot the writer renders for that terminal still reaches the agent via
+       the disk append (sink 1). The writer is agnostic to *how* delivery happens
+       (no msg_buffer / wake here): the pool owns that and injects ``deliver``.
 
     **Broadcast to the world** (ambient telemetry, not injected):
 
@@ -169,15 +184,15 @@ def make_progress_writer(
         line = _FMT_PROGRESS.format(stage=stage, status=status_str, detail=detail_str)
         append(line + "\n")
         _emit_task_progress(task_id, stage, status_str, detail_str)
-        # Deliver only *non-terminal* push-worthy events (the START marker + the
-        # per-node mid-flight terminals ``_on_done`` cannot see). The one
-        # whole-task terminal — a graph-level terminal or a route pause — is
-        # NOT delivered here: ``pool._on_done`` is the single terminal producer
-        # (it fires exactly once, and is the *only* producer on an interruption
-        # where this coroutine is cancelled before reaching its terminal code).
-        # The rich DAG snapshot the writer rendered for that terminal still
-        # reaches the agent via the disk ``append`` above (the task-attachment
-        # source of truth); only the redundant push is dropped.
+        # Deliver only a mid-flight node *failure* (the sole per-node decision
+        # point ``_on_done`` cannot see). Node success and the START marker are
+        # disk-only. The one whole-task terminal — a graph-level terminal or a
+        # route pause — is NOT delivered here: ``pool._on_done`` is the single
+        # terminal producer (it fires exactly once, and is the *only* producer
+        # on an interruption where this coroutine is cancelled before reaching
+        # its terminal code). The rich DAG snapshot the writer rendered for that
+        # terminal still reaches the agent via the disk ``append`` above (the
+        # task-attachment source of truth); only the redundant push is dropped.
         if deliver is not None and _is_push_worthy(stage, status_str) and not _is_task_terminal(stage, status_str):
             _deliver_progress(deliver, task_id, command_name, stage, status_str, detail_str)
 
