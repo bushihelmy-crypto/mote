@@ -33,7 +33,7 @@ class TimestampContextSource:
     save_to_context = False
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
-        return f"# Current time\n{get_time_info()}"
+        return f"{get_time_info()}"
 
 
 __all__ = ["TimestampContextSource"]

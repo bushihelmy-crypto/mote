@@ -10,6 +10,7 @@ a crash).
 """
 from __future__ import annotations
 
+import json
 import os
 import stat
 
@@ -124,6 +125,101 @@ class TestHotReload:
         store_a.add_user_secret("shared", "shared-secret-value-xyz")
         _bump_mtime(vault)
         assert "shared-secret-value-xyz" in store_b.as_map()
+
+
+class TestSecretsConfigFile:
+    """The plaintext, human-edited ``secrets_config.json`` -> file section."""
+
+    def _write_sc(self, path, mapping: dict) -> None:
+        path.write_text(json.dumps(mapping))
+
+    def test_file_secret_seeded_and_labeled(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"tg-token": "1234567890:AAfilesecretvalue"})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        assert store.as_map() == {"1234567890:AAfilesecretvalue": "<agent-vault:tg-token>"}
+
+    def test_file_section_encrypted_on_disk(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"k": "plaintext-file-secret-xyz"})
+        vault = tmp_path / "vault.json"
+        SecretStore(_cipher(), vault_path=vault, secrets_config_file=sc)
+        # The value is vaulted encrypted, not stored raw in the vault blob.
+        assert b"plaintext-file-secret-xyz" not in vault.read_bytes()
+
+    def test_hot_add_new_entry(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"a": "aaaa-secret-value"})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        assert "aaaa-secret-value" in store.as_map()
+
+        self._write_sc(sc, {"a": "aaaa-secret-value", "b": "bbbb-secret-value"})
+        _bump_mtime(sc)
+        m = store.as_map()
+        assert "aaaa-secret-value" in m
+        assert "bbbb-secret-value" in m
+
+    def test_hot_delete_single_entry(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"a": "aaaa-secret-value", "b": "bbbb-secret-value"})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        assert "bbbb-secret-value" in store.as_map()
+
+        # Remove one name from the file -> dropped from the vault (full replace).
+        self._write_sc(sc, {"a": "aaaa-secret-value"})
+        _bump_mtime(sc)
+        m = store.as_map()
+        assert "aaaa-secret-value" in m
+        assert "bbbb-secret-value" not in m
+
+    def test_hot_delete_whole_file(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"a": "aaaa-secret-value"})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        assert "aaaa-secret-value" in store.as_map()
+
+        sc.unlink()  # delete the entire file -> section cleared
+        assert "aaaa-secret-value" not in store.as_map()
+
+    def test_deleted_file_cleared_on_restart(self, tmp_path):
+        """A stale entry from a since-deleted file is cleared on construct."""
+        sc = tmp_path / "secrets_config.json"
+        vault = tmp_path / "vault.json"
+        self._write_sc(sc, {"a": "aaaa-secret-value"})
+        SecretStore(_cipher(), vault_path=vault, secrets_config_file=sc)
+        sc.unlink()
+        # Fresh store: file gone, but the vault still holds the old encrypted entry.
+        # The _UNSET-sentinel first reconcile must clear it.
+        reloaded = SecretStore(_cipher(), vault_path=vault, secrets_config_file=sc)
+        assert "aaaa-secret-value" not in reloaded.as_map()
+
+    def test_file_isolated_from_config_and_user(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_config(cfg, _API_KEY)
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"file-key": "file-secret-value-123"})
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault, config_path=cfg, secrets_config_file=sc)
+        store.add_user_secret("user-key", "user-secret-value-456")
+
+        m = store.as_map()
+        assert m[_API_KEY] == "<secret:llm.api_key>"  # config tier
+        assert m["file-secret-value-123"] == "<agent-vault:file-key>"  # file tier
+        assert m["user-secret-value-456"] == "<agent-vault:user-key>"  # user tier
+
+    def test_malformed_file_ignored(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        sc.write_text("{not valid json")
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        assert store.as_map() == {}
+
+    def test_non_string_values_dropped(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        sc.write_text(json.dumps({"good": "keepme-secret-value", "bad": 12345}))
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        m = store.as_map()
+        assert "keepme-secret-value" in m
+        assert 12345 not in m and "12345" not in m
 
 
 class TestFailOpen:

@@ -80,7 +80,7 @@ class PlainTerminalConsumer(BaseConsumer):
 
     def on_tool_call_completed(self, ev: Any) -> None:
         mark = "✓" if ev.ok else "✗"
-        self._print(f"  {mark} {ev.summary or '(no output)'}")
+        self._print(f"  {mark} {ev.summary or t(K.RESULT_NO_OUTPUT)}")
         self._show_truncation(ev)
 
     def on_media_block(self, ev: Any) -> None:
@@ -96,7 +96,7 @@ class PlainTerminalConsumer(BaseConsumer):
 
     def on_approval_requested(self, ev: Any) -> None:
         action = ev.action or ev.tool_name or "action"
-        self._print(f"  approval required [{ev.risk}]: {action}")
+        self._print(f"  {t(K.APPROVAL_REQUIRED)} [{ev.risk}]: {action}")
 
     def on_usage_updated(self, ev: Any) -> None:
         line = _format_usage_line(ev)

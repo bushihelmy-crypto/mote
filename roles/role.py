@@ -27,6 +27,12 @@ from mote.router.router import LLMRouter
 from mote.session import list_sessions as _list
 
 if TYPE_CHECKING:
+    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem
+    from mote.common.schema.permission_types import ApprovalChoice, ApprovalRequest
+    from mote.context.skills.skill_pool import SkillPool
+    from mote.executor.capability_types import CapabilityMap
+    from mote.executor.tool_result import ToolResult
+    from mote.sandbox import SandboxRuntime
     from mote.session import (
         BrowserStateRecorder,
         FileSnapshotRecorder,
@@ -448,7 +454,7 @@ class Role(BaseRole):
         """
         self._state_ctl.set_tool_session(key, value)
 
-    def get_skill_pool(self):
+    def get_skill_pool(self) -> Optional[SkillPool]:
         """Return the live SkillPool, or None when skills are disabled.
 
         Capability surface for the ``Skill`` bridge tool; delegates to
@@ -471,7 +477,7 @@ class Role(BaseRole):
     # role behavior stays in the Role and tools stay thin triggers.
     # =========================================================================
 
-    def tool_capabilities(self) -> dict[str, Any]:
+    def tool_capabilities(self) -> CapabilityMap:
         """The explicit allowlist of capabilities a tool may receive via bind().
 
         BaseTool.bind() resolves each name in a tool's `requires` against this
@@ -511,6 +517,9 @@ class Role(BaseRole):
             "run_skill_fork": self.run_skill_fork,
             "register_resource": self._capabilities.register_resource,
             "get_sandbox_runtime": self.get_sandbox_runtime,
+            "dispatch_tool": self.dispatch_tool,
+            "list_tool_names": self.list_tool_names,
+            "list_graph_tool_names": self.list_graph_tool_names,
         }
 
     def deactivate(self) -> None:
@@ -534,7 +543,7 @@ class Role(BaseRole):
         """Return the background task pool (capability surface; delegates)."""
         return self._capabilities.get_bg_pool()
 
-    def get_sandbox_runtime(self):
+    def get_sandbox_runtime(self) -> Optional[SandboxRuntime]:
         """Return the OS-level sandbox runtime, or ``None`` when not configured.
 
         Capability surface for the command-execution tools (Bash / terminal /
@@ -613,7 +622,7 @@ class Role(BaseRole):
         """
         return await self._capabilities.ask_user(question)
 
-    async def ask_user_question(self, questions):
+    async def ask_user_question(self, questions: list[AskUserQuestionItem]) -> AskUserQuestionAnswers:
         """Ask the user structured multiple-choice questions; return structured answers.
 
         Capability surface behind the ``AskUserQuestion`` tool; delegates to
@@ -621,13 +630,13 @@ class Role(BaseRole):
         """
         return await self._capabilities.ask_user_question(questions)
 
-    async def request_approval(self, prompt: str) -> str:
-        """Ask the human to approve a tool call and return their raw reply.
+    async def request_approval(self, request: "ApprovalRequest") -> "ApprovalChoice":
+        """Ask the human to approve a gated tool call; return their decision.
 
         The interactive channel for the PermissionEngine's ``ask`` decisions.
         Capability surface; delegates to :class:`RoleCapabilities`.
         """
-        return await self._capabilities.request_approval(prompt)
+        return await self._capabilities.request_approval(request)
 
     async def reply_to_user(self, content: str) -> str:
         """Reply to the user with the provided content.
@@ -644,6 +653,28 @@ class Role(BaseRole):
         :class:`RoleCapabilities` (which owns the wait coordination).
         """
         return await self._capabilities.wait_interruptible(duration_seconds)
+
+    async def dispatch_tool(self, name: str, kwargs: "dict | None" = None) -> "ToolResult":
+        """Dispatch a nested tool call through the executor chokepoint.
+
+        Capability surface for the ``run_graph`` orchestrator: every graph-node
+        tool call is routed back through ``ToolExecutor.run_command``, so the same
+        permission gate, hooks, and observability that guard a direct tool call
+        apply identically to graph-driven calls (re-entrant safe). Returns the
+        tool's ``ToolResult`` — a denied/failed call is ``success=False``, not raised.
+        """
+        return await self.executor.run_command(name, kwargs or {})
+
+    def list_tool_names(self) -> list[str]:
+        """Live tool names (primary + aliases), for ``run_graph`` to validate the
+        tool references in a graph spec. Capability surface over the executor."""
+        return self.executor.tool_names()
+
+    def list_graph_tool_names(self) -> list[str]:
+        """Names of tools that are themselves graph orchestrators, for ``run_graph``
+        to refuse nesting a graph inside a graph. Capability surface over the
+        executor's ``is_graph_tool`` marker set."""
+        return sorted(self.executor.graph_tool_names())
 
     async def end_session(self) -> str:
         """End the current session and produce a summary if configured.

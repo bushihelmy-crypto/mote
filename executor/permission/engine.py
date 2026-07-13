@@ -35,16 +35,25 @@ from __future__ import annotations
 import os
 from typing import Awaitable, Callable, Optional
 
-from mote.common.schema.permission_types import PermissionDecision, PermissionMode, PermissionRule
-from mote.executor.permission.prompts import build_approval_prompt, build_escalation_prompt, parse_approval_response
+from mote.common.schema.permission_types import (
+    ApprovalChoice,
+    ApprovalReasonCode,
+    ApprovalRequest,
+    PermissionDecision,
+    PermissionMode,
+    PermissionRule,
+)
 from mote.executor.permission.rule_matcher import suggest_command_rule
 from mote.executor.permission.rule_store import RuleStore
 from mote.executor.permission.sandbox import SandboxGuard
 
-# An async callback that asks the human a question and returns their free-text
-# reply. Supplied by the Role (``request_approval`` capability); ``None`` when
-# no interactive channel exists.
-AskUser = Callable[[str], Awaitable[str]]
+# An async callback that asks the human to approve a gated action and returns
+# their structured decision. Supplied by the Role (``request_approval``
+# capability); ``None`` when no interactive channel exists. The engine hands it
+# a language-neutral :class:`ApprovalRequest` (never a prose string) and gets
+# back one of the three :data:`ApprovalChoice` outcomes — display wording lives
+# entirely in the human layer.
+AskUser = Callable[[ApprovalRequest], Awaitable[ApprovalChoice]]
 
 
 class PermissionEngine:
@@ -165,10 +174,19 @@ class PermissionEngine:
             )
 
         pending = ask_paths + escalation_paths
-        reason = "; ".join(r for r in reasons if r) or "this action needs your approval"
-        prompt = build_approval_prompt(tool_name, "\n  ".join(pending), reason)
-        reply = await self._ask_user(prompt)
-        choice = parse_approval_response(reply)
+        # A consolidated multi-path ask: escalation among them lifts the risk
+        # band, and any concrete verdict text rides ``reason_detail`` verbatim.
+        detail = "; ".join(r for r in reasons if r)
+        request = ApprovalRequest(
+            tool_name=tool_name,
+            kind="escalation" if escalation_paths else "approval",
+            target="\n  ".join(pending),
+            paths=list(pending),
+            risk="high" if escalation_paths else "medium",
+            reason_code="sandbox" if escalation_paths else "default",
+            reason_detail=detail,
+        )
+        choice = await self._ask_user(request)
 
         if choice == "deny":
             return PermissionDecision.deny(
@@ -343,8 +361,16 @@ class PermissionEngine:
                 message=f"'{tool_name}' blocked by sandbox: {verdict.reason} (no channel to escalate).",
             )
 
-        reply = await self._ask_user(build_escalation_prompt(tool_name, path, verdict.reason))
-        choice = parse_approval_response(reply)
+        request = ApprovalRequest(
+            tool_name=tool_name,
+            kind="escalation",
+            target=path,
+            paths=[path],
+            risk="high",
+            reason_code="sandbox",
+            reason_detail=verdict.reason,
+        )
+        choice = await self._ask_user(request)
         if choice == "deny":
             return PermissionDecision.deny(
                 "sandbox",
@@ -382,9 +408,26 @@ class PermissionEngine:
             )
 
         rule, spec = self._suggested_allow_rule(tool_name, target, segments)
-        prompt = build_approval_prompt(tool_name, target, reason, suggestion=spec)
-        reply = await self._ask_user(prompt)
-        choice = parse_approval_response(reply)
+        # Map the internal reason_type to a language-neutral reason_code. A fixed
+        # reason (ask rule / mode default) carries no detail — the display layer
+        # localizes it from the code. A tool self-check ask carries the tool's
+        # own (author-written English) message verbatim as ``reason_detail``.
+        reason_code: ApprovalReasonCode
+        if reason_type == "rule":
+            reason_code, reason_detail = "ask_rule", ""
+        elif reason_type == "tool_check":
+            reason_code, reason_detail = "tool", reason
+        else:
+            reason_code, reason_detail = "default", ""
+        request = ApprovalRequest(
+            tool_name=tool_name,
+            target=target,
+            paths=[target] if target else [],
+            reason_code=reason_code,
+            reason_detail=reason_detail,
+            suggestion=spec,
+        )
+        choice = await self._ask_user(request)
 
         if choice == "deny":
             return PermissionDecision.deny("user", "user denied", message=f"The user denied running '{tool_name}'.")

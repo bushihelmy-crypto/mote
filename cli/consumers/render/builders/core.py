@@ -21,6 +21,12 @@ from mote.cli.consumers.render.palette import BRANCH, CHECK, CROSS, MEDIA, PLAY,
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
+# The stable ``ErrorCode`` string the permission gate stamps on a user-declined
+# approval (mirrors ``ErrorCode.TOOL_PERMISSION_DENIED``). Kept as a literal so
+# this render leaf never imports the exception package (leaf discipline — same
+# reason the contract layer stores ``error_code`` as a bare string).
+_REJECTION_CODE = "TOOL_PERMISSION_DENIED"
+
 # Continuation indents (spaces) so wrapped/detail lines align under the glyph
 # that introduces them: assistant/markdown under ``BULLET `` (2), a tool's
 # result detail under ``  BRANCH `` (4).
@@ -144,18 +150,37 @@ def linkify(text: str, *, base_style: str = "") -> "Text":
     return out
 
 
-def tool_started_text(ev: Any, *, ok: Optional[bool] = None, blink: bool = False) -> "Text":
+def is_rejection(ev: Any) -> bool:
+    """True when a completed tool is the human *declining* an approval, not a failure.
+
+    A permission-gate denial (``TOOL_PERMISSION_DENIED``) is a deliberate user
+    choice — the tool never ran and nothing went wrong — so hosts render it as a
+    muted "rejected" note (amber, no ``[ErrorType]`` suffix) rather than a red
+    error row. Keyed on the stable ``error_code`` so a genuine ``PermissionError``
+    raised *inside* a tool still reads as a real failure.
+    """
+    if ev is None or getattr(ev, "ok", True):
+        return False
+    return (getattr(ev, "error_code", "") or "") == _REJECTION_CODE
+
+
+def tool_started_text(ev: Any, *, ok: Optional[bool] = None, blink: bool = False, rejected: bool = False) -> "Text":
     """Compose the ``● Tool(headline)`` invocation line (bullet added by caller).
 
     The bullet is coloured by run state (the status glyph): brand while
     the call is in flight (``ok is None``), success-green once it completes ok, and
-    error-red when it fails. While running, ``blink`` (toggled by the host's
-    heartbeat) brightens the bullet to :data:`Palette.SHIMMER` for a subtle pulse.
+    error-red when it fails. A ``rejected`` completion (the human declined the
+    approval — see :func:`is_rejection`) uses the amber approval-gate colour
+    instead of error-red, so a deliberate decline never reads as a failure. While
+    running, ``blink`` (toggled by the host's heartbeat) brightens the bullet to
+    :data:`Palette.SHIMMER` for a subtle pulse.
     """
     from mote.cli.consumers.render.palette import BULLET
 
     if ok is None:
         bullet_style = Palette.SHIMMER if blink else Palette.BRAND
+    elif rejected:
+        bullet_style = Palette.WARNING
     else:
         bullet_style = Palette.SUCCESS if ok else Palette.ERROR
     line = Text()
@@ -176,9 +201,18 @@ def tool_completed_text(ev: Any) -> "Text":
     is appended — plus ``· retryable`` when the failure is retryable — so the
     human sees the machine-classified cause next to the summary. Absent
     ``error_type`` leaves the line unchanged.
+
+    A user-declined approval (:func:`is_rejection`) is *not* a failure: it renders
+    as a muted amber ``rejected`` note with no summary text and no ``[ErrorType]``
+    suffix, so a deliberate decline never reads as a red error row.
     """
+    if is_rejection(ev):
+        line = Text()
+        line.append("  " + BRANCH + " ", style=Palette.DIM)
+        line.append(t(K.TOOL_REJECTED), style=Palette.WARNING)
+        return line
     style = Palette.SUCCESS if ev.ok else Palette.ERROR
-    summary = ev.summary or ("(no output)" if ev.ok else "failed")
+    summary = ev.summary or (t(K.RESULT_NO_OUTPUT) if ev.ok else t(K.RESULT_FAILED))
     line = Text()
     line.append("  " + BRANCH + " ", style=Palette.DIM)
     line.append(summary, style=style)
@@ -186,7 +220,7 @@ def tool_completed_text(ev: Any) -> "Text":
     if not ev.ok and error_type:
         suffix = f" [{error_type}]"
         if getattr(ev, "retryable", False):
-            suffix += " · retryable"
+            suffix += f" · {t(K.RESULT_RETRYABLE)}"
         line.append(suffix, style=Palette.DIM)
     return line
 
@@ -515,6 +549,7 @@ __all__ = [
     "linkify",
     "tool_started_text",
     "tool_completed_text",
+    "is_rejection",
     "FoldMode",
     "fold_mode",
     "tool_group_summary_text",

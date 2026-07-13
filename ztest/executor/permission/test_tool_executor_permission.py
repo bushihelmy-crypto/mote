@@ -51,17 +51,24 @@ class SafetyTool(BaseTool):
 
 
 class FakeRole:
-    """Publishes a request_approval capability returning a canned reply."""
+    """Publishes a request_approval capability returning a canned ApprovalChoice.
+
+    The capability now receives a structured ``ApprovalRequest`` and returns an
+    ``ApprovalChoice``; tests still express intent in the readable yes/no
+    vocabulary, mapped here to the choice the engine consumes.
+    """
+
+    _REPLY_TO_CHOICE = {"yes": "allow_once", "always": "allow_session", "no": "deny"}
 
     def __init__(self, reply: str = "no") -> None:
-        self.reply = reply
-        self.asked: list[str] = []
+        self.reply = self._REPLY_TO_CHOICE.get(reply, reply)
+        self.asked: list = []
 
     def tool_capabilities(self) -> dict[str, Any]:
         return {"request_approval": self._approve}
 
-    async def _approve(self, prompt: str) -> str:
-        self.asked.append(prompt)
+    async def _approve(self, request: Any) -> str:
+        self.asked.append(request)
         return self.reply
 
 

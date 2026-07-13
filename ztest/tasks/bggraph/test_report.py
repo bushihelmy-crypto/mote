@@ -99,23 +99,35 @@ def test_no_bus_still_appends():
 # ---------------------------------------------------------------------------
 
 
-def test_push_worthy_status_delivers_structured_notification():
+def test_node_failure_delivers_structured_notification():
     from mote.executor.tasks.types import BackgroundTaskNotification
 
     lines, delivered = [], []
     writer = make_progress_writer(lines.append, task_id="bg_1", command_name="my_graph", deliver=delivered.append)
-    writer("split", "success", "node done")
-    # Terminal status is push-worthy → one structured notification.
+    writer("split", "failed", "node blew up")
+    # A per-node failure is the sole mid-flight decision point → one push.
     assert len(delivered) == 1
     n = delivered[0]
     assert isinstance(n, BackgroundTaskNotification)
     assert (n.content, n.task_id, n.command_name, n.status) == (
-        "node done",
+        "node blew up",
         "bg_1",
         "my_graph",
-        "success",
+        "failed",
     )
+    # A mid-flight failure is NOT the whole-task terminal (pool._on_done owns that).
+    assert n.task_terminal is False
     # Still appended to disk.
+    assert lines == ["[split] failed: node blew up\n"]
+
+
+def test_node_success_not_delivered():
+    lines, delivered = [], []
+    writer = make_progress_writer(lines.append, task_id="bg_1", deliver=delivered.append)
+    writer("split", "success", "node done")
+    # node_completed is progress, not a decision → disk-only, no push. The final
+    # result reaches the agent once via the whole-task terminal (pool._on_done).
+    assert delivered == []
     assert lines == ["[split] success: node done\n"]
 
 
@@ -128,38 +140,37 @@ def test_running_status_not_delivered():
     assert lines == ["[split] running: still going\n"]
 
 
-def test_graph_start_marker_is_delivered():
+def test_graph_start_marker_not_delivered():
     from mote.executor.tasks.bggraph.types import END
 
-    delivered = []
-    writer = make_progress_writer(lambda _l: None, task_id="bg_1", deliver=delivered.append)
-    # The graph-level START marker (END stage + running) is a push-worthy heads-up.
+    lines, delivered = [], []
+    writer = make_progress_writer(lines.append, task_id="bg_1", deliver=delivered.append)
+    # The graph-level START marker (END stage + running) is disk-only now — the
+    # tool's own return value already carries the stage-summary at submit time.
     writer(END, "running", "task started")
-    assert [m.content for m in delivered] == ["task started"]
-    # ...but it is NOT the whole-task terminal.
-    assert delivered[0].task_terminal is False
+    assert delivered == []
+    assert lines == ["[__end__] running: task started\n"]
 
 
-def test_writer_delivers_only_non_terminal_events():
+def test_writer_delivers_only_node_failures():
     from mote.executor.tasks.bggraph.types import END
 
     delivered = []
     writer = make_progress_writer(lambda _l: None, task_id="bg_1", deliver=delivered.append)
-    # Per-node terminal → mid-flight, delivered (pushes a new react turn).
+    # Node success → disk-only (progress, not a decision).
     writer("split", "success", "node done")
-    # Graph START heads-up → delivered.
+    # Graph START heads-up → disk-only (stage-summary already returned at submit).
     writer(END, "running", "started")
-    # Graph-level terminal → NOT delivered by the writer; pool._on_done is the
-    # sole producer of the one whole-task terminal.
+    # Graph-level terminal → pool._on_done is the sole producer of that terminal.
     writer(END, "success", "graph done")
-    # Route pause → also a whole-task outcome → NOT delivered here.
+    # Route pause → whole-task outcome → pool._on_done, not the writer.
     writer("router_node", "waiting_for_route", "pick a route")
+    # Node failure → the ONE mid-flight decision point the writer pushes.
+    writer("tts", "failed", "boom")
 
-    # Only the two non-terminal events reach deliver, and neither is flagged
-    # task_terminal (the writer never emits a terminal anymore).
+    # Only the node failure reaches deliver, and it is not flagged task_terminal.
     assert [(m.status, m.task_terminal) for m in delivered] == [
-        ("success", False),  # node terminal (mid-flight)
-        ("running", False),  # START
+        ("failed", False),
     ]
 
 
@@ -168,10 +179,12 @@ def test_current_placeholder_substituted_with_task_id():
     bus, rec = _bus()
     writer = make_progress_writer(lines.append, task_id="bg_7", deliver=delivered.append)
     with set_bus(bus):
-        writer("split", "success", "task (current) finished")
+        # A node failure is the one event that reaches all three sinks (disk +
+        # bus + deliver), so it exercises substitution on the delivered path too.
+        writer("split", "failed", "task (current) finished")
     # Substitution now happens in the writer, so every sink sees the real id:
     # disk append, event bus and the delivered notification — never the literal.
-    assert lines == ["[split] success: task bg_7 finished\n"]
+    assert lines == ["[split] failed: task bg_7 finished\n"]
     assert rec.events[0].detail == "task bg_7 finished"
     assert [m.content for m in delivered] == ["task bg_7 finished"]
 

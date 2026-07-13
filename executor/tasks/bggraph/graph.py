@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable, Optional, Union
 
 from mote.common.utils.docstring import first_line
 from mote.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
-from mote.executor.tasks.bggraph.channels import derive_reducers
+from mote.executor.tasks.bggraph.channels import derive_output_fields, derive_reducers
 from mote.executor.tasks.bggraph.engine import _build_executor
 from mote.executor.tasks.bggraph.engine import resume as _resume
 from mote.executor.tasks.bggraph.engine import resume_skip as _resume_skip
@@ -111,6 +111,10 @@ class BgGraph:
         # field name → reducer, derived from ``state_schema`` Annotated metadata
         # at compile time (see ``compile``).
         self._reducers: dict[str, Callable] = {}
+        # Names of ``Output``-marked state fields — the declared result. Derived
+        # at compile time alongside reducers; empty means "no declared output",
+        # so the run result falls back to the whole state (see engine).
+        self._output_fields: set[str] = set()
 
     # --- node registration ---
 
@@ -222,14 +226,54 @@ class BgGraph:
 
     # --- compilation ---
 
-    def compile(self) -> Callable[..., Awaitable[BgTaskResult]]:
-        """Validate and compile to an async ``executor(**kwargs) -> BgTaskResult``."""
+    def _prepare(self) -> None:
+        """Compile-time preparation shared by :meth:`compile` and :meth:`arun`:
+        normalize waiting-edges, validate topology/params, derive reducers."""
         self._normalize_waiting_edges()
         self._validate()
         self._validate_params()
         self._reducers = derive_reducers(self.state_schema)
+        self._output_fields = derive_output_fields(self.state_schema)
 
+    def compile(self) -> Callable[..., Awaitable[BgTaskResult]]:
+        """Validate and compile to an async ``executor(**kwargs) -> BgTaskResult``."""
+        self._prepare()
         return _build_executor(self)
+
+    # --- foreground run ---
+
+    async def arun(self, **initial_state) -> GraphState:
+        """Prepare, then run the graph **inline** and return the final state.
+
+        This is simply ``await`` on the frontier driver — no ``BgTaskResult``
+        wrapper, so it runs on the calling task rather than being submitted to the
+        background pool (which is what :meth:`compile`'s executor does). Running on
+        the live task is what lets a dispatched tool's approval / AskUserQuestion
+        prompt surface on the interactive channel.
+
+        Raises the engine's terminal error (``GraphBatchFailureError`` etc.) on
+        failure; on success the returned state carries every node's result.
+        """
+        # Local imports avoid a module-level cycle (engine imports back into the
+        # bggraph package), mirroring ``compile``'s runtime dependency on it.
+        from collections import defaultdict
+
+        from mote.executor.tasks.bggraph.engine import _run_driver
+        from mote.executor.tasks.bggraph.types import GraphRunState
+
+        self._prepare()
+        state = self.state_schema(**initial_state)
+        run_state = GraphRunState.for_graph(self)
+        await _run_driver(
+            self,
+            state,
+            execute_nodes=self._get_entry_nodes(),
+            completed=set(),
+            trigger_count=defaultdict(set),
+            initial_params=dict(initial_state),
+            run_state=run_state,
+        )
+        return state
 
     # --- resume (delegates to engine) ---
 

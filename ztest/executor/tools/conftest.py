@@ -109,6 +109,14 @@ class CapRole:
         # Optional OS-level sandbox runtime for the command-execution tools.
         # None => those tools run un-sandboxed (the historical test behavior).
         self._sandbox_runtime = sandbox_runtime
+        # Scriptable tool table for the run_graph orchestrator: name -> async
+        # fn(kwargs) -> ToolResult. ``dispatch_tool`` routes here (the fake
+        # executor chokepoint) and ``list_tool_names`` reports the keys, so a
+        # graph node can call these fakes exactly as it would a real tool.
+        self.fake_tools: dict[str, Callable] = {}
+        # Names treated as graph orchestrators (``is_graph_tool``); run_graph
+        # refuses to nest these. Empty unless a test opts in.
+        self.graph_tools: set[str] = set()
 
     # --- cwd accessors (Bash) ---
     def get_cwd(self) -> str:
@@ -227,6 +235,23 @@ class CapRole:
     def get_sandbox_runtime(self) -> Any:
         return self._sandbox_runtime
 
+    # --- run_graph orchestration (fake executor chokepoint) ---
+    async def dispatch_tool(self, name: str, kwargs: Optional[dict] = None) -> Any:
+        from mote.executor.tool_result import ToolResult
+
+        fn = self.fake_tools.get(name)
+        if fn is None:
+            return ToolResult(output=f"no such tool: {name}", success=False)
+        return await fn(kwargs or {})
+
+    def list_tool_names(self) -> list[str]:
+        return list(self.fake_tools)
+
+    def list_graph_tool_names(self) -> list[str]:
+        # Names in ``self.graph_tools`` are treated as graph orchestrators (so a
+        # test can prove run_graph refuses to nest them). Empty by default.
+        return list(getattr(self, "graph_tools", ()) or ())
+
     # --- the allowlist bind() consults ---
     def tool_capabilities(self) -> dict[str, Any]:
         return {
@@ -255,6 +280,9 @@ class CapRole:
             "end_session": self.end_session,
             "wait_interruptible": self.wait_interruptible,
             "get_sandbox_runtime": self.get_sandbox_runtime,
+            "dispatch_tool": self.dispatch_tool,
+            "list_tool_names": self.list_tool_names,
+            "list_graph_tool_names": self.list_graph_tool_names,
         }
 
 

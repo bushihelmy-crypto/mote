@@ -1,55 +1,45 @@
-"""Approval prompt text + response parsing.
+"""Approval console rendering + response parsing (non-port fallback).
 
-When a decision resolves to ``ask``, the engine renders a question with
-:func:`build_approval_prompt` and sends it through the Role's
-``request_approval`` capability (which reaches the human via the env). The
-user's free-text reply is interpreted by :func:`parse_approval_response`.
+The interactive approval round-trip is *structured*: the engine emits an
+:class:`~mote.common.schema.permission_types.ApprovalRequest` and gets back an
+:class:`~mote.common.schema.permission_types.ApprovalChoice`. The production
+front-end (``PortHumanChannel``) drives a port's structured ``decide_approval``
+selector, so it never needs prose.
+
+This module serves only the *fallback* console path — a bare ``MoteEnv`` backed
+by ``get_human_input`` (a text stdin), which has no structured selector. There
+we must render the request to a line the human can read and parse their typed
+reply back into a choice. The wording here is intentionally English: this path
+is the developer/plumbing console (tests, headless), not the localized CLI —
+the human-facing localized surface is the port selector in ``cli`` under i18n.
 """
 from __future__ import annotations
 
-from typing import Literal
-
-# What the user's reply maps to.
-#   allow_once    -> run this call only
-#   allow_session -> run and remember for the session
-#   deny          -> block this call
-ApprovalChoice = Literal["allow_once", "allow_session", "deny"]
+from mote.common.schema.permission_types import ApprovalChoice, ApprovalRequest
 
 
-def build_approval_prompt(tool_name: str, target: str, reason: str = "", suggestion: str = "") -> str:
-    """Compose the approval question shown to the user.
+def render_approval_prompt(request: ApprovalRequest) -> str:
+    """Render an :class:`ApprovalRequest` to a single console prompt string.
 
-    ``suggestion`` (when given) is the permission rule an "always" reply will
-    add for the session — surfaced so the user sees exactly what they are
-    granting (e.g. ``Bash(git commit:*)`` rather than just this one command).
+    Used only by the ``get_human_input`` fallback (no structured selector). The
+    ``target``/``paths`` are the verbatim code artifact; ``reason_detail`` (a
+    tool self-check note or sandbox verdict) is shown as-is when present.
     """
-    target_line = f"\n  target: {target}" if target else ""
-    reason_line = f"\n  reason: {reason}" if reason else ""
-    always = (
-        f"'always' to add the rule {suggestion} for the rest of the session"
-        if suggestion
-        else "'always' to allow for the rest of the session"
-    )
-    return (
-        f"[APPROVAL REQUIRED] The agent wants to run tool '{tool_name}'."
-        f"{target_line}{reason_line}\n"
-        f"Reply 'yes' to allow once, {always}, or 'no' to deny."
-    )
-
-
-def build_escalation_prompt(tool_name: str, path: str, reason: str) -> str:
-    """Compose a sandbox-violation escalation question.
-
-    Distinct from a plain approval prompt: the action is permitted by policy but
-    would cross the sandbox boundary, so the user is asked to grant an exception.
-    """
-    return (
-        f"[SANDBOX ESCALATION] Tool '{tool_name}' wants to write outside the sandbox:\n"
-        f"  path:   {path}\n"
-        f"  reason: {reason}\n"
-        "Reply 'yes' to allow this write once, 'always' to allow writes under this "
-        "directory for the session, or 'no' to block it."
-    )
+    escalation = request.kind == "escalation"
+    head = "[SANDBOX ESCALATION]" if escalation else "[APPROVAL REQUIRED]"
+    verb = "write outside the sandbox" if escalation else f"run tool '{request.tool_name}'"
+    lines = [f"{head} The agent wants to {verb}."]
+    if request.target:
+        label = "path" if escalation else "target"
+        lines.append(f"  {label}: {request.target}")
+    if request.reason_detail:
+        lines.append(f"  reason: {request.reason_detail}")
+    if request.suggestion:
+        always = f"'always' to add the rule {request.suggestion} for the session"
+    else:
+        always = "'always' to allow for the rest of the session"
+    lines.append(f"Reply 'yes' to allow once, {always}, or 'no' to deny.")
+    return "\n".join(lines)
 
 
 def parse_approval_response(response: str) -> ApprovalChoice:

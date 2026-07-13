@@ -46,7 +46,7 @@ import re
 import shutil
 import sys
 import time
-from typing import Callable, ClassVar, Optional
+from typing import ClassVar, Optional
 
 from mote.common.const.tools import (
     DEFAULT_HEAD_LIMIT,
@@ -60,6 +60,7 @@ from mote.common.const.tools import (
 from mote.common.prompt.tools import GREP_DESCRIPTION
 from mote.common.text import count_noun, display_path, plural
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetCwd, RecordFileGlimpsed
 from mote.executor.dependency._document import extract_document_text as _extract_document_text
 from mote.executor.dependency._document import is_document as _is_document
 from mote.executor.dependency._paths import base_cwd, resolve_path
@@ -233,8 +234,8 @@ class Grep(BaseTool):
     requires = ("get_cwd", "record_file_glimpsed")
 
     # Injected from Role by bind(): Role.get_cwd, Role.record_file_glimpsed.
-    get_cwd: Callable[[], str]
-    record_file_glimpsed: Callable[[str], None]
+    get_cwd: GetCwd
+    record_file_glimpsed: RecordFileGlimpsed
 
     def _base_cwd(self) -> str:
         """The stable base dir for default root / relativization (unbound: cwd)."""

@@ -64,7 +64,7 @@ def test_bash_threads_runtime_to_aexecute(workspace):
     rt = RecordingRuntime()
     role = CapRole(cwd=str(workspace), sandbox_runtime=rt)
     tool = bind(Bash(), role=role)
-    out = run(tool.call(command="echo hello"))
+    out = run(tool.call(command="echo hello")).output
     assert "hello" in out
     # The command went through the runtime's wrap_command (aexecute appends a
     # cwd-sync probe, so match the prefix rather than exact equality).
@@ -75,7 +75,7 @@ def test_bash_threads_runtime_to_aexecute(workspace):
 def test_bash_without_runtime_runs_unsandboxed(workspace):
     role = CapRole(cwd=str(workspace), sandbox_runtime=None)
     tool = bind(Bash(), role=role)
-    out = run(tool.call(command="echo plain"))
+    out = run(tool.call(command="echo plain")).output
     assert "plain" in out
 
 

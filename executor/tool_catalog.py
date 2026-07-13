@@ -154,3 +154,17 @@ class ToolCatalog:
             if getattr(tool, "reconstructable", False):
                 names.add(name)
         return frozenset(names)
+
+    def graph_tool_names(self) -> frozenset[str]:
+        """Names (primary + aliases) of bound tools that are graph orchestrators.
+
+        A tool self-declares this via the ``is_graph_tool`` ClassVar. run_graph
+        uses this to refuse referencing another graph tool from a node (no
+        graph-in-graph nesting). Every alias is included so the check matches
+        whichever name a spec used.
+        """
+        names: set[str] = set()
+        for name, tool in self._tools.items():
+            if getattr(tool, "is_graph_tool", False):
+                names.add(name)
+        return frozenset(names)

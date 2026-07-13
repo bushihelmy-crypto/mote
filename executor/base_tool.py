@@ -90,6 +90,15 @@ class BaseTool(ABC):
     # the per-Role compactable set the ContextManager threads into the Transcript.
     reconstructable: ClassVar[bool] = False
 
+    # Whether this tool is itself a *graph orchestrator* — it drives a bggraph
+    # internally (RunGraph, CodeReview, MediaPipeline). run_graph refuses to
+    # reference any such tool from a node, so a declarative graph can never nest
+    # another graph (no run_graph→run_graph recursion, and no run_graph→CodeReview
+    # graph-in-graph). Tools that merely *call* other tools are fine; this marks
+    # only tools whose body is a compiled bggraph. Consumed by the ToolExecutor
+    # to expose the graph-tool name set to the run_graph orchestrator.
+    is_graph_tool: ClassVar[bool] = False
+
     # --- Permission metadata (consumed by the PermissionEngine) ---
     # Coarse risk label a tool self-declares (advisory in phase 1). See
     # mote.common.schema.permission_types.RiskLevel.

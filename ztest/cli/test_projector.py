@@ -407,6 +407,31 @@ def test_post_tool_failure_fills_structured_error_fields():
     assert done.recovery == "request access then retry"
 
 
+def test_post_tool_failure_prefers_report_message_over_raw_error_xml():
+    """The CLI shows the report's clean human message, never the ``<error …>`` XML.
+
+    The executor hands the LLM a ``render_error_block`` wrapper (``<error …>…\
+</error>``) as ``tool_response``; the projector must instead surface the
+    structured ``ErrorReport.message`` so the machine-facing XML never leaks onto
+    the human transcript.
+    """
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        error="PermissionError",
+        code="tool.permission_denied",
+        retryable=False,
+        recovery="",
+        message="Permission to run 'Bash' was denied",
+    )
+    xml = '<error code="tool.permission_denied" retryable="false">\nPermission to run \'Bash\' was denied\n</error>'
+    p = ViewProjector()
+    out = p.project(ev_post_tool("Bash", xml, success=False, error=report))
+    done = out[0]
+    assert done.summary == "Permission to run 'Bash' was denied"
+    assert "<error" not in done.summary
+
+
 def test_post_tool_failure_without_error_leaves_fields_empty():
     """A failure with no structured ``error`` degrades to empty fields (summary stays)."""
     p = ViewProjector()
@@ -434,7 +459,7 @@ def test_post_tool_success_output_starting_with_error_not_misjudged():
 def test_post_tool_empty_output_summary():
     p = ViewProjector()
     out = p.project(ev_post_tool("Bash", ""))
-    assert out[0].summary == "(no output)"
+    assert out[0].summary == t(K.RESULT_NO_OUTPUT)
 
 
 def test_post_tool_media_block_from_structured_image():

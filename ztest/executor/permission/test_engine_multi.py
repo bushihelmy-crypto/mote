@@ -20,16 +20,28 @@ from mote.executor.permission.sandbox import SandboxGuard
 pytestmark = pytest.mark.asyncio
 
 
+# The engine's ``ask_user`` now takes a structured ``ApprovalRequest`` and returns
+# an ``ApprovalChoice``. ``_test_prompts`` collects the requests (tests inspect
+# ``request.target`` for the folded path list); replies stay in the readable
+# yes/always/no vocabulary and map to the choice the engine consumes.
+_REPLY_TO_CHOICE = {
+    "yes": "allow_once",
+    "always": "allow_session",
+    "no": "deny",
+}
+
+
 def engine(mode="default", *, allow=None, deny=None, ask=None, reply=None):
     cfg = PermissionConfig(mode=mode, allow=allow or [], deny=deny or [], ask=ask or [])
     store = RuleStore.from_config(cfg)
     ask_user = None
-    prompts: list[str] = []
+    prompts: list = []
     if reply is not None:
+        choice = _REPLY_TO_CHOICE.get(reply, reply)
 
-        async def ask_user(prompt: str) -> str:  # noqa: E306
-            prompts.append(prompt)
-            return reply
+        async def ask_user(request) -> str:  # noqa: E306
+            prompts.append(request)
+            return choice
 
     eng = PermissionEngine(mode=mode, store=store, ask_user=ask_user)
     eng._test_prompts = prompts  # type: ignore[attr-defined]
@@ -40,12 +52,13 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None):
     cfg = PermissionConfig(mode=mode)
     store = RuleStore.from_config(cfg)
     ask_user = None
-    prompts: list[str] = []
+    prompts: list = []
     if reply is not None:
+        choice = _REPLY_TO_CHOICE.get(reply, reply)
 
-        async def ask_user(prompt: str) -> str:  # noqa: E306
-            prompts.append(prompt)
-            return reply
+        async def ask_user(request) -> str:  # noqa: E306
+            prompts.append(request)
+            return choice
 
     guard = SandboxGuard(
         SandboxConfig(mode="workspace-write", writable_roots=[]),
@@ -74,8 +87,8 @@ class TestFolding:
         assert d.behavior == "allow"
         # Exactly ONE prompt covering all asking paths.
         assert len(eng._test_prompts) == 1
-        prompt = eng._test_prompts[0]
-        assert "/a.py" in prompt and "/b.py" in prompt and "/c.py" in prompt
+        target = eng._test_prompts[0].target
+        assert "/a.py" in target and "/b.py" in target and "/c.py" in target
 
     async def test_consolidated_ask_denied(self):
         eng = engine("default", reply="no")
@@ -109,7 +122,7 @@ class TestSandbox:
         assert d.behavior == "allow"
         # The escalation prompt was raised for the out-of-sandbox path.
         assert len(eng._test_prompts) == 1
-        assert "outside.py" in eng._test_prompts[0]
+        assert "outside.py" in eng._test_prompts[0].target
 
     async def test_escalation_blocked_no_channel(self, tmp_path):
         cwd = str(tmp_path)

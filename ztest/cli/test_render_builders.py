@@ -430,7 +430,7 @@ def test_tool_bullet_turns_green_on_success_red_on_failure():
 
 
 def _completed(**over):
-    base = dict(ok=True, summary="done", error_type="", retryable=False)
+    base = dict(ok=True, summary="done", error_type="", error_code="", retryable=False)
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -446,7 +446,8 @@ def test_tool_completed_failure_appends_retryable_tag():
     ev = _completed(ok=False, summary="overloaded", error_type="LLMOverloadedError", retryable=True)
     plain = tool_completed_text(ev).plain
     assert "[LLMOverloadedError]" in plain
-    assert "· retryable" in plain
+    # The retryable tag is localized ("retryable" / "可重试"); assert on the catalog value.
+    assert f"· {i18n_t(K.RESULT_RETRYABLE)}" in plain
 
 
 def test_tool_completed_success_has_no_error_suffix():
@@ -458,3 +459,26 @@ def test_tool_completed_failure_without_error_type_has_no_suffix():
     # A failure with no structured error_type renders the summary alone.
     ev = _completed(ok=False, summary="boom", error_type="")
     assert tool_completed_text(ev).plain.endswith("boom")
+
+
+def test_tool_completed_user_rejection_is_muted_note_not_error():
+    # A permission-gate denial is a deliberate decline, not a failure: it renders
+    # the localized "rejected" note (amber), never the raw summary or [ErrorType].
+    ev = _completed(
+        ok=False,
+        summary="The user denied running 'Bash'",
+        error_type="PermissionError",
+        error_code="TOOL_PERMISSION_DENIED",
+    )
+    text = tool_completed_text(ev)
+    assert "[PermissionError]" not in text.plain
+    assert "The user denied" not in text.plain
+    # No red error styling anywhere on the line.
+    assert not any(str(span.style) == str(Palette.ERROR) for span in text.spans)
+
+
+def test_tool_completed_permission_error_inside_tool_still_reads_as_failure():
+    # A genuine PermissionError raised *inside* a tool (no denial code) keeps the
+    # red error suffix — only the permission-gate code is treated as a decline.
+    ev = _completed(ok=False, summary="denied", error_type="PermissionError", error_code="TOOL")
+    assert "[PermissionError]" in tool_completed_text(ev).plain

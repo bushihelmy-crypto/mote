@@ -255,7 +255,7 @@ class TerminalSurface(BaseSurface):
         action = ev.action or ev.tool_name or "action"
         line = Text()
         line.append(BULLET + " ", style=Palette.WARNING)
-        line.append(f"{WARN} approval required ", style=f"bold {Palette.WARNING}")
+        line.append(f"{WARN} {t(K.APPROVAL_REQUIRED)} ", style=f"bold {Palette.WARNING}")
         line.append(f"[{ev.risk}] ", style=Palette.DIM)
         line.append(action, style=Palette.WARNING)
         self._console.print(line)

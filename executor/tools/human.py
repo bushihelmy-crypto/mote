@@ -1,17 +1,35 @@
 """Human interaction commands — ask_user, reply_to_user, AskUserQuestion."""
 from __future__ import annotations
 
-from typing import Awaitable, Callable
-
 from mote.common.prompt.tools import ASK_USER_DESCRIPTION, ASK_USER_QUESTION_PROMPT, REPLY_TO_USER_DESCRIPTION
 from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput, AskUserQuestionItem
+from mote.common.schema.permission_types import PermissionDecision
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import AskUser as AskUserCap
+from mote.executor.capability_types import AskUserQuestion as AskUserQuestionCap
+from mote.executor.capability_types import ReplyToUser as ReplyToUserCap
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).
 _MSG_INVALID_QUESTIONS = "Error: invalid questions — {error}"
+
+
+def _self_approve(self, args: dict) -> PermissionDecision:
+    """Permission self-check shared by the human-interaction tools.
+
+    These tools ARE the interactive user channel: they mutate nothing on disk
+    or system, they only put a question/reply in front of the human. Gating
+    them behind the permission engine's approval prompt is both redundant and
+    deadlock-prone — the approval prompt is itself a user interaction, so an
+    un-exempted AskUserQuestion fires an "[APPROVAL REQUIRED]" prompt *before*
+    the actual question, which can hang the whole react loop. Returning an
+    ``allow`` short-circuits engine step 11 (default→ask). Bypass-immune deny/ask
+    rules (engine steps 1-4) still win, so a user can explicitly gate these if
+    they ever want to.
+    """
+    return PermissionDecision.allow("safe", "human-interaction tool needs no approval")
 
 
 @register_tool
@@ -24,7 +42,9 @@ class AskUser(BaseTool):
     requires = ("ask_user",)
 
     # Injected from Role by bind(): Role.ask_user.
-    ask_user: Callable[[str], Awaitable[str]]
+    ask_user: AskUserCap
+
+    check_permissions = _self_approve
 
     async def call(self, *, question: str) -> str:
         """Ask the user a question.
@@ -45,7 +65,9 @@ class ReplyToUser(BaseTool):
     requires = ("reply_to_user",)
 
     # Injected from Role by bind(): Role.reply_to_user.
-    reply_to_user: Callable[[str], Awaitable[str]]
+    reply_to_user: ReplyToUserCap
+
+    check_permissions = _self_approve
 
     async def call(self, *, content: str) -> str:
         """Reply to the user.
@@ -72,7 +94,9 @@ class AskUserQuestion(BaseTool):
     requires = ("ask_user_question",)
 
     # Injected from Role by bind(): Role.ask_user_question (structured channel).
-    ask_user_question: Callable[[list[AskUserQuestionItem]], Awaitable[AskUserQuestionAnswers]]
+    ask_user_question: AskUserQuestionCap
+
+    check_permissions = _self_approve
 
     # --- Execution -----------------------------------------------------------
 

@@ -79,6 +79,10 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "PermissionDecision": ("permission_types", "PermissionDecision"),
     "PermissionFacts": ("permission_types", "PermissionFacts"),
     "PermissionRule": ("permission_types", "PermissionRule"),
+    "ApprovalChoice": ("permission_types", "ApprovalChoice"),
+    "ApprovalKind": ("permission_types", "ApprovalKind"),
+    "ApprovalReasonCode": ("permission_types", "ApprovalReasonCode"),
+    "ApprovalRequest": ("permission_types", "ApprovalRequest"),
     # hook_config
     "HookConfig": ("hook_config", "HookConfig"),
     "HookCommandHandler": ("hook_config", "HookCommandHandler"),
@@ -90,6 +94,7 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "FileWatchConfig": ("file_watch_config", "FileWatchConfig"),
     # node_status
     "BgStatus": ("node_status", "BgStatus"),
+    "PAUSE_STATUSES": ("node_status", "PAUSE_STATUSES"),
     # think
     "ThinkResult": ("think", "ThinkResult"),
 }

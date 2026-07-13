@@ -73,6 +73,7 @@ class RoleSchema(BaseModel):
         "Jupyter",
         "Agent",
         "AskUserQuestion",
+        "RunGraph",
         "Sleep",
         "ResumeTasks",
         "GetNodeState",

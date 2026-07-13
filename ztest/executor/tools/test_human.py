@@ -161,6 +161,71 @@ class TestAskUserQuestionGuards:
             _call(tool, questions=[])
 
 
+# --- Permission self-check ---------------------------------------------------
+
+
+class TestHumanToolsSelfApprove:
+    """The human-interaction tools must self-approve (no permission prompt).
+
+    Regression: without a ``check_permissions`` override these tools fell through
+    to the engine's default→ask step, firing an "[APPROVAL REQUIRED]" prompt
+    *before* the question could be asked — which deadlocked the react loop. A
+    model-presented AskUserQuestion selection then never reached the model (while
+    the user typing directly in the REPL, ungated, still worked).
+    """
+
+    @pytest.mark.parametrize("tool_cls", [AskUser, ReplyToUser, AskUserQuestion])
+    def test_check_permissions_allows(self, tool_cls):
+        decision = tool_cls().check_permissions({})
+        assert decision is not None
+        assert decision.behavior == "allow"
+
+    def test_engine_does_not_prompt_in_default_mode(self):
+        # End-to-end through the engine: a default-mode AskUserQuestion resolves
+        # to allow WITHOUT ever calling the approval channel.
+        from mote.executor.permission.engine import PermissionEngine
+        from mote.executor.permission.rule_store import RuleStore
+
+        prompted: list = []
+
+        async def _ask(prompt):
+            prompted.append(prompt)
+            return "no"
+
+        engine = PermissionEngine(mode="default", store=RuleStore(), ask_user=_ask)
+        tool = AskUserQuestion()
+
+        async def _go():
+            return await engine.check(
+                "AskUserQuestion", target="", tool_check=tool.check_permissions({}), mutates_fs=False
+            )
+
+        decision = run(_go())
+        assert decision.behavior == "allow"
+        assert prompted == []  # never prompted
+
+    def test_deny_rule_still_wins(self):
+        # A user-configured bypass-immune deny rule still overrides self-approval,
+        # so explicit gating remains possible.
+        from mote.common.schema.permission_types import PermissionRule
+        from mote.executor.permission.engine import PermissionEngine
+        from mote.executor.permission.rule_store import RuleStore
+
+        store = RuleStore()
+        store.add_session_rule(
+            PermissionRule(tool_name="AskUserQuestion", pattern=None, behavior="deny", source="session")
+        )
+        engine = PermissionEngine(mode="default", store=store, ask_user=None)
+        tool = AskUserQuestion()
+
+        async def _go():
+            return await engine.check(
+                "AskUserQuestion", target="", tool_check=tool.check_permissions({}), mutates_fs=False
+            )
+
+        assert run(_go()).behavior == "deny"
+
+
 # --- Pure-helper unit tests --------------------------------------------------
 
 

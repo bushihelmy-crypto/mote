@@ -33,6 +33,7 @@ dependencies = [
     "filelock",
     "chardet",
     "json-repair",
+    "asteval",  # sandboxed expression eval for run_graph compute nodes
     "cryptography",
     "keyring",
     # Async / HTTP

@@ -78,14 +78,38 @@ class TestCompletionPaths:
 
     @pytest.mark.asyncio
     async def test_result_delivered_in_full(self, pool):
-        # The success result is delivered untruncated so the model gets the whole
-        # output up front (and needn't poll GetNodeState to reconstruct it).
+        # A result under the size-limit threshold is delivered inline whole, so
+        # the model gets the output up front (needn't poll GetNodeState). This
+        # size (a few KB) stays well under DEFAULT_MAX_RESULT_SIZE_CHARS.
         big = "x" * (MAX_RESULT_LEN + 500)
         tid = pool.submit(lambda: echo(big), "big")
         await pool.wait_all()
         result = pool.get_task_info(tid).result
         assert result == big
         assert "truncated" not in result
+
+    @pytest.mark.asyncio
+    async def test_large_result_persists_and_previews(self, tmp_path):
+        # A whole-task result over DEFAULT_MAX_RESULT_SIZE_CHARS rides the same
+        # size-limit primitive as the synchronous tool path: the full value is
+        # written to a session-scoped ``.tool_results`` file and the inline
+        # result becomes a ``<persisted-output>`` preview naming that path —
+        # distinct from the streaming stdout log at ``.task_outputs``.
+        from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, MessageQueue
+        from mote.executor.tasks import TaskOutputStore
+
+        store = TaskOutputStore(base_dir=tmp_path)
+        pool = BackgroundTaskPool(MessageQueue(), output_store=store, session_id="s1")
+        huge = "y" * (DEFAULT_MAX_RESULT_SIZE_CHARS + 1000)
+        tid = pool.submit(lambda: echo(huge), "huge")
+        await pool.wait_all()
+        result = pool.get_task_info(tid).result
+        assert result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
+        assert "Output too large" in result
+        # Full value landed in the session-scoped tool-results file.
+        result_file = tmp_path / ".tool_results" / "s1" / f"task-{tid}.txt"
+        assert result_file.exists()
+        assert result_file.read_text() == huge
 
     @pytest.mark.asyncio
     async def test_failure_records_error_report(self, pool):

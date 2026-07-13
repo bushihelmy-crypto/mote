@@ -5,8 +5,9 @@
 Wires a compiled graph's ``poll`` coroutine through ``BackgroundTaskPool`` with
 a ``TaskOutputStore`` progress sink, then asserts:
 
-* notifications (START / per-node / END) land in the msg_buffer (the pool /
-  progress writer push directly — no event bus), and
+* only decision-point notifications reach the msg_buffer — the whole-task
+  terminal (END, via pool._on_done), a route pause, and a node failure. START
+  and per-node completions are disk-only (no event bus), and
 * per-node ``report_progress`` events were appended to the task's disk output
   (the basis for ``<delta-summary>`` blocks).
 """
@@ -19,7 +20,6 @@ import pytest
 from mote.common.schema import MessageQueue
 from mote.executor.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskOutputStore
 from mote.executor.tasks.bggraph import END, START, BgGraph
-from mote.executor.tasks.bggraph.types import LlmPauseResult
 
 from .conftest import S, gated_node, sync_node
 
@@ -84,11 +84,14 @@ class TestPoolIntegration:
         tid = pool.submit(res.poll_factory, res.command_name, timeout=None, progress=True)
         await pool.wait_all()
 
-        # Graph tasks push via the progress writer → UserMessage in the buffer.
-        # Expect: START + per-node completions + terminal END.
+        # Only the whole-task terminal is pushed to the model: START and every
+        # per-node completion are disk-only now (progress, not decisions), and
+        # the one terminal SUCCESS is produced by pool._on_done.
         msgs = await _drain_msgs(msg_buffer)
-        assert len(msgs) >= 2  # at minimum START + END
-        # Terminal notification contains "success".
+        notes = [m for m in msgs if isinstance(m, BackgroundTaskNotification)]
+        assert len(notes) == 1
+        assert notes[0].status == BgStatus.SUCCESS
+        # Terminal notification contains "success" + the real task_id.
         contents = " ".join(m.content for m in msgs)
         assert "success" in contents
         assert tid in contents  # real task_id injected
@@ -156,7 +159,7 @@ def _llm_pause_graph() -> BgGraph:
 
 
 class TestPoolPauseAndResubmit:
-    """Pool correctly identifies LlmPauseResult and supports resubmit."""
+    """Pool correctly identifies a GraphPause and supports resubmit."""
 
     async def test_pause_sets_waiting_for_route(self, pool, store, msg_buffer):
         """When graph pauses on an LLM edge, pool marks WAITING_FOR_ROUTE."""
@@ -178,11 +181,50 @@ class TestPoolPauseAndResubmit:
         assert meta.graph_meta is not None
         assert meta.graph_meta.graph_ref is not None
 
-        # Notifications pushed via the progress writer (START + node + llm_route).
+        # Only the route pause is pushed (a decision point, via pool._on_done);
+        # START + node completion are disk-only now.
         msgs = await _drain_msgs(msg_buffer)
         assert len(msgs) >= 1
         contents = " ".join(m.content for m in msgs)
         assert "waiting_for_route" in contents or "route" in contents.lower()
+
+    async def test_deadlocked_join_sets_stalled(self, pool, store, msg_buffer):
+        """A deadlocked AND-join surfaces as STALLED (not a spurious SUCCESS)."""
+        never = asyncio.Event()  # deliberately never set
+        g = BgGraph("stallpool", state_schema=S)
+        g.add_node("entry", sync_node(lambda s: "e", field="entry"))
+        g.add_node("a", sync_node(lambda s: "a", field="a"))
+        g.add_node("b", gated_node(never, lambda s: "b", field="b"))
+        g.add_node("c", sync_node(lambda s: "c", field="c"))
+        g.add_edge(START, "entry")
+        g.add_conditional_edges("entry", lambda s: "only_a", {"only_a": "a"})
+        g.add_edge(["a", "b"], "c")
+        g.add_edge("c", END)
+
+        res = await g.compile()(x=0)
+        tid = pool.submit(
+            res.poll_factory,
+            res.command_name,
+            timeout=None,
+            progress=True,
+            graph_meta=res.graph_meta,
+        )
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.STALLED
+        # Snapshot saved for resume (like a route pause).
+        assert meta.state_snapshot is not None
+        assert "a" in meta.completed_nodes
+        assert "c" not in meta.completed_nodes
+
+        # The stall is pushed as a decision point (via pool._on_done) and names
+        # the deadlocked join + its missing upstream.
+        msgs = await _drain_msgs(msg_buffer)
+        assert len(msgs) >= 1
+        contents = " ".join(m.content for m in msgs)
+        assert "stalled" in contents.lower()
+        assert "c" in contents
 
     async def test_resubmit_resumes_to_success(self, pool, store, msg_buffer):
         """resubmit() with a fresh coro runs to completion under same task_id."""
@@ -270,3 +312,71 @@ class TestPoolTimeoutSnapshot:
         assert meta.run_state is not None
         # The first node finished before the hang, so it is recorded done.
         assert "first" in meta.completed_nodes
+
+
+class TestPoolResultLimitPolicy:
+    """The pool applies the SAME ``ToolResultLimitConfig`` the sync ToolExecutor
+    uses — to the success result AND every error/timeout/cancel block. A large
+    error persists+previews (not blunt-truncates); the enable toggle passes it
+    through whole.
+    """
+
+    async def test_large_error_persists_under_config(self, tmp_path, msg_buffer):
+        from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+        from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
+
+        store = TaskOutputStore(base_dir=tmp_path)
+        # Tiny cap so a modest error block trips the persist threshold.
+        pool = BackgroundTaskPool(
+            msg_buffer=msg_buffer,
+            output_store=store,
+            limit_config=ToolResultLimitConfig(default_max_result_size_chars=200),
+        )
+
+        g = BgGraph("bigboom", state_schema=S)
+
+        def _raise(_s):
+            raise ValueError("X" * 5000)
+
+        g.add_node("a", sync_node(_raise))
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+
+        res = await g.compile()(x=0)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None)
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.FAILED
+        # Over the cap → persisted+preview envelope, not a blunt slice.
+        assert meta.result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
+
+    async def test_limit_disabled_passes_error_through_whole(self, tmp_path, msg_buffer):
+        from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+        from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
+
+        store = TaskOutputStore(base_dir=tmp_path)
+        pool = BackgroundTaskPool(
+            msg_buffer=msg_buffer,
+            output_store=store,
+            limit_config=ToolResultLimitConfig(enable_tool_result_limit=False),
+        )
+
+        g = BgGraph("nolimit", state_schema=S)
+
+        def _raise(_s):
+            raise ValueError("Y" * 5000)
+
+        g.add_node("a", sync_node(_raise))
+        g.add_edge(START, "a")
+        g.add_edge("a", END)
+
+        res = await g.compile()(x=0)
+        tid = pool.submit(res.poll_factory, res.command_name, timeout=None)
+        await pool.wait_all()
+
+        meta = pool.get_task_info(tid)
+        assert meta.status == BgStatus.FAILED
+        # Disabled → whole error block, never persisted.
+        assert not meta.result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
+        assert "YYYY" in meta.result

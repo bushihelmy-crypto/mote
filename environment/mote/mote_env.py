@@ -40,6 +40,20 @@ class MoteEnv(AgentEnvironment):
             "messages. If you no longer need to take action, use the command 'end' to stop."
         )
 
+    async def request_approval(self, request: Any, sent_from: Optional[Any] = None) -> str:
+        """Approve a gated action over the console (no structured selector).
+
+        The bare-console fallback: render the structured request to a text
+        prompt, block on ``get_human_input``, and parse the typed reply back to
+        an :data:`~mote.common.schema.permission_types.ApprovalChoice`. The rich
+        CLI front-end (``PortHumanChannel``) drives a localized port selector
+        instead; this path is the developer/headless console.
+        """
+        from mote.executor.permission.prompts import parse_approval_response, render_approval_prompt
+
+        rsp = await get_human_input(render_approval_prompt(request))
+        return parse_approval_response(rsp)
+
     def __repr__(self) -> str:
         return "MoteEnv()"
 

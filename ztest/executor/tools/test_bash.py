@@ -20,6 +20,12 @@ from .conftest import CapRole, bind, run
 
 
 def _bash(tool, **kwargs):
+    """Run the tool and return its text output (Bash returns a ToolResult)."""
+    return run(tool.call(**kwargs)).output
+
+
+def _bash_result(tool, **kwargs):
+    """Run the tool and return the whole ToolResult (for inspecting ``data``)."""
     return run(tool.call(**kwargs))
 
 
@@ -106,6 +112,60 @@ class TestBashGuards:
         out = _bash(tool, command="echo early; sleep 5", timeout=0.5)
         assert "timed out" in out
         assert "early" in out
+
+
+class TestBashInputs:
+    def test_inputs_object_exported_as_json_env(self, workspace):
+        tool, _ = _ready(workspace)
+        # The whole object is reachable as $INPUTS (JSON), even nested values.
+        out = _bash(tool, command='echo "$INPUTS"', inputs={"a": 1, "nested": {"b": [2, 3]}})
+        assert '"a": 1' in out
+        assert '"nested"' in out
+
+    def test_scalar_inputs_exported_as_own_env_vars(self, workspace):
+        tool, _ = _ready(workspace)
+        out = _bash(
+            tool,
+            command='echo "$name $count $flag"',
+            inputs={"name": "hi", "count": 7, "flag": True},
+        )
+        # str verbatim, number decimal, bool shell-idiomatic.
+        assert out == "hi 7 true"
+
+    def test_non_identifier_and_complex_keys_only_via_inputs(self, workspace):
+        tool, _ = _ready(workspace)
+        # A non-identifier key and a list value are NOT their own env vars, but
+        # both still ride along inside $INPUTS.
+        out = _bash(
+            tool,
+            command='printenv items || echo NO_ITEMS; echo "$INPUTS"',
+            inputs={"bad-key": "x", "items": [1, 2]},
+        )
+        assert "NO_ITEMS" in out
+        assert '"items"' in out
+        assert '"bad-key"' in out
+
+    def test_stdout_json_parsed_into_data(self, workspace):
+        tool, _ = _ready(workspace)
+        res = _bash_result(tool, command='echo "{\\"k\\": [1, 2]}"')
+        # A caller / graph $ref can index into the structured value.
+        assert res.data == {"k": [1, 2]}
+
+    def test_stdout_plaintext_is_data_string(self, workspace):
+        tool, _ = _ready(workspace)
+        res = _bash_result(tool, command="echo plain text")
+        assert res.data == "plain text"
+
+    def test_empty_stdout_data_is_none(self, workspace):
+        tool, _ = _ready(workspace)
+        res = _bash_result(tool, command=":")
+        assert res.data is None
+
+    def test_no_inputs_leaves_env_uninjected(self, workspace):
+        tool, _ = _ready(workspace)
+        # Without inputs, $INPUTS is not set (parent env inherited unchanged).
+        out = _bash(tool, command='echo "[${INPUTS:-unset}]"')
+        assert out == "[unset]"
 
 
 class TestBashWorkdir:

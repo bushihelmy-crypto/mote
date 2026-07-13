@@ -24,10 +24,12 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, SelectionList, Static
+from textual.widgets.button import ButtonVariant
 from textual.widgets.selection_list import Selection
 
 from mote.cli.consumers.textual.style import PROMPT_SYMBOL, WARN
 from mote.cli.contracts.view.events import ApprovalDecision
+from mote.cli.view.approval import approval_action, approval_options, approval_preview, approval_risk
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
@@ -49,8 +51,6 @@ class QuestionScreen(ModalScreen[tuple]):
     is kept verbatim (no digit→label mapping), so a numeric or multi-line answer
     survives intact.
     """
-
-    OTHER_LABEL = "Other (type your own answer)"
 
     DEFAULT_CSS = """
     QuestionScreen {
@@ -119,11 +119,11 @@ class QuestionScreen(ModalScreen[tuple]):
                 hint = t(K.HINT_SELECT_MULTI) if self._multi else t(K.HINT_SELECT_SINGLE)
                 yield Label(hint, classes="q-hint")
                 selections = [Selection(opt, i) for i, opt in enumerate(self._options)]
-                selections.append(Selection(self.OTHER_LABEL, _OTHER_VALUE))
+                selections.append(Selection(t(K.SELECT_OTHER), _OTHER_VALUE))
                 yield SelectionList(*selections, id="choices")
-            yield Input(placeholder="Your answer…", id="answer")
+            yield Input(placeholder=t(K.SELECT_ANSWER_PLACEHOLDER), id="answer")
             # Multi-select needs an explicit confirm (single-select dismisses on pick).
-            submit = Button("Submit", id="submit", variant="primary")
+            submit = Button(t(K.SELECT_SUBMIT), id="submit", variant="primary")
             if self._options and self._multi:
                 submit.add_class("visible")
             yield submit
@@ -251,28 +251,41 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
         ("escape", "decide('reject')", "Cancel"),
     ]
 
+    # Button colour per outcome (keeps the success/primary/error/warning cue the
+    # hardcoded buttons carried, now that labels come localized from the shared
+    # renderer). Any unknown outcome falls back to a neutral default button.
+    _OUTCOME_VARIANT: dict[str, ButtonVariant] = {
+        "accept": "success",
+        "always_allow": "primary",
+        "reject": "error",
+        "always_deny": "warning",
+    }
+
     def __init__(self, request: Any) -> None:
         super().__init__()
-        self._action = getattr(request, "action", "") or getattr(request, "tool_name", "") or "action"
-        self._risk = getattr(request, "risk", "medium")
-        self._preview = getattr(request, "args_preview", "") or ""
+        # Localize the semantic request here; the engine sends language-neutral
+        # data and all human wording lands under the active locale.
+        self._action = approval_action(request)
+        self._risk = approval_risk(request)
+        self._preview = approval_preview(request)
+        self._options = approval_options()
         self._approval_id = getattr(request, "approval_id", "") or ""
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(f"{WARN} approval required", classes="a-title")
+            yield Label(f"{WARN} {t(K.APPROVAL_REQUIRED)}", classes="a-title")
             yield Label(f"[{self._risk}]", classes="a-risk")
             yield Label(self._action, classes="a-action")
             if self._preview:
                 yield Static(self._preview, classes="a-preview")
-            yield Label("Do you want to proceed?", classes="a-proceed")
+            yield Label(t(K.APPROVAL_PROCEED), classes="a-proceed")
             with Vertical(id="buttons"):
-                yield Button(f"{PROMPT_SYMBOL} 1. Yes (y)", id="accept", variant="success")
-                yield Button(
-                    f"{PROMPT_SYMBOL} 2. Yes, and don\u2019t ask again (a)", id="always_allow", variant="primary"
-                )
-                yield Button(f"{PROMPT_SYMBOL} 3. No, tell me what to do (n · esc)", id="reject", variant="error")
-                yield Button(f"{PROMPT_SYMBOL} 4. No, never allow this (d)", id="always_deny", variant="warning")
+                for i, (outcome, label, shortcut) in enumerate(self._options, start=1):
+                    yield Button(
+                        f"{PROMPT_SYMBOL} {i}. {label} ({shortcut})",
+                        id=outcome,
+                        variant=self._OUTCOME_VARIANT.get(outcome, "default"),
+                    )
             yield Label(t(K.HINT_SELECT_SINGLE_CANCEL), classes="a-foot")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

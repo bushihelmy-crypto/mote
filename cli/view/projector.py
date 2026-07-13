@@ -55,6 +55,8 @@ from mote.common.events.types import (
     PRE_TOOL_USE,
     TASK_PROGRESS,
 )
+from mote.common.i18n import keys as K
+from mote.common.i18n import t
 from mote.common.text import PERSISTED_OUTPUT_OPEN
 
 # ---------------------------------------------------------------------------
@@ -530,7 +532,7 @@ class ViewProjector:
         # count (Bash/terminal/unknown).
         summary = _result_summary(name, event, text) or _first_nonempty_line(text)
         if not summary:
-            summary = "(no output)"
+            summary = t(K.RESULT_NO_OUTPUT)
         elif len(summary) > _MAX_RESULT_CHARS:
             summary = summary[:_MAX_RESULT_CHARS] + "…"
         if _looks_like_diff(text):
@@ -547,8 +549,14 @@ class ViewProjector:
         its code/type/retryable/recovery are read off as flat scalars so a host
         can render machine-reasonable failure facts. ``error is None`` leaves them
         empty — the plain-text summary alone (behaviour equivalent to today).
+
+        The displayed body prefers the report's clean human ``message`` over the
+        raw ``<error …>…</error>`` XML block ``render_error_block`` produced for
+        the LLM, so the CLI never shows that machine-facing wrapper. Falls back to
+        the response text only when no structured report is attached.
         """
-        detail, hidden = _fold_lines(text.strip(), _MAX_FAILURE_LINES)
+        source = (getattr(error, "message", "") or "").strip() or text
+        detail, hidden = _fold_lines(source.strip(), _MAX_FAILURE_LINES)
         truncated = hidden > 0
         if len(detail) > _MAX_RESULT_CHARS:
             detail = detail[:_MAX_RESULT_CHARS] + "…"

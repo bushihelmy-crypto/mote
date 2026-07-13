@@ -47,6 +47,7 @@ from mote.cli.io.terminal_menu import (
     _redraw_option_lines,
     _render_option_lines,
 )
+from mote.cli.view.approval import approval_action, approval_options, approval_preview, approval_risk
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
@@ -305,7 +306,7 @@ class TerminalPort:
         self._write(f"\n{question}\n")
         for i, label in enumerate(labels, start=1):
             self._write(f"  {i}. {label}\n")
-        self._write(f"  {len(labels) + 1}. Other (type your own answer)\n")
+        self._write(f"  {len(labels) + 1}. {t(K.SELECT_OTHER)}\n")
         self._reprompt()
         answer = (await self._read_line()).strip()
         if answer.isdigit():
@@ -347,8 +348,6 @@ class TerminalPort:
     # ------------------------------------------------------------------
     # ask — interactive select + free-text combo
     # ------------------------------------------------------------------
-    _OTHER_LABEL = "Other (type your own answer)"
-
     async def _select_structured(self, question: str, labels: list, multi: bool) -> tuple:
         """Render a navigable menu (options + "Other"), return ``(selected, free)``.
 
@@ -360,7 +359,7 @@ class TerminalPort:
         The "Other" free text is returned verbatim (no digit→label mapping), so a
         numeric or multi-line answer survives intact — the real fix.
         """
-        entries = list(labels) + [self._OTHER_LABEL]
+        entries = list(labels) + [t(K.SELECT_OTHER)]
         other_index = len(entries) - 1
         # Light frame: a brand-orange top rule + bold question, then
         # the navigable rows, then a dim keyboard-hint footer.
@@ -418,7 +417,7 @@ class TerminalPort:
 
     async def _prompt_free_text(self) -> str:
         """Cooked-mode free-text entry (the "Other" branch of the menu)."""
-        self._write("Type your answer:\n")
+        self._write(f"{t(K.SELECT_FREE_TEXT_PROMPT)}\n")
         self._reprompt()
         return await self._read_line()
 
@@ -481,15 +480,6 @@ class TerminalPort:
         """
         return await self._read_nav_key(lambda ch: "space" if ch == " " else (ch if ch.isdigit() else None))
 
-    # Approval choices, in display order: ``(outcome, label, shortcut)``. The
-    # shortcut key jumps to *and* selects the option.
-    _APPROVAL_OPTIONS = (
-        ("accept", "Yes", "y"),
-        ("always_allow", "Yes, and don\u2019t ask again for similar actions", "a"),
-        ("reject", "No, and tell me what to do differently (esc)", "n"),
-        ("always_deny", "No, and never allow this action", "d"),
-    )
-
     async def decide_approval(self, ctx: Any, request: Any) -> Any:
         """Prompt for a gated action and map the choice to an ``ApprovalDecision``.
 
@@ -499,17 +489,22 @@ class TerminalPort:
         When stdin isn't an interactive terminal (tests, pipes) it degrades to the
         typed ``[y]/[n]/[a]/[d]`` prompt via the shared, parked-reader-safe
         ``_read_line`` so it never races the main-loop reader.
+
+        The headline / options / preview are localized here from the semantic
+        :class:`ApprovalRequest` via ``mote.cli.view.approval`` — the engine sends
+        language-neutral data, all human wording lands under the active locale.
         """
         from mote.cli.contracts.view.events import ApprovalDecision
 
-        action = getattr(request, "action", "") or getattr(request, "tool_name", "") or "action"
-        risk = getattr(request, "risk", "medium")
+        action = approval_action(request)
+        risk = approval_risk(request)
+        preview = approval_preview(request)
+        options = approval_options()
         approval_id = getattr(request, "approval_id", "") or ""
-        preview = getattr(request, "args_preview", "") or ""
 
         if self._can_interactive_select():
             try:
-                outcome = await self._interactive_approval(action, risk, preview)
+                outcome = await self._interactive_approval(action, risk, preview, options)
                 return ApprovalDecision(approval_id=approval_id, outcome=outcome)
             except Exception:  # noqa: BLE001 — any tty/termios failure → typed path
                 pass
@@ -546,9 +541,8 @@ class TerminalPort:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _interactive_approval(self, action: str, risk: str, preview: str) -> str:
+    async def _interactive_approval(self, action: str, risk: str, preview: str, options) -> str:
         """Render the menu, read navigation keys, return the chosen outcome."""
-        options = self._APPROVAL_OPTIONS
         shortcuts = {sc: i for i, (_out, _lbl, sc) in enumerate(options)}
         # Header + preview render in cooked mode (plain ``\n``); the option block
         # below renders in raw mode and is the only region we redraw in place.
@@ -556,12 +550,12 @@ class TerminalPort:
         # title, the dim command preview, then a neutral "proceed?" prompt.
         amber = lambda t, bold=False: ansi_fg(t, _AMBER_RGB, bold=bold)  # noqa: E731
         self._write("\n" + amber("\u2500" * _RULE_WIDTH) + "\n")
-        self._write(amber(f"{WARN} approval required", bold=True) + _dim(f"  [{risk}]") + "\n")
+        self._write(amber(f"{WARN} {t(K.APPROVAL_REQUIRED)}", bold=True) + _dim(f"  [{risk}]") + "\n")
         self._write(f"  {action}\n")
         if preview:
             self._write(f"{_dim(preview)}\n")
         self._write("\n")
-        self._write("Do you want to proceed?\n")
+        self._write(f"{t(K.APPROVAL_PROCEED)}\n")
 
         index = 0
         restore = self._enter_raw()
@@ -623,10 +617,10 @@ class TerminalPort:
 
     async def _typed_approval(self, action: str, risk: str, preview: str) -> str:
         """Typed fallback: one line mapped to an outcome (non-tty / test path)."""
-        self._write(f"\n\u26a0 approval required [{risk}]: {action}\n")
+        self._write(f"\n\u26a0 {t(K.APPROVAL_REQUIRED)} [{risk}]: {action}\n")
         if preview:
             self._write(f"{preview}\n")
-        self._write("  [y]es / [n]o / [a]lways / [d]eny-always? ")
+        self._write(f"  {t(K.APPROVAL_TYPED_HINT)} ")
         answer = (await self._read_line()).strip().lower()
         return {
             "y": "accept",

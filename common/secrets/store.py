@@ -12,6 +12,15 @@ real value on write (so a later PreToolUse *restore* direction can reverse it):
   **zero new detection logic**. Auto-synced into the vault and re-synced *hot*
   when the config file's mtime changes — editing ``config.yaml`` at runtime makes
   its api_key redact without a restart.
+* **file section** (``<agent-vault:<key>>``) — a plaintext, **human-edited**
+  ``~/.mote/secrets_config.json`` (a flat ``{name: value}`` map). This is the one
+  tier a person configures by hand: edit the JSON to add/rotate a named secret and
+  it is (re)encrypted into the vault on the next refresh (hot, by mtime); *remove*
+  an entry (or delete the whole file) and it is dropped from the vault too. It is a
+  **full replacement** of the section — the file is the source of truth, so both
+  add and delete propagate. Unlike the config tier it needs no ``_is_secret``
+  heuristic (every entry is explicitly a secret) and unlike the CLI upload tier it
+  is declarative (a file you version/manage, not an inline prompt span).
 * **user section** (``<agent-vault:<key>>``) — named secrets uploaded via the CLI
   ``<secret name="KEY">VALUE</secret>`` mechanism, persisted (encrypted) to disk so
   they survive restarts.
@@ -19,8 +28,9 @@ real value on write (so a later PreToolUse *restore* direction can reverse it):
   ``<secret>VALUE</secret>``, held only in memory for the life of the process
   (never written to disk).
 
-The on-disk vault is a **two-section** document ``{"config": {...}, "secrets":
-{...}}`` encrypted whole by a :class:`~mote.common.secrets.cipher.VaultCipher`.
+The on-disk vault is a **three-section** document ``{"config": {...}, "file":
+{...}, "secrets": {...}}`` encrypted whole by a
+:class:`~mote.common.secrets.cipher.VaultCipher`.
 Every write is *section-isolated* — read-modify-write of the decrypted document,
 replacing only the target section, then an atomic ``tmp + os.replace`` — so
 re-syncing the config section can never clobber the user's named secrets and vice
@@ -44,14 +54,27 @@ from mote.common.secrets.cipher import VaultCipher
 
 # The user vault file, in the config path (~/.mote/), never in a project tree.
 _SECRETS_FILE = "secrets.json"
+# The plaintext, human-edited named-secret file (source of the "file" section).
+_SECRETS_CONFIG_FILE = "secrets_config.json"
 
 _CONFIG_SECTION = "config"
+_FILE_SECTION = "file"
 _SECRETS_SECTION = "secrets"
+
+# Sentinel distinguishing "never synced" from "synced, file was absent (mtime None)"
+# so the file section is reconciled once on construct even when the file is missing
+# (a stale encrypted entry from a since-deleted file is then cleared on startup).
+_UNSET = object()
 
 
 def secrets_path() -> Path:
     """The on-disk path of the encrypted vault file (``~/.mote/secrets.json``)."""
     return CONFIG_ROOT / _SECRETS_FILE
+
+
+def secrets_config_path() -> Path:
+    """The plaintext, human-edited named-secret file (``~/.mote/secrets_config.json``)."""
+    return CONFIG_ROOT / _SECRETS_CONFIG_FILE
 
 
 class SecretStore:
@@ -63,25 +86,35 @@ class SecretStore:
         *,
         vault_path: Optional[Path] = None,
         config_path: Optional[Path] = None,
+        secrets_config_file: Optional[Path] = None,
     ) -> None:
         self._cipher = cipher
         self._vault_path = Path(vault_path) if vault_path is not None else secrets_path()
         #: The ``config.yaml`` whose secret leaves seed the config section. ``None``
         #: disables config auto-sync (unit tests that exercise only user/session).
         self._config_path = Path(config_path) if config_path is not None else None
+        #: The plaintext human-edited named-secret file seeding the file section.
+        #: Defaults to ``~/.mote/secrets_config.json``; pass a path to relocate.
+        self._secrets_config_path = (
+            Path(secrets_config_file) if secrets_config_file is not None else secrets_config_path()
+        )
 
-        # Disk-backed tiers (mirrors of the two vault sections).
+        # Disk-backed tiers (mirrors of three vault sections).
         self._config_section: Dict[str, str] = {}  # {dotted_path: value}
+        self._file_section: Dict[str, str] = {}  # {key: value} — human-edited file
         self._user_section: Dict[str, str] = {}  # {key: value}
         # In-memory-only tier — anonymous session uploads, never persisted.
         self._session: Dict[str, str] = {}  # {key: value}
 
         # mtimes we last synced from, so ``refresh`` can skip untouched files.
         self._config_mtime: Optional[float] = None
+        # _UNSET (not None) so the file section reconciles once on construct even
+        # when the file is absent — clearing a stale entry left by a deleted file.
+        self._file_mtime: Any = _UNSET
         self._vault_mtime: Optional[float] = None
 
         self._load()  # decrypt whatever is already on disk (fail-open)
-        self.refresh()  # initial config harvest + mtime baseline
+        self.refresh()  # initial config + file harvest + mtime baseline
 
     # -- reads --------------------------------------------------------------
 
@@ -89,16 +122,19 @@ class SecretStore:
         """Return the merged ``{value: label}`` map for the redaction policy.
 
         Refreshes first (cheap mtime stats), so a caller on the redaction hot
-        path always sees a config edit / external vault write without an explicit
-        reload. Later tiers overwrite earlier ones on a value clash (session wins
-        over user wins over config) — the label is cosmetic, the masking is the
-        same either way.
+        path always sees a config / secrets_config edit / external vault write
+        without an explicit reload. Later tiers overwrite earlier ones on a value
+        clash (session > user > file > config) — the label is cosmetic, the
+        masking is the same either way.
         """
         self.refresh()
         merged: Dict[str, str] = {}
         for dotted, value in self._config_section.items():
             if value:
                 merged[value] = f"<secret:{dotted}>"
+        for key, value in self._file_section.items():
+            if value:
+                merged[value] = f"<agent-vault:{key}>"
         for key, value in self._user_section.items():
             if value:
                 merged[value] = f"<agent-vault:{key}>"
@@ -108,7 +144,7 @@ class SecretStore:
         return merged
 
     def __len__(self) -> int:
-        return len(self._config_section) + len(self._user_section) + len(self._session)
+        return len(self._config_section) + len(self._file_section) + len(self._user_section) + len(self._session)
 
     # -- writes -------------------------------------------------------------
 
@@ -141,18 +177,31 @@ class SecretStore:
         """
         self._write_section(_CONFIG_SECTION, mapping)
 
+    def write_file_section(self, mapping: Dict[str, str]) -> None:
+        """Replace the vault's file section with the human-edited ``{name: value}``.
+
+        Section-isolated (never clobbers config-auto-sync or the CLI user tier).
+        A **full replacement**, so a name dropped from ``secrets_config.json`` is
+        dropped from the vault too. :meth:`refresh` calls it when that file's
+        mtime changes; public so an admin/seed path can drive it directly.
+        """
+        self._write_section(_FILE_SECTION, mapping)
+
     # -- lifecycle ----------------------------------------------------------
 
     def refresh(self) -> None:
-        """Lazily re-sync from disk by mtime — config reseed, then vault reload.
+        """Lazily re-sync from disk by mtime — config + file reseed, then reload.
 
-        Cheap when nothing changed (two ``stat`` calls). When ``config.yaml``
-        changed, its secret leaves are re-harvested and rewritten into the config
-        section (auto-sync, hot). When the vault file changed underneath us (an
-        external write, or our own section write), the disk-backed tiers are
-        reloaded. The in-memory session tier is untouched by either.
+        Cheap when nothing changed (a few ``stat`` calls). When ``config.yaml``
+        changed, its secret leaves are re-harvested into the config section. When
+        ``secrets_config.json`` changed (edit / delete of the whole file), its
+        ``{name: value}`` map is re-encrypted into the file section as a full
+        replacement (add and delete both propagate). When the vault file changed
+        underneath us (an external write, or our own section write), the
+        disk-backed tiers are reloaded. The in-memory session tier is untouched.
         """
         self._reseed_config_if_changed()
+        self._reseed_file_if_changed()
         self._reload_vault_if_changed()
 
     def _reseed_config_if_changed(self) -> None:
@@ -164,6 +213,24 @@ class SecretStore:
         harvested = self._harvest_config_file()
         self.write_config_section(harvested)
         self._config_mtime = mtime
+
+    def _reseed_file_if_changed(self) -> None:
+        """Re-sync the file section from ``secrets_config.json`` by mtime.
+
+        Unlike the config path this fires even when the file is *absent*: a
+        ``None`` mtime that differs from the last-synced value (``_UNSET`` on the
+        first call, or a real mtime after the file is deleted) reconciles the
+        section to empty, so removing the file clears its vault entries too.
+        """
+        mtime = _mtime(self._secrets_config_path)
+        if mtime == self._file_mtime:
+            return
+        harvested = self._harvest_secrets_config_file()
+        # Skip the encrypt/write when nothing actually changed on disk (e.g. a
+        # missing file that stays missing after the first reconcile).
+        if harvested != self._file_section:
+            self.write_file_section(harvested)
+        self._file_mtime = mtime
 
     def _reload_vault_if_changed(self) -> None:
         mtime = _mtime(self._vault_path)
@@ -187,15 +254,30 @@ class SecretStore:
         _harvest(data, "", harvested)
         return harvested
 
+    def _harvest_secrets_config_file(self) -> Dict[str, str]:
+        """Parse the plaintext ``secrets_config.json`` into a ``{name: value}`` map.
+
+        Every string leaf is a secret here (no ``_is_secret`` heuristic), so the
+        file is a flat object of names to values. A missing / unreadable /
+        malformed / non-object file yields ``{}`` (fail-open, and the trigger that
+        clears the section when the file is deleted). Non-string values are
+        dropped so a stray number/bool cannot poison the redaction map.
+        """
+        try:
+            raw = self._secrets_config_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            return {}
+        return _string_map(data)
+
     # -- vault I/O ----------------------------------------------------------
 
     def _load(self) -> None:
-        """Decrypt the vault (fail-open) and mirror its two sections in memory."""
+        """Decrypt the vault (fail-open) and mirror its three sections in memory."""
         data = self._read_vault()
-        config = data.get(_CONFIG_SECTION)
-        secrets = data.get(_SECRETS_SECTION)
-        self._config_section = _string_map(config)
-        self._user_section = _string_map(secrets)
+        self._config_section = _string_map(data.get(_CONFIG_SECTION))
+        self._file_section = _string_map(data.get(_FILE_SECTION))
+        self._user_section = _string_map(data.get(_SECRETS_SECTION))
 
     def _read_vault(self) -> Dict[str, Any]:
         """Return the decrypted vault document, or ``{}`` on any failure."""
@@ -220,6 +302,8 @@ class SecretStore:
         # write back over the (identical) in-memory state.
         if section == _CONFIG_SECTION:
             self._config_section = _string_map(mapping)
+        elif section == _FILE_SECTION:
+            self._file_section = _string_map(mapping)
         elif section == _SECRETS_SECTION:
             self._user_section = _string_map(mapping)
         self._vault_mtime = _mtime(self._vault_path)
@@ -275,4 +359,4 @@ def _harvest(node: Any, prefix: str, out: Dict[str, str]) -> None:
             _harvest(item, prefix, out)
 
 
-__all__ = ["SecretStore", "secrets_path"]
+__all__ = ["SecretStore", "secrets_path", "secrets_config_path"]

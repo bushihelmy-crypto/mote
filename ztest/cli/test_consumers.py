@@ -527,44 +527,36 @@ async def test_human_channel_ask_delegates_to_port():
 
 
 @pytest.mark.asyncio
-async def test_human_channel_approval_prompt_routes_to_selector():
-    # An engine-rendered approval prompt drives decide_approval (not ask) and the
-    # chosen outcome maps back to the engine's free-text reply vocabulary.
-    prompt = (
-        "[APPROVAL REQUIRED] The agent wants to run tool 'Bash'.\n"
-        "  target: rm -rf build/\n"
-        "Reply 'yes' to allow once, 'always' to allow for the rest of the session, or 'no' to deny."
-    )
+async def test_human_channel_request_approval_routes_to_selector():
+    # ``request_approval`` hands the semantic request straight to the port's
+    # decide_approval (no text round-trip) and maps the outcome to an ApprovalChoice.
+    from mote.common.schema.permission_types import ApprovalRequest
+
+    request = ApprovalRequest(tool_name="Bash", target="rm -rf build/")
     for outcome, expected in [
-        ("accept", "yes"),
-        ("always_allow", "always"),
-        ("reject", "no"),
-        ("always_deny", "no"),
+        ("accept", "allow_once"),
+        ("always_allow", "allow_session"),
+        ("reject", "deny"),
+        ("always_deny", "deny"),
     ]:
         port = FakeApprovalPort(outcome=outcome)
         env = PortHumanChannel(port, ctx="CTX")
-        reply = await env.ask_user(prompt)
-        assert reply == expected
+        choice = await env.request_approval(request)
+        assert choice == expected
         assert port.asked == []  # never fell through to the text input
         assert len(port.decided) == 1
-        req = port.decided[0][1]
-        assert req.action == "run: Bash"
-        assert "rm -rf build/" in req.args_preview
-        assert "Reply 'yes'" not in req.args_preview  # instruction line stripped
+        assert port.decided[0][1] is request  # the exact semantic request is passed through
 
 
 @pytest.mark.asyncio
-async def test_human_channel_escalation_prompt_routes_to_selector():
-    prompt = (
-        "[SANDBOX ESCALATION] Tool 'Write' wants to write outside the sandbox:\n"
-        "  path:   /etc/hosts\n"
-        "Reply 'yes' to allow this write once, 'always' to allow, or 'no' to block it."
-    )
-    port = FakeApprovalPort(outcome="always_allow")
+async def test_human_channel_request_approval_no_selector_denies():
+    # A port with no decide_approval selector fails closed (deny).
+    port = FakePort()
     env = PortHumanChannel(port)
-    reply = await env.ask_user(prompt)
-    assert reply == "always"
-    assert port.decided[0][1].risk == "high"
+    from mote.common.schema.permission_types import ApprovalRequest
+
+    choice = await env.request_approval(ApprovalRequest(tool_name="Write"))
+    assert choice == "deny"
 
 
 @pytest.mark.asyncio

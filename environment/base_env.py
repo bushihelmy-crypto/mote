@@ -169,6 +169,16 @@ class AgentEnvironment(BaseEnvironment):
         """Default: this environment has no human channel."""
         return "Not in MoteEnv, command will not be executed."
 
+    async def request_approval(self, request: Any, sent_from: Optional[Any] = None) -> str:
+        """Default: no human channel to approve a gated action → fail closed.
+
+        Returns the ``"deny"`` :data:`~mote.common.schema.permission_types.ApprovalChoice`
+        so the PermissionEngine denies when no interactive channel exists. The
+        production front-end (``PortHumanChannel``) overrides this to drive a
+        port's structured selector; ``MoteEnv`` overrides it for the console.
+        """
+        return "deny"
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

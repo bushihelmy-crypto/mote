@@ -57,6 +57,11 @@ CATALOG: Dict[str, str] = {
     K.SUMMARY_EDIT_REMOVED: "updated -{count, plural, one{# line} other{# lines}}",
     K.SUMMARY_UPDATED: "updated",
     K.SUMMARY_REPLACED: "replaced {count, plural, one{# occurrence} other{# occurrences}}",
+    # Tool outcomes
+    K.TOOL_REJECTED: "rejected by user",
+    K.RESULT_NO_OUTPUT: "(no output)",
+    K.RESULT_FAILED: "failed",
+    K.RESULT_RETRYABLE: "retryable",
     # Driver
     K.DRIVER_TOOLS_LOADED: "loaded {count, plural, one{# tool} other{# tools}}",
     # Prompt input
@@ -66,12 +71,29 @@ CATALOG: Dict[str, str] = {
     K.KEY_EXPAND_HINT: "ctrl+o expand",
     K.KEY_COLLAPSE_HINT: "ctrl+o collapse",
     K.KEY_EXIT_HINT: "(Press Ctrl+C again to exit)",
+    # Approval gate
+    K.APPROVAL_REQUIRED: "approval required",
+    K.APPROVAL_PROCEED: "Do you want to proceed?",
+    K.APPROVAL_ACTION_RUN: "run: {tool}",
+    K.APPROVAL_ACTION_ESCALATE: "escalate: {tool}",
+    K.APPROVAL_OPT_YES: "Yes",
+    K.APPROVAL_OPT_ALWAYS: "Yes, and don\u2019t ask again for similar actions",
+    K.APPROVAL_OPT_NO: "No, and tell me what to do differently (esc)",
+    K.APPROVAL_OPT_NEVER: "No, and never allow this action",
+    K.APPROVAL_TYPED_HINT: "[y]es / [n]o / [a]lways / [d]eny-always?",
+    K.APPROVAL_REASON_ASK_RULE: "an ask rule requires confirmation",
+    K.APPROVAL_REASON_DEFAULT: "this action needs your approval",
+    K.APPROVAL_SUGGESTION: "always allows {rule} for the session",
     # Interactive select hints
     K.HINT_SELECT_MULTI: "Space select · Enter confirm",
     K.HINT_SELECT_SINGLE: "↑↓ select · Enter confirm",
     K.HINT_SELECT_MULTI_CANCEL: "Space select · Enter confirm · Esc cancel",
     K.HINT_SELECT_SINGLE_CANCEL: "↑↓ select · Enter confirm · Esc cancel",
     K.HINT_ESC_CANCEL: "Esc cancel",
+    K.SELECT_OTHER: "Other (type your own answer)",
+    K.SELECT_FREE_TEXT_PROMPT: "Type your answer:",
+    K.SELECT_ANSWER_PLACEHOLDER: "Your answer…",
+    K.SELECT_SUBMIT: "Submit",
     # /lang command
     K.LANG_CURRENT: "Current language: {code}",
     K.LANG_AVAILABLE: "Available languages: {codes}",

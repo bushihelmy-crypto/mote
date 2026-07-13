@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 from mote.executor.tasks.bggraph import END, START, BgGraph, GraphBatchFailureError, GraphRecursionError
-from mote.executor.tasks.bggraph.types import _LLM_ROUTE_SENTINEL, LlmPauseResult
+from mote.executor.tasks.bggraph.types import GraphPause, PauseReason
 from mote.executor.tasks.types import BgTaskResult
 
 from .conftest import S, boom_node, flaky_node, gated_node, non_retryable_flaky_node, sync_node
@@ -381,12 +381,58 @@ class TestLlmPause:
         g.add_edge("nextstep", END)
         res = await g.compile()(x=0)
         out = await res.poll_factory()
-        # isinstance check works with the backward-compat alias
-        assert isinstance(out, _LLM_ROUTE_SENTINEL)
-        assert isinstance(out, LlmPauseResult)
+        assert isinstance(out, GraphPause)
+        assert out.reason == PauseReason.LLM_ROUTE
         # Carries pause state
         assert "a" in out.completed
         assert out.state is not None
         assert getattr(out.state, "a") == "a-done"
         assert out.edge.from_node == "a"
         assert "go" in out.edge.mapping
+
+
+class TestStall:
+    async def test_deadlocked_join_pauses_as_stall(self):
+        # entry --> a, entry --> b(gated, never runs). Join [a, b] -> c.
+        # A conditional edge on ``a`` routes to END, so ``b`` is never spawned:
+        # the join sees only ``a`` arrive (partial) and can never fire. The
+        # frontier drains without error, which must surface as a STALL pause,
+        # NOT a spurious SUCCESS.
+        never = asyncio.Event()  # deliberately never set
+        g = BgGraph("stall", state_schema=S)
+        g.add_node("entry", sync_node(lambda s: "e", field="entry"))
+        g.add_node("a", sync_node(lambda s: "a", field="a"))
+        g.add_node("b", gated_node(never, lambda s: "b", field="b"))
+        g.add_node("c", sync_node(lambda s: "c", field="c"))
+        g.add_edge(START, "entry")
+        # entry routes only to ``a`` (``b`` is never entered).
+        g.add_conditional_edges("entry", lambda s: "only_a", {"only_a": "a"})
+        g.add_edge(["a", "b"], "c")  # AND-join needing both a and b
+        g.add_edge("c", END)
+
+        out = await _run(g, x=0)
+        assert isinstance(out, GraphPause)
+        assert out.reason == PauseReason.STALL
+        assert out.stalled_nodes == ("c",)
+        # ``a`` finished before the stall; ``c`` never ran.
+        assert "a" in out.completed
+        assert "c" not in out.completed
+        assert out.state is not None
+
+    async def test_unentered_branch_is_not_a_stall(self):
+        # A conditional edge that skips a whole branch (zero arrivals at any
+        # join) is normal, not a stall: the graph finishes SUCCESS. Guards
+        # against a false-positive where an unselected branch is misread.
+        g = BgGraph("no-stall", state_schema=S)
+        g.add_node("entry", sync_node(lambda s: "e", field="entry"))
+        g.add_node("taken", sync_node(lambda s: "t", field="taken"))
+        g.add_node("skipped", sync_node(lambda s: "s", field="skipped"))
+        g.add_edge(START, "entry")
+        g.add_conditional_edges("entry", lambda s: "go", {"go": "taken", "other": "skipped"})
+        g.add_edge("taken", END)
+        g.add_edge("skipped", END)
+
+        out = await _run(g, x=0)
+        # Plain dict result (SUCCESS), not a pause.
+        assert not isinstance(out, GraphPause)
+        assert isinstance(out, dict)

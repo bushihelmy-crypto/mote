@@ -99,9 +99,13 @@ class TextualSurface(BaseSurface):
         tid = getattr(ev, "tool_use_id", None)
         widget = self._app._tool_widgets.pop(tid, None) if tid else None
         if widget is not None:
+            # The completion folds into the widget; its body + full output live
+            # behind ctrl+o now (every standalone tool folds), so a separate
+            # truncation row would dangle below the collapsed row — skip it.
             widget.complete(ev)
-        else:  # no matching started widget — render a standalone completed row
-            self._app._mount(Static(tool_completed_text(ev)))
+            return
+        # No matching started widget — render a standalone completed row + note.
+        self._app._mount(Static(tool_completed_text(ev)))
         self._show_truncation(truncation)
 
     # -- collapsed search/read group --

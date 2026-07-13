@@ -17,7 +17,7 @@ them into a single ``PermissionDecision``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 # ---------------------------------------------------------------------------
 # Enumerations (kept as Literals — no runtime enum machinery needed)
@@ -155,3 +155,58 @@ class PermissionRule:
     def spec(self) -> str:
         """Render back to the ``Tool(pattern)`` text form (round-trips parsing)."""
         return self.tool_name if self.pattern is None else f"{self.tool_name}({self.pattern})"
+
+
+# ---------------------------------------------------------------------------
+# Interactive approval — the structured request/decision round-trip
+# ---------------------------------------------------------------------------
+
+# What the human's decision maps to (the engine's own vocabulary — NOT display
+# text). Returned by the ``request_approval`` capability.
+#   allow_once    -> run this call only
+#   allow_session -> run and remember for the session
+#   deny          -> block this call
+ApprovalChoice = Literal["allow_once", "allow_session", "deny"]
+
+# Which kind of gate the human is answering. ``approval`` is a plain
+# permission ask; ``escalation`` is a sandbox-boundary exception (the action is
+# permitted by policy but would write outside the sandbox).
+ApprovalKind = Literal["approval", "escalation"]
+
+# A *stable, language-neutral* code for the fixed reason an approval was raised.
+# The engine emits one of these; the human display layer (cli) maps it to a
+# localized string. ``tool``/``sandbox`` carry a free-text ``reason_detail``
+# instead (a tool's self-declared danger note / a sandbox verdict) — that detail
+# is author-written English passed through verbatim, not localized.
+#   ask_rule -> an ``ask`` permission rule matched
+#   default  -> the mode fallback (nothing pre-authorized this call)
+#   tool     -> the tool's own ``check_permissions`` asked (see reason_detail)
+#   sandbox  -> a sandbox-boundary write exception (see reason_detail)
+ApprovalReasonCode = Literal["ask_rule", "default", "tool", "sandbox"]
+
+
+@dataclass(frozen=True)
+class ApprovalRequest:
+    """A gated tool call awaiting the human's structured approval decision.
+
+    The semantic (not display) description of *what* needs approving. It carries
+    only language-neutral facts — the tool name, the code artifact(s) at stake
+    (``target``/``paths``, kept verbatim), the risk band, a fixed
+    ``reason_code`` (+ optional free-text ``reason_detail`` for tool/sandbox
+    reasons), and the session rule an "always" grant would add (``suggestion``).
+
+    The human display layer renders these facts into localized wording via the
+    i18n catalog; the engine never assembles a prose prompt string. This is the
+    inbound half of the ``request_approval`` capability
+    (``ApprovalRequest -> ApprovalChoice``) and mirrors the ``ApprovalRequested``
+    ViewEvent that flows *down* to consumers.
+    """
+
+    tool_name: str
+    kind: ApprovalKind = "approval"
+    target: str = ""
+    paths: List[str] = field(default_factory=list)
+    risk: RiskLevel = "medium"
+    reason_code: ApprovalReasonCode = "default"
+    reason_detail: str = ""
+    suggestion: str = ""

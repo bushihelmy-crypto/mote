@@ -35,10 +35,16 @@ class DiskTaskOutput:
         self,
         task_id: str,
         base_dir: Union[str, Path],
+        session_id: str = "",
         on_cap: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.task_id = task_id
-        base = Path(base_dir) / ".task_outputs"
+        # Scope the stdout/progress log by session — mirrors the result-value
+        # path (``.tool_results/{session}/...``) so both on-disk artifacts of a
+        # task share the same per-session layout under one workspace root. Empty
+        # session falls back to the shared ``default`` bucket, identical to
+        # ``tool_result_limit``'s scoping.
+        base = Path(base_dir) / ".task_outputs" / (session_id or "default")
         base.mkdir(parents=True, exist_ok=True)
         self._file_path = base / f"{task_id}.output"
         # Create (or truncate) the output file
@@ -214,15 +220,28 @@ class TaskOutputStore:
     """Registry of per-task disk outputs.
 
     Files are stored under
-    ``{base_dir}/.task_outputs/{task_id}.output``.
+    ``{base_dir}/.task_outputs/{session_id}/{task_id}.output``.
     Defaults to ``DEFAULT_WORKSPACE_ROOT`` so the path stays stable
-    even when the agent switches its working directory.
+    even when the agent switches its working directory; the session layer
+    mirrors the result-value path (``.tool_results/{session}/...``) so both
+    of a task's on-disk artifacts share one per-session tree.
     """
 
-    def __init__(self, base_dir: Union[str, Path, None] = None) -> None:
+    def __init__(self, base_dir: Union[str, Path, None] = None, session_id: str = "") -> None:
         self._base_dir = Path(base_dir) if base_dir is not None else Path(DEFAULT_WORKSPACE_ROOT)
+        self._session_id = session_id
         self._outputs: dict[str, DiskTaskOutput] = {}
         self._on_cap: Optional[Callable[[str], None]] = None
+
+    @property
+    def base_dir(self) -> Path:
+        """Root under which this store's task files live.
+
+        The pool reuses it to scope a large whole-task *result* file
+        (``.tool_results/...``) into the same tree as the streaming stdout log
+        (``.task_outputs/...``), so both persisted artifacts share one root.
+        """
+        return self._base_dir
 
     def set_on_cap(self, callback: Callable[[str], None]) -> None:
         """Set a callback invoked when any task's output hits the disk cap.
@@ -237,7 +256,7 @@ class TaskOutputStore:
         """Create and register a new task output."""
         if task_id in self._outputs:
             raise ValueError(f"Task output already exists: {task_id}")
-        output = DiskTaskOutput(task_id, self._base_dir, on_cap=self._on_cap)
+        output = DiskTaskOutput(task_id, self._base_dir, session_id=self._session_id, on_cap=self._on_cap)
         self._outputs[task_id] = output
         return output
 

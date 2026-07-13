@@ -75,6 +75,12 @@ SUMMARY_EDIT_REMOVED: Final[str] = "summary.edit_removed"
 SUMMARY_UPDATED: Final[str] = "summary.updated"
 SUMMARY_REPLACED: Final[str] = "summary.replaced"
 
+# --- Tool outcomes ---------------------------------------------------------
+TOOL_REJECTED: Final[str] = "tool.rejected"
+RESULT_NO_OUTPUT: Final[str] = "result.no_output"
+RESULT_FAILED: Final[str] = "result.failed"
+RESULT_RETRYABLE: Final[str] = "result.retryable"
+
 # --- Driver notices --------------------------------------------------------
 DRIVER_TOOLS_LOADED: Final[str] = "driver.tools_loaded"
 
@@ -84,12 +90,32 @@ KEY_EXPAND_HINT: Final[str] = "key.expand_hint"
 KEY_COLLAPSE_HINT: Final[str] = "key.collapse_hint"
 KEY_EXIT_HINT: Final[str] = "key.exit_hint"
 
+# --- Approval gate (title / prompt / options / reasons, both hosts) -------
+APPROVAL_REQUIRED: Final[str] = "approval.required"
+APPROVAL_PROCEED: Final[str] = "approval.proceed"
+APPROVAL_ACTION_RUN: Final[str] = "approval.action.run"
+APPROVAL_ACTION_ESCALATE: Final[str] = "approval.action.escalate"
+APPROVAL_OPT_YES: Final[str] = "approval.opt.yes"
+APPROVAL_OPT_ALWAYS: Final[str] = "approval.opt.always"
+APPROVAL_OPT_NO: Final[str] = "approval.opt.no"
+APPROVAL_OPT_NEVER: Final[str] = "approval.opt.never"
+APPROVAL_TYPED_HINT: Final[str] = "approval.typed_hint"
+APPROVAL_REASON_ASK_RULE: Final[str] = "approval.reason.ask_rule"
+APPROVAL_REASON_DEFAULT: Final[str] = "approval.reason.default"
+APPROVAL_SUGGESTION: Final[str] = "approval.suggestion"
+
 # --- Interactive select hints (question + approval menus, both hosts) -----
 HINT_SELECT_MULTI: Final[str] = "hint.select_multi"
 HINT_SELECT_SINGLE: Final[str] = "hint.select_single"
 HINT_SELECT_MULTI_CANCEL: Final[str] = "hint.select_multi_cancel"
 HINT_SELECT_SINGLE_CANCEL: Final[str] = "hint.select_single_cancel"
 HINT_ESC_CANCEL: Final[str] = "hint.esc_cancel"
+
+# --- Interactive select — "Other" free-text branch (both hosts) -----------
+SELECT_OTHER: Final[str] = "select.other"
+SELECT_FREE_TEXT_PROMPT: Final[str] = "select.free_text_prompt"
+SELECT_ANSWER_PLACEHOLDER: Final[str] = "select.answer_placeholder"
+SELECT_SUBMIT: Final[str] = "select.submit"
 
 # --- Prompt input ----------------------------------------------------------
 PROMPT_PLACEHOLDER: Final[str] = "prompt.placeholder"
@@ -138,17 +164,37 @@ ALL_KEYS: Final[Tuple[str, ...]] = (
     SUMMARY_EDIT_REMOVED,
     SUMMARY_UPDATED,
     SUMMARY_REPLACED,
+    TOOL_REJECTED,
+    RESULT_NO_OUTPUT,
+    RESULT_FAILED,
+    RESULT_RETRYABLE,
     DRIVER_TOOLS_LOADED,
     PROMPT_PLACEHOLDER,
     KEY_TOGGLE_TOOL,
     KEY_EXPAND_HINT,
     KEY_COLLAPSE_HINT,
     KEY_EXIT_HINT,
+    APPROVAL_REQUIRED,
+    APPROVAL_PROCEED,
+    APPROVAL_ACTION_RUN,
+    APPROVAL_ACTION_ESCALATE,
+    APPROVAL_OPT_YES,
+    APPROVAL_OPT_ALWAYS,
+    APPROVAL_OPT_NO,
+    APPROVAL_OPT_NEVER,
+    APPROVAL_TYPED_HINT,
+    APPROVAL_REASON_ASK_RULE,
+    APPROVAL_REASON_DEFAULT,
+    APPROVAL_SUGGESTION,
     HINT_SELECT_MULTI,
     HINT_SELECT_SINGLE,
     HINT_SELECT_MULTI_CANCEL,
     HINT_SELECT_SINGLE_CANCEL,
     HINT_ESC_CANCEL,
+    SELECT_OTHER,
+    SELECT_FREE_TEXT_PROMPT,
+    SELECT_ANSWER_PLACEHOLDER,
+    SELECT_SUBMIT,
     LANG_CURRENT,
     LANG_AVAILABLE,
     LANG_SWITCHED,

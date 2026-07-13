@@ -25,12 +25,20 @@ isolated and torn down with it.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, ClassVar, Optional
+from typing import ClassVar, Optional
 
 from mote.common.logs import logger
 from mote.common.prompt.tools import TERMINAL_DESCRIPTION
 from mote.common.schema.permission_types import PermissionDecision
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import (
+    GetCwd,
+    GetSandboxRuntime,
+    GetToolSession,
+    RecordTerminalState,
+    SetToolSession,
+    TakePendingTerminalRestore,
+)
 from mote.executor.dependency._terminal import DEFAULT_YIELD_MS, TerminalSession
 from mote.executor.permission.classifier import classify_command
 from mote.executor.permission.command_parse import segment_strings
@@ -68,13 +76,13 @@ class Terminal(BaseTool):
     # directory on first use) + the per-Role tool-session store (where the live
     # TerminalSession is kept, so it persists across calls and is owned by the
     # Role rather than a process-global singleton).
-    get_cwd: Callable[[], str]
-    get_tool_session: Callable[[str], Any]
-    set_tool_session: Callable[[str, Any], None]
+    get_cwd: GetCwd
+    get_tool_session: GetToolSession
+    set_tool_session: SetToolSession
     # Capability accessor returning the session's SandboxRuntime, or None when no
     # OS-level sandbox is configured. Defaults to a no-runtime stub so a tool
     # bound without a Role (some unit tests) still runs un-sandboxed.
-    get_sandbox_runtime: Callable[[], Any] = staticmethod(lambda: None)
+    get_sandbox_runtime: GetSandboxRuntime = staticmethod(lambda: None)
     # Capability accessors for session-resume terminal-state restore:
     #   record_terminal_state — persist (cwd, env diff, unset) into the rollout
     #     after a call settles at a prompt (so resume can re-seed a shell).
@@ -82,8 +90,8 @@ class Terminal(BaseTool):
     #     (or None); applied once when a fresh shell starts.
     # Both default to no-op stubs so a tool bound without a Role (unit tests)
     # still runs (no recording, no restore).
-    record_terminal_state: Callable[..., None] = staticmethod(lambda *a, **k: None)
-    take_pending_terminal_restore: Callable[[], Optional[dict]] = staticmethod(lambda: None)
+    record_terminal_state: RecordTerminalState = staticmethod(lambda *a, **k: None)
+    take_pending_terminal_restore: TakePendingTerminalRestore = staticmethod(lambda: None)
 
     async def _ensure_session(self) -> TerminalSession:
         """Return this Role's live terminal, starting a fresh one if needed.

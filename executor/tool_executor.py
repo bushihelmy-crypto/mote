@@ -593,6 +593,15 @@ class ToolExecutor(BaseToolExecutor):
         """Return schemas for all declared tools (built-in + MCP + pipeline)."""
         return self._catalog.schemas_for(None)
 
+    def tool_names(self) -> list[str]:
+        """All bound tool names (primary + aliases) currently in the catalog.
+
+        A public read for capabilities that need the live tool set (e.g. the
+        ``run_graph`` orchestrator validating node tool references) without
+        reaching into the catalog collaborator.
+        """
+        return self._catalog.names()
+
     def reconstructable_tool_names(self) -> frozenset[str]:
         """Names (primary + aliases) of bound tools whose results are re-derivable.
 
@@ -602,6 +611,16 @@ class ToolExecutor(BaseToolExecutor):
         recoverable (re-read the file, re-run the query).
         """
         return self._catalog.reconstructable_names()
+
+    def graph_tool_names(self) -> frozenset[str]:
+        """Names (primary + aliases) of bound tools that are graph orchestrators.
+
+        A tool self-declares this via the ``is_graph_tool`` ClassVar (see
+        :class:`~mote.executor.base_tool.BaseTool`). The run_graph orchestrator
+        refuses to reference any of these from a node, so a declarative graph can
+        never nest another graph.
+        """
+        return self._catalog.graph_tool_names()
 
     def get_native_tool_specs(self, provider: str = "anthropic") -> list[dict]:
         """Return native tool-use specs for all declared tools (static + MCP).

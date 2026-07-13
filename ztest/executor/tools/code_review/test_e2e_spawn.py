@@ -164,7 +164,9 @@ async def test_findings_flow_to_report(tmp_path, redirect_sessions, scripted_llm
     """End-to-end: the children's JSON findings flow through to the report."""
     control = AgentControl(store=ResidencyStore(base_dir=str(tmp_path)))
     out = await _run_pipeline(control, str(tmp_path))
+    # Success narrows to the declared Output (report only); the children's
+    # findings having flowed through is proven by their content landing in the
+    # report — the intermediate ``findings`` scratch is not returned to the model.
     report = out.get("report", "")
-    findings = out.get("findings", [])
-    assert findings, f"expected findings to flow through, got none. report={report!r}"
+    assert "found 2 issues" in report, f"expected findings to flow into the report, got {report!r}"
     assert "suspicious assignment" in report

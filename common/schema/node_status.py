@@ -20,3 +20,15 @@ class BgStatus(str, Enum):
     TIMEOUT = "timeout"
     SKIPPED = "skipped"
     WAITING_FOR_ROUTE = "waiting_for_route"
+    STALLED = "stalled"
+
+
+# Statuses where a task paused mid-run awaiting a model decision — resumable,
+# NOT terminal. A pause keeps its state snapshot for ``resume_tasks`` and stays
+# cancellable. Two reasons share this shape (see ``bggraph.types.PauseReason``):
+# ``WAITING_FOR_ROUTE`` (frontier hit an LLM edge — pick a route) and
+# ``STALLED`` (frontier drained with a blocked AND-join — a deadlock the model
+# must break). Keeping the set here (the leaf status module) lets the resume /
+# cancel gates test "is this a resumable pause?" from one authoritative place
+# instead of re-listing the members.
+PAUSE_STATUSES = frozenset({BgStatus.WAITING_FOR_ROUTE, BgStatus.STALLED})

@@ -8,6 +8,7 @@ Public API::
 from __future__ import annotations
 
 from mote.executor.tasks.bggraph.base_node import BaseNode, From
+from mote.executor.tasks.bggraph.channels import Output
 from mote.executor.tasks.bggraph.graph import BgGraph
 from mote.executor.tasks.bggraph.types import (
     END,
@@ -15,12 +16,13 @@ from mote.executor.tasks.bggraph.types import (
     BgStatus,
     GraphBatchFailureError,
     GraphParamTypeError,
+    GraphPause,
     GraphRecursionError,
     GraphRouterError,
     GraphRunState,
     GraphState,
-    LlmPauseResult,
     NodeRecord,
+    PauseReason,
     Stage,
 )
 
@@ -28,12 +30,14 @@ __all__ = [
     "BaseNode",
     "From",
     "BgGraph",
+    "Output",
     "GraphState",
     "GraphRunState",
     "NodeRecord",
     "Stage",
     "BgStatus",
-    "LlmPauseResult",
+    "GraphPause",
+    "PauseReason",
     "START",
     "END",
     "GraphRouterError",

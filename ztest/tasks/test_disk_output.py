@@ -46,7 +46,10 @@ class TestDiskTaskOutputAsync:
         out = DiskTaskOutput("t3", tmp_path)
         p = Path(out.file_path)
         assert p.exists()
-        assert p.parent.name == ".task_outputs"
+        # Layout: ``.task_outputs/{session}/{task_id}.output`` — an empty session
+        # falls back to the ``default`` bucket (mirrors ``.tool_results``).
+        assert p.parent.name == "default"
+        assert p.parent.parent.name == ".task_outputs"
         assert p.name == "t3.output"
         await out.close()
 
@@ -90,6 +93,24 @@ class TestDiskTaskOutputAsync:
         # Appends after the cap are dropped.
         out.append("more")
         assert out.get_size() == 5
+
+    @pytest.mark.asyncio
+    async def test_session_scopes_path(self, tmp_path):
+        # A session id inserts a ``.task_outputs/{session}/`` layer, mirroring
+        # the result-value path so both artifacts share one per-session tree.
+        out = DiskTaskOutput("t7", tmp_path, session_id="sess-abc")
+        p = Path(out.file_path)
+        assert p.parent.name == "sess-abc"
+        assert p.parent.parent.name == ".task_outputs"
+        await out.close()
+
+    @pytest.mark.asyncio
+    async def test_store_threads_session_to_outputs(self, tmp_path):
+        store = TaskOutputStore(tmp_path, session_id="sess-xyz")
+        out = store.init_output("t8")
+        p = Path(out.file_path)
+        assert p.parent.name == "sess-xyz"
+        await out.close()
 
 
 class TestDiskTaskOutputSync:

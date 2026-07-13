@@ -11,7 +11,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, List, Optional
 
-from mote.executor.tasks.bggraph import GraphState
+from mote.executor.tasks.bggraph import GraphState, Output
 
 
 class ReviewState(GraphState):
@@ -41,5 +41,5 @@ class ReviewState(GraphState):
     # (last-value). ``aggregate`` formats this when present, else ``findings``.
     kept_findings: Optional[List] = None
 
-    # --- Output ---
-    report: str = ""
+    # --- Output (returned on success; inputs/intermediate are not) ---
+    report: Annotated[str, Output] = ""

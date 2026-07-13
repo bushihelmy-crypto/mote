@@ -6,15 +6,12 @@ task can be resumed later via resume_tasks.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
-
+from mote.common.schema.node_status import PAUSE_STATUSES
 from mote.executor.base_tool import BaseTool
+from mote.executor.capability_types import GetBgPool
 from mote.executor.tasks.types import BgStatus
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError
-
-if TYPE_CHECKING:
-    from mote.executor.tasks import BackgroundTaskPool
 
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_CANCEL_DONE = "Task {task_id} is already {status}, cannot cancel."
@@ -36,7 +33,7 @@ class CancelTasks(BaseTool):
     requires = ("get_bg_pool",)
 
     # Injected from Role by bind(): Role.get_bg_pool.
-    get_bg_pool: Callable[[], "BackgroundTaskPool"]
+    get_bg_pool: GetBgPool
 
     async def call(
         self,
@@ -55,8 +52,9 @@ class CancelTasks(BaseTool):
         if meta is None:
             raise ToolError(_MSG_UNKNOWN_TASK.format(task_id=task_id))
 
-        # Can only cancel tasks that are still active
-        if meta.status not in (BgStatus.PENDING, BgStatus.RUNNING, BgStatus.WAITING_FOR_ROUTE):
+        # Can only cancel tasks that are still active — running, queued, or
+        # paused awaiting a decision (LLM route / deadlock stall).
+        if meta.status not in (BgStatus.PENDING, BgStatus.RUNNING, *PAUSE_STATUSES):
             return _MSG_CANCEL_DONE.format(task_id=task_id, status=meta.status)
 
         success = pool.cancel(task_id)

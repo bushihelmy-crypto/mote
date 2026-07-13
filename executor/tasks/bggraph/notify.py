@@ -73,9 +73,39 @@ _FMT_NODE_NOTIFICATION = (
 )
 # Trailing action hint for node_failed — driven by whether any node is still
 # running. No running node means the graph has stalled and a terminal failure
-# follows immediately, so a decision is needed now.
-_HINT_NODE_FAILURE_STALLED = "No runnable nodes remain — make a decision now or ask the user."
-_HINT_NODE_FAILURE_RUNNING = "Other nodes are still running — you may decide later."
+# follows immediately, so a decision is needed now. Both variants point at the
+# diagnostic + recovery tools (task_id is ``(current)`` here; the progress
+# writer substitutes the real id before delivery).
+_HINT_NODE_FAILURE_RECOVERY = (
+    'Inspect with get_node_state(task_id="(current)") to see per-node status/inputs/outputs, '
+    'then resume_tasks(task_id="(current)", from_node=[...]) to re-run '
+    "(or skip_node=[...] to bypass, overrides={...} to change inputs)."
+)
+_HINT_NODE_FAILURE_STALLED = (
+    "No runnable nodes remain — make a decision now or ask the user. " + _HINT_NODE_FAILURE_RECOVERY
+)
+_HINT_NODE_FAILURE_RUNNING = "Other nodes are still running — you may decide later. " + _HINT_NODE_FAILURE_RECOVERY
+_FMT_STALL_NOTIFICATION = (
+    '"{command}" task stalled (task_id: {task_id})\n'
+    "The graph ran out of runnable nodes but did not finish: one or more AND-join "
+    "nodes are deadlocked (a required upstream can never arrive). A decision is "
+    "needed now.\n"
+    "stalled join nodes:\n{stalled_nodes_text}\n"
+    "completed nodes:\n{completed_nodes_text}\n"
+    "skipped nodes:\n{skipped_nodes_text}\n"
+    "pending nodes:\n{pending_nodes_text}\n"
+    "{action_hint}"
+)
+# One stalled AND-join block: names the join, which of its sources arrived and
+# which are still missing (the missing ones are what deadlocked it).
+_FMT_STALL_NODE_BLOCK = (
+    "  - {node_name}\n" "    arrived sources: {arrived_text}\n" "    missing sources: {missing_text}"
+)
+_HINT_STALL = (
+    'Break the deadlock: resume_tasks(task_id="(current)", from_node=[<missing upstream(s)>]) to run them, '
+    "or skip_node=[<missing upstream(s)>] to bypass the join's wait (keeps partial results), "
+    'or ask the user. Inspect first with get_node_state(task_id="(current)").'
+)
 _FMT_LLM_ROUTE_NOTIFICATION = (
     '"{command}" task waiting_for_route (task_id: {task_id})\n'
     "stage-summary:\n{stage_summary}\n"
@@ -92,8 +122,15 @@ _FMT_LLM_ROUTE_OPTION = (
     "    description: {target_desc}\n"
     "    params:\n{target_params_text}"
 )
-_HINT_OPTIONAL = "You may also do nothing (route to END requires no action)."
-_HINT_REQUIRED = "You MUST choose one of the above options to continue."
+# Route-pause hints. Each option above already shows its ``resume_tasks(...)``
+# call; add a pointer to get_node_state for inspecting produced state before
+# deciding (task_id is ``(current)`` — the writer substitutes the real id).
+_HINT_INSPECT = (
+    'Call get_node_state(task_id="(current)") for per-node status, '
+    "or fields=[...] to dump a produced value before choosing."
+)
+_HINT_OPTIONAL = "You may also do nothing (route to END requires no action). " + _HINT_INSPECT
+_HINT_REQUIRED = "You MUST choose one of the above options to continue. " + _HINT_INSPECT
 
 _FMT_FAILED_NODE_BLOCK = "  - {node_name}\n" "    error: {error}\n" "    auto_retries: {auto_retries_text}"
 _FMT_NODE_PARAM = "      {name} = {value}\n        {desc}, {source}"
@@ -470,3 +507,60 @@ def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: 
         action_hint=action_hint,
     )
     report_progress(llm_edge.from_node, BgStatus.WAITING_FOR_ROUTE, notification)
+
+
+def _render_stall_nodes(graph: Any, stalled_nodes: tuple[str, ...], completed: set) -> str:
+    """Render each deadlocked AND-join with its arrived / missing sources.
+
+    A join's ``sources`` come from the graph's waiting-edges; a source counts as
+    arrived when it is in *completed*. The missing sources are what deadlocked
+    the join, so they are the model's resume/skip targets.
+    """
+    blocks = []
+    for name in stalled_nodes:
+        # A target may have several waiting-edges; union their sources.
+        sources: list[str] = []
+        for we in graph._waiting_edges:
+            if we.to_node == name:
+                for s in we.sources:
+                    if s not in sources:
+                        sources.append(s)
+        arrived = [s for s in sources if s in completed]
+        missing = [s for s in sources if s not in completed]
+        blocks.append(
+            _FMT_STALL_NODE_BLOCK.format(
+                node_name=name,
+                arrived_text=", ".join(arrived) if arrived else "(none)",
+                missing_text=", ".join(missing) if missing else "(none)",
+            )
+        )
+    return "\n".join(blocks) if blocks else "  (none)"
+
+
+def push_stall_notification(
+    graph: Any,
+    state: Any,
+    stalled_nodes: tuple[str, ...],
+    *,
+    completed: set,
+    run_state: Optional[GraphRunState] = None,
+    task_id: str = "(current)",
+) -> None:
+    """Push a decision notification when the frontier drains on a deadlocked join.
+
+    Mirrors the LLM-route pause: the task is not terminal, so the pool owns the
+    push (this renders the rich DAG snapshot to disk as the ``<task-attachment>``
+    source of truth). Names the stalled joins with their missing upstreams so the
+    model can resume/skip them directly.
+    """
+    run_state = GraphRunState.ensure(graph, state, run_state)
+    notification = _FMT_STALL_NOTIFICATION.format(
+        command=graph.command_name,
+        task_id=task_id,
+        stalled_nodes_text=_render_stall_nodes(graph, stalled_nodes, completed),
+        completed_nodes_text=_render_completed_nodes(graph, state, run_state, completed),
+        skipped_nodes_text=_render_status_nodes(graph, run_state, BgStatus.SKIPPED),
+        pending_nodes_text=_render_status_nodes(graph, run_state, BgStatus.PENDING),
+        action_hint=_HINT_STALL,
+    )
+    report_progress(END, BgStatus.STALLED, notification)
