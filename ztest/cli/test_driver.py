@@ -49,7 +49,7 @@ class FakeContextManager:
     def count(self) -> int:
         return self._n
 
-    def clear(self) -> None:
+    async def clear(self) -> None:
         self.cleared = True
         self._n = 0
 
@@ -61,10 +61,13 @@ class FakeRole:
         name: str = "Assistant",
         tools: Optional[List[str]] = None,
         mcps: Optional[List[str]] = None,
+        deferred_tools: Optional[List[str]] = None,
     ) -> None:
         self.session_id = session_id
         self.state = SimpleNamespace(env=None)
-        self.role_schema = SimpleNamespace(name=name, tools=tools or [], mcps=mcps or [])
+        self.role_schema = SimpleNamespace(
+            name=name, tools=tools or [], mcps=mcps or [], deferred_tools=deferred_tools or []
+        )
         self.event_bus = FakeBus()
         self.context_manager = FakeContextManager()
 
@@ -187,8 +190,20 @@ def test_announce_tools_flags_builtin_count():
     ev = drv._projector.delivered_sync[-1]
     assert isinstance(ev, Notice)
     assert "\u2691" in ev.text
-    assert t(K.DRIVER_TOOLS_LOADED, count=3) in ev.text
+    assert t(K.DRIVER_TOOLS_LOADED, count=3, deferred=0) in ev.text
     assert "MCP" not in ev.text
+
+
+def test_announce_tools_annotates_deferred_count():
+    # Deferred (search-to-enable) tools are part of the startup load — they count
+    # toward the total, and the badge annotates how many of it start deferred.
+    role = FakeRole(tools=["Read", "Write", "Bash"], deferred_tools=["WebBrowser", "Agent"])
+    control = FakeControl({role.session_id: FakeRuntime(role)})
+    drv = SessionDriver(control, role.session_id, role, port=FakePort(), projector=FakeProjector())
+    drv._announce_tools()
+    ev = drv._projector.delivered_sync[-1]
+    assert isinstance(ev, Notice)
+    assert t(K.DRIVER_TOOLS_LOADED, count=3, deferred=2) in ev.text
 
 
 def test_announce_tools_no_op_when_no_tools():
@@ -224,10 +239,11 @@ def test_active_agents_lists_id_name_status():
     assert agents == [("a1", "Helper", "idle")]
 
 
-def test_clear_conversation_clears_history_and_emits_transcript_cleared():
+@pytest.mark.asyncio
+async def test_clear_conversation_clears_history_and_emits_transcript_cleared():
     drv, _c, _p, projector = make_driver()
     drv._role.context_manager = FakeContextManager(n=5)
-    cleared = drv.clear_conversation()
+    cleared = await drv.clear_conversation()
     assert cleared == 5  # returns the pre-clear message count
     assert drv._role.context_manager.cleared is True
     assert drv._role.context_manager.count() == 0

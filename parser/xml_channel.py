@@ -65,9 +65,11 @@ class XmlCommandChannel(CommandChannel):
         # finished. The shared base default (plain outputs) is what native uses.
         return f"I have finished the task, please mark my task as finished. Outputs: {outputs}"
 
-    async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
-        outputs = join_command_outputs(executed)
+    async def record_call(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
         await memory.add(AIMessage(content=command_rsp))
+
+    async def record_results(self, memory: "MessageStore", executed: list[dict]) -> None:
+        outputs = join_command_outputs(executed)
         await memory.add(UserMessage(content=outputs, cause_by=CauseBy.RUN_COMMAND))
         media = _media_message(*_collect_media(executed))
         if media is not None:

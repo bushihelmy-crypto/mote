@@ -29,11 +29,10 @@ import asyncio
 import re
 import uuid
 import weakref
-from typing import Callable, Dict, Optional, Protocol, cast
+from typing import Callable, Dict, Optional, Protocol
 
 from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, set_control
 from mote.common.events import AgentLifecycleEvent, EventBus, LogSubscriber, PreAgentSpawnEvent
-from mote.common.events.outcomes import SpawnOutcome
 from mote.common.exception import AgentLimitReached, AgentNotFound, AgentNotKnown
 from mote.common.logs import logger
 from mote.common.schema import Message
@@ -47,6 +46,7 @@ from mote.environment.registry import AgentMetadata, AgentRegistry, next_agent_s
 from mote.environment.residency import Residency, ResidencySlot
 from mote.environment.runtime import AgentRuntime, AgentStatus, is_final
 from mote.environment.spawn_gate import SpawnGate
+from mote.environment.spawn_usage_gate import SpawnUsageGate
 from mote.environment.store import ResidencyStore
 from mote.environment.turn_scheduler import EventDrivenScheduler
 from mote.router.cost.node import CostNode
@@ -97,6 +97,8 @@ class AgentControl:
         store: Optional[ResidencyStore] = None,
         max_agents: Optional[int] = None,
         max_depth: Optional[int] = None,
+        max_cost_usd: Optional[float] = None,
+        max_total_tokens: Optional[int] = None,
         residency_capacity: Optional[int] = None,
         role_loader: Optional[Callable[[dict], object]] = None,
         watch_interval: float = 0.01,
@@ -108,6 +110,11 @@ class AgentControl:
         # Total-agent spawn cap (registry) + concurrent-turn cap (limiter) share
         # one ceiling, mirroring codex's single ``max_threads``. ``None`` == no cap.
         self._max_agents = max_agents
+        # Only ``max_depth`` is stashed: it is re-read per spawn as the default
+        # ceiling (see spawn_agent). The fleet token/cost ceilings
+        # (``max_cost_usd``/``max_total_tokens``) are NOT stashed — each is owned
+        # outright by the gate it configures below (SpawnUsageGate), the single
+        # authority for its limit.
         self._max_depth = max_depth
         if max_agents is not None:
             self._limiter.initialize(max_agents)
@@ -119,6 +126,24 @@ class AgentControl:
         # The spawn-depth veto runs on this runtime bus as a fail-closed control
         # subscriber (see spawn_agent), not an inline depth check.
         self._event_bus.subscribe(SpawnGate())
+        # The fleet token/cost veto sits in the SAME gate bucket, AFTER SpawnGate
+        # (depth denials short-circuit first). Reader closures pull the fleet's
+        # LIVE spend off the cost mirror tree (``self._cost_root``), lazily (the
+        # tree may not exist until the root agent is added). ``None`` caps → inert.
+        # This is the fleet's single *cost* ceiling: runaway fan-out is bounded by
+        # spend (SpawnUsageGate) + depth (SpawnGate) + live-incarnation count
+        # (max_agents/residency), and — for a single declarative orchestration —
+        # by run_graph's own ``recursion_limit`` on total node activations. A
+        # cumulative spawn-*count* ceiling would only duplicate those (count is a
+        # poor proxy for cost), so it is deliberately absent.
+        self._event_bus.subscribe(
+            SpawnUsageGate(
+                max_cost_usd=max_cost_usd,
+                max_total_tokens=max_total_tokens,
+                cost_reader=lambda: self._cost_root.subtree_cost() if self._cost_root else 0.0,
+                tokens_reader=lambda: self._cost_root.subtree_usage().total_tokens if self._cost_root else 0,
+            )
+        )
         self._store = store if store is not None else ResidencyStore()
         # Bind self as the ambient plane around every turn so a deep spawn site
         # discovers it via ``current_control()`` (inherited by child tasks).
@@ -332,8 +357,9 @@ class AgentControl:
             )
         )
         if spawn_outcome is not None and spawn_outcome.is_blocking:
-            # A PreAgentSpawnEvent always folds a SpawnOutcome (or None).
-            reason = cast("SpawnOutcome", spawn_outcome).reason
+            # ``emit`` infers ``SpawnOutcome | None`` from PreAgentSpawnEvent's
+            # ``ControlEvent[SpawnOutcome]`` binding — no cast needed.
+            reason = spawn_outcome.reason
             raise AgentLimitReached(message=reason or "spawn denied")
 
         # Live-incarnation cap: residency reserves a slot, evicting the LRU idle
@@ -383,11 +409,24 @@ class AgentControl:
             slot.commit(agent_id)
             if spec.watch_completion and spec.parent_id:
                 self.start_completion_watcher(agent_id, spec.parent_id, child_path=child_path)
+            # Wall-clock TTL (axis C): an independent watchdog interrupts the
+            # child at its deadline. Recycling + the soft parent notice ride the
+            # existing interrupt() → INTERRUPTED → completion-watcher path.
+            if spec.timeout_seconds is not None:
+                self.start_ttl_watchdog(agent_id, spec.timeout_seconds)
             return ChildAgentHandle(runtime, control=self, agent_id=agent_id, agent_path=child_path)
         # EPHEMERAL: caller runs it inline via the handle; never enters the
         # scheduler. It still occupies a live slot (held pending, not evictable)
-        # — the handle releases it on aclose.
-        return ChildAgentHandle(runtime, control=self, agent_id=agent_id, agent_path=child_path, residency_slot=slot)
+        # — the handle releases it on aclose. Any ``timeout_seconds`` bounds that
+        # single inline turn (the handle wraps its await in ``asyncio.wait_for``).
+        return ChildAgentHandle(
+            runtime,
+            control=self,
+            agent_id=agent_id,
+            agent_path=child_path,
+            residency_slot=slot,
+            timeout_seconds=spec.timeout_seconds,
+        )
 
     def release_child(self, agent_id: str) -> None:
         """Release a spawned child: drop from map/scheduler/residency + free the cap slot."""
@@ -848,6 +887,38 @@ class AgentControl:
                 logger.warning(f"AgentControl: completion notify to {parent_id} failed: {exc}")
 
         task = asyncio.create_task(_watch())
+        self._watchers.append(task)
+        return task
+
+    def start_ttl_watchdog(self, child_id: str, timeout_seconds: float) -> asyncio.Task:
+        """Interrupt *child_id* once it has lived *timeout_seconds* wall-clock.
+
+        The MANAGED wall-clock deadline: a total time-to-live, not a per-turn
+        cap. Sleeps out the budget, then — if the child is still live and not
+        already final — calls the existing :meth:`interrupt` (→ INTERRUPTED). The
+        completion watcher (already running for a watched child) folds the usual
+        queue-only parent notice, and ``release_child`` recycles it, so this adds
+        only the alarm. A child that finishes early is dropped from ``_runtimes``,
+        so the post-sleep lookup no-ops. Like the completion watcher it holds a
+        :class:`weakref` to ``self`` so a dropped plane lets the watchdog bail.
+        """
+        weak_self = weakref.ref(self)
+
+        async def _watchdog() -> None:
+            await asyncio.sleep(timeout_seconds)
+            ctrl = weak_self()
+            if ctrl is None:
+                return
+            child = ctrl._runtimes.get(child_id)
+            if child is None or is_final(child.status):
+                return  # finished/evicted before the deadline → nothing to do
+            logger.warning(f"AgentControl: {child_id} exceeded its {timeout_seconds}s TTL; interrupting.")
+            try:
+                await ctrl.interrupt(child_id)
+            except Exception as exc:  # noqa: BLE001 — interrupt is best-effort
+                logger.warning(f"AgentControl: TTL interrupt of {child_id} failed: {exc}")
+
+        task = asyncio.create_task(_watchdog())
         self._watchers.append(task)
         return task
 

@@ -10,6 +10,7 @@ from mote.common.resource import (
 from mote.common.resource.registry import _project_one
 from mote.common.resource.unit import ResourceUnit
 from mote.common.schema import ResourceMessage
+from mote.common.utils.prompt_sanitizer import count_tokens
 
 
 def test_load_and_contains_and_len():
@@ -116,8 +117,24 @@ def test_project_one_header_format():
 
 
 def _tokens_line_body(n_tokens: int) -> str:
-    """A body of roughly *n_tokens* (~1 token per short line)."""
+    """A body of roughly *n_tokens* (short lines; over-provisions vs the tokenizer
+    so it comfortably EXCEEDS a cap of *n_tokens* — used where 'big enough' matters,
+    not an exact count)."""
     return "\n".join(f"tok{i}" for i in range(n_tokens))
+
+
+def _sized_body(target_tokens: int) -> str:
+    """A body measured to be just UNDER *target_tokens* by the real tokenizer.
+
+    Grows line-by-line until one more line would cross the target, so callers can
+    assert precise budget-boundary behavior without hardcoding the tokenizer's
+    (non-1:1) line→token ratio."""
+    lines: list[str] = []
+    while True:
+        candidate = "\n".join(lines + [f"tok{len(lines)}"])
+        if count_tokens(candidate) >= target_tokens:
+            return "\n".join(lines) if lines else candidate
+        lines.append(f"tok{len(lines)}")
 
 
 def test_per_kind_budget_does_not_starve_other_kinds():
@@ -179,3 +196,67 @@ def test_task_result_projection_carries_kind():
     assert m.resource_kind == "task_result"
     assert m.metadata[RESOURCE_KIND] == "task_result"
     assert m.resource_id == "bg_3"
+
+
+# --- revealed-tool descriptions ("tool" kind) decoupled from Skill's assumptions -
+
+
+def test_tool_kind_has_own_sub_budget():
+    """A flood of revealed-tool descriptions cannot starve a skill — the ``tool``
+    sub-cap bounds it independently of Skill's uncapped behavior."""
+    r = ResourceRegistry()
+    sub_cap = POST_COMPACT_PER_KIND_BUDGET["tool"]
+    # Oldest is a skill; newer are many tool descriptions that together exceed the
+    # tool sub-cap.
+    r._units["skill1"] = ResourceUnit(id="skill1", kind="skill", content="SKILLBODY", invoked_at=0.0)
+    body = _tokens_line_body(sub_cap - 200)
+    for k in range(5):
+        r._units[f"tool{k}"] = ResourceUnit(id=f"tool{k}", kind="tool", content=body, invoked_at=float(k + 1))
+    projected = r.project()
+    kinds = [m.resource_kind for m in projected]
+    assert "skill" in kinds  # skill survives the tool flood (no starvation)
+    assert kinds.count("tool") < 5  # tool bounded by its own sub-cap
+
+
+def test_tool_kind_never_round_reaped_unlike_task_result():
+    """A ``tool`` description is a repeatable capability (skill-like), so it is
+    NOT round-reaped — ``projection_rounds`` counts compactions survived, not model
+    usage, and there is no consume-unload/reuse-refresh seam, so a round cap would
+    evict a still-in-use tool. Only task_result (a one-shot payload) reaps."""
+    assert "tool" not in POST_COMPACT_MAX_ROUNDS  # deliberately absent
+    r = ResourceRegistry()
+    task_cap = POST_COMPACT_MAX_ROUNDS["task_result"]
+    r.load(id="tool1", kind="tool", content="TOOLDESC", sticky=True)
+    r.load(id="task1", kind="task_result", content="RESULT", sticky=True)
+    r.load(id="skill1", kind="skill", content="SKILL", sticky=True)
+    # Project well past the task_result cap.
+    for _ in range(task_cap + 5):
+        r.project()
+    assert "task1" not in r  # one-shot task_result recycled by rounds
+    assert "tool1" in r  # tool persists like a skill (no round cap)
+    assert "skill1" in r
+
+
+def test_tool_soft_lru_ages_out_but_stays_reprojectable():
+    """Old tool descriptions stop projecting once the active set exceeds the
+    sub-cap (soft LRU) yet remain in the registry — re-projecting if the active
+    set later shrinks. This is the age-out mechanism (NOT reaping)."""
+    r = ResourceRegistry()
+    sub_cap = POST_COMPACT_PER_KIND_BUDGET["tool"]
+    per_unit = POST_COMPACT_MAX_TOKENS_PER_UNIT
+    # Each unit fits alone (< per-unit cap so untruncated, < sub-cap so one
+    # projects) but two together exceed the sub-cap → the newer wins, the older is
+    # skipped this projection. Size ~2/3 of the sub-cap so 2× overflows it.
+    body = _sized_body(min(int(sub_cap * 0.6), per_unit - 500))
+    assert count_tokens(body) < sub_cap  # one fits
+    assert 2 * count_tokens(body) > sub_cap  # two overflow
+    r._units["old_tool"] = ResourceUnit(id="old_tool", kind="tool", content=body, invoked_at=1.0)
+    r._units["new_tool"] = ResourceUnit(id="new_tool", kind="tool", content=body, invoked_at=2.0)
+    ids = {m.resource_id for m in r.project()}
+    assert "new_tool" in ids  # most-recent wins the budget
+    assert "old_tool" not in ids  # older skipped (over sub-cap)
+    assert "old_tool" in r  # but STILL held — not reaped
+    # Active set shrinks (newer consumed/unloaded): the old tool projects again.
+    r.unload("new_tool")
+    ids2 = {m.resource_id for m in r.project()}
+    assert "old_tool" in ids2  # re-projectable once room frees up

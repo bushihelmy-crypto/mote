@@ -4,8 +4,8 @@
 
 Two entry points share the same parse → word-level pair → render pipeline:
 :func:`render_diff` (from raw diff *text* a shell produced) and
-:func:`render_file_change` (from the structured ``old``/``new`` fact of an Edit /
-apply_patch). Both return a coloured ``rich.Text`` with a line-number gutter,
+:func:`render_file_change` (from the structured ``old``/``new`` fact of an Edit).
+Both return a coloured ``rich.Text`` with a line-number gutter,
 filled +/- bars, cyan hunk headers, and word-level highlight of the exact spans
 that changed within a matched -/+ pair.
 """
@@ -128,8 +128,8 @@ def render_diff(diff_text: str) -> "Text":
     Filled +/- bars, a line-number gutter, ``@@`` hunk headers in cyan, and
     word-level highlight of the exact spans that changed within a matched -/+ pair.
 
-    When the change is a *structured fact* (``old``/``new`` full content from Edit /
-    apply_patch), prefer :func:`render_file_change` — it owns the full facts and a
+    When the change is a *structured fact* (``old``/``new`` full content from Edit),
+    prefer :func:`render_file_change` — it owns the full facts and a
     rich host can drive an interactive side-by-side from them, not just this diff.
     """
     rows = _parse_diff_rows(diff_text.splitlines())

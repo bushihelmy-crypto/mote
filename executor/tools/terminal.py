@@ -28,7 +28,6 @@ import os
 from typing import ClassVar, Optional
 
 from mote.common.logs import logger
-from mote.common.prompt.tools import TERMINAL_DESCRIPTION
 from mote.common.schema.permission_types import PermissionDecision
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import (
@@ -57,8 +56,20 @@ class Terminal(BaseTool):
 
     name = "Terminal"
     aliases = ["terminal.run"]
+    # Recall synonyms for tool-search: ways a model asks to run shell/commands
+    # that the summary ("persistent interactive terminal") does not spell out.
+    keywords: ClassVar[list[str]] = [
+        "shell",
+        "command",
+        "bash",
+        "cli",
+        "console",
+        "execute command",
+        "命令行",
+        "终端",
+        "运行命令",
+    ]
     max_result_size_chars: ClassVar[int] = 30_000
-    description = TERMINAL_DESCRIPTION
     requires = (
         "get_cwd",
         "get_tool_session",
@@ -167,7 +178,13 @@ class Terminal(BaseTool):
         close: bool = False,
         yield_time_ms: int = DEFAULT_YIELD_MS,
     ) -> str:
-        """Type into / interrupt / close the session's persistent terminal.
+        """Drive a persistent interactive terminal — for REPLs and long-lived sessions.
+
+        Type into a persistent interactive terminal kept alive across calls (one
+        per session). State (cwd, env, venv) persists; typing a program like
+        'python3' puts it in the foreground so later input is fed to it. Set
+        interrupt=true to send Ctrl-C, close=true to shut the terminal down. For
+        ordinary one-shot commands prefer the Bash tool.
 
         Args:
             input: Text to type into the terminal. At a shell prompt this runs a

@@ -16,8 +16,9 @@ against a frontier of already-announced session ids and emits **only the newly
 appeared teammates** — the first turn carries the full roster (parent +
 pre-existing siblings/children), and thereafter each spawn surfaces once as an
 additive block. Already-announced members are never repeated (the base lives in
-history). A :class:`PostCompactEvent` resets the frontier so the full roster is
-re-emitted after the earlier announcement was condensed away.
+history). Any :data:`HISTORY_RESET_EVENTS` (a compaction *or* a ``/clear`` / user
+delete that rebuilds stored history) resets the frontier so the full live roster
+is re-emitted after the earlier announcement was condensed or pruned away.
 
 Layer-clean: it reaches the plane through the ambient discovery surface
 (:func:`resolve_control`) and walks the registry entirely by duck-typing, so the
@@ -32,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Set
 
 from mote.common.agent_control import resolve_control
-from mote.common.events import PostCompactEvent
+from mote.common.events import HISTORY_RESET_EVENTS
 from mote.common.interface import ObservationSubscriber, TurnContextPriority
 from mote.common.logs import logger
 
@@ -58,8 +59,8 @@ class TeamContextSource(ObservationSubscriber):
     """Announces newly-appeared parent / siblings / children (with session ids).
 
     Push→pull in one object (like ``GitContextSource``): as an
-    :class:`ObservationSubscriber` it resets its frontier on
-    :class:`PostCompactEvent`; as an ephemeral-context source it renders the
+    :class:`ObservationSubscriber` it resets its frontier on any
+    :data:`HISTORY_RESET_EVENTS`; as an ephemeral-context source it renders the
     roster delta each turn.
     """
 
@@ -79,8 +80,14 @@ class TeamContextSource(ObservationSubscriber):
         self._sent_ids: Set[str] = set()
 
     async def handle(self, event) -> None:
-        """Reset the frontier after a compaction so the full roster re-emits."""
-        if isinstance(event, PostCompactEvent):
+        """Reset the frontier whenever stored history is structurally rebuilt.
+
+        A compaction condenses the earlier roster announcement away; a ``/clear``
+        or user delete prunes the messages that carried it. Both fold to
+        ``HISTORY_RESET_EVENTS`` — clearing the frontier makes the next render
+        re-diff against the live roster and re-emit the still-present teammates.
+        """
+        if isinstance(event, HISTORY_RESET_EVENTS):
             self._sent_ids.clear()
         return None
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import types
 import typing
-from typing import Any, Awaitable, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from mote.common.utils.docstring import first_line
 from mote.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
@@ -29,6 +29,9 @@ from mote.executor.tasks.bggraph.types import (
 )
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_spec_adapter import annotation_to_json_schema
+
+if TYPE_CHECKING:
+    from mote.executor.tasks.bggraph.types import GraphRunState
 
 # ---------------------------------------------------------------------------
 # Type-compatibility check for compile-time param validation
@@ -242,7 +245,7 @@ class BgGraph:
 
     # --- foreground run ---
 
-    async def arun(self, **initial_state) -> GraphState:
+    async def arun(self, *, run_state: Optional["GraphRunState"] = None, **initial_state) -> GraphState:
         """Prepare, then run the graph **inline** and return the final state.
 
         This is simply ``await`` on the frontier driver — no ``BgTaskResult``
@@ -250,6 +253,12 @@ class BgGraph:
         background pool (which is what :meth:`compile`'s executor does). Running on
         the live task is what lets a dispatched tool's approval / AskUserQuestion
         prompt surface on the interactive channel.
+
+        ``run_state`` (optional) lets the caller pass in the authoritative
+        per-node record it will read after the run — e.g. ``run_graph`` builds one
+        so it can emit an ``ActivityCompleted`` outcome tree off the terminal node
+        records. When omitted, a fresh one is created (today's behavior); mirrors
+        how :meth:`resume` already accepts an optional ``run_state``.
 
         Raises the engine's terminal error (``GraphBatchFailureError`` etc.) on
         failure; on success the returned state carries every node's result.
@@ -263,7 +272,8 @@ class BgGraph:
 
         self._prepare()
         state = self.state_schema(**initial_state)
-        run_state = GraphRunState.for_graph(self)
+        if run_state is None:
+            run_state = GraphRunState.for_graph(self)
         await _run_driver(
             self,
             state,

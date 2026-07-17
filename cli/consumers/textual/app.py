@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
@@ -35,14 +36,17 @@ from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_co
 from mote.cli.consumers.textual.style import THEME_NAME, Palette, mote_theme, textual_css_vars
 from mote.cli.consumers.textual.surface import TextualSurface
 from mote.cli.consumers.textual.widgets import (
+    ActivityWidget,
     AssistantBlock,
     FoldableRow,
     PromptInput,
     StatusBar,
     ToolCallWidget,
     ToolGroupWidget,
+    UserMessageRow,
 )
 from mote.cli.consumers.transcript import TranscriptReducer, apply_ops
+from mote.cli.contracts.view import Notice
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
@@ -93,6 +97,16 @@ class MoteApp(App):
         # Localised at import under the default locale (Textual captures binding
         # descriptions statically); the footer label follows the startup language.
         ("ctrl+o", "toggle_tool_details", t(K.KEY_TOGGLE_TOOL)),
+        # React-unit delete-mode: ctrl+x arms it (checkboxes appear on user rows),
+        # enter confirms the ticked turns, escape cancels. Guarded against an
+        # in-flight turn (see ``action_delete_mode``).
+        ("ctrl+x", "delete_mode", t(K.KEY_DELETE_MODE)),
+        # Confirm/cancel while in delete-mode. Priority bindings so they preempt
+        # the focused ``PromptInput`` (whose enter=submit / escape=clear would
+        # otherwise swallow them); ``check_action`` disables them when NOT in
+        # delete-mode so normal typing keeps enter/escape.
+        Binding("enter", "delete_confirm", "Confirm delete", show=False, priority=True),
+        Binding("escape", "delete_cancel", "Cancel delete", show=False, priority=True),
     ]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -117,6 +131,11 @@ class MoteApp(App):
         # tool_use_id → the group that owns it, so a completion folds into the
         # right group (distinct from the standalone ``_tool_widgets`` map).
         self._grouped_tool_ids: dict[str, ToolGroupWidget] = {}
+        # Open nested orchestrations (a run_graph; a sub-agent / bg task) keyed by
+        # their ``scope`` (a hashable ScopePath tuple). Each scoped op the reducer
+        # emits (per-node progress, a folded child tool call, the close) routes to
+        # the keyed :class:`ActivityWidget`; mirrors ``_tool_group``/``_tool_widgets``.
+        self._activity_widgets: dict[tuple, ActivityWidget] = {}
         # The global expand/collapse state for tool groups, toggled by ctrl+o.
         # New groups honour it so a mid-session toggle is sticky.
         self._tools_expanded = False
@@ -129,6 +148,14 @@ class MoteApp(App):
         # the transcript, so we cache it to re-render as the "最近提问" key-info row
         # (the active question the post-compaction reply continues to answer).
         self._last_user_prompt = ""
+        # React-unit delete-mode: True while the user is ticking turns to prune
+        # (ctrl+x arms it, enter confirms, escape cancels). While on, every
+        # ``UserMessageRow`` shows a checkbox and enter/escape are captured for
+        # confirm/cancel instead of reaching the prompt.
+        self._delete_mode = False
+        # The transient delete-mode hint banner row, tracked so it can be removed
+        # again when the mode is dismissed (Esc leaves no lingering notice).
+        self._delete_hint_row: Any = None
         # Idle Ctrl+C exit-arm (mirrors the terminal port's armed-flag machine):
         # the first idle press arms + shows a hint, the next *consecutive* press
         # exits the TUI. Cleared when the user submits input, so a later lone
@@ -185,6 +212,12 @@ class MoteApp(App):
     # Status-bar busy/idle affordance (spinner)
     # ------------------------------------------------------------------
     def set_busy(self) -> None:
+        # A turn beginning cancels any armed delete-mode: pruning history mid-turn
+        # would race the running reply, so the ticks are dropped and the user told.
+        if self._delete_mode:
+            self._set_delete_mode(False)
+            self._dismiss_delete_hint()
+            self.notice(t(K.DELETE_BUSY), level="warning")
         try:
             self.query_one("#status", StatusBar).running = True
         except NoMatches:  # status bar may not be mounted in a test
@@ -417,6 +450,146 @@ class MoteApp(App):
         self._tools_expanded = not self._tools_expanded
         for row in self.query(FoldableRow):
             row.set_expanded(self._tools_expanded)
+
+    # ------------------------------------------------------------------
+    # React-unit delete-mode (ctrl+x → tick turns → enter confirm / esc cancel)
+    # ------------------------------------------------------------------
+    def notice(self, text: str, level: str = "info") -> Any:
+        """Mount a transient system ``NoticeRow`` (delete-mode feedback etc.).
+
+        Routes through the same surface seam every other row uses so the notice
+        lands on the transcript identically to a projected ``Notice`` event.
+        Returns the mounted row so a transient hint (e.g. the delete-mode banner)
+        can be removed again when the mode is dismissed.
+        """
+        return self._surface.render_notice(Notice(text=text, level=level))
+
+    def check_action(self, action: str, parameters: tuple) -> bool:
+        """Enable the confirm/cancel bindings ONLY while in delete-mode.
+
+        Textual consults this for every binding before firing it; returning
+        ``False`` lets the key fall through to the focused widget. So enter/escape
+        keep their normal ``PromptInput`` meaning (submit / clear) until delete-mode
+        is armed, at which point the priority ``delete_confirm`` / ``delete_cancel``
+        bindings take over.
+        """
+        if action in ("delete_confirm", "delete_cancel"):
+            return self._delete_mode
+        return True
+
+    def action_delete_mode(self) -> None:
+        """Ctrl+X: arm react-unit delete-mode (checkboxes on every user row).
+
+        Blocked while a turn is in flight — pruning history mid-turn would race
+        the running reply. A no-op re-press does nothing (already armed).
+        """
+        if self._delete_mode:
+            return
+        if self._port is not None and not self._port.is_waiting_for_turn():
+            self.notice(t(K.DELETE_BUSY), level="warning")
+            return
+        self._set_delete_mode(True)
+        self._delete_hint_row = self.notice(t(K.DELETE_MODE_HINT))
+
+    def _set_delete_mode(self, on: bool) -> None:
+        """Flip delete-mode + push ``select_mode`` onto every mounted user row."""
+        self._delete_mode = on
+        for row in self.query(UserMessageRow):
+            row.select_mode = on
+
+    def action_delete_cancel(self) -> None:
+        """Escape (in delete-mode): leave delete-mode, clearing all ticks.
+
+        Cancelling is a no-op on history, so it leaves no trace: the transient
+        hint banner is removed rather than replaced with a "cancelled" notice.
+        """
+        self._set_delete_mode(False)
+        self._dismiss_delete_hint()
+
+    def _dismiss_delete_hint(self) -> None:
+        """Remove the transient delete-mode hint banner if one is mounted."""
+        row = self._delete_hint_row
+        self._delete_hint_row = None
+        if row is not None:
+            try:
+                row.remove()
+            except Exception:  # noqa: BLE001 — already unmounted is fine
+                pass
+
+    def action_delete_confirm(self) -> None:
+        """Enter (in delete-mode): prune the ticked react-units, then exit the mode.
+
+        Collects the ``message_id`` of every ticked ``UserMessageRow`` (the delete
+        anchors), delegates the durable prune to the driver, and — on success —
+        surgically removes the affected rows and their following turn widgets from
+        the transcript. An empty selection is a no-op (no checkpoint written).
+        """
+        # Guard the race where a turn began after delete-mode was armed: never
+        # prune history while a reply is in flight.
+        if self._port is not None and not self._port.is_waiting_for_turn():
+            self._set_delete_mode(False)
+            self._dismiss_delete_hint()
+            self.notice(t(K.DELETE_BUSY), level="warning")
+            return
+        ticked = [row for row in self.query(UserMessageRow) if row.selected]
+        anchor_ids = [row.message_id for row in ticked if row.message_id]
+        if not anchor_ids:
+            self._set_delete_mode(False)
+            self._dismiss_delete_hint()
+            self.notice(t(K.DELETE_NONE), level="warning")
+            return
+        self.run_worker(self._do_delete(anchor_ids, ticked), exclusive=False)
+
+    async def _do_delete(self, anchor_ids: list, ticked: list) -> None:
+        """Run the durable delete, then remove the pruned widgets from the screen."""
+        removed = 0
+        if self._session_driver is not None:
+            removed = await self._session_driver.delete_react_units(anchor_ids)
+        self._set_delete_mode(False)
+        self._dismiss_delete_hint()
+        if removed:
+            self._prune_widgets(ticked)
+            self._recompute_last_prompt()
+            self.notice(t(K.DELETE_DONE, count=removed))
+        else:
+            self.notice(t(K.DELETE_NONE), level="warning")
+
+    def _prune_widgets(self, anchors: list) -> None:
+        """Remove each anchor ``UserMessageRow`` + its following turn's widgets.
+
+        A react-unit's widgets are the anchor row and everything mounted after it
+        up to (but excluding) the next ``UserMessageRow`` — mirroring the backend's
+        message-level react-unit span. Iterates the live transcript children in
+        order so the boundary is read off the actual widget sequence.
+        """
+        anchor_set = set(anchors)
+        children = list(self._transcript().children)
+        to_remove: list = []
+        i = 0
+        n = len(children)
+        while i < n:
+            widget = children[i]
+            if isinstance(widget, UserMessageRow) and widget in anchor_set:
+                to_remove.append(widget)
+                j = i + 1
+                while j < n and not isinstance(children[j], UserMessageRow):
+                    to_remove.append(children[j])
+                    j += 1
+                i = j
+            else:
+                i += 1
+        for widget in to_remove:
+            widget.remove()
+
+    def _recompute_last_prompt(self) -> None:
+        """Reset ``_last_user_prompt`` to the last surviving user row's text.
+
+        A compaction clear re-renders this cached prompt as the "最近提问" bridge
+        row, so after a delete it must track the newest remaining turn (or empty
+        when every user row was pruned).
+        """
+        rows = list(self.query(UserMessageRow))
+        self._last_user_prompt = rows[-1]._text if rows else ""
 
 
 def run_textual(

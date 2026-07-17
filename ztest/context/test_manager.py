@@ -214,10 +214,22 @@ async def test_delete_present_and_absent():
 
 @pytest.mark.asyncio
 async def test_clear():
-    cm = ContextManager(model="gpt-4")
+    from mote.common.events import HistoryEditedEvent
+
+    bus = _RecordingBus()
+    cm = ContextManager(model="gpt-4", bus=bus)
     await cm.add_batch([text_msg("a"), text_msg("b")])
-    cm.clear()
+    bus.emitted.clear()  # ignore the MessageAppended events from add_batch
+
+    await cm.clear()
+
     assert cm.count() == 0
+    # /clear announces the structural rebuild as an empty-history edit so every
+    # history-derived signal (SR frontiers, the resource side-store) resets.
+    edits = [e for e in bus.emitted if isinstance(e, HistoryEditedEvent)]
+    assert len(edits) == 1
+    assert edits[0].messages == []
+    assert edits[0].reason == "clear"
 
 
 @pytest.mark.asyncio
@@ -425,3 +437,123 @@ async def test_prepare_request_manage_false_skips_compaction():
     req = await cm.prepare_request("prompt", manage=False)
     assert all(m.content != "[Old tool result content cleared]" for m in ctx.messages)
     assert req[-1].content == "prompt"
+
+
+# ---------------------------------------------------------------------------
+# React-unit delete (direct history editing)
+# ---------------------------------------------------------------------------
+from mote.common.schema import AIMessage  # noqa: E402
+
+
+class _RecordingBus:
+    """Minimal event bus double — records every emitted event for assertions.
+
+    ``subscribe`` is a no-op (the manager registers itself to observe
+    ``ToolsChangedEvent``); ``emit`` records so tests can assert on the stream.
+    """
+
+    def __init__(self):
+        self.emitted: list = []
+
+    def subscribe(self, subscriber) -> None:
+        pass
+
+    async def emit(self, event) -> None:
+        self.emitted.append(event)
+
+
+def _human(content: str) -> UserMessage:
+    """A human prompt (a react-unit anchor)."""
+    return UserMessage(content=content)
+
+
+def _reminder() -> UserMessage:
+    """A role=user <system-reminder> envelope — NOT a react-unit boundary."""
+    from mote.common.text import wrap_system_reminder
+
+    return UserMessage(content=wrap_system_reminder(["injected context"]))
+
+
+def _drop(messages, anchor_ids):
+    """Run the pure boundary helper with the real human-prompt predicate."""
+    return ContextManager._react_unit_drop_indices(messages, anchor_ids, ContextManager._is_human_prompt)
+
+
+def test_drop_indices_single_unit():
+    """One anchor drops its prompt + reply + tool turns, up to the next prompt."""
+    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    assert _drop(msgs, [msgs[0].id]) == {0, 1}
+
+
+def test_drop_indices_last_unit_runs_to_end():
+    """The final react-unit has no following prompt — drops to end of history."""
+    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    assert _drop(msgs, [msgs[2].id]) == {2, 3}
+
+
+def test_drop_indices_adjacent_units():
+    """Two selected adjacent anchors drop both whole turns."""
+    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    assert _drop(msgs, [msgs[0].id, msgs[2].id]) == {0, 1, 2, 3}
+
+
+def test_drop_indices_reminder_is_not_a_boundary():
+    """A <system-reminder> role=user message stays inside the anchor's unit."""
+    msgs = [_human("q1"), _reminder(), AIMessage(content="a1"), _human("q2")]
+    # The reminder (idx 1) and reply (idx 2) belong to q1's unit; q2 ends it.
+    assert _drop(msgs, [msgs[0].id]) == {0, 1, 2}
+
+
+def test_drop_indices_unknown_id_is_ignored():
+    msgs = [_human("q1"), AIMessage(content="a1")]
+    assert _drop(msgs, ["no-such-id"]) == set()
+
+
+def test_drop_indices_empty_selection():
+    msgs = [_human("q1"), AIMessage(content="a1")]
+    assert _drop(msgs, []) == set()
+
+
+def test_drop_indices_delete_all():
+    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    assert _drop(msgs, [msgs[0].id, msgs[2].id]) == {0, 1, 2, 3}
+
+
+@pytest.mark.asyncio
+async def test_delete_react_units_prunes_and_emits_one_event():
+    """A delete rebuilds history once and emits exactly one HistoryEditedEvent."""
+    from mote.common.events import HistoryEditedEvent
+
+    ctx = LLMCallContext()
+    bus = _RecordingBus()
+    cm = ContextManager(ctx, model="gpt-4", bus=bus)
+    q1, a1, q2, a2 = _human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")
+    await cm.add_batch([q1, a1, q2, a2])
+    bus.emitted.clear()  # ignore the MessageAppended events from add_batch
+
+    removed = await cm.delete_react_units([q1.id])
+
+    assert removed == 2
+    assert [m.content for m in cm.get()] == ["q2", "a2"]
+    edits = [e for e in bus.emitted if isinstance(e, HistoryEditedEvent)]
+    assert len(edits) == 1
+    assert [m.content for m in edits[0].messages] == ["q2", "a2"]
+    assert edits[0].reason == "delete"
+
+
+@pytest.mark.asyncio
+async def test_delete_react_units_noop_emits_nothing():
+    """An empty/unknown selection removes nothing and emits no event."""
+    from mote.common.events import HistoryEditedEvent
+
+    ctx = LLMCallContext()
+    bus = _RecordingBus()
+    cm = ContextManager(ctx, model="gpt-4", bus=bus)
+    await cm.add_batch([_human("q1"), AIMessage(content="a1")])
+    bus.emitted.clear()
+
+    removed = await cm.delete_react_units(["ghost"])
+
+    assert removed == 0
+    assert cm.count() == 2
+    assert not [e for e in bus.emitted if isinstance(e, HistoryEditedEvent)]

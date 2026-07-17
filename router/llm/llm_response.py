@@ -32,6 +32,21 @@ class LLMToolCall:
 
 
 @dataclass
+class WebSearchHit:
+    """One search result from a provider-native server-side web search.
+
+    Attributes:
+        title: The result page's title.
+        url: The result page's URL.
+        snippet: An optional short description/excerpt (providers that return one).
+    """
+
+    title: str
+    url: str
+    snippet: str = ""
+
+
+@dataclass
 class LLMResponse:
     """Text + structured tool calls from one native-tool-use completion.
 

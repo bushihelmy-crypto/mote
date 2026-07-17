@@ -21,7 +21,7 @@ from mote.common.config.layers import deep_merge
 def parse_override_value(raw: str) -> Any:
     """Parse a raw string into a typed value via YAML, falling back to the string.
 
-    So ``models.router_enabled=true`` -> ``True``, ``models.default.max_token=8000``
+    So ``models.default.calc_usage=true`` -> ``True``, ``models.default.max_token=8000``
     -> ``8000``, ``models.default.model=claude-opus`` -> ``"claude-opus"``. An empty
     string stays ``""``.
     """
@@ -80,7 +80,6 @@ class ConfigOverrides(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     proxy: Optional[str] = None
-    enable_router: Optional[bool] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
     def to_layer_dict(self) -> Dict[str, Any]:
@@ -96,8 +95,6 @@ class ConfigOverrides(BaseModel):
             default["base_url"] = self.base_url
         if default:
             models["default"] = default
-        if self.enable_router is not None:
-            models["router_enabled"] = self.enable_router
         if models:
             data["models"] = models
         if self.proxy is not None:

@@ -79,16 +79,6 @@ def _missing_upstreams(
 class ResumeTasks(BaseTool):
     name = "ResumeTasks"
     aliases = ["resume_tasks"]
-    description = (
-        "Resume or restart a paused/failed background pipeline task. "
-        "Use from_node to re-run specific nodes; use skip_node to skip ONLY the "
-        "named node(s) while the rest of the pipeline keeps running its downstream "
-        "nodes to completion (skip does NOT stop or cancel the pipeline — it marks "
-        "just those nodes done/skipped and the DAG continues). "
-        "Omit both from_node and skip_node to restart the whole pipeline from scratch. "
-        "Use overrides to change input parameters before resuming (keys come from "
-        "the 'params' section shown in failure/routing notifications)."
-    )
     requires = ("get_bg_pool",)
 
     # Injected from Role by bind(): Role.get_bg_pool.
@@ -102,7 +92,17 @@ class ResumeTasks(BaseTool):
         skip_node: str | list[str] | None = None,
         overrides: dict[str, Any] | None = None,
     ) -> str:
-        """Resume a background pipeline task.
+        """Resume or restart a paused/failed pipeline — re-run, skip, or override nodes.
+
+        Resume or restart a paused/failed background pipeline task. Use
+        ``from_node`` to re-run specific nodes; use ``skip_node`` to skip ONLY the
+        named node(s) while the rest of the pipeline keeps running its downstream
+        nodes to completion (skip does NOT stop or cancel the pipeline — it marks
+        just those nodes done/skipped and the DAG continues). Omit both
+        ``from_node`` and ``skip_node`` to restart the whole pipeline from
+        scratch. Use ``overrides`` to change input parameters before resuming
+        (keys come from the 'params' section shown in failure/routing
+        notifications).
 
         Args:
             task_id: The task ID to resume (e.g. "bg_3").

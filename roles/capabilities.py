@@ -305,8 +305,8 @@ class RoleCapabilities:
     # Loop coordination
     # ------------------------------------------------------------------
 
-    async def wait_interruptible(self, duration_seconds: float) -> tuple[float, bool]:
-        """Sleep for up to *duration_seconds*, waking early on activity.
+    async def wait_interruptible(self) -> float:
+        """Block until an event wakes the agent — no duration, event-driven only.
 
         Wake conditions: a new message arrives in the message buffer (user
         input, background-task notification, etc.) or a background task
@@ -314,31 +314,25 @@ class RoleCapabilities:
         trigger and never touches RoleState, the msg_buffer, or the bg pool.
 
         Returns:
-            (slept_seconds, interrupted) — elapsed time rounded to 0.1s and
-            whether the sleep was cut short by activity.
+            slept_seconds — elapsed wait time rounded to 0.1s.
         """
         role = self._role
         msg_buffer = role.state.msg_buffer
         bg_pool = role._peek_bg_pool()
 
         start = time.time()
-        sleep_task = asyncio.create_task(asyncio.sleep(duration_seconds))
-        waiters: set[asyncio.Task] = {sleep_task}
-
-        msg_task = asyncio.create_task(msg_buffer.wait_for_message())
-        waiters.add(msg_task)
+        waiters: set[asyncio.Task] = {asyncio.create_task(msg_buffer.wait_for_message())}
 
         if bg_pool is not None:
             waiters.add(asyncio.create_task(bg_pool.wait_for_completion()))
 
         try:
-            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-            interrupted = sleep_task not in done
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
         finally:
             for t in waiters:
                 t.cancel()
 
-        return round(time.time() - start, 1), interrupted
+        return round(time.time() - start, 1)
 
     async def end_session(self) -> str:
         """End the current session.

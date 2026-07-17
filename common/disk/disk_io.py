@@ -14,6 +14,7 @@ loop.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Optional, Union
 
@@ -191,3 +192,19 @@ def remove_file(path: PathLike) -> None:
         os.remove(path)
     except FileNotFoundError:
         pass
+
+
+def remove_tree(path: PathLike) -> bool:
+    """Recursively delete a directory tree; return whether anything was removed.
+
+    The bulk-removal counterpart to :func:`remove_file`, used by the workspace
+    cleanup sweep to drop an expired session directory (or a legacy artifact
+    tree) in one call. A missing path is not an error — it returns ``False``.
+    Best-effort: a partial-failure mid-walk is logged by the caller, never
+    raised here, so one unremovable entry can't abort a whole sweep.
+    """
+    p = Path(path)
+    if not p.exists():
+        return False
+    shutil.rmtree(p, ignore_errors=True)
+    return True

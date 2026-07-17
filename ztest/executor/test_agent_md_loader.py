@@ -4,15 +4,17 @@
 
 A project (or the user) declares a spawnable subagent by dropping a Markdown file
 with YAML frontmatter under ``.mote/agents/``. These tests pin the loader's
-contract: frontmatter (name/description/tools/model/max_turns/aliases) + body is
-parsed into a ``(BaseAgent, Role)`` subclass carrying class-level ``tools`` /
-``max_react_loop`` (read by the Agent tool without instantiating), registration is
+contract: frontmatter (name/description/tools/model/aliases) + body is parsed
+into a ``(BaseAgent, Role)`` subclass carrying class-level ``tools`` (read by the
+Agent tool without instantiating), registration is
 idempotent, a rescan cleanly *replaces* a prior markdown agent (aliases included),
 and a hand-written Python agent always wins over a same-named markdown file.
 
 Discovery is redirected at a tmp tree by monkeypatching the discovery helpers the
 loader funnels through, so nothing touches the real ``.mote/agents`` on disk.
 """
+import pytest
+
 import mote.executor.agent_md_loader as loader
 from mote.executor.agent_md_loader import _normalize_tools, discover_md_agents, register_md_agents
 
@@ -56,7 +58,6 @@ class TestDiscover:
             "name: reviewer\n"
             "description: Reviews a diff.\n"
             "tools: [Read, Grep, Glob]\n"
-            "max_turns: 30\n"
             "aliases: [rev, code-reviewer]\n"
             "---\n"
             "You are a careful code reviewer.\n",
@@ -68,7 +69,6 @@ class TestDiscover:
         cls = found["reviewer"]
         assert cls.agent_name == "reviewer"
         assert cls.tools == ["Read", "Grep", "Glob"]
-        assert cls.max_react_loop == 30
         assert cls.aliases == ["rev", "code-reviewer"]
         assert cls.description == "Reviews a diff."
         assert cls.get_schema()["description"] == "Reviews a diff."
@@ -94,10 +94,23 @@ class TestDiscover:
         # No allowlist declared → class exposes an empty tools list (inherits all
         # via the schema path, but the *listing* attr is empty).
         assert cls.tools == []
-        assert cls.max_react_loop == 50  # default cap
 
 
 class TestRegister:
+    @pytest.fixture(autouse=True)
+    def _restore_registry(self):
+        # These tests seed the GLOBAL agent-registry singleton (register_md_agents
+        # + a hand-seeded _PyAgent). Snapshot/restore around each so the mutation
+        # never leaks into sibling suites — e.g. the Agent tool's custom_schema()
+        # iterates all_agents() and would trip over a leaked bare BaseRole.
+        from mote.executor.agent_registry import registry
+
+        saved = dict(registry._registry)  # noqa: SLF001 — test-scoped save/restore
+        try:
+            yield
+        finally:
+            registry._registry = saved  # noqa: SLF001
+
     def _registry(self):
         from mote.executor.agent_registry import registry
 

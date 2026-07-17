@@ -62,8 +62,9 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "PERSISTED_OUTPUT_OPEN_TAG": ("tool_config", "PERSISTED_OUTPUT_OPEN_TAG"),
     "PERSISTED_OUTPUT_CLOSE_TAG": ("tool_config", "PERSISTED_OUTPUT_CLOSE_TAG"),
     "TOOL_MAX_RESULT_SIZE_CHARS": ("tool_config", "TOOL_MAX_RESULT_SIZE_CHARS"),
-    "TOOL_RESULTS_SUBDIR": ("tool_config", "TOOL_RESULTS_SUBDIR"),
     "ToolResultLimitConfig": ("tool_config", "ToolResultLimitConfig"),
+    "EffectLedgerConfig": ("tool_config", "EffectLedgerConfig"),
+    "ToolSearchConfig": ("tool_config", "ToolSearchConfig"),
     # permission_config
     "PermissionConfig": ("permission_config", "PermissionConfig"),
     "SandboxConfig": ("permission_config", "SandboxConfig"),
@@ -96,6 +97,8 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "BgStatus": ("node_status", "BgStatus"),
     "PAUSE_STATUSES": ("node_status", "PAUSE_STATUSES"),
     "TERMINAL_STATUSES": ("node_status", "TERMINAL_STATUSES"),
+    # tool_effect
+    "ToolEffect": ("tool_effect", "ToolEffect"),
     # think
     "ThinkResult": ("think", "ThinkResult"),
 }

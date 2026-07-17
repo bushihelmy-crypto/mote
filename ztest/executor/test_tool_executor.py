@@ -171,18 +171,14 @@ class TestResultLimiting:
             async def call(self):
                 return big
 
-        ex = make_executor(BigTool(), session_id="limit-sess")
-        # Point persistence at a tmp dir via the module default base_dir.
-        import mote.executor.tool_result_limit as trl
+        # Point persistence at a tmp dir by injecting a WorkspaceStore rooted
+        # there; the persisted result co-locates under the session directory.
+        from mote.common.workspace import WorkspaceStore
 
-        orig = trl.DEFAULT_WORKSPACE_ROOT
-        trl.DEFAULT_WORKSPACE_ROOT = tmp_path
-        try:
-            result = await ex.run_command("Big", {}, result_id="rid-1")
-        finally:
-            trl.DEFAULT_WORKSPACE_ROOT = orig
+        ex = make_executor(BigTool(), session_id="limit-sess", workspace_store=WorkspaceStore(tmp_path))
+        result = await ex.run_command("Big", {}, result_id="rid-1")
         assert result.output.startswith("<persisted-output>")
-        assert (tmp_path / ".tool_results" / "limit-sess" / "rid-1.txt").exists()
+        assert (tmp_path / ".agent_sessions" / "limit-sess" / "tool_results" / "rid-1.txt").exists()
 
     async def test_limiting_disabled_passes_through(self):
         big = "y" * 60_000
@@ -833,3 +829,142 @@ class TestReloadMcp:
         for _ in range(3):
             await ex.reload_mcp(["server"], enabled=True)
         assert set(ex.get_mcp_tool_schemas()) == {"server:a"}
+
+
+# ---------------------------------------------------------------------------
+# EXTERNAL-effect idempotency ledger integration (run_command chokepoint)
+# ---------------------------------------------------------------------------
+
+from mote.common.schema import EffectLedgerConfig, ToolEffect  # noqa: E402
+from mote.common.workspace import WorkspaceStore  # noqa: E402
+from mote.executor.effect_ledger import COMPLETED, FAILED, STARTED, EffectLedger  # noqa: E402
+from mote.executor.tool_result import ToolError  # noqa: E402
+
+
+class _ExternalTool(BaseTool):
+    """Default-EXTERNAL tool that records whether its body ran."""
+
+    name = "Ext"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ran = 0
+
+    async def call(self, *, text: str = "ok") -> str:
+        self.ran += 1
+        return text
+
+
+class _PureTool(BaseTool):
+    name = "Pure"
+    effect = ToolEffect.PURE
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ran = 0
+
+    async def call(self) -> str:
+        self.ran += 1
+        return "pure"
+
+
+class _FailExternal(BaseTool):
+    name = "ExtFail"
+
+    async def call(self) -> str:
+        raise ToolError("boom")
+
+
+class TestEffectLedgerIntegration:
+    async def test_external_call_records_started_then_completed(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        result = await ex.run_command("Ext", {"text": "hi"}, result_id="c1")
+        assert result.output == "hi"
+        rec = ex.ledger.status("c1")  # type: ignore[union-attr]
+        assert rec is not None and rec.status == COMPLETED
+        assert rec.success is True and rec.result == "hi"
+
+    async def test_failed_external_records_failed(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_FailExternal(), session_id="s", workspace_store=store)
+        result = await ex.run_command("ExtFail", {}, result_id="c1")
+        assert result.success is False
+        rec = ex.ledger.status("c1")  # type: ignore[union-attr]
+        assert rec is not None and rec.status == FAILED and rec.success is False
+
+    async def test_started_is_durable_before_body(self, tmp_path):
+        # A fresh reader sees the started record already on disk while the body is
+        # still running — proving mark_started is fsync'd before the body runs.
+        store = WorkspaceStore(tmp_path)
+        observed: dict = {}
+
+        class _Inspect(BaseTool):
+            name = "Inspect"
+
+            async def call(self) -> str:
+                reader = EffectLedger("s", store=store)
+                rec = reader.status("c1")
+                observed["status"] = rec.status if rec else None
+                return "done"
+
+        ex = make_executor(_Inspect(), session_id="s", workspace_store=store)
+        await ex.run_command("Inspect", {}, result_id="c1")
+        assert observed["status"] == STARTED
+
+    async def test_pure_tool_is_not_ledgered(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_PureTool(), session_id="s", workspace_store=store)
+        await ex.run_command("Pure", {}, result_id="c1")
+        assert ex.ledger.status("c1") is None  # type: ignore[union-attr]
+
+    async def test_no_result_id_is_not_ledgered(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        await ex.run_command("Ext", {"text": "hi"})  # no result_id
+        assert ex.ledger.unresolved() == []  # type: ignore[union-attr]
+
+    async def test_disabled_config_is_full_noop(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        tool = _ExternalTool()
+        ex = make_executor(
+            tool,
+            session_id="s",
+            workspace_store=store,
+            ledger_config=EffectLedgerConfig(enabled=False),
+        )
+        result = await ex.run_command("Ext", {"text": "hi"}, result_id="c1")
+        assert result.output == "hi" and tool.ran == 1
+        assert ex.ledger is None
+        # Nothing was written under the ledger space.
+        assert not (tmp_path / ".agent_sessions" / "s" / "ledger").exists()
+
+    async def test_completed_prior_replays_without_rerun(self, tmp_path):
+        # Pre-seed a completed record (as if from before a crash), then a fresh
+        # executor re-dispatching the same id returns the stored result verbatim
+        # and never re-runs the body.
+        store = WorkspaceStore(tmp_path)
+        seed = EffectLedger("s", store=store)
+        seed.mark_started("c1", "Ext")
+        seed.mark_completed("c1", "Ext", result="cached-value")
+
+        tool = _ExternalTool()
+        ex = make_executor(tool, session_id="s", workspace_store=store)
+        result = await ex.run_command("Ext", {"text": "fresh"}, result_id="c1")
+        assert result.output == "cached-value"
+        assert tool.ran == 0  # body was NOT re-run
+
+    async def test_started_prior_is_refused_as_unknown(self, tmp_path):
+        # A resume replaying a call the ledger last saw as ``started`` (its
+        # EXTERNAL outcome lost to the crash) is refused, never silently re-run —
+        # the framework leaves the verify/retry/abandon decision to the model.
+        store = WorkspaceStore(tmp_path)
+        seed = EffectLedger("s", store=store)
+        seed.mark_started("c1", "Ext")
+
+        tool = _ExternalTool()
+        ex = make_executor(tool, session_id="s", workspace_store=store)
+        result = await ex.run_command("Ext", {"text": "x"}, result_id="c1")
+        assert result.success is False
+        assert "<unknown-after-crash>" in result.output
+        assert tool.ran == 0  # body was NOT re-run

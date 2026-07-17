@@ -5,8 +5,8 @@ engine: fetch a git diff, deterministically filter to reviewable source files,
 review each file with its own agent tool-loop (concurrently, in batches), locate
 each comment back onto concrete line numbers, and aggregate a report.
 
-Like MediaPipeline, this is opt-in: registered for discovery but not in the
-default RoleSchema.tools. Add ``"CodeReview"`` to a role's tools to enable it.
+This is opt-in: registered for discovery but not in the default
+RoleSchema.tools. Add ``"CodeReview"`` to a role's tools to enable it.
 """
 from __future__ import annotations
 
@@ -22,30 +22,6 @@ from mote.executor.tools.code_review.graph import build_code_review_graph
 class CodeReview(BaseTool):
     name = "CodeReview"
     aliases = ["code_review", "review_diff"]
-    description = (
-        "Review a git diff with one AI reviewer per changed file. Use this when "
-        "the user asks to review code, review a commit/branch/PR, or check changes "
-        "for bugs.\n\n"
-        "Behavior:\n"
-        "  - Fetches the diff (working tree by default, or a commit / ref range).\n"
-        "  - Filters to reviewable source files (skips binary, deleted, tests, "
-        "vendored/generated files).\n"
-        "  - Reviews each file concurrently (one agent tool-loop per file, "
-        "batch_size files per wave) — the reviewer reads surrounding code to "
-        "ground its findings.\n"
-        "  - Locates each comment onto concrete line numbers, self-critiques to "
-        "drop false positives, and aggregates a report.\n\n"
-        "The report is already reviewed and filtered — report it directly, do not "
-        "re-review the same diff.\n\n"
-        "Parameters:\n"
-        "  - repo_dir: (REQUIRED) the git repository directory to review.\n"
-        "  - from_ref / to_ref: review the diff of a ref range (from..to).\n"
-        "  - commit: review a single commit (git show). Takes precedence over refs.\n"
-        "  - batch_size: files reviewed per concurrent wave (default 8).\n"
-        "  - fmt: 'text' (default, human-readable) or 'json'.\n"
-        "If neither commit nor refs are given, the working-tree diff (git diff "
-        "HEAD) is reviewed."
-    )
     # Body is a compiled bggraph — run_graph must not nest it inside another graph.
     is_graph_tool = True
 
@@ -65,7 +41,33 @@ class CodeReview(BaseTool):
         batch_size: int = 8,
         fmt: str = "text",
     ) -> BgTaskResult:
-        """Run the code-review pipeline as a background task.
+        """Review a git diff with one AI reviewer per file — bugs, then a filtered report.
+
+        Review a git diff with one AI reviewer per changed file. Use this when the
+        user asks to review code, review a commit/branch/PR, or check changes for
+        bugs.
+
+        Behavior:
+          - Fetches the diff (working tree by default, or a commit / ref range).
+          - Filters to reviewable source files (skips binary, deleted, tests,
+            vendored/generated files).
+          - Reviews each file concurrently (one agent tool-loop per file,
+            batch_size files per wave) — the reviewer reads surrounding code to
+            ground its findings.
+          - Locates each comment onto concrete line numbers, self-critiques to
+            drop false positives, and aggregates a report.
+
+        The report is already reviewed and filtered — report it directly, do not
+        re-review the same diff.
+
+        Parameters:
+          - repo_dir: (REQUIRED) the git repository directory to review.
+          - from_ref / to_ref: review the diff of a ref range (from..to).
+          - commit: review a single commit (git show). Takes precedence over refs.
+          - batch_size: files reviewed per concurrent wave (default 8).
+          - fmt: 'text' (default, human-readable) or 'json'.
+        If neither commit nor refs are given, the working-tree diff (git diff
+        HEAD) is reviewed.
 
         Args:
             repo_dir: The git repository directory to review.

@@ -22,8 +22,7 @@ project's own permission, event, and context subsystems).
    Copyright: Copyright 2025 OpenAI  (upstream NOTICE: zthird_party_licenses/codex.NOTICE.txt)
    Modified : Yes — ported from Rust (codex-rs/*) to Python.
    Used in  : environment/* (agent_path, control, mailbox, registry, runtime,
-              residency, limiter, store), executor/dependency/_apply_patch/*,
-              executor/tools/apply_patch.py, executor/permission/classifier.py,
+              residency, limiter, store), executor/permission/classifier.py,
               sandbox/network/policy.py, and parts of the hook engine.
 
 --------------------------------------------------------------------------------

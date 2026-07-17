@@ -35,6 +35,7 @@ from mote.environment.residency import Residency
 from mote.environment.runtime import AgentRuntime, AgentStatus
 from mote.environment.scheduling import CronScheduler, CronService, CronTask
 from mote.environment.spawn_gate import SpawnGate
+from mote.environment.spawn_usage_gate import SpawnUsageGate
 from mote.environment.store import ResidencyStore
 from mote.environment.turn_scheduler import EventDrivenScheduler
 from mote.environment.watching import FileChangeEvent, FileWatcher, FileWatchService
@@ -73,6 +74,7 @@ __all__ = [
     "SpawnContext",
     "SpawnGate",
     "SpawnSpec",
+    "SpawnUsageGate",
     "current_control",
     "resolve_control",
     "set_control",

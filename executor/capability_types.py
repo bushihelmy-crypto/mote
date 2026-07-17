@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mote.context.skills.skill_pool import SkillPool
     from mote.executor.tasks import BackgroundTaskPool
     from mote.executor.tool_result import ToolResult
+    from mote.router.llm.llm_response import WebSearchHit
     from mote.sandbox import SandboxRuntime
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,11 @@ if TYPE_CHECKING:
 GetCwd: TypeAlias = Callable[[], str]
 SetCwd: TypeAlias = Callable[[str], None]
 Deactivate: TypeAlias = Callable[[], None]
+# The name of the default (main think-loop) model — used by media tools (Read /
+# WebBrowser screenshot) to check ``supports_vision`` / ``supports_pdf_input``
+# up-front and refuse with a ToolNotConfiguredError, rather than attaching media
+# the model silently cannot read. ``None`` when no default model is configured.
+GetDefaultModel: TypeAlias = Callable[[], Optional[str]]
 
 # ---------------------------------------------------------------------------
 # Human I/O (only valid inside a MoteEnv)
@@ -112,7 +118,7 @@ SetToolSession: TypeAlias = Callable[[str, Any], None]
 # Interruptible sleep
 # ---------------------------------------------------------------------------
 
-WaitInterruptible: TypeAlias = Callable[[float], Awaitable[tuple[float, bool]]]
+WaitInterruptible: TypeAlias = Callable[[], Awaitable[float]]
 
 # ---------------------------------------------------------------------------
 # Skills / resources
@@ -139,6 +145,39 @@ GetSandboxRuntime: TypeAlias = Callable[[], "Optional[SandboxRuntime]"]
 DispatchTool: TypeAlias = Callable[[str, Optional[dict]], "Awaitable[ToolResult]"]
 ListToolNames: TypeAlias = Callable[[], list[str]]
 ListGraphToolNames: TypeAlias = Callable[[], list[str]]
+ListGraphExcludedToolNames: TypeAlias = Callable[[], list[str]]
+
+# ---------------------------------------------------------------------------
+# Tool search (deferred-tool discovery — SearchTools meta-tool)
+# ---------------------------------------------------------------------------
+
+ListDeferredTools: TypeAlias = Callable[[], dict[str, str]]
+RevealTools: TypeAlias = Callable[[list[str]], list[str]]
+# Resolve the FULL (multi-line) descriptions of named deferred tools — the prose
+# SearchTools persists into the ResourceRegistry on reveal (so it enters cached
+# history + survives compaction), rather than re-sending it on the reminder tail.
+DescribeDeferredTools: TypeAlias = Callable[[list[str]], dict[str, str]]
+
+# ---------------------------------------------------------------------------
+# Server-side web search (WebSearch tool's secondary call)
+#
+# ``web_search`` is keyword-only past ``query`` (allowed_domains/blocked_domains/
+# max_uses) → ``Callable[..., Awaitable[...]]``; the return type still welds and
+# the call site's kwargs are checked against the real Role method at the dict
+# literal.
+# ---------------------------------------------------------------------------
+
+WebSearch: TypeAlias = Callable[..., "Awaitable[list[WebSearchHit]]"]
+
+# ---------------------------------------------------------------------------
+# Vision fallback (WebBrowser's ``read_image`` action)
+#
+# ``describe_image`` is keyword-only past ``image_b64`` (prompt) →
+# ``Callable[..., Awaitable[str]]``; the return type still welds and the call
+# site's kwargs are checked against the real Role method at the dict literal.
+# ---------------------------------------------------------------------------
+
+DescribeImage: TypeAlias = Callable[..., "Awaitable[str]"]
 
 
 class CapabilityMap(TypedDict):
@@ -154,6 +193,7 @@ class CapabilityMap(TypedDict):
 
     get_cwd: GetCwd
     set_cwd: SetCwd
+    get_default_model: GetDefaultModel
     deactivate: Deactivate
     ask_user: AskUser
     ask_user_question: AskUserQuestion
@@ -188,3 +228,9 @@ class CapabilityMap(TypedDict):
     dispatch_tool: DispatchTool
     list_tool_names: ListToolNames
     list_graph_tool_names: ListGraphToolNames
+    list_graph_excluded_tool_names: ListGraphExcludedToolNames
+    list_deferred_tools: ListDeferredTools
+    reveal_tools: RevealTools
+    describe_deferred_tools: DescribeDeferredTools
+    web_search: WebSearch
+    describe_image: DescribeImage

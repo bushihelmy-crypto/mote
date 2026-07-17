@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from mote.context.skills.skill_pool import SkillPool
     from mote.executor.capability_types import CapabilityMap
     from mote.executor.tool_result import ToolResult
+    from mote.router.llm.llm_response import WebSearchHit
     from mote.sandbox import SandboxRuntime
     from mote.session import (
         BrowserStateRecorder,
@@ -394,6 +395,17 @@ class Role(BaseRole):
         """
         self._state_ctl.set_cwd(path)
 
+    def get_default_model(self) -> Optional[str]:
+        """Name of the default (main think-loop) model, or None if unconfigured.
+
+        Capability surface for media tools (Read / WebBrowser screenshot): the
+        media a tool attaches rides the MAIN model's request, so a tool checks
+        ``supports_vision`` / ``supports_pdf_input`` against this name to refuse
+        up-front (ToolNotConfiguredError) rather than attach media the model
+        silently cannot read.
+        """
+        return getattr(self.config.models.default, "model", None)
+
     def record_file_read(self, path: str, mtime_ns: int) -> None:
         """Record that a file was read.
 
@@ -488,6 +500,7 @@ class Role(BaseRole):
         return {
             "get_cwd": self.get_cwd,
             "set_cwd": self.set_cwd,
+            "get_default_model": self.get_default_model,
             "deactivate": self.deactivate,
             "ask_user": self.ask_user,
             "ask_user_question": self.ask_user_question,
@@ -522,6 +535,12 @@ class Role(BaseRole):
             "dispatch_tool": self.dispatch_tool,
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,
+            "list_graph_excluded_tool_names": self.list_graph_excluded_tool_names,
+            "list_deferred_tools": self.list_deferred_tools,
+            "reveal_tools": self.reveal_tools,
+            "describe_deferred_tools": self.describe_deferred_tools,
+            "web_search": self.web_search,
+            "describe_image": self.describe_image,
         }
 
     def deactivate(self) -> None:
@@ -648,13 +667,13 @@ class Role(BaseRole):
         """
         return await self._capabilities.reply_to_user(content)
 
-    async def wait_interruptible(self, duration_seconds: float) -> tuple[float, bool]:
-        """Sleep for up to *duration_seconds*, waking early on activity.
+    async def wait_interruptible(self) -> float:
+        """Block until an event wakes the agent — event-driven only, no timer.
 
         Capability surface for the Sleep tool; delegates to
         :class:`RoleCapabilities` (which owns the wait coordination).
         """
-        return await self._capabilities.wait_interruptible(duration_seconds)
+        return await self._capabilities.wait_interruptible()
 
     async def dispatch_tool(self, name: str, kwargs: "dict | None" = None) -> "ToolResult":
         """Dispatch a nested tool call through the executor chokepoint.
@@ -664,6 +683,18 @@ class Role(BaseRole):
         permission gate, hooks, and observability that guard a direct tool call
         apply identically to graph-driven calls (re-entrant safe). Returns the
         tool's ``ToolResult`` — a denied/failed call is ``success=False``, not raised.
+
+        Deliberately passes NO ``result_id``, so graph-internal calls are not
+        individually ledgered by the effect-ledger. Crash recovery for a graph is
+        two-level: (1) the foreground ``run_graph`` runs inside ONE top-level
+        ``run_command`` whose own EXTERNAL ledger entry (RunGraph resolves to
+        EXTERNAL) is the crash-recovery unit — a resume reconciles that single
+        call; (2) in-flight pause/resume re-runs only not-yet-completed NODES.
+        Ledgering each node call would be unreconcilable: a graph-internal call
+        never surfaces as a ``tool_calls`` entry in the durable history, so the
+        resume reconciler could never pair (and reap) it — its ``started`` record
+        would leak forever. So node-level idempotency stays a graph concern
+        (node-replay), and the ledger guards the graph as a whole.
         """
         return await self.executor.run_command(name, kwargs or {})
 
@@ -677,6 +708,95 @@ class Role(BaseRole):
         to refuse nesting a graph inside a graph. Capability surface over the
         executor's ``is_graph_tool`` marker set."""
         return sorted(self.executor.graph_tool_names())
+
+    def list_graph_excluded_tool_names(self) -> list[str]:
+        """Names of tools that must not appear as a node inside a graph, for
+        ``run_graph`` to refuse referencing them (e.g. Sleep, which blocks on an
+        external wake event a foreground graph never delivers). Capability surface
+        over the executor's ``graph_excluded`` marker set."""
+        return sorted(self.executor.graph_excluded_tool_names())
+
+    def list_deferred_tools(self) -> dict[str, str]:
+        """The deferred-tool MATCH corpus → ``{name: summary + recall keywords}``.
+
+        Capability surface for the ``SearchTools`` meta-tool: the full set of
+        deferred (not-yet-revealed) tools it searches over, each entry enriched
+        with the tool's recall keywords so a synonym the one-line summary omits
+        still resolves. This is the SEARCH layer — distinct from the DISPLAY menu
+        the model reads (``deferred_tool_index``, pure summaries). Delegates to
+        the executor's tool catalog (the single deferral seam)."""
+        return self.executor.deferred_search_index()
+
+    def reveal_tools(self, names: list[str]) -> list[str]:
+        """Reveal deferred tools by name so their full schema is sent next turn.
+
+        Capability surface for the ``SearchTools`` meta-tool. Intersects *names*
+        with the executor's deferred set (so only real deferred tool names are
+        accepted — a bogus/non-deferred name is ignored), records the accepted
+        names on ``RoleState`` (durable across resume) and returns them. The next
+        ``prepare()`` includes their schema on the active channel."""
+        deferred = set(self.executor.deferred_tool_index().keys())
+        accepted = [n for n in names if n in deferred]
+        self._state_ctl.reveal_tools(accepted)
+        return accepted
+
+    def describe_deferred_tools(self, names: list[str]) -> dict[str, str]:
+        """Full descriptions of the named deferred tools → ``{name: description}``.
+
+        Capability surface for the ``SearchTools`` meta-tool: on reveal it reads
+        the newly-revealed tools' full prose (stripped off the split ``tools=``
+        wire) so it can persist that description into the conversation +
+        ResourceRegistry. Delegates to the executor's tool catalog."""
+        return self.executor.describe_deferred_tools(names)
+
+    async def web_search(
+        self,
+        query: str,
+        *,
+        allowed_domains: Optional[list[str]] = None,
+        blocked_domains: Optional[list[str]] = None,
+        max_uses: int = 8,
+    ) -> "list[WebSearchHit]":
+        """Run a provider-native server-side web search and return the hits.
+
+        Capability surface for the ``WebSearch`` tool. Routes an ISOLATED
+        secondary LLM call via the ``web_search`` task (a small/fast model — see
+        ``ModelsConfig`` — that itself supports server-side web search) so the
+        tool never touches the router/Context directly, mirroring every other
+        capability. The routed provider issues the actual search+crawl through
+        its server-side tool (Anthropic ``web_search_20250305`` / OpenAI
+        Responses ``web_search``) and returns structured hits.
+
+        Raises:
+            NotImplementedError: The routed provider/model has no server-side web
+                search — the tool degrades to a "search unavailable" notice.
+        """
+        llm = self.router.route_for_task("web_search")
+        return await llm.aweb_search(
+            query,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            max_uses=max_uses,
+        )
+
+    async def describe_image(self, image_b64: str, *, prompt: str = "") -> str:
+        """Read an image as text via an ISOLATED vision-model call.
+
+        Capability surface for ``WebBrowser``'s ``read_image`` action. Routes a
+        secondary LLM call via the ``image_description`` task (a multimodal
+        small/fast model — see ``ModelsConfig``) so the caller never touches the
+        router/Context directly, mirroring every other capability. It reads an
+        on-page image as text: normally an image reaches the model directly as
+        media (Read → ToolMedia), but the browser has no such wire for an
+        in-page ``<img>`` — this routes it to a vision model instead, whose
+        textual reading then re-enters the conversation as ordinary text.
+
+        Raises:
+            NotImplementedError: The routed model is not vision-capable — the
+                tool degrades to an "image understanding unavailable" notice.
+        """
+        llm = self.router.route_for_task("image_description")
+        return await llm.adescribe_image(image_b64, prompt=prompt)
 
     async def end_session(self) -> str:
         """End the current session and produce a summary if configured.
@@ -766,6 +886,10 @@ class Role(BaseRole):
         # Kick off the whole-repo code-index cold scan off the event loop (Layer
         # C). No-op when the index layer is off; best-effort inside.
         await self._components.kickoff_repo_scan()
+
+        # Reclaim stale workspace artifacts off the event loop (throttled ~daily,
+        # excludes this session). No-op when disabled; best-effort inside.
+        await self._components.kickoff_workspace_cleanup()
 
     @role_raise_decorator
     async def run(self, with_message=None) -> Message | None:

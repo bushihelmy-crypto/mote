@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
 from mote.common.base.command_channel import CommandChannel, _collect_media, _media_message
 from mote.common.config.config.llm_config import LLMType
+from mote.common.const.llm import supports_native_tool_search
 from mote.common.logs import logger
 from mote.common.prompt.output import NATIVE_COMMAND_GUIDE
 from mote.common.prompt.refs import Sym
@@ -21,8 +22,30 @@ if TYPE_CHECKING:
 class NativeToolChannel(CommandChannel):
     """Provider-native tool-use: structured tool_calls, no XML format text."""
 
-    def __init__(self, provider: str = "openai") -> None:
+    def __init__(self, provider: str = "openai", model: str | None = None) -> None:
         self._provider = provider
+        # The resolved model name — threaded into get_native_tool_specs so the
+        # catalog's server-side tool-search (defer_loading) decision is
+        # capability-gated (supports_native_tool_search), not provider-only.
+        self._model = model
+
+    @property
+    def _server_side_tool_search(self) -> bool:
+        """True when this transport does provider-native (server-side) tool search.
+
+        Only then may a SearchTools discovery be rendered as ``tool_reference`` /
+        ``tool_search`` blocks the API expands (the ``tool_references`` stamp on
+        the recorded ToolMessage). An INCAPABLE native model runs the client-side
+        SPLIT path instead: it CANNOT expand those blocks, so the stamp must be
+        suppressed there (the discovery reveals via RoleState + the reminder-tail
+        description menu, not via a wire reference block). Keyed on the exact same
+        capability + provider gate the catalog's ``native_specs`` uses, so the
+        record side never drifts from the wire projection.
+        """
+        return supports_native_tool_search(self._model) and self._provider in (
+            "anthropic",
+            "openai_responses",
+        )
 
     def vocabulary(self) -> dict:
         # Surfaces for the provider-native tool-use protocol: a turn ends by
@@ -54,7 +77,7 @@ class NativeToolChannel(CommandChannel):
         return False
 
     def tool_specs(self, executor) -> Optional[list[dict]]:
-        return executor.get_native_tool_specs(provider=self._provider)
+        return executor.get_native_tool_specs(provider=self._provider, model=self._model)
 
     async def iter_commands(self, think_engine: "BaseThinkEngine", valid_names: set[str]) -> AsyncGenerator[dict, None]:
         if not think_engine.done:
@@ -72,18 +95,34 @@ class NativeToolChannel(CommandChannel):
                 "error_msg": "",
             }
 
-    async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
+    async def record_call(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
         tool_calls = [{"id": e["id"], "name": e["name"], "args": e.get("args") or {}} for e in executed if e.get("id")]
         await memory.add(AIMessage(content=command_rsp or "", tool_calls=tool_calls))
+
+    async def record_results(self, memory: "MessageStore", executed: list[dict]) -> None:
         for e in executed:
             if not e.get("id"):
                 continue
+            # Server-side tool-search (capable native model): a SearchTools
+            # result carries {tool_references: [...]} in its data → the discovered
+            # names. Stamped onto the ToolMessage so the native wire renders the
+            # tool_result as tool_reference / tool_search blocks the API expands.
+            # Gated on the transport's ACTUAL server-side capability — an
+            # incapable native model runs the client-side SPLIT path and cannot
+            # expand those blocks, so the stamp is suppressed there (discovery
+            # reveals via RoleState + the reminder-tail description menu instead).
+            # Any other tool's data is ignored here (only this key is read).
+            data = e.get("data")
+            tool_references = (
+                data.get("tool_references") if self._server_side_tool_search and isinstance(data, dict) else None
+            )
             await memory.add(
                 ToolMessage(
                     content=e["output"],
                     tool_call_id=e["id"],
                     retention=e.get("retention"),
                     resource_path=e.get("resource_path"),
+                    tool_references=tool_references,
                 )
             )
         media = _media_message(*_collect_media(executed))
@@ -118,28 +157,37 @@ def infer_native_tool_provider(llm_config) -> str:
 
     So we key on ``resolve_api_type`` (the same logic that selects the client):
     ANTHROPIC transport (api_type=anthropic or an anthropic.com base_url) ->
-    "anthropic"; everything else -> "openai". Keying on the model name is wrong:
-    a Claude model reached via an OpenAI-compatible gateway still POSTs an
-    OpenAI-shaped body that the gateway translates server-side, so emitting the
-    Anthropic shape there yields a ``tools`` field the gateway silently drops —
-    the model then receives no tools and falls back to inventing text commands.
+    "anthropic"; the OpenAI Responses transport (a genuine OpenAI endpoint on a
+    native-tool-search-capable gpt-5.4+ model) -> "openai_responses" (the flat
+    Responses function envelope); everything else -> "openai". Keying on the
+    model name alone is wrong: a Claude model reached via an OpenAI-compatible
+    gateway still POSTs an OpenAI-shaped body that the gateway translates
+    server-side, so emitting the Anthropic shape there yields a ``tools`` field
+    the gateway silently drops — the model then receives no tools and falls back
+    to inventing text commands. The Responses envelope is likewise keyed off
+    ``resolve_api_type`` (which excludes gateways by host), not the raw model.
     """
 
     try:
-        if resolve_api_type(llm_config) == LLMType.ANTHROPIC:
-            return "anthropic"
+        resolved = resolve_api_type(llm_config)
     except Exception:
-        pass
+        return "openai"
+    if resolved == LLMType.ANTHROPIC:
+        return "anthropic"
+    if resolved == LLMType.OPENAI_RESPONSES:
+        return "openai_responses"
     return "openai"
 
 
-def make_command_channel(protocol: str, *, provider: str = "openai") -> CommandChannel:
+def make_command_channel(protocol: str, *, provider: str = "openai", model: str | None = None) -> CommandChannel:
     """Build the channel for a RoleSchema.command_protocol value.
 
     "xml" -> XmlCommandChannel; "native" -> NativeToolChannel. Unknown values
     fall back to XML (the safe, model-agnostic default). ``provider`` is the
     native tool-spec envelope; pass the value from infer_native_tool_provider().
+    ``model`` is the resolved model name, threaded into the tool-spec build so
+    the server-side tool-search decision is capability-gated.
     """
     if protocol == "native":
-        return NativeToolChannel(provider=provider)
+        return NativeToolChannel(provider=provider, model=model)
     return XmlCommandChannel()

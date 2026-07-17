@@ -20,6 +20,13 @@ PDFS = "pdfs"
 # TOOL_CALL_ID: the call id on a tool-result message (role="tool").
 TOOL_CALLS = "tool_calls"
 TOOL_CALL_ID = "tool_call_id"
+# TOOL_REFERENCES: names of tools the model just discovered via SearchTools, on a
+# tool-result message. On the Anthropic native wire (server-side tool-search,
+# "custom" path) the tool_result's content is rendered as a list of
+# ``tool_reference`` blocks — one per name — instead of the human-readable text,
+# and the API expands each into the tool's full definition. Metadata-as-truth:
+# survives dump/load like the other tool keys; every other provider ignores it.
+TOOL_REFERENCES = "tool_references"
 
 # Resource-projection metadata keys (carried in Message.metadata).
 # A "resource" is a dynamically-loaded capability body (e.g. a Skill body) that

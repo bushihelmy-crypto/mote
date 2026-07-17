@@ -66,12 +66,12 @@ class ContextProvider(BaseContextProvider):
     async def resolve_llm(self, messages=None):
         """Resolve the think LLM via the router (the conduit for flag + llmconfig).
 
-        - ``config.models.router_enabled`` True → intelligent routing from the
+        - ``role_schema.enable_router`` True → intelligent routing from the
           request messages (the router picks a model card per request).
         - Otherwise → the fixed configured ``config.models.default``.
         """
         role = self._role
-        if role.config.models.router_enabled and messages:
+        if role.role_schema.enable_router and messages:
             return await role.router.aroute(RoutingRequest(messages=messages))
         return role.router.route(llm_config=role.config.models.default)
 
@@ -104,8 +104,6 @@ class ContextProvider(BaseContextProvider):
         schema = self._schema
         state = self._state
         return LoopContext(
-            max_react_loop=schema.max_react_loop,
-            max_consecutive_react_limit=schema.max_consecutive_react_limit,
             name=schema.name,
             display_name=schema.display_name,
             tools=schema.tools,

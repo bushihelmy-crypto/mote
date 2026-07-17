@@ -59,9 +59,6 @@ models:
     # oauth:
     #   provider: "anthropic"
 
-  # 智能路由：true 时按请求从注册的 model cards 选模型；false 用上面固定的 default。
-  router_enabled: false
-
   # 强制回复语言。设置后系统提示的 # Language 段要求模型始终用该语言回复，
   # 与用户输入语言无关；留空则镜像用户语言。
   response_language: "chinese"
@@ -71,12 +68,24 @@ models:
   # api_key_helper: ""
 
   # 任务级模型覆盖（键为路由任务名）。默认仅 model 不同，transport/凭据继承自 default。
-  # 内置任务：compression、summary（默认均为 claude-sonnet-4-8）。
+  # 内置任务：
+  #   - compression / summary：上下文压缩与总结（默认均为 claude-sonnet-4-8）。
+  #   - web_search：WebSearch 工具的二级搜索调用。默认 claude-haiku-4-5-20251001。
+  #     该模型必须支持「服务端 web 搜索」（Anthropic web_search_20250305 /
+  #     OpenAI Responses web_search，见 WEB_SEARCH_MODELS：opus-4 / sonnet-4 /
+  #     haiku-4 / gpt-4o / gpt-4.1 / gpt-5 / o3 / o4）；否则 WebSearch 会报
+  #     ToolNotConfiguredError 并提示改用 WebBrowser。
+  #   - image_description：WebBrowser 读图（read_image）的二级视觉调用。默认
+  #     claude-haiku-4-5-20251001。该模型必须支持图片输入（多模态 / vision）。
   # tasks:
   #   compression:
   #     model: "claude-sonnet-4-8"
   #   summary:
   #     model: "claude-sonnet-4-8"
+  #   web_search:
+  #     model: "claude-haiku-4-5-20251001"
+  #   image_description:
+  #     model: "claude-haiku-4-5-20251001"
 
 # ----------------------------------------------------------------------------
 # tools —— 工具运行时（代理 / 浏览器地区）。注意与 models.default.proxy 区分：
@@ -88,6 +97,34 @@ tools:
   # 浏览器地区身份（stealth 指纹用）：auto | en | zh。与代理出口 IP 地区保持一致
   #（zh-CN locale 配美国 IP 是明显的 bot 特征）。
   browser_locale: "auto"
+  # 大工具结果落盘策略：单条结果超过上限时把完整输出写入会话文件，正文只留
+  # <persisted-output> 预览 + 指针（模型可按需再读全文）。同时驱动 git/pytest/ruff
+  # 的语义压缩。压缩子系统的这份配置会被 compaction 的 spill reducer 复用（同一实例，
+  # 从 executor 借出），使工具执行期限流与历史级 spill 保持一致。
+  result_limit:
+    enable_tool_result_limit: true       # 总开关；false 则不限流不落盘
+    persist_large_tool_results: true     # 超限时是否落盘（false 则就地头部截断）
+    default_max_result_size_chars: 50000 # 单条结果字符上限（工具可各自覆盖更低/更高）
+    enable_output_compression: true      # 语义压缩（git/pytest/ruff）总开关
+  # 外部副作用幂等台账（EffectLedger，崩溃重放防护）。对每个 EXTERNAL 副作用工具调用
+  #（网络 / 子进程 / IPC / 人机 / 派生 agent）在 tool body 执行前写 started、执行后写
+  # completed/failed，随会话持久化。崩溃 resume 时对账：completed 的悬空调用用台账结果
+  # 直接愈合（不重跑），started 但结果未知的注入 <unknown-after-crash> 告警。
+  effect_ledger:
+    enabled: true                        # false 则完全不记台账（每次调用照常直接跑）
+  # Tool Search 总开关（延迟工具发现）。角色的 role_schema.deferred_tools 声明哪些工具
+  # 「搜索后才可见」，此开关全局决定该声明是否生效。false 时对所有角色强制清空延迟集：
+  # 不隐藏任何工具、不绑定 SearchTools、不注入紧凑菜单、不走原生 tool-search——每个声明的
+  # 工具都完全可见（普通无延迟路径）。
+  #
+  # 注意：能否走原生 tool-search（服务端 defer_loading，缓存零击穿）取决于「模型能力」，
+  # 由 supports_native_tool_search(model) 判定。只有 opus-4 / sonnet-4 / haiku-4 /
+  # gpt-5.4+ 等新模型才走原生；旧模型（claude-3、gpt-4、gpt-5.0-5.3 等）即使在 native
+  # 通道也只能退回客户端 withhold/reveal 路径——每次 reveal 都会把工具 schema 追加进
+  # tools=，改变前缀 → 击穿 prompt 缓存（后续 system+messages 全部失效重算）。
+  # 所以延迟工具功能对旧模型是「有功能但无缓存收益」，对新模型才是「功能+缓存双赢」。
+  tool_search:
+    enabled: true                        # false 则彻底关闭延迟工具功能
 
 # ----------------------------------------------------------------------------
 # context —— 上下文工程（压缩 / 代码地图 / 技能 / 后台流水线）
@@ -110,20 +147,47 @@ context:
     include_project_dir: true   # 扫描 <dir>/.mote/skills（cwd→git-root 向上查找）
     extra_dirs: []              # 额外的最高优先级技能目录
   bggraph:
-    # 渲染 # Background Pipelines 系统提示段，告知模型某些工具会异步跑多步节点图
-    #（返回 task_id、可暂停等待决策）。
+    # 启用后台节点图（pipeline）引擎，控制 pipeline 工具是否加载绑定。
     enabled: false
 
 # ----------------------------------------------------------------------------
-# mcp —— MCP 主开关。服务器本身不在这里配置，而在各自的 mcp_config.json 声明
+# workspace —— 磁盘工作区的按时清理（TTL）
+# 所有会话产物都落在 ~/.mote/workspace/.agent_sessions/<session_id>/ 下：
+#   rollout.jsonl（会话记录）+ blobs/ + tool_results/ + task_outputs/ + ledger/
+# 清理以“会话”为原子单位，用 rollout.jsonl 的 mtime 作为存活信号，每天最多跑一次
+# （由 workspace 根下的 .last_cleanup 时间戳节流），启动时后台触发、绝不删当前会话。
+#
+# ledger/effects.jsonl —— 外部工具副作用幂等台账（EffectLedger，崩溃重放防护）。
+# 对每个 EXTERNAL 副作用工具调用（网络 / 子进程 / IPC / 人机 / 派生 agent）在 tool body
+# 执行前写一条 started、执行后写 completed/failed，随会话一起持久化。进程崩溃后 resume
+# 时对账：completed 的悬空调用用台账里记录的结果直接愈合（不重跑副作用），started 但结果
+# 未知的调用注入 <unknown-after-crash> 告警（让模型先核验再重试）。开关在 tools.effect_ledger
+# （见上文 tools 段），默认 enabled=True。
+# ----------------------------------------------------------------------------
+workspace:
+  cleanup:
+    enabled: true             # 总开关；false 则完全不清理
+    # 会话级 TTL：rollout 超过该天数未动 -> 整个会话目录连同产物一并删除。
+    # 0（或负数）= 永不删除会话。
+    session_ttl_days: 30
+    # 产物级 TTL：会话仍在存活窗口内、但超过该天数未动 -> 只清掉体积大的
+    # tool_results/ 与 task_outputs/，保留 rollout.jsonl + blobs/（会话仍可回放）。
+    # 0（或负数）= 永不清理产物。
+    artifact_ttl_days: 7
+
+# ----------------------------------------------------------------------------
+# mcp —— MCP 主开关。服务器本身不在这里配置，而在各自的 mcp.json 声明
 #（由 executor.mcp.config_source.load_mcp_servers 发现）。
 # ----------------------------------------------------------------------------
 mcp:
-  enabled: false               # 开启后加载 mcp_config.json 中的全部服务器
+  enabled: false               # 开启后加载 mcp.json 中的全部服务器
 
 # ----------------------------------------------------------------------------
 # multimodal —— 多模态生成服务（图像 / 音频 / 音乐 / 视频）
-# 仅 media-pipeline 工具消费这些配置；未使用则可整体留空。
+# 仅 GenerateMedia 工具消费这些配置；未使用则可整体留空。
+# 注意：GenerateMedia 生成某类媒体前会先检查对应服务是否配置（base_url + api_key
+# 均非空）；未配置时直接报 ToolNotConfiguredError 并指明缺失的 multimodal.* 路径，
+# 而不是等 HTTP 调用失败才报错。
 # ----------------------------------------------------------------------------
 multimodal:
   image_generation:

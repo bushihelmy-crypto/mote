@@ -16,7 +16,6 @@ import os
 import pytest
 
 from mote.common.const import TOOL_RESULT_RESOURCE_PATH
-from mote.common.const.tools import MAX_LINE_LENGTH
 from mote.executor.tool_result import ToolError, ToolResult
 from mote.executor.tools.read import FILE_UNCHANGED_STUB, Read
 
@@ -91,12 +90,14 @@ class TestReadText:
         assert "shorter than the provided offset" in out
         assert "2 lines" in out
 
-    def test_long_line_truncated_with_note(self, workspace):
-        p = write_file(workspace / "long.txt", "x" * (MAX_LINE_LENGTH + 50) + "\n")
+    def test_long_line_returned_intact(self, workspace):
+        # Per-line truncation was removed; a large result is handled by the
+        # shared persist-to-disk exit, not truncated here.
+        long_line = "x" * 3000
+        p = write_file(workspace / "long.txt", long_line + "\n")
         out = _read(Read(), file_path=p)
-        assert "[line truncated]" in out
-        assert "1 line exceeded" in out
-        assert "was truncated" in out
+        assert long_line in out
+        assert "[line truncated]" not in out
 
     def test_missing_file_raises(self, workspace):
         with pytest.raises(ToolError, match="does not exist"):
@@ -132,6 +133,114 @@ class TestReadGuards:
     def test_blocked_device_path_refused(self):
         with pytest.raises(ToolError, match="block or produce infinite output"):
             _read(Read(), file_path="/dev/zero")
+
+    def test_video_missing_file_raises(self, workspace):
+        # A video path is recognised before the binary rejection, but a missing
+        # file still fails with the standard "does not exist" error (not a blunt
+        # "cannot read binary").
+        with pytest.raises(ToolError, match="does not exist"):
+            _read(Read(), file_path=str(workspace / "nope.mp4"))
+
+
+class TestReadVideo:
+    """Read absorbs a LOCAL video file: frames as image media + a transcript.
+
+    The heavy ffmpeg/ffprobe decode lives in the shared ``_video`` kernel and is
+    external-process work, so these tests drive Read's own branch with
+    ``decompose_video`` monkeypatched — fully offline.
+    """
+
+    def _fake_result(self, **kw):
+        from mote.executor.dependency._video import VideoFrame, VideoResult
+
+        frames = kw.pop(
+            "frames",
+            [VideoFrame(timestamp=0.0, jpeg=b"\xff\xd8jpg", reason="first-frame")],
+        )
+        return VideoResult(
+            frames=frames,
+            transcript=kw.pop("transcript", ""),
+            meta=kw.pop("meta", {"title": "clip.mp4", "duration_seconds": 12}),
+            engine=kw.pop("engine", "keyframe"),
+            notes=kw.pop("notes", []),
+        )
+
+    def test_frames_become_image_media(self, workspace, monkeypatch):
+        import mote.executor.tools.read as rd
+        from mote.executor.dependency._video import VideoFrame
+
+        frames = [
+            VideoFrame(timestamp=0.0, jpeg=b"\xff\xd8a", reason="first-frame"),
+            VideoFrame(timestamp=5.0, jpeg=b"\xff\xd8b", reason="keyframe"),
+        ]
+
+        async def fake(*a, **k):
+            return self._fake_result(frames=frames)
+
+        monkeypatch.setattr(rd, "decompose_video", fake)
+        p = write_file(workspace / "clip.mp4", "not really a video")
+        r = _read_result(Read(), file_path=p)
+        assert r.success is True
+        assert len(r.images) == 2
+        assert r.data["type"] == "video"
+        assert r.data["frames"] == 2
+        assert r.data["engine"] == "keyframe"
+        # A successful read tags the source path (like image/text/pdf reads).
+        assert r.resource_path == p
+
+    def test_summary_carries_metadata_and_transcript(self, workspace, monkeypatch):
+        import mote.executor.tools.read as rd
+
+        async def fake(*a, **k):
+            return self._fake_result(
+                transcript="[00:00] hello",
+                meta={"title": "My Clip", "duration_seconds": 12, "width": 640, "height": 480},
+            )
+
+        monkeypatch.setattr(rd, "decompose_video", fake)
+        p = write_file(workspace / "clip.mp4", "not really a video")
+        r = _read_result(Read(), file_path=p)
+        assert "My Clip" in r.output
+        assert "hello" in r.output
+        assert r.data["has_transcript"] is True
+
+    def test_no_frames_fails(self, workspace, monkeypatch):
+        import mote.executor.tools.read as rd
+
+        async def fake(*a, **k):
+            return self._fake_result(frames=[])
+
+        monkeypatch.setattr(rd, "decompose_video", fake)
+        p = write_file(workspace / "clip.mp4", "not really a video")
+        with pytest.raises(ToolError, match="[Nn]o frames"):
+            _read_result(Read(), file_path=p)
+
+    def test_unavailable_raises_not_configured(self, workspace, monkeypatch):
+        import mote.executor.tools.read as rd
+        from mote.common.exception import ToolNotConfiguredError
+        from mote.executor.dependency._video import VideoUnavailable
+
+        async def fake(*a, **k):
+            raise VideoUnavailable("ffmpeg is not installed. install it")
+
+        monkeypatch.setattr(rd, "decompose_video", fake)
+        p = write_file(workspace / "clip.mp4", "not really a video")
+        # A missing decode kernel is a configuration gap → ToolNotConfiguredError,
+        # not a plain-text notice that the model would mistake for content.
+        with pytest.raises(ToolNotConfiguredError, match="unavailable"):
+            _read_result(Read(), file_path=p)
+
+    def test_decode_error_fails(self, workspace, monkeypatch):
+        import mote.executor.tools.read as rd
+        from mote.executor.dependency._video import VideoError
+
+        async def fake(*a, **k):
+            raise VideoError("corrupt file")
+
+        monkeypatch.setattr(rd, "decompose_video", fake)
+        p = write_file(workspace / "broken.mp4", "not really a video")
+        with pytest.raises(ToolError, match="broken.mp4"):
+            _read_result(Read(), file_path=p)
 
 
 class TestReadDedup:
@@ -315,3 +424,42 @@ class TestReadImage:
             f.write(png)
         with pytest.raises(ToolError, match="invalid detail"):
             _read(Read(), file_path=p, detail="low")
+
+    def test_non_vision_model_raises(self, workspace):
+        """Default model is not vision-capable → refuse before attaching the image."""
+        from mote.common.exception import ToolNotConfiguredError
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        p = os.path.join(str(workspace), "img.png")
+        with open(p, "wb") as f:
+            f.write(png)
+        tool = bind(Read(), CapRole(default_model="gpt-4"), session_id="r_novision")
+        with pytest.raises(ToolNotConfiguredError, match="not vision-capable"):
+            _read_result(tool, file_path=p)
+
+
+class TestReadPdf:
+    _MINIMAL_PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+
+    def test_non_pdf_model_raises(self, workspace):
+        """Default model does not accept native PDF input → refuse up-front."""
+        from mote.common.exception import ToolNotConfiguredError
+
+        p = os.path.join(str(workspace), "doc.pdf")
+        with open(p, "wb") as f:
+            f.write(self._MINIMAL_PDF)
+        tool = bind(Read(), CapRole(default_model="gpt-4"), session_id="r_nopdf")
+        with pytest.raises(ToolNotConfiguredError, match="native"):
+            _read_result(tool, file_path=p, mode="visual")
+
+    def test_pdf_capable_model_reads(self, workspace):
+        """A PDF-capable default model reads the PDF as a document media result."""
+        p = os.path.join(str(workspace), "doc.pdf")
+        with open(p, "wb") as f:
+            f.write(self._MINIMAL_PDF)
+        tool = bind(Read(), CapRole(default_model="claude-sonnet-4"), session_id="r_pdf")
+        result = _read_result(tool, file_path=p, mode="visual")
+        assert isinstance(result, ToolResult)
+        assert result.data["type"] == "pdf"

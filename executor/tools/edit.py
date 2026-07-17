@@ -30,7 +30,6 @@ import os
 from typing import ClassVar, Optional
 
 from mote.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
-from mote.common.prompt.tools import EDIT_DESCRIPTION
 from mote.common.text import count_noun, verb_agree
 from mote.executor.dependency._file_base import FileMutatingTool
 from mote.executor.tool_registry import register_tool
@@ -236,7 +235,6 @@ class Edit(FileMutatingTool):
     reconstructable: ClassVar[bool] = True
     # Success messages can echo a code snippet; allow a higher cap.
     max_result_size_chars: ClassVar[int] = 100_000
-    description = EDIT_DESCRIPTION
 
     async def call(
         self,
@@ -246,12 +244,23 @@ class Edit(FileMutatingTool):
         new_string: str,
         replace_all: bool = False,
     ) -> ToolResult:
-        """Perform an exact string replacement in a file.
+        """Edit a file by replacing an exact string — precise in-place changes.
 
-        Locates old_string in the file and replaces it with new_string. By
-        default exactly one occurrence is replaced and old_string must be unique;
-        set replace_all to replace every occurrence. Pass an empty old_string to
-        create a new file (or fill an empty one) with new_string as its content.
+        Performs exact string replacements in files. Locates old_string in the
+        file and replaces it with new_string. By default exactly one occurrence
+        is replaced and old_string must be unique; set replace_all to replace
+        every occurrence. Pass an empty old_string to create a new file (or fill
+        an empty one) with new_string as its content.
+
+        You must use the Read tool at least once on the file before editing it —
+        the edit fails otherwise. Preserve the exact indentation (tabs/spaces) as
+        it appears in the file, but do NOT include the line-number prefix that
+        Read adds to its output.
+
+        The edit fails if old_string is not unique in the file: either add more
+        surrounding context so the match is unique, or set replace_all=true to
+        change every occurrence (useful for renaming a variable across the file).
+        Prefer editing an existing file over rewriting it whole with Write.
 
         Args:
             file_path: Absolute path to the file to modify (~ is expanded;

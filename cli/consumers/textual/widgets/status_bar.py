@@ -19,7 +19,7 @@ from textual.reactive import reactive
 from textual.widgets import Static
 
 from mote.cli.consumers.render.builders import USAGE_SEP, shimmer_text, sparkline
-from mote.cli.consumers.textual.style import COMPACT, RETRY, Palette
+from mote.cli.consumers.textual.style import COMPACT, RETRY, STATUS_FG, Palette
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 from mote.common.text import format_token_count as _format_tok
@@ -168,7 +168,10 @@ class StatusBar(Static):
         # bottom-right corner (see ``FoldableRow``), so the bar shows only metrics
         # — falling back to a dim ``就绪`` idle marker when there's nothing to show.
         if not segments:
-            return Text(t(K.STATUS_IDLE), style=Palette.DIM)
+            idle = Text(t(K.STATUS_IDLE), style=f"bold {STATUS_FG}")
+            idle.append(USAGE_SEP, style=Palette.DIM)
+            idle.append(t(K.STATUS_IDLE_HINT), style=Palette.DIM)
+            return idle
         out = Text()
         for i, seg in enumerate(segments):
             if i:

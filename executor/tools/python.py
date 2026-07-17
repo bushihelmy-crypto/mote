@@ -28,7 +28,6 @@ import os
 from typing import ClassVar
 
 from mote.common.logs import logger
-from mote.common.prompt.tools import PYTHON_DESCRIPTION
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import (
     GetCwd,
@@ -54,8 +53,21 @@ class Python(BaseTool):
 
     name = "Jupyter"
     aliases = ["Python"]
+    # Recall synonyms for tool-search: ways a model asks to execute code/cells
+    # that the summary ("run Python in a Jupyter kernel") does not spell out.
+    keywords: ClassVar[list[str]] = [
+        "execute code",
+        "notebook",
+        "cell",
+        "script",
+        "compute",
+        "calculate",
+        "执行代码",
+        "运行代码",
+        "笔记本",
+        "计算",
+    ]
     max_result_size_chars: ClassVar[int] = 30_000
-    description = PYTHON_DESCRIPTION
     requires = (
         "get_cwd",
         "get_tool_session",
@@ -128,7 +140,13 @@ class Python(BaseTool):
         close: bool = False,
         timeout: float = DEFAULT_TIMEOUT_S,
     ) -> str:
-        """Execute / interrupt / restart / close the session's persistent kernel.
+        """Run Python in a persistent Jupyter kernel — state persists across calls.
+
+        Execute Python code in a persistent Jupyter kernel kept alive across
+        calls (one per session). Variables, imports, and functions persist, so
+        you can build up state step by step. Set interrupt=true to send a
+        KeyboardInterrupt, restart=true to clear all state, close=true to shut
+        the kernel down. For shell commands use the Bash tool.
 
         Args:
             code: Python source to execute in the kernel. State (variables,

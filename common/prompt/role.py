@@ -23,8 +23,8 @@ Based on the context, accomplish the user's goal using the available commands. P
 # Sections BELOW the marker are ordered by cache stability, not by subsystem:
 # the criterion is whether a section's RENDERED BYTES change within a session.
 #   1. Session-fixed placeholders first (command_guide,
-#      tool_usage_guide, memory/language/scratchpad/env, frc, summarize,
-#      pipeline_section). Their values are constant per session, so they extend
+#      tool_usage_guide, memory/language/scratchpad/env, frc, summarize).
+#      Their values are constant per session, so they extend
 #      the cacheable prefix. tool_usage_guide is the static orientation on how
 #      tools are called (protocol-specific, supplied by the command channel);
 #      the volatile tool CATALOG itself (built-in / MCP / pipeline schemas) is no
@@ -35,8 +35,7 @@ Based on the context, accomplish the user's goal using the available commands. P
 #      the stable prefix. Note: skills_info here is only the static Skill Loading
 #      Guide (constant per session); the volatile Skills *index* lives in the
 #      per-turn listing source, so a skill hot-reload never touches this
-#      section at all. The pipeline BRIEF (pipeline_section) is byte-constant so
-#      it stays in tier 1.
+#      section at all.
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->"
 
 SYSTEM_PROMPT = """
@@ -80,8 +79,6 @@ ${env_section}
 ${frc}
 
 ${task_final_output}
-
-${pipeline_section}
 
 ${skills_info}
 """.replace(

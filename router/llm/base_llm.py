@@ -30,7 +30,7 @@ from mote.common.schema import Message
 from mote.common.utils.common import build_data_url, log_and_reraise, pdfs_within_limits
 from mote.common.utils.token_counter import TOKEN_MAX, count_message_tokens
 from mote.router.cost import Costs, CostTracker, TokenUsage
-from mote.router.llm.llm_response import LLMResponse, LLMToolCall
+from mote.router.llm.llm_response import LLMResponse, LLMToolCall, WebSearchHit
 from mote.router.llm.recovery import build_llm_strategies
 from mote.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
 
@@ -81,9 +81,36 @@ class BaseLLM(ABC):
         images: Optional[Union[str, list[str]]] = None,
         pdfs: Optional[Union[str, list[str]]] = None,
     ) -> dict[str, Union[str, dict]]:
-        if (images or pdfs) and self.support_image_input():
-            return self._user_msg_with_media(msg, images=images, pdfs=pdfs)
+        if images or pdfs:
+            if self.support_image_input():
+                return self._user_msg_with_media(msg, images=images, pdfs=pdfs)
+            # Non-vision model: the attachments cannot ride the wire. Rather than
+            # silently drop them (which leaves the model reading text like
+            # "Shown below." with nothing below), tell it plainly they were
+            # withheld so it doesn't hallucinate having seen them.
+            return {"role": "user", "content": msg + self._unreadable_media_notice(images, pdfs)}
         return {"role": "user", "content": msg}
+
+    @staticmethod
+    def _unreadable_media_notice(
+        images: Optional[Union[str, list[str]]],
+        pdfs: Optional[Union[str, list[str]]],
+    ) -> str:
+        """Honest notice appended when a non-vision model is handed attachments.
+
+        The current model cannot read images (``supports_vision`` is False), so
+        the media never reaches it. Announce that plainly instead of letting the
+        model believe an image was shown.
+        """
+        n_img = 1 if isinstance(images, str) else len(images or [])
+        n_pdf = 1 if isinstance(pdfs, str) else len(pdfs or [])
+        parts: list[str] = []
+        if n_img:
+            parts.append(f"{n_img} image{'s' if n_img > 1 else ''}")
+        if n_pdf:
+            parts.append(f"{n_pdf} PDF{'s' if n_pdf > 1 else ''}")
+        what = " and ".join(parts) if parts else "attachment(s)"
+        return f"\n\n[{what} attached but the current model cannot read images; the attachment was not shown.]"
 
     def _user_msg_with_media(
         self,
@@ -305,6 +332,79 @@ class BaseLLM(ABC):
             return LLMResponse(content=content, tool_calls=tool_calls)
 
         return await self._run_with_recovery(_send, message)
+
+    async def aweb_search(
+        self,
+        query: str,
+        *,
+        allowed_domains: Optional[list[str]] = None,
+        blocked_domains: Optional[list[str]] = None,
+        max_uses: int = 8,
+    ) -> list[WebSearchHit]:
+        """Run a provider-native server-side web search and return the hits.
+
+        This is the single seam behind the ``WebSearch`` tool: it issues an
+        ISOLATED secondary request carrying the provider's server-side web-search
+        tool (Anthropic ``web_search_20250305`` / OpenAI Responses ``web_search``)
+        — the API server performs the actual search + crawl and returns structured
+        result blocks, which the provider normalizes into :class:`WebSearchHit`.
+        It is not an agent loop: one request, one parse, no tool dispatch.
+
+        Args:
+            query: The natural-language search query.
+            allowed_domains: If set, restrict results to these domains.
+            blocked_domains: If set, exclude results from these domains.
+            max_uses: Cap on how many searches the API may run for this request.
+
+        Returns:
+            A list of :class:`WebSearchHit` (may be empty).
+
+        Raises:
+            NotImplementedError: The provider has no server-side web search
+                (e.g. Chat Completions / third-party endpoints). The tool catches
+                this and degrades to a "search unavailable" notice.
+        """
+        raise NotImplementedError("This provider does not support server-side web search.")
+
+    async def adescribe_image(
+        self,
+        image_b64: str,
+        *,
+        prompt: str = "",
+        timeout=USE_CONFIG_TIMEOUT,
+    ) -> str:
+        """Describe an image as text via an isolated multimodal completion.
+
+        The single seam behind ``WebBrowser``'s ``read_image`` action: it feeds
+        one image to a vision-capable model and returns the model's textual
+        reading of it. The browser has no wire to hand an in-page ``<img>`` to
+        the main model as media, so the image is routed to a vision task model
+        instead and its content reaches the agent as text. Unlike ``aweb_search``
+        there is no provider-specific
+        server tool: any vision provider handles this through the ordinary
+        multimodal user message, so it lives once here on the base class, gated
+        only on model capability.
+
+        Args:
+            image_b64: The image bytes, base64-encoded (no data-uri prefix).
+            prompt: Optional extra instruction steering what to extract/describe;
+                falls back to a general "describe this image" ask when empty.
+
+        Returns:
+            The model's textual description of the image.
+
+        Raises:
+            NotImplementedError: The routed model is not vision-capable, so it
+                cannot read the image at all. The tool catches this and degrades
+                to a clear "image understanding unavailable" notice.
+        """
+        if not self.support_image_input():
+            raise NotImplementedError(f"{self.model} does not support image input.")
+        ask = prompt.strip() or (
+            "Describe this image in detail. Transcribe any text verbatim, and note "
+            "any diagrams, charts, tables or UI elements and their content."
+        )
+        return await self.aask(ask, images=[image_b64], stream=False, timeout=timeout)
 
     def rotate_credential(self) -> bool:
         """Rotate to the next configured credential, rebuilding the client.

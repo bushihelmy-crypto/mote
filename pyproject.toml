@@ -74,6 +74,7 @@ dependencies = [
     "PyMuPDF",
     "pdfminer.six",
     "markdownify",
+    "pylatexenc",  # flatten LaTeX math ($…$/$$…$$) to Unicode for terminal render
     # Observability
     "langfuse",
     "sentry-sdk",

@@ -41,6 +41,7 @@ class ChildAgentHandle:
         agent_path: Optional[AgentPath] = None,
         residency_slot: Optional[Any] = None,
         poll_interval: float = 0.01,
+        timeout_seconds: Optional[float] = None,
     ):
         self._runtime = runtime
         # ``control`` is the live AgentControl; held directly (the handle's
@@ -53,6 +54,10 @@ class ChildAgentHandle:
         # their slot in spawn_agent and pass ``None``.
         self._residency_slot = residency_slot
         self._poll_interval = poll_interval
+        # EPHEMERAL wall-clock deadline for the single inline turn; ``None`` ==
+        # unlimited. MANAGED children ignore this (their TTL is a control-plane
+        # watchdog), so it is only ever consulted by ``run_to_completion``.
+        self._timeout_seconds = timeout_seconds
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -84,9 +89,24 @@ class ChildAgentHandle:
 
         The EPHEMERAL shape. The slot is always released (even on error) via the
         ``finally`` close.
+
+        When the spawn carried a ``timeout_seconds`` the turn runs under an
+        ``asyncio.wait_for`` deadline: on expiry the turn's ``CancelledError``
+        path settles the runtime to INTERRUPTED and we return the partial summary
+        (soft failure — a timed-out child yields whatever it produced, mirroring
+        ``spawn_and_run`` degrading gracefully rather than raising).
         """
         try:
-            await self._runtime.run_one_turn(message)
+            if self._timeout_seconds is not None:
+                try:
+                    await asyncio.wait_for(self._runtime.run_one_turn(message), self._timeout_seconds)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"ChildAgentHandle: {self._agent_id} exceeded its "
+                        f"{self._timeout_seconds}s time budget; returning partial summary."
+                    )
+            else:
+                await self._runtime.run_one_turn(message)
             return self.result
         finally:
             await self.aclose()

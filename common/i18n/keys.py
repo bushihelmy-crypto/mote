@@ -20,6 +20,7 @@ from typing import Final, Tuple
 
 # --- Status bar (activity verbs / idle / thinking) ------------------------
 STATUS_IDLE: Final[str] = "status.idle"
+STATUS_IDLE_HINT: Final[str] = "status.idle_hint"
 STATUS_THINKING: Final[str] = "status.thinking"
 STATUS_VERB_THINKING: Final[str] = "status.verb.thinking"
 STATUS_VERB_PROCESSING: Final[str] = "status.verb.processing"
@@ -86,9 +87,16 @@ DRIVER_TOOLS_LOADED: Final[str] = "driver.tools_loaded"
 
 # --- Keybinding label + fold affordance hints -----------------------------
 KEY_TOGGLE_TOOL: Final[str] = "key.toggle_tool"
+KEY_DELETE_MODE: Final[str] = "key.delete_mode"
 KEY_EXPAND_HINT: Final[str] = "key.expand_hint"
 KEY_COLLAPSE_HINT: Final[str] = "key.collapse_hint"
 KEY_EXIT_HINT: Final[str] = "key.exit_hint"
+
+# --- React-unit delete-mode (Textual host) --------------------------------
+DELETE_MODE_HINT: Final[str] = "delete.mode_hint"
+DELETE_BUSY: Final[str] = "delete.busy"
+DELETE_NONE: Final[str] = "delete.none"
+DELETE_DONE: Final[str] = "delete.done"
 
 # --- Approval gate (title / prompt / options / reasons, both hosts) -------
 APPROVAL_REQUIRED: Final[str] = "approval.required"
@@ -130,6 +138,7 @@ LANG_UNKNOWN: Final[str] = "lang.unknown"
 #: Every id above (the completeness test asserts each catalog covers this set).
 ALL_KEYS: Final[Tuple[str, ...]] = (
     STATUS_IDLE,
+    STATUS_IDLE_HINT,
     STATUS_THINKING,
     STATUS_VERB_THINKING,
     STATUS_VERB_PROCESSING,
@@ -171,9 +180,14 @@ ALL_KEYS: Final[Tuple[str, ...]] = (
     DRIVER_TOOLS_LOADED,
     PROMPT_PLACEHOLDER,
     KEY_TOGGLE_TOOL,
+    KEY_DELETE_MODE,
     KEY_EXPAND_HINT,
     KEY_COLLAPSE_HINT,
     KEY_EXIT_HINT,
+    DELETE_MODE_HINT,
+    DELETE_BUSY,
+    DELETE_NONE,
+    DELETE_DONE,
     APPROVAL_REQUIRED,
     APPROVAL_PROCEED,
     APPROVAL_ACTION_RUN,

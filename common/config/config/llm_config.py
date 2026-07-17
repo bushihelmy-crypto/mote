@@ -24,6 +24,11 @@ class LLMType(Enum):
     """
 
     OPENAI = "openai"
+    # OpenAI Responses API transport (openai_responses_api.py, responses.create).
+    # A whole-model takeover for gpt-5.4+ (native tool_search), resolved
+    # dynamically by resolve_api_type — never a brand preset (transport, not a
+    # brand). See supports_native_tool_search.
+    OPENAI_RESPONSES = "openai_responses"
     # OpenAI-compatible providers (use openai_api.py with different base_url)
     FIREWORKS = "fireworks"
     OPEN_LLM = "open_llm"
@@ -174,10 +179,26 @@ class LLMConfig(YamlModel):
 class ProviderPreset:
     """Public, brand-specific defaults applied to an ``LLMConfig``.
 
-    ``base_url`` + ``api_type`` (wire protocol) are filled when the user did not
-    set them. ``env_keys`` lists the environment variables searched (in order)
-    for an API key. ``oauth_provider`` links to a preset in
-    ``OAuthProviderConfig``'s registry when the brand supports OAuth login.
+    A preset is the SINGLE SOURCE OF TRUTH for one brand's identity: its config
+    (``base_url`` + ``api_type`` wire protocol, filled when the user left them
+    empty), the environment variables searched (in order) for an API key
+    (``env_keys``), an optional link to an OAuth login preset (``oauth_provider``),
+    and — crucially — the two ways a user or a model name may NAME this brand:
+
+    * ``aliases`` — extra human spellings accepted for an explicit ``provider:``
+      (e.g. ``zhipu``/``bigmodel`` → the ``zhipuai`` preset). The canonical
+      catalog key is always accepted; aliases are the additional nicknames.
+    * ``model_markers`` — lowercase model-name substrings that let ``provider:
+      auto`` infer this brand from the model name alone (e.g. ``glm`` → zhipuai).
+
+    INVARIANT (enforced at import by :func:`_build_alias_index`): every
+    ``model_marker`` is ALSO a valid ``provider:`` name for the same brand — it is
+    registered as an alias too. So a brand's complete set of accepted names is
+    ``{canonical} ∪ aliases ∪ model_markers``, and ``provider: auto`` and an
+    explicit ``provider:`` can never disagree about what a name resolves to.
+    Aliases/markers must be globally unique across brands (collisions raise at
+    import). This keeps brand identity in ONE table — no second lookup map to
+    drift against.
     """
 
     base_url: str
@@ -185,6 +206,8 @@ class ProviderPreset:
     env_keys: List[str] = field(default_factory=list)
     default_model: Optional[str] = None
     oauth_provider: Optional[str] = None
+    aliases: Tuple[str, ...] = ()
+    model_markers: Tuple[str, ...] = ()
 
 
 # brand name -> preset. Most brands use the OpenAI-compatible wire with a
@@ -196,27 +219,33 @@ PROVIDER_CATALOG: Dict[str, ProviderPreset] = {
         api_type=LLMType.OPENAI,
         env_keys=["OPENAI_API_KEY"],
         oauth_provider="openai",
+        model_markers=("gpt",),
     ),
     "anthropic": ProviderPreset(
         base_url="https://api.anthropic.com",
         api_type=LLMType.ANTHROPIC,
         env_keys=["ANTHROPIC_API_KEY"],
         oauth_provider="anthropic",
+        model_markers=("claude",),
     ),
     "deepseek": ProviderPreset(
         base_url="https://api.deepseek.com/v1",
         api_type=LLMType.DEEPSEEK,
         env_keys=["DEEPSEEK_API_KEY"],
+        model_markers=("deepseek",),
     ),
     "moonshot": ProviderPreset(
         base_url="https://api.moonshot.cn/v1",
         api_type=LLMType.MOONSHOT,
         env_keys=["MOONSHOT_API_KEY"],
+        aliases=("kimi",),
+        model_markers=("moonshot", "kimi"),
     ),
     "mistral": ProviderPreset(
         base_url="https://api.mistral.ai/v1",
         api_type=LLMType.MISTRAL,
         env_keys=["MISTRAL_API_KEY"],
+        model_markers=("mistral",),
     ),
     "yi": ProviderPreset(
         base_url="https://api.lingyiwanwu.com/v1",
@@ -252,6 +281,8 @@ PROVIDER_CATALOG: Dict[str, ProviderPreset] = {
         base_url="https://api.x.ai/v1",
         api_type=LLMType.OPENAI,
         env_keys=["XAI_API_KEY"],
+        aliases=("grok",),
+        model_markers=("grok",),
     ),
     "together": ProviderPreset(
         base_url="https://api.together.xyz/v1",
@@ -277,21 +308,41 @@ PROVIDER_CATALOG: Dict[str, ProviderPreset] = {
         base_url="https://api.minimaxi.com/v1",
         api_type=LLMType.OPENAI,
         env_keys=["MINIMAX_API_KEY"],
+        model_markers=("minimax",),
     ),
     "dashscope": ProviderPreset(
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         api_type=LLMType.OPENAI,
         env_keys=["DASHSCOPE_API_KEY"],
+        aliases=("qwen", "tongyi", "aliyun"),
+        model_markers=("qwen",),
     ),
     "zhipuai": ProviderPreset(
         base_url="https://open.bigmodel.cn/api/paas/v4",
         api_type=LLMType.OPENAI,
         env_keys=["ZHIPUAI_API_KEY"],
+        aliases=("zhipu", "glm", "bigmodel"),
+        model_markers=("glm",),
     ),
     "stepfun": ProviderPreset(
         base_url="https://api.stepfun.com/v1",
         api_type=LLMType.OPENAI,
         env_keys=["STEPFUN_API_KEY"],
+    ),
+    "hunyuan": ProviderPreset(
+        # Tencent Hunyuan OpenAI-compatible surface (also has a /anthropic one).
+        base_url="https://api.hunyuan.cloud.tencent.com/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["HUNYUAN_API_KEY"],
+        model_markers=("hunyuan",),
+    ),
+    "xiaomi": ProviderPreset(
+        # Xiaomi MiMo OpenAI-compatible surface (also has a /anthropic one).
+        base_url="https://api.xiaomimimo.com/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["XIAOMI_API_KEY", "MIMO_API_KEY"],
+        aliases=("mimo",),
+        model_markers=("mimo",),
     ),
     "baichuan": ProviderPreset(
         base_url="https://api.baichuan-ai.com/v1",
@@ -312,21 +363,73 @@ PROVIDER_CATALOG: Dict[str, ProviderPreset] = {
 }
 
 
+def _build_alias_index(catalog: Mapping[str, ProviderPreset]) -> Dict[str, str]:
+    """Build the accepted-name → canonical-brand reverse index (fail-fast).
+
+    A brand's accepted names are its canonical catalog key plus every
+    ``alias`` and every ``model_marker`` (markers are registered as aliases too,
+    so ``provider: auto`` and an explicit ``provider:`` resolve identically —
+    the class invariant documented on :class:`ProviderPreset`). All names are
+    lowercased. A name claimed by two different brands raises ``ValueError`` at
+    import time — brand identity stays unique and drift is impossible.
+    """
+    index: Dict[str, str] = {}
+
+    def _claim(name: str, canonical: str) -> None:
+        key = name.strip().lower()
+        if not key:
+            return
+        owner = index.get(key)
+        if owner is not None and owner != canonical:
+            raise ValueError(
+                f"provider name {key!r} claimed by both {owner!r} and {canonical!r}; "
+                "aliases and model_markers must be globally unique"
+            )
+        index[key] = canonical
+
+    for canonical, preset in catalog.items():
+        _claim(canonical, canonical)
+        for alias in preset.aliases:
+            _claim(alias, canonical)
+        # Every model_marker is also a valid explicit provider name (invariant).
+        for marker in preset.model_markers:
+            _claim(marker, canonical)
+    return index
+
+
+# Accepted-name → canonical-brand, computed once at import (fail-fast on any
+# cross-brand name collision). The single reverse index behind BOTH explicit
+# ``provider:`` resolution (get_provider_preset) and ``provider: auto`` model
+# inference (detect_provider) — there is no second lookup table to drift.
+_ALIAS_INDEX: Dict[str, str] = _build_alias_index(PROVIDER_CATALOG)
+
+
 def list_providers() -> List[str]:
     """Return the registered provider brand names (sorted)."""
     return sorted(PROVIDER_CATALOG)
 
 
+def resolve_provider_name(name: str) -> Optional[str]:
+    """Return the canonical brand for a user-supplied ``provider:`` name.
+
+    Accepts the canonical key or any registered alias / model-marker
+    (case-insensitive, whitespace-trimmed). ``None`` when unrecognised.
+    """
+    return _ALIAS_INDEX.get((name or "").strip().lower())
+
+
 def get_provider_preset(name: str) -> ProviderPreset:
     """Return the :class:`ProviderPreset` for ``name``.
 
-    Raises ``KeyError`` (listing the known providers) when unknown. Matching is
-    case-insensitive and whitespace-trimmed.
+    Resolves the canonical brand via the alias index, so a nickname or model
+    marker (e.g. ``glm``/``zhipu`` → ``zhipuai``, ``kimi`` → ``moonshot``) works
+    exactly like the canonical key. Raises ``KeyError`` (listing the known
+    providers) when unknown. Matching is case-insensitive and whitespace-trimmed.
     """
-    key = (name or "").strip().lower()
-    if key not in PROVIDER_CATALOG:
+    canonical = resolve_provider_name(name)
+    if canonical is None:
         raise KeyError(f"unknown provider {name!r}; known: {list_providers()}")
-    return PROVIDER_CATALOG[key]
+    return PROVIDER_CATALOG[canonical]
 
 
 def apply_provider_preset(values: dict) -> dict:
@@ -343,6 +446,11 @@ def apply_provider_preset(values: dict) -> dict:
         return values
 
     preset = get_provider_preset(provider)
+    # Normalise a nickname/model-marker to the canonical brand so downstream
+    # (env-key lookup, cost selection) always sees one stable name.
+    canonical = resolve_provider_name(provider)
+    if canonical is not None:
+        values["provider"] = canonical
     if values.get("base_url") in (None, ""):
         values["base_url"] = preset.base_url
     if values.get("api_type") in (None, ""):
@@ -355,20 +463,6 @@ def apply_provider_preset(values: dict) -> dict:
         if isinstance(oauth, dict) and not oauth.get("provider"):
             oauth["provider"] = preset.oauth_provider
     return values
-
-
-# Model-name substring -> brand, used to infer ``provider: auto`` when neither
-# an explicit base_url host nor an environment key gives a signal. Only
-# unambiguous hints for brands that have a catalog preset are listed.
-_MODEL_BRAND_HINTS: List[Tuple[str, str]] = [
-    ("claude", "anthropic"),
-    ("deepseek", "deepseek"),
-    ("moonshot", "moonshot"),
-    ("kimi", "moonshot"),
-    ("mistral", "mistral"),
-    ("grok", "xai"),
-    ("gpt", "openai"),
-]
 
 
 def _url_host(url: str) -> str:
@@ -398,9 +492,10 @@ def detect_provider(values: Mapping[str, Any], environ: Optional[Mapping[str, st
                 return name
 
     model = (values.get("model") or "").lower()
-    for hint, name in _MODEL_BRAND_HINTS:
-        if hint in model:
-            return name
+    if model:
+        for name, preset in PROVIDER_CATALOG.items():
+            if any(marker in model for marker in preset.model_markers):
+                return name
 
     for name, preset in PROVIDER_CATALOG.items():
         if any(environ.get(k) for k in preset.env_keys):

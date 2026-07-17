@@ -19,6 +19,13 @@ from .conftest import CapRole, bind, mark_read, run, write_file
 
 
 def _write(tool: Write, **kwargs):
+    """Run the tool and return its ``output`` message (the tool now returns a
+    ``ToolResult`` carrying ``file_changes``, mirroring Edit)."""
+    return run(tool.call(**kwargs)).output
+
+
+def _write_result(tool: Write, **kwargs):
+    """Run the tool and return the full ``ToolResult`` (for ``file_changes`` asserts)."""
     return run(tool.call(**kwargs))
 
 
@@ -114,6 +121,42 @@ class TestNewlinePreservation:
         p = str(workspace / "lf.txt")
         _write(Write(), file_path=p, content="x\ny\n")
         assert open(p, "rb").read() == b"x\ny\n"
+
+
+class TestFileChanges:
+    """Write carries the change as a structured ``FileChange`` (old/new/path) so
+    the view layer renders the full content as a selectable diff — like Edit."""
+
+    def test_create_reports_empty_old(self, workspace):
+        p = str(workspace / "new.txt")
+        result = _write_result(Write(), file_path=p, content="hello\nworld\n")
+        assert len(result.file_changes) == 1
+        change = result.file_changes[0]
+        assert change.path == p
+        assert change.old == ""  # a create has no before-image
+        assert change.new == "hello\nworld\n"
+
+    def test_overwrite_reports_old_and_new(self, workspace):
+        p = write_file(workspace / "exists.txt", "before\n")
+        role = CapRole()
+        mark_read(role, p)
+        tool = bind(Write(), role)
+        result = _write_result(tool, file_path=p, content="after\n")
+        assert len(result.file_changes) == 1
+        change = result.file_changes[0]
+        assert change.old == "before\n"
+        assert change.new == "after\n"
+
+    def test_crlf_old_content_lf_normalized(self, workspace):
+        # The structured fact is the display-agnostic LF form, even for a CRLF file.
+        p = write_file(workspace / "crlf.txt", "a\r\nb\r\n", newline="")
+        role = CapRole()
+        mark_read(role, p)
+        tool = bind(Write(), role)
+        result = _write_result(tool, file_path=p, content="x\ny\n")
+        change = result.file_changes[0]
+        assert change.old == "a\nb\n"
+        assert change.new == "x\ny\n"
 
 
 class TestCwdResolution:

@@ -1,6 +1,6 @@
 """Shared relative-path resolution for the stateless file tools.
 
-Read / Write / Edit / ApplyPatch / Glob / Grep all resolve a model-supplied
+Read / Write / Edit / Glob / Grep all resolve a model-supplied
 path the same way: an absolute path is used as-is, and a relative path is
 resolved against the session's *stable* working directory (Codex-aligned — the
 cwd is a fixed data value, not shell state that drifts with ``cd``).

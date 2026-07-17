@@ -64,7 +64,7 @@ class PermissionSubscriber(ControlSubscriber):
 
         facts = resolve(event.tool_input)
 
-        # Most tools touch a single target; a few (ApplyPatch) act on several
+        # Most tools touch a single target; a few act on several
         # paths in one call. Evaluate them together via check_multi so a
         # multi-path call yields one consolidated approval; single-target tools
         # keep the segment-aware check() path.

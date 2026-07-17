@@ -40,12 +40,10 @@ class RoleSchema(BaseModel):
     # the client that actually issues the request. See infer_native_tool_provider.
 
     # --- Loop control ---
-    max_react_loop: int = 50
-    max_consecutive_react_limit: int = 10
     # Hard per-agent budget cap in USD, keyed off this agent's own accrued spend
-    # (``context.cost_manager.total_cost``). A sibling run-limit to max_react_loop:
-    # at 80% the loop surfaces a soft CLI notice (once), at 100% it stops before
-    # the next think — no further LLM access. ``0.0`` disables the gate entirely
+    # (``context.cost_manager.total_cost``). The run's single spend ceiling: at
+    # 80% the loop surfaces a soft CLI notice (once), at 100% it stops before the
+    # next think — no further LLM access. ``0.0`` disables the gate entirely
     # (opt-in; the default), so an unbudgeted agent triggers neither threshold.
     max_cost: float = 0.0
     # Which strategies the graph's per-turn factories build. Each is a key into a
@@ -62,6 +60,17 @@ class RoleSchema(BaseModel):
     max_auto_continue: int = 0
 
     # --- Tools / Agent declarations ---
+    deferred_tools: list[str] = [
+        "Terminal",
+        "Jupyter",
+        "Agent",
+        "RunGraph",
+        "Sleep",
+        "WebBrowser",
+        "WebSearch",
+        "GenerateMedia",
+        "Skill",
+    ]
     tools: list[str] = [
         "Read",
         "Write",
@@ -69,22 +78,34 @@ class RoleSchema(BaseModel):
         "Glob",
         "Grep",
         "Bash",
+        "AskUserQuestion",
+        "GenerateMedia",
+        "SearchTools",
+        # Deferred tools MUST also live here: ``deferred_tools`` is a
+        # visibility-only subset of ``tools`` (a deferred tool is still bound and
+        # dispatchable, its schema is merely withheld until searched). Omitting
+        # them here would leave them UNBOUND — invisible to SearchTools, so the
+        # model could never discover, reveal, or call them.
         "Terminal",
         "Jupyter",
         "Agent",
-        "AskUserQuestion",
         "RunGraph",
         "Sleep",
-        "ResumeTasks",
-        "CancelTasks",
-        "GetNodeStates",
-        "CodeReview",
         "WebBrowser",
+        "WebSearch",
         "Skill",
     ]
     mcps: list[str] = []
     agents: list[str] = []
     skills: list[str] = []
+    # Tool-search deferral: a subset of ``tools`` whose full schema is withheld
+    # from the model until it discovers the tool via the ``SearchTools`` meta-tool
+    # (which is auto-bound whenever this list is non-empty). Deferral is
+    # visibility-only — a deferred tool stays fully dispatchable once revealed.
+    # Declaring deferral per-role (not on the tool class) lets the same tool be
+    # core for one role and deferred for another; keeps the steady per-turn token
+    # cost flat as the toolset grows. Empty (default) → every tool is always
+    # visible and no search tool is bound (zero overhead when unused).
 
     # --- Permissions ---
     # Tool-approval policy. The default engages the PermissionEngine in
@@ -178,6 +199,13 @@ class RoleSchema(BaseModel):
 
     # --- Memory config ---
     enable_memory: bool = True
+
+    # --- Routing ---
+    # Per-role intelligent-routing switch. When True the ContextProvider routes
+    # each think request through the LLMRouter (picks a model card per request
+    # from the registered cards); when False this role uses the fixed
+    # ``config.models.default``. Owned here (not in global config) so each role
+    # decides its own routing independently.
     enable_router: bool = False
 
     # --- Behavior flags ---

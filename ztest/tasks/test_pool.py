@@ -92,9 +92,10 @@ class TestCompletionPaths:
     async def test_large_result_persists_and_previews(self, tmp_path):
         # A whole-task result over DEFAULT_MAX_RESULT_SIZE_CHARS rides the same
         # size-limit primitive as the synchronous tool path: the full value is
-        # written to a session-scoped ``.tool_results`` file and the inline
+        # written to a session-scoped ``tool_results/`` file and the inline
         # result becomes a ``<persisted-output>`` preview naming that path —
-        # distinct from the streaming stdout log at ``.task_outputs``.
+        # distinct from the streaming stdout log at ``task_outputs/`` (both
+        # co-located under the session directory).
         from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, MessageQueue
         from mote.executor.tasks import TaskOutputStore
 
@@ -107,7 +108,7 @@ class TestCompletionPaths:
         assert result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
         assert "Output too large" in result
         # Full value landed in the session-scoped tool-results file.
-        result_file = tmp_path / ".tool_results" / "s1" / f"task-{tid}.txt"
+        result_file = tmp_path / ".agent_sessions" / "s1" / "tool_results" / f"task-{tid}.txt"
         assert result_file.exists()
         assert result_file.read_text() == huge
 

@@ -24,9 +24,12 @@ from mote.common.events.outcomes import (
     ToolResultOutcome,
     TurnOutcome,
 )
+from mote.common.events.scope import ScopePath, ScopeRef, current_scope, push_scope
 from mote.common.events.stream import log_llm_stream
 from mote.common.events.trace import current_span_id, span
 from mote.common.events.types import (
+    ACTIVITY_COMPLETED,
+    ACTIVITY_STARTED,
     AGENT_LIFECYCLE,
     BUDGET,
     COMPACTION_CHECKPOINT,
@@ -34,6 +37,8 @@ from mote.common.events.types import (
     FILE_CHANGED,
     FILE_MUTATED,
     FILE_SNAPSHOT,
+    HISTORY_EDITED,
+    HISTORY_RESET_EVENTS,
     LLM_ERROR,
     LLM_REQUEST,
     LLM_RESPONSE,
@@ -57,6 +62,8 @@ from mote.common.events.types import (
     TURN_END,
     TURN_START,
     USER_PROMPT_SUBMIT,
+    ActivityCompletedEvent,
+    ActivityStartedEvent,
     AgentEvent,
     AgentLifecycleEvent,
     BudgetEvent,
@@ -65,6 +72,7 @@ from mote.common.events.types import (
     FileChangedEvent,
     FileMutatedEvent,
     FileSnapshotEvent,
+    HistoryEditedEvent,
     LLMErrorEvent,
     LLMRequestEvent,
     LLMResponseEvent,
@@ -99,6 +107,11 @@ __all__ = [
     "current_bus",
     "observe_event",
     "observe_event_sync",
+    # activity scope spine
+    "ScopeRef",
+    "ScopePath",
+    "current_scope",
+    "push_scope",
     # llm stream
     "log_llm_stream",
     # trace instrumentation
@@ -116,6 +129,8 @@ __all__ = [
     # events
     "AgentEvent",
     "AgentLifecycleEvent",
+    "ActivityStartedEvent",
+    "ActivityCompletedEvent",
     "BudgetEvent",
     "SessionStartEvent",
     "SessionEndEvent",
@@ -129,6 +144,7 @@ __all__ = [
     "LLMErrorEvent",
     "LLMRetryEvent",
     "CompactionCheckpointEvent",
+    "HistoryEditedEvent",
     "FileSnapshotEvent",
     "FileChangedEvent",
     "FileMutatedEvent",
@@ -161,6 +177,8 @@ __all__ = [
     "LLM_ERROR",
     "LLM_RETRY",
     "COMPACTION_CHECKPOINT",
+    "HISTORY_EDITED",
+    "HISTORY_RESET_EVENTS",
     "FILE_SNAPSHOT",
     "FILE_CHANGED",
     "FILE_MUTATED",
@@ -173,6 +191,8 @@ __all__ = [
     "SPAN_START",
     "SPAN_END",
     "BUDGET",
+    "ACTIVITY_STARTED",
+    "ACTIVITY_COMPLETED",
     "USER_PROMPT_SUBMIT",
     "PRE_TOOL_USE",
     "POST_TOOL_USE",

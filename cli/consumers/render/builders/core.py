@@ -370,17 +370,23 @@ def task_progress_text(ev: Any) -> "Text":
 #            ("搜索 2 个模式，读取 1 个文件"), a collapsed read/search summary.
 #            The individual call's identity doesn't matter (search = Grep/Glob,
 #            read = Read); a non-folding tool or assistant text breaks the run.
-#   DETAIL — fold *this* call's body+output behind its ``● Tool(headline)`` line
-#            (Bash/Terminal/WebBrowser). Each command's identity matters, so the
-#            calls are NOT merged — every call keeps its own row.
-#   NONE   — always rendered in full (Edit/Write/…).
+#   DETAIL — fold *this* call's body+output behind its ``● Tool(headline)`` line.
+#            Each command's identity matters, so the calls are NOT merged — every
+#            call keeps its own row. This is the DEFAULT for any tool that is
+#            neither a GROUP tool nor on the NONE deny-list below.
+#   NONE   — always rendered in full (Edit/Write): the "what changed" is the
+#            point, so these stay expanded and ctrl+o does not fold them.
+#
+# The DETAIL default is a deny-list (``_FOLD_NONE``), not an allow-list: any new
+# tool is foldable by default, and only the few tools whose full body should
+# always show are opted out.
 #
 # This classifier is a pure, host-agnostic builder so both rich hosts (and a
 # future terminal adoption) share one definition; the search/read *count*
 # phrasing below keeps the Grep/Glob vs Read split for the summary.
 _GROUP_SEARCH = {"Grep", "Glob"}
 _GROUP_READ = {"Read"}
-_FOLD_DETAIL = {"Bash", "Terminal", "WebBrowser", "Skill"}
+_FOLD_NONE = {"Edit", "Write"}
 
 
 class FoldMode(Enum):
@@ -395,9 +401,9 @@ def fold_mode(name: str) -> FoldMode:
     """Classify how tool *name*'s transcript row folds (the single source of truth)."""
     if name in _GROUP_SEARCH or name in _GROUP_READ:
         return FoldMode.GROUP
-    if name in _FOLD_DETAIL:
-        return FoldMode.DETAIL
-    return FoldMode.NONE
+    if name in _FOLD_NONE:
+        return FoldMode.NONE
+    return FoldMode.DETAIL
 
 
 def tool_group_summary_text(items: Any, *, active: bool) -> "Text":
@@ -488,6 +494,145 @@ def compaction_summary_text(summary: str, *, max_lines: int = _COMPACT_SUMMARY_M
     return text
 
 
+# --- activity (nested orchestration) topology + outcome -------------------
+# A ``run_graph`` (and, later, a sub-agent / background task) is a nested
+# orchestration; these two builders turn its neutral, pre-computed topology /
+# node-state structures (plain dicts — the contract layer imports nothing from
+# bggraph) into the shared look both rich hosts land. ``activity_topology`` draws
+# the declared shape once at open; ``activity_outcome`` draws the final per-node
+# result tree at close (self-sufficient — read straight off the terminal event,
+# never the live stream, so a replayed transcript renders identically).
+
+# Per-node-kind marker for the topology view — a glyph that hints how the node
+# runs (a plain tool call, a parallel fan-out, a serial fold, a pure compute).
+_NODE_KIND_GLYPH = {
+    "tool": "\u25c6",  # ◆ — a single tool call
+    "map": "\u21c9",  # ⇉ — parallel fan-out over a collection
+    "fold": "\u2192",  # → — serial accumulate
+    "compute": "\u0192",  # ƒ — pure data-shaping
+}
+
+# Per-node terminal status → (glyph, style) for the outcome tree. Mirrors the
+# task-progress mapping but keyed on a graph node's final ``BgStatus`` string;
+# an unknown status falls back to the dim skip marker.
+_NODE_STATUS_STYLE = {
+    "success": (CHECK, Palette.SUCCESS),
+    "failed": (CROSS, Palette.ERROR),
+    "skipped": (SKIP, Palette.DIM),
+    "cancelled": (SKIP, Palette.WARNING),
+    "running": (PLAY, Palette.BRAND),
+    "pending": (SKIP, Palette.DIM),
+}
+
+
+def activity_header(activity_kind: str, label: str) -> "Text":
+    """The ``  ⎿ label (kind)`` heading line shared by topology + outcome.
+
+    A ``run_graph`` orchestration already has a ``● RunGraph`` tool-call row
+    above it, so the activity block does NOT draw a second top-level ``●``
+    bullet — it hangs off that row as a nested ``⎿`` branch (offset/indented),
+    the same tree affordance a tool's result detail uses.
+    """
+    line = Text()
+    line.append("  " + BRANCH + " ", style=Palette.DIM)
+    line.append(label or activity_kind or "activity", style=f"bold {Palette.BRAND}")
+    if activity_kind and activity_kind != (label or ""):
+        line.append(f" ({activity_kind})", style=Palette.DIM)
+    return line
+
+
+def activity_topology(activity_kind: str, label: str, topology: Any) -> "Text":
+    """Render a nested orchestration's declared shape (nodes + guarded edges).
+
+    *topology* is the neutral pre-computed structure the projector carried:
+    ``{"nodes": [{"id", "kind", "label"}...], "edges": [{"from", "to",
+    "guarded": bool}...]}``. Each node is one indented ``  <glyph> label`` line
+    (the glyph hints its kind); guarded edges are appended as a dim ``when``
+    annotation so the branch/loop structure is visible. Missing/empty topology
+    degrades to just the header (nothing to draw).
+    """
+    text = activity_header(activity_kind, label)
+    topo = topology or {}
+    nodes = topo.get("nodes") or []
+    for node in nodes:
+        nid = node.get("id", "") or ""
+        nkind = node.get("kind", "") or ""
+        nlabel = node.get("label", "") or nid
+        glyph = _NODE_KIND_GLYPH.get(nkind, "\u2022")  # • fallback
+        text.append("\n")
+        text.append(f"    {glyph} ", style=Palette.DIM)
+        text.append(nlabel, style=Palette.BRAND)
+        if nkind:
+            text.append(f" [{nkind}]", style=Palette.DIM)
+    edges = topo.get("edges") or []
+    guarded = [e for e in edges if e.get("guarded")]
+    for e in guarded:
+        text.append("\n")
+        text.append(f"      {BRANCH} ", style=Palette.DIM)
+        text.append(f"{e.get('from', '?')} \u2192 {e.get('to', '?')}", style=Palette.DIM)
+        text.append(" (when)", style=Palette.DIM)
+    return text
+
+
+def _node_retry_args(node: Any) -> str:
+    """Bounded JSON of a failed node's ``args`` so the model can retry the call."""
+    import json
+
+    args = node.get("args")
+    if not args:
+        return ""
+    try:
+        txt = json.dumps(args, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        txt = repr(args)
+    if len(txt) > 200:
+        txt = txt[:200] + "\u2026"
+    return txt
+
+
+def activity_outcome(node_states: Any, outcome: str, summary: str) -> "Text":
+    """Render a nested orchestration's final per-node result tree.
+
+    *node_states* is the neutral list the terminal event carried:
+    ``[{"id", "kind", "label", "status", "attempts", "error", "args"}...]``.
+    The head is a nested ``  ⎿ <✓/✗> outcome`` branch (no second ``●`` bullet —
+    it hangs off the ``● RunGraph`` tool-call row above it); each node is an
+    indented ``    <✓/⊘/✗> label`` line coloured by its final status, with the
+    attempt count when it retried; a failed node appends its error and the
+    ``args`` needed to retry that exact call (reusing ``run_graph``'s bounded
+    retry-note format). A trailing ``summary`` line, when present, is dimmed.
+    """
+    line = Text()
+    ok = (outcome or "success") == "success"
+    head_glyph, head_style = (CHECK, Palette.SUCCESS) if ok else (CROSS, Palette.ERROR)
+
+    line.append("  " + BRANCH + " ", style=Palette.DIM)
+    line.append(f"{head_glyph} {outcome or 'success'}", style=head_style)
+    for node in node_states or ():
+        nid = node.get("id", "") or ""
+        nlabel = node.get("label", "") or nid
+        status = node.get("status", "") or ""
+        attempts = int(node.get("attempts", 0) or 0)
+        glyph, style = _NODE_STATUS_STYLE.get(status, (SKIP, Palette.DIM))
+        line.append("\n")
+        line.append(f"    {glyph} ", style=style)
+        line.append(nlabel, style=style)
+        if attempts > 1:
+            line.append(f" (\u00d7{attempts})", style=Palette.DIM)  # ×N attempts
+        if status == "failed":
+            err = node.get("error", "") or ""
+            if err:
+                line.append(f": {err}", style=Palette.DIM)
+            args_txt = _node_retry_args(node)
+            if args_txt:
+                line.append("\n")
+                line.append(f"      {BRANCH} {args_txt}", style=Palette.DIM)
+    if summary and (summary or "").strip():
+        line.append("\n")
+        line.append(f"    {summary.strip()}", style=Palette.DIM)
+    return line
+
+
 def session_table(ev: Any) -> Optional["Table"]:
     """Build the numbered resumable-session table from a ``SessionListShown`` event."""
     if not getattr(ev, "items", None):
@@ -561,6 +706,9 @@ __all__ = [
     "file_change_caption",
     "media_caption",
     "task_progress_text",
+    "activity_header",
+    "activity_topology",
+    "activity_outcome",
     "conversation_compacted_text",
     "compaction_summary_text",
     "session_table",

@@ -70,7 +70,7 @@ def _pick_last(a: Optional[str], b: Optional[str]) -> Optional[str]:
 
 
 @dataclass
-class ToolCallOutcome(ControlOutcome):
+class ToolCallOutcome(ControlOutcome["ToolCallOutcome"]):
     """A tool call may be denied, or have its args rewritten, before it runs.
 
     The one two-subscriber bucket: the hook (rewrite/veto) then the permission
@@ -118,7 +118,7 @@ class ToolCallOutcome(ControlOutcome):
 
 
 @dataclass
-class ToolResultOutcome(ControlOutcome):
+class ToolResultOutcome(ControlOutcome["ToolResultOutcome"]):
     """A finished tool's result may be rewritten, annotated, or marked blocked.
 
     ``updated_response`` replaces the output text (truncate/redact);
@@ -166,7 +166,7 @@ class ToolResultOutcome(ControlOutcome):
 
 
 @dataclass
-class PromptOutcome(ControlOutcome):
+class PromptOutcome(ControlOutcome["PromptOutcome"]):
     """Rewrite the user prompt, prepend context, or stop to abort the turn.
 
     ``updated_prompt`` replaces the submitted prompt text (the secret-upload
@@ -214,7 +214,7 @@ class PromptOutcome(ControlOutcome):
 
 
 @dataclass
-class CompactOutcome(ControlOutcome):
+class CompactOutcome(ControlOutcome["CompactOutcome"]):
     """Cancel the management pass, or supply custom compaction instructions."""
 
     cancel: bool = False
@@ -237,7 +237,7 @@ class CompactOutcome(ControlOutcome):
 
 
 @dataclass
-class SpawnOutcome(ControlOutcome):
+class SpawnOutcome(ControlOutcome["SpawnOutcome"]):
     """Deny a child spawn (depth/quota/policy). ``reason`` surfaces to the caller."""
 
     denied: bool = False
@@ -260,7 +260,7 @@ class SpawnOutcome(ControlOutcome):
 
 
 @dataclass
-class TurnOutcome(ControlOutcome):
+class TurnOutcome(ControlOutcome["TurnOutcome"]):
     """A Stop-hook decision: ``block`` the turn end (auto-continue) + why."""
 
     block: bool = False

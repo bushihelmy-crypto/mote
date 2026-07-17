@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, TypeVar, overload
 
 from mote.common.interface.event_subscriber import (
     DURABLE,
@@ -69,6 +69,20 @@ from mote.common.interface.event_subscriber import (
     SyncObserver,
 )
 from mote.common.logs import logger
+
+if TYPE_CHECKING:
+    # Type-only: the generic control-event base whose parameter ``emit`` threads
+    # to its outcome type. Imported under TYPE_CHECKING so the bus stays a runtime
+    # leaf (it never imports the events/outcomes modules at import time — the
+    # generic link is a static contract, resolved to ``None``/``Optional[O]`` by
+    # the checker, with the runtime ``isinstance`` defence-in-depth unchanged).
+    from mote.common.events.types import ControlEvent
+
+#: Outcome self-type threaded from a ``ControlEvent[_O]`` argument to ``emit``'s
+#: return, so ``await bus.emit(PreToolUseEvent())`` infers ``ToolCallOutcome |
+#: None`` with no cast. A non-control (observation) event matches the ``object``
+#: overload instead and infers ``None``.
+_O = TypeVar("_O", bound=ControlOutcome)
 
 #: Per-subscriber wall-clock budgets (circuit breakers, not tight SLAs). A
 #: handler exceeding these is abandoned with a warning so one wedged subscriber
@@ -173,6 +187,14 @@ class EventBus:
 
     # -- dispatch -----------------------------------------------------------
 
+    @overload
+    async def emit(self, event: "ControlEvent[_O]") -> Optional[_O]:
+        ...
+
+    @overload
+    async def emit(self, event: object) -> None:
+        ...
+
     async def emit(self, event) -> Optional[ControlOutcome]:
         """Dispatch ``event`` through both phases; return the folded outcome.
 
@@ -180,6 +202,13 @@ class EventBus:
         (observation) is fire-and-forget. Pure-observation events (no control
         subscriber maps their name) return ``None`` — the caller simply does not
         read an outcome for them.
+
+        The two overloads make the event↔outcome link static at the call site: a
+        :class:`~mote.common.events.types.ControlEvent`\\ ``[O]`` threads its
+        outcome parameter to the return, so ``await bus.emit(PreToolUseEvent())``
+        is typed ``ToolCallOutcome | None`` (no cast); any other event matches the
+        ``object`` overload and is typed ``None`` (an observation emit reads no
+        outcome). The runtime body is unchanged and type-agnostic.
 
         When phase 1 rewrote the call, observers receive the **final rewritten**
         event, so what is recorded/rendered matches what actually runs.

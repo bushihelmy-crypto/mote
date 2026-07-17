@@ -7,10 +7,9 @@ defaults:
 
 - Three output modes: ``files_with_matches`` (default), ``content``, ``count``.
 - VCS metadata dirs (.git/.svn/.hg/.bzr/.jj/.sl) are excluded automatically.
-- Long match lines are capped (``--max-columns 500``) to avoid base64/minified
-  noise flooding the result.
-- Results default to the first 250 entries (``head_limit``) to protect context;
-  pass ``head_limit=0`` for unlimited. ``offset`` paginates.
+- All matches are returned; use ``head_limit`` to cap the entry count and
+  ``offset`` to paginate. A large result is persisted to disk by the shared
+  tool-result exit rather than truncated here.
 - ``files_with_matches`` results are sorted by mtime (most recent first), and all
   paths are relativized to the working directory to save tokens.
 
@@ -49,15 +48,13 @@ import time
 from typing import ClassVar, Optional
 
 from mote.common.const.tools import (
-    DEFAULT_HEAD_LIMIT,
     DOCUMENT_EXTENSIONS,
     GLIMPSE_EXTENSIONS,
     GLIMPSE_RECORD_LIMIT,
-    MAX_COLUMNS,
     SEARCH_TIMEOUT,
     VCS_DIRECTORIES_TO_EXCLUDE,
 )
-from mote.common.prompt.tools import GREP_DESCRIPTION
+from mote.common.schema import ToolEffect
 from mote.common.text import count_noun, display_path, plural
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import GetCwd, RecordFileGlimpsed
@@ -207,14 +204,15 @@ def _apply_head_limit(items: list, limit: Optional[int], offset: int) -> tuple[l
     """Slice items by offset/limit. Returns (sliced, applied_limit).
 
     applied_limit is only set when truncation actually happened, so callers know
-    there may be more results to paginate. limit=0 means unlimited.
+    there may be more results to paginate. limit is unbounded unless the caller
+    asks for a specific N (limit=0 or None both mean unlimited); a large result
+    is persisted to disk by the shared tool-result exit rather than capped here.
     """
-    if limit == 0:
+    if not limit:
         return items[offset:], None
-    effective = DEFAULT_HEAD_LIMIT if limit is None else limit
-    sliced = items[offset : offset + effective]
-    truncated = (len(items) - offset) > effective
-    return sliced, (effective if truncated else None)
+    sliced = items[offset : offset + limit]
+    truncated = (len(items) - offset) > limit
+    return sliced, (limit if truncated else None)
 
 
 @register_tool
@@ -225,9 +223,10 @@ class Grep(BaseTool):
     aliases: ClassVar[list[str]] = ["Grep.run", "grep", "search"]
     # Read-only search: results are re-derivable by re-running the query.
     reconstructable: ClassVar[bool] = True
+    # No side effect — opt out of the effect ledger (safe to replay always).
+    effect: ClassVar[ToolEffect] = ToolEffect.PURE
     # Grep output is usually compact; cap below the default.
     max_result_size_chars: ClassVar[int] = 20_000
-    description = GREP_DESCRIPTION
     # get_cwd is the stable base for the default search root + output
     # relativization. record_file_glimpsed feeds matched files to the code map as
     # navigation hints. Both optional: unbound (no Role) falls back / no-ops.
@@ -258,15 +257,28 @@ class Grep(BaseTool):
         head_limit: Optional[int] = None,
         offset: int = 0,
     ) -> str:
-        """Search file contents with a regular expression.
+        """Search file contents by regex — ripgrep-powered, filter by glob or type.
+
+        A powerful content search tool built on ripgrep. ALWAYS use this for
+        searching file contents — never run grep / rg through the Bash tool.
 
         Supports full regex syntax (e.g. "log.*Error", "function\\s+\\w+").
         Searches plain-text files (including .csv) directly, and also looks
         inside rich documents — PDF (.pdf), Word (.docx) and Excel (.xlsx) — by
         extracting their text first (each PDF page / Word paragraph / Excel row
         becomes a searchable line). Version-control metadata directories are
-        excluded automatically and results default to the first 250 entries
-        (pass head_limit=0 for unlimited, use offset to paginate).
+        excluded automatically. All matches are returned by default; use
+        head_limit to cap the entry count and offset to paginate.
+
+        - Filter the file set with glob (e.g. "*.py", "*.{ts,tsx}") or type
+          (e.g. "py", "rust", "pdf"). Choose output_mode: files_with_matches
+          (default), content, or count.
+        - In the default mode each result is 'path:line', where line is the
+          first match — pass that number straight to Read's offset to jump to
+          it. Use content mode with context (-A/-B/-C) when you need the
+          surrounding lines.
+        - Escape literal braces in the regex ({} is regex syntax). For patterns
+          that must span lines, set multiline=true.
 
         Args:
             pattern: The regular expression to search for in file contents.
@@ -296,7 +308,7 @@ class Grep(BaseTool):
             multiline: Allow patterns to span lines, where "." also matches
                 newlines (ripgrep -U --multiline-dotall). Default False.
             head_limit: Limit output to the first N entries (like "| head -N").
-                Defaults to 250; pass 0 for unlimited (use sparingly).
+                Omit (or pass 0) to return all matches.
             offset: Skip the first N entries before applying head_limit, for
                 pagination. Default 0.
         """
@@ -440,7 +452,7 @@ class Grep(BaseTool):
 
         Exit code 0 = matches, 1 = no matches (both fine); anything else raises.
         """
-        args = [rg, "--hidden", "--max-columns", str(MAX_COLUMNS)]
+        args = [rg, "--hidden"]
         for vcs in VCS_DIRECTORIES_TO_EXCLUDE:
             args += ["--glob", f"!{vcs}"]
         if multiline:
@@ -580,17 +592,14 @@ class Grep(BaseTool):
         # content mode
         if multiline:
             # Can't attribute multiline matches to single line numbers reliably;
-            # emit the matched spans, truncated to MAX_COLUMNS.
+            # emit the matched spans intact (a large result is persisted to disk
+            # by the shared tool-result exit rather than truncated here).
             for m in regex.finditer(data):
                 snippet = m.group(0).replace("\n", "\\n")
-                if len(snippet) > MAX_COLUMNS:
-                    snippet = snippet[:MAX_COLUMNS]
                 rows.append(f"{file_path}:{snippet}")
             return
         for i, line in enumerate(data.splitlines(), start=1):
             if regex.search(line):
-                if len(line) > MAX_COLUMNS:
-                    line = line[:MAX_COLUMNS]
                 rows.append(f"{file_path}:{i}:{line}" if line_numbers else f"{file_path}:{line}")
 
     def _format(self, rows, root, output_mode, head_limit, offset) -> str:

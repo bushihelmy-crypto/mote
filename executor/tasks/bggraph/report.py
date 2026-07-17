@@ -2,7 +2,7 @@
 
 Provides both the generic progress ContextVar primitive (``report_progress``,
 ``set_progress_writer``, ``reset_progress_writer``) and the bggraph-specific
-rendering helpers (``make_progress_writer``, ``_truncate``).
+rendering helpers (``make_progress_writer``, ``_as_text``).
 """
 
 from __future__ import annotations
@@ -53,8 +53,6 @@ def reset_progress_writer(token: contextvars.Token) -> None:
 # ---------------------------------------------------------------------------
 
 _FMT_PROGRESS = "[{stage}] {status}: {detail}"
-
-MAX_RESULT_DISPLAY_CHARS = 99999999
 
 # The single authoritative definition of which *mid-flight* (per-node) progress
 # events, emitted from inside the running graph coroutine, are worth
@@ -121,9 +119,10 @@ def _is_task_terminal(stage: str, status: str) -> bool:
     return stage == END and status in _GRAPH_TERMINAL_STATUSES
 
 
-def _truncate(text: Any, limit: int = MAX_RESULT_DISPLAY_CHARS) -> str:
-    """Render *text* as a string. Truncation is currently disabled — the full
-    text is always returned so notifications/progress are not cut mid-content.
+def _as_text(text: Any) -> str:
+    """Render *text* as a string. The full text is always returned so
+    notifications/progress are never cut mid-content; a large result is
+    persisted to disk by the shared tool-result exit, not truncated here.
     """
     return str(text) if text is not None else ""
 
@@ -175,7 +174,7 @@ def make_progress_writer(
 
     def _writer(stage: str, status: Any, detail: Any = None) -> None:
         status_str = status.value if hasattr(status, "value") else str(status)
-        detail_str = _truncate(detail) if detail is not None else ""
+        detail_str = _as_text(detail) if detail is not None else ""
         # The notify layer renders a ``(current)`` placeholder before the real
         # pool task_id is known. Substitute it here so every sink (disk append,
         # event bus and the delivered notification) reports the real id.

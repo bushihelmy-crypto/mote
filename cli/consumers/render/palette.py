@@ -51,6 +51,7 @@ class Palette:
     DIFF_HUNK = "#4a9eda"  # @@ hunk header (cyan)
     QUESTION = "#b48ead"  # posed-question marker (soft magenta)
     LINK = "#4a9eda"  # clickable URL (cyan, underlined by the linkifier)
+    MATH_BG = "#33251f"  # warm dark tint behind a flattened LaTeX formula (the box)
 
 
 # Glyphs (light figure set).

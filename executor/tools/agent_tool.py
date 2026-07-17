@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from string import Template
+from typing import ClassVar
 
 from mote.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
 from mote.common.prompt.agent import AGENT_TASK_PROMPT
-from mote.common.prompt.tools import AGENT_DESCRIPTION
 from mote.common.schema import UserMessage
+from mote.common.utils.docstring import description_body
 from mote.executor.agent_registry import registry as agent_registry
 from mote.executor.base_tool import BaseTool
 from mote.executor.tool_registry import register_tool
@@ -30,10 +32,32 @@ class Agent(BaseTool):
 
     name = "Agent"
     aliases = ["run_agent"]
-    description = AGENT_DESCRIPTION
+    # Recall synonyms for tool-search: ways a model expresses "hand this off"
+    # that the summary ("spawn a typed child agent") does not literally contain.
+    keywords: ClassVar[list[str]] = [
+        "delegate",
+        "subagent",
+        "sub-agent",
+        "spawn",
+        "hand off",
+        "dispatch task",
+        "委派",
+        "子代理",
+        "分派",
+        "子任务",
+        "并发",
+    ]
 
     async def call(self, *, agent_type: str, prompt: str, context: str = "") -> str:
-        """Spawn a typed child agent and return its summary.
+        """Spawn a typed child agent for a bounded subtask — returns its summary.
+
+        Delegate a self-contained subtask to a fresh child agent of the named
+        type. The child runs its own react loop with its own toolset and config
+        (defined by that agent type's RoleSchema), then returns only its final
+        summary — so the long working process never pollutes your history. Pick
+        an ``agent_type`` from the list embedded in this tool's schema; put the
+        concrete instruction in ``prompt`` and any background the agent needs in
+        ``context``.
 
         Args:
             agent_type: Name of the registered agent type to spawn.
@@ -92,13 +116,17 @@ class Agent(BaseTool):
         for name, agent_cls in agent_registry.all_agents().items():
             desc = agent_cls.get_schema()["description"]
             tools = ", ".join(getattr(agent_cls, "tools", None) or [])
-            max_turns = getattr(agent_cls, "max_react_loop", "?")
-            lines.append(f"- {name}: {desc} (tools: {tools}, max_turns: {max_turns})")
+            lines.append(f"- {name}: {desc} (tools: {tools})")
         agent_types_desc = "\n".join(lines) if lines else "No agent types registered."
+
+        # Base description comes from the call() docstring body (docstring-native
+        # prose); we only APPEND the live agent-type roster. summary() reads this
+        # description's first line, so it stays the docstring summary sentence.
+        base = description_body(inspect.getdoc(cls.call) or "")
 
         return {
             "name": cls.name,
-            "description": f"{cls.description}\n\nAvailable agent types:\n{agent_types_desc}",
+            "description": f"{base}\n\nAvailable agent types:\n{agent_types_desc}",
             "parameters": {
                 "type": "object",
                 "properties": {

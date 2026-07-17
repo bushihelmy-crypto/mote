@@ -19,6 +19,8 @@ rows live in the prompt, never the full bodies.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import GetCwd, GetSkillPool, RegisterResource, RunSkillFork
 from mote.executor.tool_registry import register_tool
@@ -44,6 +46,19 @@ class Skill(BaseTool):
     """
 
     name = "Skill"
+    # Recall synonyms for tool-search: ways a model asks for a packaged
+    # procedure that the summary ("invoke a project Skill") does not spell out.
+    keywords: ClassVar[list[str]] = [
+        "procedure",
+        "playbook",
+        "recipe",
+        "macro",
+        "capability",
+        "invoke skill",
+        "技能",
+        "调用技能",
+        "流程",
+    ]
     # ``get_cwd`` lets fork skills inherit the working dir; ``get_skill_pool``
     # resolves the live skill pool; ``run_skill_fork`` spawns the isolated child;
     # ``register_resource`` registers an inline body so it survives compaction.
@@ -58,7 +73,12 @@ class Skill(BaseTool):
     register_resource: RegisterResource = staticmethod(lambda **k: None)
 
     async def call(self, *, name: str = "", arguments: str = "", query: str = "") -> str:
-        """Invoke a skill by ``name``, or search skills with ``query``.
+        """Invoke or search reusable skills — packaged multi-step procedures.
+
+        Invoke a skill by ``name`` (as listed in the Available Skills index), or
+        search skills with ``query`` when the name is unknown. An inline skill
+        returns its rendered instructions as the result; a fork skill runs in an
+        isolated sub-agent and returns only its final summary.
 
         Args:
             name: The skill to invoke (as listed in the Available Skills index).

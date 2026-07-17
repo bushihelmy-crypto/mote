@@ -44,7 +44,7 @@ from __future__ import annotations
 import abc
 import inspect
 from enum import IntEnum
-from typing import Any, ClassVar, Literal, Optional
+from typing import Any, ClassVar, Generic, Literal, Optional, TypeVar
 
 #: How the observation plane delivers an event to a subscriber.
 DeliveryPolicy = Literal["mirror", "durable"]
@@ -127,7 +127,16 @@ class ObserverPriority(IntEnum):
 DEFAULT_PRIORITY = ObserverPriority.LIVE
 
 
-class ControlOutcome(abc.ABC):
+#: Self-type of a concrete outcome — the CRTP parameter that binds ``merge`` to
+#: *this* outcome type so folding two outcomes of *different* events is a static
+#: error, not a runtime ``isinstance`` catch. ``ToolCallOutcome`` subclasses
+#: ``ControlOutcome["ToolCallOutcome"]``, so its ``merge`` takes/returns exactly a
+#: ``ToolCallOutcome``. (A plain ``Self`` parameter reads as a covariant override
+#: and pyright rejects it; CRTP is the checker-accepted encoding.)
+_TOutcome = TypeVar("_TOutcome", bound="ControlOutcome")
+
+
+class ControlOutcome(abc.ABC, Generic[_TOutcome]):
     """The typed influence a control subscriber folds back onto the host.
 
     Each control event has its own concrete outcome (see
@@ -141,9 +150,12 @@ class ControlOutcome(abc.ABC):
       stamped with ``by`` = the rewriting subscriber's name (provenance).
 
     A nominal ABC (not a structural Protocol): a new outcome that forgets
-    ``is_blocking``/``merge`` cannot be instantiated. ``rebind`` is *concrete*
-    here — the identity default (rewrite nothing) — so a non-rewriting outcome is
-    inert for free; only the two rewriting outcomes override it.
+    ``is_blocking``/``merge`` cannot be instantiated. It is **CRTP-generic** in its
+    own concrete type (``_TOutcome``) so ``merge`` is typed *same-event only* —
+    ``tool_outcome.merge(spawn_outcome)`` is a compile-time error, not a runtime
+    surprise. ``rebind`` is *concrete* here — the identity default (rewrite
+    nothing) — so a non-rewriting outcome is inert for free; only the two
+    rewriting outcomes override it.
     """
 
     @property
@@ -153,7 +165,7 @@ class ControlOutcome(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def merge(self, other: "ControlOutcome") -> "ControlOutcome":
+    def merge(self, other: _TOutcome) -> _TOutcome:
         """Fold ``other`` (same event type) into ``self``, returning the result."""
         ...
 

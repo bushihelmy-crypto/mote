@@ -1,8 +1,8 @@
 """
 ReActLoop — the default think→act react cycle.
 
-The loop owns its own iteration state (consecutive count) and reads/writes the
-shared `active` signal via injected callables, because `active` doubles as a
+The loop reads/writes the shared `active` signal via injected callables,
+because `active` doubles as a
 tool→loop kill switch: the End tool (and ask_user's "stop") call
 Role.deactivate(), which must still be able to break this loop. Everything else
 is a plain component.
@@ -19,9 +19,9 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from mote.common.base import BaseLoop, LoopContext
 from mote.common.base.command_channel import join_command_outputs
 from mote.common.const.message import MESSAGE_ROUTE_TO_ALL
+from mote.common.disk import get_disk_writer
 from mote.common.events import span
 from mote.common.logs import log_class
-from mote.common.prompt.output import SUMMARIZE_STATUS_WHEN_CONSECUTIVE
 from mote.common.schema import AIMessage, CauseBy, Message, MessagePriority, UserMessage
 
 if TYPE_CHECKING:
@@ -96,8 +96,6 @@ class ReActLoop(BaseLoop):
         # context_provider.loop_context() — the loop never receives it directly.
         self._ctx: LoopContext | None = None
 
-        # Loop-owned iteration state (was state.consecutive_react_cnt).
-        self._consecutive = 0
         # Recovery support: tracks the last message committed by observe.
         self.latest_observed_msg: Message | None = None
 
@@ -206,66 +204,126 @@ class ReActLoop(BaseLoop):
             # command, so a tool in the loop below (e.g. ``end_session``) reads
             # this turn's fresh result off state rather than the engine.
             self._report_think_result(self._think_engine.result)
+            content = self._think_engine.result.content
+
+            # Build the per-command entries up front (id/name/args are known from
+            # the parsed calls; output/success fill in as each body runs). Having
+            # the full skeleton before execution lets the channel record the
+            # assistant tool-call message ahead of any side effect.
+            executed: list[dict] = [
+                {
+                    "id": cmd.get("id"),
+                    "name": cmd["command_name"],
+                    "args": cmd.get("args") or {},
+                    "output": "",
+                    "success": True,
+                }
+                for cmd in commands
+            ]
+
+            # Durability checkpoint: when this turn calls an EXTERNAL-effect tool
+            # that the executor will ledger, persist the assistant's tool-call
+            # message and FLUSH it to disk *before* running any body. A crash
+            # mid-side-effect then leaves a dangling tool_call on resume that the
+            # ledger can heal (pair with the recorded/unknown result), instead of
+            # losing the whole turn (and the call id needed to reconcile it).
+            # Non-EXTERNAL turns skip this and keep the cheaper single-shot
+            # record_turn below — no early append, no drain. Layering: the loop
+            # (not the executor) owns drain timing; it only asks the durable
+            # writer to flush what the recorder subscriber already queued.
+            checkpoint = any(self._executor.will_ledger(e["name"], e["id"]) for e in executed)
+            if checkpoint:
+                await self._channel.record_call(self._memory, content, executed)
+                await get_disk_writer().drain()
 
             # Execute in order. On the first failure, stop running further commands
             # but still RECORD a result for each remaining one: native tool-use
             # requires every emitted tool_call to have a paired tool_result, so we
             # cannot simply drop them.
-            executed: list[dict] = []
             failed = False
-            for cmd in commands:
-                name = cmd["command_name"]
-                entry = {
-                    "id": cmd.get("id"),
-                    "name": name,
-                    "args": cmd.get("args") or {},
-                    "output": "",
-                    "success": True,
-                }
-                if failed:
-                    entry["output"] = (
-                        f"[SKIPPED] Command {name} was not executed because an earlier "
-                        "command failed. Please replan in the next round."
-                    )
-                    entry["success"] = False
-                    executed.append(entry)
-                    continue
-                result = await self._executor.run_command(name, cmd.get("args") or {}, result_id=cmd.get("id"))
-                entry["output"] = result.output
-                entry["success"] = result.success
-                # Media (base64 images / PDFs) surfaced to the model as a supplemental
-                # multimodal message by the channel's record_turn.
-                if result.images:
-                    entry["images"] = result.images
-                if result.pdfs:
-                    entry["pdfs"] = result.pdfs
-                # Per-result lifecycle hint (erasable/pin). Carried like media so
-                # the channel can stamp it onto the tool_result message metadata;
-                # only the native channel (which has per-result messages) uses it.
-                if result.retention:
-                    entry["retention"] = result.retention
-                # Resource provenance of a reconstructable result (the file a Read
-                # derived from). Carried the same way; the channel stamps it onto
-                # the tool_result metadata for ContextVisibility to key off.
-                if result.resource_path:
-                    entry["resource_path"] = result.resource_path
-                executed.append(entry)
-                if not result.success:
-                    failed = True
-                # A terminal block (user rejected the approval prompt, or a hook
-                # vetoed the call) ends the whole react loop, not just this call.
-                # Clear the active signal — the same kill switch the End tool trips
-                # — so the next _step_think returns False and the loop stops. Later
-                # commands are still recorded as [SKIPPED] via ``failed`` above, so
-                # native tool-use keeps every tool_call paired with a tool_result.
-                if result.terminate:
-                    self._set_active(False)
+            try:
+                for entry in executed:
+                    name = entry["name"]
+                    if failed:
+                        entry["output"] = (
+                            f"[SKIPPED] Command {name} was not executed because an earlier "
+                            "command failed. Please replan in the next round."
+                        )
+                        entry["success"] = False
+                        entry["settled"] = True
+                        continue
+                    result = await self._executor.run_command(name, entry["args"], result_id=entry["id"])
+                    entry["output"] = result.output
+                    entry["success"] = result.success
+                    # Media (base64 images / PDFs) surfaced to the model as a supplemental
+                    # multimodal message by the channel's record_results.
+                    if result.images:
+                        entry["images"] = result.images
+                    if result.pdfs:
+                        entry["pdfs"] = result.pdfs
+                    # Per-result lifecycle hint (erasable/pin). Carried like media so
+                    # the channel can stamp it onto the tool_result message metadata;
+                    # only the native channel (which has per-result messages) uses it.
+                    if result.retention:
+                        entry["retention"] = result.retention
+                    # Resource provenance of a reconstructable result (the file a Read
+                    # derived from). Carried the same way; the channel stamps it onto
+                    # the tool_result metadata for ContextVisibility to key off.
+                    if result.resource_path:
+                        entry["resource_path"] = result.resource_path
+                    # Structured payload (only SearchTools' {tool_references} is read by
+                    # the recorder → ToolMessage.tool_references for the Anthropic
+                    # server-side tool-search wire projection). Other tools' data is
+                    # ignored downstream.
+                    if result.data is not None:
+                        entry["data"] = result.data
+                    entry["settled"] = True
+                    if not result.success:
+                        failed = True
+                    # A terminal block (user rejected the approval prompt, or a hook
+                    # vetoed the call) ends the whole react loop, not just this call.
+                    # Clear the active signal — the same kill switch the End tool trips
+                    # — so the next _step_think returns False and the loop stops. Later
+                    # commands are still recorded as [SKIPPED] via ``failed`` above, so
+                    # native tool-use keeps every tool_call paired with a tool_result.
+                    if result.terminate:
+                        self._set_active(False)
+            except BaseException:
+                # Interrupted mid-execution — the common case is a Ctrl+C, which
+                # AgentControl.interrupt turns into a task ``cancel()`` →
+                # ``CancelledError`` (a BaseException) raised at the ``await`` inside
+                # run_command, before the loop finished. In the CHECKPOINT path the
+                # assistant tool_call message is ALREADY in history (record_call ran
+                # up front to make a mid-side-effect crash healable). Unwinding now
+                # without a paired tool_result for every id would leave a dangling
+                # tool_use → the NEXT provider request violates the "each tool_use
+                # needs an immediately following tool_result" rule (Anthropic /
+                # Bedrock 400). So close the pairing here, at the point of truth
+                # (we KNOW it was interrupted — more precise than the resume-time
+                # ledger reconcile, which can only guess ``unknown-after-crash``):
+                # synthesize an ``[INTERRUPTED]`` result for every call that had not
+                # settled, record the results, then re-raise so the normal
+                # interrupt/recovery unwind still runs. The non-checkpoint path has
+                # recorded NOTHING yet (record_turn runs only on the success tail
+                # below), so it has no dangling call to repair — hence the guard.
+                if checkpoint:
+                    for entry in executed:
+                        if not entry.get("settled"):
+                            entry["output"] = "[INTERRUPTED] Command did not complete (the turn was interrupted)."
+                            entry["success"] = False
+                    await self._channel.record_results(self._memory, executed)
+                raise
 
             outputs = join_command_outputs(executed)
 
-            # The channel writes this turn into memory in its protocol's shape
-            # (XML: text + merged outputs; native: tool_calls + per-call tool results).
-            await self._channel.record_turn(self._memory, self._think_engine.result.content, executed)
+            # Write this turn into memory in the channel's protocol shape (XML:
+            # text + merged outputs; native: tool_calls + per-call tool results).
+            # If a checkpoint already recorded the assistant message, only the
+            # results remain; otherwise record the whole round in one shot.
+            if checkpoint:
+                await self._channel.record_results(self._memory, executed)
+            else:
+                await self._channel.record_turn(self._memory, content, executed)
 
             await self._think_engine.join()
 
@@ -296,27 +354,6 @@ class ReActLoop(BaseLoop):
             cause_by=CauseBy.RUN_COMMAND,
         )
 
-    async def _ask_user(self, question: str, header: str, options: list[tuple[str, str]]) -> str:
-        """Run the AskUserQuestion tool with a single question; return its answer.
-
-        Consolidates the two post-check prompts in run() (the max-rounds gate and
-        the consecutive-actions gate), which differ only in their question text and
-        their option pairs. ``options`` is a list of ``(label, description)``.
-        """
-        result = await self._executor.run_command(
-            "AskUserQuestion",
-            {
-                "questions": [
-                    {
-                        "question": question,
-                        "header": header,
-                        "options": [{"label": label, "description": desc} for label, desc in options],
-                    }
-                ]
-            },
-        )
-        return result.output
-
     async def run(self) -> Message | None:
         # Pull the static observe + loop-control bundle once per run(). The loop
         # holds only the provider; it never receives LoopContext directly.
@@ -328,17 +365,15 @@ class ReActLoop(BaseLoop):
 
         self._set_active(True)
 
-        actions_taken = 0
-        self._consecutive = 0
         rsp = AIMessage(content=_NO_ACTIONS_YET, cause_by=CauseBy.ACTION)
-        while actions_taken < self._ctx.max_react_loop:
+        while True:
             if await self._observe(max_priority=MessagePriority.NEXT):
-                self._consecutive = 0
                 self._set_active(True)
-            # Budget gate — a run-limit sibling of max_react_loop. Checked before
-            # think so a hard cap halts the loop *before* any LLM access; the
-            # provider owns the spend read + threshold events (soft notice at
-            # 80%, hard stop at 100%). An unbudgeted agent returns PROCEED.
+            # Budget gate — the run's spend ceiling. Checked before think so a
+            # hard cap halts the loop *before* any LLM access; the provider owns
+            # the spend read + threshold events (soft notice at 80%, hard stop at
+            # 100%). An unbudgeted agent returns PROCEED, and termination then
+            # rests entirely on the natural exits below (no-todo / terminal).
             verdict = await self._context_provider.enforce_budget()
             if verdict.stop:
                 rsp = AIMessage(content=verdict.message, sent_from=self.ctx.name, cause_by=CauseBy.RUN_COMMAND)
@@ -366,41 +401,5 @@ class ReActLoop(BaseLoop):
                 break
             # act
             rsp = await self._step_act()
-            actions_taken += 1
-            self._consecutive += 1
-
-            # post-check
-            can_ask = "AskUserQuestion" in self._ctx.tools
-            if self._ctx.max_react_loop >= 10 and actions_taken >= self._ctx.max_react_loop:
-                if not can_ask:
-                    break
-                answer = await self._ask_user(
-                    "I have reached my max action rounds, do you want me to continue?",
-                    "Continue?",
-                    [("Yes", "Continue working on the task."), ("No", "Stop here.")],
-                )
-                if "yes" in answer.lower():
-                    actions_taken = 0
-            if self._consecutive >= self._ctx.max_consecutive_react_limit:
-                if not can_ask:
-                    break
-                # Reuse the managed history verbatim: it is kept boundary-safe
-                # (complete tool_use↔tool_result pairs) and under budget by
-                # manage_history on every think turn. A bare tail slice here used
-                # to cut through the middle of a tool group, stranding an orphan
-                # tool_result at the head → Anthropic 400.
-                memory = self._memory.get()
-                context = memory + [UserMessage(content=SUMMARIZE_STATUS_WHEN_CONSECUTIVE)]
-                llm = await self._context_provider.resolve_llm(context)
-                question = await llm.aask(context)
-                answer = await self._ask_user(
-                    question,
-                    "Guidance?",
-                    [("Continue", "Proceed as planned."), ("Adjust", "Provide different instructions.")],
-                )
-                await self._memory.add(
-                    UserMessage(content="User's extra instruction: " + answer, cause_by=CauseBy.RUN_COMMAND)
-                )
-                self._consecutive = 0
 
         return rsp

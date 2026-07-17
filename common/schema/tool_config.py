@@ -45,9 +45,6 @@ TOOL_MAX_RESULT_SIZE_CHARS: dict[str, int] = {
     "Sleep": 1_000,
 }
 
-# Subdirectory (under the workspace root) that holds persisted tool results.
-TOOL_RESULTS_SUBDIR = ".tool_results"
-
 # ---------------------------------------------------------------------------
 # Output-compression constants (``mote.executor.compress``)
 # ---------------------------------------------------------------------------
@@ -78,3 +75,38 @@ class ToolResultLimitConfig(BaseModel):
     enable_output_compression: bool = True
     compression_min_output_chars: int = COMPRESSION_MIN_OUTPUT_CHARS
     compression_max_input_chars: int = COMPRESSION_MAX_INPUT_CHARS
+
+
+class EffectLedgerConfig(BaseModel):
+    """Knobs for the EXTERNAL-tool-effect idempotency ledger (crash-replay guard).
+
+    Sibling of :class:`ToolResultLimitConfig`: a pure-data, tool-execution-scope
+    policy the :class:`ToolExecutor` owns. When enabled, the executor records a
+    durable started/completed/failed entry per EXTERNAL ``(session, tool_call_id)``
+    around the tool body so a resume after a mid-call crash can tell a finished
+    call from an in-flight one (and heal a dangling one from the recorded result
+    instead of re-running its side effect). Disabling it reproduces the prior
+    no-ledger behavior — every call simply runs.
+    """
+
+    enabled: bool = True
+
+
+class ToolSearchConfig(BaseModel):
+    """Master switch for the Tool Search subsystem (deferred-tool discovery).
+
+    Sibling of :class:`ToolResultLimitConfig` / :class:`EffectLedgerConfig`: a
+    pure-data, tool-execution-scope policy. Per-role ``RoleSchema.deferred_tools``
+    declares WHICH tools are hidden-until-discovered; this ``enabled`` flag is the
+    global OVERRIDE that gates whether that declaration takes effect at all.
+
+    ``enabled=True`` (default) reproduces the existing behavior: a non-empty
+    ``deferred_tools`` engages the machinery (SearchTools bound, compact menu
+    injected, native ``defer_loading`` where the model supports it). Setting it
+    ``False`` forces the effective deferred set to EMPTY for every role — so no
+    tool is hidden, the ``SearchTools`` meta-tool is not bound, the deferred menu
+    is not built, and no server-side tool-search path fires — every declared tool
+    is simply fully visible on both channels (the plain no-deferral path).
+    """
+
+    enabled: bool = True

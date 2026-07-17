@@ -1,7 +1,7 @@
 """Multimodal service configurations (image/audio/music/video generation).
 
-Only the four generation services the media-pipeline tools actually consume are
-modelled (see ``executor/tools/media_pipeline/creators.py``). Each carries just
+Only the four generation services the GenerateMedia tool actually consumes are
+modelled (see ``executor/tools/generate_media/creators.py``). Each carries just
 the endpoint + model fields the creators read.
 """
 from __future__ import annotations

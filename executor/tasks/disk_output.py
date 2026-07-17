@@ -15,10 +15,10 @@ import asyncio
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-from mote.common.const import DEFAULT_WORKSPACE_ROOT
 from mote.common.const.tasks import DEFAULT_MAX_READ_BYTES, MAX_TASK_OUTPUT_BYTES, MAX_TASK_OUTPUT_BYTES_DISPLAY
 from mote.common.disk import disk_io
 from mote.common.logs import logger
+from mote.common.workspace import ArtifactKind, WorkspaceStore
 
 # Sentinel object to signal drain loop shutdown (never confused with real data).
 _SENTINEL = object()
@@ -34,17 +34,14 @@ class DiskTaskOutput:
     def __init__(
         self,
         task_id: str,
-        base_dir: Union[str, Path],
-        session_id: str = "",
+        output_dir: Union[str, Path],
         on_cap: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.task_id = task_id
-        # Scope the stdout/progress log by session — mirrors the result-value
-        # path (``.tool_results/{session}/...``) so both on-disk artifacts of a
-        # task share the same per-session layout under one workspace root. Empty
-        # session falls back to the shared ``default`` bucket, identical to
-        # ``tool_result_limit``'s scoping.
-        base = Path(base_dir) / ".task_outputs" / (session_id or "default")
+        # *output_dir* is the already-resolved ``task_outputs/`` space for this
+        # task's session (from :class:`WorkspaceStore`); this class holds no
+        # layout knowledge of its own.
+        base = Path(output_dir)
         base.mkdir(parents=True, exist_ok=True)
         self._file_path = base / f"{task_id}.output"
         # Create (or truncate) the output file
@@ -219,29 +216,42 @@ class DiskTaskOutput:
 class TaskOutputStore:
     """Registry of per-task disk outputs.
 
-    Files are stored under
-    ``{base_dir}/.task_outputs/{session_id}/{task_id}.output``.
-    Defaults to ``DEFAULT_WORKSPACE_ROOT`` so the path stays stable
-    even when the agent switches its working directory; the session layer
-    mirrors the result-value path (``.tool_results/{session}/...``) so both
-    of a task's on-disk artifacts share one per-session tree.
+    Files are stored in the ``task_outputs/`` space under the session directory
+    (``{root}/.agent_sessions/{session_id}/task_outputs/{task_id}.output``),
+    resolved through the shared :class:`WorkspaceStore`. Both of a task's on-disk
+    artifacts (this stdout log and its large-result overflow) therefore live
+    under one session tree and are swept together with the session.
+
+    Accepts an optional ``base_dir`` (a workspace *root*) for convenience — it is
+    wrapped in a :class:`WorkspaceStore` — or, for the injected single-owner
+    path, an explicit ``store``. Defaults to the standard workspace root.
     """
 
-    def __init__(self, base_dir: Union[str, Path, None] = None, session_id: str = "") -> None:
-        self._base_dir = Path(base_dir) if base_dir is not None else Path(DEFAULT_WORKSPACE_ROOT)
+    def __init__(
+        self,
+        base_dir: Union[str, Path, None] = None,
+        session_id: str = "",
+        *,
+        store: Optional[WorkspaceStore] = None,
+    ) -> None:
+        self._store = store if store is not None else WorkspaceStore(base_dir)
         self._session_id = session_id
         self._outputs: dict[str, DiskTaskOutput] = {}
         self._on_cap: Optional[Callable[[str], None]] = None
 
     @property
-    def base_dir(self) -> Path:
-        """Root under which this store's task files live.
+    def store(self) -> WorkspaceStore:
+        """The workspace layout owner backing this store.
 
-        The pool reuses it to scope a large whole-task *result* file
-        (``.tool_results/...``) into the same tree as the streaming stdout log
-        (``.task_outputs/...``), so both persisted artifacts share one root.
+        The pool reuses it to scope a large whole-task *result* file into the
+        same session tree as this streaming stdout log, so both persisted
+        artifacts share one owner and one layout.
         """
-        return self._base_dir
+        return self._store
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     def set_on_cap(self, callback: Callable[[str], None]) -> None:
         """Set a callback invoked when any task's output hits the disk cap.
@@ -256,7 +266,8 @@ class TaskOutputStore:
         """Create and register a new task output."""
         if task_id in self._outputs:
             raise ValueError(f"Task output already exists: {task_id}")
-        output = DiskTaskOutput(task_id, self._base_dir, session_id=self._session_id, on_cap=self._on_cap)
+        output_dir = self._store.space(self._session_id, ArtifactKind.TASK_OUTPUTS)
+        output = DiskTaskOutput(task_id, output_dir, on_cap=self._on_cap)
         self._outputs[task_id] = output
         return output
 

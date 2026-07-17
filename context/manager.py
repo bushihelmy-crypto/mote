@@ -35,12 +35,13 @@ from typing import TYPE_CHECKING
 
 import mote.context.budget as budget
 from mote.common.const import CACHE_INTENT, CACHE_INTENT_EPHEMERAL_TAIL
-from mote.common.events import MessageAppendedEvent, ToolsChangedEvent
+from mote.common.events import HistoryEditedEvent, MessageAppendedEvent, ToolsChangedEvent
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.logs import log_class
 from mote.common.schema import ContextManagerConfig, FoldState, LLMCallContext
 
 if TYPE_CHECKING:
+    from mote.common.schema import ToolResultLimitConfig
     from mote.common.schema.messages import Message, UserMessage
 else:
     from mote.common.schema import Message, UserMessage
@@ -51,6 +52,7 @@ from mote.context.compaction import (
     EraseReducer,
     FoldReducer,
     HeadDropReducer,
+    OversizedSpillReducer,
     RecoveryContextReducer,
     ReductionPipeline,
     ReductionReason,
@@ -59,6 +61,9 @@ from mote.context.compaction import (
     Transcript,
     Urgency,
 )
+
+if TYPE_CHECKING:
+    from mote.common.workspace import WorkspaceStore
 
 # Sentinel distinguishing "argument omitted" from an explicit ``None`` in
 # :meth:`ContextManager.rebuild_compression` (``None`` is a meaningful llm value
@@ -91,6 +96,10 @@ class ContextManager(ObservationSubscriber):
             live ToolExecutor (``reconstructable_tool_names()``) so the set tracks
             whatever tools are actually bound. Defaults to the empty set —
             standalone/test use folds nothing until a set is injected.
+        session_id: Owning session id; scopes where the spill reducer persists an
+            oversized part. Empty in standalone/test use.
+        store: Workspace layout owner resolving the on-disk spill location.
+            Defaults to the standard workspace root when omitted.
     """
 
     def __init__(
@@ -104,11 +113,25 @@ class ContextManager(ObservationSubscriber):
         sticky_provider=None,
         rehydrate_provider=None,
         compactable: frozenset[str] = frozenset(),
+        session_id: str = "",
+        store: "WorkspaceStore | None" = None,
+        limit_config: "ToolResultLimitConfig | None" = None,
     ):
         self._context = context if context is not None else LLMCallContext()
         self._llm = llm
         self.config = config or ContextManagerConfig()
         self._model = model
+        # Session id + workspace layout owner threaded to the spill reducer so a
+        # spilled oversized part co-locates under the session directory (swept
+        # with the session). Empty / None fall back to the default workspace root.
+        self._session_id = session_id
+        self._store = store
+        # The large-result persistence policy. Owned by the executor (which
+        # enforces it at the tool chokepoint) and borrowed here so the spill
+        # reducer applies the SAME threshold/persist policy to runaway history
+        # parts — one owner, no drift. None => the reducer's own default, which
+        # matches the executor's default (standalone/test use).
+        self._limit_config = limit_config
         # Tools whose result bodies are re-derivable (fold/clear-safe). Threaded
         # into ``Transcript.from_messages`` (the single place the reconstructable
         # judgment is made — the FoldReducer only consumes the resulting segment
@@ -168,6 +191,18 @@ class ContextManager(ObservationSubscriber):
         model = self.model
         self._erase = EraseReducer(self.config, model=model)
         self._fold = FoldReducer(self.config, model=model)
+        # Lossless spill of runaway single parts (message content / tool-call
+        # args) to disk, leaving a ``<persisted-output>`` pointer. FREE, so the
+        # pipeline's cost-sort runs it opportunistically before summarize (LLM)
+        # and drop (DESTRUCTIVE). Reuses the tool path's persist primitive routed
+        # through the session's WorkspaceStore.
+        self._spill = OversizedSpillReducer(
+            self.config,
+            model=model,
+            session_id=self._session_id,
+            store=self._store,
+            limit_config=self._limit_config,
+        )
         self._summarize = SummarizeReducer(
             self._llm,
             self.config,
@@ -176,7 +211,7 @@ class ContextManager(ObservationSubscriber):
             rehydrate_provider=self._rehydrate_provider,
         )
         self._drop = HeadDropReducer(self.config, model=model)
-        pipeline = ReductionPipeline([self._erase, self._fold, self._summarize, self._drop], model=model)
+        pipeline = ReductionPipeline([self._erase, self._fold, self._spill, self._summarize, self._drop], model=model)
         self._engine = ContextEngine(pipeline, bus=self._bus, summarize_reducer=self._summarize)
         # Reactive (HARD) reducer for the LLM recovery loop. It runs the SAME
         # boundary-safe machinery and escalates fold → summarize → drop, stopping
@@ -189,7 +224,7 @@ class ContextManager(ObservationSubscriber):
         # inner call cannot re-enter _compress. The fold→summarize→drop cycle is
         # thus broken at the injection layer — no runtime re-entrancy guard needed.
         self._recovery_reducer = RecoveryContextReducer(
-            [self._erase, self._fold, self._summarize, self._drop], model=model
+            [self._erase, self._fold, self._spill, self._summarize, self._drop], model=model
         )
 
     def rebuild_compression(self, *, llm: object = _UNSET, config: ContextManagerConfig | None = _UNSET) -> None:
@@ -293,8 +328,88 @@ class ContextManager(ObservationSubscriber):
     def count(self) -> int:
         return len(self._context.messages)
 
-    def clear(self) -> None:
+    async def clear(self) -> None:
+        """Empty the stored history and announce the structural rebuild.
+
+        Emits a single :class:`HistoryEditedEvent` (``reason="clear"``) — the same
+        event a user delete fires — so the recorder persists the now-empty list as
+        a replay checkpoint AND every history-derived signal (turn-context
+        incremental frontiers, the resource side-store) re-derives itself against
+        the emptied history. ``/clear`` and delete are the two orthogonal
+        history-rebuild paths; both converge on this one event.
+        """
         self._context.messages.clear()
+        if self._bus is not None:
+            await self._bus.emit(HistoryEditedEvent(messages=[], reason="clear"))
+
+    # ------------------------------------------------------------------
+    # Direct history editing (user-driven delete of react-units)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_human_prompt(message: Message) -> bool:
+        """True iff *message* is a human's own typed prompt (a react-unit anchor).
+
+        A react-unit begins at a human prompt and runs up to (excluding) the next
+        one. Only a ``role="user"`` message that is NOT an injected
+        ``<system-reminder>`` envelope counts — the per-turn context blocks the
+        bus wraps as user messages are part of a turn, never a boundary.
+        """
+        from mote.common.text import is_system_reminder
+
+        role = str(getattr(message, "role", "") or "")
+        if role != "user":
+            return False
+        return not is_system_reminder(getattr(message, "content", "") or "")
+
+    @staticmethod
+    def _react_unit_drop_indices(
+        messages: list[Message],
+        anchor_ids,
+        is_human_prompt,
+    ) -> set[int]:
+        """Indices to drop for the react-units anchored at ``anchor_ids`` (pure).
+
+        For each human-prompt message whose id is in ``anchor_ids``, drop it and
+        every following message up to (but excluding) the next human prompt — one
+        whole turn (prompt → reply → its tool calls). Unknown ids are ignored, so
+        a stale/duplicate anchor never crashes and never over-deletes.
+        """
+        wanted = {a for a in (anchor_ids or []) if a}
+        drop: set[int] = set()
+        n = len(messages)
+        i = 0
+        while i < n:
+            if is_human_prompt(messages[i]) and getattr(messages[i], "id", None) in wanted:
+                drop.add(i)
+                j = i + 1
+                while j < n and not is_human_prompt(messages[j]):
+                    drop.add(j)
+                    j += 1
+                i = j
+            else:
+                i += 1
+        return drop
+
+    async def delete_react_units(self, anchor_ids) -> int:
+        """Delete the react-units anchored at ``anchor_ids`` (one slice+swap).
+
+        Computes the drop set once via :meth:`_react_unit_drop_indices`, rebuilds
+        the backing history without those messages, and emits a single
+        :class:`HistoryEditedEvent` so the recorder persists the pruned list as a
+        replay checkpoint (survives restart/resume). Returns the number of
+        messages removed; a no-op (empty selection / all-unknown ids) removes
+        nothing and emits nothing.
+        """
+        messages = self._context.messages
+        drop = self._react_unit_drop_indices(messages, anchor_ids, self._is_human_prompt)
+        if not drop:
+            return 0
+        kept = [m for idx, m in enumerate(messages) if idx not in drop]
+        self._context.messages[:] = kept
+        if self._bus is not None:
+            await self._bus.emit(HistoryEditedEvent(messages=list(kept), reason="delete"))
+        return len(drop)
 
     # ------------------------------------------------------------------
     # History-level orchestration (microcompact → autocompact)

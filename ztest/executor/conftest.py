@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from mote.common.schema import ToolResultLimitConfig
+from mote.common.schema import EffectLedgerConfig, ToolResultLimitConfig
 from mote.executor.base_tool import BaseTool
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_executor import ToolExecutor
@@ -178,7 +178,9 @@ def make_executor(
     session_id: str = "sess",
     role: FakeRole | None = None,
     limit_config: ToolResultLimitConfig | None = None,
+    ledger_config: EffectLedgerConfig | None = None,
     recovery_strategies: dict | None = None,
+    workspace_store=None,
 ) -> ToolExecutor:
     """Build a ToolExecutor with no registry lookup and inject bound instances.
 
@@ -190,7 +192,9 @@ def make_executor(
         session_id,
         tools=None,
         limit_config=limit_config,
+        ledger_config=ledger_config,
         recovery_strategies=recovery_strategies,
+        workspace_store=workspace_store,
     )
     for tool in tools:
         tool.bind(session_id, role=role)

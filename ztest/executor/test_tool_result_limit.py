@@ -5,13 +5,15 @@
 Pure functions (no executor wiring): byte formatting, threshold clamping,
 preview newline-boundary truncation, and the ``enforce_tool_result_limit``
 persist / truncate / idempotent paths. Disk writes are pointed at ``tmp_path``
-via the ``base_dir`` argument.
+via a ``WorkspaceStore`` rooted there, so persisted results co-locate under the
+session directory (``.agent_sessions/{session}/tool_results/``).
 """
 from __future__ import annotations
 
 import pytest
 
 from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, PREVIEW_SIZE_BYTES
+from mote.common.workspace import WorkspaceStore
 from mote.executor.tool_result_limit import (
     enforce_tool_result_limit,
     format_file_size,
@@ -93,27 +95,30 @@ class TestEnforceToolResultLimit:
             session_id="s1",
             max_result_size_chars=100,
             persist=True,
-            base_dir=tmp_path,
+            store=WorkspaceStore(tmp_path),
         )
         assert result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
         assert "Output too large" in result
-        path = tmp_path / ".tool_results" / "s1" / "abc.txt"
+        # Co-located under the session directory alongside rollout + blobs.
+        path = tmp_path / ".agent_sessions" / "s1" / "tool_results" / "abc.txt"
         assert path.exists()
         assert path.read_text() == big
 
     def test_persist_is_idempotent_on_already_wrapped(self, tmp_path):
         wrapped = f"{PERSISTED_OUTPUT_OPEN_TAG}\nalready persisted\n</persisted-output>" + "x" * 60_000
         # Even though it's over threshold, an already-wrapped output is left alone.
-        result = enforce_tool_result_limit(wrapped, "T", result_id="r", max_result_size_chars=100, base_dir=tmp_path)
+        result = enforce_tool_result_limit(
+            wrapped, "T", result_id="r", max_result_size_chars=100, store=WorkspaceStore(tmp_path)
+        )
         assert result == wrapped
 
     def test_reuses_existing_file(self, tmp_path):
         big = "z" * 5000
-        path = tmp_path / ".tool_results" / "s2" / "rid.txt"
+        path = tmp_path / ".agent_sessions" / "s2" / "tool_results" / "rid.txt"
         path.parent.mkdir(parents=True)
         path.write_text("PREEXISTING CONTENT")
         enforce_tool_result_limit(
-            big, "T", result_id="rid", session_id="s2", max_result_size_chars=100, base_dir=tmp_path
+            big, "T", result_id="rid", session_id="s2", max_result_size_chars=100, store=WorkspaceStore(tmp_path)
         )
         # Idempotent persistence: an existing file is NOT overwritten.
         assert path.read_text() == "PREEXISTING CONTENT"
@@ -126,18 +131,18 @@ class TestEnforceToolResultLimit:
             result_id="r",
             max_result_size_chars=100,
             persist=False,
-            base_dir=tmp_path,
+            store=WorkspaceStore(tmp_path),
         )
         assert not result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
         assert "omitted" in result
         assert "total" in result
         # No file written when persistence is disabled.
-        assert not (tmp_path / ".tool_results").exists()
+        assert not (tmp_path / ".agent_sessions").exists()
 
     def test_preview_size_governs_persisted_preview(self, tmp_path):
         big = "p" * (PREVIEW_SIZE_BYTES * 3)
         result = enforce_tool_result_limit(
-            big, "T", result_id="r", session_id="s", max_result_size_chars=100, base_dir=tmp_path
+            big, "T", result_id="r", session_id="s", max_result_size_chars=100, store=WorkspaceStore(tmp_path)
         )
         # Preview slice is bounded by PREVIEW_SIZE_BYTES, far smaller than the full output.
         assert len(result) < len(big)

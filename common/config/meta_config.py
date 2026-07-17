@@ -10,6 +10,7 @@ from mote.common.config.config.observability_config import ObservabilityConfig
 from mote.common.config.config.secrets_config import SecretsConfig
 from mote.common.config.config.tools_config import ToolsConfig
 from mote.common.config.config.ui_config import UIConfig
+from mote.common.config.config.workspace_config import WorkspaceConfig
 from mote.common.observability.langfuse_integration import init_langfuse
 from mote.common.utils.yaml_model import YamlModel
 
@@ -21,7 +22,8 @@ class Config(YamlModel):
     knobs), ``context`` (context engineering), ``multimodal`` (media services),
     ``mcp`` (the MCP master switch — servers live in their own
     ``mcp_config.json``, never here), ``observability`` (Sentry/Langfuse), ``ui``
-    (human display) and ``secrets`` (redaction/vault).
+    (human display), ``secrets`` (redaction/vault) and ``workspace`` (disk-layer
+    TTL cleanup).
     """
 
     # Which models run: the default LLM, per-task overrides, routing switch and
@@ -51,6 +53,11 @@ class Config(YamlModel):
     # and vaults ``<secret>…</secret>`` uploads from the prompt before they reach
     # the model.
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+
+    # On-disk workspace settings — currently the periodic TTL cleanup sweep that
+    # reclaims stale per-session artifacts (rollout / blobs / tool_results /
+    # task_outputs). Grouped here so the workspace tree has one config home.
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
 
     @model_validator(mode="after")
     def activate_langfuse(self):

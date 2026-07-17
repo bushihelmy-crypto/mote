@@ -71,19 +71,19 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None):
 
 class TestFolding:
     async def test_all_allow(self):
-        d = await engine("bypass").check_multi("ApplyPatch", targets=["/a.py", "/b.py"])
+        d = await engine("bypass").check_multi("MultiEdit", targets=["/a.py", "/b.py"])
         assert d.behavior == "allow"
 
     async def test_deny_wins(self):
         # One path is denied by rule -> the whole call is denied immediately.
-        d = await engine("bypass", deny=["ApplyPatch(/secret*)"]).check_multi(
-            "ApplyPatch", targets=["/a.py", "/secret.py"]
+        d = await engine("bypass", deny=["MultiEdit(/secret*)"]).check_multi(
+            "MultiEdit", targets=["/a.py", "/secret.py"]
         )
         assert d.behavior == "deny"
 
     async def test_single_consolidated_ask_for_multiple_paths(self):
         eng = engine("default", reply="yes")  # default => ask each path
-        d = await eng.check_multi("ApplyPatch", targets=["/a.py", "/b.py", "/c.py"])
+        d = await eng.check_multi("MultiEdit", targets=["/a.py", "/b.py", "/c.py"])
         assert d.behavior == "allow"
         # Exactly ONE prompt covering all asking paths.
         assert len(eng._test_prompts) == 1
@@ -92,22 +92,22 @@ class TestFolding:
 
     async def test_consolidated_ask_denied(self):
         eng = engine("default", reply="no")
-        d = await eng.check_multi("ApplyPatch", targets=["/a.py", "/b.py"])
+        d = await eng.check_multi("MultiEdit", targets=["/a.py", "/b.py"])
         assert d.behavior == "deny"
 
     async def test_no_channel_fails_closed(self):
         # default mode, no ask_user => asks become a deny.
-        d = await engine("default").check_multi("ApplyPatch", targets=["/a.py", "/b.py"])
+        d = await engine("default").check_multi("MultiEdit", targets=["/a.py", "/b.py"])
         assert d.behavior == "deny"
 
     async def test_always_remembers_session_rule(self):
         eng = engine("default", reply="always")
         targets = ["/a.py", "/b.py"]
-        d = await eng.check_multi("ApplyPatch", targets=targets)
+        d = await eng.check_multi("MultiEdit", targets=targets)
         assert d.behavior == "allow"
         # A subsequent identical call needs no prompt (session rules remembered).
         eng._test_prompts.clear()
-        d2 = await eng.check_multi("ApplyPatch", targets=targets)
+        d2 = await eng.check_multi("MultiEdit", targets=targets)
         assert d2.behavior == "allow"
         assert eng._test_prompts == []
 
@@ -118,7 +118,7 @@ class TestSandbox:
         outside = os.path.join(str(tmp_path.parent), "outside.py")
         inside = os.path.join(cwd, "inside.py")
         eng = sandboxed_engine(cwd, mode="bypass", reply="yes")
-        d = await eng.check_multi("ApplyPatch", targets=[inside, outside], mutates_fs=True)
+        d = await eng.check_multi("MultiEdit", targets=[inside, outside], mutates_fs=True)
         assert d.behavior == "allow"
         # The escalation prompt was raised for the out-of-sandbox path.
         assert len(eng._test_prompts) == 1
@@ -128,13 +128,13 @@ class TestSandbox:
         cwd = str(tmp_path)
         outside = os.path.join(str(tmp_path.parent), "outside.py")
         eng = sandboxed_engine(cwd, mode="bypass", reply=None)
-        d = await eng.check_multi("ApplyPatch", targets=[outside], mutates_fs=True)
+        d = await eng.check_multi("MultiEdit", targets=[outside], mutates_fs=True)
         assert d.behavior == "deny"
 
 
 class TestSingleTargetRegression:
     async def test_empty_targets_delegates_to_check(self):
-        d = await engine("bypass").check_multi("ApplyPatch", targets=[])
+        d = await engine("bypass").check_multi("MultiEdit", targets=[])
         assert d.behavior == "allow"
 
     async def test_check_still_single(self):

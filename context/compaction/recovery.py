@@ -20,17 +20,21 @@ turns) shrink the payload deterministically without a model round-trip.
 The wire<->Message bridge: ``BaseLLM`` holds messages as ``Message.to_dict()``
 wire dicts. We reconstruct :class:`Message` objects (restoring the
 ``tool_calls`` / ``tool_call_id`` metadata the :class:`Transcript` groups on),
-reduce, then flatten back. Kept non-tool-result messages are emitted from their
-pristine original dict (so multimodal image parts are never lossily flattened);
-tool-result messages round-trip through ``to_dict`` so an in-place fold is
-reflected.
+reduce, then flatten back. The bridge is *representation-based*, not
+mutation-detecting: a string-bodied message round-trips losslessly through
+``to_dict`` (any reducer's in-place rewrite of its content or tool-call args is
+serialized faithfully), so it always re-emits via ``to_dict`` and no per-reducer
+"was this touched?" check is needed. The one shape ``Message`` (whose ``content``
+is a ``str``) cannot hold is a *multimodal* body — a list of content parts — so
+such a dict is kept verbatim and re-emitted byte-for-byte; reducers treat those
+turns as opaque (they only ever rewrite long string bodies / tool-call args).
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from mote.common.const import TOOL_CALL_ID, TOOL_CALLS
+from mote.common.const import CACHE_INTENT, TOOL_CALL_ID, TOOL_CALLS
 from mote.common.schema import Message
 from mote.context.compaction.pipeline import ReductionPipeline
 from mote.context.compaction.request import ReductionReason, ReductionRequest, Urgency
@@ -75,19 +79,34 @@ def _wire_to_message(d: dict) -> Message:
         ]
         m = Message(content=content, role=role or "assistant")
         m.metadata[TOOL_CALLS] = parsed
-        m.metadata[_WIRE_ORIGINAL] = d
-        return m
+    else:
+        m = Message(content=content, role=role)
 
-    m = Message(content=content, role=role)
-    m.metadata[_WIRE_ORIGINAL] = d
+    # Preserve the declarative cache-intent hint so a kept message re-emits it
+    # (``to_dict`` re-serializes ``metadata[CACHE_INTENT]`` → the private wire key).
+    intent = d.get("_cache_intent")
+    if intent:
+        m.metadata[CACHE_INTENT] = intent
+
+    # Only a *multimodal* body (a list of content parts) cannot round-trip through
+    # the str-typed ``Message.content``. Keep such a dict verbatim so a kept turn
+    # is emitted byte-for-byte. Every string-bodied message round-trips losslessly
+    # via ``to_dict`` — so the bridge needs no per-reducer mutation detection, and
+    # any reducer that rewrites string content or tool-call args is reflected
+    # automatically (see :func:`_message_to_wire`).
+    if isinstance(d.get("content"), list):
+        m.metadata[_WIRE_ORIGINAL] = d
     return m
 
 
 def _message_to_wire(m: Message) -> dict:
-    """Flatten a (possibly reduced) message back to a wire dict."""
-    # A tool-result body may have been folded in place → reflect current content.
-    if m.metadata.get(TOOL_CALL_ID):
-        return m.to_dict()
+    """Flatten a (possibly reduced) message back to a wire dict.
+
+    A multimodal turn kept its pristine wire dict (a str-typed ``Message.content``
+    can't hold content parts) and is re-emitted verbatim; every other message is
+    serialized by ``to_dict``, which faithfully reflects any in-place reducer
+    rewrite of its content or tool-call args.
+    """
     original = m.metadata.get(_WIRE_ORIGINAL)
     if original is not None:
         return original

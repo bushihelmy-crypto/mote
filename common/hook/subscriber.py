@@ -35,7 +35,7 @@ hook package's import graph minimal.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 
 from mote.common.events.outcomes import CompactOutcome, PromptOutcome, ToolCallOutcome, ToolResultOutcome, TurnOutcome
 from mote.common.events.types import (
@@ -51,27 +51,54 @@ from mote.common.events.types import (
 from mote.common.hook.types import HookOutcome
 from mote.common.interface.event_subscriber import ControlOutcome, ControlStage, ControlSubscriber
 
+if TYPE_CHECKING:
+    # Type-only: the concrete event classes each binding's ``payload`` lambda
+    # reads. Imported under TYPE_CHECKING so the ``payload`` field-accesses are
+    # checked against the real event shape (a renamed field errors) while the
+    # runtime import graph stays minimal — this module still pulls in no event
+    # class at import time, only the ``name`` discriminator constants above.
+    from mote.common.events.types import (  # noqa: F401 — used in string forward-refs below
+        FileChangedEvent,
+        PostCompactEvent,
+        PostToolUseEvent,
+        PreCompactEvent,
+        PreToolUseEvent,
+        SessionStartEvent,
+        TurnEndEvent,
+        UserPromptSubmitEvent,
+    )
+
+#: The event a binding's ``payload`` reads (its fields are type-checked) and the
+#: outcome its ``project`` folds. Parametrizing on both is what makes a renamed
+#: event field, a mistyped ``HookOutcome`` read, or a binding wired to the wrong
+#: outcome a compile-time error — the payload-side ``Any`` hole this closes.
+_E = TypeVar("_E")
+_Ob = TypeVar("_Ob", bound=ControlOutcome)
+
 
 @dataclass(frozen=True)
-class _HookBinding:
+class _HookBinding(Generic[_E, _Ob]):
     """How one control event maps onto the hook layer, in one place.
 
     ``hook_name`` is the hook to fire; ``payload`` builds its input dict from the
-    event; ``project`` translates the folded :class:`HookOutcome` into the event's
-    typed :class:`ControlOutcome`. ``project=None`` marks an *advisory* event: the
-    hook fires for its side effects but contributes no outcome.
+    event (typed ``_E`` so its field-accesses are checked); ``project`` translates
+    the folded :class:`HookOutcome` into the event's typed outcome (``_Ob``).
+    ``project=None`` marks an *advisory* event: the hook fires for its side effects
+    but contributes no outcome.
     """
 
     hook_name: str
-    payload: Callable[[Any], dict]
-    project: Optional[Callable[[HookOutcome], ControlOutcome]] = None
+    payload: Callable[[_E], dict]
+    project: Optional[Callable[[HookOutcome], _Ob]] = None
 
 
 #: The per-event mapping, keyed by the event ``name`` discriminator the bus routes
-#: on. Attribute access in the ``payload`` builders is duck-typed (the bus never
-#: needs the event classes either), keeping the import surface minimal.
+#: on. Each row is parametrized on its event/outcome types, so the ``payload``
+#: field reads and ``project`` outcome are statically checked against the real
+#: event shape — the event classes enter only as TYPE_CHECKING names, keeping the
+#: runtime import surface minimal.
 _BINDINGS: dict[str, _HookBinding] = {
-    USER_PROMPT_SUBMIT: _HookBinding(
+    USER_PROMPT_SUBMIT: _HookBinding["UserPromptSubmitEvent", PromptOutcome](
         "UserPromptSubmit",
         lambda e: {"prompt": e.prompt},
         lambda ho: PromptOutcome(
@@ -80,7 +107,7 @@ _BINDINGS: dict[str, _HookBinding] = {
             stop_reason=ho.stop_reason,
         ),
     ),
-    PRE_TOOL_USE: _HookBinding(
+    PRE_TOOL_USE: _HookBinding["PreToolUseEvent", ToolCallOutcome](
         "PreToolUse",
         lambda e: {
             "tool_name": e.tool_name,
@@ -95,7 +122,7 @@ _BINDINGS: dict[str, _HookBinding] = {
             stop_reason=ho.stop_reason,
         ),
     ),
-    POST_TOOL_USE: _HookBinding(
+    POST_TOOL_USE: _HookBinding["PostToolUseEvent", ToolResultOutcome](
         "PostToolUse",
         lambda e: {
             "tool_name": e.tool_name,
@@ -113,12 +140,12 @@ _BINDINGS: dict[str, _HookBinding] = {
             stop_reason=ho.stop_reason,
         ),
     ),
-    PRE_COMPACT: _HookBinding(
+    PRE_COMPACT: _HookBinding["PreCompactEvent", CompactOutcome](
         "PreCompact",
         lambda e: {"trigger": e.trigger},
         lambda ho: CompactOutcome(cancel=ho.stop, additional_context=list(ho.additional_context)),
     ),
-    TURN_END: _HookBinding(
+    TURN_END: _HookBinding["TurnEndEvent", TurnOutcome](
         # The legacy "Stop" hook fired at the turn boundary. A "Stop" hook that
         # folds a deny is asking to *block the stop* — i.e. auto-continue.
         "Stop",
@@ -130,12 +157,12 @@ _BINDINGS: dict[str, _HookBinding] = {
         ),
     ),
     # Advisory events: fire the hook for its side effects, contribute no outcome.
-    POST_COMPACT: _HookBinding(
+    POST_COMPACT: _HookBinding["PostCompactEvent", ControlOutcome](
         "PostCompact",
         lambda e: {"trigger": e.trigger, "compact_summary": e.summary},
     ),
-    SESSION_START: _HookBinding("SessionStart", lambda e: {"source": e.source}),
-    FILE_CHANGED: _HookBinding(
+    SESSION_START: _HookBinding["SessionStartEvent", ControlOutcome]("SessionStart", lambda e: {"source": e.source}),
+    FILE_CHANGED: _HookBinding["FileChangedEvent", ControlOutcome](
         "FileChanged",
         lambda e: {
             "path": e.path,

@@ -34,11 +34,12 @@ _MSG_LIST_AS_STRING = (
     '(e.g. ["findings", "report"]), not a stringified one.'
 )
 
-# Inline previews stay short (detail view is meant to be compact); an explicit
-# ``fields=`` dump is allowed to be much larger so the model can recover a full
-# produced value (e.g. the report / findings) that a truncated notification cut.
+# Inline previews stay short (the overview/detail view is a compact one-line
+# glance across many nodes); an explicit ``fields=`` dump returns the FULL value
+# so the model can recover a produced value (e.g. the report / findings) that a
+# notification cut — a large dump is persisted to disk by the shared tool-result
+# exit rather than truncated here.
 _INLINE_PREVIEW_LIMIT = 200
-_FIELD_DUMP_LIMIT = 8000
 
 # Sentinel distinguishing "field absent" from a legitimate ``None`` value.
 _NO_FIELD = object()
@@ -87,12 +88,14 @@ def _format_source(source: str) -> str:
     return f"state field '{source.split('.')[0]}'"
 
 
-def _preview_value(value, *, limit: int, collapse: bool = False) -> str:
-    """Render a state value compactly, truncating long blobs.
+def _preview_value(value, *, limit: int | None = None, collapse: bool = False) -> str:
+    """Render a state value. Pass *limit* to cap an inline one-line preview.
 
     Lists/tuples are prefixed with their length so the model sees the shape even
-    when the body is truncated. *collapse* squashes newlines (for inline
-    one-line previews); the ``fields=`` dump keeps them.
+    when the body is capped. *collapse* squashes newlines (for inline one-line
+    previews). With *limit* unset the FULL value is returned (the ``fields=``
+    dump path) — a large dump is persisted to disk by the shared tool-result
+    exit rather than truncated here.
     """
     if value is None:
         return "None"
@@ -107,7 +110,7 @@ def _preview_value(value, *, limit: int, collapse: bool = False) -> str:
     body = body.strip()
     if collapse:
         body = collapse_whitespace(body)
-    if len(body) > limit:
+    if limit is not None and len(body) > limit:
         body = f"{body[:limit]}… (+{len(body) - limit} more chars)"
     return f"{prefix}{body}"
 
@@ -160,21 +163,6 @@ def _record_header(rec, *, self_loop: bool = False) -> str:
 class GetNodeState(BaseTool):
     name = "GetNodeStates"
     aliases = ["get_node_state"]
-    description = (
-        "Inspect the per-node execution state of a background graph pipeline. "
-        "DIAGNOSTIC only — reach for it when a task FAILED/TIMED OUT/paused or its "
-        "result looks wrong. Do NOT poll a running task: it pushes a completion "
-        "notification with the full result, so just Sleep to wait. "
-        "Omit all args for an overview: every node's status "
-        "(success/failed/pending/skipped/running), attempt count and failure "
-        "reason, plus which node is running now. Pass nodes=[...] to drill into "
-        "specific node(s): their description, declared inputs (source/type + a "
-        "preview of the current value) and outputs (the state fields the node "
-        "wrote + a preview, and which downstream nodes consume them). Pass "
-        "fields=[...] to dump the full current value of specific state fields "
-        "(e.g. findings, report, raw_diff). Use it before resume_tasks to "
-        "decide which nodes to re-run, skip, or override."
-    )
     requires = ("get_bg_pool",)
 
     # Injected from Role by bind(): Role.get_bg_pool.
@@ -187,7 +175,22 @@ class GetNodeState(BaseTool):
         nodes: str | list[str] | None = None,
         fields: str | list[str] | None = None,
     ) -> str:
-        """Report the per-node state of a background graph task.
+        """Inspect a background pipeline's per-node state — diagnose a failed or paused task.
+
+        Inspect the per-node execution state of a background graph pipeline.
+        DIAGNOSTIC only — reach for it when a task FAILED/TIMED OUT/paused or its
+        result looks wrong. Do NOT poll a running task: it pushes a completion
+        notification with the full result, so just Sleep to wait.
+
+        Omit all args for an overview: every node's status
+        (success/failed/pending/skipped/running), attempt count and failure
+        reason, plus which node is running now. Pass ``nodes=[...]`` to drill into
+        specific node(s): their description, declared inputs (source/type + a
+        preview of the current value) and outputs (the state fields the node
+        wrote + a preview, and which downstream nodes consume them). Pass
+        ``fields=[...]`` to dump the full current value of specific state fields
+        (e.g. findings, report, raw_diff). Use it before resume_tasks to
+        decide which nodes to re-run, skip, or override.
 
         Args:
             task_id: The task ID to inspect (e.g. "bg_3").
@@ -337,5 +340,5 @@ class GetNodeState(BaseTool):
             if value is _NO_FIELD:
                 blocks.append(f"{field}: (not set)")
                 continue
-            blocks.append(f"{field}:\n{_preview_value(value, limit=_FIELD_DUMP_LIMIT)}")
+            blocks.append(f"{field}:\n{_preview_value(value)}")
         return "\n\n".join(blocks)

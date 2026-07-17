@@ -16,6 +16,7 @@ from mote.common.i18n import keys as K
 CATALOG: Dict[str, str] = {
     # Status bar
     K.STATUS_IDLE: "ready",
+    K.STATUS_IDLE_HINT: "ctrl+x to delete chat",
     K.STATUS_THINKING: "Thinking",
     K.STATUS_VERB_THINKING: "Thinking",
     K.STATUS_VERB_PROCESSING: "Processing",
@@ -63,14 +64,21 @@ CATALOG: Dict[str, str] = {
     K.RESULT_FAILED: "failed",
     K.RESULT_RETRYABLE: "retryable",
     # Driver
-    K.DRIVER_TOOLS_LOADED: "loaded {count, plural, one{# tool} other{# tools}}",
+    K.DRIVER_TOOLS_LOADED: "loaded {count, plural, one{# tool} other{# tools}}"
+    "{deferred, plural, =0{} other{ (# deferred)}}",
     # Prompt input
     K.PROMPT_PLACEHOLDER: "Type a message… (/help for commands)",
     # Keybinding + fold hints
     K.KEY_TOGGLE_TOOL: "expand/collapse tools",
+    K.KEY_DELETE_MODE: "delete turns",
     K.KEY_EXPAND_HINT: "ctrl+o expand",
     K.KEY_COLLAPSE_HINT: "ctrl+o collapse",
     K.KEY_EXIT_HINT: "(Press Ctrl+C again to exit)",
+    # React-unit delete-mode
+    K.DELETE_MODE_HINT: "Delete-mode: click a turn to tick it, Enter to confirm, Esc to cancel",
+    K.DELETE_BUSY: "A turn is in flight — can't enter delete-mode",
+    K.DELETE_NONE: "No turns selected",
+    K.DELETE_DONE: "Deleted {count} messages",
     # Approval gate
     K.APPROVAL_REQUIRED: "approval required",
     K.APPROVAL_PROCEED: "Do you want to proceed?",

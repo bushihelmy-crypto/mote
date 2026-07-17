@@ -43,8 +43,6 @@ MAX_EDIT_FILE_SIZE_BYTES = 10 * 1024 * 1024  # Edit: file size cap (10 MB)
 # ---------------------------------------------------------------------------
 # Read tool
 # ---------------------------------------------------------------------------
-DEFAULT_MAX_LINES = 2000  # default lines returned when limit unspecified
-MAX_LINE_LENGTH = 2000  # lines longer than this are truncated
 MAX_IMAGE_DIMENSION = 2048  # Read: images whose longest edge exceeds this are
 # downscaled (detail="high") before being shown to
 # the model; detail="original" skips the resize.
@@ -53,16 +51,9 @@ MAX_IMAGE_DIMENSION = 2048  # Read: images whose longest edge exceeds this are
 # Search / Grep tool
 # ---------------------------------------------------------------------------
 VCS_DIRECTORIES_TO_EXCLUDE = (".git", ".svn", ".hg", ".bzr", ".jj", ".sl")
-DEFAULT_HEAD_LIMIT = 250  # default cap on grep results
-MAX_COLUMNS = 500  # match lines longer than this are truncated
 # Search budget: WSL's 9p filesystem is much slower over Windows-mounted trees,
 # so it gets a longer deadline (60s on WSL, 20s default).
 SEARCH_TIMEOUT = 60.0 if _is_wsl() else 20.0  # search timeout in seconds
-
-# ---------------------------------------------------------------------------
-# Glob tool
-# ---------------------------------------------------------------------------
-GLOB_DEFAULT_LIMIT = 100  # cap on returned files
 
 # ---------------------------------------------------------------------------
 # Code-map glimpse (Grep/Glob → code map navigation hint)

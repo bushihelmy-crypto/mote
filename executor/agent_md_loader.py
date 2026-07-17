@@ -13,7 +13,6 @@ Frontmatter (all optional except ``name`` + ``description``)::
     description: Reviews a diff…    # the "when to use" surfaced to the LLM (required)
     tools: [Read, Grep, Glob]      # tool allowlist (str CSV or list; empty/'*'/absent = all)
     model: claude-sonnet-4-6       # optional per-agent model override
-    max_turns: 30                  # optional react-loop cap
     aliases: [rev, code-reviewer]  # optional extra lookup names
     ---
     <markdown body = the agent's system-prompt instruction>
@@ -74,8 +73,6 @@ def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type]:
     model = str(meta.get("model", "") or "").strip()
     aliases_raw = meta.get("aliases")
     aliases = _normalize_tools(aliases_raw) or []
-    max_turns = meta.get("max_turns")
-    turn_cap = int(max_turns) if isinstance(max_turns, int) else 50
     instruction = body.strip()
 
     # Deferred import: keeps executor a leaf w.r.t. roles (no import-time cycle).
@@ -85,10 +82,9 @@ def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type]:
 
     class _MarkdownAgent(BaseAgent, Role):
         agent_name = name
-        # class-level so the Agent tool's ``custom_schema`` listing can read them
-        # without instantiating (getattr(agent_cls, "tools"/"max_react_loop")).
+        # class-level so the Agent tool's ``custom_schema`` listing can read it
+        # without instantiating (getattr(agent_cls, "tools")).
         tools = list(tool_list) if tool_list else []
-        max_react_loop = turn_cap
 
         def __init__(self, *, parent_session_id: Optional[str] = None, context=None, config=None, **_ignored):
             schema_kwargs: dict = {

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
+from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, ToolEffect
 from mote.executor.base_tool import BaseTool
 
 from .conftest import AddTool, CapTool, EchoTool, FakeRole
@@ -61,16 +61,82 @@ class TestSchema:
         assert "text" in schema["parameters"]["parameters"]
         assert "text" in schema["parameters"]["signature"]
 
-    def test_description_override_takes_precedence(self):
+    def test_description_is_docstring_body_without_args(self):
+        # Docstring-native: the description is the docstring BODY (summary line +
+        # manual) with the ``Args:`` section dropped (params travel separately).
         class Described(BaseTool):
             name = "Described"
-            description = "Custom description here."
 
-            async def call(self):  # pragma: no cover
-                """Docstring line that should be ignored."""
+            async def call(self, x: str):  # pragma: no cover
+                """One-line summary.
+
+                A fuller operating manual paragraph.
+
+                Args:
+                    x: should not leak into the description.
+                """
                 return "ok"
 
-        assert Described.get_schema()["description"] == "Custom description here."
+        desc = Described.get_schema()["description"]
+        assert desc.startswith("One-line summary.")
+        assert "fuller operating manual" in desc
+        assert "should not leak" not in desc  # Args: stripped from the wire prose
+
+    def test_summary_is_docstring_first_line(self):
+        # The one-line MENU entry is the first docstring line.
+        class Described(BaseTool):
+            name = "Described"
+
+            async def call(self, x: str):  # pragma: no cover
+                """One-line summary.
+
+                Body paragraph.
+                """
+                return "ok"
+
+        assert Described.summary() == "One-line summary."
+
+    def test_summary_tracks_custom_schema_description(self):
+        # A dynamic-description tool's menu tracks its custom_schema description's
+        # first line, not the raw docstring.
+        class Dyn(BaseTool):
+            name = "Dyn"
+
+            @classmethod
+            def custom_schema(cls):
+                return {"name": "Dyn", "description": "Live blurb.\nMore detail.", "parameters": {}}
+
+            async def call(self):  # pragma: no cover
+                """Ignored docstring."""
+                return "ok"
+
+        assert Dyn.summary() == "Live blurb."
+
+    def test_search_text_appends_keywords(self):
+        # search_text() = summary + recall keywords (the SEARCH corpus). The
+        # keywords never touch summary()/get_schema() — they exist only here.
+        class Kw(BaseTool):
+            name = "Kw"
+            keywords = ["synonym", "别名"]
+
+            async def call(self):  # pragma: no cover
+                """Do a thing."""
+                return "ok"
+
+        assert Kw.summary() == "Do a thing."  # menu/wire unaffected
+        assert "synonym" not in Kw.get_schema()["description"]  # never on the wire
+        assert Kw.search_text() == "Do a thing. synonym 别名"
+
+    def test_search_text_no_keywords_equals_summary(self):
+        # No keywords → search corpus is just the summary (no trailing space/join).
+        class NoKw(BaseTool):
+            name = "NoKw"
+
+            async def call(self):  # pragma: no cover
+                """Only a summary."""
+                return "ok"
+
+        assert NoKw.search_text() == NoKw.summary() == "Only a summary."
 
     def test_custom_schema_short_circuits(self):
         custom = {"name": "X", "description": "d", "parameters": "p"}
@@ -106,6 +172,57 @@ class TestNativeSchema:
     def test_native_schema_instance_delegates_to_class(self):
         tool = AddTool()
         assert tool.native_schema() == AddTool.get_native_schema()
+
+
+class TestResolveEffect:
+    def test_default_is_external(self):
+        # A plain tool declares neither mutates_filesystem nor an explicit
+        # effect -> conservative EXTERNAL (guarded, not silently replayed).
+        assert EchoTool.resolve_effect() is ToolEffect.EXTERNAL
+
+    def test_filesystem_mutation_derives_local(self):
+        class FsTool(BaseTool):
+            name = "Fs"
+            mutates_filesystem = True
+
+            async def call(self, **kwargs):
+                return ""
+
+        assert FsTool.resolve_effect() is ToolEffect.LOCAL
+
+    def test_reconstructable_alone_does_not_imply_pure(self):
+        # reconstructable is a compaction concern, NOT side-effect-free:
+        # a reconstructable non-fs tool still derives EXTERNAL (cf. Bash).
+        class ReconTool(BaseTool):
+            name = "Recon"
+            reconstructable = True
+
+            async def call(self, **kwargs):
+                return ""
+
+        assert ReconTool.resolve_effect() is ToolEffect.EXTERNAL
+
+    def test_explicit_effect_wins_over_derivation(self):
+        class PureButFs(BaseTool):
+            name = "PureButFs"
+            mutates_filesystem = True
+            effect = ToolEffect.PURE
+
+        assert PureButFs.resolve_effect() is ToolEffect.PURE
+
+    def test_read_tools_are_pure(self):
+        from mote.executor.tools.glob import Glob
+        from mote.executor.tools.grep import Grep
+        from mote.executor.tools.read import Read
+
+        assert Read.resolve_effect() is ToolEffect.PURE
+        assert Grep.resolve_effect() is ToolEffect.PURE
+        assert Glob.resolve_effect() is ToolEffect.PURE
+
+    def test_external_tools_derive_external(self):
+        from mote.executor.tools.bash import Bash
+
+        assert Bash.resolve_effect() is ToolEffect.EXTERNAL
 
 
 class TestMisc:

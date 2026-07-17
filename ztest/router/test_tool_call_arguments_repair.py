@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Tests for tool-call argument JSON repair in ``OpenAILLM.get_choice_tool_calls``.
 
-A model emitting a large multi-line string argument (e.g. ApplyPatch's whole
-patch) sometimes produces invalid JSON — unescaped newlines/quotes or a
+A model emitting a large multi-line string argument (e.g. Write's whole file
+body) sometimes produces invalid JSON — unescaped newlines/quotes or a
 truncated tail. Rather than dropping the whole argument (the old ``{}``
 fallback), the parser routes the ``JSONDecodeError`` path through
 ``json_repair`` to recover the call.
@@ -48,19 +48,19 @@ class TestRepairToolArguments:
 
 class TestGetChoiceToolCallsIntegration:
     def test_valid_json_unchanged(self):
-        calls = _FakeLLM().get_choice_tool_calls(_rsp("ApplyPatch", '{"input": "ok"}'))
-        assert calls == [{"id": "call_1", "name": "ApplyPatch", "arguments": {"input": "ok"}}]
+        calls = _FakeLLM().get_choice_tool_calls(_rsp("Write", '{"content": "ok"}'))
+        assert calls == [{"id": "call_1", "name": "Write", "arguments": {"content": "ok"}}]
 
     def test_malformed_json_repaired_not_dropped(self):
-        # The old behaviour returned arguments={}; now the patch is recovered.
-        patch = "*** Begin Patch\n*** Add File: a.py\n+x\n*** End Patch"
-        bad = '{"input": "' + patch + '"}'  # raw newlines -> invalid JSON
-        calls = _FakeLLM().get_choice_tool_calls(_rsp("ApplyPatch", bad))
+        # The old behaviour returned arguments={}; now the body is recovered.
+        body = "def f():\n    return 1\n\nclass A:\n    pass"
+        bad = '{"content": "' + body + '"}'  # raw newlines -> invalid JSON
+        calls = _FakeLLM().get_choice_tool_calls(_rsp("Write", bad))
         assert len(calls) == 1
-        assert calls[0]["arguments"]["input"] == patch
+        assert calls[0]["arguments"]["content"] == body
 
     def test_unsalvageable_falls_back_to_empty(self):
-        calls = _FakeLLM().get_choice_tool_calls(_rsp("ApplyPatch", "::garbage::"))
+        calls = _FakeLLM().get_choice_tool_calls(_rsp("Write", "::garbage::"))
         assert calls[0]["arguments"] == {}
 
     def test_text_only_response_yields_no_calls(self):

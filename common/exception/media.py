@@ -1,4 +1,4 @@
-"""Media-generation tier exceptions (``mote.executor.tools.media_pipeline``).
+"""Media-generation tier exceptions (``mote.executor.tools.generate_media``).
 
 The upstream async-task media API (image / audio / music / video) returns a
 ``status`` field that is either ``completed`` or ``failed``. A ``failed`` task

@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Path constants, root-directory helpers, and ``.mote/`` config discovery."""
+"""Path constants, package/config anchors, and ``.mote/`` config discovery."""
 import json
-import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,39 +13,19 @@ import mote
 #: (skills / agents / mcp.json / settings.local.json) live under ``<dir>/.mote``.
 MOTE_DIR_NAME = ".mote"
 
-
-def get_mote_package_root():
-    """Get the root directory of the installed package."""
-    package_root = Path(mote.__file__).parent.parent
-    logger.info(f"Package root set to {str(package_root)}")
-    return package_root
-
-
-def get_mote_root():
-    """Get the project root directory.
-
-    Resolution order: the ``MOTE_PROJECT_ROOT`` env override, then the
-    package root when it looks like a project checkout (carries a ``.git`` /
-    ``.project_root`` / ``.gitignore`` marker), else the current directory.
-    Deriving from the package location keeps ``SOURCE_ROOT`` (and the shipped
-    ``mote/config.yaml`` it points at) stable regardless of ``cwd``.
-    """
-    project_root_env = os.getenv("MOTE_PROJECT_ROOT")
-    if project_root_env:
-        project_root = Path(project_root_env)
-        logger.info(f"PROJECT_ROOT set from environment variable to {str(project_root)}")
-        return project_root
-
-    project_root = get_mote_package_root()
-    for marker in (".git", ".project_root", ".gitignore"):
-        if (project_root / marker).exists():
-            return project_root
-    return Path.cwd()
+#: The installed ``mote`` package directory — the single deterministic anchor for
+#: assets SHIPPED INSIDE the package (``config.example.yaml``, prompt templates,
+#: bundled schemas, …). Resolved straight from the import system
+#: (``mote.__file__``), so it is correct under editable installs, wheels, zipapps
+#: and containers alike — no ``cwd`` guessing, no ``.git`` marker heuristics, and
+#: no env override needed. A caller that wants the *containing* directory can use
+#: the explicit :pyattr:`MOTE_PACKAGE_DIR.parent`.
+MOTE_PACKAGE_DIR = Path(mote.__file__).resolve().parent
 
 
-# MOTE PROJECT ROOT AND VARS
+# MOTE ROOTS — user config home + per-session workspace. These are anchored at
+# the user's home directory, independent of where mote is installed or launched.
 CONFIG_ROOT = Path.home() / ".mote"
-MOTE_ROOT = get_mote_root()  # Dependent on MOTE_PROJECT_ROOT
 DEFAULT_WORKSPACE_ROOT = CONFIG_ROOT / "workspace"
 
 
@@ -54,10 +33,42 @@ DEFAULT_WORKSPACE_ROOT = CONFIG_ROOT / "workspace"
 # `storage` under the individual generated project.
 SERDESER_PATH = DEFAULT_WORKSPACE_ROOT / "storage"
 
+
+# ============================================================================
+# Workspace layout — the per-session artifact tree.
+# ----------------------------------------------------------------------------
+# Every artifact a session produces lives UNDER one session directory::
+#
+#     {DEFAULT_WORKSPACE_ROOT}/.agent_sessions/{session_id}/
+#         rollout.jsonl     # the append-only truth source (liveness signal)
+#         blobs/            # file snapshots
+#         tool_results/     # large tool-result overflow
+#         task_outputs/     # background-task stdout logs
+#
+# Because artifacts are subordinate to the session directory, deleting a
+# session directory removes its whole footprint atomically — cleanup is
+# orphan-proof by construction. These names are the single source of truth for
+# the layout; :class:`mote.common.workspace.WorkspaceStore` composes them and is
+# the only module that turns them into paths.
+# ============================================================================
+#: Directory (under the workspace root) that holds every session directory.
+SESSIONS_SUBDIR = ".agent_sessions"
+#: The rollout log file inside each session directory (the truth source).
+ROLLOUT_FILENAME = "rollout.jsonl"
+#: Bucket used when a caller has no session id (shared, unattributed artifacts).
+DEFAULT_SESSION_BUCKET = "default"
+#: Throttle stamp file (under the workspace root) for the periodic cleanup sweep.
+WORKSPACE_CLEANUP_STAMP = ".last_cleanup"
+
+# Pre-co-location, top-level artifact trees. New writes co-locate under the
+# session directory; these constants exist only so the cleanup sweep can
+# recognize and mtime-prune leftover legacy data one last time.
+LEGACY_TOOL_RESULTS_SUBDIR = ".tool_results"
+LEGACY_TASK_OUTPUTS_SUBDIR = ".task_outputs"
+
 # The trusted PROJECT config lives under ``~/.mote`` (CONFIG_ROOT), same dir as
 # the user config — that is where ``config.yaml`` is shipped/edited.
 SOURCE_ROOT = CONFIG_ROOT
-TOOL_SCHEMA_PATH = MOTE_ROOT / "mote/tools/schemas"
 
 
 # ============================================================================

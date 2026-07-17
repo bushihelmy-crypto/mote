@@ -176,8 +176,11 @@ def to_native_tool_specs(tool_schemas: dict[str, dict], provider: str = "anthrop
     the pure envelope step.
 
     provider:
-      - "anthropic": {"name", "description", "input_schema": <schema>}
-      - "openai":    {"type":"function", "function":{"name","description","parameters":<schema>}}
+      - "anthropic":        {"name", "description", "input_schema": <schema>}
+      - "openai":           {"type":"function", "function":{"name","description","parameters":<schema>}}
+      - "openai_responses": {"type":"function", "name", "description", "parameters":<schema>}
+        (the Responses API uses a FLAT function shape, distinct from Chat
+        Completions' nested ``function`` object.)
     """
     provider = provider.lower()
     specs: list[dict] = []
@@ -185,7 +188,9 @@ def to_native_tool_specs(tool_schemas: dict[str, dict], provider: str = "anthrop
         name = schema["name"]
         description = schema.get("description", "") or ""
         params = schema.get("input_schema") or {"type": "object", "properties": {}}
-        if provider == "openai":
+        if provider == "openai_responses":
+            specs.append({"type": "function", "name": name, "description": description, "parameters": params})
+        elif provider == "openai":
             specs.append(
                 {
                     "type": "function",

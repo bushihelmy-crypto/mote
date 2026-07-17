@@ -25,6 +25,7 @@ from mote.common.const import (
     RETENTION,
     TOOL_CALL_ID,
     TOOL_CALLS,
+    TOOL_REFERENCES,
     TOOL_RESULT_RESOURCE_PATH,
 )
 from mote.common.logs import logger
@@ -133,6 +134,13 @@ class Message(BaseModel):
                 "tool_call_id": self.metadata[TOOL_CALL_ID],
                 "content": self.content,
             }
+            # Server-side tool-search discovery result (Anthropic native only):
+            # the discovered tool names ride a private wire key so the provider
+            # can render the tool_result as ``tool_reference`` blocks. Only when
+            # non-empty; stripped before the request goes out (like _cache_intent).
+            refs = self.metadata.get(TOOL_REFERENCES)
+            if refs:
+                wire["_tool_references"] = refs
         elif self.metadata.get(TOOL_CALLS):
             tool_calls = [
                 {
@@ -289,6 +297,7 @@ class ToolMessage(Message):
         tool_call_id: str,
         retention: Optional[str] = None,
         resource_path: Optional[str] = None,
+        tool_references: Optional[List[str]] = None,
         **kwargs,
     ):
         kwargs.pop("role", None)
@@ -306,6 +315,12 @@ class ToolMessage(Message):
         # Metadata-as-truth: survives dump/load like the keys above.
         if resource_path:
             self.metadata[TOOL_RESULT_RESOURCE_PATH] = resource_path
+        # Server-side tool-search discovery (Anthropic native): the tool names
+        # discovered by this SearchTools result. Metadata-as-truth (survives
+        # dump/load); to_dict emits it as the ``_tool_references`` private wire
+        # key, which AnthropicLLM renders as tool_reference content blocks.
+        if tool_references:
+            self.metadata[TOOL_REFERENCES] = tool_references
 
 
 class ResourceMessage(UserMessage):

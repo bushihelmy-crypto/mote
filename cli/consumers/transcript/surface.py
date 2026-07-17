@@ -65,6 +65,22 @@ class RenderSurface(Protocol):
     def flush_group(self) -> None:
         ...
 
+    # nested activity (a run_graph orchestration; a sub-agent / bg task)
+    def open_activity(self, scope: Any, activity_kind: str, label: str, topology: Any) -> None:
+        ...
+
+    def update_activity_node(self, scope: Any, stage: str, status: str, detail: str) -> None:
+        ...
+
+    def add_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        ...
+
+    def complete_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        ...
+
+    def close_activity(self, scope: Any, outcome: str, node_states: Any, summary: str) -> None:
+        ...
+
     # static rows
     def render_media(self, ev: Any) -> None:
         ...
@@ -149,6 +165,21 @@ class BaseSurface:
         return None
 
     def flush_group(self) -> None:
+        return None
+
+    def open_activity(self, scope: Any, activity_kind: str, label: str, topology: Any) -> None:
+        return None
+
+    def update_activity_node(self, scope: Any, stage: str, status: str, detail: str) -> None:
+        return None
+
+    def add_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        return None
+
+    def complete_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        return None
+
+    def close_activity(self, scope: Any, outcome: str, node_states: Any, summary: str) -> None:
         return None
 
     def render_media(self, ev: Any) -> None:

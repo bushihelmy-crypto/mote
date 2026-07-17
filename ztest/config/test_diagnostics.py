@@ -27,7 +27,10 @@ def test_unknown_key_paths_flags_top_level_and_nested():
 
 
 def test_unknown_key_paths_empty_for_clean_config():
-    data = {"models": {"default": {"model": "x"}, "router_enabled": True}, "tools": {"proxy": "p"}}
+    data = {
+        "models": {"default": {"model": "x"}, "api_key_helper": "cmd"},  # pragma: allowlist secret
+        "tools": {"proxy": "p"},
+    }
     assert unknown_key_paths(data, Config) == []
 
 

@@ -13,21 +13,25 @@ not handled here.
 Lives in ``executor`` (not ``context``) because it is a tool-execution
 concern: it runs at the single ``ToolExecutor.run_command`` chokepoint on one
 tool's output. Keeping it here means the dependency points downward
-(``context`` → ``executor``), never the reverse. The all-scope
-``ContextManagerConfig`` composes :class:`ToolResultLimitConfig` and re-exports
-these constants.
+(``context`` → ``executor``), never the reverse. The config data model
+:class:`ToolResultLimitConfig` is NOT composed by ``ContextManagerConfig`` (that
+config's own docstring is explicit: the tool-execution scope is owned
+elsewhere). It is configured under the ``tools`` group and owned by the
+``ToolExecutor``; the compaction spill reducer borrows that one instance back
+off the built executor, so there is a single source with no drift.
 
 Disk writes go through :mod:`mote.common.disk.disk_io` so this shares the exact
 read/write primitives with ``tasks/disk_output.py`` (per the project decision
-to factor common disk I/O into one place).
+to factor common disk I/O into one place). The on-disk *location* is resolved
+exclusively through :class:`mote.common.workspace.WorkspaceStore`, so a
+persisted result co-locates under its session directory alongside the rollout
+and blobs (making it swept together with the session).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
 
-from mote.common.const import DEFAULT_WORKSPACE_ROOT
 from mote.common.disk import disk_io
 from mote.common.logs import logger
 from mote.common.schema import (
@@ -35,11 +39,9 @@ from mote.common.schema import (
     PERSISTED_OUTPUT_CLOSE_TAG,
     PERSISTED_OUTPUT_OPEN_TAG,
     PREVIEW_SIZE_BYTES,
-    TOOL_RESULTS_SUBDIR,
 )
 from mote.common.text import cap_head, format_file_size
-
-PathLike = Union[str, Path]
+from mote.common.workspace import ArtifactKind, WorkspaceStore
 
 
 def persistence_threshold(declared_max_result_size_chars: int) -> int:
@@ -68,15 +70,15 @@ def generate_preview(content: str, max_bytes: int) -> tuple[str, bool]:
     return content[:cut_point], True
 
 
-def _tool_results_dir(session_id: str, base_dir: PathLike | None) -> Path:
-    """Directory holding persisted results for *session_id*."""
-    base = Path(base_dir) if base_dir is not None else Path(DEFAULT_WORKSPACE_ROOT)
-    return base / TOOL_RESULTS_SUBDIR / (session_id or "default")
+def _tool_result_path(session_id: str, result_id: str, store: WorkspaceStore | None) -> Path:
+    """Filepath where a tool result is persisted (``{id}.txt``).
 
-
-def _tool_result_path(session_id: str, result_id: str, base_dir: PathLike | None) -> Path:
-    """Filepath where a tool result is persisted (``{id}.txt``)."""
-    return _tool_results_dir(session_id, base_dir) / f"{result_id}.txt"
+    Location comes from the :class:`WorkspaceStore` — the ``tool_results/`` space
+    under *session_id*'s directory — never computed here, so the layout stays
+    single-sourced.
+    """
+    store = store or WorkspaceStore()
+    return store.space(session_id, ArtifactKind.TOOL_RESULTS) / f"{result_id}.txt"
 
 
 def _build_persisted_message(filepath: str, original_size: int, preview: str, has_more: bool) -> str:
@@ -90,7 +92,7 @@ def _build_persisted_message(filepath: str, original_size: int, preview: str, ha
     return message
 
 
-def persist_result(output: str, result_id: str, session_id: str, base_dir: PathLike | None) -> str | None:
+def persist_result(output: str, result_id: str, session_id: str, store: WorkspaceStore | None) -> str | None:
     """Write *output* to disk; return its filepath, or None on failure.
 
     Idempotent: a result id is unique per invocation and its content
@@ -98,7 +100,7 @@ def persist_result(output: str, result_id: str, session_id: str, base_dir: PathL
     (keeps repeated turns byte-identical). Public so the compression layer can
     stash a full original under its own id namespace via the same primitive.
     """
-    path = _tool_result_path(session_id, result_id, base_dir)
+    path = _tool_result_path(session_id, result_id, store)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
@@ -131,7 +133,7 @@ def enforce_tool_result_limit(
     session_id: str = "",
     max_result_size_chars: int = DEFAULT_MAX_RESULT_SIZE_CHARS,
     persist: bool = True,
-    base_dir: PathLike | None = None,
+    store: WorkspaceStore | None = None,
 ) -> str:
     """Cap a single tool's *output*, persisting the full result when too large.
 
@@ -154,7 +156,8 @@ def enforce_tool_result_limit(
         max_result_size_chars: The tool's declared cap (clamped by the
             system-wide default via :func:`persistence_threshold`).
         persist: Persist to disk when True; otherwise truncate inline.
-        base_dir: Root for persisted files (defaults to the workspace root).
+        store: Workspace layout owner that resolves the on-disk location
+            (defaults to the standard workspace root).
     """
     if not output:
         return output
@@ -168,7 +171,7 @@ def enforce_tool_result_limit(
         return output
 
     if persist:
-        filepath = persist_result(output, result_id, session_id, base_dir)
+        filepath = persist_result(output, result_id, session_id, store)
         if filepath is not None:
             preview, has_more = generate_preview(output, PREVIEW_SIZE_BYTES)
             return _build_persisted_message(filepath, len(output), preview, has_more)

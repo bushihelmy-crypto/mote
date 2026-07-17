@@ -18,6 +18,7 @@ from typing import Optional
 
 from mote.executor.compress.base import Compressor
 from mote.executor.compress.cargo import CargoCompressor
+from mote.executor.compress.curl import CurlCompressor
 from mote.executor.compress.git import GitCompressor
 from mote.executor.compress.pip import PipCompressor
 from mote.executor.compress.pytest import PytestCompressor
@@ -30,6 +31,7 @@ _COMPRESSORS: tuple[Compressor, ...] = (
     RuffCompressor(),
     CargoCompressor(),
     PipCompressor(),
+    CurlCompressor(),
 )
 
 

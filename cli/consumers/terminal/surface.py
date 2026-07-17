@@ -39,7 +39,14 @@ from typing import Any, List, Optional, Tuple
 
 from mote.cli.consumers.render.builders import CONTENT_INDENT as _CONTENT_INDENT
 from mote.cli.consumers.render.builders import RESULT_INDENT as _RESULT_INDENT
-from mote.cli.consumers.render.builders import FoldMode, bullet_row, conversation_compacted_text, file_change_caption
+from mote.cli.consumers.render.builders import (
+    FoldMode,
+    activity_outcome,
+    activity_topology,
+    bullet_row,
+    conversation_compacted_text,
+    file_change_caption,
+)
 from mote.cli.consumers.render.builders import fold_note as _fold_note
 from mote.cli.consumers.render.builders import format_usage_line as _format_usage_line
 from mote.cli.consumers.render.builders import indent as _indent_renderable
@@ -54,7 +61,7 @@ from mote.cli.consumers.render.builders import (
     user_message_row,
 )
 from mote.cli.consumers.render.markdown import themed_markdown
-from mote.cli.consumers.render.palette import BULLET, COMPACT, NOTE, RETRY, WARN, Palette
+from mote.cli.consumers.render.palette import BRANCH, BULLET, COMPACT, NOTE, RETRY, WARN, Palette
 from mote.cli.consumers.render.terminal_image import detect_image_protocol
 from mote.cli.consumers.transcript import BaseSurface, Truncation
 from mote.common.i18n import keys as K
@@ -91,12 +98,22 @@ class TerminalSurface(BaseSurface):
         # ``Live`` wiped the moment the reducer sequences its clearing op.
         self._retry_live: Optional["Live"] = None
         self._thinking_live: Optional["Live"] = None
+        # The transient per-node progress line of the *current* activity (a compact
+        # ⎿ branch below its printed topology). Another transient (stream/retry/
+        # thinking) reclaims the single ``Live`` slot; a static row scrolls it away.
+        self._activity_live: Optional["Live"] = None
         # Whether the current assistant turn has printed its ``●`` bullet.
         self._assistant_open = False
         # A buffered search/read run: ``(tool_name, headline)`` per grouped call,
         # plus the count still in flight. ``None`` => no open group.
         self._group_items: Optional[List[Tuple[str, str]]] = None
         self._group_pending = 0
+        # The scope of the most-recently-opened activity — its live subtree is the
+        # current scrollback tail, so only *its* per-node/child updates can refresh
+        # a transient ``Live``. Any other event (a sibling row, a finished activity)
+        # scrolls the topology out of reach, so later updates for it no-op (a linear
+        # terminal can't retro-edit scrolled rows — same ceiling as a search group).
+        self._activity_tail: Optional[Tuple[Any, ...]] = None
 
     # ------------------------------------------------------------------
     # Small layout helpers (bullet column + indented continuation)
@@ -135,7 +152,10 @@ class TerminalSurface(BaseSurface):
             self._console.print(self._bullet_row(BULLET, themed_markdown(markdown), style=Palette.BRAND))
         self._show_truncation(truncation, spaces=_CONTENT_INDENT)
 
-    def render_user_message(self, markdown: str) -> None:
+    def render_user_message(self, markdown: str, message_id: Any = None) -> None:
+        # ``message_id`` is a react-unit delete anchor used only by the full-screen
+        # Textual host; the scrollback terminal has no inline multi-select, so it's
+        # accepted for arity parity and ignored.
         self._end_stream()
         if markdown.strip():
             self._console.print()
@@ -195,6 +215,52 @@ class TerminalSurface(BaseSurface):
         if summary.plain:
             self._console.print()
             self._console.print(summary)
+
+    # ------------------------------------------------------------------
+    # nested activity (a run_graph orchestration; a sub-agent / bg task)
+    # ------------------------------------------------------------------
+    def open_activity(self, scope: Any, activity_kind: str, label: str, topology: Any) -> None:
+        # Print the declared topology once as a permanent block, then remember this
+        # scope as the current tail so its live progress can animate below it.
+        self._end_stream()
+        self._console.print()
+        self._console.print(activity_topology(activity_kind, label, topology))
+        self._activity_tail = tuple(scope) if scope else ()
+
+    def update_activity_node(self, scope: Any, stage: str, status: str, detail: str) -> None:
+        # A per-node progress ping refreshes the transient ⎿ line *only* when this
+        # is the current activity tail (its topology is still on-screen); a scrolled
+        # activity can't be repainted, so it no-ops.
+        if not self._is_activity_tail(scope):
+            return
+        self._show_activity_progress(stage, status, detail)
+
+    def add_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        if not self._is_activity_tail(scope):
+            return
+        self._show_activity_progress(
+            getattr(ev, "title", "") or getattr(ev, "tool_name", "") or "",
+            "running",
+            getattr(ev, "headline", "") or "",
+        )
+
+    def complete_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        if not self._is_activity_tail(scope):
+            return
+        ok = bool(getattr(ev, "success", True))
+        self._show_activity_progress(
+            getattr(ev, "title", "") or getattr(ev, "tool_name", "") or "",
+            "success" if ok else "failed",
+            getattr(ev, "headline", "") or "",
+        )
+
+    def close_activity(self, scope: Any, outcome: str, node_states: Any, summary: str) -> None:
+        # Wipe the transient progress line, then print the self-sufficient outcome
+        # tree as a permanent block.
+        self._clear_activity_live()
+        if self._is_activity_tail(scope):
+            self._activity_tail = None
+        self._console.print(activity_outcome(node_states, outcome, summary))
 
     # ------------------------------------------------------------------
     # static transcript rows
@@ -442,8 +508,10 @@ class TerminalSurface(BaseSurface):
             return
         # A streamed token means the retry succeeded, so wipe any transient
         # countdown before opening the stream region (idempotent — the reducer
-        # also sequences ``clear_retry`` ahead of a delta).
+        # also sequences ``clear_retry`` ahead of a delta). An activity progress
+        # line shares the single ``Live`` slot, so it must yield too.
         self._clear_retry()
+        self._clear_activity_live()
         self._pending += text
         finalized, remainder = self._split_committable(self._pending)
         if finalized.strip():
@@ -457,6 +525,7 @@ class TerminalSurface(BaseSurface):
         # Any event that finalizes/opens a block also ends the transient regions.
         self._clear_retry()
         self._clear_thinking()
+        self._clear_activity_live()
         if self._live is None and not self._pending:
             self._assistant_open = False
             return
@@ -480,6 +549,49 @@ class TerminalSurface(BaseSurface):
         """Erase the transient ``✻ 思考中`` indicator."""
         if self._thinking_live is not None:
             live, self._thinking_live = self._thinking_live, None
+            live.stop()
+
+    # ------------------------------------------------------------------
+    # nested-activity live progress (transient ⎿ line under the topology)
+    # ------------------------------------------------------------------
+    def _is_activity_tail(self, scope: Any) -> bool:
+        """True when *scope* is the current on-screen (repaintable) activity."""
+        return self._activity_tail is not None and (tuple(scope) if scope else ()) == self._activity_tail
+
+    def _show_activity_progress(self, stage: str, status: str, detail: str) -> None:
+        """Refresh the single transient ⎿ progress line below the topology."""
+        # Reclaim rich's single ``Live`` slot: an activity ping is transparent to
+        # the thinking/retry guards (the reducer doesn't clear them ahead of it), so
+        # close any competing transient before opening ours.
+        if self._activity_live is None:
+            self._clear_retry()
+            self._clear_thinking()
+        text = Text()
+        # Aligned under the nested topology's node column (the ● RunGraph row +
+        # its ⎿ activity branch sit above; the live per-node ping indents one
+        # level deeper, matching activity_topology's node lines).
+        text.append("    " + BRANCH + " ", style=Palette.DIM)
+        text.append((stage or "").strip(), style=Palette.BRAND)
+        if status:
+            text.append(f" · {status}", style=Palette.DIM)
+        if detail:
+            text.append(f" · {detail.strip()}", style=Palette.DIM)
+        if self._activity_live is None:
+            self._activity_live = Live(
+                text,
+                console=self._console,
+                refresh_per_second=self._LIVE_REFRESH_PER_SECOND,
+                vertical_overflow="crop",
+                transient=True,
+            )
+            self._activity_live.start()
+        else:
+            self._activity_live.update(text)
+
+    def _clear_activity_live(self) -> None:
+        """Erase the transient per-node activity progress line."""
+        if self._activity_live is not None:
+            live, self._activity_live = self._activity_live, None
             live.stop()
 
 

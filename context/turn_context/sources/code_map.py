@@ -22,10 +22,11 @@ newly-touched sibling importing it — so the reminder does not re-print an
 unchanged map every turn.
 
 Push→pull bridge in one object (like :class:`ToolCatalogContextSource`):
-- as an :class:`~mote.common.interface.ObservationSubscriber` it catches
-  :class:`~mote.common.events.PostCompactEvent` and clears the frontier, so
-  the turn after a compaction re-emits the full map (the earlier one was
-  condensed away with the rest of pre-compaction history);
+- as an :class:`~mote.common.interface.ObservationSubscriber` it catches any
+  :data:`~mote.common.events.HISTORY_RESET_EVENTS` (a compaction *or* a ``/clear`` /
+  user delete that structurally rebuilds stored history) and clears the frontier,
+  so the next turn re-emits the full map (the earlier one was condensed away by
+  the compaction or pruned by the edit);
 - as an :class:`~mote.common.interface.EphemeralContextSource` it renders the
   changed rows once per think() cycle.
 
@@ -41,7 +42,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from mote.common.disk import mtime_ns
-from mote.common.events import PostCompactEvent
+from mote.common.events import HISTORY_RESET_EVENTS
 from mote.common.interface import ObservationSubscriber, TurnContextPriority
 from mote.common.text import display_path
 from mote.common.utils.prompt_sanitizer import count_tokens
@@ -117,7 +118,7 @@ class CodeMapContextSource(ObservationSubscriber):
         self._post_compact = False
         # F3: path -> {qualified_name: signature} of the *last* extract, so a fresh
         # extract can be diffed for an interface change (removed symbol / changed
-        # signature) that breaks unseen callers. Cleared on PostCompactEvent.
+        # signature) that breaks unseen callers. Cleared on any history reset.
         self._shape_cache: dict[str, dict[str, str]] = {}
         # F3 per-render (recomputed each render, folded into the signature):
         #   _changed_names: path -> [broken qualified names] (removed OR sig-changed)
@@ -134,17 +135,18 @@ class CodeMapContextSource(ObservationSubscriber):
         self._surfaced: dict[str, dict[str, list[str]]] = {}
 
     async def handle(self, event) -> None:
-        """Reset the incremental frontier after a compaction (re-emit the full map).
+        """Reset the incremental frontier when stored history is structurally rebuilt.
 
-        The prior map rows were persisted into history and condensed away by the
-        compaction, so the model no longer has them; clearing ``_reported`` makes
-        the next render re-emit every non-trivial file. The in-context frontier is
-        also cleared (bodies were condensed away → show ``defines:`` again) and the
-        symbol-shape baseline reset (a fresh post-compaction baseline, so the first
-        render after does not mis-fire the interface-change risk label). All other
-        events ignored.
+        A compaction condenses the prior map rows away; a ``/clear`` or user
+        delete prunes the messages that carried them. Both fold to
+        ``HISTORY_RESET_EVENTS`` — the model no longer has the rows, so clearing
+        ``_reported`` makes the next render re-emit every non-trivial file. The
+        in-context frontier is also cleared (bodies were condensed/pruned away →
+        show ``defines:`` again) and the symbol-shape baseline reset (a fresh
+        baseline, so the first render after does not mis-fire the interface-change
+        risk label). All other events ignored.
         """
-        if isinstance(event, PostCompactEvent):
+        if isinstance(event, HISTORY_RESET_EVENTS):
             self._reported = {}
             self._in_context = set()
             self._post_compact = True

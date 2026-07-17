@@ -51,6 +51,8 @@ RETRY_STATUS = "retry_status"
 TRANSCRIPT_CLEARED = "transcript_cleared"
 SYSTEM_REMINDER = "system_reminder"
 CONVERSATION_COMPACTED = "conversation_compacted"
+ACTIVITY_STARTED = "activity_started"
+ACTIVITY_COMPLETED = "activity_completed"
 
 # ``ToolCallCompleted.result_kind`` values — the neutral signal telling a consumer
 # *which* renderer a tool result wants. The projector decides this once; consumers
@@ -71,6 +73,13 @@ class ViewEvent(BaseModel):
     """
 
     kind: ClassVar[str] = "view_event"
+
+    # Execution lineage (a ``ScopePath`` — tuple of ``ScopeRef``) this event
+    # belongs to, carried forward from the machine event by the projector.
+    # ``()`` = top level (today's exact behavior). A consumer that groups by
+    # activity reads this; a flat consumer ignores it. Non-breaking by
+    # construction: it defaults, so every existing ViewEvent constructs unchanged.
+    scope: tuple = ()
 
 
 class MessageBlockStarted(ViewEvent):
@@ -105,6 +114,11 @@ class MessageBlockCompleted(ViewEvent):
     # points at the complete body (disk path / URL) so it can offer "see full".
     content_truncated: bool = False
     full_ref: Optional[str] = None
+    # The stored ``Message.id`` this block was rendered from (human turns only —
+    # the driver threads it so a UserMessageRow can be mapped back to the exact
+    # history message when a react-unit is deleted). ``None`` for assistant blocks
+    # (which the projector emits and which are not delete anchors).
+    message_id: Optional[str] = None
 
 
 class ReasoningDelta(ViewEvent):
@@ -188,7 +202,7 @@ class MediaBlock(ViewEvent):
 
 
 class FileDiffBlock(ViewEvent):
-    """A file change a tool made (Edit / apply_patch), as the *structured fact*.
+    """A file change a tool made (e.g. Edit), as the *structured fact*.
 
     The change-content counterpart to ``MediaBlock``: the projector emits this
     alongside a ``ToolCallCompleted(result_kind=diff)`` so a host renders the
@@ -386,6 +400,45 @@ class ConversationCompacted(ViewEvent):
     message_count: int = 0
 
 
+class ActivityStarted(ViewEvent):
+    """A nested orchestration (a ``run_graph`` graph, a sub-agent, a background
+    task) began — carries the *topology* the consumer draws before any step runs.
+
+    The activity is identified by its ``scope`` (inherited from the base): the
+    reducer keys an open activity by that ``ScopePath``, and every later scoped
+    ``TaskProgress`` / tool event / ``ActivityCompleted`` with the same head
+    updates the same subtree. ``topology`` is a neutral pre-computed structure
+    (``{"nodes": [{"id","kind","label"}...], "edges": [{"from","to","guard"}...]}``
+    — plain dicts, so the contract layer imports nothing from bggraph); the L4
+    ``activity_topology`` renderer turns it into a tree/graph. It is display-only:
+    a live "which node is running" overlay rides on later ``TaskProgress`` events.
+    """
+
+    kind: ClassVar[str] = ACTIVITY_STARTED
+    activity_kind: str = ""  # "graph" | "agent" | "task"
+    label: str = ""
+    topology: Optional[dict] = None
+
+
+class ActivityCompleted(ViewEvent):
+    """A nested orchestration finished — carries a *self-sufficient* outcome tree.
+
+    Self-sufficiency is the invariant (mirrors ``ToolCallCompleted`` carrying its
+    own truncation): ``node_states`` and ``outcome`` fully describe the terminal
+    render read straight off the graph's terminal state, so a replayed / resumed
+    transcript (which has only this event, never the live ``TaskProgress`` stream)
+    renders the full outcome. ``node_states`` is a list of neutral dicts
+    (``{"id","kind","label","status","attempts","error","args"}``); ``outcome`` is
+    ``"success"`` | ``"failed"``; ``summary`` is a human one-liner. The L4
+    ``activity_outcome`` renderer turns them into the final ✓/⊘/✗ tree.
+    """
+
+    kind: ClassVar[str] = ACTIVITY_COMPLETED
+    outcome: str = "success"  # success | failed
+    node_states: List[dict] = []
+    summary: str = ""
+
+
 __all__ = [
     "ViewEvent",
     "MessageBlockStarted",
@@ -409,6 +462,8 @@ __all__ = [
     "TranscriptCleared",
     "SystemReminder",
     "ConversationCompacted",
+    "ActivityStarted",
+    "ActivityCompleted",
     "MESSAGE_BLOCK_STARTED",
     "MESSAGE_BLOCK_DELTA",
     "MESSAGE_BLOCK_COMPLETED",
@@ -428,6 +483,8 @@ __all__ = [
     "TRANSCRIPT_CLEARED",
     "SYSTEM_REMINDER",
     "CONVERSATION_COMPACTED",
+    "ACTIVITY_STARTED",
+    "ACTIVITY_COMPLETED",
     "RESULT_KIND_PLAIN",
     "RESULT_KIND_DIFF",
     "RESULT_KIND_TABLE",

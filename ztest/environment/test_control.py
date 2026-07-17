@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for AgentControl — the multi-agent control plane."""
 
+import asyncio
 import types
 
 import pytest
@@ -593,6 +594,41 @@ async def test_spawn_agent_run_to_completion_releases(control):
     assert control.registry.agent_metadata_for_id(handle.session_id) is None
 
 
+@pytest.mark.asyncio
+async def test_managed_ttl_watchdog_interrupts_at_deadline(control):
+    # A MANAGED child with a short TTL is interrupted by the watchdog once the
+    # wall-clock budget elapses (reusing the existing interrupt() path).
+    handle = await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED, timeout_seconds=0.02))
+    # It starts non-final (freshly scheduled); let the TTL watchdog fire.
+    await asyncio.sleep(0.08)
+    assert control.get_status(handle.session_id) == AgentStatus.INTERRUPTED
+
+
+@pytest.mark.asyncio
+async def test_managed_no_timeout_registers_no_watchdog(control):
+    # Without timeout_seconds no TTL watchdog is scheduled → the child is left
+    # to the scheduler and never auto-interrupted.
+    before = len(control._watchers)
+    handle = await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED))
+    # completion watcher is only started when parent_id is set (it is not here),
+    # so no watcher tasks should have been added at all.
+    assert len(control._watchers) == before
+    assert control.get_status(handle.session_id) != AgentStatus.INTERRUPTED
+
+
+@pytest.mark.asyncio
+async def test_managed_ttl_watchdog_noops_when_child_finishes_early(control):
+    # A child that reaches a final status before its deadline is dropped from
+    # _runtimes on release; the watchdog's post-sleep lookup then no-ops (no
+    # crash, no spurious interrupt of an unrelated later agent).
+    handle = await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED, timeout_seconds=0.05))
+    control.get_runtime(handle.session_id).status = AgentStatus.COMPLETED
+    control.release_child(handle.session_id)  # gone from _runtimes
+    await asyncio.sleep(0.09)  # outlast the TTL; watchdog must not raise
+    # nothing to assert beyond "no exception" — the child is already released.
+    assert control.get_runtime(handle.session_id) is None
+
+
 def _cost_role(summary="result"):
     from mote.router.cost import CostTracker
 
@@ -694,6 +730,101 @@ async def test_subtree_estimated_flag_rolls_up(control):
     )
     assert control.cost_root.subtree_has_estimated() is True
     assert control.cost_root.tracker.has_unknown_model_cost is False
+
+
+@pytest.mark.asyncio
+async def test_spawn_denied_when_fleet_token_budget_reached(tmp_path):
+    # SpawnUsageGate reads the LIVE cumulative subtree spend off the cost tree:
+    # once the fleet has burned its token budget, the next spawn is refused.
+    control = make_control(tmp_path, max_total_tokens=1000)
+    parent_role = _cost_role()
+    parent_rt = AgentRuntime(parent_role)
+    control.add_agent(parent_rt, root=True)
+    # A first child is admitted (fleet spend still zero).
+    child_role = _cost_role()
+    handle = await control.spawn_agent(
+        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+    )
+    from mote.router.cost import TokenUsage
+
+    # The child burns past the fleet token budget.
+    control.cost_node_for(handle.session_id).tracker.add(
+        TokenUsage(input_tokens=800, output_tokens=400, total_tokens=1200), "gpt-4o"
+    )
+    # The next spawn is refused — the tree is over its token budget.
+    with pytest.raises(AgentLimitReached):
+        await control.spawn_agent(
+            SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+        )
+
+
+@pytest.mark.asyncio
+async def test_spawn_denied_when_fleet_cost_budget_reached(tmp_path):
+    control = make_control(tmp_path, max_cost_usd=0.001)
+    parent_role = _cost_role()
+    parent_rt = AgentRuntime(parent_role)
+    control.add_agent(parent_rt, root=True)
+    child_role = _cost_role()
+    handle = await control.spawn_agent(
+        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+    )
+    from mote.router.cost import TokenUsage
+
+    # A big known-model spend pushes fleet USD cost past the tiny cap.
+    control.cost_node_for(handle.session_id).tracker.add(
+        TokenUsage(input_tokens=100_000, output_tokens=100_000, total_tokens=200_000), "gpt-4o"
+    )
+    assert control.cost_root.subtree_cost() >= 0.001
+    with pytest.raises(AgentLimitReached):
+        await control.spawn_agent(
+            SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+        )
+
+
+@pytest.mark.asyncio
+async def test_usage_gate_inert_without_caps(tmp_path):
+    # No token/cost caps -> the usage gate never denies regardless of spend.
+    control = make_control(tmp_path)
+    parent_role = _cost_role()
+    parent_rt = AgentRuntime(parent_role)
+    control.add_agent(parent_rt, root=True)
+    child_role = _cost_role()
+    handle = await control.spawn_agent(
+        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+    )
+    from mote.router.cost import TokenUsage
+
+    control.cost_node_for(handle.session_id).tracker.add(
+        TokenUsage(input_tokens=10**6, output_tokens=10**6, total_tokens=2 * 10**6), "gpt-4o"
+    )
+    # Still admits — no cap configured.
+    handle2 = await control.spawn_agent(
+        SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+    )
+    assert handle2 is not None
+
+
+@pytest.mark.asyncio
+async def test_usage_gate_denies_spawn_over_token_budget(tmp_path):
+    # Once the fleet's live spend crosses the token ceiling, the next spawn is
+    # refused — the runaway-fan-out guard's cost dimension.
+    control = make_control(tmp_path, max_total_tokens=1000)
+    parent_role = _cost_role()
+    parent_rt = AgentRuntime(parent_role)
+    control.add_agent(parent_rt, root=True)
+    child_role = _cost_role()
+    handle = await control.spawn_agent(
+        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+    )
+    from mote.router.cost import TokenUsage
+
+    control.cost_node_for(handle.session_id).tracker.add(
+        TokenUsage(input_tokens=800, output_tokens=400, total_tokens=1200), "gpt-4o"
+    )
+    with pytest.raises(AgentLimitReached):
+        await control.spawn_agent(
+            SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+        )
 
 
 @pytest.mark.asyncio

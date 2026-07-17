@@ -272,15 +272,16 @@ def test_fold_mode_classifies_group_detail_and_none():
     assert fold_mode("Read") is FoldMode.GROUP
     assert fold_mode("Grep") is FoldMode.GROUP
     assert fold_mode("Glob") is FoldMode.GROUP
-    # DETAIL: per-call body+output fold (distinct command identity).
+    # DETAIL: per-call body+output fold — the DEFAULT for any tool not on the
+    # NONE deny-list (deny-list, not allow-list, so new tools fold by default).
     assert fold_mode("Bash") is FoldMode.DETAIL
     assert fold_mode("Terminal") is FoldMode.DETAIL
     assert fold_mode("WebBrowser") is FoldMode.DETAIL
     assert fold_mode("Skill") is FoldMode.DETAIL
-    # NONE: always rendered in full.
+    assert fold_mode("Unknown") is FoldMode.DETAIL
+    # NONE: always rendered in full — the "what changed" is the point.
     assert fold_mode("Write") is FoldMode.NONE
     assert fold_mode("Edit") is FoldMode.NONE
-    assert fold_mode("Unknown") is FoldMode.NONE
 
 
 def test_tool_group_summary_counts_search_and_read():

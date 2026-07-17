@@ -29,6 +29,7 @@ from mote.session.kernel_state import KernelStateRecorder
 from mote.session.listing import SessionInfo, list_sessions
 from mote.session.log import SessionLog
 from mote.session.recall import body_for_tool_call
+from mote.session.reconcile import ReconcileResult, reconcile_tool_calls
 from mote.session.replay import ReplayResult, replay
 from mote.session.snapshot import BlobStore, FileSnapshotRecorder
 from mote.session.subscribers import RecorderSubscriber
@@ -51,6 +52,8 @@ __all__ = [
     "BrowserStateRecorder",
     "ReplayResult",
     "replay",
+    "ReconcileResult",
+    "reconcile_tool_calls",
     "SessionInfo",
     "list_sessions",
     "fork",

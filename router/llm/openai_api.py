@@ -28,13 +28,37 @@ from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
 
-# Models that reject standard chat params. Keyed by model name → the set of
-# request kwargs to drop. Data-driven so adding a model is a table edit, not a
+# Model-name substrings whose models reject standard chat params → the set of
+# request kwargs to drop. FAMILY match: a key matches when it is a substring of
+# the model name, so one entry covers a whole family (``gpt-5`` → gpt-5 /
+# gpt-5.4 / gpt-5-mini; ``kimi`` → kimi-k2 / kimi-latest). Sets from every
+# matching key are UNIONed. Data-driven so adding a model is a table edit, not a
 # new ``if self.model == ...`` branch in ``_cons_kwargs``.
+#
+# The Kimi / Moonshot entries drop ``temperature`` because those models reject
+# any temperature other than a single model-specific fixed value (HTTP 400
+# "only 1 is allowed for this model" / "only 0.6 is allowed for this model");
+# mote's default temperature=0.0 would trip that, so omit it and let the model
+# use its own default (matches hermes-agent's OMIT_TEMPERATURE behaviour).
 _UNSUPPORTED_REQUEST_PARAMS: dict[str, frozenset] = {
-    "gpt-5": frozenset({"max_tokens", "temperature"}),  # GPT-5: only default temperature, no max_tokens
+    "gpt-5": frozenset({"max_tokens", "temperature"}),  # GPT-5 family: only default temperature, no max_tokens
     "claude-opus-4-8": frozenset({"temperature"}),  # claude-opus-4-8: only default temperature
+    "kimi": frozenset({"temperature"}),  # Moonshot Kimi: rejects non-fixed temperature
+    "moonshot": frozenset({"temperature"}),  # Moonshot moonshot-* models: same fixed-temperature rule
 }
+
+
+def _unsupported_request_params(model: Optional[str]) -> frozenset:
+    """Union of dropped-param sets for every family key matching ``model``.
+
+    Substring (family) match — see :data:`_UNSUPPORTED_REQUEST_PARAMS`.
+    """
+    name = model or ""
+    dropped: set = set()
+    for key, params in _UNSUPPORTED_REQUEST_PARAMS.items():
+        if key in name:
+            dropped |= params
+    return frozenset(dropped)
 
 
 @register_provider(
@@ -242,7 +266,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
-        for param in _UNSUPPORTED_REQUEST_PARAMS.get(self.model or "", frozenset()):
+        for param in _unsupported_request_params(self.model):
             kwargs.pop(param, None)
 
         return kwargs
@@ -335,7 +359,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
                 args = json.loads(raw_args, strict=False) if isinstance(raw_args, str) else (raw_args or {})
             except json.JSONDecodeError:
                 # A model emitting a large multi-line string argument (e.g.
-                # ApplyPatch's whole patch) sometimes produces invalid JSON —
+                # Write's whole file body) sometimes produces invalid JSON —
                 # unescaped newlines/quotes or a truncated tail. Try json_repair
                 # to recover the call rather than dropping the entire argument.
                 args = self._repair_tool_arguments(raw_args or "")
