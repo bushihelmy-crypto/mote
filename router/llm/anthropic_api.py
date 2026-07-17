@@ -24,6 +24,7 @@ from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, w
 
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.const import USE_CONFIG_TIMEOUT
+from mote.common.const.llm import supports_web_search
 from mote.common.events import log_llm_stream
 from mote.common.exception import LLMEmptyResponseError, LLMTimeoutError, classify_llm_error, is_retryable
 from mote.common.logs import logger
@@ -33,6 +34,7 @@ from mote.router.cost import CostTracker, TokenUsage
 from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
+from mote.router.llm.llm_response import WebSearchHit
 
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
@@ -92,7 +94,9 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         return httpx.AsyncClient(proxy=self.config.proxy)
 
     # -- message conversion (OpenAI wire shape -> Anthropic) ----------------
-    def _convert_messages(self, messages: list[dict]) -> tuple[str, list[dict]]:
+    def _convert_messages(
+        self, messages: list[dict], *, render_tool_references: bool = False
+    ) -> tuple[str, list[dict]]:
         """Split out the system prompt and convert the rest to Anthropic messages.
 
         Returns ``(system_text, anthropic_messages)``. System messages are joined
@@ -100,6 +104,15 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         blocks inside a user turn; assistant ``tool_calls`` become ``tool_use``
         blocks. Consecutive same-role turns are merged so the user/assistant
         alternation the API expects is preserved (e.g. parallel tool results).
+
+        ``render_tool_references`` gates the SearchTools-discovery rendering: a
+        ``tool_reference`` block is only valid when the SAME request carries the
+        deferred-tool corpus it expands against, so the caller (``_cons_kwargs``)
+        passes True only when the request's ``tools`` include a ``defer_loading``
+        member. When False (e.g. any toolless ``aask`` — summarize, dedup guards,
+        routing), a result carrying ``_tool_references`` degrades to its plain
+        stringified text instead of emitting an orphaned reference the API would
+        reject with a 400. The private routing key never reaches the wire either way.
         """
         system_parts: list[str] = []
         converted: list[dict] = []
@@ -112,10 +125,22 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
                     system_parts.append(text)
                 continue
             if role == "tool":
+                # Server-side tool-search (custom path): when the result carries
+                # ``_tool_references`` (a SearchTools discovery) AND this request
+                # carries the deferred-tool corpus, render the tool_result content
+                # as a list of ``tool_reference`` blocks — the API expands each into
+                # the tool's full definition. Without the corpus (toolless aask) the
+                # reference has nothing to expand against, so degrade to the ordinary
+                # stringified text. The private routing key never reaches the wire.
+                refs = msg.get("_tool_references")
+                if refs and render_tool_references:
+                    content: Any = [{"type": "tool_reference", "tool_name": n} for n in refs]
+                else:
+                    content = self._stringify(msg.get("content"))
                 block = {
                     "type": "tool_result",
                     "tool_use_id": msg.get("tool_call_id", ""),
-                    "content": self._stringify(msg.get("content")),
+                    "content": content,
                 }
                 self._append_blocks(converted, "user", [block])
                 continue
@@ -277,7 +302,19 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         return {"type": "auto"}
 
     def _cons_kwargs(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT, **extra_kwargs) -> dict:
-        system, converted = self._convert_messages(messages)
+        # raise_if_empty is a control flag for the caller, never a wire param.
+        extra_kwargs.pop("raise_if_empty", None)
+        # Resolve the tool corpus FIRST: a ``tool_reference`` block in history is
+        # only valid when this request carries the deferred-tool corpus it expands
+        # against, so ``_convert_messages`` must know whether tools are present
+        # before it renders the tool-result blocks.
+        converted_tools: Optional[list[dict]] = None
+        if "tools" in extra_kwargs:
+            tools = extra_kwargs.pop("tools")
+            if tools:
+                converted_tools = self._convert_tools(tools)
+        render_tool_references = bool(converted_tools)
+        system, converted = self._convert_messages(messages, render_tool_references=render_tool_references)
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self._get_max_tokens(),
@@ -291,12 +328,8 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
             kwargs["temperature"] = self.config.temperature
         if system:
             kwargs["system"] = system
-        # raise_if_empty is a control flag for the caller, never a wire param.
-        extra_kwargs.pop("raise_if_empty", None)
-        if "tools" in extra_kwargs:
-            tools = extra_kwargs.pop("tools")
-            if tools:
-                kwargs["tools"] = self._convert_tools(tools)
+        if converted_tools is not None:
+            kwargs["tools"] = converted_tools
         if extra_kwargs.get("tool_choice") is not None:
             kwargs["tool_choice"] = self._convert_tool_choice(extra_kwargs.pop("tool_choice"))
         else:
@@ -350,9 +383,22 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         #    tool so a system-only change still reuses the cached tool section.
         #    Anthropic-shaped specs pass through ``_convert_tools`` by reference,
         #    so copy-on-mark to avoid stamping the caller's tool dict.
+        #    A ``defer_loading: true`` tool (server-side tool-search corpus member)
+        #    must NOT also carry ``cache_control`` — the API returns a 400 — so
+        #    scan from the end for the last NON-deferred tool to anchor on. If
+        #    every tool is deferred (shouldn't happen: SearchTools + core tools
+        #    stay non-deferred, and the API itself forbids all-deferred), skip the
+        #    tools breakpoint entirely (system + messages markers still apply).
         tools = kwargs.get("tools")
-        if isinstance(tools, list) and tools and isinstance(tools[-1], dict):
-            tools[-1] = {**tools[-1], "cache_control": dict(marker)}
+        if isinstance(tools, list):
+            for ti in range(len(tools) - 1, -1, -1):
+                tool = tools[ti]
+                if not isinstance(tool, dict):
+                    continue
+                if tool.get("defer_loading"):
+                    continue  # can't carry cache_control — keep scanning
+                tools[ti] = {**tool, "cache_control": dict(marker)}
+                break
 
         # 3) messages: exactly one marker, on the end of the *stable* conversation
         #    prefix — the last DURABLE block, not the final message by position.
@@ -541,6 +587,75 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
                     }
                 )
         return out
+
+    # -- server-side web search --------------------------------------------
+    async def aweb_search(
+        self,
+        query: str,
+        *,
+        allowed_domains: Optional[list[str]] = None,
+        blocked_domains: Optional[list[str]] = None,
+        max_uses: int = 8,
+    ) -> list[WebSearchHit]:
+        """Run Anthropic's server-side ``web_search_20250305`` and return the hits.
+
+        Issues an isolated (non-streaming) ``messages.create`` carrying the
+        server tool so the API performs the search + crawl and streams back
+        ``web_search_tool_result`` content blocks. We collect those blocks and
+        extract ``{title, url}`` (mirroring Claude Code's ``extractSearchResults``).
+        The server tool spec passes through ``_convert_tools`` untouched (it only
+        rewrites OpenAI ``function`` specs).
+
+        Raises ``NotImplementedError`` when the routed model does not support
+        server-side search (e.g. an old Claude on the anthropic transport), so the
+        WebSearch tool degrades cleanly instead of firing a request the API would
+        reject with an opaque error the tool cannot catch.
+        """
+        if not supports_web_search(self.model):
+            raise NotImplementedError(f"{self.model} does not support server-side web search.")
+
+        tool_spec: dict[str, Any] = {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": max_uses,
+        }
+        if allowed_domains:
+            tool_spec["allowed_domains"] = allowed_domains
+        if blocked_domains:
+            tool_spec["blocked_domains"] = blocked_domains
+
+        messages = [
+            {"role": "system", "content": "You are an assistant for performing a web search tool use"},
+            {"role": "user", "content": f"Perform a web search for the query: {query}"},
+        ]
+        rsp = await self._achat_completion(
+            messages,
+            tools=[tool_spec],
+            raise_if_empty=False,
+        )
+        return self._extract_web_search_hits(rsp)
+
+    @staticmethod
+    def _extract_web_search_hits(rsp: Any) -> list[WebSearchHit]:
+        """Pull ``{title, url}`` out of an Anthropic ``web_search_tool_result`` response.
+
+        Walks the response ``content`` for ``web_search_tool_result`` blocks; each
+        carries a list of result items with ``title`` / ``url`` (and possibly an
+        error block, which has no list content and is skipped).
+        """
+        hits: list[WebSearchHit] = []
+        for block in getattr(rsp, "content", None) or []:
+            if getattr(block, "type", None) != "web_search_tool_result":
+                continue
+            content = getattr(block, "content", None)
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                title = getattr(item, "title", None) if not isinstance(item, dict) else item.get("title")
+                url = getattr(item, "url", None) if not isinstance(item, dict) else item.get("url")
+                if url:
+                    hits.append(WebSearchHit(title=title or "", url=url))
+        return hits
 
     # -- token / usage helpers ---------------------------------------------
     def _get_max_tokens(self) -> int:

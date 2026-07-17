@@ -46,17 +46,17 @@ THEME_NAME = "mote-monokai"
 # The classic Monokai canvas (cmder's default) — a neutral olive-charcoal, not
 # a warm brown. Each step is a distinct raised surface off the same base hue so
 # inputs / panels read as lifted planes without any muddy tint.
-_BG = "#222219"  # app canvas — deep near-black Monokai olive-charcoal
-_SURFACE = "#6b6c5f"  # cards / inputs — clearly lifted off the canvas
+_BG = "#000000"  # app canvas — black
+_SURFACE = "#120231"  # cards / inputs — clearly lifted off the canvas
 _PANEL = "#787969"  # raised chrome
 _FOREGROUND = "#f8f8f2"  # Monokai off-white body text
 
-# The bottom status bar keeps the classic editor blue (VS Code's status-bar
-# ``#007ACC`` family) — a calm anchoring band under the warm transcript rather
-# than another charcoal slab. Exposed as ``$status-bg`` / ``$status-fg`` so the
-# ``StatusBar`` widget CSS reads them from the shared token map.
-STATUS_BG = "#12507e"  # status bar band — settled editor blue
-STATUS_FG = "#dbe7f2"  # status bar text — cool off-white for contrast on blue
+# The bottom status bar band — an orange-yellow anchoring slab under the warm
+# transcript, with black text for contrast. Exposed as ``$status-bg`` /
+# ``$status-fg`` so the ``StatusBar`` widget CSS reads them from the shared token
+# map.
+STATUS_BG = "#e8a317"  # status bar band — orange-yellow
+STATUS_FG = "#000000"  # status bar text — black for contrast on orange-yellow
 
 
 def textual_css_vars() -> dict[str, str]:

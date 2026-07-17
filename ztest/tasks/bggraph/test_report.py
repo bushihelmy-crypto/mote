@@ -12,7 +12,7 @@ import pytest
 
 from mote.common.events import EventBus, TaskProgressEvent, set_bus
 from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.executor.tasks.bggraph.report import MAX_RESULT_DISPLAY_CHARS, make_progress_writer
+from mote.executor.tasks.bggraph.report import make_progress_writer
 
 
 class _Recorder(ObservationSubscriber, SyncObserver):
@@ -79,7 +79,7 @@ def test_detail_is_not_truncated_in_either_sink():
     lines = []
     bus, rec = _bus()
     writer = make_progress_writer(lines.append, task_id="bg_3")
-    big = "y" * (MAX_RESULT_DISPLAY_CHARS + 100)
+    big = "y" * 200_000
     with set_bus(bus):
         writer("node", "running", big)
     assert big in lines[0]

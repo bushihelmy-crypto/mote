@@ -44,14 +44,14 @@ class CodeMapConfig(YamlModel):
 class BgGraphConfig(YamlModel):
     """Background node-graph (pipeline) engine knobs.
 
-    Gates the ``# Background Pipelines`` brief in the system prompt: when
-    ``enabled`` the model is told that some tools run multi-step node graphs
-    asynchronously (returning a ``task_id``, pausing for decisions). The brief is
-    rendered purely off this switch — not off whether any pipeline tool happens
-    to be registered — so it is an explicit, config-driven capability.
+    Gates pipeline tool *loading* at construction: when ``enabled`` the pipeline
+    tools are bound and available; when off they are never bound (see
+    ``ToolExecutor`` / ``TestPipelinesEnabledGate``). An explicit, config-driven
+    capability switch — not a function of whether any pipeline tool happens to be
+    registered.
     """
 
-    enabled: bool = Field(default=False, description="Render the # Background Pipelines system-prompt brief.")
+    enabled: bool = Field(default=False, description="Enable the background node-graph (pipeline) engine.")
 
 
 class SkillsConfig(YamlModel):

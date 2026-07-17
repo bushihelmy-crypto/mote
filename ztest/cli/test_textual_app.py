@@ -712,6 +712,186 @@ async def test_compaction_without_summary_or_prompt_mounts_only_marker():
         assert len(app.query(UserMessageRow)) == 0
 
 
+# --------------------------------------------------------------------------
+# React-unit delete-mode (ctrl+x → tick → enter confirm / esc cancel)
+# --------------------------------------------------------------------------
+
+
+class _FakeDeleteDriver:
+    """Records the anchor ids handed to ``delete_react_units`` and returns a
+    caller-chosen removed-count (the durable prune is exercised elsewhere)."""
+
+    def __init__(self, removed: int = 0) -> None:
+        self.removed = removed
+        self.calls: list = []
+
+    async def delete_react_units(self, anchor_ids) -> int:
+        self.calls.append(list(anchor_ids))
+        return self.removed
+
+
+async def _seed_two_turns(app, pilot):
+    """Mount two full react-units: (q1, reply, tool) then (q2, reply)."""
+    app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="q1", role="user", message_id="m1")))
+    app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="a1", streamed=False)))
+    app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Bash", tool_use_id="tu-1")))
+    app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="q2", role="user", message_id="m2")))
+    app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="a2", streamed=False)))
+    await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_delete_mode_arms_checkboxes_on_user_rows():
+    app = MoteApp()
+    app._port = _FakePort(waiting=True)
+    async with app.run_test() as pilot:
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        assert app._delete_mode is True
+        rows = list(app.query(UserMessageRow))
+        assert len(rows) == 2
+        assert all(r.select_mode for r in rows)
+        # A hint notice was surfaced.
+        assert len(app.query(NoticeRow)) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_mode_blocked_mid_turn():
+    app = MoteApp()
+    app._port = _FakePort(waiting=False)  # a turn is in flight
+    async with app.run_test() as pilot:
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        assert app._delete_mode is False
+        # No checkboxes armed; a "busy" warning was shown.
+        assert all(not r.select_mode for r in app.query(UserMessageRow))
+        assert len(app.query(NoticeRow)) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_cancel_clears_ticks_and_exits_mode():
+    app = MoteApp()
+    app._port = _FakePort(waiting=True)
+    async with app.run_test() as pilot:
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        first = app.query(UserMessageRow).first()
+        first.selected = True
+        await pilot.pause()
+        # Arming delete-mode mounted exactly one hint banner.
+        assert len(app.query(NoticeRow)) == 1
+        app.action_delete_cancel()
+        await pilot.pause()
+        assert app._delete_mode is False
+        assert all(not r.selected for r in app.query(UserMessageRow))
+        assert all(not r.select_mode for r in app.query(UserMessageRow))
+        # Cancelling removes the hint banner rather than leaving a "cancelled"
+        # notice — no trace lingers in the transcript.
+        assert len(app.query(NoticeRow)) == 0
+        assert app._delete_hint_row is None
+
+
+@pytest.mark.asyncio
+async def test_turn_start_cancels_armed_delete_mode():
+    app = MoteApp()
+    app._port = _FakePort(waiting=True)
+    async with app.run_test() as pilot:
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        first = app.query(UserMessageRow).first()
+        first.selected = True
+        await pilot.pause()
+        assert app._delete_mode is True
+        # A turn now begins → delete-mode is cancelled, ticks dropped, user warned.
+        app.set_busy()
+        await pilot.pause()
+        assert app._delete_mode is False
+        assert all(not r.selected for r in app.query(UserMessageRow))
+        assert all(not r.select_mode for r in app.query(UserMessageRow))
+        assert app._delete_hint_row is None
+        # The armed hint was replaced by a single busy warning.
+        assert len(app.query(NoticeRow)) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_confirm_refused_when_turn_started_mid_mode():
+    app = MoteApp()
+    port = _FakePort(waiting=True)
+    app._port = port
+    driver = _FakeDeleteDriver(removed=3)
+    async with app.run_test() as pilot:
+        app._session_driver = driver
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        first = app.query(UserMessageRow).first()
+        first.selected = True
+        await pilot.pause()
+        # A turn quietly began (no set_busy path) → confirm must refuse the prune.
+        port.waiting = False
+        app.action_delete_confirm()
+        await pilot.pause()
+        assert app._delete_mode is False
+        assert driver.calls == []  # no checkpoint written
+        assert len(app.query(UserMessageRow)) == 2  # nothing pruned
+
+
+@pytest.mark.asyncio
+async def test_delete_confirm_empty_selection_is_noop():
+    app = MoteApp()
+    app._port = _FakePort(waiting=True)
+    driver = _FakeDeleteDriver(removed=0)
+    async with app.run_test() as pilot:
+        # Attach the fake AFTER startup so ``on_mount`` doesn't call its ``run()``
+        # (only ``delete_react_units`` is exercised here).
+        app._session_driver = driver
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        app.action_delete_confirm()  # nothing ticked
+        await pilot.pause()
+        assert app._delete_mode is False
+        assert driver.calls == []  # no checkpoint written
+        # Both turns' rows survive.
+        assert len(app.query(UserMessageRow)) == 2
+
+
+@pytest.mark.asyncio
+async def test_delete_confirm_prunes_ticked_react_unit_widgets():
+    app = MoteApp()
+    app._port = _FakePort(waiting=True)
+    driver = _FakeDeleteDriver(removed=3)  # q1 + a1 + tool result deleted
+    async with app.run_test() as pilot:
+        # Attach the fake AFTER startup so ``on_mount`` doesn't call its ``run()``.
+        app._session_driver = driver
+        await _seed_two_turns(app, pilot)
+        app.action_delete_mode()
+        await pilot.pause()
+        # Tick the FIRST turn (message_id m1).
+        first = app.query(UserMessageRow).first()
+        first.selected = True
+        await pilot.pause()
+        app.action_delete_confirm()
+        await pilot.pause()
+        # The driver was handed the first turn's anchor id.
+        assert driver.calls == [["m1"]]
+        assert app._delete_mode is False
+        # The first turn's widgets (its user row + assistant block + tool) are
+        # gone; the second turn survives.
+        rows = list(app.query(UserMessageRow))
+        assert [r._text for r in rows] == ["q2"]
+        # The assistant block + tool that belonged to the first turn were pruned;
+        # only the second turn's reply block remains.
+        assert len(app.query(AssistantBlock)) == 1
+        assert len(app.query(ToolCallWidget)) == 0
+        # The cached last-prompt now tracks the surviving turn.
+        assert app._last_user_prompt == "q2"
+
+
 def test_worker_finished_exits_app():
     app = MoteApp()
     calls: list = []

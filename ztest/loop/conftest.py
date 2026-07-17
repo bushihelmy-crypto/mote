@@ -84,6 +84,10 @@ class FakeChannel:
         self.commands = list(commands or [])
         self.terminal = terminal
         self.recorded_turns: list[tuple[str, list[dict]]] = []
+        # Two-phase (checkpoint) recording: the assistant call recorded ahead of
+        # execution, then the results after. Populated only on the EXTERNAL path.
+        self.recorded_calls: list[tuple[str, list[dict]]] = []
+        self.recorded_results: list[list[dict]] = []
         self.iter_calls: list[set] = []
 
     async def iter_commands(self, think_engine, valid_names):
@@ -93,6 +97,14 @@ class FakeChannel:
 
     async def record_turn(self, memory, content, executed) -> None:
         self.recorded_turns.append((content, list(executed)))
+
+    async def record_call(self, memory, content, executed) -> None:
+        # Snapshot at call time (before bodies run) so a test can prove the
+        # assistant message was recorded ahead of execution.
+        self.recorded_calls.append((content, [dict(e) for e in executed]))
+
+    async def record_results(self, memory, executed) -> None:
+        self.recorded_results.append([dict(e) for e in executed])
 
     async def is_terminal(self, think_engine) -> bool:
         return self.terminal
@@ -114,6 +126,10 @@ class FakeResult:
     terminate: bool = False
     retention: str | None = None
     resource_path: str | None = None
+    # Structured payload the loop forwards onto the executed entry (only
+    # SearchTools' {tool_references} is read downstream; None for every other
+    # tool). Mirrors ToolResult.data.
+    data: Any = None
 
 
 class FakeExecutor:
@@ -123,14 +139,26 @@ class FakeExecutor:
     returns; anything missing falls back to ``default``.
     """
 
-    def __init__(self, *, results: Optional[dict[str, FakeResult]] = None, default: Optional[FakeResult] = None):
+    def __init__(
+        self,
+        *,
+        results: Optional[dict[str, FakeResult]] = None,
+        default: Optional[FakeResult] = None,
+        ledgered: Optional[set[str]] = None,
+    ):
         self.results = results or {}
         self.default = default or FakeResult()
         self.calls: list[dict] = []
+        # Names the fake would EXTERNAL-ledger; drives will_ledger so a test can
+        # exercise the loop's pre-execution checkpoint path.
+        self.ledgered = set(ledgered or ())
 
     async def run_command(self, name, args, result_id=None):
         self.calls.append({"name": name, "args": args, "result_id": result_id})
         return self.results.get(name, self.default)
+
+    def will_ledger(self, name, result_id) -> bool:
+        return result_id is not None and name in self.ledgered
 
 
 class FakeMemory:
@@ -238,8 +266,6 @@ def make_loop_context(**overrides) -> LoopContext:
     from mote.common.schema import MessageQueue
 
     params: dict[str, Any] = dict(
-        max_react_loop=5,
-        max_consecutive_react_limit=3,
         name="Alice",
         display_name="Alice(Tester)",
         tools=["Read", "AskUserQuestion"],

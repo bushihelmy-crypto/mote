@@ -30,6 +30,11 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 # A skill-listing/activation heading ("Available Skills", "New Skills available",
 # "Relevant Skills") — the blocks whose summary should carry a skill *count*.
 _SKILL_HEADING_RE = re.compile(r"skill", re.IGNORECASE)
+# A deferred-tool menu heading ("Additional tools", "Additional tools (search to
+# enable)") — the block whose summary should list the tool *names* (not a count):
+# the human wants to see exactly which tools are search-to-enable, mirroring how
+# git/skill blocks surface their contents.
+_TOOL_HEADING_RE = re.compile(r"additional tools", re.IGNORECASE)
 
 
 def _split_blocks(inner: str) -> List[tuple[str, List[str]]]:
@@ -80,21 +85,52 @@ def _count_skill_rows(body: List[str]) -> int:
     return count
 
 
+def _tool_names(body: List[str]) -> List[str]:
+    """Extract deferred-tool names from a "# Additional tools" block's bullets.
+
+    Both deferred-menu sources render ``- <name>: <one-line desc>`` bullets (the
+    withhold-path :class:`DeferredToolIndexContextSource` and the split-path
+    :class:`SplitToolMenuContextSource`). We keep only the ``<name>`` (the text
+    before the first ``:``) so the transcript summary lists exactly which tools
+    are search-to-enable. Intro prose is neither a bullet nor carries a name, so
+    it is ignored.
+    """
+    names: List[str] = []
+    for line in body:
+        s = line.strip()
+        if not s.startswith("- "):
+            continue
+        entry = s[2:].strip()
+        name = entry.split(":", 1)[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
 def _summarize_reminder(content: str) -> str:
     """Condense a ``<system-reminder>`` envelope to a one-line heading summary.
 
     The bus joins each source's block (``# Heading\\n<body>``) inside the envelope.
     We strip the tags, split into blocks at their headings, and keep only each
     block's heading (falling back to its first non-empty line) — dropping the
-    prose/JSON bodies. A *skill* block's heading additionally carries the count of
-    available skills (e.g. "Available Skills (3)") so the human sees how many were
-    injected without the full listing. Headings are joined with ``·``.
+    prose/JSON bodies. Two blocks enrich their heading from the body: a *skill*
+    block carries the count of available skills (e.g. "Available Skills (3)"), and
+    a *deferred-tool* block ("Additional tools") lists the tool NAMES (e.g.
+    "Additional tools (search to enable): WebSearch, RunGraph") so the human sees
+    exactly which tools are search-to-enable — matching how git/skill blocks
+    surface their contents. Headings are joined with ``·``.
     """
     parts: List[str] = []
     for heading, body in _split_blocks(_strip_envelope(content)):
         if heading:
             label = heading
-            if _SKILL_HEADING_RE.search(heading):
+            if _TOOL_HEADING_RE.search(heading):
+                # Deferred-tool menu: list the tool NAMES (not a count) so the
+                # human sees exactly what is search-to-enable this turn.
+                names = _tool_names(body)
+                if names:
+                    label = f"{heading}: {', '.join(names)}"
+            elif _SKILL_HEADING_RE.search(heading):
                 n = _count_skill_rows(body)
                 if n:
                     label = f"{heading} ({n})"
@@ -112,5 +148,6 @@ __all__ = [
     "_strip_envelope",
     "_split_blocks",
     "_count_skill_rows",
+    "_tool_names",
     "_summarize_reminder",
 ]

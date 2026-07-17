@@ -33,7 +33,7 @@ the ``Message`` type, so it sits at the very bottom of the layering.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, List, Optional, TypeVar, get_args, get_origin
 
 from mote.common.events.outcomes import (
     CompactOutcome,
@@ -66,6 +66,7 @@ LLM_RESPONSE = "llm_response"
 LLM_ERROR = "llm_error"
 LLM_RETRY = "llm_retry"
 COMPACTION_CHECKPOINT = "compaction_checkpoint"
+HISTORY_EDITED = "history_edited"
 FILE_SNAPSHOT = "file_snapshot"
 USER_PROMPT_SUBMIT = "user_prompt_submit"
 PRE_TOOL_USE = "pre_tool_use"
@@ -84,6 +85,8 @@ AGENT_LIFECYCLE = "agent_lifecycle"
 SPAN_START = "span_start"
 SPAN_END = "span_end"
 BUDGET = "budget"
+ACTIVITY_STARTED = "activity_started"
+ACTIVITY_COMPLETED = "activity_completed"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,54 @@ BUDGET = "budget"
 # live in the ``common/events/rewrite.py`` leaf (so ``outcome_type`` can bind
 # events to outcomes without a cycle); re-exported here for convenience.
 # ---------------------------------------------------------------------------
+
+
+#: The outcome type a control event is bound to — the CRTP-style parameter that
+#: statically links an event to *its* outcome. ``PreToolUseEvent`` subclasses
+#: ``ControlEvent[ToolCallOutcome]``, so ``bus.emit(PreToolUseEvent())`` infers
+#: ``ToolCallOutcome | None`` (see ``bus.py``) with no cast at the call site.
+_TOut = TypeVar("_TOut", bound=ControlOutcome)
+
+
+class ControlEvent(Generic[_TOut]):
+    """Generic base for every *control* event — parametrized on its outcome type.
+
+    A control event is one a :class:`ControlSubscriber` may fold a
+    :class:`ControlOutcome` for (veto / rewrite / inject / stop). Declaring the
+    outcome type as the generic argument (``ControlEvent[ToolCallOutcome]``) is
+    the single source of truth for the event↔outcome link:
+
+    * **Static** — ``bus.emit(event: ControlEvent[O]) -> Optional[O]`` threads the
+      argument through, so a call site reads the exact outcome type with no cast.
+      ``tool_outcome = ToolResultOutcome(...)`` returned for a ``PreToolUseEvent``
+      is a compile-time error.
+    * **Runtime** — the ``outcome_type`` ClassVar (which ``bus.py`` reads for its
+      ``isinstance`` defence-in-depth) is *auto-derived* from the same generic
+      argument in :meth:`__init_subclass__`, so the two can never drift: there is
+      no separate ``outcome_type = XOutcome`` line to forget to update.
+
+    A pure-observation event does **not** inherit this (it has no outcome); the
+    bus's ``emit`` overload returns ``None`` for it. Events that are also
+    :class:`Rewritable` inherit both (``ControlEvent[O], Rewritable``).
+    """
+
+    name: ClassVar[str] = ""
+    #: Auto-derived from the generic argument at subclass creation — never set by
+    #: hand. Read by ``bus.py`` for its runtime ``isinstance`` outcome check.
+    outcome_type: ClassVar[type[ControlOutcome]]
+
+    def __init_subclass__(cls, **kw: Any) -> None:
+        super().__init_subclass__(**kw)
+        # Extract the outcome type from ``ControlEvent[X]`` in the MRO bases and
+        # pin it onto the ClassVar the bus reads. A subclass that specializes the
+        # parameter (the concrete events below) sets it; an intermediate generic
+        # subclass that leaves it a TypeVar is skipped (stays inherited/unset).
+        for base in getattr(cls, "__orig_bases__", ()):
+            if get_origin(base) is ControlEvent:
+                (arg,) = get_args(base)
+                if isinstance(arg, type):
+                    cls.outcome_type = arg
+                return
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +186,7 @@ class TurnStartEvent:
 
 
 @dataclass
-class TurnEndEvent:
+class TurnEndEvent(ControlEvent[TurnOutcome]):
     """A react turn finished. Carries the per-turn runtime snapshot."""
 
     turn_id: str = ""
@@ -144,7 +195,6 @@ class TurnEndEvent:
     token_state: Optional[dict] = None
 
     name: ClassVar[str] = TURN_END
-    outcome_type: ClassVar[type[ControlOutcome]] = TurnOutcome
 
 
 @dataclass
@@ -275,6 +325,26 @@ class CompactionCheckpointEvent:
 
 
 @dataclass
+class HistoryEditedEvent:
+    """A user edited the history directly (e.g. deleted react-units) — the
+    rebuilt message list, with no summary.
+
+    Distinct from :class:`CompactionCheckpointEvent` on purpose: both are
+    persisted identically (the recorder writes each as a ``CompactedEvent`` so
+    replay/resume reset history to ``messages`` for free), but the view projector
+    ignores this event by construction (its name is not one it folds → ``[]``),
+    so a delete does NOT surface the "✻ Conversation compacted" boundary marker.
+    ``reason`` records why the edit happened (``"delete"`` today) for future
+    provenance; it is not rendered.
+    """
+
+    messages: List["Message"] = field(default_factory=list)
+    reason: str = "delete"
+
+    name: ClassVar[str] = HISTORY_EDITED
+
+
+@dataclass
 class FileSnapshotEvent:
     """A before-image snapshot of a file a tool is about to mutate."""
 
@@ -394,8 +464,54 @@ class TaskProgressEvent:
     stage: str = ""
     status: str = ""
     detail: str = ""  # rendered, no trailing newline
+    #: Execution lineage (``ScopePath``) this ping belongs to. ``()`` for a plain
+    #: background-task progress line (today's behavior — folds to a flat
+    #: ``TaskProgress`` view event). A non-empty scope whose head is an open
+    #: activity routes the ping into that activity's subtree (a per-node update).
+    scope: tuple = ()
 
     name: ClassVar[str] = TASK_PROGRESS
+
+
+@dataclass
+class ActivityStartedEvent:
+    """A nested orchestration (a ``run_graph`` graph today; a sub-agent / bg task
+    in future) began — the machine-side signal the projector folds into an
+    :class:`~mote.cli.contracts.view.events.ActivityStarted` ViewEvent.
+
+    ``scope`` identifies the activity (its :class:`~mote.common.events.scope.
+    ScopePath`); ``topology`` is a neutral pre-computed structure describing the
+    declared graph (plain dicts/lists, so this leaf imports nothing from bggraph).
+    Purely observational — mirrors *that an activity opened* so a renderer can
+    draw its shape before any node runs.
+    """
+
+    scope: tuple = ()
+    activity_kind: str = ""  # "graph" | "agent" | "task"
+    label: str = ""
+    topology: Optional[dict] = None
+
+    name: ClassVar[str] = ACTIVITY_STARTED
+
+
+@dataclass
+class ActivityCompletedEvent:
+    """A nested orchestration finished — the terminal, **self-sufficient** signal.
+
+    Carries the full outcome read straight off the graph's terminal state
+    (``node_states`` + ``outcome`` + ``summary``), so a replayed / resumed
+    transcript renders the outcome from this event alone, never reconstructing it
+    from the live :class:`TaskProgressEvent` stream (which a replay does not
+    have). ``node_states`` is a list of neutral dicts; ``outcome`` is
+    ``"success"`` | ``"failed"``. Purely observational.
+    """
+
+    scope: tuple = ()
+    outcome: str = "success"  # success | failed
+    node_states: List[dict] = field(default_factory=list)
+    summary: str = ""
+
+    name: ClassVar[str] = ACTIVITY_COMPLETED
 
 
 @dataclass
@@ -496,7 +612,7 @@ class SpanEndEvent:
 
 
 @dataclass
-class UserPromptSubmitEvent(Rewritable):
+class UserPromptSubmitEvent(ControlEvent[PromptOutcome], Rewritable):
     """The user submitted a prompt for this turn.
 
     :class:`Rewritable`: a control subscriber may rewrite ``prompt`` (the
@@ -510,11 +626,10 @@ class UserPromptSubmitEvent(Rewritable):
     prompt: str = ""
 
     name: ClassVar[str] = USER_PROMPT_SUBMIT
-    outcome_type: ClassVar[type[ControlOutcome]] = PromptOutcome
 
 
 @dataclass
-class PreToolUseEvent(Rewritable):
+class PreToolUseEvent(ControlEvent[ToolCallOutcome], Rewritable):
     """A tool is about to run (a subscriber may deny / mutate args).
 
     ``resolve_facts`` is the seam that lets a permission gate run as a control
@@ -539,13 +654,17 @@ class PreToolUseEvent(Rewritable):
     #: Tool-bound, args-agnostic fact resolver (executor-supplied). Excluded from
     #: equality/repr — it is behavior, not data.
     resolve_facts: Optional[Callable[[dict], "PermissionFacts"]] = field(default=None, compare=False, repr=False)
+    #: Execution lineage (``ScopePath``) this call runs under, pulled from the
+    #: ambient scope contextvar at emit time. ``()`` = top level. Lets a scoped
+    #: call (e.g. a graph node's dispatched tool, ``tool_use_id`` may be ``None``)
+    #: be attributed to its parent activity instead of orphaning at the top.
+    scope: tuple = ()
 
     name: ClassVar[str] = PRE_TOOL_USE
-    outcome_type: ClassVar[type[ControlOutcome]] = ToolCallOutcome
 
 
 @dataclass
-class PostToolUseEvent(Rewritable):
+class PostToolUseEvent(ControlEvent[ToolResultOutcome], Rewritable):
     """A tool finished (a subscriber may inject context / rewrite output / block).
 
     ``tool_response`` is the tool's result text. A control subscriber may rewrite
@@ -579,19 +698,20 @@ class PostToolUseEvent(Rewritable):
     #: fact — side-by-side on a rich host, a synthesized coloured diff on a text host —
     #: instead of sniffing ``tool_response`` text for a diff shape.
     file_changes: list = field(default_factory=list)
+    #: Execution lineage (``ScopePath``) this call ran under — see
+    #: :attr:`PreToolUseEvent.scope`. ``()`` = top level.
+    scope: tuple = ()
 
     name: ClassVar[str] = POST_TOOL_USE
-    outcome_type: ClassVar[type[ControlOutcome]] = ToolResultOutcome
 
 
 @dataclass
-class PreCompactEvent:
+class PreCompactEvent(ControlEvent[CompactOutcome]):
     """About to compact (a subscriber may veto or supply instructions)."""
 
     trigger: str = "auto"
 
     name: ClassVar[str] = PRE_COMPACT
-    outcome_type: ClassVar[type[ControlOutcome]] = CompactOutcome
 
 
 @dataclass
@@ -604,8 +724,23 @@ class PostCompactEvent:
     name: ClassVar[str] = POST_COMPACT
 
 
+# The single definition of "the stored history was structurally rebuilt, so
+# every piece of state DERIVED from history must be re-derived." Two disjoint
+# causes, one consequence:
+#   * :class:`PostCompactEvent` — a compaction condensed the *head* away (old
+#     turns the user can no longer see or select).
+#   * :class:`HistoryEditedEvent` — the user directly rewrote the *live* history
+#     (``/clear`` empties it; deleting react-units prunes selected turns).
+# The two never touch the same messages (compaction only condenses what the user
+# can't reach; an edit only removes what is still live), so a source/side-store
+# that caches "what I've already put into history" is stale after EITHER and
+# resets identically. Incremental turn-context frontiers reset on this tuple;
+# the compaction-only "history compacted" notice keys on PostCompactEvent alone.
+HISTORY_RESET_EVENTS: tuple[type, ...] = (PostCompactEvent, HistoryEditedEvent)
+
+
 @dataclass
-class PreAgentSpawnEvent:
+class PreAgentSpawnEvent(ControlEvent[SpawnOutcome]):
     """A child agent is about to be born (a subscriber may deny the spawn).
 
     Emitted by the single birth channel (``AgentControl.spawn_agent``) *before*
@@ -627,7 +762,6 @@ class PreAgentSpawnEvent:
     nickname: str = ""
 
     name: ClassVar[str] = PRE_AGENT_SPAWN
-    outcome_type: ClassVar[type[ControlOutcome]] = SpawnOutcome
 
 
 #: Any concrete event (all expose a ``.name`` discriminator ClassVar).
@@ -648,6 +782,7 @@ __all__ = [
     "LLM_ERROR",
     "LLM_RETRY",
     "COMPACTION_CHECKPOINT",
+    "HISTORY_EDITED",
     "FILE_SNAPSHOT",
     "USER_PROMPT_SUBMIT",
     "PRE_TOOL_USE",
@@ -666,9 +801,13 @@ __all__ = [
     "SPAN_START",
     "SPAN_END",
     "BUDGET",
+    "ACTIVITY_STARTED",
+    "ACTIVITY_COMPLETED",
     # rewrite provenance
     "Rewrite",
     "Rewritable",
+    # control-event generic base
+    "ControlEvent",
     # observation events
     "SessionStartEvent",
     "SessionEndEvent",
@@ -682,6 +821,7 @@ __all__ = [
     "LLMErrorEvent",
     "LLMRetryEvent",
     "CompactionCheckpointEvent",
+    "HistoryEditedEvent",
     "FileSnapshotEvent",
     "FileChangedEvent",
     "FileMutatedEvent",
@@ -694,6 +834,8 @@ __all__ = [
     "AgentLifecycleEvent",
     "SpanStartEvent",
     "SpanEndEvent",
+    "ActivityStartedEvent",
+    "ActivityCompletedEvent",
     # control events
     "UserPromptSubmitEvent",
     "PreToolUseEvent",

@@ -15,11 +15,6 @@ class TestDefaults:
     def test_protocol_default_is_native(self):
         assert RoleSchema().command_protocol == "native"
 
-    def test_loop_control_defaults(self):
-        s = RoleSchema()
-        assert s.max_react_loop == 50
-        assert s.max_consecutive_react_limit == 10
-
     def test_collection_defaults(self):
         s = RoleSchema()
         assert s.mcps == []
@@ -61,13 +56,11 @@ class TestOverrides:
             name="Cleo",
             profile="Shipper",
             tools=["Read", "Write"],
-            max_react_loop=7,
             command_protocol="xml",
         )
         assert s.name == "Cleo"
         assert s.profile == "Shipper"
         assert s.tools == ["Read", "Write"]
-        assert s.max_react_loop == 7
         assert s.command_protocol == "xml"
 
     def test_round_trip_model_dump_validate(self):

@@ -53,6 +53,36 @@ def first_line(fn_or_doc: Union[Callable, str, None]) -> str:
     return ""
 
 
+def description_body(fn_or_doc: Union[Callable, str, None]) -> str:
+    """The model-facing description prose of a docstring — everything before the
+    first Google-style section header (``Args:``/``Returns:``/…).
+
+    This is the docstring's summary line plus its full operating manual, with the
+    ``Args:`` block (and any other structured section) dropped so the parameter
+    documentation is not duplicated as prose on the wire — parameters travel
+    separately as a structured JSON Schema. Newlines/indentation inside the prose
+    are preserved (via ``inspect.cleandoc``), so multi-paragraph manuals render
+    intact. The FIRST line of the returned text is the tight one-line summary a
+    tool-search menu shows (see :func:`first_line`); the whole text is the full
+    description a tool sends once revealed.
+
+    Accepts a callable (reads its ``__doc__``) or a raw string. Returns ``""``
+    when there is no content.
+    """
+    if fn_or_doc is None:
+        return ""
+    doc = fn_or_doc.__doc__ if callable(fn_or_doc) else fn_or_doc
+    if not doc:
+        return ""
+    out: list[str] = []
+    for line in inspect.cleandoc(doc).splitlines():
+        header = line.strip().rstrip(":").rstrip("\uff1a").lower()
+        if header in _KNOWN_SECTIONS and line.strip().endswith((":", "\uff1a")):
+            break
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def parse_section(docstring: Union[str, None], section: str) -> list[tuple[str, str]]:
     """Parse a named section from a Google-style docstring.
 

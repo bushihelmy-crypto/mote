@@ -18,15 +18,15 @@ The first turn emits the full catalog; every later turn emits only the
 re-announced (the model simply stops seeing them; a stale attempt fails cleanly).
 
 Push→pull bridge in one object (like ``CompactionNoticeContextSource``):
-- as an :class:`~mote.common.interface.ObservationSubscriber` it catches
-  :class:`~mote.common.events.PostCompactEvent` off the bus and resets the
-  incremental frontier, so the turn after a compaction re-sends the *full*
-  catalog (the earlier full listing was condensed away with the rest of the
-  pre-compaction history); it also catches
-  :class:`~mote.common.events.ToolsChangedEvent` and drops the vanished names
-  from the frontier, so a tool that is de-registered and later re-registered is
-  re-announced (rather than silently withheld because its name still sat in
-  ``_sent_names``);
+- as an :class:`~mote.common.interface.ObservationSubscriber` it catches any
+  :data:`~mote.common.events.HISTORY_RESET_EVENTS` (a compaction *or* a ``/clear`` /
+  user delete that structurally rebuilds stored history) off the bus and resets
+  the incremental frontier, so the next turn re-sends the *full* catalog (the
+  earlier full listing was condensed away by the compaction or pruned by the
+  edit); it also catches :class:`~mote.common.events.ToolsChangedEvent` and drops
+  the vanished names from the frontier, so a tool that is de-registered and later
+  re-registered is re-announced (rather than silently withheld because its name
+  still sat in ``_sent_names``);
 - as an :class:`~mote.common.interface.EphemeralContextSource` it renders the
   catalog once per think() cycle.
 
@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional, Protocol
 
-from mote.common.events import PostCompactEvent, ToolsChangedEvent
+from mote.common.events import HISTORY_RESET_EVENTS, ToolsChangedEvent
 from mote.common.interface import ObservationSubscriber, TurnContextPriority
 
 
@@ -97,15 +97,17 @@ class ToolCatalogContextSource(ObservationSubscriber):
     async def handle(self, event) -> None:
         """Keep the incremental frontier consistent with catalog-shaping events.
 
-        A ``PostCompactEvent`` resets it wholesale (the prior full listing was
-        condensed away, so re-send everything). A ``ToolsChangedEvent`` drops only
-        the removed names, so a later re-registration of the same name is treated
-        as new and re-announced. All other events are ignored.
+        Any ``HISTORY_RESET_EVENTS`` resets it wholesale — a compaction condensed
+        the prior full listing away, or a ``/clear`` / user delete pruned the
+        messages that carried it; either way re-send the whole catalog. A
+        ``ToolsChangedEvent`` (checked first, since it is not a history-reset
+        event) drops only the removed names, so a later re-registration of the
+        same name is treated as new and re-announced. All other events ignored.
         """
-        if isinstance(event, PostCompactEvent):
-            self._sent_names = set()
-        elif isinstance(event, ToolsChangedEvent):
+        if isinstance(event, ToolsChangedEvent):
             self._sent_names -= set(event.removed)
+        elif isinstance(event, HISTORY_RESET_EVENTS):
+            self._sent_names = set()
         return None
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:

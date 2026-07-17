@@ -19,30 +19,23 @@ def _sleep(tool, **kwargs):
 
 
 class TestSleep:
-    def test_slept_full_duration(self, workspace):
-        # CapRole default returns (duration, False) => slept the full time.
-        role = CapRole()
-        tool = bind(Sleep(), role)
-        out = _sleep(tool, duration_seconds=2.5)
-        assert out == "Slept for 2.5s"
-
-    def test_default_duration_is_ten_minutes(self, workspace):
-        # Duration is optional; omitting it sleeps the default 600s (10 min).
+    def test_woke_default(self, workspace):
+        # CapRole default returns 0.0 => woke immediately (event-driven).
         role = CapRole()
         tool = bind(Sleep(), role)
         out = _sleep(tool)
-        assert out == "Slept for 600.0s"
+        assert out == "Woke after 0.0s"
 
-    def test_interrupted(self, workspace):
-        # Script an early wake: slept 0.4s, interrupted.
-        role = CapRole(wait_result=(0.4, True))
+    def test_takes_no_arguments(self, workspace):
+        # Sleep has no duration parameter — call with no args.
+        role = CapRole(wait_result=5.0)
         tool = bind(Sleep(), role)
-        out = _sleep(tool, duration_seconds=300)
-        assert out == "Sleep interrupted after 0.4s"
+        out = _sleep(tool)
+        assert out == "Woke after 5.0s"
 
     def test_returns_reported_slept_seconds(self, workspace):
-        # The reported seconds come from wait_interruptible, not the request.
-        role = CapRole(wait_result=(10.0, False))
+        # The reported seconds come from wait_interruptible.
+        role = CapRole(wait_result=10.0)
         tool = bind(Sleep(), role)
-        out = _sleep(tool, duration_seconds=300)
-        assert out == "Slept for 10.0s"
+        out = _sleep(tool)
+        assert out == "Woke after 10.0s"

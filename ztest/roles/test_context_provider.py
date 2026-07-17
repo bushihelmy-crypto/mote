@@ -44,16 +44,12 @@ class TestProviderWiring:
 
 class TestLoopContext:
     def test_packs_schema_and_state(self, role):
-        role.role_schema.max_react_loop = 11
-        role.role_schema.max_consecutive_react_limit = 3
         role.role_schema.tools = ["Read", "Bash"]
         role.role_schema.enable_memory = False
         role.role_schema.observe_all_msg_from_buffer = False
 
         lc = role.context_provider.loop_context()
         assert isinstance(lc, LoopContext)
-        assert lc.max_react_loop == 11
-        assert lc.max_consecutive_react_limit == 3
         assert lc.name == role.name
         assert lc.display_name == role.role_schema.display_name
         assert lc.tools == ["Read", "Bash"]
@@ -65,15 +61,16 @@ class TestLoopContext:
 
     def test_reevaluated_per_call(self, role):
         cp = role.context_provider
-        before = cp.loop_context().max_react_loop
-        role.role_schema.max_react_loop = before + 5
-        assert cp.loop_context().max_react_loop == before + 5
+        role.role_schema.tools = ["Read"]
+        assert cp.loop_context().tools == ["Read"]
+        role.role_schema.tools = ["Read", "Write"]
+        assert cp.loop_context().tools == ["Read", "Write"]
 
 
 class TestResolveLLM:
     def test_fixed_model_when_router_disabled(self, role):
-        role.role_schema.enable_router = False  # config flag read via role.config
-        # enable_router on the config drives routing; default config has it False.
+        role.role_schema.enable_router = False
+        # role_schema.enable_router drives routing; default schema has it False.
         llm = asyncio.run(role.context_provider.resolve_llm())
         # Should resolve to a concrete provider (fixed config.llm path).
         assert llm is not None
@@ -82,14 +79,14 @@ class TestResolveLLM:
         # With routing on but no messages, the provider must use the fixed model
         # (it never invokes the async router without signals to route on).
         sentinel = object()
-        monkeypatch.setattr(role.config.models, "router_enabled", True)
+        monkeypatch.setattr(role.role_schema, "enable_router", True)
         monkeypatch.setattr(role.router, "route", lambda *, name=None, llm_config=None: sentinel)
         out = asyncio.run(role.context_provider.resolve_llm(messages=None))
         assert out is sentinel
 
     def test_routes_when_enabled_with_messages(self, role, monkeypatch):
         sentinel = object()
-        monkeypatch.setattr(role.config.models, "router_enabled", True)
+        monkeypatch.setattr(role.role_schema, "enable_router", True)
 
         async def fake_aroute(request):
             assert request.messages  # signals were forwarded

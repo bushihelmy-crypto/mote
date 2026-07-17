@@ -35,8 +35,12 @@ def apply_ops(reducer: TranscriptReducer, surface: RenderSurface, ev: Any) -> No
     and the Textual app inline on its UI pump — so "how an op lands on a surface"
     is written exactly once.
     """
-    for op in reducer.feed(ev):
-        getattr(surface, op.kind)(*op.surface_args())
+    ops = reducer.feed(ev)
+    for op in ops:
+        method = getattr(surface, op.kind, None)
+        if method is None:
+            continue
+        method(*op.surface_args())
 
 
 class SurfaceDriver(BaseConsumer):

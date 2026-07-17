@@ -184,14 +184,34 @@ def role_cleanup(role: Any) -> Any:
     return getattr(role, "cleanup", None)
 
 
-def clear_messages(role: Any) -> int:
-    """Clear the role's stored message history; return the pre-clear count."""
+async def clear_messages(role: Any) -> int:
+    """Clear the role's stored message history; return the pre-clear count.
+
+    Awaits :meth:`ContextManager.clear`, which empties history AND emits a
+    ``HistoryEditedEvent(reason="clear")`` so the recorder checkpoints the
+    now-empty list and every history-derived signal (turn-context frontiers, the
+    resource side-store) re-derives itself.
+    """
     cm = getattr(role, "context_manager", None)
     if cm is None:
         return 0
     cleared = cm.count()
-    cm.clear()
+    await cm.clear()
     return cleared
+
+
+async def delete_react_units(role: Any, anchor_ids) -> int:
+    """Delete the react-units anchored at ``anchor_ids`` on the role's history.
+
+    Delegates to :meth:`ContextManager.delete_react_units`, which rebuilds the
+    stored history without the selected turns and emits a ``HistoryEditedEvent``
+    (persisted as a replay checkpoint). Returns the number of messages removed
+    (``0`` when the role has no context manager or nothing matched).
+    """
+    cm = getattr(role, "context_manager", None)
+    if cm is None:
+        return 0
+    return await cm.delete_react_units(anchor_ids)
 
 
 def runtime_name(runtime: Any) -> str:
@@ -229,6 +249,28 @@ def role_tool_count(role: Any) -> int:
     schema = getattr(role, "role_schema", None)
     tools = getattr(schema, "tools", None) or []
     return len(set(tools))
+
+
+def role_deferred_tool_count(role: Any) -> int:
+    """How many of the loaded tools are *deferred* (hidden until searched).
+
+    A deferred tool is bound and dispatchable but its schema is withheld from the
+    model until discovered via ``SearchTools`` — so it counts toward the loaded
+    total, and the badge annotates how many of that total start deferred.
+
+    Respects the global tool-search master switch: when
+    ``config.tools.tool_search.enabled`` is off no tool is deferred (every one is
+    fully visible), so this reports ``0``. Missing schema / config degrades to
+    ``0`` (a fake in tests without a ``deferred_tools`` field satisfies it too).
+    """
+    config = getattr(role, "config", None)
+    tools_cfg = getattr(config, "tools", None)
+    search_cfg = getattr(tools_cfg, "tool_search", None)
+    if search_cfg is not None and not getattr(search_cfg, "enabled", True):
+        return 0
+    schema = getattr(role, "role_schema", None)
+    deferred = getattr(schema, "deferred_tools", None) or []
+    return len(set(deferred))
 
 
 def resume_role(role: Any) -> bool:
@@ -277,10 +319,12 @@ __all__ = [
     "role_event_bus",
     "role_cleanup",
     "clear_messages",
+    "delete_react_units",
     "runtime_name",
     "runtime_role",
     "fork_role",
     "role_tool_count",
+    "role_deferred_tool_count",
     "resume_role",
     "list_sessions",
     "turn_message",

@@ -31,13 +31,34 @@ POST_COMPACT_TOKEN_BUDGET = 25_000
 # flood of one kind (e.g. many background task results) can never starve another
 # (e.g. loaded Skill bodies). A kind absent from this map has no sub-cap — it is
 # bounded only by the global budget, preserving the original skill behavior.
-POST_COMPACT_PER_KIND_BUDGET: dict[str, int] = {"task_result": 8_000}
+#
+# ``tool`` = revealed split-path deferred-tool descriptions (SearchTools persists
+# each on reveal). Given its own sub-cap so a long session that reveals many tools
+# cannot crowd Skill / task_result out of the shared global budget — its usage
+# scale (potentially dozens of reveals) differs from Skill's (user-loaded, few),
+# so it must NOT inherit Skill's uncapped behavior. 6k fits the head-truncated
+# descriptions of the most-recently revealed tools; once the active set exceeds
+# the cap the oldest simply stop projecting (soft LRU) but stay re-projectable if
+# it later shrinks — they are NOT reaped (a tool is a repeatable capability, see
+# POST_COMPACT_MAX_ROUNDS below).
+POST_COMPACT_PER_KIND_BUDGET: dict[str, int] = {"task_result": 8_000, "tool": 6_000}
 
 # Per-kind projection-lifetime caps: a unit of this kind is unloaded once it has
 # been re-projected more than ``rounds`` times without being consumed — the
 # round-based half of the double-safety recycle (the other half is explicit
-# ``unload`` on consume). A kind absent from this map is never reaped by round
-# count (a Skill body sticks until explicitly unloaded).
+# ``unload`` on consume, e.g. a task_result read by the model). A kind absent from
+# this map is never reaped by round count.
+#
+# ``tool`` is deliberately ABSENT (no round-reap): ``projection_rounds`` counts
+# compactions survived, NOT model usage — there is no consume-unload or
+# reuse-refresh seam for tool descriptions, so a round cap would evict a
+# still-in-use tool's description and (outside resume) never restore it. A
+# revealed tool is a repeatable capability (skill-like persistence), NOT a
+# one-shot payload (task_result-like), so it must not inherit task_result's
+# recycle semantics. Its SCALE is bounded by the per-kind sub-budget above, and
+# OLD descriptions age out for free via most-recent-first projection: once active
+# tool descriptions exceed the sub-cap the oldest simply stop projecting (soft
+# LRU, no tokens spent) yet remain re-projectable if the active set later shrinks.
 POST_COMPACT_MAX_ROUNDS: dict[str, int] = {"task_result": 6}
 
 
@@ -58,6 +79,17 @@ class ResourceRegistry:
         it does not touch history already sent.
         """
         return self._units.pop(id, None) is not None
+
+    def reset(self) -> None:
+        """Drop every loaded unit — the whole side-store goes empty.
+
+        Used when the history this registry mirrors is rebuilt from scratch
+        (``/clear`` empties history, or a delete prunes it): the caller then
+        re-seeds the survivors from the rebuilt history, so the registry is first
+        emptied here and repopulated to match. Distinct from :meth:`unload`
+        (single id) — this is the bulk "history reset" primitive.
+        """
+        self._units.clear()
 
     def get_all(self) -> list[ResourceUnit]:
         """All held units, most-recent-first (newest invoked_at first)."""

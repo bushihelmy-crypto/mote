@@ -13,7 +13,7 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 from mote.common.exception import ErrorReport, render_error_block
-from mote.executor.tasks.bggraph.report import _truncate, report_progress
+from mote.executor.tasks.bggraph.report import _as_text, report_progress
 from mote.executor.tasks.bggraph.types import END, BgStatus, GraphRunState
 
 # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ def _render_failed_nodes(
             blocks.append(
                 _FMT_FAILED_NODE_BLOCK.format(
                     node_name=name,
-                    error=_truncate(exc),
+                    error=_as_text(exc),
                     auto_retries_text=_format_auto_retries(run_state, name),
                 )
             )
@@ -362,7 +362,7 @@ class TaskNotification(BaseModel):
         return _FMT_NOTIFICATION_SUCCESS.format(
             command=self.command,
             task_id=self.task_id,
-            result=_truncate(self.result) if self.result else "",
+            result=_as_text(self.result) if self.result else "",
         )
 
 
@@ -400,7 +400,7 @@ def push_terminal_notification(
         command=graph.command_name,
         status=status,
         event="terminal",
-        result=_truncate(result) if result else None,
+        result=_as_text(result) if result else None,
         initial_params=initial_params,
         error_block=error_block,
         failed_nodes_text=_render_failed_nodes(error, graph, state, run_state),
@@ -436,7 +436,7 @@ def push_node_notification(
         event = "failed"
         subject_text = _FMT_FAILED_NODE_BLOCK.format(
             node_name=node_name,
-            error=_truncate(exc),
+            error=_as_text(exc),
             auto_retries_text=_format_auto_retries(run_state, node_name),
         )
     else:
@@ -475,7 +475,7 @@ def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: 
     from_node_desc = from_node_def.description if from_node_def else ""
     # Field/channel model: there is no per-node result slot, so surface a
     # compact snapshot of the full state instead of one node's value.
-    from_node_result = _truncate(state.model_dump())
+    from_node_result = _as_text(state.model_dump())
 
     has_end = END in llm_edge.mapping.values()
     options = []

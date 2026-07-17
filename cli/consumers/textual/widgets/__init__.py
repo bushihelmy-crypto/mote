@@ -18,6 +18,7 @@ diverge on look (§9.7 "format once").
 
 from __future__ import annotations
 
+from mote.cli.consumers.textual.widgets.activity import ActivityWidget
 from mote.cli.consumers.textual.widgets.base import SelectableStatic
 from mote.cli.consumers.textual.widgets.prompt_input import PROMPT_SYMBOL, PromptInput
 from mote.cli.consumers.textual.widgets.status_bar import StatusBar, _format_tok  # noqa: F401  # re-export for tests
@@ -43,6 +44,7 @@ from mote.cli.consumers.textual.widgets.transcript import (
 
 __all__ = [
     "SelectableStatic",
+    "ActivityWidget",
     "AssistantBlock",
     "build_tool_parts",
     "FoldableRow",

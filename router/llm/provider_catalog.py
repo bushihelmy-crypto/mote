@@ -20,6 +20,7 @@ from mote.common.config.config.llm_config import (
     get_env_api_key,
     get_provider_preset,
     list_providers,
+    resolve_provider_name,
 )
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "PROVIDER_CATALOG",
     "list_providers",
     "get_provider_preset",
+    "resolve_provider_name",
     "apply_provider_preset",
     "detect_provider",
     "find_env_keys",

@@ -15,7 +15,7 @@ import json
 import pytest
 
 from mote.common.base import CommandChannel
-from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS, TOOL_RESULT_RESOURCE_PATH
+from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS, TOOL_REFERENCES, TOOL_RESULT_RESOURCE_PATH
 from mote.parser.native_channel import NativeToolChannel
 
 from .conftest import FakeExecutor, FakeMemory, FakeThinkEngine, collect, executed_command
@@ -317,6 +317,79 @@ class TestRecordTurnMedia:
         # assistant (no tool-result since no id) + media.
         assert len(memory.messages) == 2
         assert memory.messages[-1].metadata[IMAGES] == ["only"]
+
+
+class TestToolReferencesGating:
+    """The SearchTools discovery seam is CAPABILITY-gated on the record side.
+
+    A SearchTools result carries ``data={"tool_references": [...]}``. That is
+    stamped onto the recorded ToolMessage (so the wire renders it as
+    ``tool_reference`` / ``tool_search`` blocks the API expands) ONLY on a
+    transport that actually does server-side tool search — i.e. a capable model
+    on the anthropic / openai_responses envelope. An INCAPABLE native model runs
+    the client-side SPLIT path and CANNOT expand those blocks, so the stamp must
+    be suppressed there (it discovers via RoleState + the reminder-tail menu).
+    This keeps the record side aligned with ``native_specs`` byte-for-byte.
+    """
+
+    def _search_result(self, refs):
+        return {
+            "id": "s1",
+            "name": "SearchTools",
+            "args": {"query": "img"},
+            "output": "revealed: ConvertImage",
+            "success": True,
+            "data": {"tool_references": refs},
+        }
+
+    @pytest.mark.asyncio
+    async def test_capable_anthropic_stamps_references(self):
+        memory = FakeMemory()
+        channel = NativeToolChannel(provider="anthropic", model="opus-4")
+        await channel.record_results(memory, [self._search_result(["ConvertImage"])])
+        assert memory.messages[0].metadata[TOOL_REFERENCES] == ["ConvertImage"]
+
+    @pytest.mark.asyncio
+    async def test_capable_openai_responses_stamps_references(self):
+        memory = FakeMemory()
+        channel = NativeToolChannel(provider="openai_responses", model="gpt-5.4")
+        await channel.record_results(memory, [self._search_result(["ConvertImage"])])
+        assert memory.messages[0].metadata[TOOL_REFERENCES] == ["ConvertImage"]
+
+    @pytest.mark.asyncio
+    async def test_old_anthropic_suppresses_references(self):
+        # Old Claude runs SPLIT — cannot expand tool_reference blocks, so no stamp.
+        memory = FakeMemory()
+        channel = NativeToolChannel(provider="anthropic", model="claude-3-5-sonnet")
+        await channel.record_results(memory, [self._search_result(["ConvertImage"])])
+        assert TOOL_REFERENCES not in memory.messages[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_openai_chat_completions_suppresses_references(self):
+        # The Chat Completions "openai" envelope has no server-side path even on a
+        # capable model, so the stamp is suppressed (SPLIT).
+        memory = FakeMemory()
+        channel = NativeToolChannel(provider="openai", model="gpt-5.4")
+        await channel.record_results(memory, [self._search_result(["ConvertImage"])])
+        assert TOOL_REFERENCES not in memory.messages[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_no_model_suppresses_references(self):
+        # Capability unknown → defensive SPLIT, no stamp.
+        memory = FakeMemory()
+        channel = NativeToolChannel(provider="anthropic")
+        await channel.record_results(memory, [self._search_result(["ConvertImage"])])
+        assert TOOL_REFERENCES not in memory.messages[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_non_search_data_ignored_on_capable(self):
+        # Only the tool_references key is read; any other data shape → no stamp.
+        memory = FakeMemory()
+        channel = NativeToolChannel(provider="anthropic", model="opus-4")
+        entry = executed_command(id="a", name="Read", output="content")
+        entry["data"] = {"something_else": 1}
+        await channel.record_results(memory, [entry])
+        assert TOOL_REFERENCES not in memory.messages[0].metadata
 
 
 class TestTurnSignature:

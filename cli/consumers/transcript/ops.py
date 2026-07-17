@@ -111,9 +111,10 @@ class RenderUserMessage(TranscriptOp):
 
     kind: ClassVar[str] = "render_user_message"
     markdown: str = ""
+    message_id: Optional[str] = None
 
     def surface_args(self) -> Tuple[Any, ...]:
-        return (self.markdown,)
+        return (self.markdown, self.message_id)
 
 
 # -- standalone tools (NONE / DETAIL fold modes) ---------------------------
@@ -235,6 +236,80 @@ class RenderSessionList(_RenderEvent):
     kind: ClassVar[str] = "render_session_list"
 
 
+# -- nested activity (a run_graph orchestration; a sub-agent / bg task) -----
+# An activity is keyed by its ``scope`` (a ``ScopePath`` — hashable tuple of
+# ScopeRef). The reducer opens one on ActivityStarted, routes every later scoped
+# event (per-node progress, the activity's own child tool calls) into it, and
+# closes it on ActivityCompleted. A surface owns *how* it renders (terminal:
+# append-only topology then outcome block; textual: a live widget that lights
+# nodes up) — the reducer only decides *what happened*, host-blind.
+@dataclass(frozen=True)
+class OpenActivity(TranscriptOp):
+    """A nested orchestration began — draw its declared topology."""
+
+    kind: ClassVar[str] = "open_activity"
+    scope: Tuple[Any, ...] = ()
+    activity_kind: str = ""
+    label: str = ""
+    topology: Optional[dict] = None
+
+    def surface_args(self) -> Tuple[Any, ...]:
+        return (self.scope, self.activity_kind, self.label, self.topology)
+
+
+@dataclass(frozen=True)
+class UpdateActivityNode(TranscriptOp):
+    """A scoped progress ping updated one node/step of an open activity."""
+
+    kind: ClassVar[str] = "update_activity_node"
+    scope: Tuple[Any, ...] = ()
+    stage: str = ""
+    status: str = ""
+    detail: str = ""
+
+    def surface_args(self) -> Tuple[Any, ...]:
+        return (self.scope, self.stage, self.status, self.detail)
+
+
+@dataclass(frozen=True)
+class AddActivityToolCall(TranscriptOp):
+    """A tool call dispatched *inside* an activity started (folds under it,
+    not as a top-level orphan row)."""
+
+    kind: ClassVar[str] = "add_activity_tool_call"
+    scope: Tuple[Any, ...] = ()
+    ev: Any = None
+
+    def surface_args(self) -> Tuple[Any, ...]:
+        return (self.scope, self.ev)
+
+
+@dataclass(frozen=True)
+class CompleteActivityToolCall(TranscriptOp):
+    """A tool call dispatched inside an activity finished (updates the folded row)."""
+
+    kind: ClassVar[str] = "complete_activity_tool_call"
+    scope: Tuple[Any, ...] = ()
+    ev: Any = None
+
+    def surface_args(self) -> Tuple[Any, ...]:
+        return (self.scope, self.ev)
+
+
+@dataclass(frozen=True)
+class CloseActivity(TranscriptOp):
+    """A nested orchestration finished — render its self-sufficient outcome tree."""
+
+    kind: ClassVar[str] = "close_activity"
+    scope: Tuple[Any, ...] = ()
+    outcome: str = "success"
+    node_states: Tuple[Any, ...] = ()
+    summary: str = ""
+
+    def surface_args(self) -> Tuple[Any, ...]:
+        return (self.scope, self.outcome, self.node_states, self.summary)
+
+
 # -- transient chrome (never a permanent transcript row) -------------------
 @dataclass(frozen=True)
 class SetThinking(TranscriptOp):
@@ -316,6 +391,11 @@ __all__ = [
     "RenderQuestion",
     "RenderApproval",
     "RenderSessionList",
+    "OpenActivity",
+    "UpdateActivityNode",
+    "AddActivityToolCall",
+    "CompleteActivityToolCall",
+    "CloseActivity",
     "SetThinking",
     "SetRetry",
     "ClearRetry",

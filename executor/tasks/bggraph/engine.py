@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import TypeAdapter, ValidationError
 
+from mote.common.events.scope import ScopeRef, push_scope
 from mote.common.exception import RecoveryAction, RecoveryRunner
 from mote.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
 from mote.executor.tasks.bggraph.channels import apply_updates
@@ -159,6 +160,25 @@ async def _run_one_node(
     never mutated, so a compiled graph stays safe to reuse across concurrent runs.
     """
     node_def = graph._nodes[node_name]
+    # Push a ``node`` scope for the whole node body so the progress pings this
+    # node emits AND the tool calls it dispatches (which pull the ambient scope
+    # at the executor emit site) inherit the ``(graph, node)`` lineage. The
+    # contextvar is copied into any ``asyncio.create_task``/``gather`` children a
+    # map/fold body spawns, so per-item calls are attributed too. Reset in
+    # ``finally`` (via the contextmanager) so a sibling node never sees it.
+    with push_scope(ScopeRef("node", node_name, node_def.description or node_name)):
+        await _run_one_node_body(node_name, state, graph, completed, run_state, node_def)
+
+
+async def _run_one_node_body(
+    node_name: str,
+    state: GraphState,
+    graph: "BgGraph",
+    completed: set,
+    run_state: Optional[GraphRunState],
+    node_def: Any,
+) -> None:
+    """The actual node execution, run inside the pushed ``node`` scope."""
     if run_state is not None:
         run_state.mark_running(node_name)
     report_progress(node_name, BgStatus.RUNNING, node_def.description or None)
@@ -570,7 +590,7 @@ def _build_executor(graph: "BgGraph"):
             ),
         )
 
-    # Stamp the executor so a tool wiring it in (MediaPipeline-style) is
+    # Stamp the executor so a tool wiring it in (CodeReview-style) is
     # auto-recognised as a pipeline tool — no per-tool flag to maintain.
     return mark_pipeline_executor(executor)
 

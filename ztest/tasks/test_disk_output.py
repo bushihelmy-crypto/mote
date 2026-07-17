@@ -43,14 +43,17 @@ class TestDiskTaskOutputAsync:
 
     @pytest.mark.asyncio
     async def test_file_created_under_task_outputs(self, tmp_path):
-        out = DiskTaskOutput("t3", tmp_path)
+        # Layout is owned by the WorkspaceStore (via TaskOutputStore), not by
+        # DiskTaskOutput. An empty session falls back to the ``default`` bucket,
+        # co-located under the session directory next to rollout + blobs.
+        store = TaskOutputStore(tmp_path)
+        out = store.init_output("t3")
         p = Path(out.file_path)
         assert p.exists()
-        # Layout: ``.task_outputs/{session}/{task_id}.output`` — an empty session
-        # falls back to the ``default`` bucket (mirrors ``.tool_results``).
-        assert p.parent.name == "default"
-        assert p.parent.parent.name == ".task_outputs"
         assert p.name == "t3.output"
+        assert p.parent.name == "task_outputs"
+        assert p.parent.parent.name == "default"
+        assert p.parent.parent.parent.name == ".agent_sessions"
         await out.close()
 
     @pytest.mark.asyncio
@@ -96,12 +99,14 @@ class TestDiskTaskOutputAsync:
 
     @pytest.mark.asyncio
     async def test_session_scopes_path(self, tmp_path):
-        # A session id inserts a ``.task_outputs/{session}/`` layer, mirroring
-        # the result-value path so both artifacts share one per-session tree.
-        out = DiskTaskOutput("t7", tmp_path, session_id="sess-abc")
+        # A session id nests the output under ``.agent_sessions/{session}/
+        # task_outputs/`` so both of a task's artifacts share one session tree.
+        store = TaskOutputStore(tmp_path, session_id="sess-abc")
+        out = store.init_output("t7")
         p = Path(out.file_path)
-        assert p.parent.name == "sess-abc"
-        assert p.parent.parent.name == ".task_outputs"
+        assert p.parent.name == "task_outputs"
+        assert p.parent.parent.name == "sess-abc"
+        assert p.parent.parent.parent.name == ".agent_sessions"
         await out.close()
 
     @pytest.mark.asyncio
@@ -109,7 +114,8 @@ class TestDiskTaskOutputAsync:
         store = TaskOutputStore(tmp_path, session_id="sess-xyz")
         out = store.init_output("t8")
         p = Path(out.file_path)
-        assert p.parent.name == "sess-xyz"
+        assert p.parent.name == "task_outputs"
+        assert p.parent.parent.name == "sess-xyz"
         await out.close()
 
 

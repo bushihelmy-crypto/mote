@@ -27,6 +27,8 @@ from typing import Any, List, Optional, cast
 from mote.cli.contracts.view.events import (
     RESULT_KIND_DIFF,
     RESULT_KIND_PLAIN,
+    ActivityCompleted,
+    ActivityStarted,
     ConversationCompacted,
     FileDiffBlock,
     MediaBlock,
@@ -44,6 +46,8 @@ from mote.cli.contracts.view.events import (
 from mote.cli.view.reminders import _is_system_reminder, _summarize_reminder
 from mote.cli.view.summaries import _result_summary
 from mote.common.events.types import (
+    ACTIVITY_COMPLETED,
+    ACTIVITY_STARTED,
     BUDGET,
     COMPACTION_CHECKPOINT,
     LLM_ERROR,
@@ -275,7 +279,24 @@ class ViewProjector:
     # -- the pure fold ------------------------------------------------------
 
     def project(self, event: Any) -> List[ViewEvent]:
-        """Fold one ``AgentEvent`` into zero-or-more ``ViewEvent``\\s (pure)."""
+        """Fold one ``AgentEvent`` into zero-or-more ``ViewEvent``\\s (pure).
+
+        Execution lineage is a *carried-forward* fact, not a per-branch chore:
+        after the fold, any non-empty ``scope`` on the source machine event is
+        stamped onto every emitted ViewEvent that hasn't set its own. This is the
+        narrow-waist — a scoped tool/progress/activity event lands with its
+        lineage attached, so the reducer nests it without each helper threading
+        scope. Empty scope (the common case) is a no-op → byte-identical output.
+        """
+        out = self._project(event)
+        scope = getattr(event, "scope", ()) or ()
+        if scope and out:
+            for ev in out:
+                if not ev.scope:
+                    ev.scope = scope
+        return out
+
+    def _project(self, event: Any) -> List[ViewEvent]:
         name = getattr(event, "name", None)
 
         if name == LLM_STREAM_DELTA:
@@ -310,6 +331,24 @@ class ViewProjector:
                     stage=getattr(event, "stage", "") or "",
                     status=getattr(event, "status", "") or "",
                     detail=getattr(event, "detail", "") or "",
+                )
+            ]
+
+        if name == ACTIVITY_STARTED:
+            return [
+                ActivityStarted(
+                    activity_kind=getattr(event, "activity_kind", "") or "",
+                    label=getattr(event, "label", "") or "",
+                    topology=getattr(event, "topology", None),
+                )
+            ]
+
+        if name == ACTIVITY_COMPLETED:
+            return [
+                ActivityCompleted(
+                    outcome=getattr(event, "outcome", "success") or "success",
+                    node_states=list(getattr(event, "node_states", None) or []),
+                    summary=getattr(event, "summary", "") or "",
                 )
             ]
 
@@ -407,6 +446,23 @@ class ViewProjector:
         # would double-print it (matches render.py's skip).
         if name == "AskUserQuestion":
             return None
+
+        # RunGraph is an orchestration, not a leaf tool: its detail (the declared
+        # topology + per-node progress + outcome) rides on the Activity events
+        # (ActivityStarted/Completed) which the reducer nests into a dedicated
+        # widget. A title-only row here (no args JSON dump — the same suppression
+        # AskUserQuestion gets, but keeping the row so the call is still visible)
+        # avoids the raw ``_format_args`` fallback that made RunGraph render as a
+        # flat spec blob.
+        if name == "RunGraph":
+            return ToolCallStarted(
+                tool_name=name,
+                title=name,
+                headline="",
+                body=None,
+                lexer=None,
+                tool_use_id=tool_use_id,
+            )
 
         headline = ""
         head_arg = _HEADLINE_ARG.get(name)

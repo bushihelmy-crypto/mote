@@ -22,15 +22,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator, Optional
 
-from mote.common.const import DEFAULT_WORKSPACE_ROOT
+from mote.common.const import DEFAULT_WORKSPACE_ROOT, ROLLOUT_FILENAME, SESSIONS_SUBDIR
 from mote.common.disk import Journal, drain_blocking
 from mote.common.logs import log_class
 from mote.session.events import SessionEvent, SessionMetaEvent, parse_line, to_line
 
-#: Directory name under the workspace root holding all session logs.
-SESSIONS_DIRNAME = ".agent_sessions"
-#: The rollout file name inside each session directory.
-ROLLOUT_FILENAME = "rollout.jsonl"
+#: Directory name under the workspace root holding all session logs. Back-compat
+#: alias for the centralized :data:`mote.common.const.SESSIONS_SUBDIR`.
+SESSIONS_DIRNAME = SESSIONS_SUBDIR
 
 
 def _default_base_dir() -> Path:

@@ -18,7 +18,8 @@
 - [九、Router：三种路由 + 故障恢复](#九router三种路由--故障恢复)
 - [十、ContextManager：历史压缩与请求组装](#十contextmanager历史压缩与请求组装)
 - [十一、Environment：多 Agent 控制平面](#十一environment多-agent-控制平面)
-- [十二、扩展点速查表](#十二扩展点速查表)
+- [十二、EffectLedger：外部副作用幂等台账与崩溃对账](#十二effectledger外部副作用幂等台账与崩溃对账)
+- [十三、扩展点速查表](#十三扩展点速查表)
 
 ---
 
@@ -177,7 +178,7 @@ sequenceDiagram
     end
     Loop->>Loop: set_active(True)
 
-    loop while actions < max_react_loop
+    loop 直到预算 / 无待办 / 终止信号
         Loop->>Loop: _observe(NEXT) 二次观察（插入式消息）
         Note over Loop: ---- THINK ----
         Loop->>CP: prepare() 组装 ThinkRequest
@@ -245,7 +246,7 @@ graph TD
 
     C5 --> D["ContextProvider.resolve_llm(req)"]
     subgraph resolve["resolve_llm — provider.py:76-86"]
-        D --> D1{"config.enable_router 且有 messages?"}
+        D --> D1{"role_schema.enable_router 且有 messages?"}
         D1 -->|是| D2["router.aroute(RoutingRequest)<br/>按请求信号智能选模型"]
         D1 -->|否| D3["router.route(config.llm)<br/>固定配置模型"]
     end
@@ -295,18 +296,29 @@ graph TD
         F10 --> F11["_limit_result: 超限则落盘<br/>+ persisted-output 预览"]
     end
 
+    C0{"本轮含 EXTERNAL 台账工具?<br/>executor.will_ledger(name, id)"} -->|是| CP["channel.record_call(assistant tool_calls)<br/>+ get_disk_writer().drain() 执行前落盘"]
+    B --> C0
+    C0 -->|否| C
+    CP --> C
+
     F11 --> G["收集 ToolResult（含 images/pdfs）"]
     E --> H
     G --> H["全部完成"]
-    H --> I["channel.record_turn(memory, rsp, executed)<br/>按协议写回历史"]
-    I --> J["ThinkEngine.join() 收尾 think 任务"]
+    H --> I{"走了执行前检查点?"}
+    I -->|是| I1["channel.record_results(memory, executed)<br/>只补写结果（call 已落盘）"]
+    I -->|否| I2["channel.record_turn(memory, rsp, executed)<br/>单次写回（call + results）"]
+    I1 --> J["ThinkEngine.join() 收尾 think 任务"]
+    I2 --> J
     J --> K["返回 AIMessage(cause_by=RUN_COMMAND)"]
 ```
 
 设计要点：
+- **执行前持久化检查点**：本轮若含 EXTERNAL 台账工具，先 `record_call` 写入 assistant 的 tool_calls 消息并 `drain()` 落盘，**再**执行 body；否则走更省的单次 `record_turn`。这样即便副作用执行到一半崩溃，durable 历史里也已有悬空 tool_call，resume 时才能被对账愈合（见第十二节）。`record_turn` = `record_call` + `record_results` 的组合，两条路径永不漂移（`react_loop.py` / `common/base/command_channel.py`）。
 - **失败快停但全记录**：首个失败后停止真正执行，但仍为剩余指令补记 `[SKIPPED]` 结果——因为 native tool-use 协议要求每个 `tool_call` 必须有配对的 `tool_result`（`react_loop.py:156-181`）。
 - **工具实例隔离**：每个 `ToolExecutor` 维护自己的 `_tools` 实例缓存（`tool_executor.py:48-52`），不同 Role 间不共享工具实例，避免并发 bind 冲突。
 - **大输出落盘**：超过 `max_result_size_chars` 的文本结果写盘并替换为预览，但带媒体（图片/PDF）的结果原样发给模型（`tool_executor.py:159-186`）。
+- **工具搜索（Tool Search）——能力（capability）分派，三条互斥路径**：`deferred_tools` 里的外围工具默认隐藏 schema，模型经 `SearchTools` 关键词搜索后揭示。分派**按模型能力**而非 provider：`supports_native_tool_search(model)`（`common/const/llm.py`，仿 `supports_vision`/`supports_pdf_input` 的子串表）是唯一闸门——支持原生 tool search 的模型整体接管到 provider 的原生 wire，不支持的（老 Claude/老 GPT/其它兼容网关/XML）回退到共享的客户端 withhold/reveal（修掉了老模型被误盖 `defer_loading` 被 API 拒的潜伏 bug）。三路共享同一权威 `RoleState.revealed_tools`（resume-safe，不扫历史）+ 同一匹配器 `SearchTools`，仅 wire 投影不同：**(A) Anthropic native** — 语料工具全量上线标 `defer_loading:true`（以语料成员身份为准，跨揭示 `tools=` 前缀字节稳定，prompt 缓存不失效），`SearchTools` 结果经 `ToolResult.data["tool_references"]` → `ToolMessage.tool_references` → `_tool_references` 私有 wire key → `AnthropicLLM._convert_messages` 渲染成 `tool_reference` 块，缓存断点移到最后一个非 `defer_loading` 工具（规避 `defer_loading`+`cache_control` 同存的 400）；**(B) OpenAI Responses native**（gpt-5.4+）——`resolve_api_type` 把可用模型整体路由到新 provider `OpenAIResponsesLLM`（`LLMType.OPENAI_RESPONSES`，`responses.create`，仿 AnthropicLLM 的 convert-in/normalize-out），同一 `_tool_references` seam 渲染成 `tool_search_call`+`tool_search_output` 对（`execution=client`，内嵌工具定义标 `defer_loading:true`，前缀字节稳定），响应里的 `tool_search_call` 归一回 `SearchTools` 调用走同一 executor；`to_native_tool_specs` 新增扁平 `"openai_responses"` envelope；**(C) 客户端回退**，再细分两种（不再一刀切 withhold）：**(C1) SPLIT（老模型 native 通道）** — 语料工具的**函数名 + 参数结构（input_schema）留在 `tools=`**（保留结构化/受约束调用能力 + `tools=` 前缀字节稳定 → 揭示不失效缓存），仅把**工具描述**换成常量占位 `SPLIT_TOOLSPEC_DESC`（不标 `defer_loading`）。描述走**未揭示→揭示的两段生命周期**（缓存经济学：临时尾部每轮重发完整描述 = O(揭示数×描述长) 永久未缓存开销，故揭示后改走持久化）：**未揭示**工具的一行简述放临时提醒尾部（缓存断点之后）的 `SplitToolMenuContextSource`（"# Additional tools"，`split_tool_menu()` 仅列未揭示语料工具的 `_one_line` 简述）；**揭示**时 `SearchTools` 把该工具**完整（多行）描述**（`catalog.describe_deferred(names)`）既写进结果 body（进入可缓存历史）、又经 `register_resource(kind="tool")` 注册为 sticky 资源持久化进 `common/resource` ResourceRegistry（`kind="tool"` 不在 `POST_COMPACT_MAX_ROUNDS`/`PER_KIND_BUDGET` 里 → 永久 re-project、无子上限，同 skill body 语义 → 压缩后经 `sticky_provider` 重投影存活），该工具随即从临时菜单**掉出**（菜单只增不减地缩小）——因此 `SearchTools.reconstructable=False`（否则 fold 会把承载持久描述的 body 清空）。resume 时 `session_manager._rebuild_revealed_tool_resources()` 从 `RoleState.revealed_tools`（durable 权威）× `catalog.describe_deferred()` 重新注册描述，即便崩溃前原 body 已被压缩也能重投影。老模型无法展开 `tool_reference`/`tool_search` 块，故 `record_results` 的 `tool_references` 打标按 `_server_side_tool_search` 门控**抑制**（老模型经 RoleState 揭示 + 尾部描述菜单发现），与 `native_specs` 字节对齐。**(C2) WITHHOLD（仅 XML）** — `schemas_for` 里 `_is_hidden` 直接扣掉 schema 直到揭示（XML 无 `tools=` 前缀需保护）。关键洞见：native wire **永不 withhold**（要么 server_defer 标记、要么 SPLIT 占位），withhold 在 native 上的"省"是幻觉（一次揭示即重算整个前缀）。菜单源仅在 `_effective_deferred_tools(role) and not _uses_native_tool_search(role)` 时构建（native → `SplitToolMenuContextSource`；XML → `DeferredToolIndexContextSource`；A/B 能力路抑制——API 自带索引已见全量 deferred 定义）。
+- **工具搜索全局开关（`toolsearch.enable`）**：`ToolsConfig.toolsearch: ToolSearchConfig{enabled: bool=True}`（`common/schema/tool_config.py`）。唯一真相源 helper `_effective_deferred_tools(role)`（`roles/role_components.py`）= `enabled` 时返回 `role_schema.deferred_tools`、否则 `[]`——所有延迟决策（executor 的 `deferred=` 集、菜单门控、`_uses_native_tool_search`）都读它。`enabled=False` → 延迟集清空 → `SearchTools` 不绑定（绑定以非空延迟集为条件）→ 零开销、完全走普通全量 toolset。
 - **工具绑定（创建期）**：
 
 ```mermaid
@@ -409,6 +421,7 @@ graph TD
 ```
 
 设计要点：
+- **按成本排序的 reducer 流水线**：`erase`/`fold`/`spill`（均 FREE）→ `summarize`（LLM）→ `drop`（DESTRUCTIVE），cheapest-first 且达标即停。其中 `OversizedSpillReducer`（`context/compaction/reducers/spill.py`）无损落盘超大单条内容（消息正文 / tool-call args）——复用工具路径的 `enforce_tool_result_limit`（经会话 `WorkspaceStore` 落盘），把 fold/erase/summarize/drop 都够不到的失控单条替换成 `<persisted-output>` 指针，可再读回。
 - **两段式压缩**：先做不花钱的 microcompact，必要时才触发 LLM autocompact（`context/manager.py:129-191`）。
 - **压缩用独立模型**：autocompact 的摘要走 router 的 `COMPRESSION_TASK`，与主模型解耦、可用更便宜的模型（`role.py:220-226`）。
 - **命令提示不落库**：`prepare_request` 返回的是"历史 + user_prompt"的新列表，命令提示只附加到请求，不写入存储历史（`provider.py:140-151`）。
@@ -466,7 +479,48 @@ sequenceDiagram
 
 ---
 
-## 十二、扩展点速查表
+## 十二、EffectLedger：外部副作用幂等台账与崩溃对账
+
+**要解决的问题**：一个 EXTERNAL 副作用工具（网络 / 子进程 / IPC / 人机交互 / 派生 agent）没有本地可回滚的前像快照。若进程在“副作用已发生、但 tool_result 消息尚未持久化”之间崩溃，朴素 resume 会重放该调用 → **副作用重复执行**（重复下单、重复发消息）。ContextManager 的 pairing 不变式只保证配对不断裂，救不了“副作用是否已生效”这层语义。
+
+**两段协同**（都挂在 `ToolExecutor.run_command` 这一个 chokepoint 上）：
+
+```mermaid
+graph TD
+    subgraph exec["run_command — 仅 EXTERNAL 且有稳定 result_id 才入账"]
+        P["_ledger_precheck(call_id)"] --> P1{"台账已有该 id?"}
+        P1 -->|completed| P2["直接返回记录结果<br/>（幂等重放，不重跑）"]
+        P1 -->|started| P3["拒绝：<unknown-after-crash><br/>（外部结果不可知，绝不静默重跑）"]
+        P1 -->|无记录| S["mark_started（body 前 fsync 落盘）"]
+        S --> B["跑 tool body"]
+        B --> T["mark_completed / mark_failed<br/>（携带结果供愈合）"]
+    end
+```
+
+- **① 存储**（`executor/effect_ledger.py`）：per-`(session, tool_call_id)` 的 append-only JSONL（`ledger/effects.jsonl`，经 `WorkspaceStore` 落到会话目录，随会话清理）。读时 fold 成 latest-per-id 索引；`unresolved()` 精确列出崩溃时仍是 `started` 的调用。`mark_started` 在 body 前 fsync，`mark_completed/failed` 把最终结果写进记录供后续愈合。
+- **② ToolEffect 分类**（`executor/base_tool.py:resolve_effect`）：显式 `effect` 优先 → `mutates_filesystem` 派生 `LOCAL`（已被快照层保护）→ 其余保守判 `EXTERNAL`（未知副作用面默认入账）。只读工具（Read/Grep/Glob）显式声明 `effect = PURE` 退出台账。注意 `reconstructable` 不参与判定（Bash 可重建结果但仍是 EXTERNAL）。
+
+**为什么没有“幂等键”这一层**：幂等是**接口提供方**的职责，不是台账能替它实现的。一个 EXTERNAL 副作用崩溃在半途时，它是否已生效对框架而言**物理上不可知**——框架无权替远端断言“可安全重跑”。所以台账只做一件诚实的事：如实记录 `started` 并在 resume 时上报 `<unknown-after-crash>`，把“核验 / 重试 / 放弃”的决策权交给模型。曾经的 `idempotency_key` / `annotate_tool_effect` 抽象是一层框架替提供方猜测的死抽象，已删除。
+
+**执行前持久化检查点**（第七节，`react_loop.py`）：ReAct 循环把 `record_turn` 拆成 `record_call`（assistant 的 tool_calls 消息）+ `record_results`（各工具结果）。本轮含 EXTERNAL 台账工具时，**先** `record_call` 并 `drain()` 落盘，**再**执行 body。这保证崩溃时 durable 历史里已有悬空 tool_call —— 否则连“悬空调用”都不存在，对账无从谈起。
+
+**Resume 对账**（`session/reconcile.py` + `roles/session_manager.py`）：`replay()` 重建历史后，`reconcile_tool_calls(messages, ledger)` 扫描悬空 tool_call（assistant 请求了但历史里无配对 tool_result），逐个查台账并注入合成 tool_result（恢复 provider 配对不变式）：
+
+| 台账状态 | 语义 | 注入内容 |
+|---|---|---|
+| `completed` / `failed` | 副作用已完成，只是结果消息丢了 | **愈合**：台账记录的真实结果，**不重跑** |
+| `started` | 崩溃时在途，外部结果不可知 | `<unknown-after-crash>`：绝不静默重跑，由模型核验后决定 |
+| 无记录 | PURE/LOCAL，从未入账 | `<not-executed>`：安全重放 |
+
+对账成功后 `ledger.reap(resolved_ids)` 清理已解决记录，台账不随会话无限增长。层次上 `session` 通过窄结构协议 `LedgerView`（只 `status`）读台账，不反向依赖 `executor`；对账函数是纯函数，从不改台账，只返回待 reap 的 id 集。
+
+**bggraph 协同**：`run_graph` 前台运行在**一次**顶层 `run_command` 内，其自身 EXTERNAL 台账条目就是崩溃恢复单元（resume 只对账这一个顶层调用）。图内节点分派（`Role.dispatch_tool`）**刻意不传 result_id**、不逐节点入账——因为图内调用从不作为 tool_calls 出现在 durable 历史里，对账器永远够不到它，逐节点入账的 `started` 记录会永久泄漏。于是形成两级保护：**图内** = 节点级重放（暂停/恢复只重跑未完成节点），**图整体** = 顶层台账条目。
+
+**默认开启**：`EffectLedgerConfig.enabled = True`（`common/schema/tool_config.py`）。YAML 开关在 `tools.effect_ledger`，由 `_build_executor` 从 `role.config.tools.effect_ledger` 读入并传给 `ToolExecutor`（与兄弟 `ToolResultLimitConfig` 同构、并列挂在 `tools.result_limit`：都是 tool-exec-scope 的纯数据策略，executor 是唯一属主——compaction 的 spill reducer 复用 executor 借出的同一个 `result_limit` 实例，单一来源无漂移）。
+
+---
+
+## 十三、扩展点速查表
 
 | 想做的扩展 | 怎么做 | 关键文件 |
 |---|---|---|

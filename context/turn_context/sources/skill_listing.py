@@ -13,12 +13,13 @@ re-searches via ``Skill(query=...)``).
 
 Push→pull bridge in one object (like :class:`ToolCatalogContextSource`, whose
 incremental frontier is identical): as an
-:class:`~mote.common.interface.ObservationSubscriber` it catches
-:class:`~mote.common.events.PostCompactEvent` off the bus and resets the
-frontier, so the turn after a compaction re-emits the *full* index (the earlier
-full listing was persisted into history and condensed away with the rest of the
-pre-compaction history — without the reset ``_sent_names`` would still believe
-every skill was announced and the index would be silently, permanently lost).
+:class:`~mote.common.interface.ObservationSubscriber` it catches any
+:data:`~mote.common.events.HISTORY_RESET_EVENTS` (a compaction *or* a ``/clear`` /
+user delete that structurally rebuilds stored history) off the bus and resets
+the frontier, so the next turn re-emits the *full* index — the earlier full
+listing was persisted into history and either condensed away by the compaction
+or pruned by the edit, and without the reset ``_sent_names`` would still believe
+every skill was announced and the index would be silently, permanently lost.
 As an :class:`~mote.common.interface.EphemeralContextSource` it renders the
 index once per think() cycle.
 
@@ -32,7 +33,7 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Optional, Protocol
 
-from mote.common.events import PostCompactEvent
+from mote.common.events import HISTORY_RESET_EVENTS
 from mote.common.interface import ObservationSubscriber, TurnContextPriority
 
 
@@ -83,13 +84,17 @@ class SkillListingContextSource(ObservationSubscriber):
         self._sent_names: set[str] = set()
 
     async def handle(self, event) -> None:
-        """Reset the incremental frontier after a compaction (re-emit the full index).
+        """Reset the incremental frontier when stored history is structurally rebuilt.
 
-        The prior full listing was persisted into history and condensed away by
-        the compaction, so the model no longer has it; clearing ``_sent_names``
-        makes the next render re-emit the whole index. All other events ignored.
+        Two orthogonal causes fold to the same fix (``HISTORY_RESET_EVENTS``):
+        a compaction condenses the prior full listing away, and a ``/clear`` or a
+        user delete prunes the messages that carried it. In every case the model
+        no longer has the listing, so clearing ``_sent_names`` makes the next
+        render re-diff against the live skill set — re-emitting the whole index
+        (or, after a delete that left some skills still announced elsewhere, only
+        the ones now missing). All other events ignored.
         """
-        if isinstance(event, PostCompactEvent):
+        if isinstance(event, HISTORY_RESET_EVENTS):
             self._sent_names = set()
         return None
 

@@ -29,6 +29,7 @@ from textual.widgets import Static
 
 from mote.cli.consumers.render.builders import RESULT_INDENT, FoldMode, fold_note, indent, tool_completed_text
 from mote.cli.consumers.textual.widgets import (
+    ActivityWidget,
     ApprovalMarkerRow,
     AssistantBlock,
     CompactionSummaryRow,
@@ -80,10 +81,10 @@ class TextualSurface(BaseSurface):
         self._app._open_block = None
         self._show_truncation(truncation)
 
-    def render_user_message(self, markdown: str) -> None:
+    def render_user_message(self, markdown: str, message_id: Any = None) -> None:
         self._app._close_block()
         if markdown.strip():
-            self._app._mount(UserMessageRow(markdown))
+            self._app._mount(UserMessageRow(markdown, message_id=message_id))
 
     # -- standalone tools --
     def tool_started(self, ev: Any, fold: FoldMode) -> None:
@@ -131,6 +132,37 @@ class TextualSurface(BaseSurface):
         # late completion still folds in). Idempotent.
         self._app._tool_group = None
 
+    # -- nested orchestration (run_graph / sub-agent / bg task) --
+    def open_activity(self, scope: Any, activity_kind: str, label: str, topology: Any) -> None:
+        # One live widget per scope, keyed so scoped pings/child tool calls route
+        # to the right subtree even when several activities nest or run in parallel.
+        self._app._close_block()
+        widget = ActivityWidget(activity_kind, label, topology, expanded=self._app._tools_expanded)
+        self._app._mount(widget)
+        self._app._activity_widgets[tuple(scope)] = widget
+
+    def update_activity_node(self, scope: Any, stage: str, status: str, detail: str) -> None:
+        widget = self._app._activity_widgets.get(tuple(scope))
+        if widget is not None:
+            widget.update_node(stage, status, detail)
+
+    def add_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        widget = self._app._activity_widgets.get(tuple(scope))
+        if widget is not None:
+            widget.add_child(ev)
+
+    def complete_activity_tool_call(self, scope: Any, ev: Any) -> None:
+        widget = self._app._activity_widgets.get(tuple(scope))
+        if widget is not None:
+            widget.complete_child(ev)
+
+    def close_activity(self, scope: Any, outcome: str, node_states: Any, summary: str) -> None:
+        # Freeze the widget to the self-sufficient outcome tree, then drop the
+        # live handle (a replayed transcript re-renders straight off node_states).
+        widget = self._app._activity_widgets.pop(tuple(scope), None)
+        if widget is not None:
+            widget.finalize_outcome(outcome, node_states, summary)
+
     # -- static transcript rows --
     def render_media(self, ev: Any) -> None:
         self._app._close_block()
@@ -144,9 +176,11 @@ class TextualSurface(BaseSurface):
         self._app._close_block()
         self._app._mount(TaskProgressRow(ev))
 
-    def render_notice(self, ev: Any) -> None:
+    def render_notice(self, ev: Any) -> Any:
         self._app._close_block()
-        self._app._mount(NoticeRow(ev))
+        row = NoticeRow(ev)
+        self._app._mount(row)
+        return row
 
     def render_system_reminder(self, ev: Any) -> None:
         self._app._close_block()
@@ -213,6 +247,7 @@ class TextualSurface(BaseSurface):
         self._app._tool_widgets.clear()
         self._app._grouped_tool_ids.clear()
         self._app._tool_group = None
+        self._app._activity_widgets.clear()
         self._app._selected_tool = None
 
     def _show_truncation(self, truncation: Truncation) -> None:

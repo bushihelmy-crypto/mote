@@ -22,11 +22,10 @@ import os
 from typing import ClassVar
 
 from mote.common.const.tools import MAX_CONTENT_SIZE_BYTES
-from mote.common.prompt.tools import WRITE_DESCRIPTION
 from mote.common.text import count_noun
 from mote.executor.dependency._file_base import FileMutatingTool
 from mote.executor.tool_registry import register_tool
-from mote.executor.tool_result import ToolError
+from mote.executor.tool_result import FileChange, ToolError, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise/return site).
@@ -50,15 +49,24 @@ class Write(FileMutatingTool):
     reconstructable: ClassVar[bool] = True
     # Success messages can echo file content; allow a higher cap.
     max_result_size_chars: ClassVar[int] = 100_000
-    description = WRITE_DESCRIPTION
 
-    async def call(self, *, file_path: str, content: str = "") -> str:
-        """Write content to a file on the local filesystem.
+    async def call(self, *, file_path: str, content: str = "") -> ToolResult:
+        """Write a whole file to disk — create a new file or fully replace one.
 
-        If the file exists it is overwritten; otherwise it (and any missing
-        parent directories) is created. When overwriting, the existing file's
-        newline style is preserved. An existing file must have been read this
-        session (and be unchanged since) before it can be overwritten.
+        Writes a file to the local filesystem, creating any missing parent
+        directories. If the file exists it is OVERWRITTEN; otherwise it is
+        created. When overwriting, the existing file's newline style is
+        preserved.
+
+        - If the file already exists, you must use the Read tool on it first, so
+          you are editing from its current contents rather than clobbering
+          changes you have not seen (an existing file must have been read this
+          session and be unchanged since before it can be overwritten).
+        - ALWAYS prefer editing an existing file with the Edit tool when only
+          part of it changes. Only use Write to create a new file or fully
+          replace one.
+        - NEVER proactively create documentation (*.md) or README files unless
+          the user explicitly asks for them.
 
         Args:
             file_path: Absolute path to the file to write (~ is expanded;
@@ -87,8 +95,18 @@ class Write(FileMutatingTool):
         # Read-before-overwrite: an existing file must have been read this
         # session and not changed on disk since. Skipped for new files and when
         # the capability isn't injected (unbound use).
+        old = ""
         if existed:
             self._check_read_before_write(file_path, full_path, noun="file", verb="overwriting")
+            # Capture the before-image (LF-normalized — the display-agnostic
+            # form) so the result can carry the change as a structured
+            # ``FileChange`` fact, exactly like Edit. Unreadable → treat as
+            # empty so the write still proceeds and simply shows as a full add.
+            try:
+                with open(full_path, "r", encoding="utf-8", newline="") as f:
+                    old = f.read().replace("\r\n", "\n")
+            except (OSError, UnicodeDecodeError):
+                old = ""
 
         # Preserve the existing newline style on overwrite; default to LF for
         # new files. Content arrives normalized to "\n"; translate on write.
@@ -123,4 +141,13 @@ class Write(FileMutatingTool):
 
         line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
         verb = "Updated" if existed else "Created"
-        return _MSG_WRITE_OK.format(verb=verb, path=full_path, lines=count_noun(line_count, "line"), size=encoded_size)
+        message = _MSG_WRITE_OK.format(
+            verb=verb, path=full_path, lines=count_noun(line_count, "line"), size=encoded_size
+        )
+        # Carry the change as a structured fact (old/new full content, LF-normalized)
+        # so the view layer renders the full file content — a selectable diff on a
+        # text host — instead of a bare one-line summary, matching Edit.
+        return ToolResult(
+            output=message,
+            file_changes=[FileChange(path=full_path, old=old, new=content.replace("\r\n", "\n"))],
+        )

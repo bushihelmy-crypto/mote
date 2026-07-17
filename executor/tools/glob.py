@@ -10,9 +10,9 @@ interface and defaults:
 - Matching paths are returned sorted by modification time, most recent first.
 - Hidden files are included; version-control metadata dirs (.git/.svn/...) are
   excluded.
-- Results are capped at the first 100 files to protect context; when truncated,
-  a note suggests narrowing the pattern or path. Paths are relativized to the
-  working directory to save tokens.
+- All matching paths are returned, relativized to the working directory to
+  save tokens. A large result is persisted to disk by the shared tool-result
+  exit rather than truncated here.
 
 Differences by design:
 - The Python fallback does not honor .gitignore (ripgrep, run with --no-ignore
@@ -27,10 +27,8 @@ import glob as _glob_mod
 import os
 from typing import ClassVar
 
-from mote.common.const.tools import GLIMPSE_EXTENSIONS, GLIMPSE_RECORD_LIMIT
-from mote.common.const.tools import GLOB_DEFAULT_LIMIT as DEFAULT_LIMIT
-from mote.common.const.tools import SEARCH_TIMEOUT, VCS_DIRECTORIES_TO_EXCLUDE
-from mote.common.prompt.tools import GLOB_DESCRIPTION
+from mote.common.const.tools import GLIMPSE_EXTENSIONS, GLIMPSE_RECORD_LIMIT, SEARCH_TIMEOUT, VCS_DIRECTORIES_TO_EXCLUDE
+from mote.common.schema import ToolEffect
 from mote.common.text import display_path
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import GetCwd, RecordFileGlimpsed
@@ -50,7 +48,6 @@ _MSG_NOT_A_DIRECTORY = "Error: path is not a directory: {path}"
 _MSG_SEARCH_TIMEOUT = "Error: search timed out after {seconds:.0f}s. Try a more specific path or pattern."
 _MSG_FIND_FAILED = "Error finding files: {error}"
 _MSG_NO_FILES = "No files found"
-_MSG_TRUNCATED = "(Results are truncated. Consider using a more specific path or pattern.)"
 
 
 def _mtime(p: str) -> float:
@@ -69,9 +66,10 @@ class Glob(BaseTool):
     aliases: ClassVar[list[str]] = ["Glob.run", "glob"]
     # Read-only pattern match: results are re-derivable by re-running the glob.
     reconstructable: ClassVar[bool] = True
+    # No side effect — opt out of the effect ledger (safe to replay always).
+    effect: ClassVar[ToolEffect] = ToolEffect.PURE
     # Glob can list many paths; allow a higher cap before persisting.
     max_result_size_chars: ClassVar[int] = 100_000
-    description = GLOB_DESCRIPTION
     # get_cwd is the stable base for the default search root + output
     # relativization. record_file_glimpsed feeds matched files to the code map as
     # navigation hints. Both optional: unbound (no Role) falls back / no-ops.
@@ -91,13 +89,18 @@ class Glob(BaseTool):
         pattern: str,
         path: str = "",
     ) -> str:
-        """Find files whose paths match a glob pattern.
+        """Find files by name pattern — glob like '**/*.py', sorted by recency.
 
-        Supports glob patterns like "**/*.js" or "src/**/*.ts". Returns the
-        matching file paths sorted by modification time (most recent first),
-        relativized to the working directory. Hidden files are included;
-        version-control metadata directories are excluded. Results are limited
-        to the first 100 files.
+        Fast file-name pattern matching that works with any codebase size.
+        Returns the matching file paths sorted by modification time (most recent
+        first), relativized to the working directory. Hidden files are included;
+        version-control metadata directories are excluded.
+
+        - Supports glob patterns like "**/*.js" or "src/**/*.ts".
+        - Use this to find files BY NAME or path shape. To search file CONTENTS,
+          use Grep instead. To explore a deep tree with several rounds of
+          globbing and grepping, launch an agent to reduce round-trips.
+        - ALWAYS use this tool instead of running find / ls through Bash.
 
         Args:
             pattern: The glob pattern to match files against, e.g. "**/*.py".
@@ -211,14 +214,12 @@ class Glob(BaseTool):
 
     @staticmethod
     def _format(files: list[str], cwd: str) -> str:
-        """Sort by mtime (most recent first), truncate, relativize, render."""
-        ordered = sorted(files, key=lambda p: (-_mtime(p), p))
-        truncated = len(ordered) > DEFAULT_LIMIT
-        limited = ordered[:DEFAULT_LIMIT]
-        if not limited:
-            return _MSG_NO_FILES
+        """Sort by mtime (most recent first), relativize, render.
 
-        rels = [display_path(p, cwd) for p in limited]
-        if truncated:
-            rels.append(_MSG_TRUNCATED)
-        return "\n".join(rels)
+        The full match list is returned; a large result is persisted to disk by
+        the shared tool-result exit rather than truncated here.
+        """
+        ordered = sorted(files, key=lambda p: (-_mtime(p), p))
+        if not ordered:
+            return _MSG_NO_FILES
+        return "\n".join(display_path(p, cwd) for p in ordered)

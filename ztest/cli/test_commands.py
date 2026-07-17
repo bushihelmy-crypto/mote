@@ -71,7 +71,7 @@ class FakeCtx:
         self.calls.append(("resume_session_ref", ref))
         return self.resume_result
 
-    def clear_conversation(self) -> int:
+    async def clear_conversation(self) -> int:
         self.calls.append(("clear_conversation", None))
         return self.clear_result
 

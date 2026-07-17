@@ -71,9 +71,9 @@ class _Harness:
         return [m.content for m in self.msg_buffer.pop_all()]
 
 
-def _media_pipeline_graph(node_fn) -> BgGraph:
+def _media_graph(node_fn) -> BgGraph:
     """A one-node ``media`` graph: START -> image -> END."""
-    g = BgGraph("media_pipeline", state_schema=S)
+    g = BgGraph("media", state_schema=S)
     g.add_node("image", node_fn)
     g.add_edge(START, "image")
     g.add_edge("image", END)
@@ -89,7 +89,7 @@ def test_completed_graph_records_success_on_disk_without_pushing():
     h = _Harness()
 
     async def _run():
-        g = _media_pipeline_graph(sync_node(lambda s: "video.mp4", field="image"))
+        g = _media_graph(sync_node(lambda s: "video.mp4", field="image"))
         state = g.state_schema(x=1)
         token = set_progress_writer(h.writer())
         try:
@@ -123,7 +123,7 @@ def test_stuck_running_node_never_reports_completion():
 
     async def _run():
         gate = asyncio.Event()  # never released while we snapshot
-        g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
+        g = _media_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
         state = g.state_schema(x=1)
         token = set_progress_writer(h.writer())
         try:
@@ -160,7 +160,7 @@ def test_cancelled_node_pushes_cancelled_not_success():
 
     async def _run():
         gate = asyncio.Event()  # never released → node stays running until cancelled
-        g = _media_pipeline_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
+        g = _media_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
         state = g.state_schema(x=1)
         run_state = GraphRunState.for_graph(g)
         token = set_progress_writer(h.writer())

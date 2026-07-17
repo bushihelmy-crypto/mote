@@ -14,8 +14,6 @@
   tool categories relate / how to call them), supplied by the XML channel as the
   system prompt's ${tool_usage_guide} section. Native leaves it "" (its tools
   ride the API ``tools=`` param). The volatile catalog LIST is injected per-turn.
-- SUMMARIZE_STATUS_WHEN_CONSECUTIVE: the nudge the react loop injects when a
-  turn runs too long without finishing.
 - BUDGET_EXHAUSTED: the final reply the react loop returns when an agent hits
   its hard budget cap and stops before the next think (no further LLM access).
 """
@@ -83,11 +81,6 @@ Call the available tools to accomplish the user's goal. You may call multiple to
 # exist, and each says "if any are listed", so naming an absent section is inert.
 XML_TOOL_USAGE_GUIDE = """# Using tools
 The tools you can call are delivered to you each turn as a catalog. Built-in commands appear under `# Available Commands`. If external MCP tools are listed (under `# MCP Tools`, named `server:tool_name`, e.g. "github:get_me"), or background pipeline tools are listed (under `# Pipeline Tools`), they are called the same way as built-in commands. Call every tool directly by name with keyword arguments, regardless of category. MCP tools connect to external services and may fail — if one does, inform the user."""
-
-
-SUMMARIZE_STATUS_WHEN_CONSECUTIVE = """
-You received a requirement but take too long to complete it. Please summarize the current progress and explain what you are doing now. Ask the user if they want you to continue. Output in 30 words.
-"""
 
 
 # Returned as the react loop's final reply when the hard budget cap halts the

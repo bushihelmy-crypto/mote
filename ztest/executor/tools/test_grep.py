@@ -194,6 +194,14 @@ class TestHelpers:
         assert sliced == items
         assert applied is None
 
+    def test_apply_head_limit_none_is_unlimited(self):
+        # No explicit head_limit now means "return everything" (the old default
+        # 250-entry cap was removed; large results are persisted to disk).
+        items = list(range(500))
+        sliced, applied = _apply_head_limit(items, None, 0)
+        assert sliced == items
+        assert applied is None
+
     def test_apply_head_limit_truncates(self):
         items = list(range(10))
         sliced, applied = _apply_head_limit(items, 3, 0)

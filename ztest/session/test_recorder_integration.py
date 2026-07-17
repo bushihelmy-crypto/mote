@@ -106,6 +106,32 @@ async def test_real_recorder_appends_to_log(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_drain_persists_tool_call_before_crash(tmp_path):
+    # The pre-execution durability checkpoint (react loop, EXTERNAL-effect path):
+    # the assistant tool-call message is appended, then get_disk_writer().drain()
+    # flushes it. Simulate a crash right after that drain (before any tool result
+    # is recorded) and confirm a replay can still read the assistant tool_calls —
+    # so a resume has the call id it needs to reconcile the dangling call.
+    from mote.common.disk import get_disk_writer
+    from mote.session.events import parse_event
+
+    log = SessionLog("sess_ckpt", base_dir=str(tmp_path))
+    recorder = RecorderSubscriber(log)
+    cm = ContextManager(bus=_bus_with(recorder))
+
+    # record_call's effect: assistant message carrying the tool_calls, no results.
+    await cm.add(AIMessage(content="calling", tool_calls=[{"id": "t1", "name": "Bash", "args": {"cmd": "curl x"}}]))
+    # The loop's checkpoint barrier — the durable flush before the side effect.
+    await get_disk_writer().drain()
+
+    # "Crash": nothing else is written. Replay reads the rollout back.
+    events = [parse_event(r) for r in log.iter_raw()]
+    assert [e.type for e in events] == [MESSAGE]
+    calls = events[0].message.metadata.get("tool_calls")
+    assert calls == [{"id": "t1", "name": "Bash", "args": {"cmd": "curl x"}}]
+
+
+@pytest.mark.asyncio
 async def test_disabled_recorder_does_not_append(tmp_path):
     log = SessionLog("sess_off", base_dir=str(tmp_path))
     recorder = RecorderSubscriber(log, enabled=False)
@@ -150,3 +176,99 @@ async def test_llm_response_without_usage_is_not_recorded(tmp_path):
     recorder = RecorderSubscriber(log)
     await recorder.handle(LLMResponseEvent(request_id="rq2", model="gpt-4o", usage=None))
     assert list(log.iter_raw()) == []
+
+
+class TestHistoryEditedPersistence:
+    """A react-unit delete emits a ``HistoryEditedEvent``; the recorder persists it
+    as a ``CompactedEvent`` so replay resets history to the pruned list (durable
+    across restart/resume) WITHOUT a compaction UI marker (the projector ignores
+    the source event — verified separately in the cli view-isolation tests)."""
+
+    @pytest.mark.asyncio
+    async def test_history_edited_recorded_as_compacted(self, tmp_path):
+        from mote.common.events import HistoryEditedEvent
+        from mote.session.events import COMPACTED
+
+        log = SessionLog("sess_edit", base_dir=str(tmp_path))
+        recorder = RecorderSubscriber(log)
+        await recorder.handle(HistoryEditedEvent(messages=[UserMessage(content="kept")], reason="delete"))
+        types = [r["type"] for r in log.iter_raw()]
+        assert types == [COMPACTED]
+
+    @pytest.mark.asyncio
+    async def test_replay_resets_history_to_pruned_messages(self, tmp_path):
+        from mote.common.events import HistoryEditedEvent
+        from mote.session.replay import replay
+
+        log = SessionLog("sess_edit_replay", base_dir=str(tmp_path))
+        recorder = RecorderSubscriber(log)
+        # Original three-turn history lands as message records.
+        cm = ContextManager(bus=_bus_with(recorder))
+        await cm.add(UserMessage(content="q1"))
+        await cm.add(AIMessage(content="a1"))
+        await cm.add(UserMessage(content="q2"))
+        await cm.add(AIMessage(content="a2"))
+        # Delete the first react-unit -> pruned list is [q2, a2].
+        await recorder.handle(
+            HistoryEditedEvent(
+                messages=[UserMessage(content="q2"), AIMessage(content="a2")],
+                reason="delete",
+            )
+        )
+        result = replay(log)
+        # The checkpoint resets replay history to the pruned list; the pre-edit
+        # q1/a1 appends are discarded (same reset semantics as a compaction).
+        assert [m.content for m in result.messages] == ["q2", "a2"]
+        assert result.from_checkpoint is True
+        assert result.checkpoints == 1
+
+    @pytest.mark.asyncio
+    async def test_round_trip_append_edit_replay(self, tmp_path):
+        """append -> edit -> replay yields the post-delete history, and later
+        appends after the edit stack onto the pruned list."""
+        from mote.common.events import HistoryEditedEvent
+        from mote.session.replay import replay
+
+        log = SessionLog("sess_edit_rt", base_dir=str(tmp_path))
+        recorder = RecorderSubscriber(log)
+        cm = ContextManager(bus=_bus_with(recorder))
+        await cm.add(UserMessage(content="q1"))
+        await cm.add(AIMessage(content="a1"))
+        await cm.add(UserMessage(content="q2"))
+        await cm.add(AIMessage(content="a2"))
+        await recorder.handle(
+            HistoryEditedEvent(
+                messages=[UserMessage(content="q1"), AIMessage(content="a1")],
+                reason="delete",
+            )
+        )
+        # A new turn continues after the delete.
+        await cm.add(UserMessage(content="q3"))
+        await cm.add(AIMessage(content="a3"))
+        result = replay(log)
+        assert [m.content for m in result.messages] == ["q1", "a1", "q3", "a3"]
+
+
+class TestToolMessageToolReferences:
+    """``ToolMessage.tool_references`` (server-side tool-search discovery) survives
+    dump/load and surfaces as the ``_tool_references`` private wire key — only
+    when set (metadata-as-truth, invisible to every existing path otherwise)."""
+
+    def test_round_trips_through_dump_load(self):
+        from mote.common.const import TOOL_REFERENCES
+        from mote.common.schema import Message, ToolMessage
+
+        msg = ToolMessage(content="revealed", tool_call_id="c1", tool_references=["ConvertImage", "QueryDatabase"])
+        restored = Message.load(msg.dump())
+        assert restored is not None
+        # Subclass identity is lost on replay; metadata is the truth.
+        assert restored.metadata[TOOL_REFERENCES] == ["ConvertImage", "QueryDatabase"]
+
+    def test_to_dict_emits_private_key_only_when_set(self):
+        from mote.common.schema import ToolMessage
+
+        with_refs = ToolMessage(content="x", tool_call_id="c1", tool_references=["A"])
+        assert with_refs.to_dict()["_tool_references"] == ["A"]
+
+        without = ToolMessage(content="x", tool_call_id="c2")
+        assert "_tool_references" not in without.to_dict()

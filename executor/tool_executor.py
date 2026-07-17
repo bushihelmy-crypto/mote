@@ -21,7 +21,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Callable, Mapping, cast
 
 from mote.common.events import EventBus, FileMutatedEvent, PostToolUseEvent, PreToolUseEvent, ToolsChangedEvent, span
-from mote.common.events.outcomes import ToolCallOutcome
+from mote.common.events.scope import current_scope
 from mote.common.exception import (
     ErrorReport,
     RecoveryAction,
@@ -33,11 +33,20 @@ from mote.common.exception import (
     render_error_block,
 )
 from mote.common.logs import log_class, logger
-from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PermissionConfig, PermissionFacts, ToolResultLimitConfig
+from mote.common.schema import (
+    DEFAULT_MAX_RESULT_SIZE_CHARS,
+    EffectLedgerConfig,
+    PermissionConfig,
+    PermissionFacts,
+    ToolEffect,
+    ToolResultLimitConfig,
+)
 from mote.common.text import plural
+from mote.common.workspace import WorkspaceStore
 from mote.executor import tool_result_limit
 from mote.executor.base_executor import BaseToolExecutor
 from mote.executor.compress.tool_output import compress_tool_result
+from mote.executor.effect_ledger import COMPLETED, EffectLedger
 from mote.executor.mcp_lifecycle import McpLifecycle
 from mote.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
 from mote.executor.permission.sandbox import SandboxGuard
@@ -53,6 +62,19 @@ if TYPE_CHECKING:
 # Signature params that are framework plumbing, never LLM-facing arguments.
 # (``*args``/``**kwargs`` are detected by parameter *kind*, not by name.)
 _NON_ARG_PARAMS = frozenset({"self", "cls"})
+
+# Refusal shown when a resumed session re-dispatches an EXTERNAL call that the
+# ledger last saw as ``started`` — its outcome was lost to a crash, so re-running
+# it might duplicate a side effect. The framework cannot know whether the effect
+# took hold; that judgment (verify / retry / abandon) is left to the model.
+_UNKNOWN_AFTER_CRASH = (
+    "<unknown-after-crash>\n"
+    "Tool '{name}' (call {call_id}) was started before a restart but its outcome "
+    "was never recorded, so re-running it could duplicate an external side effect. "
+    "It was NOT re-run. Verify whether the effect already took hold; reissue the "
+    "call only if it is safe to retry."
+    "\n</unknown-after-crash>"
+)
 
 
 def _validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any]) -> None:
@@ -158,16 +180,29 @@ class ToolExecutor(BaseToolExecutor):
         tools: list[str] | None = None,
         role=None,
         limit_config: ToolResultLimitConfig | None = None,
+        ledger_config: EffectLedgerConfig | None = None,
         permission_config: PermissionConfig | None = None,
         bus: EventBus | None = None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
         get_bg_pool: Callable[[], Any] | None = None,
         pipelines_enabled: bool = True,
+        workspace_store: WorkspaceStore | None = None,
+        deferred_tools: set[str] | None = None,
+        get_revealed: Callable[[], set[str]] | None = None,
     ) -> None:
         self._session_id = session_id
+        # Workspace layout owner used to place a large persisted tool result
+        # under this session's directory. Defaults to the standard workspace
+        # root; a shared instance can be injected via the component graph.
+        self._workspace_store = workspace_store or WorkspaceStore()
         # Two collaborators carry the split state: the catalog owns the bound-tool
-        # map + schema views, the lifecycle owns the MCP slot.
-        self._catalog = ToolCatalog()
+        # map + schema views, the lifecycle owns the MCP slot. Tool-search
+        # deferral (schema-visibility only): the catalog hides deferred tools'
+        # schemas from both channels until they are revealed (read live via
+        # ``get_revealed`` — the revealed set lives on RoleState so it survives
+        # session resume). Deferral never touches dispatch: a revealed tool is
+        # still in the map and resolves through run_command unchanged.
+        self._catalog = ToolCatalog(deferred=deferred_tools, get_revealed=get_revealed)
         self._mcp_lifecycle = McpLifecycle()
         self._get_bg_pool = get_bg_pool
         # The event spine (``common.events.EventBus``) is always present: every
@@ -190,6 +225,16 @@ class ToolExecutor(BaseToolExecutor):
         # Tool-result size limiting knobs (per-tool cap + disk persistence). A
         # default config reproduces the out-of-the-box behavior.
         self._limit_config = limit_config or ToolResultLimitConfig()
+
+        # EXTERNAL-effect idempotency ledger (crash-replay guard). The executor
+        # is the single owner of this cross-cutting policy (mirrors limit_config).
+        # Built once per session, co-located under the session directory via the
+        # shared workspace store; ``None`` when disabled → run_command skips all
+        # ledger work (identical to the prior no-ledger behavior).
+        self._ledger_config = ledger_config or EffectLedgerConfig()
+        self._ledger: EffectLedger | None = (
+            EffectLedger(session_id, store=self._workspace_store) if self._ledger_config.enabled else None
+        )
 
         # Permission engine. Built ONLY when a Role opts in with a
         # PermissionConfig — otherwise None and run_command runs with no
@@ -369,12 +414,13 @@ class ToolExecutor(BaseToolExecutor):
                     tool_input=args,
                     tool_use_id=result_id,
                     resolve_facts=_resolve_facts,
+                    scope=current_scope(),
                 )
             )
             # ``None`` when no control subscriber maps the event (no hook, no gate).
+            # ``emit`` infers ``ToolCallOutcome | None`` from ``PreToolUseEvent``'s
+            # ``ControlEvent[ToolCallOutcome]`` binding — no cast needed.
             if outcome is not None:
-                # A PreToolUseEvent always folds a ToolCallOutcome (or None).
-                outcome = cast("ToolCallOutcome", outcome)
                 if outcome.updated_args is not None:
                     args = outcome.updated_args
                 if outcome.behavior == "deny" or outcome.stop:
@@ -389,6 +435,19 @@ class ToolExecutor(BaseToolExecutor):
                         _failed_result(ToolPermissionDeniedError(reason), terminate=outcome.stop),
                         result_id,
                     )
+
+            # EXTERNAL-effect idempotency guard. Only EXTERNAL calls with a
+            # stable id are ledgered (PURE reads / LOCAL fs writes are already
+            # replay-safe). A precheck may short-circuit before the body runs
+            # (idempotent replay of an already-completed call, or refusal of an
+            # unknown-after-crash one); otherwise mark the call started (durably,
+            # before the body) so a mid-call crash is detectable on resume.
+            ledgered = self._is_ledgered(tool, result_id)
+            if ledgered:
+                short_circuit = self._ledger_precheck(name, cast(str, result_id))
+                if short_circuit is not None:
+                    return await self._reject(name, args, short_circuit, result_id)
+                cast(EffectLedger, self._ledger).mark_started(cast(str, result_id), name)
 
             async def _call():
                 # Validate inside the recovery loop so a strategy that repairs
@@ -413,7 +472,7 @@ class ToolExecutor(BaseToolExecutor):
                 # downstream consumers (hooks/telemetry) get structure. The tool
                 # *ran*, so the failure ``_settle``s on the control plane, where a
                 # PostToolUse hook may still rewrite/annotate/block it.
-                return await self._settle(name, args, _failed_result(e), result_id)
+                return await self._finish(name, args, _failed_result(e), result_id, ledgered)
 
             # BgTaskResult owns its own settlement: it submits the poll (when a
             # pool exists) and shapes the mode-specific output. The executor just
@@ -421,14 +480,77 @@ class ToolExecutor(BaseToolExecutor):
             if isinstance(raw, BgTaskResult):
                 pool = self._get_bg_pool() if self._get_bg_pool is not None else None
                 result = raw.to_tool_result(pool, name)
-                return await self._settle(name, args, result, result_id)
+                return await self._finish(name, args, result, result_id, ledgered)
 
             # Normalize the raw return into a ToolResult. A returned ToolResult is
             # used as-is; a plain value is always treated as success — failure is
             # signalled structurally (raise ToolError above, or return
             # ToolResult(success=False)), never by sniffing the output text.
             result = ToolResult.from_tool_return(raw)
-            return await self._settle(name, args, result, result_id)
+            return await self._finish(name, args, result, result_id, ledgered)
+
+    def _is_ledgered(self, tool: Any, result_id: str | None) -> bool:
+        """The single EXTERNAL-effect ledger gate: enabled + stable id + EXTERNAL.
+
+        One definition shared by :meth:`run_command` (which has the resolved
+        tool) and :meth:`will_ledger` (the loop's pre-execution probe), so the
+        two can never disagree on which calls are ledgered.
+        """
+        return self._ledger is not None and result_id is not None and tool.resolve_effect() is ToolEffect.EXTERNAL
+
+    def will_ledger(self, name: str, result_id: str | None) -> bool:
+        """Whether :meth:`run_command` would ledger this call (see base contract).
+
+        Resolves ``name`` to its tool then applies the shared :meth:`_is_ledgered`
+        gate; an unknown name (no bound tool) is never ledgered.
+        """
+        tool = self._get_tool(name)
+        return tool is not None and self._is_ledgered(tool, result_id)
+
+    def _ledger_precheck(self, name: str, call_id: str) -> ToolResult | None:
+        """Decide an EXTERNAL call's fate BEFORE its body runs, per the ledger.
+
+        Returns a :class:`ToolResult` to short-circuit (skip the body), or
+        ``None`` to proceed and run the tool. Dormant in normal operation — a
+        provider-assigned ``call_id`` is unique per call, so a prior record for
+        the same id only appears after a resume replays the same tool call:
+
+        - ``completed`` → idempotent replay: return the recorded result verbatim
+          so the effect is not re-run (its result message was simply lost).
+        - ``started`` → the call was in flight when the crash hit and its EXTERNAL
+          outcome is physically unknowable to the framework, so re-running it
+          might duplicate a side effect. Refused with ``<unknown-after-crash>``;
+          whether to verify / retry / abandon is the model's call, not ours.
+        """
+        ledger = cast(EffectLedger, self._ledger)
+        prior = ledger.status(call_id)
+        if prior is None:
+            return None
+        if prior.status == COMPLETED:
+            return ToolResult(output=prior.result or "", success=prior.success)
+        # started → outcome lost to the crash; never silently re-run an EXTERNAL effect.
+        return _failed_result(ToolPermissionDeniedError(_UNKNOWN_AFTER_CRASH.format(name=name, call_id=call_id)))
+
+    async def _finish(
+        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None, ledgered: bool
+    ) -> ToolResult:
+        """Settle a ran call, then record its terminal ledger state (if ledgered).
+
+        The single tail every post-body exit (success, ``raise``, BgTask submit)
+        funnels through: :meth:`_settle` runs the PostToolUse control plane +
+        compression + size cap, THEN — only for a ledgered EXTERNAL call — the
+        terminal record is written carrying the settled output forward, so a
+        resume can heal a dangling call from it without re-running the effect.
+        Marking happens after settlement so the stored result matches exactly
+        what the model saw.
+        """
+        result = await self._settle(name, args, result, result_id)
+        if ledgered and result_id is not None and self._ledger is not None:
+            if result.success:
+                self._ledger.mark_completed(result_id, name, result=result.output)
+            else:
+                self._ledger.mark_failed(result_id, name, result=result.output)
+        return result
 
     def _apply_post_outcome(self, result: ToolResult, outcome) -> ToolResult:
         """Fold a PostToolUse :class:`ControlOutcome` into the result.
@@ -474,6 +596,7 @@ class ToolExecutor(BaseToolExecutor):
             media=result.media,
             file_changes=result.file_changes,
             tool_use_id=result_id,
+            scope=current_scope(),
         )
 
     async def _safe_observe(self, event, *, ctx: str) -> None:
@@ -567,6 +690,7 @@ class ToolExecutor(BaseToolExecutor):
             session_id=self._session_id,
             max_result_size_chars=cap,
             persist=cfg.persist_large_tool_results,
+            store=self._workspace_store,
         )
         return result
 
@@ -612,6 +736,39 @@ class ToolExecutor(BaseToolExecutor):
         """
         return self._catalog.reconstructable_names()
 
+    @property
+    def limit_config(self) -> ToolResultLimitConfig:
+        """The single large-result persistence policy (threshold + persist flag).
+
+        The executor is the owner of this cross-cutting "big blob → disk pointer"
+        policy: it enforces it at the tool chokepoint (``run_command``). The
+        compaction pipeline's ``OversizedSpillReducer`` applies the *same* policy
+        to runaway history parts, so it borrows this one instance rather than
+        defaulting its own — one owner, no drift. When a config source is later
+        wired here, compaction follows automatically.
+        """
+        return self._limit_config
+
+    @property
+    def ledger_config(self) -> EffectLedgerConfig:
+        """The EXTERNAL-effect idempotency-ledger policy (the enable switch).
+
+        The executor owns this cross-cutting crash-replay policy (mirrors
+        :attr:`limit_config`); the resume reconciler borrows this one instance
+        rather than defaulting its own, so there is one owner and no drift.
+        """
+        return self._ledger_config
+
+    @property
+    def ledger(self) -> EffectLedger | None:
+        """The session's effect ledger, or ``None`` when the policy is disabled.
+
+        Exposed so the resume reconciler can read ``unresolved()`` / heal a
+        dangling call from a recorded result — all through the one instance the
+        executor owns.
+        """
+        return self._ledger
+
     def graph_tool_names(self) -> frozenset[str]:
         """Names (primary + aliases) of bound tools that are graph orchestrators.
 
@@ -622,14 +779,74 @@ class ToolExecutor(BaseToolExecutor):
         """
         return self._catalog.graph_tool_names()
 
-    def get_native_tool_specs(self, provider: str = "anthropic") -> list[dict]:
+    def graph_excluded_tool_names(self) -> frozenset[str]:
+        """Names (primary + aliases) of bound tools that must not be graph nodes.
+
+        A tool self-declares this via the ``graph_excluded`` ClassVar (see
+        :class:`~mote.executor.base_tool.BaseTool`). The run_graph orchestrator
+        refuses to reference any of these from a node — e.g. Sleep, which blocks
+        on an external wake event a foreground graph never delivers.
+        """
+        return self._catalog.graph_excluded_tool_names()
+
+    def deferred_tool_index(self, *, include_revealed: bool = True) -> dict[str, str]:
+        """The compact menu of deferred tools → ``{name: one-line desc}``.
+
+        Pure one-line summaries — for what the model *reads*. ``SearchTools``
+        matches against the enriched :meth:`deferred_search_index` instead. Empty
+        when no tool is deferred.
+
+        *include_revealed* selects the caller's view (see
+        :meth:`ToolCatalog.deferred_index`): ``True`` (default) = the whole
+        deferred corpus, the identity/validation view (e.g.
+        :meth:`~mote.roles.role.Role.reveal_tools`); ``False`` = drop
+        already-revealed tools, the DISPLAY view for the ephemeral reminder tail
+        (a revealed tool's schema is already live, so it should leave the "search
+        to enable" menu — the tail rides after the cache breakpoint so this costs
+        no cache churn).
+        """
+        return self._catalog.deferred_index(include_revealed=include_revealed)
+
+    def deferred_search_index(self) -> dict[str, str]:
+        """The deferred tools' MATCH corpus → ``{name: summary + keywords}``.
+
+        The search-only sibling of :meth:`deferred_tool_index`: each entry folds
+        in the tool's recall keywords so ``SearchTools`` matches synonyms the
+        one-line summary omits, without those words ever reaching a menu or the
+        wire. Empty when no tool is deferred.
+        """
+        return self._catalog.deferred_search_index()
+
+    def split_tool_menu(self) -> dict[str, str]:
+        """Reveal-aware description menu for the client-side SPLIT native path.
+
+        Complement of the split ``native_specs`` projection: brief hint per
+        unrevealed corpus tool, full description once revealed. Injected into the
+        ephemeral reminder tail so the byte-stable ``tools=`` prefix (name +
+        params) is never touched. See :meth:`ToolCatalog.split_tool_menu`.
+        """
+        return self._catalog.split_tool_menu()
+
+    def describe_deferred_tools(self, names: list[str]) -> dict[str, str]:
+        """Full descriptions for the given deferred tool names → ``{name: desc}``.
+
+        Capability surface for the ``SearchTools`` meta-tool: on reveal it reads
+        the newly-revealed tools' full prose (stripped off the split ``tools=``
+        wire) to persist it into the conversation + ResourceRegistry. See
+        :meth:`ToolCatalog.describe_deferred`.
+        """
+        return self._catalog.describe_deferred(names)
+
+    def get_native_tool_specs(self, provider: str = "anthropic", model: str | None = None) -> list[dict]:
         """Return native tool-use specs for all declared tools (static + MCP).
 
         Each tool contributes a {name, description, input_schema} record wrapped
         into the provider envelope. The native-protocol counterpart to
-        get_tool_schemas(); not used by the XML path.
+        get_tool_schemas(); not used by the XML path. ``model`` gates the
+        server-side tool-search (``defer_loading``) decision — see
+        :meth:`ToolCatalog.native_specs`.
         """
-        return self._catalog.native_specs(provider)
+        return self._catalog.native_specs(provider, model)
 
     # ------------------------------------------------------------------
     # MCP lifecycle

@@ -122,7 +122,7 @@ async def cmd_resume(ctx: Any, arg: str) -> None:
 
 @register_command("clear", help="clear the conversation (history + transcript)", aliases=("reset",))
 async def cmd_clear(ctx: Any, _arg: str) -> None:
-    cleared = ctx.clear_conversation()
+    cleared = await ctx.clear_conversation()
     ctx.notice(f"cleared conversation ({cleared} messages).\n", level="success")
 
 

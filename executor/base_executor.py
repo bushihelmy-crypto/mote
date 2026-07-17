@@ -48,3 +48,18 @@ class BaseToolExecutor(ABC):
     @abstractmethod
     def get_mcp_tool_schemas(self) -> dict[str, dict]:
         """Schemas for MCP tools — namespaced name -> schema."""
+
+    def will_ledger(self, name: str, result_id: str | None) -> bool:
+        """Whether :meth:`run_command` would open an EXTERNAL-effect ledger entry.
+
+        True for exactly the calls whose assistant tool-call message must be made
+        durable *before* the body runs — so a crash mid-side-effect leaves a
+        healable dangling call on resume rather than losing the whole turn. The
+        react loop reads this to decide whether to persist+flush a checkpoint
+        ahead of an act step.
+
+        Default ``False``: an executor with no effect ledger never needs the
+        pre-execution checkpoint. :class:`~mote.executor.tool_executor.ToolExecutor`
+        overrides with the real gate (ledger enabled + stable id + EXTERNAL tool).
+        """
+        return False

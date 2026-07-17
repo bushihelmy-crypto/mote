@@ -90,3 +90,38 @@ async def test_hook_config_engages_manager(tmp_path, monkeypatch):
     role = Role(role_schema=RoleSchema(name="Cfg", hooks=HookConfig()), context=Context())
     # A declared HookConfig (even empty events) engages the manager.
     assert role.hook_manager is not None
+
+
+@pytest.mark.asyncio
+async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
+    """A global ``~/.mote/hooks.json`` engages the hook layer for a Role that
+    declares no per-Role ``HookConfig`` and registers no callbacks."""
+    import json
+
+    import mote.common.const.paths as paths
+    from mote.router.llm.context import Context
+
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "hooks.json").write_text(
+        json.dumps(
+            {"hooks": {"PreToolUse": [{"matcher": "Bash", "handlers": [{"type": "command", "command": "exit 2"}]}]}}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(paths, "CONFIG_ROOT", home)
+
+    role = Role(role_schema=RoleSchema(name="Global"), context=Context())
+    # hooks=None + no callbacks, yet the global file engages the layer.
+    assert role.role_schema.hooks is None
+    assert role.hook_manager is not None
+
+    # And the loaded command hook actually fires: a matched Bash tool blocks
+    # (the `exit 2` handler signals deny).
+    outcome = await role.hook_manager.fire("PreToolUse", {"tool_name": "Bash"})
+    assert outcome.behavior == "deny"
+
+    # An unmatched tool selects no handler → EMPTY (no block).
+    outcome_read = await role.hook_manager.fire("PreToolUse", {"tool_name": "Read"})
+    assert outcome_read.behavior != "deny"

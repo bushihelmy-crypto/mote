@@ -147,9 +147,9 @@ async def loads_xml(data, valid_names: set[str]) -> Tuple[list[dict], str]:
         await lexer.loads_xml(xml=data)
         return lexer.get_commands(), ""
     except ValueError as e:
-        # A long freeform argument (e.g. ApplyPatch's whole patch carried as the
-        # single <input> body) sometimes arrives truncated: the model's output is
-        # cut off before its closing </input></Command> tags, leaving the streaming
+        # A long freeform argument (e.g. Write's whole file body carried as the
+        # single <content> body) sometimes arrives truncated: the model's output is
+        # cut off before its closing </content></Command> tags, leaving the streaming
         # lexer mid-value and raising "Invalid XML". Mirror the native channel's
         # json_repair fallback — synthesize the missing close tags from the lexer's
         # own open state and re-parse, recovering the command rather than dropping it.

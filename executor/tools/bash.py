@@ -21,7 +21,6 @@ import json
 import os
 from typing import Any, ClassVar, cast
 
-from mote.common.prompt.tools import BASH_DESCRIPTION
 from mote.common.schema.permission_types import PermissionDecision
 from mote.common.utils.common import aexecute
 from mote.executor.base_tool import BaseTool
@@ -36,6 +35,9 @@ from mote.executor.tool_result import ToolError, ToolResult
 _MSG_COMMAND_REQUIRED = "Error: 'command' argument is required."
 _MSG_WORKDIR_NOT_EXIST = "Error: workdir does not exist: {workdir}"
 _MSG_EXEC_FAILED = "Error executing command: {error}"
+# When ``check`` is on, a non-zero exit turns the whole call into a failure so a
+# graph node isolates it (rather than reading the error text as a normal value).
+_MSG_CHECK_FAILED = "Command failed with exit code {rc}."
 
 # The env var carrying the whole ``inputs`` object as JSON.
 _INPUTS_ENV = "INPUTS"
@@ -91,7 +93,6 @@ class Bash(BaseTool):
     reconstructable: ClassVar[bool] = True
     # Shell output can be verbose; cap below the default.
     max_result_size_chars: ClassVar[int] = 30_000
-    description = BASH_DESCRIPTION
     requires = ("get_cwd", "get_sandbox_runtime")
     # Arbitrary command execution — the highest-risk tool.
     risk_level = "high"
@@ -143,8 +144,32 @@ class Bash(BaseTool):
         inputs: dict[str, Any] | None = None,
         timeout: float = 300.0,
         workdir: str = "",
+        check: bool = False,
     ) -> ToolResult:
-        """Execute a bash command against the session's stable working directory.
+        """Run a one-shot shell command — also fetches web pages via curl/wget.
+
+        Runs a bash command against the session's stable working directory. Use
+        the ``workdir`` param to run in a subdirectory; a ``cd`` does not persist
+        across calls. Optionally pass ``inputs`` (an object) to feed typed values
+        into the command: the whole object is exported as the ``$INPUTS`` env var
+        (JSON), and each scalar entry with an identifier-safe key is also
+        exported as its own env var. If the command's stdout is valid JSON it is
+        parsed into the structured result (so a caller can index into it), else
+        the structured result is the raw stdout text.
+
+        By default a non-zero exit is NOT an error — the exit code is annotated in
+        the output and the call still succeeds (a ``grep`` with no match, a
+        ``diff`` that finds changes, etc. exit non-zero legitimately). Pass
+        ``check=True`` when the command MUST succeed to be meaningful: a non-zero
+        exit then fails the call (``success=False``), so a ``run_graph`` map/fold
+        node isolates it via ``on_item_error`` instead of reading the error text
+        as if it were a normal value.
+
+        To fetch a web page, run ``curl <url>`` (or ``wget -qO- <url>``): a
+        fetched HTML page is automatically cleaned into readable Markdown
+        (scripts, nav and styling stripped), so this is the fast way to read a
+        page's text. Use the WebBrowser tool instead when you need to interact
+        (click/type/log in) or the page renders its content with JavaScript.
 
         Args:
             command: The bash command to execute.
@@ -164,13 +189,22 @@ class Bash(BaseTool):
                 command does NOT persist across calls (the cwd is a stable value,
                 not shell state), so ``workdir`` is the way to scope a command to
                 another directory.
+            check: When True, a non-zero exit code fails the call
+                (``success=False``) instead of merely annotating it — so a command
+                whose failure would otherwise pass silently (e.g. inside a
+                ``run_graph`` map, where a failed item must be isolated, not read
+                as data) is surfaced as an error. Leave False (the default) for
+                commands whose non-zero exit is expected/meaningful (``grep`` with
+                no hit, ``diff`` with changes). A timeout is unaffected by ``check``
+                (it already carries its own message and is not a normal exit code).
 
         Returns:
             A ``ToolResult`` whose ``output`` is the human-readable stdout /
             stderr / exit-code text and whose ``data`` is the *structured*
             result: the command's stdout parsed as JSON when it is valid JSON,
             else the raw stdout string — so a downstream graph ``$ref`` can
-            index into it.
+            index into it. With ``check=True`` a non-zero exit yields
+            ``success=False`` (and ``error`` set), leaving ``data`` unset.
         """
         if not command or not command.strip():
             raise ToolError(_MSG_COMMAND_REQUIRED)
@@ -227,7 +261,20 @@ class Bash(BaseTool):
             parts.append(stderr)
         if not timed_out and rc:
             parts.append(f"[exit code: {rc}]")
-        return ToolResult(output="\n".join(parts) if parts else "", data=_structured(stdout))
+        text = "\n".join(parts) if parts else ""
+
+        # ``check``: a non-zero exit (that is NOT a timeout — a timeout carries its
+        # own message and is not a normal exit code) fails the call, so a caller
+        # like a run_graph map/fold node isolates it via on_item_error instead of
+        # reading the error text as a normal value. The reason line leads, followed
+        # by the command's own output (stdout/stderr) so the model can see what went
+        # wrong; ``data`` is left unset because a failed command has no trustworthy
+        # structured result. (``error`` is an ErrorReport, not a string — a plain
+        # failure carries its reason in ``output``, which ``_unwrap`` reads back.)
+        if check and rc and not timed_out:
+            reason = _MSG_CHECK_FAILED.format(rc=rc)
+            return ToolResult(output=f"{reason}\n{text}" if text else reason, success=False)
+        return ToolResult(output=text, data=_structured(stdout))
 
     def cleanup_session(self, session_id: str) -> None:
         """No persistent process to tear down; aexecute spawns per-call."""

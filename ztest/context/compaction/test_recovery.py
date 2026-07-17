@@ -82,6 +82,40 @@ def test_tool_result_round_trips_via_to_dict():
     assert out["tool_call_id"] == "c1"
 
 
+def test_mutated_string_content_is_reflected_not_discarded():
+    # A string-bodied message keeps NO pristine original, so a reducer's in-place
+    # rewrite (e.g. spill replacing a runaway body with a pointer) is emitted via
+    # to_dict — never silently discarded by a stale original.
+    d = {"role": "assistant", "content": "R" * 5000}
+    m = _wire_to_message(d)
+    m.content = "<persisted-output>…pointer…</persisted-output>"
+    out = _message_to_wire(m)
+    assert out["content"] == "<persisted-output>…pointer…</persisted-output>"
+
+
+def test_mutated_tool_call_args_are_reflected():
+    # A tool_calls message is faithful via to_dict, so a rewritten args string
+    # (spill of a giant blob) rides back out on the wire.
+    d = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Bash", "arguments": "B" * 5000}}],
+    }
+    m = _wire_to_message(d)
+    m.metadata[TOOL_CALLS][0]["args"] = "<persisted-output>…args…</persisted-output>"
+    out = _message_to_wire(m)
+    assert out["tool_calls"][0]["function"]["arguments"] == "<persisted-output>…args…</persisted-output>"
+
+
+def test_cache_intent_survives_round_trip():
+    # The declarative cache-intent hint is restored on reconstruction so a kept
+    # string message re-emits it (to_dict path), not just multimodal originals.
+    d = {"role": "user", "content": "hi", "_cache_intent": "ephemeral"}
+    m = _wire_to_message(d)
+    out = _message_to_wire(m)
+    assert out["_cache_intent"] == "ephemeral"
+
+
 # ---------------------------------------------------------------------------
 # reduce()
 # ---------------------------------------------------------------------------

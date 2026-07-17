@@ -179,6 +179,38 @@ def test_system_reminder_non_skill_bullets_not_counted():
     assert out[0].text == "Files changed on disk"
 
 
+def test_system_reminder_deferred_tools_heading_lists_names():
+    # The deferred-tool menu block ("# Additional tools …") lists the tool NAMES
+    # (not a count) so the human sees exactly what is search-to-enable — mirroring
+    # how git/skill blocks surface their contents. Names come before the first
+    # ``:`` in each ``- name: desc`` bullet; the intro prose is ignored.
+    p = ViewProjector()
+    inner = (
+        "# Additional tools (search to enable)\n"
+        "These tools exist but are not loaded. Call SearchTools(query=...) to reveal them.\n"
+        "- ConvertImage: Convert an image between formats.\n"
+        "- WebSearch: Search the web.\n"
+        "- RunGraph: Orchestrate a workflow."
+    )
+    out = p.project(ev_system_reminder(inner))
+    assert isinstance(out[0], SystemReminder)
+    assert out[0].text == "Additional tools (search to enable): ConvertImage, WebSearch, RunGraph"
+
+
+def test_system_reminder_split_tool_menu_lists_names():
+    # The split-path menu ("# Additional tools") uses the same ``- name: desc``
+    # bullets, so it lists names identically.
+    p = ViewProjector()
+    inner = (
+        "# Additional tools\n"
+        "These tools are callable but only a hint is shown.\n"
+        "- Terminal: Run a shell command.\n"
+        "- Jupyter: Execute code in a notebook."
+    )
+    out = p.project(ev_system_reminder(inner))
+    assert out[0].text == "Additional tools: Terminal, Jupyter"
+
+
 def test_pre_tool_headline_and_body():
     p = ViewProjector()
     out = p.project(ev_pre_tool("Write", {"file_path": "a.py", "content": "print(1)\n"}))
@@ -373,6 +405,20 @@ def test_compaction_folds_to_conversation_compacted():
     assert ev.message_count == 4
 
 
+def test_history_edited_folds_to_nothing_no_compaction_marker():
+    """A react-unit delete is persisted as a checkpoint but MUST NOT surface a
+    ``ConversationCompacted`` boundary marker. The projector ignores the source
+    ``HistoryEditedEvent`` by construction (unknown name → ``[]``), so the delete
+    silently prunes history with no "conversation compacted" UI."""
+    from mote.common.events.types import HISTORY_EDITED
+
+    from .conftest import AgentEvt
+
+    p = ViewProjector()
+    ev = AgentEvt(HISTORY_EDITED, messages=[1, 2, 3], reason="delete")
+    assert p.project(ev) == []
+
+
 def test_post_tool_failure_read_from_structured_success():
     """When the event carries ``success=False``, that fact drives ``ok`` — no sniff."""
     p = ViewProjector()
@@ -557,7 +603,7 @@ def test_post_tool_media_ref_without_path_degrades():
 def test_post_tool_file_diff_block_from_structured_change():
     """A structured ``FileChange`` folds into a ``FileDiffBlock`` (no text sniff).
 
-    Edit / apply_patch mirror the ToolResult's ``file_changes`` onto the event; the
+    Edit mirrors the ToolResult's ``file_changes`` onto the event; the
     projector resolves the path and carries the ``old``/``new`` facts directly,
     independent of the tool_response text (which says "updated successfully", not a
     diff). The ToolCallCompleted still rides alongside.
@@ -584,14 +630,14 @@ def test_post_tool_file_diff_block_from_structured_change():
 
 
 def test_post_tool_multiple_file_changes_fold_to_multiple_blocks():
-    """apply_patch may touch several files → one ``FileDiffBlock`` per change."""
+    """A tool may touch several files → one ``FileDiffBlock`` per change."""
     from mote.cli.contracts.view import FileDiffBlock
     from mote.executor.tool_result import FileChange
 
     p = ViewProjector()
     out = p.project(
         ev_post_tool(
-            "apply_patch",
+            "Edit",
             "A /tmp/new.py\nM /tmp/mod.py\nD /tmp/gone.py",
             file_changes=[
                 FileChange(path="/tmp/new.py", old="", new="hello\n"),  # add

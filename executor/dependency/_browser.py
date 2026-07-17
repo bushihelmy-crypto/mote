@@ -29,14 +29,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import signal
 import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
 from mote.common.logs import logger
-from mote.common.text import cap_head_tail, count_noun, verb_agree
+from mote.common.text import cap_head_tail, count_noun, html_to_markdown, verb_agree
 from mote.executor.tool_result import ToolError
 
 # --- Constants -------------------------------------------------------------
@@ -504,52 +503,19 @@ def _html_to_markdown(
     extract_links: bool = False,
     extract_images: bool = False,
 ) -> Optional[str]:
-    """Convert cleaned HTML to Markdown via the ``markdownify`` library.
+    """Convert browser-cleaned HTML to Markdown via the shared purification kernel.
 
-    By default this strips the two biggest sources of ``read`` noise — images
-    and hyperlink URLs — mirroring browser-use's defaults (``extract_links`` /
-    ``extract_images`` both ``False``): ``<img>`` is dropped entirely and ``<a>``
-    renders as its plain text (no ``(https://…%E5%90%91…)`` query-string URLs).
-    The model opts back in per-call via ``extract_links`` / ``extract_images``
-    when it actually needs a URL to navigate to or an image src to inspect.
+    This is a thin consumer-layer entry point: the browser-specific cleaning
+    (the ``_CLEAN_HTML_JS`` visibility pass, run on the LIVE DOM before this is
+    called) has already happened; here we only delegate to the one shared
+    ``HTML → Markdown`` contract (:func:`mote.common.text.html_to_markdown`),
+    which every dirty-HTML source converges on. ``extract_links`` /
+    ``extract_images`` pass straight through.
 
-    Returns ``None`` if ``markdownify`` is unavailable or conversion fails, so
+    Returns ``None`` if the kernel is unavailable or conversion fails, so
     :meth:`BrowserSession.read` can fall back to a plain-text dump.
     """
-    try:
-        from markdownify import markdownify as _markdownify
-    except Exception:  # noqa: BLE001 — optional dependency; caller falls back
-        return None
-    # ``strip`` removes a tag's markup while keeping its text content, so
-    # stripping ``a`` turns "[headline](https://…long%20noisy%20url…)" into a
-    # bare "headline". Stripping ``img`` drops decorative images / tracking
-    # pixels outright. Only keep each when the caller opts in.
-    strip = []
-    if not extract_images:
-        strip.append("img")
-    if not extract_links:
-        strip.append("a")
-    try:
-        md = _markdownify(
-            html,
-            heading_style="ATX",  # '#' style headings
-            bullets="-",  # '-' for unordered lists
-            escape_asterisks=False,  # cleaner output (don't escape * / _)
-            escape_underscores=False,
-            escape_misc=False,  # don't escape misc chars (cleaner output)
-            autolinks=False,  # don't wrap bare URLs in <>
-            default_title=False,  # don't inject default title attrs
-            strip=strip or None,
-        )
-    except Exception:  # noqa: BLE001 — malformed HTML; caller falls back
-        return None
-    # Scrub any leftover percent-encoding (e.g. surviving link/image URLs when
-    # the caller opted in) — matches browser-use's cleanup pass.
-    md = re.sub(r"%[0-9A-Fa-f]{2}", "", md)
-    # Collapse 3+ blank lines and trailing spaces.
-    md = re.sub(r"\n{3,}", "\n\n", md)
-    md = re.sub(r"[ \t]+\n", "\n", md)
-    return md.strip()
+    return html_to_markdown(html, extract_links=extract_links, extract_images=extract_images)
 
 
 # --- Form detection ---------------------------------------------------------
@@ -1303,6 +1269,23 @@ class BrowserSession:
         """Capture the active tab as a PNG and return the raw bytes."""
         page = self._active_page()
         return await page.screenshot(type="png", full_page=False)
+
+    async def read_image(self, target: str, *, timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS) -> bytes:
+        """Capture the image element identified by *target* as PNG bytes.
+
+        *target* is a ``[N]`` snapshot index or a raw CSS selector, resolved by
+        the same three-tier :meth:`_locate` used by ``click`` / ``type``. Unlike
+        the full-tab :meth:`screenshot`, this renders just the one element — an
+        ``<img>`` (or any node) — so a vision model reads only the picture the
+        model asked about, not the whole page. Playwright rasterizes whatever the
+        element currently displays, so it works for ``<img>``, ``<canvas>`` and
+        CSS-background nodes alike, sidestepping cross-origin / hotlink-guard
+        fetches of the raw ``src``.
+        """
+        page = self._active_page()
+        selector, ref = self._resolve_target(target)
+        handle = await self._locate(page, selector, ref, timeout_ms)
+        return await handle.screenshot(type="png", timeout=timeout_ms)
 
     async def eval_js(self, expression: str) -> str:
         """Evaluate a JavaScript *expression* on the active tab; return its value.

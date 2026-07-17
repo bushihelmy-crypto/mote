@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from mote.cli import backend
 from mote.common.const import IMAGES
 from mote.executor.agent_registry import registry
@@ -82,19 +84,21 @@ class _FakeCM:
     def count(self):
         return self._n
 
-    def clear(self):
+    async def clear(self):
         self.cleared = True
 
 
-def test_clear_messages_counts_then_clears():
+@pytest.mark.asyncio
+async def test_clear_messages_counts_then_clears():
     cm = _FakeCM(4)
     role = SimpleNamespace(context_manager=cm)
-    assert backend.clear_messages(role) == 4
+    assert await backend.clear_messages(role) == 4
     assert cm.cleared is True
 
 
-def test_clear_messages_without_manager_returns_zero():
-    assert backend.clear_messages(SimpleNamespace()) == 0
+@pytest.mark.asyncio
+async def test_clear_messages_without_manager_returns_zero():
+    assert await backend.clear_messages(SimpleNamespace()) == 0
 
 
 def test_turn_message_attaches_images_metadata():
@@ -168,11 +172,13 @@ def test_generic_role_uses_curated_default_when_none_passed():
     role = backend.build_role(context=_context(), name="Tester")
     # No explicit tools ⇒ RoleSchema's curated default (its declared tool
     # surface), NOT the full registered toolbox. So the CLI reports exactly the
-    # declared set — internal control verbs (End/Reply/Ask/ApplyPatch/…) that are
+    # declared set — internal control verbs (End/Reply/Ask/…) that are
     # registered but not curated do not leak into the top-level role.
     assert role.role_schema.tools == RoleSchema.model_fields["tools"].default
     assert "Read" in role.role_schema.tools
-    assert "Skill" in role.role_schema.tools
+    # Skill is now a DEFERRED tool (discovered via SearchTools), so it lives on
+    # the deferred surface rather than the always-visible ``tools`` list.
+    assert "Skill" in role.role_schema.deferred_tools
 
 
 def test_generic_role_explicit_tools_are_respected():
@@ -191,6 +197,26 @@ def test_role_tool_count_reports_builtin_only():
 def test_role_tool_count_degrades_to_zero():
     assert backend.role_tool_count(SimpleNamespace()) == 0
     assert backend.role_tool_count(SimpleNamespace(role_schema=SimpleNamespace())) == 0
+
+
+def test_role_deferred_tool_count_reports_deduped_deferred():
+    role = SimpleNamespace(role_schema=SimpleNamespace(deferred_tools=["WebBrowser", "Agent", "WebBrowser"]))
+    assert backend.role_deferred_tool_count(role) == 2
+
+
+def test_role_deferred_tool_count_zero_when_search_disabled():
+    # The global tool-search master switch off ⇒ no tool is deferred, so the badge
+    # reports zero deferred even though the schema declares some.
+    role = SimpleNamespace(
+        role_schema=SimpleNamespace(deferred_tools=["WebBrowser", "Agent"]),
+        config=SimpleNamespace(tools=SimpleNamespace(tool_search=SimpleNamespace(enabled=False))),
+    )
+    assert backend.role_deferred_tool_count(role) == 0
+
+
+def test_role_deferred_tool_count_degrades_to_zero():
+    assert backend.role_deferred_tool_count(SimpleNamespace()) == 0
+    assert backend.role_deferred_tool_count(SimpleNamespace(role_schema=SimpleNamespace())) == 0
 
 
 def test_build_role_unknown_agent_type_returns_none():

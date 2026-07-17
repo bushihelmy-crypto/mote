@@ -10,6 +10,7 @@ the executor seam (``ToolExecutor.run_command``) — this package never imports
 the executor.
 """
 
+from mote.common.hook.config_source import HOOKS_CONFIG_FILE_NAME, load_global_hooks, merge_hook_configs
 from mote.common.hook.manager import HookCallback, HookManager
 from mote.common.hook.types import EMPTY, HookBehavior, HookEvent, HookInput, HookOutcome, fold
 
@@ -22,4 +23,7 @@ __all__ = [
     "HookOutcome",
     "EMPTY",
     "fold",
+    "HOOKS_CONFIG_FILE_NAME",
+    "load_global_hooks",
+    "merge_hook_configs",
 ]

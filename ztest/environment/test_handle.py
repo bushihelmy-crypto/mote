@@ -51,7 +51,7 @@ class FakeSlot:
         self.rolled_back += 1
 
 
-def _handle(summary="done", *, residency_slot=None):
+def _handle(summary="done", *, residency_slot=None, timeout_seconds=None):
     role = FakeRole("child-1", summary=summary)
     runtime = AgentRuntime(role, agent_path=AgentPath.from_string("/root/child"))
     control = FakeControl()
@@ -61,6 +61,7 @@ def _handle(summary="done", *, residency_slot=None):
         agent_id="child-1",
         agent_path=AgentPath.from_string("/root/child"),
         residency_slot=residency_slot,
+        timeout_seconds=timeout_seconds,
     )
     return h, role, control
 
@@ -155,3 +156,42 @@ async def test_ephemeral_slot_released_exactly_once():
     await h.aclose()
     await h.aclose()
     assert slot.rolled_back == 1  # idempotent — released exactly once
+
+
+@pytest.mark.asyncio
+async def test_timeout_returns_partial_summary_and_releases():
+    """A turn that outlasts ``timeout_seconds`` is cut short; the handle returns
+    whatever summary the role had (soft failure) and still recycles the slot."""
+    import asyncio
+
+    slot = FakeSlot()
+    h, role, control = _handle(summary="partial so far", residency_slot=slot, timeout_seconds=0.02)
+
+    async def slow(with_message=None):
+        await asyncio.sleep(10)  # far past the 0.02s budget
+
+    role.run = slow
+    out = await h.run_to_completion("go")
+    assert out == "partial so far"  # soft: partial summary, no raise
+    assert slot.rolled_back == 1  # recycled despite the timeout
+    assert control.released == ["child-1"]
+    assert role.cleaned is True
+
+
+@pytest.mark.asyncio
+async def test_no_timeout_runs_to_completion_unbounded():
+    """Without a timeout the turn runs to natural completion (no wait_for)."""
+    h, role, control = _handle(summary="full result", timeout_seconds=None)
+    out = await h.run_to_completion("go")
+    assert out == "full result"
+    assert role.turns == ["go"]
+
+
+@pytest.mark.asyncio
+async def test_fast_turn_under_timeout_completes_normally():
+    """A turn well under budget completes normally and returns its full summary."""
+    h, role, control = _handle(summary="quick result", timeout_seconds=5.0)
+    out = await h.run_to_completion("go")
+    assert out == "quick result"
+    assert role.turns == ["go"]
+    assert control.released == ["child-1"]

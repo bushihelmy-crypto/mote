@@ -171,3 +171,274 @@ def test_bare_url_renders_as_an_osc8_hyperlink():
     out = _render("see https://example.com now")
     assert _OSC8 in out
     assert "https://example.com" in out
+
+
+# --- LaTeX math → boxed Unicode span ---------------------------------------
+
+# ``Palette.MATH_BG`` (#33251f) emitted as a truecolor BACKGROUND SGR — its
+# presence proves the formula span carries the ``markdown.math`` box.
+_MATH_BG_SGR = "48;2;51;37;31"
+
+
+def test_flatten_preserves_script_grouping():
+    # The pure single-line helper: ^{…}/_{…} grouping survives (2¹⁰, not the lossy
+    # 2¹0) and macros expand to their symbols.
+    from mote.cli.consumers.render.mathbox import flatten
+
+    assert flatten("2^{10}") == "2¹⁰"
+    assert flatten(r"\sum_{i=1}^{n} i") == "∑ᵢ₌₁ⁿ i"
+    assert flatten(r"\frac{a}{b}") == "a/b"
+
+
+def test_inline_math_is_flattened_and_boxed():
+    # End-to-end: ``$…$`` becomes the Unicode glyph, the ``$`` delimiter is gone,
+    # and the span carries the distinct math background.
+    out = _render("energy $E = mc^2$ today")
+    assert "mc²" in out
+    assert "$" not in out
+    assert _MATH_BG_SGR in out  # the boxed background
+
+
+def test_display_math_dollars_and_bracket_are_boxed():
+    for src in ("$$x^2 + y^2$$", r"\[ a_{ij} \]"):
+        out = _render(src)
+        assert _MATH_BG_SGR in out
+    assert "x²" in _render("$$x^2 + y^2$$")
+    assert "aᵢⱼ" in _render(r"\[ a_{ij} \]")
+
+
+def test_inline_paren_math_is_boxed():
+    out = _render(r"see \(\frac{a}{b}\) here")
+    assert "a/b" in out
+    assert _MATH_BG_SGR in out
+
+
+def test_currency_is_not_treated_as_math():
+    # No space-hugging delimiters, so "$5 and $10" is prose — the ``$`` stays and
+    # no math box is drawn.
+    out = _render("it costs $5 and $10 total")
+    assert "$5" in out and "$10" in out
+    assert _MATH_BG_SGR not in out
+
+
+def test_math_inside_code_is_left_verbatim():
+    # ``$…$`` inside inline code is consumed as a code span before the math rule
+    # sees the ``$``, so it stays literal (no box, no flattening).
+    out = _render("run `$x^2$` verbatim")
+    assert "$x^2$" in out
+    assert _MATH_BG_SGR not in out
+
+
+def test_stray_currency_does_not_reach_into_a_later_code_span():
+    # Regression: a currency ``$`` in prose must not latch onto a ``$`` living
+    # inside a following inline-code span (the rule scans raw source). "$10" stays
+    # prose and the code renders verbatim, so no math box appears at all.
+    out = _render("cost $5 and $10. Code stays literal: `$x^2$`.")
+    assert "$5" in out and "$10" in out
+    assert "$x^2$" in out
+    assert _MATH_BG_SGR not in out
+
+
+# --- Inline math: fractions/matrices flattened unambiguously ----------------
+
+
+def test_inline_fraction_is_parenthesised_when_compound():
+    # A compound numerator/denominator gets parens so ``(a+b)/(c-d)`` can't read
+    # as the ambiguous ``a+b/c-d``. Simple atoms stay bare (``x/y``).
+    out = _render(r"the ratio $\frac{a+b}{c-d}$ here")
+    assert "(a+b)/(c-d)" in out
+    assert _MATH_BG_SGR in out
+
+
+def test_inline_matrix_uses_semicolon_row_notation():
+    out = _render(r"see $\begin{bmatrix} a & b \\ c & d \end{bmatrix}$ inline")
+    assert "[ a b ; c d ]" in out
+
+
+# --- Display math: 2D box layout --------------------------------------------
+
+
+def test_display_fraction_stacks_over_a_bar():
+    # ``$$\frac{a}{b}$$`` lays out on three rows: numerator, ─── rule, denominator.
+    out = _render(r"$$\frac{a+b}{c-d}$$")
+    assert "───" in out  # the fraction bar
+    assert "a+b" in out and "c-d" in out
+    assert _MATH_BG_SGR in out  # the block is boxed
+
+
+def test_inline_sqrt_uses_radical_glyph():
+    # ``\sqrt{x}`` inline flattens to ``√(…)`` (parenthesised when compound).
+    out = _render(r"the root $\sqrt{b^2-4ac}$ here")
+    assert "\u221a(b²-4ac)" in out  # √(b²-4ac)
+    assert _MATH_BG_SGR in out
+
+
+def test_inline_sqrt_index_is_superscripted():
+    out = _render(r"see $\sqrt[3]{x+1}$ inline")
+    assert "³\u221a(x+1)" in out  # ³√(x+1)
+
+
+def test_display_sqrt_extends_an_overline_vinculum():
+    # ``$$\sqrt{…}$$`` lays out with a ``───`` overline over the radicand and the
+    # ``√`` checkmark on the baseline row — the 2D radical.
+    out = _render(r"$$\sqrt{b^2-4ac}$$")
+    assert "\u221a" in out  # √ radical sign
+    assert "\u2500" in out  # ─ overline vinculum
+    assert "b²-4ac" in out
+    assert _MATH_BG_SGR in out
+
+
+def test_display_matrix_uses_stretchy_brackets():
+    out = _render(r"$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$")
+    # Stretchy round-bracket glyphs across the stacked rows.
+    assert "⎛" in out and "⎝" in out
+    assert "⎞" in out and "⎠" in out
+
+
+# --- Scripts: nested exponents & derivative primes --------------------------
+
+
+def test_flatten_maps_nested_exponent():
+    # ``e^{x^2}`` used to degrade to ``e^x^2`` (the inner ``^`` aborted the run);
+    # the nested script is converted first so it maps fully to ``eˣ²``.
+    from mote.cli.consumers.render.mathbox import flatten
+
+    assert flatten("e^{x^2}") == "eˣ²"
+    assert flatten("e^{-x^2}") == "e⁻ˣ²"
+    assert flatten("x^{2n}") == "x²ⁿ"
+
+
+def test_flatten_parenthesises_unmappable_compound_exponent():
+    # Euler's identity: ``π`` has no superscript glyph, so ``e^{i\pi}`` can't map
+    # fully — it parenthesises as ``e^(iπ)`` rather than leaking a bare ``e^iπ``.
+    from mote.cli.consumers.render.mathbox import flatten
+
+    assert flatten(r"e^{i\pi} + 1 = 0") == "e^(iπ) + 1 = 0"
+    assert flatten(r"e^{i\theta}") == "e^(iθ)"
+    # A LONE unmappable symbol stays bare — parens there would only add noise.
+    assert flatten("x^q") == "x^q"
+
+
+def test_flatten_maps_derivative_primes():
+    # ``''`` used to mangle into a curly quote (``”``); real prime glyphs now.
+    from mote.cli.consumers.render.mathbox import flatten
+
+    assert flatten("f'(x)") == "f′(x)"
+    assert flatten("f''(x)") == "f″(x)"
+    assert flatten("f'''(x)") == "f‴(x)"
+
+
+# --- Big operators: limit positioning ---------------------------------------
+
+
+def test_display_sum_stacks_limits_over_the_symbol():
+    # ``\sum_{i=1}^{n}`` in display math puts ``n`` above and ``i=1`` below ``∑``.
+    from mote.cli.consumers.render.mathbox import build_box
+
+    box = build_box(r"\sum_{i=1}^{n} i", display=True)
+    lines = box.render_lines()
+    assert box.height == 3
+    assert "n" in lines[0]  # upper limit on top
+    assert "∑" in lines[1]  # operator on the middle (baseline) row
+    assert "i=1" in lines[2]  # lower limit on the bottom
+
+
+def test_display_integral_sets_limits_beside_a_tall_sign():
+    # ``\int_0^1`` draws a stretched sign (``⌠⎮⌡``) carrying its bounds at the
+    # top-/bottom-right — the conventional display-integral layout.
+    from mote.cli.consumers.render.mathbox import build_box
+
+    box = build_box(r"\int_0^1 f\,dx", display=True)
+    lines = box.render_lines()
+    assert box.height == 3
+    assert lines[0].startswith("⌠") and lines[-1].startswith("⌡")  # tall sign
+    assert "1" in lines[0] and "0" in lines[-1]  # bounds beside the sign
+
+
+def test_display_integral_macro_bound_is_captured():
+    # A macro upper bound (``\infty``) after a fused ``_0^`` is bound as the sup.
+    from mote.cli.consumers.render.mathbox import build_box
+
+    box = build_box(r"\int_0^\infty x^2\,dx", display=True)
+    lines = box.render_lines()
+    assert "∞" in lines[0]  # upper bound present, not dropped
+    assert "0" in lines[-1]
+
+
+def test_display_lim_subscript_is_placed_under_the_word():
+    # ``\lim_{x \to 0}`` stacks the bound under ``lim`` instead of leaking ``_``.
+    from mote.cli.consumers.render.mathbox import build_box
+
+    box = build_box(r"\lim_{x \to 0} f(x)", display=True)
+    lines = box.render_lines()
+    assert any("lim" in line for line in lines)
+    assert any("→" in line for line in lines)
+    assert not any("_" in line for line in lines)  # no raw underscore leak
+
+
+def test_inline_lim_parenthesises_unmappable_bound():
+    # Inline, ``x→0`` has no subscript glyphs, so the bound is parenthesised and
+    # attached (``lim(x→0)``) rather than leaking ``lim_x →0``.
+    from mote.cli.consumers.render.mathbox import build_box
+
+    line = build_box(r"\lim_{x \to 0} f(x)", display=False).to_line()
+    assert "lim(" in line and "_" not in line
+
+
+def test_inline_sum_keeps_unicode_scripts():
+    # Fully-mappable scripts stay as compact Unicode subscripts inline.
+    from mote.cli.consumers.render.mathbox import build_box
+
+    line = build_box(r"\sum_{i=1}^{n} i", display=False).to_line()
+    assert "∑ᵢ₌₁ⁿ" in line
+
+
+def test_inline_improper_integral_marks_both_bounds_and_keeps_the_gap():
+    # ``\int_{-\infty}^{+\infty}`` has unmappable bounds, so both are
+    # parenthesised SYMMETRICALLY (``_(…)^(…)`` — not a bare sub with a lone
+    # ``^`` sup), and the space before the integrand survives the box glue so it
+    # doesn't abut the operator (``…^(+∞) e⁻ˣ²`` not ``…^(+∞)e⁻ˣ²``).
+    from mote.cli.consumers.render.mathbox import build_box
+
+    line = build_box(r"\int_{-\infty}^{+\infty} e^{-x^2}\,dx", display=False).to_line()
+    assert "∫_(-∞)^(+∞)" in line  # symmetric sub/sup markers
+    assert "^(+∞) e⁻ˣ²" in line  # separating space preserved before integrand
+
+
+# --- MathBox box algebra (unit) ---------------------------------------------
+
+
+def test_mathbox_frac_puts_baseline_on_the_bar():
+    from mote.cli.consumers.render.mathbox import atom, frac
+
+    box = frac(atom("1"), atom("i²"))
+    assert box.lines[box.baseline].startswith("─")  # baseline row is the rule
+    assert box.height == 3
+
+
+def test_mathbox_hconcat_aligns_on_baseline():
+    from mote.cli.consumers.render.mathbox import atom, frac, hconcat
+
+    # gluing a tall fraction to a plain atom lifts the atom onto the shared axis.
+    box = hconcat([atom("x="), frac(atom("1"), atom("2"))])
+    assert box.height == 3
+    assert box.lines[box.baseline].startswith("x=")
+
+
+def test_mathbox_sqrt_puts_checkmark_on_baseline_under_a_vinculum():
+    from mote.cli.consumers.render.mathbox import atom, sqrt
+
+    box = sqrt(atom("x+1"))
+    # Top row is the overline; the radicand row (baseline) carries the √.
+    assert box.lines[0].strip().startswith("─")  # vinculum on top
+    assert "\u221a" in box.lines[box.baseline]  # √ on the baseline row
+    assert box.height == 2
+
+
+def test_build_box_falls_back_gracefully_on_unknown():
+    from mote.cli.consumers.render.mathbox import build_box
+
+    # An unmodelled construct still yields a (flat) box, never None/raw soup.
+    box = build_box(r"\alpha + \beta", display=True)
+    assert box is not None
+    assert box.height == 1

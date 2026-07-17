@@ -55,6 +55,9 @@ _MARKDOWN_STYLES = {
     # Code: drop rich's black background for a plain brand-tinted foreground.
     "markdown.code": Palette.BRAND,
     "markdown.code_block": Palette.BRAND,
+    # Math: a flattened LaTeX formula reads as a boxed span — brand-orange text on
+    # a warm dark tint, distinct from code (which is deliberately background-free).
+    "markdown.math": f"{Palette.BRAND} on {Palette.MATH_BG}",
     # Emphasis kept structural (bold/italic already encode it); no colour change.
 }
 

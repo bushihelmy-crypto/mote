@@ -168,6 +168,42 @@ class TestBashInputs:
         assert out == "[unset]"
 
 
+class TestBashCheck:
+    def test_check_success_on_zero_exit(self, workspace):
+        tool, _ = _ready(workspace)
+        # A zero exit under check still succeeds, with the structured data intact.
+        res = _bash_result(tool, command="echo 42", check=True)
+        assert res.success is True
+        assert res.data == 42
+
+    def test_check_fails_on_nonzero_exit(self, workspace):
+        tool, _ = _ready(workspace)
+        res = _bash_result(tool, command="echo boom 1>&2; exit 3", check=True)
+        # A non-zero exit under check fails the call so a graph node can isolate it.
+        assert res.success is False
+        assert "exit code 3" in res.output
+        # The command's own output rides along so the model can see what happened.
+        assert "boom" in res.output
+        # No trustworthy structured result on a failed command.
+        assert res.data is None
+
+    def test_no_check_nonzero_exit_still_succeeds(self, workspace):
+        tool, _ = _ready(workspace)
+        # Without check, a non-zero exit is annotated but the call still succeeds
+        # (grep-no-match / diff-with-changes are legitimate non-zero exits).
+        res = _bash_result(tool, command="(exit 1)")
+        assert res.success is True
+        assert "[exit code: 1]" in res.output
+
+    def test_check_ignores_timeout(self, workspace):
+        tool, _ = _ready(workspace)
+        # A timeout is not a normal exit code — check does not turn it into a
+        # success=False (it already carries its own "timed out" message).
+        res = _bash_result(tool, command="sleep 5", timeout=0.2, check=True)
+        assert res.success is True
+        assert "timed out" in res.output
+
+
 class TestBashWorkdir:
     def test_runs_in_relative_workdir(self, workspace):
         sub = workspace / "rel"

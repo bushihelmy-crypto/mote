@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Model configuration: the default LLM, task-routed LLMs, and routing switch.
+"""Model configuration: the default LLM and task-routed LLMs.
 
 Groups everything about *which model runs* under one roof:
 
@@ -8,8 +8,6 @@ Groups everything about *which model runs* under one roof:
 - ``tasks``         — task-name -> LLMConfig overrides (e.g. ``compression`` /
                       ``summary``); each inherits transport + credentials from
                       ``default`` unless the user set them explicitly.
-- ``router_enabled``— when True the LLMRouter picks a model per request from the
-                      registered cards; when False ``default`` is a fixed model.
 - ``api_key_helper``— shell command that prints an API key on stdout, used to
                       fill ``default.api_key`` at load time when no static/env
                       key is present (trusted layers only; see CREDENTIAL_DENYLIST).
@@ -29,18 +27,25 @@ def _default_tasks() -> Dict[str, LLMConfig]:
     return {
         "compression": LLMConfig(model="claude-sonnet-4-8"),
         "summary": LLMConfig(model="claude-sonnet-4-8"),
+        # WebSearch's isolated secondary call (carries the provider server-side
+        # web-search tool). A small/fast model suffices — it only relays the
+        # query to the API's search backend and returns the structured hits. The
+        # model MUST itself support server-side web search (be in
+        # ``WEB_SEARCH_MODELS``); Haiku-4.5 qualifies and is the cheapest option.
+        "web_search": LLMConfig(model="claude-haiku-4-5-20251001"),
+        # WebBrowser's ``read_image`` isolated secondary call: feeds one on-page
+        # image to a vision model and returns its textual reading (the browser
+        # has no wire to hand an in-page ``<img>`` to the main model as media).
+        # The routed model MUST support image input (be multimodal — see
+        # ``supports_vision``); Haiku-4.5 is multimodal and the cheapest option.
+        "image_description": LLMConfig(model="claude-haiku-4-5-20251001"),
     }
 
 
 class ModelsConfig(YamlModel):
-    """All LLM selection knobs (default model, task overrides, routing switch)."""
+    """All LLM selection knobs (default model, task overrides)."""
 
     default: LLMConfig
-
-    # Intelligent LLM routing. When True, the router picks a model per request
-    # from the registered model cards (ContextProvider triggers it in the react
-    # loop); when False, ``default`` is used as a fixed model.
-    router_enabled: bool = False
 
     # Optional shell command that prints an API key on stdout. Used to fill
     # ``default.api_key`` at load time only when no static/env key is present

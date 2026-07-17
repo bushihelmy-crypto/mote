@@ -25,6 +25,7 @@ from mote.cli.consumers.transcript import (
     OpenGroup,
     RenderError,
     RenderNotice,
+    RenderTaskProgress,
     RenderUserMessage,
     SetRetry,
     SetThinking,
@@ -33,7 +34,16 @@ from mote.cli.consumers.transcript import (
     TranscriptReducer,
     UpdateUsage,
 )
+from mote.cli.consumers.transcript.ops import (
+    AddActivityToolCall,
+    CloseActivity,
+    CompleteActivityToolCall,
+    OpenActivity,
+    UpdateActivityNode,
+)
 from mote.cli.contracts.view import (
+    ActivityCompleted,
+    ActivityStarted,
     ConversationCompacted,
     ErrorRaised,
     MessageBlockCompleted,
@@ -42,6 +52,7 @@ from mote.cli.contracts.view import (
     Notice,
     ReasoningDelta,
     RetryStatus,
+    TaskProgress,
     ToolCallCompleted,
     ToolCallStarted,
     TranscriptCleared,
@@ -81,6 +92,28 @@ def test_user_completion_is_user_message_and_cached_for_compaction():
     assert isinstance(comp[0], ClearForCompaction)
     assert comp[0].last_user_prompt == "fix the bug"
     assert comp[0].message_count == 5
+
+
+def test_user_message_threads_message_id_as_delete_anchor():
+    """The user completion carries the backend ``Message.id`` through to the op so
+    the Textual host can anchor a react-unit delete on it. ``surface_args`` includes
+    the id (couples the arity across every surface)."""
+    r = TranscriptReducer()
+    ops = r.feed(MessageBlockCompleted(markdown="fix the bug", role="user", message_id="msg-42"))
+    assert _kinds(ops) == ["render_user_message"]
+    op = ops[0]
+    assert isinstance(op, RenderUserMessage)
+    assert op.message_id == "msg-42"
+    assert op.surface_args() == ("fix the bug", "msg-42")
+
+
+def test_user_message_without_id_threads_none():
+    r = TranscriptReducer()
+    ops = r.feed(MessageBlockCompleted(markdown="hello", role="user"))
+    op = ops[0]
+    assert isinstance(op, RenderUserMessage)
+    assert op.message_id is None
+    assert op.surface_args() == ("hello", None)
 
 
 # ------------------------------------------------------------- thinking ---
@@ -216,3 +249,120 @@ def test_usage_does_not_break_open_group():
     # The group is still open — a second grouped call keeps coalescing.
     assert _kinds(r.feed(_started("Grep", "t2", "foo"))) == ["add_to_group"]
     assert isinstance(r.feed(UsageUpdated(model="m"))[0], UpdateUsage)
+
+
+# ------------------------------------------------------ activity scope ----
+# An activity opens at its own scope ``(graph,)``; every later CHILD event (a
+# tool dispatched inside a node, a progress ping) carries the LONGER child scope
+# ``(graph, node)``. The reducer must route each op back to the OWNING activity's
+# scope — the exact key the surface stored the widget under (``open_activity``) —
+# else the surface ``_activity_widgets.get(scope)`` lookup misses and the live
+# node trail + folded child tool rows silently vanish. These lock that routing.
+_GRAPH = ("graph:7f",)
+_NODE = ("graph:7f", "node:a")
+
+
+def _activity_started(scope=_GRAPH, kind="graph", label="run_graph"):
+    return ActivityStarted(scope=scope, activity_kind=kind, label=label, topology={"nodes": [], "edges": []})
+
+
+def test_activity_opens_keyed_by_its_own_scope():
+    r = TranscriptReducer()
+    ops = r.feed(_activity_started())
+    assert _kinds(ops) == ["open_activity"]
+    op = ops[0]
+    assert isinstance(op, OpenActivity)
+    assert op.scope == _GRAPH
+
+
+def test_child_tool_started_routes_to_owning_activity_scope():
+    r = TranscriptReducer()
+    r.feed(_activity_started())
+    # A tool dispatched INSIDE the graph carries the longer (graph, node) scope.
+    child = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id=None, scope=_NODE)
+    ops = r.feed(child)
+    assert _kinds(ops) == ["add_activity_tool_call"]
+    op = ops[0]
+    assert isinstance(op, AddActivityToolCall)
+    # The op keys by the OWNING activity's scope (graph,), NOT the child's (graph, node).
+    assert op.scope == _GRAPH
+
+
+def test_child_tool_completed_routes_to_owning_activity_scope():
+    r = TranscriptReducer()
+    r.feed(_activity_started())
+    done = ToolCallCompleted(tool_name="Bash", tool_use_id=None, summary="ok", scope=_NODE)
+    ops = r.feed(done)
+    assert _kinds(ops) == ["complete_activity_tool_call"]
+    op = ops[0]
+    assert isinstance(op, CompleteActivityToolCall)
+    assert op.scope == _GRAPH
+
+
+def test_scoped_progress_ping_routes_to_owning_activity_scope():
+    r = TranscriptReducer()
+    r.feed(_activity_started())
+    ping = TaskProgress(scope=_NODE, stage="node:a", status="running", detail="step 1")
+    ops = r.feed(ping)
+    assert _kinds(ops) == ["update_activity_node"]
+    op = ops[0]
+    assert isinstance(op, UpdateActivityNode)
+    assert op.scope == _GRAPH
+    assert op.stage == "node:a" and op.status == "running" and op.detail == "step 1"
+
+
+def test_activity_completed_keyed_by_its_own_scope():
+    r = TranscriptReducer()
+    r.feed(_activity_started())
+    ops = r.feed(ActivityCompleted(scope=_GRAPH, outcome="success", node_states=[], summary="done"))
+    assert _kinds(ops) == ["close_activity"]
+    op = ops[0]
+    assert isinstance(op, CloseActivity)
+    assert op.scope == _GRAPH
+
+
+def test_unscoped_progress_ping_stays_top_level():
+    """A background task's ping (no matching open activity) is NOT swallowed by an
+    activity — it renders as a standalone top-level row."""
+    r = TranscriptReducer()
+    r.feed(_activity_started())
+    # An unscoped ping owns to no open activity → top-level TaskProgress row.
+    ops = r.feed(TaskProgress(scope=(), stage="bg", status="running"))
+    assert _kinds(ops) == ["render_task_progress"]
+    assert isinstance(ops[0], RenderTaskProgress)
+
+
+def test_child_of_unmatched_scope_does_not_route_to_activity():
+    """A tool scoped under a DIFFERENT graph than the open one owns to nothing and
+    stands alone (its scope is not a suffix of the open activity's)."""
+    r = TranscriptReducer()
+    r.feed(_activity_started(scope=("graph:aa",)))
+    other = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="b1", scope=("graph:bb", "node:x"))
+    ops = r.feed(other)
+    # No owning activity → a standalone DETAIL tool row (Bash), not add_activity_tool_call.
+    assert "add_activity_tool_call" not in _kinds(ops)
+    assert _kinds(ops) == ["tool_started"]
+
+
+def test_nested_activities_route_to_innermost_owner():
+    """Two nested activities open at (graph,) and (graph, sub); a child under
+    (graph, sub, node) routes to the LONGEST matching prefix (the inner one)."""
+    r = TranscriptReducer()
+    outer = ("graph:o",)
+    inner = ("graph:o", "sub:i")
+    r.feed(_activity_started(scope=outer))
+    r.feed(_activity_started(scope=inner, kind="agent", label="sub"))
+    child = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id=None, scope=("graph:o", "sub:i", "node:n"))
+    ops = r.feed(child)
+    assert _kinds(ops) == ["add_activity_tool_call"]
+    assert ops[0].scope == inner  # longest-prefix wins → innermost activity
+
+
+def test_closed_activity_no_longer_owns_child_events():
+    """After close_activity drops the scope, a late child ping no longer routes to
+    it (the widget handle is gone) — it falls through to a top-level row."""
+    r = TranscriptReducer()
+    r.feed(_activity_started())
+    r.feed(ActivityCompleted(scope=_GRAPH, outcome="success", node_states=[], summary="done"))
+    ops = r.feed(TaskProgress(scope=_NODE, stage="node:a", status="running"))
+    assert _kinds(ops) == ["render_task_progress"]

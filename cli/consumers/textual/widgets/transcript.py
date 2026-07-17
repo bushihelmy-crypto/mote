@@ -45,7 +45,6 @@ from mote.cli.consumers.render.builders import (
     tool_completed_text,
     tool_group_summary_text,
     tool_started_text,
-    user_message_row,
 )
 from mote.cli.consumers.render.markdown import themed_markdown
 from mote.cli.consumers.textual.style import BULLET, NOTE, WARN, Palette
@@ -111,7 +110,7 @@ class FoldableRow(SelectableStatic):
         background: $boost;
     }
     FoldableRow.-selected {
-        background: $brand 25%;
+        background: $dim 40%;
     }
     """
 
@@ -281,10 +280,18 @@ class ToolCallWidget(FoldableRow):
         self._rebuild()
 
     @property
+    def _folds(self) -> bool:
+        # Detail-folding calls (Bash/Terminal/WebBrowser) toggle under ctrl+o; a
+        # standalone Read/Edit/Write always renders full, so it shows no fold hint
+        # — EXCEPT when the call was DENIED. A rejection never ran, so its body
+        # (the would-be diff/content) is dead weight; folding it to just the
+        # ``● Tool`` + ``⎿ rejected`` lines reclaims the wasted space and makes the
+        # row click-selectable + ctrl+o-toggleable like any detail row.
+        return self._folds_detail or is_rejection(self._completed)
+
+    @property
     def _fold_hint(self) -> bool:
-        # Only detail-folding calls (Bash/Terminal/WebBrowser) toggle under ctrl+o;
-        # a standalone Read/Edit always renders full, so it shows no fold hint.
-        return self._folds_detail
+        return self._folds
 
     def on_mount(self) -> None:
         # Pulse the running bullet until the result lands (a blink);
@@ -307,7 +314,7 @@ class ToolCallWidget(FoldableRow):
         self._rebuild()
 
     def _rebuild(self) -> None:
-        if self._folds_detail and not self.expanded:
+        if self._folds and not self.expanded:
             # Folded: keep only the invocation line and (once done) the result
             # summary, hiding the body + full output. The ctrl+o affordance shows
             # only on the selected block (its bottom-right), not on every row.
@@ -369,16 +376,103 @@ class ToolGroupWidget(FoldableRow):
 
 
 class UserMessageRow(SelectableStatic):
-    """The user's own typed message, rendered with the ❯ prompt chevron.
+    """The user's own typed message — a full-width blue band, WeChat-style right side.
 
     Mounted (instead of clearing silently) so the human's turn stays in the
     scrollback transcript — the ``PromptInput`` clears on submit, so without this
-    the user's message would vanish. Uses the SAME shared ``user_message_row``
-    builder as the rich terminal so both hosts look identical.
+    the user's message would vanish.
+
+    The row spans the **whole width** as a blue band (drawn at reduced opacity so
+    it reads as a soft tinted slab, not a hard block) but its content is
+    **right-justified** so the human's turn reads as the right-hand side of a
+    chat, mirroring the assistant's left-aligned ``●`` blocks. A blue ``●``
+    speaker dot rides the far right edge after the text — the mirror of the
+    assistant's brand-orange ``●`` gutter marker on the left.
+
+    As a :class:`SelectableStatic` the text stays mouse-selectable / copyable
+    like every other transcript row, and its blue background sits *behind* the
+    (bg-transparent) text so the right-justified content shows through.
     """
 
-    def __init__(self, text: str, **kwargs: Any) -> None:
-        super().__init__(user_message_row(text), **kwargs)
+    #: The speaker dot at the band's right edge — a clear blue (the mirror of the
+    #: assistant's brand ``●``), bright enough to read on the translucent band.
+    _BULLET_BLUE = "#4a9eff"
+
+    #: Checkbox glyphs shown at the left gutter while ``select_mode`` is on.
+    _BOX_EMPTY = "☐"
+    _BOX_CHECKED = "☑"
+
+    DEFAULT_CSS = """
+    UserMessageRow {
+        background: #12507e 55%;
+        content-align-horizontal: right;
+    }
+    UserMessageRow.-checked {
+        background: #1e6db0 70%;
+    }
+    """
+
+    #: Whether the host is in react-unit delete-mode (shows the checkbox gutter).
+    select_mode: reactive[bool] = reactive(False)
+    #: Whether this row's checkbox is ticked (part of the pending delete set).
+    selected: reactive[bool] = reactive(False)
+
+    def __init__(self, text: str, *, message_id: Optional[str] = None, **kwargs: Any) -> None:
+        self._text = text
+        #: The stored ``Message.id`` this row was rendered from — the react-unit
+        #: delete anchor. ``None`` for rows rendered before ids were threaded
+        #: (e.g. a resumed transcript); such a row can't be a delete anchor.
+        self.message_id = message_id
+        # Reactives can't be read before ``super().__init__`` runs (the node has
+        # no data yet), and both default to False anyway → build the initial
+        # (no-checkbox) renderable inline; ``watch_select_mode`` rebuilds with the
+        # gutter once delete-mode arms.
+        super().__init__(self._build_line(select_mode=False, selected=False), **kwargs)
+
+    def _build_line(self, *, select_mode: bool, selected: bool) -> Text:
+        """Build the row renderable, prefixing a checkbox when in select-mode.
+
+        Named ``_build_line`` (not ``_render``) to avoid shadowing Textual's own
+        ``Widget._render`` used during layout.
+        """
+        # Right-justify the whole line so a short turn hugs the right edge and a
+        # long one right-aligns as it wraps; the blue ``●`` trails the text.
+        line = Text(justify="right")
+        if select_mode:
+            glyph = self._BOX_CHECKED if selected else self._BOX_EMPTY
+            line.append(glyph + " ", style=self._BULLET_BLUE)
+        line.append(self._text)
+        line.append(" " + BULLET, style=self._BULLET_BLUE)
+        return line
+
+    def _rebuild(self) -> None:
+        self.update(self._build_line(select_mode=self.select_mode, selected=self.selected))
+
+    def watch_select_mode(self, value: bool) -> None:
+        # Leaving delete-mode clears any tick so a re-entry starts clean.
+        if not value:
+            self.selected = False
+        self._rebuild()
+
+    def watch_selected(self, value: bool) -> None:
+        self.set_class(value, "-checked")
+        self._rebuild()
+
+    def toggle(self) -> None:
+        """Flip the checkbox (only meaningful while ``select_mode``)."""
+        if self.select_mode:
+            self.selected = not self.selected
+
+    async def _on_click(self, event: Any) -> None:
+        # In delete-mode a plain click toggles the checkbox (and does NOT start a
+        # text selection); otherwise fall through to the base row behaviour
+        # (drag-select / Ctrl+click link following). The app re-queries every
+        # ticked row on confirm, so no per-toggle message is bubbled.
+        if self.select_mode and not getattr(event, "ctrl", False):
+            event.stop()
+            self.toggle()
+            return
+        await super()._on_click(event)
 
 
 class MediaRow(SelectableStatic):
@@ -402,7 +496,7 @@ class MediaRow(SelectableStatic):
 
 
 class FileDiffRow(SelectableStatic):
-    """A structured file change (Edit / apply_patch) — a caption + coloured diff.
+    """A structured file change (e.g. Edit) — a caption + coloured diff.
 
     The change rides as ``old``/``new`` full contents on the ``FileDiffBlock``;
     this text host synthesizes a coloured unified diff from them via the shared

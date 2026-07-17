@@ -45,9 +45,9 @@ def test_parse_cli_overrides_empty_is_empty():
 
 
 def test_config_overrides_to_layer_dict_maps_known_fields():
-    ov = ConfigOverrides(model="m", api_key="k", base_url="u", proxy="p", enable_router=True)
+    ov = ConfigOverrides(model="m", api_key="k", base_url="u", proxy="p")
     assert ov.to_layer_dict() == {
-        "models": {"default": {"model": "m", "api_key": "k", "base_url": "u"}, "router_enabled": True},
+        "models": {"default": {"model": "m", "api_key": "k", "base_url": "u"}},
         "tools": {"proxy": "p"},
     }
 

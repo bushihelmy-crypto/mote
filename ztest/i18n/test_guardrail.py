@@ -21,7 +21,7 @@ from typing import Iterator, List, Tuple
 
 import pytest
 
-from mote.common.const.paths import get_mote_package_root
+from mote.common.const.paths import MOTE_PACKAGE_DIR
 
 # CJK Unified Ideographs + Extension-A + fullwidth/half-width forms: enough to
 # catch any hard-coded Chinese sentence or its fullwidth punctuation (（），。).
@@ -42,10 +42,10 @@ def _has_cjk(text: str) -> bool:
 
 
 def _display_modules() -> List[Path]:
-    root = Path(get_mote_package_root()) / "mote"
-    # get_mote_package_root points at the dir *containing* the package; the CLI
-    # lives under <root>/mote/cli. Fall back to walking up from this test file if
-    # the layout differs so the guardrail is robust to checkout naming.
+    root = MOTE_PACKAGE_DIR
+    # MOTE_PACKAGE_DIR is the package dir itself; the CLI lives under <root>/cli.
+    # Fall back to walking up from this test file if the layout differs so the
+    # guardrail is robust to checkout naming.
     if not (root / "cli").exists():
         root = Path(__file__).resolve().parents[2]
     files: List[Path] = []

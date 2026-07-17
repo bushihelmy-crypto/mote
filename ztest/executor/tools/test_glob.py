@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """Tests for the Glob tool (``mote.executor.tools.glob``).
 
-Covers pattern matching (recursive **), the mtime ordering, the 100-file
-truncation note, VCS-dir exclusion, and the directory-validation guards. ripgrep
-is available here, so ``call`` exercises the real binary path; the pure-Python
-fallback engine is tested directly so it stays covered everywhere.
+Covers pattern matching (recursive **), the mtime ordering, that the full
+match list is returned uncapped, VCS-dir exclusion, and the directory-validation
+guards. ripgrep is available here, so ``call`` exercises the real binary path;
+the pure-Python fallback engine is tested directly so it stays covered everywhere.
 """
 from __future__ import annotations
 
@@ -90,13 +90,15 @@ class TestGlobFormat:
         lines = [ln for ln in out.splitlines() if ln.endswith(".py")]
         assert lines.index("new.py") < lines.index("old.py")
 
-    def test_truncation_note(self, workspace):
+    def test_no_file_cap(self, workspace):
+        # The 100-file cap was removed; all matches are returned and a large
+        # result is handled by the shared persist-to-disk exit, not truncated.
         for i in range(120):
             write_file(workspace / f"f{i}.py", "x")
         out = _glob(pattern="*.py")
-        assert "truncated" in out
+        assert "truncated" not in out
         files = [ln for ln in out.splitlines() if ln.endswith(".py")]
-        assert len(files) == 100
+        assert len(files) == 120
 
     def test_empty_format(self):
         assert Glob._format([], os.getcwd()) == "No files found"

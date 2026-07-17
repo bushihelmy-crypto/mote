@@ -139,6 +139,13 @@ class SpawnSpec:
     cost_rollup: bool = True
     watch_completion: bool = True
     max_depth: Optional[int] = None
+    # Wall-clock time-to-live for the child, in seconds; ``None`` == unlimited.
+    # A per-spawn deadline (axis C, complementing the depth/count/usage admission
+    # gates on axis A/B). EPHEMERAL: ``run_to_completion`` wraps its turn in
+    # ``asyncio.wait_for`` — a timeout ends the turn and returns the partial
+    # summary. MANAGED: a total TTL watchdog interrupts the child at the deadline
+    # (soft — the completion watcher folds the usual queue-only parent notice).
+    timeout_seconds: Optional[float] = None
     agent_role: str = ""
     # Where the child's LLM Context comes from. The single authority
     # (``spawn_agent``) provisions it per this policy; the factory never touches

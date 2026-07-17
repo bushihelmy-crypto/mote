@@ -1,7 +1,8 @@
 """Human interaction commands — ask_user, reply_to_user, AskUserQuestion."""
 from __future__ import annotations
 
-from mote.common.prompt.tools import ASK_USER_DESCRIPTION, ASK_USER_QUESTION_PROMPT, REPLY_TO_USER_DESCRIPTION
+from typing import ClassVar
+
 from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput, AskUserQuestionItem
 from mote.common.schema.permission_types import PermissionDecision
 from mote.executor.base_tool import BaseTool
@@ -38,7 +39,6 @@ class AskUser(BaseTool):
 
     name = "Ask"
     aliases = ["AskUser"]
-    description = ASK_USER_DESCRIPTION
     requires = ("ask_user",)
 
     # Injected from Role by bind(): Role.ask_user.
@@ -47,7 +47,10 @@ class AskUser(BaseTool):
     check_permissions = _self_approve
 
     async def call(self, *, question: str) -> str:
-        """Ask the user a question.
+        """Ask the user a free-text question — when you are blocked or unsure.
+
+        Use this when you fail the current task or are unsure of the situation
+        you have encountered, and need the user to clarify or decide.
 
         Args:
             question: The question to ask the user.
@@ -61,7 +64,6 @@ class ReplyToUser(BaseTool):
 
     name = "Reply"
     aliases = ["ReplyToUser"]
-    description = REPLY_TO_USER_DESCRIPTION
     requires = ("reply_to_user",)
 
     # Injected from Role by bind(): Role.reply_to_user.
@@ -70,7 +72,10 @@ class ReplyToUser(BaseTool):
     check_permissions = _self_approve
 
     async def call(self, *, content: str) -> str:
-        """Reply to the user.
+        """Reply to the user with a message — deliver content without ending the task.
+
+        Sends the given content to the user immediately while keeping the task
+        active, so you can continue working afterward (unlike End).
 
         Args:
             content: The content to reply to the user.
@@ -89,8 +94,19 @@ class AskUserQuestion(BaseTool):
 
     name = "AskUserQuestion"
     aliases: list[str] = []
-    # The long-form prompt is the model-facing description.
-    description = ASK_USER_QUESTION_PROMPT
+    # Recall synonyms for tool-search: ways a model expresses "check with the
+    # human" that the summary ("ask the user multiple-choice questions") omits.
+    keywords: ClassVar[list[str]] = [
+        "ask user",
+        "prompt user",
+        "clarify",
+        "confirm",
+        "user input",
+        "question",
+        "问用户",
+        "询问",
+        "确认",
+    ]
     requires = ("ask_user_question",)
 
     # Injected from Role by bind(): Role.ask_user_question (structured channel).
@@ -101,7 +117,18 @@ class AskUserQuestion(BaseTool):
     # --- Execution -----------------------------------------------------------
 
     async def call(self, *, questions: list[AskUserQuestionItem]) -> ToolResult:
-        """Ask the user one or more multiple-choice questions and collect answers.
+        """Ask the user multiple-choice questions — gather preferences or decisions.
+
+        Use this tool when you need to ask the user questions during execution.
+        This lets you gather preferences or requirements, clarify ambiguous
+        instructions, get decisions on implementation choices as you work, and
+        offer choices about what direction to take.
+
+        Usage notes:
+        - Users can always select "Other" to provide custom free-text input.
+        - Use multiSelect=true to allow multiple answers for one question.
+        - If you recommend a specific option, make it the first option and add
+          "(Recommended)" at the end of its label.
 
         The native input_schema (1-4 questions, each with 2-4 {label, description}
         options + optional multiSelect) is derived automatically from the

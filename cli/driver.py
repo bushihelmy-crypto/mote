@@ -144,11 +144,17 @@ class SessionDriver:
         connect lazily and surface their tools per-turn in the ``<system-reminder>``
         catalog — they are not part of the one-time startup load, so counting them
         here would misreport a load that never happened.
+
+        Deferred (search-to-enable) tools *are* part of that startup load — they
+        are bound at session open, only their schema is withheld until searched —
+        so they count toward the total, and the badge annotates how many of it
+        start deferred (e.g. "loaded 17 tools (8 deferred)").
         """
         builtin = backend.role_tool_count(self._role)
         if not builtin:
             return
-        self.notice("\u2691 " + t(K.DRIVER_TOOLS_LOADED, count=builtin))
+        deferred = backend.role_deferred_tool_count(self._role)
+        self.notice("\u2691 " + t(K.DRIVER_TOOLS_LOADED, count=builtin, deferred=deferred))
 
     def _take_turn_images(self) -> list:
         """Drain the port's staged image attachments for this turn (Textual only).
@@ -177,7 +183,14 @@ class SessionDriver:
                 # transcript on every consumer (terminal / textual / future web),
                 # symmetric with the assistant reply — the driver is the one
                 # host-agnostic place that holds the (steer-merged) prompt text.
-                await self._projector.deliver(MessageBlockCompleted(role="user", markdown=text, streamed=False))
+                # Build the backend message FIRST so the view event carries its
+                # stable ``id``: the same id lands in ``context.messages``
+                # (``send_input`` doesn't re-id), so a UserMessageRow can later be
+                # mapped back to the exact history message for a react-unit delete.
+                msg = backend.turn_message(text, [img["b64"] for img in images] if images else None)
+                await self._projector.deliver(
+                    MessageBlockCompleted(role="user", markdown=text, streamed=False, message_id=msg.id)
+                )
                 for img in images:
                     await self._projector.deliver(
                         MediaBlock(
@@ -187,7 +200,6 @@ class SessionDriver:
                             alt=img.get("path", "") or "image",
                         )
                     )
-                msg = backend.turn_message(text, [img["b64"] for img in images] if images else None)
                 self._control.send_input(self._agent_id, msg)
                 await asyncio.sleep(0)  # let the driver pick up the wake
                 while not self._control.quiescent():
@@ -292,17 +304,30 @@ class SessionDriver:
         if request is not None:
             request()
 
-    def clear_conversation(self) -> int:
+    async def clear_conversation(self) -> int:
         """Clear the active agent's conversation — history + rendered transcript.
 
         Drops the stored message history on the Role's ContextManager (so the
         next turn starts fresh) and emits a ``TranscriptCleared`` ViewEvent so
-        every consumer wipes what it has shown. Returns the number of messages
-        that were cleared (for the handler's notice).
+        every consumer wipes what it has shown. The history clear also fires a
+        ``HistoryEditedEvent(reason="clear")`` on the bus (awaited) so the
+        turn-context frontiers + resource side-store re-derive against the emptied
+        history. Returns the number of messages cleared (for the handler's notice).
         """
-        cleared = backend.clear_messages(self._role)
+        cleared = await backend.clear_messages(self._role)
         self._projector.deliver_sync(TranscriptCleared())
         return cleared
+
+    async def delete_react_units(self, anchor_ids) -> int:
+        """Delete the react-units anchored at ``anchor_ids`` on the active agent.
+
+        Prunes the stored history (one slice+swap + a persisted
+        ``HistoryEditedEvent`` checkpoint) so the deleted turns stay gone across
+        restart/resume. Returns the number of messages removed. The caller (the
+        Textual host) owns the surgical widget removal — no view event is emitted
+        here, so no "conversation compacted" boundary marker shows.
+        """
+        return await backend.delete_react_units(self._role, anchor_ids)
 
     @property
     def current_agent_id(self) -> str:

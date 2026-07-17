@@ -38,9 +38,10 @@ from mote.common.base import BaseThinkEngine
 from mote.common.config.loader import load_config
 from mote.common.config.sources import discover_source_files
 from mote.common.const import MOTE_REPORTER_DEFAULT_URL
+from mote.common.const.llm import supports_native_tool_search
 from mote.common.const.paths import mote_project_dirs, user_mote_dir
 from mote.common.events import EventBus, LogSubscriber
-from mote.common.hook import HookManager
+from mote.common.hook import HookManager, load_global_hooks, merge_hook_configs
 from mote.common.hook.subscriber import HookSubscriber
 from mote.common.interface import ObservationSubscriber
 from mote.common.logs import logger
@@ -51,6 +52,7 @@ from mote.common.resource import ResourceRegistry, build_task_result_pointer
 from mote.common.schema import PAUSE_STATUSES, TERMINAL_STATUSES, BgStatus, SandboxConfig
 from mote.common.utils.git_state import find_git_root
 from mote.common.utils.report import ReporterSubscriber
+from mote.common.workspace import WorkspaceStore, run_cleanup_if_due
 from mote.context import ContextManager, ContextVisibility
 from mote.context.code_map.indexer import RepoIndexer
 from mote.context.compaction import FileRehydrator
@@ -60,10 +62,12 @@ from mote.context.turn_context import (
     ChangedFilesContextSource,
     CodeMapContextSource,
     CompactionNoticeContextSource,
+    DeferredToolIndexContextSource,
     FoldPressureContextSource,
     GitContextSource,
     SkillActivationContextSource,
     SkillListingContextSource,
+    SplitToolMenuContextSource,
     TeamContextSource,
     TimestampContextSource,
     TokenPressureContextSource,
@@ -83,7 +87,7 @@ from mote.roles.component_graph import BuildContext, ComponentGraph, ComponentSp
 from mote.roles.context_provider import ContextProvider
 from mote.roles.lsp import DiagnosticsBuffer, LspService
 from mote.roles.role_state import RoleStateController
-from mote.roles.session_manager import RoleSessionManager
+from mote.roles.session_manager import ResourceReconcileSubscriber, RoleSessionManager
 from mote.router.router import COMPRESSION_TASK, LLMRouter
 from mote.session import (
     BrowserStateRecorder,
@@ -196,6 +200,7 @@ class RoleComponents:
             ComponentSpec("skill_manager", _build_skill_manager),
             ComponentSpec("bg_pool", _build_bg_pool),
             ComponentSpec("resource_registry", lambda ctx: ResourceRegistry()),
+            ComponentSpec("workspace_store", lambda ctx: WorkspaceStore()),
             ComponentSpec("session_log", _build_session_log),
             ComponentSpec("event_bus", lambda ctx: EventBus()),
             ComponentSpec("command_channel", _build_command_channel),
@@ -439,7 +444,8 @@ class RoleComponents:
 
         The roster spans the control-plane :class:`HookSubscriber` (when a hook
         layer exists), the always-on infra observers (:class:`RecorderSubscriber`,
-        :class:`LogSubscriber`) plus the conditional :class:`TracingSubscriber` /
+        :class:`ResourceReconcileSubscriber`, :class:`LogSubscriber`) plus the
+        conditional :class:`TracingSubscriber` /
         :class:`ReporterSubscriber`, the opt-in :class:`LspService` (observer +
         producer), and every dual-role turn-context feed (those exposing
         ``handle`` — an :class:`ObservationSubscriber`) pulled from the single
@@ -457,6 +463,7 @@ class RoleComponents:
             SecretUploadSubscriber(secret_store) if secret_store is not None else None,
             RedactionSubscriber(secret_store) if secret_store is not None else None,
             RecorderSubscriber(self.session_log),
+            ResourceReconcileSubscriber(self.session_manager),
             LogSubscriber(),
             TracingSubscriber(LangfuseBackend(), trace_steps=step_tracing_enabled()) if is_enabled() else None,
             ReporterSubscriber(MOTE_REPORTER_DEFAULT_URL) if MOTE_REPORTER_DEFAULT_URL else None,
@@ -621,6 +628,34 @@ class RoleComponents:
         except Exception as exc:  # noqa: BLE001 — a bad scan must not break session start
             logger.warning(f"RoleComponents: code-map cold scan failed: {exc}")
 
+    async def kickoff_workspace_cleanup(self) -> None:
+        """Sweep stale workspace artifacts off the event loop (throttled ~daily).
+
+        Fired once at session start. Reclaims dead sessions and stale overflow
+        artifacts per the two-tier TTL, excluding the *current* session so a live
+        or just-resumed run is never swept out from under itself. Throttled to at
+        most once per 24h via a stamp file, and pushed to the executor thread so
+        the walk never blocks a turn. No-op when disabled; best-effort otherwise.
+        """
+        cleanup_cfg = self._role.config.workspace.cleanup
+        if not cleanup_cfg.enabled:
+            return
+        store = self._graph.get("workspace_store") or WorkspaceStore()
+        session_id = self._role.state.session_id
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: run_cleanup_if_due(
+                    store,
+                    enabled=cleanup_cfg.enabled,
+                    session_ttl_days=cleanup_cfg.session_ttl_days,
+                    artifact_ttl_days=cleanup_cfg.artifact_ttl_days,
+                    exclude_session_id=session_id,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — cleanup must never break session start
+            logger.warning(f"RoleComponents: workspace cleanup failed: {exc}")
+
     def _read_state(self) -> dict:
         """Snapshot of ``{path: mtime_ns_when_last_read}`` for this session.
 
@@ -745,7 +780,7 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
     # push from ``_on_done`` — meaning a long-running graph never wakes a Sleep
     # mid-flight on node completions.
     role = ctx.role
-    output_store = TaskOutputStore(session_id=role.state.session_id)
+    output_store = TaskOutputStore(session_id=role.state.session_id, store=ctx.dep("workspace_store"))
     pool = BackgroundTaskPool(
         msg_buffer=role.state.msg_buffer,
         output_store=output_store,
@@ -816,26 +851,34 @@ def _build_command_channel(ctx) -> CommandChannel:
     return make_command_channel(
         ctx.role.role_schema.command_protocol,
         provider=infer_native_tool_provider(ctx.role.config.models.default),
+        model=getattr(ctx.role.config.models.default, "model", None),
     )
 
 
 # --- opt-in leaves + availability predicates ---------------------------------
 def _hook_available(role, state) -> bool:
-    """A hook layer exists iff a HookConfig is declared OR a Python callback was
-    queued via ``register_hook`` (the SDK-style path)."""
-    return role.role_schema.hooks is not None or bool(state.hook_callbacks)
+    """A hook layer exists iff a per-Role HookConfig is declared, a Python
+    callback was queued via ``register_hook`` (the SDK-style path), OR a global
+    ``~/.mote/hooks.json`` supplies rules that apply to every Role."""
+    if role.role_schema.hooks is not None or bool(state.hook_callbacks):
+        return True
+    return load_global_hooks(role.get_cwd()) is not None
 
 
 def _build_hook_manager(ctx):
     """Opt-in agent-lifecycle hook runner, seeded with any queued callbacks.
 
     The cwd accessor is passed so the hook input tracks ``cd``; the session_id
-    ties hooks to the durable log. Only built when :func:`_hook_available`.
+    ties hooks to the durable log. Global rules from ``~/.mote/hooks.json`` are
+    merged (concatenated per event) with the per-Role ``HookConfig``, so both
+    fire and ``fold`` resolves precedence. Only built when :func:`_hook_available`.
     """
+    role = ctx.role
+    merged = merge_hook_configs(load_global_hooks(role.get_cwd()), role.role_schema.hooks)
     manager = HookManager(
-        ctx.role.role_schema.hooks,
-        session_id=ctx.role.state.session_id,
-        get_cwd=ctx.role.get_cwd,
+        merged,
+        session_id=role.state.session_id,
+        get_cwd=role.get_cwd,
     )
     for event, fn, matcher in ctx.state.hook_callbacks:
         manager.register(event, fn, matcher)
@@ -1027,18 +1070,37 @@ def _build_executor(ctx) -> ToolExecutor:
     # so an explicit declaration is harmless and order is preserved.
     if ctx.dep("skill_manager").enabled:
         all_tools = all_tools + ["Skill"]
+    # Tool-search: when the role defers peripheral tools, auto-bind the
+    # ``SearchTools`` meta-tool (the sole discovery entry point) — mirrors the
+    # "always-on when engaged" wiring of ``Skill``. Appended then deduped, so an
+    # explicit declaration is harmless. SearchTools is never itself deferred.
+    deferred_tools = _effective_deferred_tools(ctx.role)
+    if deferred_tools:
+        all_tools = all_tools + ["SearchTools"]
     all_tools = _dedupe_tools(all_tools)
+    # Tool-execution-scope policy comes from the ``tools`` config group (the
+    # executor is the single owner: the compaction spill reducer borrows
+    # ``result_limit`` back off the built executor, never a second instance).
+    tools_cfg = ctx.role.config.tools
     return ToolExecutor(
         session_id=ctx.role.state.session_id,
         tools=all_tools,
         role=ctx.role,
         permission_config=ctx.role.role_schema.permissions,
+        limit_config=tools_cfg.result_limit,
+        ledger_config=tools_cfg.effect_ledger,
         bus=ctx.dep("event_bus"),  # eager: the bus is a pure leaf
         get_bg_pool=ctx.defer("bg_pool"),  # deferred: only pulled on first submit
-        # bggraph switch: off → pipeline tools (MediaPipeline, etc.) are never
+        # bggraph switch: off → pipeline tools (CodeReview, etc.) are never
         # bound, so neither askllm's native tool set nor the CLI's XML catalog
         # computes them. Mirrors the skills/mcp config-gated engagement.
         pipelines_enabled=ctx.role.config.context.bggraph.enabled,
+        workspace_store=ctx.dep("workspace_store"),
+        # Deferral (schema-visibility only): hide these tools' schemas until the
+        # model reveals them via SearchTools. The revealed set lives on RoleState
+        # (durable across resume), read live so revelation takes effect next turn.
+        deferred_tools=deferred_tools,
+        get_revealed=lambda: ctx.role.state.revealed_tools,
     )
 
 
@@ -1071,6 +1133,12 @@ def _build_context_manager(ctx) -> ContextManager:
         sticky_provider=registry.project,
         rehydrate_provider=rehydrator.project,
         compactable=compactable,
+        session_id=role.state.session_id,
+        store=ctx.dep("workspace_store"),
+        # Borrow the executor's large-result policy (single owner, no drift): the
+        # spill reducer persists runaway history parts under the SAME threshold
+        # the tool chokepoint uses. Cycle-safe — the executor builds first.
+        limit_config=ctx.dep("executor").limit_config,
     )
 
 
@@ -1179,7 +1247,86 @@ def _build_turn_context_sources(ctx) -> list:
     buffer = ctx.dep("diagnostics_buffer")
     if buffer is not None:
         sources.append(buffer)
+    # Tool-search: the deferred-tool reminder — added only when the role actually
+    # defers tools, so an ordinary role pays zero overhead. Which source depends
+    # on the deferral PATH the transport takes:
+    #
+    #   - server-side (capable native: Anthropic tool_reference / OpenAI Responses
+    #     tool_search): the API withholds the full deferred definitions from
+    #     context (defer_loading:true) — but mote drives discovery through its OWN
+    #     SearchTools, NOT a provider builtin server-side search tool, so the API
+    #     surfaces NO browsable list of what is deferred. The model would be blind
+    #     to what it can search for without this menu. So we STILL wire the compact
+    #     DeferredToolIndex (name + one-line desc): it rides the ephemeral reminder
+    #     tail (after the cache breakpoint) → byte-stable, no cache churn, and it is
+    #     the model's only view of the deferred corpus to feed SearchTools(query=).
+    #   - client-side SPLIT (incapable native model): the corpus tool's name +
+    #     params ride the wire with a stub description; the SplitToolMenu carries
+    #     the PROSE (brief hint unrevealed → full description revealed) on the
+    #     ephemeral reminder tail, keeping the tools= prefix byte-stable.
+    #   - client-side WITHHOLD (XML): the schema is dropped until reveal, so the
+    #     byte-stable DeferredToolIndex menu lists what can be searched.
+    #
+    # Only the SPLIT path (native transport WITHOUT a server-side search path) uses
+    # the split menu; every other deferring path uses the compact DeferredToolIndex.
+    if _effective_deferred_tools(role):
+        if role.role_schema.command_protocol == "native" and not _uses_native_tool_search(role):
+            sources.append(SplitToolMenuContextSource(get_menu=lambda: role.executor.split_tool_menu()))
+        else:
+            # DISPLAY view: drop already-revealed tools (their schema is already
+            # live on the channel, so keeping them in "search to enable" misleads
+            # and wastes tokens). The tail rides after the cache breakpoint, so
+            # shrinking it on reveal costs no prompt-cache churn.
+            sources.append(
+                DeferredToolIndexContextSource(
+                    get_index=lambda: role.executor.deferred_tool_index(include_revealed=False)
+                )
+            )
     return sources
+
+
+def _effective_deferred_tools(role) -> set[str]:
+    """The role's ACTIVE deferred-tool set after the global master switch.
+
+    Single source of truth for "which tools are hidden-until-searched" — read by
+    every Tool Search consumer (executor SearchTools binding, deferred menu gate,
+    native-path detection) so the ``config.tools.tool_search.enabled`` override
+    propagates with zero drift. When the switch is off the effective set is EMPTY
+    regardless of the per-role ``deferred_tools`` declaration: no tool is hidden,
+    SearchTools is not bound, the menu is not built, and no native tool-search
+    path fires — every declared tool is simply fully visible (plain no-deferral).
+    """
+    if not role.config.tools.tool_search.enabled:
+        return set()
+    return set(role.role_schema.deferred_tools)
+
+
+def _uses_native_tool_search(role) -> bool:
+    """True when this role's transport does server-side (native) Tool Search.
+
+    That is the capability-gated path where the provider's own ``defer_loading``
+    excludes corpus tool definitions from the cached context (they ride the wire
+    with ``defer_loading:true``). Note this suppresses only the SPLIT wire-shaping,
+    NOT the reminder menu: mote drives discovery through its own ``SearchTools``
+    (not a provider builtin server-side search), so the compact DeferredToolIndex
+    menu is still wired on this path — it is the model's only browsable view of the
+    deferred corpus. It holds only when the role
+    runs native tool-use, actually defers tools, the MODEL supports native tool
+    search (:func:`supports_native_tool_search`), and the resolved provider has a
+    server-side path (Anthropic ``tool_reference`` or OpenAI Responses
+    ``tool_search``). Every other case falls back to a client-side path: an
+    incapable NATIVE model runs SPLIT (name+params on the wire, description on the
+    reminder tail — cache-stable), and XML runs WITHHOLD (schema dropped until
+    reveal). Both of those wire their own reminder source; this returns False for
+    them so the caller picks the right one.
+    """
+    if role.role_schema.command_protocol != "native" or not _effective_deferred_tools(role):
+        return False
+    default = role.config.models.default
+    provider = infer_native_tool_provider(default)
+    return provider in ("anthropic", "openai_responses") and supports_native_tool_search(
+        getattr(default, "model", None)
+    )
 
 
 # --- per-turn factories (kind-dispatched; the graph caches only the factory) -

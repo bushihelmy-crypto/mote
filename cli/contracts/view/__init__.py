@@ -12,6 +12,8 @@ the shared ``contracts`` layer, while the concrete ``AgentEvent → ViewEvent`` 
 
 from mote.cli.contracts.view.capabilities import STRUCTURED_CAPS, TERMINAL_CAPS, Capabilities, CapabilityAdapter
 from mote.cli.contracts.view.events import (
+    ACTIVITY_COMPLETED,
+    ACTIVITY_STARTED,
     APPROVAL_REQUESTED,
     CONVERSATION_COMPACTED,
     ERROR_RAISED,
@@ -35,6 +37,8 @@ from mote.cli.contracts.view.events import (
     TOOL_CALL_STARTED,
     TRANSCRIPT_CLEARED,
     USAGE_UPDATED,
+    ActivityCompleted,
+    ActivityStarted,
     ApprovalDecision,
     ApprovalRequested,
     ConversationCompacted,
@@ -82,6 +86,8 @@ __all__ = [
     "TranscriptCleared",
     "SystemReminder",
     "ConversationCompacted",
+    "ActivityStarted",
+    "ActivityCompleted",
     "MESSAGE_BLOCK_STARTED",
     "MESSAGE_BLOCK_DELTA",
     "MESSAGE_BLOCK_COMPLETED",
@@ -101,6 +107,8 @@ __all__ = [
     "TRANSCRIPT_CLEARED",
     "SYSTEM_REMINDER",
     "CONVERSATION_COMPACTED",
+    "ACTIVITY_STARTED",
+    "ACTIVITY_COMPLETED",
     "RESULT_KIND_PLAIN",
     "RESULT_KIND_DIFF",
     "RESULT_KIND_TABLE",

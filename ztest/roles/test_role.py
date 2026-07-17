@@ -218,6 +218,11 @@ class TestTurnContextBus:
         # The fold-pressure feed is wired unconditionally alongside token-pressure
         # (self-suppresses until the reconstructable-result count nears the fold
         # trigger).
+        # The deferred-tool index is wired because the default role defers tools
+        # (RoleSchema.deferred_tools) — on the Anthropic-native server-side path the
+        # compact menu is still the model's only browsable view of the deferred
+        # corpus (discovery goes through mote's own SearchTools, not a provider
+        # builtin), so it rides the ephemeral reminder tail.
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
         assert names == {
@@ -232,6 +237,7 @@ class TestTurnContextBus:
             "skill_listing",
             "changed_files",
             "code_map",
+            "deferred_tool_index",
         }
 
     def test_lsp_source_present_when_configured(self):
@@ -309,6 +315,14 @@ class TestEventSubscriberRoster:
         subs = _wired_subscribers(role)
         assert any(isinstance(s, RecorderSubscriber) for s in subs)
         assert any(isinstance(s, LogSubscriber) for s in subs)
+
+    def test_resource_reconcile_subscriber_always_present(self, role):
+        # The resource side-store reconciler is an unconditional infra observer:
+        # a /clear or user delete must re-derive the registry regardless of layers.
+        from mote.roles.session_manager import ResourceReconcileSubscriber
+
+        subs = _wired_subscribers(role)
+        assert any(isinstance(s, ResourceReconcileSubscriber) for s in subs)
 
     def test_optin_subscribers_absent_on_bare_role(self, role):
         # No hook layer, no LSP, no tracing/reporter env => none of the opt-in
@@ -479,6 +493,176 @@ class TestSkillsWiring:
     def test_executor_omits_skill_tool_when_switch_off(self, context):
         r = self._role(context, global_on=False, tools=["Read"], skills=["foo"])
         assert "Skill" not in r._components.executor._tools
+
+
+# =============================================================================
+# Tool-search deferral wiring (deferred_tools -> SearchTools + index source)
+# =============================================================================
+class TestToolSearchWiring:
+    """A non-empty ``deferred_tools`` auto-binds the ``SearchTools`` meta-tool and
+    the byte-stable index turn-context source; an empty list wires neither (zero
+    overhead when unused). Deferral filters *schema visibility* on both channels
+    while the tool stays dispatchable — revelation lives on RoleState."""
+
+    @staticmethod
+    def _role(context, *, tools, deferred):
+        schema = RoleSchema(name="X", tools=tools, deferred_tools=deferred)
+        return Role(name="X", role_schema=schema, context=context)
+
+    def test_deferred_tools_autobinds_search_tool(self, context):
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        assert "SearchTools" in r._components.executor._tools
+
+    def test_no_deferral_binds_neither(self, context):
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=[])
+        assert "SearchTools" not in r._components.executor._tools
+        # No index source is added to the turn-context roster.
+        assert r.turn_context_source("deferred_tool_index") is None
+
+    def test_index_present_on_anthropic_native(self, context):
+        # The default role is native tool-use over the Anthropic transport. The
+        # server-side ``defer_loading`` path withholds the full deferred defs from
+        # context, but mote drives discovery through its OWN SearchTools (not a
+        # provider builtin), so the API surfaces NO browsable list — the compact
+        # DeferredToolIndex menu is STILL wired (the model's only view of what it
+        # can search for). It rides the ephemeral reminder tail → cache-stable.
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        assert r.turn_context_source("deferred_tool_index") is not None
+        # SPLIT is not used on the server-side path (the wire keeps full schema +
+        # defer_loading, not the stub); only the compact index rides the tail.
+        assert r.turn_context_source("split_tool_menu") is None
+
+    def test_deferred_tool_present_with_defer_loading_on_anthropic_native(self, context):
+        # Anthropic native: the deferred tool's schema STAYS on the native wire
+        # (the API needs every definition to expand tool_reference blocks) but
+        # carries ``defer_loading:true``. Revealing it does NOT change the wire —
+        # defer_loading is keyed on corpus membership, so the tools= prefix is
+        # byte-stable (prompt cache preserved). The XML view still hides it.
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        # XML schema view (schemas_for) keeps the client-side hide.
+        assert "WebBrowser" not in r.executor.get_tool_schemas()
+        assert "Read" in r.executor.get_tool_schemas()
+        assert "SearchTools" in r.executor.get_tool_schemas()
+        # Native (anthropic) wire: present + deferred, even before any reveal.
+        # The server-side path is now capability-gated, so a capable model name
+        # must be threaded (the executor gets it from the resolved model config).
+        before = r.executor.get_native_tool_specs("anthropic", model="claude-opus-4-8")
+        wb = next(s for s in before if s["name"] == "WebBrowser")
+        assert wb.get("defer_loading") is True
+        # Reveal it — the native wire is byte-identical (cache-stable).
+        r.reveal_tools(["WebBrowser"])
+        after = r.executor.get_native_tool_specs("anthropic", model="claude-opus-4-8")
+        assert after == before
+
+    def test_index_source_present_on_xml_fallback(self, context):
+        # XML has no server-side defer_loading, so the client-side menu (and
+        # withhold/reveal) stays — proving the gating is anthropic-native only.
+        schema = RoleSchema(
+            name="X", tools=["Read", "WebBrowser"], deferred_tools=["WebBrowser"], command_protocol="xml"
+        )
+        r = Role(name="X", role_schema=schema, context=context)
+        assert r.turn_context_source("deferred_tool_index") is not None
+
+    @staticmethod
+    def _openai_role(context, *, model, deferred=("WebBrowser",)):
+        # A native role forced onto a genuine OpenAI endpoint; the model name
+        # decides whether resolve_api_type picks the Responses (native tool
+        # search) transport. Mutate the resolved default config in place so
+        # infer_native_tool_provider sees the OpenAI host + chosen model.
+        from mote.common.config.config.llm_config import LLMType
+
+        schema = RoleSchema(
+            name="X", tools=["Read", "WebBrowser"], deferred_tools=list(deferred), command_protocol="native"
+        )
+        r = Role(name="X", role_schema=schema, context=context)
+        d = r.config.models.default
+        d.api_type = LLMType.OPENAI
+        d.base_url = "https://api.openai.com/v1"
+        d.model = model
+        return r
+
+    def test_index_present_on_capable_openai_native(self, context):
+        # gpt-5.4+ on the genuine OpenAI endpoint takes the Responses server-side
+        # tool_search path. Same as Anthropic native: the full defs are withheld
+        # from context, but discovery goes through mote's own SearchTools, so the
+        # compact DeferredToolIndex menu is still wired (the model's browsable
+        # view of the deferred corpus). SPLIT is not used on this path.
+        r = self._openai_role(context, model="gpt-5.4")
+        assert r.turn_context_source("deferred_tool_index") is not None
+        assert r.turn_context_source("split_tool_menu") is None
+
+    def test_split_menu_present_on_incapable_openai_native(self, context):
+        # An older OpenAI model has no native tool search → falls back to the
+        # client-side SPLIT path (native): the split_tool_menu source is wired
+        # (descriptions on the reminder tail), NOT the withhold deferred_tool_index.
+        r = self._openai_role(context, model="gpt-4o")
+        assert r.turn_context_source("split_tool_menu") is not None
+        assert r.turn_context_source("deferred_tool_index") is None
+
+    def test_deferred_tool_present_with_stub_on_incapable_openai_native(self, context):
+        # SPLIT wire projection: the deferred tool stays present (callable) with a
+        # stub description + no defer_loading, byte-stable across reveal.
+        from mote.executor.tool_catalog import SPLIT_TOOLSPEC_DESC
+
+        r = self._openai_role(context, model="gpt-4o")
+        before = r.executor.get_native_tool_specs("openai", model="gpt-4o")
+        wb = next(s for s in before if s["function"]["name"] == "WebBrowser")
+        assert wb["function"]["description"] == SPLIT_TOOLSPEC_DESC
+        assert "defer_loading" not in wb
+        r.reveal_tools(["WebBrowser"])
+        after = r.executor.get_native_tool_specs("openai", model="gpt-4o")
+        assert after == before  # cache-stable
+
+    def test_index_lists_deferred_tool(self, context):
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        index = r.list_deferred_tools()
+        assert "WebBrowser" in index
+        assert index["WebBrowser"]  # a non-empty one-line description
+        assert "Read" not in index  # non-deferred never in the menu
+
+    def test_reveal_accepts_only_deferred_names(self, context):
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        # A non-deferred / unknown name is rejected (intersection with the menu).
+        assert r.reveal_tools(["Read", "Bogus"]) == []
+        assert r.state.revealed_tools == set()
+        # A real deferred name is accepted and recorded on RoleState.
+        assert r.reveal_tools(["WebBrowser"]) == ["WebBrowser"]
+        assert r.state.revealed_tools == {"WebBrowser"}
+
+    # -- global master switch (config.tools.tool_search.enabled) --------------
+    def test_master_switch_default_true_engages(self, context):
+        # Default config → the switch is on, so a non-empty deferred_tools engages
+        # the machinery exactly as before (SearchTools bound).
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        assert r.config.tools.tool_search.enabled is True
+        assert "SearchTools" in r._components.executor._tools
+
+    def test_master_switch_off_unbinds_search_tool(self, context):
+        # enabled=False forces the effective deferred set EMPTY → SearchTools is
+        # NOT bound even though deferred_tools is declared (plain no-deferral).
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        r.config.tools.tool_search.enabled = False
+        assert "SearchTools" not in r._components.executor._tools
+
+    def test_master_switch_off_shows_all_tools_on_native_wire(self, context):
+        # With the switch off, the corpus tool is fully visible on BOTH channels —
+        # no defer_loading stamp on the native wire, present in the XML schema.
+        r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
+        r.config.tools.tool_search.enabled = False
+        assert "WebBrowser" in r.executor.get_tool_schemas()  # XML no longer hides
+        specs = r.executor.get_native_tool_specs("anthropic", model="claude-opus-4-8")
+        wb = next(s for s in specs if s["name"] == "WebBrowser")
+        assert "defer_loading" not in wb  # not deferred → no stamp
+
+    def test_master_switch_off_suppresses_menu_on_xml(self, context):
+        # Even on the XML client-side path (which normally shows the menu), the
+        # switch-off empty set means no index source is wired.
+        schema = RoleSchema(
+            name="X", tools=["Read", "WebBrowser"], deferred_tools=["WebBrowser"], command_protocol="xml"
+        )
+        r = Role(name="X", role_schema=schema, context=context)
+        r.config.tools.tool_search.enabled = False
+        assert r.turn_context_source("deferred_tool_index") is None
 
 
 # =============================================================================
@@ -864,6 +1048,13 @@ class TestCapabilities:
             "dispatch_tool",
             "list_tool_names",
             "list_graph_tool_names",
+            "list_graph_excluded_tool_names",
+            "list_deferred_tools",
+            "reveal_tools",
+            "describe_deferred_tools",
+            "web_search",
+            "describe_image",
+            "get_default_model",
         }
 
     def test_capability_values_are_bound_methods(self):
@@ -1050,26 +1241,31 @@ class TestHumanChannel:
 # wait_interruptible
 # =============================================================================
 class TestWaitInterruptible:
-    def test_completes_without_activity(self):
-        r = Role(name="X")
-        slept, interrupted = asyncio.run(r.wait_interruptible(0.1))
-        assert interrupted is False
-        # `slept` is wall-clock derived (time.time); only assert it's a float,
-        # not non-negative, since the wall clock can skew backward (e.g. WSL2).
-        assert isinstance(slept, float)
-
-    def test_interrupted_by_message(self):
+    def test_blocks_without_activity(self):
+        # No duration timer: with no event the wait never returns on its own.
         r = Role(name="X")
 
         async def scenario():
-            task = asyncio.create_task(r.wait_interruptible(5.0))
+            task = asyncio.create_task(r.wait_interruptible())
+            await asyncio.sleep(0.1)
+            assert not task.done()
+            task.cancel()
+
+        asyncio.run(scenario())
+
+    def test_woken_by_message(self):
+        r = Role(name="X")
+
+        async def scenario():
+            task = asyncio.create_task(r.wait_interruptible())
             await asyncio.sleep(0.05)
             r.put_message(Message(content="wake"))
             return await asyncio.wait_for(task, timeout=2.0)
 
-        slept, interrupted = asyncio.run(scenario())
-        assert interrupted is True
-        assert slept < 5.0
+        slept = asyncio.run(scenario())
+        # `slept` is wall-clock derived (time.time); only assert it's a float,
+        # not non-negative, since the wall clock can skew backward (e.g. WSL2).
+        assert isinstance(slept, float)
 
 
 # =============================================================================
@@ -1248,3 +1444,42 @@ class TestFullResolutionSmoke:
             graph.get(name)
         for name in ("hook_manager", "lsp_service", "diagnostics_buffer", "sandbox_runtime", "file_watch_service"):
             assert graph.peek(name) is not None, f"opt-in layer {name!r} was not built"
+
+
+# =============================================================================
+# Tool-execution-scope config wiring (tools.result_limit / tools.effect_ledger
+# reach the executor; disabling the ledger yields no ledger)
+# =============================================================================
+class TestToolExecConfigWiring:
+    """The ``tools`` config group is the single source for the two tool-exec
+    policies the executor owns. ``_build_executor`` reads them off
+    ``role.config.tools`` and threads them in, so a YAML override reaches the
+    live executor (and the spill reducer borrows the same ``result_limit``
+    instance back off the executor — proven here by identity)."""
+
+    def test_result_limit_and_ledger_config_reach_executor(self, context):
+        role = Role(name="X", context=context, role_schema=RoleSchema(tools=["Read"]))
+        # Override before the (lazy) executor is built.
+        role.config.tools.result_limit.default_max_result_size_chars = 12345
+        role.config.tools.effect_ledger.enabled = True
+
+        ex = role.executor
+        # The executor exposes the two configs it owns; both are the very
+        # instances configured under ``tools`` (identity, not just value).
+        assert ex.limit_config is role.config.tools.result_limit
+        assert ex.limit_config.default_max_result_size_chars == 12345
+        assert ex.ledger_config is role.config.tools.effect_ledger
+        assert ex.ledger is not None  # enabled -> a real ledger is built
+
+    def test_ledger_disabled_yields_no_ledger(self, context):
+        role = Role(name="X", context=context, role_schema=RoleSchema(tools=["Read"]))
+        role.config.tools.effect_ledger.enabled = False
+        assert role.executor.ledger is None  # disabled -> run_command skips all ledger work
+
+    def test_spill_reducer_borrows_the_executor_result_limit(self, context):
+        # Zero-drift proof: the compaction spill reducer does not build its own
+        # ToolResultLimitConfig — it reuses the one the executor owns, which is
+        # the one configured under ``tools``.
+        role = Role(name="X", context=context, role_schema=RoleSchema(tools=["Read"]))
+        cm = role._components._graph.get("context_manager")
+        assert cm._spill._limit is role.config.tools.result_limit

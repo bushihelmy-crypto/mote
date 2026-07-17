@@ -23,6 +23,7 @@ from mote.cli.contracts.base import BaseProjector
 from mote.cli.driver import SessionDriver
 from mote.cli.io.terminal_io import TerminalPort
 from mote.cli.view.projector import ViewProjector
+from mote.common.config.bootstrap import ensure_mote_home
 from mote.common.i18n import negotiate_and_set
 
 
@@ -47,6 +48,10 @@ def build_app(
     because it depends on live host state (e.g. the Textual consumer needs the
     running ``App``). When present it takes precedence over ``consumers``.
     """
+    # First-run scaffolding: seed ~/.mote with editable config templates before
+    # anything reads it. Idempotent + best-effort — never overwrites, never raises.
+    ensure_mote_home()
+
     if config is None:
         config = backend.load_config(model)
 

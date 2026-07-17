@@ -25,7 +25,7 @@ from mote.common.prompt.memory import (
     MEMORY_FRONTMATTER_EXAMPLE,
     MEMORY_INSTRUCTIONS,
 )
-from mote.common.prompt.output import OUTPUT_SECTION, SUMMARIZE_STATUS_WHEN_CONSECUTIVE
+from mote.common.prompt.output import OUTPUT_SECTION
 from mote.common.prompt.role import (
     CMD_EXPERIENCE_MASK,
     CMD_PROMPT,
@@ -63,7 +63,6 @@ __all__ = [
     "NO_TOOLS_TRAILER",
     # output
     "OUTPUT_SECTION",
-    "SUMMARIZE_STATUS_WHEN_CONSECUTIVE",
     # agent
     "AGENT_SECTION_TEMPLATE",
     "AGENT_TASK_PROMPT",

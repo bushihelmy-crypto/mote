@@ -4,6 +4,7 @@ from __future__ import annotations
 from mote.common.text.ansi import strip_ansi
 from mote.common.text.elision import Elision, ElisionStrategy, ElisionUnit, cap_head, cap_head_tail
 from mote.common.text.hashing import content_hash
+from mote.common.text.html import html_to_markdown
 from mote.common.text.humanize import format_elapsed, format_file_size, format_token_count
 from mote.common.text.markers import (
     PERSISTED_OUTPUT_CLOSE,
@@ -27,6 +28,7 @@ __all__ = [
     "cap_head_tail",
     "strip_ansi",
     "content_hash",
+    "html_to_markdown",
     "count_noun",
     "plural",
     "verb_agree",

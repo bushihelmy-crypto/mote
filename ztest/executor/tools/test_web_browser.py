@@ -80,6 +80,20 @@ _OVERLAY = (
     "</body>"
 )
 
+# A page carrying a real (rendered) image element for read_image. The src is a
+# 1x1 transparent PNG data-URI, so Chromium actually rasterizes an <img> box we
+# can element-screenshot — no network.
+_PNG_1PX = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+_IMAGE_PAGE = (
+    "data:text/html,<title>Pic</title><body>"
+    "<h1>Gallery</h1>"
+    "<img id='chart' src='" + _PNG_1PX + "' width='40' height='40' alt='the chart'>"
+    "</body>"
+)
+
 # A content-rich page for Markdown extraction.
 _ARTICLE = (
     "data:text/html,<title>Article</title><body>"
@@ -181,6 +195,23 @@ class TestNavigateRead:
 
         run(scenario())
 
+    def test_navigate_video_url_guides_to_ytdlp_and_read(self, caprole):
+        # A direct video URL is recognised and the model is guided to download it
+        # with yt-dlp then Read the local file — WITHOUT launching a browser (the
+        # guide needs no live session).
+        from mote.executor.tool_result import ToolError
+
+        tool = bind(WebBrowser(), caprole, session_id="b_video")
+
+        async def scenario():
+            with pytest.raises(ToolError, match="yt-dlp") as excinfo:
+                await tool.call(action="navigate", url="https://x.com/clip.mp4")
+            msg = str(excinfo.value)
+            assert "Read" in msg
+            assert "https://x.com/clip.mp4" in msg
+
+        run(scenario())
+
 
 # ---------------------------------------------------------------------------
 # eval / type / screenshot
@@ -220,6 +251,93 @@ class TestActions:
             # ToolResult with a base64 image attached.
             assert result.images and isinstance(result.images[0], str)
             assert result.data["type"] == "screenshot"
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_screenshot_non_vision_model_raises(self, workspace):
+        """A non-vision default model → refuse the capture (it could never reach it)."""
+        from mote.common.exception import ToolNotConfiguredError
+
+        role = CapRole(cwd=str(workspace), default_model="gpt-4")
+        tool = bind(WebBrowser(), role, session_id="b_shot_novision")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_PAGE_A)
+            with pytest.raises(ToolNotConfiguredError, match="not vision-capable"):
+                await tool.call(action="screenshot")
+            await tool.call(action="close")
+
+        run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# read_image — one page image → text via the vision fallback
+# ---------------------------------------------------------------------------
+
+
+class TestReadImage:
+    def test_read_image_by_selector_describes(self, caprole):
+        """A CSS selector locates the <img>; its bytes go to describe_image."""
+        caprole.describe_image_text = "a small line chart trending up"
+        tool = bind(WebBrowser(), caprole, session_id="b_img_sel")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_IMAGE_PAGE)
+            out = await tool.call(action="read_image", selector="#chart", prompt="describe the chart")
+            # The model's textual reading is returned under a header.
+            assert "a small line chart trending up" in out.output
+            assert "#chart" in out.output
+            # The vision capability was called once with real image bytes + prompt.
+            assert len(caprole.describe_image_calls) == 1
+            b64, kwargs = caprole.describe_image_calls[0]
+            assert isinstance(b64, str) and b64  # non-empty base64 PNG
+            assert kwargs.get("prompt") == "describe the chart"
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_read_image_by_index(self, caprole):
+        """A snapshot [N] index resolves the same as click/type."""
+        caprole.describe_image_text = "transparent pixel"
+        tool = bind(WebBrowser(), caprole, session_id="b_img_idx")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_IMAGE_PAGE)
+            snap = await tool.call(action="snapshot")
+            ref = _ref_for(snap, "the chart")  # the <img> alt text
+            # Fall back to the CSS selector if the walker didn't index the img.
+            target = ref if ref is not None else "#chart"
+            out = await tool.call(action="read_image", selector=target)
+            assert "transparent pixel" in out.output
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_read_image_requires_selector(self, caprole):
+        from mote.executor.tool_result import ToolError
+
+        tool = bind(WebBrowser(), caprole, session_id="b_img_nosel")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_IMAGE_PAGE)
+            with pytest.raises(ToolError):
+                await tool.call(action="read_image")
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_read_image_no_vision_model_raises(self, caprole):
+        """No vision model bound → ToolNotConfiguredError, not a plain-text notice."""
+        from mote.common.exception import ToolNotConfiguredError
+
+        caprole.describe_image_text = None  # capability raises NotImplementedError
+        tool = bind(WebBrowser(), caprole, session_id="b_img_novision")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_IMAGE_PAGE)
+            with pytest.raises(ToolNotConfiguredError, match="unavailable"):
+                await tool.call(action="read_image", selector="#chart")
             await tool.call(action="close")
 
         run(scenario())

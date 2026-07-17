@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from mote.common.schema import LLMCallContext, Message, MessageQueue
-from mote.roles.role_state import RoleState
+from mote.roles.role_state import RoleState, RoleStateController
 
 
 class TestDefaults:
@@ -66,6 +66,35 @@ class TestSerialization:
         assert restored.addresses == {"a", "b"}
         assert restored.watch == {"WatchedAction"}
         assert restored.recovered is True
+
+    def test_revealed_tools_default_empty_and_serialized(self):
+        st = RoleState()
+        assert st.revealed_tools == set()
+        assert "revealed_tools" in st.model_dump()
+
+    def test_revealed_tools_survive_resume(self):
+        # Tool-search: a revealed deferred tool must stay visible after a
+        # dump/reload (session resume) — the revealed set rides the checkpoint.
+        st = RoleState()
+        st.revealed_tools = {"ConvertImage", "QueryDatabase"}
+        restored = RoleState.model_validate(st.model_dump())
+        assert restored.revealed_tools == {"ConvertImage", "QueryDatabase"}
+
+
+class TestRevealController:
+    def test_reveal_unions_and_reads_back(self):
+        ctl = RoleStateController(RoleState())
+        assert ctl.get_revealed_tools() == set()
+        ctl.reveal_tools(["A", "B"])
+        ctl.reveal_tools(["B", "C"])  # union, idempotent on B
+        assert ctl.get_revealed_tools() == {"A", "B", "C"}
+
+    def test_get_revealed_is_live_state(self):
+        st = RoleState()
+        ctl = RoleStateController(st)
+        ctl.reveal_tools({"X"})
+        # Returns the live state set, so it reflects the checkpointed field.
+        assert st.revealed_tools == {"X"}
 
     def test_context_messages_round_trip(self):
         st = RoleState()

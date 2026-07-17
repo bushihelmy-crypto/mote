@@ -14,6 +14,7 @@ from mote.router.llm.provider_catalog import (
     get_env_api_key,
     get_provider_preset,
     list_providers,
+    resolve_provider_name,
 )
 
 
@@ -138,6 +139,36 @@ def test_detect_provider_none_when_no_signal():
     assert detect_provider({}, environ={}) is None
 
 
+# --- Chinese-brand catalog + model hints ---------------------------------
+
+
+def test_hunyuan_and_xiaomi_presets_registered():
+    hy = get_provider_preset("hunyuan")
+    assert hy.base_url == "https://api.hunyuan.cloud.tencent.com/v1"
+    assert hy.api_type == LLMType.OPENAI
+    assert hy.env_keys == ["HUNYUAN_API_KEY"]
+
+    mi = get_provider_preset("xiaomi")
+    assert mi.base_url == "https://api.xiaomimimo.com/v1"
+    assert mi.api_type == LLMType.OPENAI
+    assert "XIAOMI_API_KEY" in mi.env_keys
+
+
+@pytest.mark.parametrize(
+    ("model", "brand"),
+    [
+        ("glm-4.6", "zhipuai"),
+        ("qwen-max", "dashscope"),
+        ("qwen3-vl", "dashscope"),
+        ("MiniMax-M2", "minimax"),
+        ("hunyuan-turbo", "hunyuan"),
+        ("mimo-7b", "xiaomi"),
+    ],
+)
+def test_detect_provider_chinese_model_hints(model, brand):
+    assert detect_provider({"model": model}, environ={}) == brand
+
+
 def test_llmconfig_auto_resolves_via_base_url():
     cfg = LLMConfig(provider="auto", base_url="https://api.deepseek.com/v1", api_key="sk-x")
     assert cfg.provider == "deepseek"
@@ -167,3 +198,82 @@ def test_llmconfig_auto_falls_back_to_default_when_undetectable(monkeypatch):
     cfg = LLMConfig(provider="auto", api_key="sk-x")
     assert cfg.provider is None
     assert cfg.api_type == LLMType.OPENAI
+
+
+# --- alias / model-marker single-source-of-truth resolution ---------------
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical"),
+    [
+        ("zhipuai", "zhipuai"),
+        ("glm", "zhipuai"),
+        ("zhipu", "zhipuai"),
+        ("bigmodel", "zhipuai"),
+        ("qwen", "dashscope"),
+        ("tongyi", "dashscope"),
+        ("aliyun", "dashscope"),
+        ("kimi", "moonshot"),
+        ("mimo", "xiaomi"),
+        ("grok", "xai"),
+        ("Kimi", "moonshot"),  # case-insensitive
+        ("  glm  ", "zhipuai"),  # whitespace-trimmed
+    ],
+)
+def test_resolve_provider_name_accepts_aliases_and_markers(name, canonical):
+    assert resolve_provider_name(name) == canonical
+
+
+def test_resolve_provider_name_unknown_is_none():
+    assert resolve_provider_name("does-not-exist") is None
+    assert resolve_provider_name("") is None
+
+
+@pytest.mark.parametrize(
+    ("nickname", "canonical", "base_url"),
+    [
+        ("glm", "zhipuai", "https://open.bigmodel.cn/api/paas/v4"),
+        ("kimi", "moonshot", "https://api.moonshot.cn/v1"),
+        ("qwen", "dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("mimo", "xiaomi", "https://api.xiaomimimo.com/v1"),
+    ],
+)
+def test_get_provider_preset_via_nickname(nickname, canonical, base_url):
+    # An explicit nickname resolves to the same preset as ``provider: auto``.
+    preset = get_provider_preset(nickname)
+    assert preset.base_url == base_url
+    assert preset is PROVIDER_CATALOG[canonical]
+
+
+def test_apply_preset_normalises_nickname_to_canonical():
+    out = apply_provider_preset({"provider": "glm"})
+    assert out["provider"] == "zhipuai"
+    assert out["base_url"] == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_llmconfig_explicit_nickname_resolves_like_auto():
+    # The asymmetry the refactor removes: ``provider: glm`` now works, not just
+    # ``provider: auto`` + a glm model name.
+    cfg = LLMConfig(provider="glm", api_key="sk-x")
+    assert cfg.provider == "zhipuai"
+    assert cfg.api_type == LLMType.OPENAI
+    assert cfg.base_url == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_every_model_marker_is_a_valid_provider_name():
+    # Class invariant: every model_marker resolves as an explicit provider name
+    # to its own brand — so auto-detect and explicit provider never disagree.
+    for canonical, preset in PROVIDER_CATALOG.items():
+        for marker in preset.model_markers:
+            assert resolve_provider_name(marker) == canonical, (canonical, marker)
+
+
+def test_alias_index_rejects_cross_brand_collision():
+    from mote.common.config.config.llm_config import ProviderPreset, _build_alias_index
+
+    bad = {
+        "a": ProviderPreset(base_url="https://a/v1", api_type=LLMType.OPENAI, aliases=("shared",)),
+        "b": ProviderPreset(base_url="https://b/v1", api_type=LLMType.OPENAI, aliases=("shared",)),
+    }
+    with pytest.raises(ValueError, match="shared"):
+        _build_alias_index(bad)

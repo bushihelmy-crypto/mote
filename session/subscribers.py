@@ -27,7 +27,13 @@ The bus also never times this sink out: it must complete.
 from __future__ import annotations
 
 from mote.common.disk import get_disk_writer
-from mote.common.events.types import CompactionCheckpointEvent, LLMResponseEvent, MessageAppendedEvent, TurnEndEvent
+from mote.common.events.types import (
+    CompactionCheckpointEvent,
+    HistoryEditedEvent,
+    LLMResponseEvent,
+    MessageAppendedEvent,
+    TurnEndEvent,
+)
 from mote.common.interface.event_subscriber import DURABLE, DeliveryPolicy, ObservationSubscriber, ObserverPriority
 from mote.common.logs import log_class
 from mote.session.events import CompactedEvent, LLMCallEvent, MessageEvent, TurnContextEvent
@@ -73,6 +79,12 @@ class RecorderSubscriber(ObservationSubscriber):
                 )
         elif isinstance(event, CompactionCheckpointEvent):
             self._log.append(CompactedEvent(messages=list(event.messages), summary=event.summary or ""))
+        elif isinstance(event, HistoryEditedEvent):
+            # A direct user edit (e.g. deleted react-units): persisted as a
+            # CompactedEvent so replay/resume reset history to the pruned list
+            # for free. No summary — this is not a compaction, and the view
+            # projector ignores HistoryEditedEvent so no boundary marker shows.
+            self._log.append(CompactedEvent(messages=list(event.messages), summary=""))
         elif isinstance(event, TurnEndEvent):
             self._log.append(
                 TurnContextEvent(

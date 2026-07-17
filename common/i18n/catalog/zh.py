@@ -16,6 +16,7 @@ from mote.common.i18n import keys as K
 CATALOG: Dict[str, str] = {
     # Status bar
     K.STATUS_IDLE: "就绪",
+    K.STATUS_IDLE_HINT: "ctrl+x 可删除聊天",
     K.STATUS_THINKING: "思考中",
     K.STATUS_VERB_THINKING: "思考中",
     K.STATUS_VERB_PROCESSING: "处理中",
@@ -61,14 +62,20 @@ CATALOG: Dict[str, str] = {
     K.RESULT_FAILED: "失败",
     K.RESULT_RETRYABLE: "可重试",
     # Driver
-    K.DRIVER_TOOLS_LOADED: "已加载 {count} 个工具",
+    K.DRIVER_TOOLS_LOADED: "已加载 {count} 个工具{deferred, plural, =0{} other{（其中 # 个延迟加载）}}",
     # Prompt input
     K.PROMPT_PLACEHOLDER: "输入消息…（/help 查看命令）",
     # Keybinding + fold hints
     K.KEY_TOGGLE_TOOL: "展开/折叠工具",
+    K.KEY_DELETE_MODE: "删除对话",
     K.KEY_EXPAND_HINT: "ctrl+o 展开",
     K.KEY_COLLAPSE_HINT: "ctrl+o 折叠",
     K.KEY_EXIT_HINT: "（再次按 Ctrl+C 退出）",
+    # React-unit delete-mode
+    K.DELETE_MODE_HINT: "删除模式：点击对话勾选要删除的项，回车确认，Esc 取消",
+    K.DELETE_BUSY: "对话进行中，无法进入删除模式",
+    K.DELETE_NONE: "未勾选任何对话",
+    K.DELETE_DONE: "已删除 {count} 条消息",
     # Approval gate
     K.APPROVAL_REQUIRED: "需要审批",
     K.APPROVAL_PROCEED: "是否继续？",

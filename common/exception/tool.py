@@ -11,7 +11,7 @@ catches ``ValueError`` and the MCP retry predicate treat it as non-retryable.
 
 from __future__ import annotations
 
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from mote.common.exception.base import NonRetryableError, RetryableError
 from mote.common.exception.codes import ErrorCode
@@ -57,6 +57,21 @@ class ToolPermissionDeniedError(ToolError):
     default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_PERMISSION_DENIED
 
 
+class ToolNotConfiguredError(ToolError):
+    """A tool cannot run because a service/model it depends on is not configured.
+
+    Raised when the prerequisite is a *configuration* gap rather than a bad
+    argument or a transient failure — the routed model does not support the
+    capability (e.g. the ``web_search`` task model has no server-side search) or
+    a required service is unset (e.g. an empty ``multimodal.*_generation``
+    endpoint/key). The message should name the exact config path the user must
+    fill so the model surfaces an actionable notice instead of a raw upstream
+    error. Non-retryable: retrying without config change cannot succeed.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_NOT_CONFIGURED
+
+
 class NonRetryableToolError(ToolError, ValueError):
     """A tool error that should never be retried.
 
@@ -65,25 +80,6 @@ class NonRetryableToolError(ToolError, ValueError):
     """
 
     default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_NON_RETRYABLE
-
-
-class ApplyPatchError(ToolError):
-    """A patch could not be parsed (or, from the applier, could not be applied).
-
-    Carries the optional 1-based ``line_no`` where parsing failed so the
-    ``apply_patch`` tool can surface codex-style explicit diagnostics.
-    """
-
-    default_code: ClassVar[ErrorCode] = ErrorCode.TOOL_APPLY_PATCH
-
-    def __init__(self, message: str = "", line_no: Optional[int] = None) -> None:
-        super().__init__(message)
-        self.line_no = line_no
-
-    def __str__(self) -> str:
-        if self.line_no is not None:
-            return f"invalid hunk at line {self.line_no}, {self.message}"
-        return self.message
 
 
 class RetryableToolError(RetryableError, ToolError):

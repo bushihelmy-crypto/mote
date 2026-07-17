@@ -32,8 +32,10 @@ Differences by design:
   a cleared body, honouring the ``reconstructable`` promise that a read result is
   always recoverable on demand.
 
-The shape: offset is 1-indexed, default 2000-line cap, per-line length cap,
-size guard, blocked device paths, empty/short-file reminders.
+The shape: offset is 1-indexed; when limit is unset the whole file is read
+(a large result is persisted to disk by the shared tool-result exit rather
+than truncated here). Size guard, blocked device paths, empty/short-file
+reminders round it out.
 """
 from __future__ import annotations
 
@@ -41,21 +43,20 @@ import base64
 import io
 import json
 import os
+import tempfile
 from typing import ClassVar, Optional
 
-from mote.common.const.tools import (
-    DEFAULT_MAX_LINES,
-    MAX_FILE_SIZE_BYTES,
-    MAX_IMAGE_DIMENSION,
-    MAX_LINE_LENGTH,
-    MAX_MEDIA_SIZE_BYTES,
-)
-from mote.common.prompt.tools import FILE_UNCHANGED_STUB, READ_DESCRIPTION
-from mote.common.text import count_noun, system_reminder, verb_agree
+from mote.common.const.llm import supports_pdf_input, supports_vision
+from mote.common.const.tools import MAX_FILE_SIZE_BYTES, MAX_IMAGE_DIMENSION, MAX_MEDIA_SIZE_BYTES
+from mote.common.exception import ToolNotConfiguredError
+from mote.common.prompt.tools import FILE_UNCHANGED_STUB
+from mote.common.schema import ToolEffect
+from mote.common.text import system_reminder
 from mote.executor.base_tool import BaseTool
-from mote.executor.capability_types import GetCwd, IsResourceVisible, RecordFileRead
+from mote.executor.capability_types import GetCwd, GetDefaultModel, IsResourceVisible, RecordFileRead
 from mote.executor.dependency._document import document_lines, extract_document_text, is_document
 from mote.executor.dependency._paths import resolve_path
+from mote.executor.dependency._video import VIDEO_EXTENSIONS, VideoError, VideoUnavailable, decompose_video
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolError, ToolMedia, ToolResult
 
@@ -70,6 +71,25 @@ _MSG_INVALID_DETAIL = (
 )
 _MSG_BLOCKED_DEVICE = "Error: cannot read '{path}': this device file would block or produce " "infinite output."
 _MSG_BINARY_FILE = "Error: this tool cannot read binary files. The file appears to be a " "binary '{ext}' file."
+_MSG_VIDEO_UNAVAILABLE = (
+    "Video understanding is unavailable: {error}. Install ffmpeg + ffprobe (the "
+    "video decode kernel) so Read can decompose a video into frames + transcript."
+)
+_MSG_IMAGE_MODEL_UNSUPPORTED = (
+    "Cannot read image '{path}': the default model '{model}' is not vision-capable, "
+    "so an attached image would never reach it. Configure a multimodal (vision) "
+    "model as models.default to read images."
+)
+_MSG_PDF_MODEL_UNSUPPORTED = (
+    "Cannot read PDF '{path}': the default model '{model}' does not accept native "
+    "PDF (document) input, so an attached PDF would never reach it. Configure a "
+    "PDF-capable model (e.g. a Claude model) as models.default, or extract the "
+    "PDF's text another way."
+)
+_MSG_VIDEO_FAILED = "Could not read video '{path}': {error}"
+_MSG_VIDEO_NO_FRAMES = (
+    "No frames could be extracted from '{path}'. The file may be corrupt, " "not a video, or an unsupported codec."
+)
 _MSG_FILE_NOT_EXIST = (
     "Error: file does not exist. Note that relative paths resolve against the " "working directory {base}."
 )
@@ -103,7 +123,6 @@ _MSG_CANNOT_PROCESS_IMAGE = (
     "Error: cannot process image '{path}': {error}. Pass detail='original' to " "send the raw bytes without resizing."
 )
 _MSG_NOTEBOOK_INVALID_JSON = "Error: '{path}' is not a valid notebook (invalid JSON): {error}"
-_MSG_LINE_TRUNCATED_NOTE = "Note: {count} exceeded {max_len} characters and {verb} truncated."
 _MSG_EMPTY_FILE = "Warning: the file exists but the contents are empty."
 _MSG_SHORTER_THAN_OFFSET = (
     "Warning: the file exists but is shorter than the provided offset " "({offset}). The file has {total} lines."
@@ -119,6 +138,11 @@ _MSG_PDF_OUTPUT = "Read PDF {path} ({size} bytes). Shown below."
 
 # Image extensions rendered as multimodal image content.
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
+
+# Frame budget for a video read — a hard ceiling so a single read cannot flood
+# the context with hundreds of images. The kernel spreads frames across the clip
+# (first + last always kept) and drops near-duplicates before this cap.
+_VIDEO_MAX_FRAMES = 60
 
 # Binary extensions this tool still refuses (no text/image/pdf/notebook path).
 # .docx/.xlsx are intentionally NOT here: they are rich documents read via text
@@ -252,6 +276,40 @@ def _render_notebook(nb: dict) -> str:
     return "\n".join(parts)
 
 
+def _clock(seconds: float) -> str:
+    """A ``MM:SS`` / ``H:MM:SS`` label for a frame timestamp."""
+    total = int(round(seconds))
+    minutes, sec = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{sec:02d}"
+    return f"{minutes:02d}:{sec:02d}"
+
+
+def _video_summary(file_path: str, result, *, kept: int) -> str:
+    """Assemble the text half of a video read: header, frame index, transcript."""
+    meta = result.meta
+    title = meta.get("title") or file_path
+    lines = [f"Read video: {title}"]
+    duration = meta.get("duration_seconds") or meta.get("duration")
+    if duration:
+        lines.append(f"Duration: {int(float(duration))}s")
+    if meta.get("width") and meta.get("height"):
+        lines.append(f"Resolution: {meta['width']}x{meta['height']}")
+    lines.append(f"Extracted {kept} frame(s) via the {result.engine} engine; shown below in order.")
+    for note in result.notes:
+        lines.append(f"Note: {note}")
+    # A timestamp index so the model can map each shown frame to its moment.
+    if result.frames[:kept]:
+        stamps = ", ".join(_clock(f.timestamp) for f in result.frames[:kept])
+        lines.append(f"Frame timestamps: {stamps}")
+    if result.transcript:
+        lines.append("")
+        lines.append("Transcript:")
+        lines.append(result.transcript)
+    return "\n".join(lines)
+
+
 @register_tool
 class Read(BaseTool):
     """Read a file from the local filesystem (text, image, PDF, or notebook)."""
@@ -261,9 +319,10 @@ class Read(BaseTool):
     # Read-only observation: the file can always be re-read, so a cleared result
     # body is recoverable on demand.
     reconstructable: ClassVar[bool] = True
+    # No side effect — opt out of the effect ledger (safe to replay always).
+    effect: ClassVar[ToolEffect] = ToolEffect.PURE
     # Read can return large files; allow a higher cap before persisting.
     max_result_size_chars: ClassVar[int] = 100_000
-    description = READ_DESCRIPTION
     # Records each successful read into the Role's shared file-read state so the
     # Write/Edit tools can enforce read-before-overwrite; get_cwd is the stable
     # base for resolving relative paths; is_resource_visible lets the dedup
@@ -271,19 +330,31 @@ class Read(BaseTool):
     # context before pointing the model back at it. Optional: when the tool is
     # used unbound (no Role), these stay unset — recording is skipped, get_cwd
     # falls back to the process cwd, and dedup assumes the prior read is visible.
-    requires = ("record_file_read", "get_cwd", "is_resource_visible")
+    # get_default_model lets the image/PDF readers refuse up-front when the main
+    # model cannot read that media (rather than attach media it silently drops).
+    requires = ("record_file_read", "get_cwd", "is_resource_visible", "get_default_model")
 
     # Injected from Role by bind(): Role.record_file_read, Role.get_cwd,
-    # Role.is_resource_visible.
+    # Role.is_resource_visible, Role.get_default_model.
     record_file_read: RecordFileRead
     get_cwd: GetCwd
     is_resource_visible: IsResourceVisible
+    get_default_model: GetDefaultModel
 
     def __init__(self) -> None:
         super().__init__()
         # Dedup cache: full_path -> (offset, limit, mtime_ns). One instance per
         # Role, so this is naturally session-scoped. Only text reads are cached.
         self._read_state: dict[str, tuple[int, int | None, int]] = {}
+
+    def _default_model(self) -> Optional[str]:
+        """The main model's name, or None when unbound / unconfigured.
+
+        No-op-safe when the tool is used standalone (no Role): returns None, so
+        the media capability guards below skip and the read proceeds unchanged.
+        """
+        getter = getattr(self, "get_default_model", None)
+        return getter() if getter is not None else None
 
     def _mark_read(self, full_path: str, mtime_ns: int) -> None:
         """Record a successful read into the Role's shared file-read state.
@@ -331,11 +402,28 @@ class Read(BaseTool):
         mode: str = "text",
         detail: str = "high",
     ):
-        """Read a file from the local filesystem.
+        """Read a local file's contents — text, images, PDFs, notebooks — with line numbers.
 
-        Supports text files (returned with line numbers), images (png/jpg/jpeg/
-        gif/webp), rich documents — PDF (.pdf), Word (.docx), Excel (.xlsx) —
-        and Jupyter notebooks (.ipynb).
+        Reads a file from the local filesystem. The file_path may be absolute, or
+        relative to the working directory; ~ is expanded.
+
+        - By default it reads the whole file from the start. Use offset
+          (1-indexed start line) and limit to read a specific slice of a large
+          file; a Grep hit reported as path:42 is read with offset=42.
+        - Output is returned with cat -n style line numbers (a right-aligned
+          number then an arrow then the line). These numbers are for your
+          reference only — never reproduce the number+arrow prefix when quoting
+          or editing content.
+        - Images (png/jpg/jpeg/gif/webp) and PDFs (mode='visual') are shown to
+          you visually; Jupyter notebooks (.ipynb) are rendered as text; rich
+          documents (PDF/Word/Excel) are extracted to text with line numbers by
+          default.
+        - You may read multiple distinct files in a single turn by making several
+          Read calls at once; prefer this over reading them one at a time.
+        - ALWAYS use this tool to read files instead of shell commands like cat /
+          head / tail: it handles line numbering, large-file slicing, and media.
+          If a file was read and is unchanged, a short 'unchanged' note may be
+          returned in place of the body — that is expected.
 
         Rich documents are read two ways, selected by ``mode``:
         - ``"text"`` (default): extract the document's text and return it with
@@ -350,8 +438,8 @@ class Read(BaseTool):
                 relative paths resolve against the current working directory).
             offset: 1-indexed line number to start reading from. Only needed for
                 large text files / documents (default 1, the start of the file).
-            limit: Maximum number of lines to read. Only needed for large text
-                files / documents (default reads up to 2000 lines).
+            limit: Maximum number of lines to read. Omit to read to the end of
+                the file; set it only to read a specific slice of a large file.
             mode: For rich documents (PDF/Word/Excel), how to read them: "text"
                 (default; extract text with line numbers, aligned to Grep's
                 offsets) or "visual" (render the document to the model as bytes;
@@ -377,6 +465,27 @@ class Read(BaseTool):
             raise ToolError(_MSG_BLOCKED_DEVICE.format(path=file_path))
 
         ext = os.path.splitext(full_path)[1].lower().lstrip(".")
+        # A local video is decoded into timestamped frames (shown as images) plus
+        # a transcript — Read's video branch, the same way it absorbs an image or
+        # a PDF. Checked before the binary rejection below, since video extensions
+        # live in _BINARY_EXTENSIONS. (Networked video is out of scope: fetch a
+        # URL to a local file first, e.g. bash `yt-dlp -o clip.mp4 <url>`, then
+        # Read that local file.)
+        if ext in VIDEO_EXTENSIONS:
+            if not os.path.exists(full_path):
+                getter = getattr(self, "get_cwd", None)
+                base = (getter() if getter is not None else None) or os.getcwd()
+                raise ToolError(_MSG_FILE_NOT_EXIST.format(base=base))
+            if os.path.isdir(full_path):
+                raise ToolError(_MSG_IS_DIRECTORY.format(path=file_path))
+            result = await self._read_video(file_path, full_path)
+            try:
+                self._mark_read(full_path, os.stat(full_path).st_mtime_ns)
+            except OSError:
+                pass
+            if result.success:
+                result.resource_path = full_path
+            return result
         if ext in _BINARY_EXTENSIONS:
             raise ToolError(_MSG_BINARY_FILE.format(ext=ext))
 
@@ -459,7 +568,7 @@ class Read(BaseTool):
             return FILE_UNCHANGED_STUB
 
         try:
-            selected, total_lines, truncated_lines = self._read_range(full_path, start_line, limit)
+            selected, total_lines = self._read_range(full_path, start_line, limit)
         except UnicodeDecodeError:
             raise ToolError(_MSG_NOT_UTF8.format(path=file_path))
         except OSError as e:
@@ -478,15 +587,6 @@ class Read(BaseTool):
             )
 
         body = _add_line_numbers(selected, start_line)
-        if truncated_lines:
-            verb = verb_agree(truncated_lines, "was", "were")
-            body += "\n\n" + system_reminder(
-                _MSG_LINE_TRUNCATED_NOTE.format(
-                    count=count_noun(truncated_lines, "line"),
-                    max_len=MAX_LINE_LENGTH,
-                    verb=verb,
-                )
-            )
         return self._tagged(body, full_path)
 
     def _read_document(self, file_path, full_path, offset, limit, stat) -> "str | ToolResult":
@@ -550,27 +650,11 @@ class Read(BaseTool):
                 full_path,
             )
 
-        end_line = start_line + (limit if limit is not None else DEFAULT_MAX_LINES)
-        selected = all_lines[start_line - 1 : end_line - 1]
+        # No explicit limit reads to end-of-document; a large result is handled
+        # by the single persist-to-disk exit, not truncated here.
+        selected = all_lines[start_line - 1 :] if limit is None else all_lines[start_line - 1 : start_line - 1 + limit]
 
-        truncated_lines = 0
-        capped: list[str] = []
-        for line in selected:
-            if len(line) > MAX_LINE_LENGTH:
-                line = line[:MAX_LINE_LENGTH] + "... [line truncated]"
-                truncated_lines += 1
-            capped.append(line)
-
-        body = _add_line_numbers(capped, start_line)
-        if truncated_lines:
-            verb = verb_agree(truncated_lines, "was", "were")
-            body += "\n\n" + system_reminder(
-                _MSG_LINE_TRUNCATED_NOTE.format(
-                    count=count_noun(truncated_lines, "line"),
-                    max_len=MAX_LINE_LENGTH,
-                    verb=verb,
-                )
-            )
+        body = _add_line_numbers(selected, start_line)
         return self._tagged(body, full_path)
 
     def _read_image(self, file_path, full_path, ext, size, detail) -> ToolResult:
@@ -580,7 +664,13 @@ class Read(BaseTool):
         edge fits within MAX_IMAGE_DIMENSION (mirrors codex view_image), keeping
         aspect ratio, source format and ICC/EXIF metadata; images already within
         the limit are sent unchanged. ``detail="original"`` sends the raw bytes.
+
+        Refuses up-front with :class:`ToolNotConfiguredError` when the main model
+        is not vision-capable — an attached image would never reach it.
         """
+        model = self._default_model()
+        if model is not None and not supports_vision(model):
+            raise ToolNotConfiguredError(_MSG_IMAGE_MODEL_UNSUPPORTED.format(path=file_path, model=model))
         if size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
                 _MSG_MEDIA_TOO_LARGE.format(
@@ -654,8 +744,53 @@ class Read(BaseTool):
         except Exception as e:  # noqa: BLE001 — surface any decode/encode failure
             raise ToolError(_MSG_CANNOT_PROCESS_IMAGE.format(path=file_path, error=e))
 
+    async def _read_video(self, file_path, full_path) -> ToolResult:
+        """Decode a local video into timestamped frames + a transcript.
+
+        Frames are returned as supplemental image ``ToolMedia`` (a frame IS an
+        image — Read's existing vision outlet) plus a text summary carrying the
+        metadata and the timestamped transcript. The heavy decode runs in the
+        shared ``_video`` kernel (ffmpeg/ffprobe); a missing tool raises
+        :class:`ToolNotConfiguredError`, a decode failure a hard error.
+        """
+        # A per-call scratch dir for the extracted frames; removed on exit (the
+        # frame bytes are already carried in the result media).
+        with tempfile.TemporaryDirectory(prefix="mote-video-") as work:
+            try:
+                result = await decompose_video(full_path, work, max_frames=_VIDEO_MAX_FRAMES)
+            except VideoUnavailable as e:
+                raise ToolNotConfiguredError(_MSG_VIDEO_UNAVAILABLE.format(error=e))
+            except VideoError as e:
+                raise ToolError(_MSG_VIDEO_FAILED.format(path=file_path, error=e))
+
+            if not result.frames:
+                raise ToolError(_MSG_VIDEO_NO_FRAMES.format(path=file_path))
+
+            media = [
+                ToolMedia(kind="image", b64=base64.b64encode(frame.jpeg).decode("ascii"), mime="image/jpeg")
+                for frame in result.frames
+                if len(frame.jpeg) <= MAX_MEDIA_SIZE_BYTES
+            ]
+            return ToolResult(
+                output=_video_summary(file_path, result, kept=len(media)),
+                media=media,
+                data={
+                    "type": "video",
+                    "frames": len(media),
+                    "engine": result.engine,
+                    "has_transcript": bool(result.transcript),
+                },
+            )
+
     def _read_pdf(self, file_path, full_path, size) -> ToolResult:
-        """Read a PDF and return it as a supplemental document."""
+        """Read a PDF and return it as a supplemental document.
+
+        Refuses up-front with :class:`ToolNotConfiguredError` when the main model
+        does not accept native PDF input — an attached PDF would never reach it.
+        """
+        model = self._default_model()
+        if model is not None and not supports_pdf_input(model):
+            raise ToolNotConfiguredError(_MSG_PDF_MODEL_UNSUPPORTED.format(path=file_path, model=model))
         if size > MAX_MEDIA_SIZE_BYTES:
             raise ToolError(
                 _MSG_MEDIA_TOO_LARGE.format(
@@ -688,34 +823,33 @@ class Read(BaseTool):
 
         return _render_notebook(nb) or system_reminder(_MSG_NOTEBOOK_NO_CELLS)
 
-    def _read_range(self, full_path: str, start_line: int, limit: int | None) -> tuple[list[str], int, int]:
-        """Return (selected_lines, total_line_count, truncated_line_count).
+    def _read_range(self, full_path: str, start_line: int, limit: int | None) -> tuple[list[str], int]:
+        """Return (selected_lines, total_line_count).
 
         Iterates the file line by line so only selected lines are retained in
         memory; lines outside the range are counted but discarded (streaming
-        reader).
+        reader). When ``limit`` is None the range runs to end-of-file — a large
+        result is handled downstream by the single persist-to-disk exit, not by
+        truncating here. Individual long lines are returned intact for the same
+        reason.
         """
-        end_line = start_line + (limit if limit is not None else DEFAULT_MAX_LINES)
+        end_line = start_line + limit if limit is not None else None
         selected: list[str] = []
         total = 0
-        truncated = 0
 
         with open(full_path, "r", encoding="utf-8", newline="") as f:
             for idx, raw in enumerate(f, start=1):
                 total = idx
-                if idx < start_line or idx >= end_line:
+                if idx < start_line or (end_line is not None and idx >= end_line):
                     continue
                 # Strip BOM on the first line, normalize line endings.
                 line = raw
                 if idx == 1 and line.startswith("\ufeff"):
                     line = line[1:]
                 line = line.rstrip("\n").rstrip("\r")
-                if len(line) > MAX_LINE_LENGTH:
-                    line = line[:MAX_LINE_LENGTH] + "... [line truncated]"
-                    truncated += 1
                 selected.append(line)
 
-        return selected, total, truncated
+        return selected, total
 
     def cleanup_session(self, session_id: str) -> None:
         """Drop the per-session dedup cache."""

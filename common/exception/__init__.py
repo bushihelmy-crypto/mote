@@ -79,10 +79,10 @@ from mote.common.exception.router import (
 )
 from mote.common.exception.task import BackgroundTaskCancelledError, BackgroundTaskError, BackgroundTaskTimeoutError
 from mote.common.exception.tool import (
-    ApplyPatchError,
     NonRetryableToolError,
     RetryableToolError,
     ToolError,
+    ToolNotConfiguredError,
     ToolNotFoundError,
     ToolPermissionDeniedError,
     ToolValidationError,
@@ -129,10 +129,10 @@ __all__ = [
     "ToolError",
     "ToolValidationError",
     "ToolNotFoundError",
+    "ToolNotConfiguredError",
     "ToolPermissionDeniedError",
     "NonRetryableToolError",
     "RetryableToolError",
-    "ApplyPatchError",
     # graph execution tier
     "GraphError",
     "GraphRouterError",

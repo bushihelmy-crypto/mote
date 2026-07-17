@@ -63,6 +63,13 @@ class RoleState(SerializationMixin):
     addresses: set[str] = set()
     watch: set[str] = Field(default_factory=set)
 
+    # Tool-search: the set of deferred tools the model has discovered (revealed)
+    # this session. Serialized so a resumed session keeps its discovered tools
+    # visible (rides the checkpoint like ``addresses``). The executor's tool
+    # catalog reads it via a live getter to decide which deferred schemas to
+    # withhold; the ``RoleStateController`` owns the validated union.
+    revealed_tools: set[str] = Field(default_factory=set)
+
     # Environment (not serialized)
     env: Optional[Any] = Field(default=None, exclude=True)
 
@@ -181,6 +188,24 @@ class RoleStateController:
     def get_glimpsed_files(self) -> list[str]:
         """Absolute paths glimpsed via search this session (insertion order)."""
         return list(self._state._file_glimpsed_state.keys())
+
+    def get_revealed_tools(self) -> set[str]:
+        """The set of deferred tools revealed (discovered) this session.
+
+        Read live by the executor's tool catalog to decide which deferred
+        schemas to expose. Returns the live set (mutated in place by
+        :meth:`reveal_tools`).
+        """
+        return self._state.revealed_tools
+
+    def reveal_tools(self, names: "set[str] | list[str]") -> None:
+        """Union *names* into the revealed set (idempotent).
+
+        Callers pass names already validated against the executor's deferred set
+        (the Role capability does that intersection), so this method just records
+        the discovery; a name revealed twice is a harmless no-op.
+        """
+        self._state.revealed_tools |= set(names)
 
     def get_tool_session(self, key: str) -> Any:
         """Return a stateful tool's live session (keyed by tool name), else None."""

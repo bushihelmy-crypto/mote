@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for the per-agent hard budget cap — ContextProvider.enforce_budget.
 
-The gate is a run-limit sibling of max_react_loop: it reads this agent's own
+The gate is the run's single spend ceiling: it reads this agent's own
 accrued spend (``context.cost_manager.total_cost``) against the schema's
 ``max_cost`` cap and rules whether the loop may think again. It surfaces a soft
 ``BudgetEvent`` once at 80% and a hard-stop one once at 100% (each latched), and

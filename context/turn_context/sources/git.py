@@ -1,12 +1,14 @@
 """GitContextSource — a point-in-time git working-tree snapshot.
 
 Not a live per-turn feed: the working tree is *not* re-polled every cycle.
-Instead a snapshot is captured at exactly two moments and surfaced once each:
+Instead a snapshot is captured at exactly these moments and surfaced once each:
 
 - **session start** — so the model opens with an accurate picture of the branch
   / dirty-clean state / recent commits it inherited;
 - **after a compaction** — the snapshot is re-captured and re-shown, because the
-  earlier one was condensed away with the rest of the pre-compaction history.
+  earlier one was condensed away with the rest of the pre-compaction history;
+- **after a ``/clear`` or user delete** — same reason: the message carrying the
+  earlier snapshot was pruned, so a fresh point-in-time snapshot is re-shown.
 
 Between those events the block is silent. The rendered text says so plainly
 ("point-in-time snapshot ... run ``git status`` for the current state"), handing
@@ -17,9 +19,10 @@ subprocess cost and the false-freshness trap of a change-gated live feed.
 
 Push→pull bridge in one object (like ``CompactionNoticeContextSource``):
 - as an :class:`~mote.common.interface.ObservationSubscriber` it catches
-  :class:`SessionStartEvent` / :class:`PostCompactEvent` off the bus and *freezes*
-  the snapshot **at that instant** (so the block honestly reflects the moment it
-  claims, not whatever the tree looks like a turn later);
+  :class:`SessionStartEvent` or any :data:`HISTORY_RESET_EVENTS` (compaction /
+  ``/clear`` / user delete) off the bus and *freezes* the snapshot **at that
+  instant** (so the block honestly reflects the moment it claims, not whatever
+  the tree looks like a turn later);
 - as an :class:`~mote.common.interface.EphemeralContextSource` it renders the
   frozen snapshot once on the next think() cycle, then disarms.
 
@@ -34,13 +37,14 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from mote.common.events import PostCompactEvent, SessionStartEvent
+from mote.common.events import HISTORY_RESET_EVENTS, SessionStartEvent
 from mote.common.interface import ObservationSubscriber, TurnContextPriority
 from mote.common.logs import logger
 from mote.common.utils.git_state import collect_git_state, render_git_section
 
-# Zero-arg provider of the *current* working directory (PostCompactEvent carries
-# no cwd, so the source is handed one to resolve the tree at compaction time).
+# Zero-arg provider of the *current* working directory (a history-reset event —
+# compaction / clear / delete — carries no cwd, so the source is handed one to
+# resolve the tree at re-capture time).
 CwdProvider = Callable[[], Optional[str]]
 
 _SNAPSHOT_FOOTER = (
@@ -72,9 +76,13 @@ class GitContextSource(ObservationSubscriber):
             # SessionStartEvent carries its own working_dir — capture the tree the
             # session actually opened in (may differ from a later cwd).
             await self._capture(event.working_dir or None)
-        elif isinstance(event, PostCompactEvent):
-            # PostCompactEvent carries no cwd; resolve the live one via the
-            # injected provider (the cwd may have moved since session start).
+        elif isinstance(event, HISTORY_RESET_EVENTS):
+            # A compaction condensed the earlier snapshot away; a ``/clear`` or
+            # user delete pruned the messages that carried it. Neither event
+            # carries a cwd, so resolve the live one via the injected provider
+            # (the cwd may have moved since session start) and re-freeze. Git has
+            # no per-item delta — a fresh point-in-time snapshot IS the correct
+            # reconciliation of a rebuilt history.
             cwd = self._get_cwd() if self._get_cwd else None
             await self._capture(cwd)
         return None

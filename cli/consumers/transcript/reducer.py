@@ -25,18 +25,22 @@ of each host's choke:
 
 from __future__ import annotations
 
-from typing import Any, List, Set
+from typing import Any, List, Optional, Set, Tuple
 
 from mote.cli.consumers.render.builders import FoldMode, fold_mode
 from mote.cli.consumers.transcript.ops import (
+    AddActivityToolCall,
     AddToGroup,
     AppendDelta,
     ClearForCompaction,
     ClearRetry,
     ClearTranscript,
+    CloseActivity,
     CloseBlock,
+    CompleteActivityToolCall,
     CompleteInGroup,
     FlushGroup,
+    OpenActivity,
     OpenBlock,
     OpenGroup,
     RenderApproval,
@@ -55,9 +59,12 @@ from mote.cli.consumers.transcript.ops import (
     ToolStarted,
     TranscriptOp,
     Truncation,
+    UpdateActivityNode,
     UpdateUsage,
 )
 from mote.cli.contracts.view import (
+    ACTIVITY_COMPLETED,
+    ACTIVITY_STARTED,
     APPROVAL_REQUESTED,
     CONVERSATION_COMPACTED,
     ERROR_RAISED,
@@ -91,6 +98,12 @@ _GROUP_TRANSPARENT = frozenset(
         RETRY_STATUS,
         USAGE_UPDATED,
         SESSION_LIST_SHOWN,
+        # An in-flight activity's own lifecycle/progress must not flush an open
+        # Read/Grep group — the activity nests its child rows, it does not break
+        # a sibling run (same rationale as ``USAGE_UPDATED``).
+        ACTIVITY_STARTED,
+        ACTIVITY_COMPLETED,
+        TASK_PROGRESS,
     }
 )
 
@@ -101,6 +114,11 @@ _THINKING_TRANSPARENT = frozenset(
         REASONING_DELTA,
         USAGE_UPDATED,
         RETRY_STATUS,
+        # A scoped activity ping arriving mid-thought is background progress, not
+        # a turn boundary — it must not end the reasoning affordance.
+        ACTIVITY_STARTED,
+        ACTIVITY_COMPLETED,
+        TASK_PROGRESS,
     }
 )
 
@@ -119,6 +137,12 @@ class TranscriptReducer:
         self._thinking = False
         self._retry_active = False
         self._last_user_prompt = ""
+        # Open nested orchestrations keyed by their ``scope`` (a hashable
+        # ScopePath tuple). A scoped progress ping / child tool call whose head
+        # names an open activity folds *into* it instead of orphaning at top
+        # level. Value is the ``activity_kind`` (kept for potential per-kind
+        # routing; the surface owns rendering).
+        self._activities: dict[Tuple[Any, ...], str] = {}
 
     def feed(self, ev: Any) -> List[TranscriptOp]:
         """Fold one event into zero-or-more ops (prefix guards, then the fold)."""
@@ -168,7 +192,7 @@ class TranscriptReducer:
             if getattr(ev, "role", "assistant") == "user":
                 if markdown.strip():
                     self._last_user_prompt = markdown
-                return [RenderUserMessage(markdown=markdown)]
+                return [RenderUserMessage(markdown=markdown, message_id=getattr(ev, "message_id", None))]
             return [
                 CloseBlock(
                     markdown=markdown,
@@ -183,11 +207,50 @@ class TranscriptReducer:
         if kind == TOOL_CALL_COMPLETED:
             return self._fold_tool_completed(ev)
 
+        if kind == ACTIVITY_STARTED:
+            scope = self._scope_of(ev)
+            self._activities[scope] = getattr(ev, "activity_kind", "") or ""
+            return [
+                OpenActivity(
+                    scope=scope,
+                    activity_kind=getattr(ev, "activity_kind", "") or "",
+                    label=getattr(ev, "label", "") or "",
+                    topology=getattr(ev, "topology", None),
+                )
+            ]
+        if kind == ACTIVITY_COMPLETED:
+            scope = self._scope_of(ev)
+            self._activities.pop(scope, None)
+            return [
+                CloseActivity(
+                    scope=scope,
+                    outcome=getattr(ev, "outcome", "success") or "success",
+                    node_states=tuple(getattr(ev, "node_states", ()) or ()),
+                    summary=getattr(ev, "summary", "") or "",
+                )
+            ]
+
         if kind == MEDIA_BLOCK:
             return [RenderMedia(ev=ev)]
         if kind == FILE_DIFF_BLOCK:
             return [RenderFileDiff(ev=ev)]
         if kind == TASK_PROGRESS:
+            # A scoped ping whose head names an open activity updates its
+            # subtree; an unscoped ping (background task) stays a top-level row.
+            # The op is keyed by the OWNING activity's scope (the matched prefix,
+            # e.g. ``(graph,)``), not the ping's own longer ``(graph, node)`` —
+            # that is the key the surface stored the widget under.
+            scope = self._scope_of(ev)
+            owning = self._owning_activity(scope) if scope else None
+            if owning is not None:
+                return [
+                    UpdateActivityNode(
+                        scope=owning,
+                        stage=getattr(ev, "stage", "") or "",
+                        status=getattr(ev, "status", "") or "",
+                        detail=getattr(ev, "detail", "") or "",
+                    )
+                ]
             return [RenderTaskProgress(ev=ev)]
         if kind == NOTICE:
             return [RenderNotice(ev=ev)]
@@ -224,6 +287,15 @@ class TranscriptReducer:
         return []
 
     def _fold_tool_started(self, ev: Any) -> List[TranscriptOp]:
+        # Orphan fix: a tool dispatched *inside* an activity (its scope's head is
+        # an open activity) folds under that activity instead of orphaning as a
+        # top-level row (graph-internal calls carry ``tool_use_id=None``). The op
+        # is keyed by the OWNING activity's scope (the matched prefix), not the
+        # child's own longer scope — that is the surface's widget key.
+        scope = self._scope_of(ev)
+        owning = self._owning_activity(scope) if scope else None
+        if owning is not None:
+            return [AddActivityToolCall(scope=owning, ev=ev)]
         fold = fold_mode(getattr(ev, "tool_name", "") or "")
         tid = getattr(ev, "tool_use_id", None)
         if fold is FoldMode.GROUP:
@@ -246,6 +318,10 @@ class TranscriptReducer:
         return ops
 
     def _fold_tool_completed(self, ev: Any) -> List[TranscriptOp]:
+        scope = self._scope_of(ev)
+        owning = self._owning_activity(scope) if scope else None
+        if owning is not None:
+            return [CompleteActivityToolCall(scope=owning, ev=ev)]
         tid = getattr(ev, "tool_use_id", None)
         if tid and tid in self._grouped_ids:
             self._grouped_ids.discard(tid)
@@ -253,11 +329,41 @@ class TranscriptReducer:
         fold = fold_mode(getattr(ev, "tool_name", "") or "")
         return [ToolCompleted(ev=ev, fold=fold, truncation=Truncation.of(ev, fold))]
 
+    @staticmethod
+    def _scope_of(ev: Any) -> Tuple[Any, ...]:
+        """Read the (possibly empty) ``scope`` path off an event as a tuple."""
+        return tuple(getattr(ev, "scope", ()) or ())
+
+    def _owning_activity(self, scope: Tuple[Any, ...]) -> Optional[Tuple[Any, ...]]:
+        """Return the *scope key* of the open activity that owns ``scope``.
+
+        A scoped event belongs to an activity whose scope is a *prefix* of it
+        (the activity's own scope, or an ancestor for a child tool call whose
+        path is ``(graph, node)``). Longest matching prefix wins so a nested
+        activity routes to the innermost open one. ``None`` when nothing open
+        owns it (e.g. a background task's unscoped ping).
+
+        The RETURN is the matched activity's own scope — the exact key the
+        surface stored its widget under (via ``OpenActivity``). A child event's
+        scope is longer (``(graph, node)``) than the activity's (``(graph,)``),
+        so routing an update to the child's own scope would miss the widget;
+        callers key the op by this returned prefix instead.
+        """
+        best: Optional[Tuple[Any, ...]] = None
+        best_len = -1
+        for open_scope in self._activities:
+            n = len(open_scope)
+            if n > best_len and scope[:n] == open_scope:
+                best = open_scope
+                best_len = n
+        return best
+
     def _reset_transcript_state(self) -> None:
         """Drop the open-block / open-group bookkeeping on a screen wipe."""
         self._block_open = False
         self._group_open = False
         self._grouped_ids.clear()
+        self._activities.clear()
 
 
 __all__ = ["TranscriptReducer"]

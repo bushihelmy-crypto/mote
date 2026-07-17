@@ -18,7 +18,7 @@ from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 
 from mote.cli.consumers.textual.style import textual_css_vars
-from mote.cli.consumers.textual.widgets import AssistantBlock, StatusBar, ToolCallWidget, UserMessageRow
+from mote.cli.consumers.textual.widgets import ActivityWidget, AssistantBlock, StatusBar, ToolCallWidget, UserMessageRow
 from mote.cli.contracts.view import RetryStatus, ToolCallCompleted, ToolCallStarted, UsageUpdated
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
@@ -419,12 +419,14 @@ async def test_status_bar_idle_resets_elapsed():
 async def test_status_bar_no_longer_carries_ctrl_o_hint():
     """The ctrl+o affordance moved onto the selected tool block — off the bar.
 
-    Idle the bar shows only the dim ``就绪`` marker (no ctrl+o hint), and with
-    metrics it shows only those metrics (no ctrl+o text)."""
+    Idle the bar shows the ``就绪`` marker plus the dim ``ctrl+x`` delete-chat
+    hint (never a ctrl+o hint); with metrics it shows only those metrics (no
+    ctrl+o text)."""
     async with _Harness().run_test() as pilot:
         bar = await pilot.app.add(StatusBar())
-        assert bar.render().plain == t(K.STATUS_IDLE)  # idle: ready marker, no hint
-        assert "ctrl+o" not in bar.render().plain
+        idle = bar.render().plain
+        assert t(K.STATUS_IDLE) in idle  # idle: ready marker present
+        assert "ctrl+o" not in idle
         bar.update_usage(UsageUpdated(total_tokens=3400, model="gpt-4"))
         plain = bar.render().plain
         assert "ctrl+o" not in plain
@@ -1107,3 +1109,108 @@ async def test_plain_click_on_link_does_not_open_url():
         )
         await block._on_click(event)
         assert opened == []  # nothing opened on a plain click
+
+
+# --------------------------------------------------------------------------- #
+# ActivityWidget — nested-orchestration live view (topology → outcome)
+# --------------------------------------------------------------------------- #
+
+_TOPOLOGY = {
+    "nodes": [
+        {"id": "fetch", "kind": "tool", "label": "fetch url"},
+        {"id": "sum", "kind": "fold", "label": "accumulate"},
+    ],
+    "edges": [{"from": "fetch", "to": "sum", "guarded": True}],
+}
+
+
+@pytest.mark.asyncio
+async def test_activity_widget_renders_topology():
+    """A freshly-opened activity shows its declared topology + node kinds."""
+    async with _Harness().run_test() as pilot:
+        widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
+        text = _widget_text(widget)
+        assert "run_graph" in text
+        assert "fetch url" in text and "accumulate" in text
+
+
+@pytest.mark.asyncio
+async def test_activity_widget_updates_node_status():
+    """``update_node`` lights a node up in the live per-node trail."""
+    async with _Harness().run_test() as pilot:
+        widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
+        widget.update_node("fetch", "success", "done")
+        text = _widget_text(widget)
+        assert "fetch" in text and "success" in text and "done" in text
+
+
+@pytest.mark.asyncio
+async def test_activity_widget_folds_child_tool_call():
+    """A dispatched child tool call folds into the activity's body."""
+    from mote.cli.contracts.view import ToolCallCompleted, ToolCallStarted
+
+    async with _Harness().run_test() as pilot:
+        widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
+        # Graph-internal calls carry tool_use_id=None → positional correlation.
+        widget.add_child(ToolCallStarted(tool_name="Read", title="Read", headline="a.py", tool_use_id=None))
+        widget.complete_child(ToolCallCompleted(tool_name="Read", tool_use_id=None, summary="12 lines"))
+        text = _widget_text(widget)
+        assert "Read" in text and "12 lines" in text
+
+
+@pytest.mark.asyncio
+async def test_activity_widget_finalizes_to_outcome():
+    """``finalize_outcome`` freezes the widget to the self-sufficient tree."""
+    async with _Harness().run_test() as pilot:
+        widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
+        node_states = [
+            {"id": "fetch", "kind": "tool", "label": "fetch url", "status": "success", "attempts": 1},
+            {
+                "id": "sum",
+                "kind": "fold",
+                "label": "accumulate",
+                "status": "failed",
+                "attempts": 3,
+                "error": "boom",
+                "args": {"x": 1},
+            },
+        ]
+        widget.finalize_outcome("failed", node_states, "graph failed at sum")
+        text = _widget_text(widget)
+        assert "fetch url" in text and "accumulate" in text
+        assert "boom" in text  # failed node surfaces its error
+        assert '"x": 1' in text  # retry args shown for the failed node
+
+
+@pytest.mark.asyncio
+async def test_activity_widget_stays_displayed_after_finalize():
+    """Regression: finalizing must NOT hide the widget.
+
+    The frozen-state flag must not be named ``_closed`` — that shadows Textual's
+    ``MessagePump._closed``, whose truthiness forces ``display=False`` so the
+    outcome tree vanishes the instant the run completes ("跑完会消失").
+    """
+    async with _Harness().run_test() as pilot:
+        widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
+        assert widget.display is True
+        node_states = [
+            {"id": "fetch", "kind": "tool", "label": "fetch url", "status": "success", "attempts": 1},
+        ]
+        widget.finalize_outcome("success", node_states, "")
+        await pilot.pause()
+        # The widget must still be shown — the frozen outcome tree stays visible.
+        assert widget.display is True
+        assert "fetch url" in _widget_text(widget)
+
+
+@pytest.mark.asyncio
+async def test_activity_widget_folds_to_header():
+    """ctrl+o collapse renders only the ``● label (kind)`` header."""
+    async with _Harness().run_test() as pilot:
+        widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
+        widget.update_node("fetch", "success", "done")
+        widget.set_expanded(False)
+        text = _widget_text(widget)
+        assert "run_graph" in text
+        # Folded: topology detail + node trail are hidden.
+        assert "fetch url" not in text and "accumulate" not in text

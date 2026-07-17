@@ -8,7 +8,7 @@ plain callables — never the Role itself and never a Role-private callback.
 
 LoopContext packs the RoleSchema knobs + observe-time data a loop needs (so we
 don't hand over the whole schema). BaseLoop is the strategy interface; ReActLoop
-is the default think→act cycle ported verbatim from Role._react.
+is the default think→act cycle.
 """
 
 from __future__ import annotations
@@ -30,10 +30,6 @@ class LoopContext:
     Constructed by Role from its role_schema/state and handed to the loop, so
     the loop never reaches into the Role or schema directly.
     """
-
-    # React limits
-    max_react_loop: int
-    max_consecutive_react_limit: int
 
     # Identity
     name: str

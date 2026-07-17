@@ -51,11 +51,17 @@ class CapRole:
         cwd: Optional[str] = None,
         ask_reply: str = "",
         end_output: str = "session ended",
-        wait_result: Optional[tuple[float, bool]] = None,
+        wait_result: Optional[float] = None,
         sandbox_runtime: Any = None,
         resource_visible: Any = True,
+        default_model: Optional[str] = "claude-sonnet-4",
     ) -> None:
         self._cwd = cwd or os.getcwd()
+        # Name of the default (main think-loop) model. Media tools (Read/WebBrowser)
+        # consult this via get_default_model() to check supports_vision/supports_pdf_input
+        # up-front. Defaults to a vision+PDF-capable Claude so media tests read fine;
+        # a test can pass a non-vision name (or None) to exercise the refusal path.
+        self.default_model = default_model
         # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
         self.read_state: dict[str, int] = {}
         # Files glimpsed via a Grep/Glob match (P2) — recorded, un-read; feeds
@@ -104,7 +110,7 @@ class CapRole:
         self.ask_question_items: list = []
         self.end_output = end_output
         self.end_calls = 0
-        # (slept_seconds, interrupted); defaults to "slept the full duration".
+        # slept_seconds returned by wait_interruptible; defaults to 0.0.
         self._wait_result = wait_result
         # Optional OS-level sandbox runtime for the command-execution tools.
         # None => those tools run un-sandboxed (the historical test behavior).
@@ -117,6 +123,32 @@ class CapRole:
         # Names treated as graph orchestrators (``is_graph_tool``); run_graph
         # refuses to nest these. Empty unless a test opts in.
         self.graph_tools: set[str] = set()
+        # Names that must not appear as a graph node (``graph_excluded``, e.g.
+        # Sleep); run_graph refuses to reference these. Empty unless a test opts in.
+        self.excluded_tools: set[str] = set()
+        # Tool-search: the deferred-tool menu (name -> one-line desc) SearchTools
+        # searches over, plus the revealed set it unions into. Empty unless a
+        # test opts in.
+        self.deferred_index: dict[str, str] = {}
+        self.revealed: set[str] = set()
+        # Full descriptions SearchTools reads on reveal to persist (defaults to
+        # the one-line ``deferred_index`` text unless a test sets richer prose).
+        self.deferred_descriptions: dict[str, str] = {}
+        # Resources SearchTools/Skill register on reveal (id -> (kind, content)),
+        # captured so a test can assert the persisted descriptions.
+        self.registered_resources: dict[str, tuple[str, str]] = {}
+        # Server-side web search (WebSearch tool). ``web_search_hits`` is the
+        # scripted result list; when it is None the capability raises
+        # NotImplementedError (models the "server-side search unavailable" path).
+        # ``web_search_calls`` records each (query, kwargs) for assertions.
+        self.web_search_hits: Any = None
+        self.web_search_calls: list[tuple] = []
+        # Vision fallback (WebBrowser read_image). ``describe_image_text`` is the
+        # scripted description; when it is None the capability raises
+        # NotImplementedError (models the "no vision-capable model" path).
+        # ``describe_image_calls`` records each (image_b64, kwargs) for assertions.
+        self.describe_image_text: Any = None
+        self.describe_image_calls: list[tuple] = []
 
     # --- cwd accessors (Bash) ---
     def get_cwd(self) -> str:
@@ -124,6 +156,9 @@ class CapRole:
 
     def set_cwd(self, path: str) -> None:
         self._cwd = path
+
+    def get_default_model(self) -> Optional[str]:
+        return self.default_model
 
     # --- shared file-read state (Read records, Write/Edit enforce) ---
     def record_file_read(self, path: str, mtime_ns: int) -> None:
@@ -226,10 +261,10 @@ class CapRole:
         return self.end_output
 
     # --- sleep ---
-    async def wait_interruptible(self, duration_seconds: float) -> tuple[float, bool]:
+    async def wait_interruptible(self) -> float:
         if self._wait_result is not None:
             return self._wait_result
-        return (duration_seconds, False)
+        return 0.0
 
     # --- OS-level sandbox runtime (Bash/terminal/python) ---
     def get_sandbox_runtime(self) -> Any:
@@ -252,11 +287,52 @@ class CapRole:
         # test can prove run_graph refuses to nest them). Empty by default.
         return list(getattr(self, "graph_tools", ()) or ())
 
+    def list_graph_excluded_tool_names(self) -> list[str]:
+        # Names in ``self.excluded_tools`` must not appear as a graph node (e.g.
+        # Sleep). Lets a test prove run_graph refuses to reference them. Empty by
+        # default.
+        return list(getattr(self, "excluded_tools", ()) or ())
+
+    # --- tool-search (SearchTools discovers + reveals deferred tools) ---
+    def list_deferred_tools(self) -> dict[str, str]:
+        return dict(self.deferred_index)
+
+    def reveal_tools(self, names: list[str]) -> list[str]:
+        accepted = [n for n in names if n in self.deferred_index]
+        self.revealed |= set(accepted)
+        return accepted
+
+    def describe_deferred_tools(self, names: list[str]) -> dict[str, str]:
+        # Full description if a test provided one, else the one-line index text.
+        return {
+            n: self.deferred_descriptions.get(n, self.deferred_index.get(n, ""))
+            for n in names
+            if n in self.deferred_index
+        }
+
+    def register_resource(self, *, id: str, kind: str, content: str) -> None:
+        self.registered_resources[id] = (kind, content)
+
+    # --- server-side web search (WebSearch tool's secondary call) ---
+    async def web_search(self, query: str, **kwargs) -> Any:
+        self.web_search_calls.append((query, kwargs))
+        if self.web_search_hits is None:
+            raise NotImplementedError("no server-side web search")
+        return self.web_search_hits
+
+    # --- vision fallback (WebBrowser read_image's secondary call) ---
+    async def describe_image(self, image_b64: str, **kwargs) -> str:
+        self.describe_image_calls.append((image_b64, kwargs))
+        if self.describe_image_text is None:
+            raise NotImplementedError("no vision-capable model")
+        return self.describe_image_text
+
     # --- the allowlist bind() consults ---
     def tool_capabilities(self) -> dict[str, Any]:
         return {
             "get_cwd": self.get_cwd,
             "set_cwd": self.set_cwd,
+            "get_default_model": self.get_default_model,
             "record_file_read": self.record_file_read,
             "get_file_read_mtime": self.get_file_read_mtime,
             "record_file_glimpsed": self.record_file_glimpsed,
@@ -283,6 +359,13 @@ class CapRole:
             "dispatch_tool": self.dispatch_tool,
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,
+            "list_graph_excluded_tool_names": self.list_graph_excluded_tool_names,
+            "list_deferred_tools": self.list_deferred_tools,
+            "reveal_tools": self.reveal_tools,
+            "describe_deferred_tools": self.describe_deferred_tools,
+            "register_resource": self.register_resource,
+            "web_search": self.web_search,
+            "describe_image": self.describe_image,
         }
 
 

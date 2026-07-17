@@ -9,16 +9,17 @@ from .conftest import make_card
 
 
 class TestModelCard:
-    def test_supports_vision_true_for_gpt_substring(self):
-        # 'gpt' is in MULTI_MODAL_MODELS, so any gpt-* model is vision-capable.
-        assert make_card("c", model="gpt-3.5-turbo").supports_vision is True
+    def test_supports_vision_true_for_capable(self):
+        # Substring hit against MULTI_MODAL_MODELS → vision-capable.
         assert make_card("c", model="gpt-4o").supports_vision is True
         assert make_card("c", model="claude-3-opus").supports_vision is True
         assert make_card("c", model="gemini-1.5-pro").supports_vision is True
+        assert make_card("c", model="qwen3-vl").supports_vision is True  # Chinese VL variant
 
     def test_supports_vision_false_for_non_multimodal(self):
+        assert make_card("c", model="gpt-3.5-turbo").supports_vision is False  # pre-4o, no vision
         assert make_card("c", model="deepseek-chat").supports_vision is False
-        assert make_card("c", model="qwen-max").supports_vision is False
+        assert make_card("c", model="qwen-max").supports_vision is False  # text-only flagship
         assert make_card("c", model="claude-3-haiku").supports_vision is False
 
     def test_supports_vision_empty_model(self):

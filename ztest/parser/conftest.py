@@ -60,9 +60,11 @@ class FakeExecutor:
     def __init__(self, specs: Optional[list[dict]] = None):
         self._specs = specs
         self.provider_calls: list[str] = []
+        self.model_calls: list[Optional[str]] = []
 
-    def get_native_tool_specs(self, provider: str) -> Optional[list[dict]]:
+    def get_native_tool_specs(self, provider: str, model: Optional[str] = None) -> Optional[list[dict]]:
         self.provider_calls.append(provider)
+        self.model_calls.append(model)
         return self._specs
 
 

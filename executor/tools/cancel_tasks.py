@@ -26,10 +26,6 @@ _MSG_CANCEL_SUCCESS = (
 class CancelTasks(BaseTool):
     name = "CancelTasks"
     aliases = ["cancel_tasks"]
-    description = (
-        "Cancel a running background pipeline task. The entire DAG is cancelled; "
-        "already-completed node results are preserved and the task can be resumed later."
-    )
     requires = ("get_bg_pool",)
 
     # Injected from Role by bind(): Role.get_bg_pool.
@@ -41,7 +37,11 @@ class CancelTasks(BaseTool):
         task_id: str,
         reason: str | None = None,
     ) -> str:
-        """Cancel a running background task.
+        """Cancel a running background pipeline — completed nodes are kept for resume.
+
+        Cancel a running background pipeline task. The entire DAG is cancelled;
+        already-completed node results are preserved and the task can be resumed
+        later.
 
         Args:
             task_id: The task ID to cancel (e.g. "bg_3").

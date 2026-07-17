@@ -30,7 +30,6 @@ from mote.common.prompt.role import (
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     TASK_FINAL_OUTPUT_SECTION,
 )
-from mote.common.prompt.tools import BACKGROUND_PIPELINE_SECTION
 
 
 @dataclass
@@ -109,7 +108,6 @@ class ThinkContext:
     scratchpad: str = ""
     frc: str = ""
     task_final_output: str = ""
-    pipeline_section: str = ""
 
     # Protocol-specific ${placeholder} fills supplied by the active command
     # channel's prompt_vars() — command_guide (system "# Using commands"
@@ -190,7 +188,6 @@ class PromptBuilder:
             scratchpad=ctx.scratchpad,
             frc=ctx.frc,
             task_final_output=ctx.task_final_output,
-            pipeline_section=ctx.pipeline_section,
             # command_guide + tool_usage_guide (+ any future protocol section).
             **ctx.prompt_vars,
         )
@@ -303,7 +300,6 @@ class PromptBuilder:
         ctx.language = PromptBuilder._make_language(config.models.response_language)
         ctx.scratchpad = PromptBuilder._make_scratchpad(inputs.scratchpad_dir)
         ctx.frc, ctx.task_final_output = PromptBuilder._make_compaction_sections(config)
-        ctx.pipeline_section = PromptBuilder._make_pipeline_section(config)
 
         # Per-turn ephemeral context (git / token pressure / background tasks /
         # LSP diagnostics) gathered by the turn_context bus and injected into the
@@ -405,18 +401,6 @@ class PromptBuilder:
         keep_recent = getattr(compaction, "protected_recent_messages", 8)
         frc = Template(FRC_SECTION).safe_substitute(keep_recent=str(keep_recent))
         return frc, TASK_FINAL_OUTPUT_SECTION
-
-    @staticmethod
-    def _make_pipeline_section(config) -> str:
-        """Include the pipeline brief when the bggraph engine is enabled in config.
-
-        Driven purely by ``config.context.bggraph.enabled`` — an explicit
-        capability switch — rather than by whether a pipeline tool happens to be
-        registered. Returns "" when disabled.
-        """
-        if not getattr(config.context.bggraph, "enabled", False):
-            return ""
-        return BACKGROUND_PIPELINE_SECTION
 
     @staticmethod
     def _make_env_section(model_name: str, working_dir: str = "") -> str:

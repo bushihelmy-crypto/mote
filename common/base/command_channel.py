@@ -110,8 +110,37 @@ class CommandChannel(ABC):
         yield  # pragma: no cover — makes this an async generator for typing
 
     @abstractmethod
+    async def record_call(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
+        """Record the assistant message that PRECEDES this turn's tool results.
+
+        The first half of a round, split out so the loop can persist (and flush)
+        it *before* executing an EXTERNAL-effect tool — a mid-side-effect crash
+        then leaves a healable dangling call on resume rather than losing the
+        whole turn. Reads only the pre-execution-stable fields of ``executed``
+        (``id`` / ``name`` / ``args``), so it is safe to call before the bodies
+        run.
+
+        XML records the assistant's text; native records an assistant message
+        carrying the tool_calls (paired later by id with the results).
+        """
+
+    @abstractmethod
+    async def record_results(self, memory: "MessageStore", executed: list[dict]) -> None:
+        """Record this turn's tool RESULTS (the second half of a round).
+
+        Runs after the bodies have filled ``executed`` with ``output`` /
+        ``success`` / media. XML merges the outputs into one user message; native
+        emits one tool-result message per executed call (paired by id), plus a
+        supplemental media message when any result carried images/PDFs.
+        """
+
     async def record_turn(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
-        """Record one think->act round into memory in this protocol's shape.
+        """Record one whole think->act round into memory in this protocol's shape.
+
+        The single-shot path (call + results together) for turns that need no
+        pre-execution checkpoint. Kept as the shared composition of
+        :meth:`record_call` + :meth:`record_results` so the two-phase (checkpoint)
+        path and this one-phase path can never drift.
 
         Args:
             memory: the Role's memory (has .add()).
@@ -123,6 +152,8 @@ class CommandChannel(ABC):
         Native records an assistant message carrying tool_calls + one tool-result
         message per executed call (paired by id), as the API requires.
         """
+        await self.record_call(memory, command_rsp, executed)
+        await self.record_results(memory, executed)
 
     def turn_signature(self, think_engine: "BaseThinkEngine") -> str:
         """A stable string identifying this turn, for duplicate detection.

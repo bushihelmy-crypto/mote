@@ -540,6 +540,27 @@ class TestAutoDetection:
         cfg = LLMConfig(api_type="anthropic", base_url="https://api.openai.com/v1", model="claude", api_key="x")
         assert resolve_api_type(cfg) == LLMType.ANTHROPIC
 
+    def test_anthropic_suffix_endpoint_selects_native(self):
+        # Chinese vendors expose an Anthropic-compatible surface at a /anthropic
+        # path (MiniMax, Kimi-coding) alongside their OpenAI /v1 surface.
+        for url in (
+            "https://api.minimax.io/anthropic",
+            "https://api.minimaxi.com/anthropic",
+            "https://api.moonshot.cn/anthropic/",  # trailing slash tolerated
+        ):
+            cfg = LLMConfig(api_type="openai", base_url=url, model="MiniMax-M2", api_key="x")
+            assert resolve_api_type(cfg) == LLMType.ANTHROPIC, url
+            assert isinstance(create_llm_instance(cfg), AnthropicLLM)
+
+    def test_openai_v1_surface_of_same_vendor_stays_openai(self):
+        from mote.router.llm.openai_api import OpenAILLM
+
+        # The vendor's OpenAI-compatible /v1 surface must NOT match the
+        # /anthropic detector — only the explicit anthropic surface takes native.
+        cfg = LLMConfig(api_type="openai", base_url="https://api.minimaxi.com/v1", model="MiniMax-M2", api_key="x")
+        assert resolve_api_type(cfg) == LLMType.OPENAI
+        assert isinstance(create_llm_instance(cfg), OpenAILLM)
+
 
 # -- error classification (handlers) ---------------------------------------
 class TestErrorClassification:
@@ -561,3 +582,89 @@ class TestErrorClassification:
         overloaded = anthropic.InternalServerError("boom", response=httpx.Response(500, request=request), body=None)
         # InternalServerError is in the transient allowlist.
         assert is_retryable(overloaded) is True
+
+
+class TestDescribeImage:
+    """``adescribe_image`` (base-class seam behind WebBrowser's read_image).
+
+    Gated ONLY on model vision capability (``support_image_input`` →
+    ``supports_vision``): a non-vision model raises ``NotImplementedError``
+    BEFORE any network call so the tool degrades cleanly; a vision model issues
+    a single multimodal ``aask`` carrying the image.
+    """
+
+    def test_incapable_model_raises_notimplemented(self):
+        llm = _make_llm()
+        llm.model = "claude-2"  # not multimodal
+        with pytest.raises(NotImplementedError):
+            run(llm.adescribe_image("aGVsbG8="))
+
+    def test_capable_model_feeds_image_to_aask(self):
+        llm = _make_llm()  # claude-opus-4-8 → multimodal
+        seen: dict = {}
+
+        async def _fake_aask(msg, *, images=None, stream=True, timeout=None, **kw):
+            seen["msg"] = msg
+            seen["images"] = images
+            seen["stream"] = stream
+            return "a cat on a mat"
+
+        llm.aask = _fake_aask  # type: ignore[method-assign]
+        out = run(llm.adescribe_image("aW1n", prompt="what is this?"))
+        assert out == "a cat on a mat"
+        # The image rides the multimodal images= param; the prompt steers it.
+        assert seen["images"] == ["aW1n"]
+        assert seen["msg"] == "what is this?"
+        # Isolated one-shot: never streamed.
+        assert seen["stream"] is False
+
+    def test_empty_prompt_uses_default_ask(self):
+        llm = _make_llm()
+        seen: dict = {}
+
+        async def _fake_aask(msg, *, images=None, stream=True, timeout=None, **kw):
+            seen["msg"] = msg
+            return "desc"
+
+        llm.aask = _fake_aask  # type: ignore[method-assign]
+        run(llm.adescribe_image("aW1n"))
+        assert "Describe this image" in seen["msg"]
+
+
+class TestUnreadableMediaNotice:
+    """A non-vision model must be TOLD its attachments were withheld.
+
+    ``_user_msg`` drops media on a model whose ``support_image_input`` is
+    False; instead of silently returning bare text (which leaves the model
+    reading e.g. "Shown below." with nothing below), it appends an honest
+    notice so the model does not hallucinate having seen an image.
+    """
+
+    def test_non_vision_model_gets_notice_not_silent_drop(self):
+        llm = _make_llm()
+        llm.model = "claude-2"  # not multimodal
+        out = llm._user_msg("look at this", images=["aW1n"])
+        assert out["role"] == "user"
+        assert out["content"].startswith("look at this")
+        assert "cannot read images" in out["content"]
+        assert "not shown" in out["content"]
+
+    def test_notice_counts_images_and_pdfs(self):
+        llm = _make_llm()
+        llm.model = "claude-2"
+        out = llm._user_msg("hi", images=["a", "b"], pdfs=["p"])
+        assert "2 images" in out["content"]
+        assert "1 PDF" in out["content"]
+
+    def test_vision_model_still_attaches_media(self):
+        llm = _make_llm()  # claude-opus-4-8 → multimodal
+        out = llm._user_msg("see", images=["aW1n"])
+        # Real multimodal content list, no notice.
+        assert isinstance(out["content"], list)
+        assert any(b.get("type") == "image_url" for b in out["content"])
+
+    def test_no_media_is_plain_text_unchanged(self):
+        llm = _make_llm()
+        llm.model = "claude-2"
+        out = llm._user_msg("just text")
+        assert out == {"role": "user", "content": "just text"}

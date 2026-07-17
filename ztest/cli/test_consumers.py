@@ -45,7 +45,7 @@ def test_structured_serializes_delta_via_sync_path():
     c.handle_sync(MessageBlockDelta(text="hi"))
     line = buf.getvalue().strip()
     payload = json.loads(line)
-    assert payload == {"kind": "message_block_delta", "text": "hi"}
+    assert payload == {"kind": "message_block_delta", "text": "hi", "scope": []}
 
 
 @pytest.mark.asyncio

@@ -237,7 +237,7 @@ class BackgroundTaskPool:
         safety bound so a bare call on an idle/empty pool returns instead of
         blocking forever; pass ``None`` to wait without a bound. Callers that
         already bound the wait themselves (e.g. ``wait_interruptible`` races it
-        against a sleep) can ignore it.
+        against a new-message signal) can ignore it.
 
         Returns:
             ``True`` if a task completed, ``False`` if the timeout elapsed first.
@@ -694,7 +694,7 @@ class BackgroundTaskPool:
             session_id=self._session_id,
             max_result_size_chars=cfg.default_max_result_size_chars,
             persist=cfg.persist_large_tool_results,
-            base_dir=self._output_store.base_dir if self._output_store is not None else None,
+            store=self._output_store.store if self._output_store is not None else None,
         )
 
     def _on_done(self, task_id: str, command_name: str, task: asyncio.Task) -> None:
