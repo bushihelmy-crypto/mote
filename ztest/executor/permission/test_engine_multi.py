@@ -15,7 +15,7 @@ import pytest
 from mote.common.schema import PermissionConfig, SandboxConfig
 from mote.executor.permission.engine import PermissionEngine
 from mote.executor.permission.rule_store import RuleStore
-from mote.executor.permission.sandbox import SandboxGuard
+from mote.executor.permission.sandbox.guard import SandboxGuard
 
 pytestmark = pytest.mark.asyncio
 

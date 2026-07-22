@@ -12,12 +12,29 @@ compaction markers, the session table and the usage line.
 
 from __future__ import annotations
 
+import json
 import re
 from enum import Enum
 from typing import Any, List, Optional, Tuple
 
+from rich.style import Style
+
 from mote.cli.consumers.render.builders._rich import Padding, Syntax, Table, Text, box
-from mote.cli.consumers.render.palette import BRANCH, CHECK, CROSS, MEDIA, PLAY, SKIP, Palette
+from mote.cli.consumers.render.builders.diff import render_diff
+from mote.cli.consumers.render.palette import (
+    BRANCH,
+    BULLET,
+    CHECK,
+    COMPACT,
+    CROSS,
+    MEDIA,
+    PLAY,
+    PROMPT_SYMBOL,
+    SCISSORS,
+    SKIP,
+    Palette,
+)
+from mote.cli.contracts.view import RESULT_KIND_DIFF, RESULT_KIND_TABLE
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
@@ -96,8 +113,6 @@ def user_message_row(text: str) -> Any:
     (not markdown) since it is exactly what the user typed. Both rich hosts share
     this one builder so the user's message looks identical everywhere.
     """
-    from mote.cli.consumers.render.palette import PROMPT_SYMBOL
-
     return bullet_row(PROMPT_SYMBOL, Text(text), style=f"bold {Palette.BRAND}")
 
 
@@ -132,8 +147,6 @@ def linkify(text: str, *, base_style: str = "") -> "Text":
     is unavailable the caller degrades to plain text elsewhere; here we still
     return a ``Text`` so the shape is stable.
     """
-    from rich.style import Style
-
     out = Text()
     idx = 0
     for m in _URL_RE.finditer(text):
@@ -175,8 +188,6 @@ def tool_started_text(ev: Any, *, ok: Optional[bool] = None, blink: bool = False
     running, ``blink`` (toggled by the host's heartbeat) brightens the bullet to
     :data:`Palette.SHIMMER` for a subtle pulse.
     """
-    from mote.cli.consumers.render.palette import BULLET
-
     if ok is None:
         bullet_style = Palette.SHIMMER if blink else Palette.BRAND
     elif rejected:
@@ -239,9 +250,6 @@ def render_result_detail(ev: Any, spaces: int = RESULT_INDENT) -> List[Any]:
     Returns a list of indented renderables (empty when there is no detail, or a
     table that failed to parse) so a host can ``print`` / mount each in order.
     """
-    from mote.cli.consumers.render.builders.diff import render_diff
-    from mote.cli.contracts.view import RESULT_KIND_DIFF, RESULT_KIND_TABLE
-
     detail = getattr(ev, "detail", None)
     if not detail:
         return []
@@ -269,8 +277,6 @@ def fold_note_str(ev: Any) -> str:
     * otherwise — content was clipped in a way with no line count (a single long
       line word-capped, or a summary char-capped); a generic "内容已折叠".
     """
-    from mote.cli.consumers.render.palette import SCISSORS
-
     full_ref = getattr(ev, "full_ref", None)
     hidden = getattr(ev, "hidden_lines", 0) or 0
     if full_ref:
@@ -418,8 +424,6 @@ def tool_group_summary_text(items: Any, *, active: bool) -> "Text":
     bar, not repeated on each row. Empty *items* (or no search/read among them)
     → empty ``Text`` (nothing to show).
     """
-    from mote.cli.consumers.render.palette import BULLET
-
     text = Text()
     if not items:
         return text
@@ -454,8 +458,6 @@ def conversation_compacted_text(ev: Any) -> "Text":
     human transcript): shows *that* history was condensed and, when known, how
     many messages the rebuilt history holds.
     """
-    from mote.cli.consumers.render.palette import COMPACT
-
     count = getattr(ev, "message_count", 0) or 0
     line = Text()
     line.append(f"{COMPACT} " + t(K.COMPACT_COMPACTED), style=Palette.DIM)
@@ -576,8 +578,6 @@ def activity_topology(activity_kind: str, label: str, topology: Any) -> "Text":
 
 def _node_retry_args(node: Any) -> str:
     """Bounded JSON of a failed node's ``args`` so the model can retry the call."""
-    import json
-
     args = node.get("args")
     if not args:
         return ""

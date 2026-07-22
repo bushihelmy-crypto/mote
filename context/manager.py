@@ -39,6 +39,7 @@ from mote.common.events import HistoryEditedEvent, MessageAppendedEvent, ToolsCh
 from mote.common.interface.event_subscriber import ObservationSubscriber
 from mote.common.logs import log_class
 from mote.common.schema import ContextManagerConfig, FoldState, LLMCallContext
+from mote.common.text import is_system_reminder
 
 if TYPE_CHECKING:
     from mote.common.schema import ToolResultLimitConfig
@@ -371,8 +372,6 @@ class ContextManager(ObservationSubscriber):
         ``<system-reminder>`` envelope counts — the per-turn context blocks the
         bus wraps as user messages are part of a turn, never a boundary.
         """
-        from mote.common.text import is_system_reminder
-
         role = str(getattr(message, "role", "") or "")
         if role != "user":
             return False

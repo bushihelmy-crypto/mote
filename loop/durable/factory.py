@@ -26,6 +26,7 @@ from mote.common.ledger import RunJournal
 from mote.common.logs import logger
 from mote.common.schema import DurableConfig
 from mote.loop.durable.backend import DurableBackend, JsonlBackend
+from mote.loop.durable.plugins import load_backend_factory
 
 
 def make_durable_backend(config: DurableConfig, journal: RunJournal) -> DurableBackend:
@@ -38,9 +39,7 @@ def make_durable_backend(config: DurableConfig, journal: RunJournal) -> DurableB
     """
     if config.backend == "temporal":
         try:
-            from mote.durable_exec.temporal import make_temporal_backend
-
-            return make_temporal_backend(config.temporal, journal)
+            return load_backend_factory("temporal")(config.temporal, journal)
         except ImportError as exc:
             logger.warning(
                 "DurableConfig.backend='temporal' selected but the optional "

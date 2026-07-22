@@ -25,15 +25,13 @@ round-trip ACP *does* model — permission — is fully wired.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from mote.cli.consumers._wire import acp
+from mote.cli.contracts.view.events import ApprovalDecision
 from mote.cli.view.approval import approval_action, approval_preview, approval_risk
 from mote.common.logs import logger
-
-if TYPE_CHECKING:  # types only — avoid a runtime import cycle
-    from mote.cli.contracts.view.events import ApprovalDecision
-    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput
+from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput
 
 #: An async request sender the server injects: ``(method, params) -> result``.
 #: The server binds this to the JSON-RPC endpoint's ``request`` so the port can
@@ -111,8 +109,6 @@ class AcpPort:
         returns empty answers (non-blocking), matching the ``InputPort`` contract
         that a port which can't gate returns defaults rather than blocking.
         """
-        from mote.common.schema import AskUserQuestionAnswers
-
         return AskUserQuestionAnswers(answers=[])
 
     async def decide_approval(self, ctx: Any, request: Any) -> "ApprovalDecision":
@@ -129,8 +125,6 @@ class AcpPort:
         callable all reject (fail-safe — the answer to "may I run this?" without a
         clear human yes is no).
         """
-        from mote.cli.contracts.view.events import ApprovalDecision
-
         if self._request is None or self._closed:
             logger.debug("AcpPort.decide_approval: no live link; rejecting (fail-safe)")
             return ApprovalDecision(approval_id="", outcome="reject")
@@ -191,8 +185,6 @@ class AcpPort:
         A ``selected`` id maps through :data:`PERM_KIND_TO_OUTCOME`; anything else
         (cancelled / missing / unknown id) rejects.
         """
-        from mote.cli.contracts.view.events import ApprovalDecision
-
         if not isinstance(reply, dict):
             return ApprovalDecision(approval_id="", outcome="reject")
         outcome = reply.get("outcome")

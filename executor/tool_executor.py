@@ -49,7 +49,7 @@ from mote.executor.effect_ledger import EffectLedger
 from mote.executor.loop_guard import LoopGuardSubscriber, ThrashDetector
 from mote.executor.mcp_lifecycle import McpLifecycle
 from mote.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
-from mote.executor.permission.sandbox import SandboxGuard
+from mote.executor.permission.sandbox.guard import SandboxGuard
 from mote.executor.tool_catalog import ToolCatalog
 from mote.executor.tool_lifecycle import ToolLifecycle
 from mote.executor.tool_pipeline import ToolExecutionPipeline

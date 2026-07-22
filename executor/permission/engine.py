@@ -45,7 +45,7 @@ from mote.common.schema.permission_types import (
 )
 from mote.executor.permission.rule_matcher import suggest_command_rule
 from mote.executor.permission.rule_store import RuleStore
-from mote.executor.permission.sandbox import SandboxGuard
+from mote.executor.permission.sandbox.guard import SandboxGuard
 
 # An async callback that asks the human to approve a gated action and returns
 # their structured decision. Supplied by the Role (``request_approval``

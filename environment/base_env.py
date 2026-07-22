@@ -27,7 +27,7 @@ from pydantic import ConfigDict, PrivateAttr
 
 from mote.common.exception import AgentNotFound
 from mote.common.logs import logger
-from mote.common.schema import Message
+from mote.common.schema import AskUserQuestionAnswers, Message
 from mote.common.schema.env import BaseEnvironment
 from mote.environment.control import AgentControl
 from mote.environment.registry import AgentMetadata
@@ -161,8 +161,6 @@ class AgentEnvironment(BaseEnvironment):
         environment returning empty answers is a deliberate decision, not an
         oversight; MoteEnv may optionally override to walk ``get_human_input``.
         """
-        from mote.common.schema import AskUserQuestionAnswers
-
         return AskUserQuestionAnswers()
 
     async def reply_to_user(self, content: str, sent_from: Optional[Any] = None) -> str:

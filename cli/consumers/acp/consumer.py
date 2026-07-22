@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional
 
 from mote.cli.consumers._wire import acp
+from mote.cli.consumers.core import register_consumer
 from mote.cli.contracts.base import Sink, SinkConsumer
 from mote.cli.contracts.view import Capabilities
 
@@ -78,12 +79,7 @@ def build_acp_consumer(config: Any = None) -> AcpConsumer:
 
 
 # Self-register on import (mirrors the AG-UI consumer's pattern).
-try:
-    from mote.cli.consumers.registry import register_consumer
-
-    register_consumer("acp", capabilities=ACP_CAPS)(build_acp_consumer)
-except Exception:  # noqa: BLE001
-    pass
+register_consumer("acp", capabilities=ACP_CAPS)(build_acp_consumer)
 
 
 __all__ = ["AcpConsumer", "build_acp_consumer", "ACP_CAPS", "Sink"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Self, TypeVar
 
 from jsonschema.validators import validator_for
 from pydantic import TypeAdapter, ValidationError
@@ -126,13 +126,64 @@ class OutputContract(Generic[OutputT]):
             if not isinstance(validator.effect, ValidatorEffect):
                 raise ValueError(f"invalid validator effect for {validator.name}")
 
+    @classmethod
+    def from_type(
+        cls,
+        output_type: Any,
+        *,
+        namespace: str,
+        name: str,
+        version: str,
+        retry_policy: OutputRetryPolicy = OutputRetryPolicy(),
+        validators: tuple[OutputValidator, ...] = (),
+        migration_registry: OutputMigrationRegistry | None = None,
+        validator_migration_registry: ValidatorMigrationRegistry | None = None,
+    ) -> Self:
+        """Build a typed contract without exposing decoder assembly."""
+        return cls(
+            contract_id=OutputContractId(namespace, name, version),
+            decoder=TypeAdapterOutputDecoder(output_type),
+            retry_policy=retry_policy,
+            validators=validators,
+            migration_registry=migration_registry,
+            validator_migration_registry=validator_migration_registry,
+        )
+
+    @classmethod
+    def from_json_schema(
+        cls,
+        schema: dict[str, Any],
+        *,
+        namespace: str,
+        name: str,
+        version: str,
+        retry_policy: OutputRetryPolicy = OutputRetryPolicy(),
+        validators: tuple[OutputValidator, ...] = (),
+        migration_registry: OutputMigrationRegistry | None = None,
+        validator_migration_registry: ValidatorMigrationRegistry | None = None,
+    ) -> Self:
+        """Build a contract from a trusted JSON Schema document."""
+        return cls(
+            contract_id=OutputContractId(namespace, name, version),
+            decoder=JsonSchemaOutputDecoder(schema),
+            retry_policy=retry_policy,
+            validators=validators,
+            migration_registry=migration_registry,
+            validator_migration_registry=validator_migration_registry,
+        )
+
+    @classmethod
+    def text(cls) -> "OutputContract[str]":
+        """Return the framework's stable plain-text output contract."""
+        return OutputContract(
+            contract_id=OutputContractId("mote", "text", "1"),
+            decoder=TypeAdapterOutputDecoder(str),
+        )
+
     @property
     def is_text(self) -> bool:
         return self.contract_id == OutputContractId("mote", "text", "1")
 
 
 def text_output_contract() -> OutputContract[str]:
-    return OutputContract(
-        contract_id=OutputContractId("mote", "text", "1"),
-        decoder=TypeAdapterOutputDecoder(str),
-    )
+    return OutputContract.text()

@@ -27,11 +27,13 @@ from __future__ import annotations
 from typing import ClassVar, Optional
 from urllib.parse import quote_plus
 
+from mote.common.config.loader import load_config
 from mote.common.exception import ToolNotConfiguredError, ToolValidationError
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import WebSearch as WebSearchCapability
 from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolResult
+from mote.executor.tools.web_search_registry import create_search_backend
 
 
 def _unavailable_msg(query: str) -> str:
@@ -147,9 +149,6 @@ class WebSearch(BaseTool):
         # Resolve the active backend from config (default "provider" = the routed
         # model's server-side search, wrapping the injected ``web_search``
         # capability). Swapping in a direct-API vendor is config-only.
-        from mote.common.config.loader import load_config
-        from mote.executor.tools.web_search_registry import create_search_backend
-
         backend = create_search_backend(load_config().tools.web_search, provider_search=self.web_search)
         try:
             hits = await backend.search(

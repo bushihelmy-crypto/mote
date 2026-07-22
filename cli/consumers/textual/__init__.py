@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover — exercised only in a textual-less env
 # Lazy exports (PEP 562): only import the textual-dependent host on first access
 # so ``import mote.cli.consumers.textual`` is safe without ``textual`` present.
 _LAZY = {
-    "run_textual": ("mote.cli.consumers.textual.app", "run_textual"),
+    "run_textual": ("mote.cli.consumers.textual.bootstrap", "run_textual"),
     "MoteApp": ("mote.cli.consumers.textual.app", "MoteApp"),
     "ViewEventMessage": ("mote.cli.consumers.textual.app", "ViewEventMessage"),
     "TextualConsumer": ("mote.cli.consumers.textual.consumer", "TextualConsumer"),

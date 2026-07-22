@@ -16,49 +16,10 @@ breaks the others) before reading the active list.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, List, Optional
 
+from mote.cli.consumers.core import ConsumerSpec, consumer_spec, register_consumer, registered_consumers
 from mote.cli.contracts.interface import Consumer
-from mote.cli.contracts.view import Capabilities
-
-
-@dataclass(frozen=True)
-class ConsumerSpec:
-    """A registered channel: how to build it + what it can render."""
-
-    name: str
-    builder: Callable[[Any], Consumer]
-    capabilities: Capabilities
-    validate: Optional[Callable[[Any], None]] = None
-
-
-_REGISTRY: Dict[str, ConsumerSpec] = {}
-
-
-def register_consumer(
-    name: str,
-    *,
-    capabilities: Capabilities,
-    validate: Optional[Callable[[Any], None]] = None,
-) -> Callable[[Callable[[Any], Consumer]], Callable[[Any], Consumer]]:
-    """Decorator: register a consumer builder under ``name``.
-
-    The decorated function takes the app config and returns a :class:`Consumer`.
-    ``capabilities`` are attached to the built consumer (the projector reads them
-    to drive downgrade); ``validate`` (optional) may raise on a bad config.
-    """
-
-    def _decorator(builder: Callable[[Any], Consumer]) -> Callable[[Any], Consumer]:
-        _REGISTRY[name] = ConsumerSpec(name=name, builder=builder, capabilities=capabilities, validate=validate)
-        return builder
-
-    return _decorator
-
-
-def registered_consumers() -> List[str]:
-    """Names of all currently-registered channels (for diagnostics/help)."""
-    return sorted(_REGISTRY)
 
 
 def _ensure_builtins_imported() -> None:
@@ -80,7 +41,7 @@ def _ensure_builtins_imported() -> None:
 def build_consumer(name: str, config: Any = None) -> Consumer:
     """Build a single registered consumer by name (validating config first)."""
     _ensure_builtins_imported()
-    spec = _REGISTRY.get(name)
+    spec = consumer_spec(name)
     if spec is None:
         raise KeyError(f"unknown consumer {name!r}; registered: {registered_consumers()}")
     if spec.validate is not None:

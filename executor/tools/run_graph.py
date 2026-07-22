@@ -32,7 +32,13 @@ from mote.executor.capability_types import (
     ResumeGraphOutput,
 )
 from mote.executor.execution_context import current_tool_call_id
-from mote.executor.tasks.bggraph.from_spec import ItemFailure, build_graph, collect_item_failures, resolve_output
+from mote.executor.tasks.bggraph.from_spec import (
+    ItemFailure,
+    _node_deps,
+    build_graph,
+    collect_item_failures,
+    resolve_output,
+)
 from mote.executor.tasks.bggraph.report import reset_progress_writer, set_progress_writer
 from mote.executor.tasks.bggraph.spec import GraphSpec
 from mote.executor.tasks.bggraph.types import GraphRunState
@@ -317,8 +323,6 @@ class RunGraph(BaseTool):
         ``guarded`` when they carry a ``when`` predicate. An explicit edge that
         duplicates an inferred one is not double-listed.
         """
-        from mote.executor.tasks.bggraph.from_spec import _node_deps
-
         nodes = [{"id": n.id, "kind": n.kind, "label": (n.description or n.id)} for n in spec.nodes]
         node_ids = {n.id for n in spec.nodes}
         edges: list[dict] = []

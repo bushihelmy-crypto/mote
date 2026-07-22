@@ -8,18 +8,20 @@ from __future__ import annotations
 
 import types
 import typing
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
+from collections import defaultdict
+from typing import Any, Awaitable, Callable, Optional, Union
 
 from mote.common.utils.docstring import first_line
 from mote.executor.tasks.bggraph.base_node import BaseNode, _parse_params_from_docstring
 from mote.executor.tasks.bggraph.channels import derive_output_fields, derive_reducers
-from mote.executor.tasks.bggraph.engine import _build_executor
+from mote.executor.tasks.bggraph.engine import _build_executor, _run_driver
 from mote.executor.tasks.bggraph.engine import resume as _resume
 from mote.executor.tasks.bggraph.engine import resume_skip as _resume_skip
 from mote.executor.tasks.bggraph.engine import resume_skip_and_from as _rsaf
 from mote.executor.tasks.bggraph.types import (
     END,
     START,
+    GraphRunState,
     GraphState,
     _ConditionalEdge,
     _Edge,
@@ -29,9 +31,6 @@ from mote.executor.tasks.bggraph.types import (
 )
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_spec_adapter import annotation_to_json_schema
-
-if TYPE_CHECKING:
-    from mote.executor.tasks.bggraph.types import GraphRunState
 
 # ---------------------------------------------------------------------------
 # Type-compatibility check for compile-time param validation
@@ -269,13 +268,6 @@ class BgGraph:
         Raises the engine's terminal error (``GraphBatchFailureError`` etc.) on
         failure; on success the returned state carries every node's result.
         """
-        # Local imports avoid a module-level cycle (engine imports back into the
-        # bggraph package), mirroring ``compile``'s runtime dependency on it.
-        from collections import defaultdict
-
-        from mote.executor.tasks.bggraph.engine import _run_driver
-        from mote.executor.tasks.bggraph.types import GraphRunState
-
         self._prepare()
         state = self.state_schema(**initial_state)
         if run_state is None:

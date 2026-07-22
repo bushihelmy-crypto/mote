@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+
 # Map a structured ApprovalDecision.outcome to the engine's ApprovalChoice.
 # ``always_deny`` currently collapses to a plain deny (no persistent deny rule
 # yet); when that lands it maps to its own choice.
@@ -88,8 +90,6 @@ class PortHumanChannel:
         is no ``\\n\\n`` block splitting and no line-position pairing: bug #1 / #2
         cannot recur even on this path.
         """
-        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-
         out = []
         for q in questions:
             labels = [o.label for o in q.options]

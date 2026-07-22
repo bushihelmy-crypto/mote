@@ -9,6 +9,7 @@ from mote.context.skills.skill_manager import SkillManager
 from mote.loop import BaseLoop
 from mote.roles.component_graph import ComponentGraph
 from mote.roles.context_provider import ContextProvider
+from mote.roles.graph_output_service import GraphOutputService
 from mote.router.router import LLMRouter
 from mote.think.prompt_builder import ThinkSubsystems
 
@@ -67,6 +68,10 @@ class RoleComponentAccessors:
     @property
     def executor(self) -> "ToolExecutor":
         return self._get("executor")
+
+    @property
+    def graph_output_service(self) -> GraphOutputService:
+        return self._get("graph_output_service")
 
     @property
     def context_manager(self) -> ContextManager:

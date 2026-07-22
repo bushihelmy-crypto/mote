@@ -123,6 +123,29 @@ def test_output_lifecycle_events_roundtrip():
     assert rebuilt[-2].value == {"count": 1}
 
 
+def test_old_output_fixture_tolerates_missing_new_fields_and_future_extras():
+    from mote.session.events import OUTPUT_COMMITTED, parse_event
+
+    event = parse_event(
+        {
+            "type": OUTPUT_COMMITTED,
+            "payload": {
+                "candidate_id": "legacy-candidate",
+                "contract_id": "legacy.report@1",
+                "schema_fingerprint": "sha",
+                "value": {"count": 1},
+                "future_field": "ignored",
+            },
+        }
+    )
+
+    assert isinstance(event, OutputCommittedEvent)
+    assert event.run_id == ""
+    assert event.run_kind == "agent"
+    assert event.fencing_token == 0
+    assert event.value == {"count": 1}
+
+
 def test_parse_line_is_forgiving():
     assert parse_line("") is None
     assert parse_line("   ") is None

@@ -17,9 +17,28 @@ matching how Grep computes a match's line number.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from importlib import import_module
+from typing import Callable, Optional
 
 from mote.common.const.tools import DOCUMENT_EXTENSIONS
+
+Extractor = Callable[[str], Optional[str]]
+
+_PDF_ADAPTERS = (
+    "mote.executor.dependency.document_adapters.fitz_pdf",
+    "mote.executor.dependency.document_adapters.pdfminer_pdf",
+    "mote.executor.dependency.document_adapters.pypdf_pdf",
+)
+_DOCX_ADAPTER = "mote.executor.dependency.document_adapters.docx"
+_XLSX_ADAPTER = "mote.executor.dependency.document_adapters.xlsx"
+
+
+def _load_adapter(module_name: str) -> Optional[Extractor]:
+    try:
+        module = import_module(module_name)
+    except ImportError:
+        return None
+    return module.extract
 
 
 def is_document(file_path: str) -> bool:
@@ -43,61 +62,17 @@ def extract_pdf_text(file_path: str) -> Optional[str]:
     installed. Returns the full text or None if no backend is available / the
     extraction fails.
     """
-    # PyMuPDF (fitz): fastest, best layout.
-    try:
-        import fitz  # type: ignore
-
-        parts = []
-        with fitz.open(file_path) as doc:
-            for page in doc:
-                parts.append(page.get_text("text"))  # type: ignore[attr-defined]  # fitz.Page stub gap
-        return "\n".join(parts)
-    except ImportError:
-        pass
-    except Exception:
-        return None
-
-    # pdfminer.six: pure-Python, good text fidelity.
-    try:
-        from pdfminer.high_level import extract_text  # type: ignore
-
-        return extract_text(file_path)
-    except ImportError:
-        pass
-    except Exception:
-        return None
-
-    # pypdf / PyPDF2: last resort.
-    try:
-        try:
-            from pypdf import PdfReader  # type: ignore
-        except ImportError:
-            from PyPDF2 import PdfReader  # type: ignore
-
-        reader = PdfReader(file_path)
-        return "\n".join((page.extract_text() or "") for page in reader.pages)
-    except ImportError:
-        return None
-    except Exception:
-        return None
+    for module_name in _PDF_ADAPTERS:
+        extractor = _load_adapter(module_name)
+        if extractor is not None:
+            return extractor(file_path)
+    return None
 
 
 def extract_docx_text(file_path: str) -> Optional[str]:
     """Extract text from a Word .docx (paragraphs + table cells) via python-docx."""
-    try:
-        import docx  # type: ignore
-    except ImportError:
-        return None
-    try:
-        document = docx.Document(file_path)
-        lines = [p.text for p in document.paragraphs]
-        for table in document.tables:
-            for row in table.rows:
-                cells = [c.text for c in row.cells]
-                lines.append("\t".join(cells))
-        return "\n".join(lines)
-    except Exception:
-        return None
+    extractor = _load_adapter(_DOCX_ADAPTER)
+    return extractor(file_path) if extractor is not None else None
 
 
 def extract_xlsx_text(file_path: str) -> Optional[str]:
@@ -107,22 +82,8 @@ def extract_xlsx_text(file_path: str) -> Optional[str]:
     matches can be located. read_only + data_only keeps memory bounded on large
     workbooks.
     """
-    try:
-        from openpyxl import load_workbook  # type: ignore
-    except ImportError:
-        return None
-    try:
-        wb = load_workbook(file_path, read_only=True, data_only=True)
-        lines = []
-        for ws in wb.worksheets:
-            for row in ws.iter_rows(values_only=True):
-                cells = ["" if v is None else str(v) for v in row]
-                if any(cells):
-                    lines.append(f"[{ws.title}]\t" + "\t".join(cells))
-        wb.close()
-        return "\n".join(lines)
-    except Exception:
-        return None
+    extractor = _load_adapter(_XLSX_ADAPTER)
+    return extractor(file_path) if extractor is not None else None
 
 
 def extract_document_text(file_path: str) -> Optional[str]:

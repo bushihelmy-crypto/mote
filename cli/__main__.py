@@ -124,7 +124,7 @@ def main(argv=None) -> None:
     ui = _resolve_ui(args.ui)
 
     if ui == "textual":
-        from mote.cli.consumers.textual.app import run_textual
+        from mote.cli.consumers.textual.bootstrap import run_textual
 
         run_textual(model=args.model, tools=tools, cwd=args.cwd, name=args.name)
         print("\nGoodbye.")

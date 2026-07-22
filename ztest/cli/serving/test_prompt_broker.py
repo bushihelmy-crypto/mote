@@ -52,7 +52,8 @@ async def test_double_resolve_second_is_false():
     assert broker.resolve(pid, {"a": 2}) is False  # already delivered + popped
 
 
-def test_discard_drops_without_resolving():
+@pytest.mark.asyncio
+async def test_discard_drops_without_resolving():
     broker = PromptBroker()
     pid = broker.new_id("q")
     broker.open(pid)

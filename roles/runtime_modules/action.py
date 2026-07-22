@@ -5,11 +5,14 @@ from typing import Any
 
 from mote.common.resource import build_task_result_pointer
 from mote.common.schema import PAUSE_STATUSES, TERMINAL_STATUSES, BgStatus
+from mote.common.secrets.cipher import build_cipher
 from mote.common.workspace import WorkspaceStore
+from mote.executor.dependency.browser_profile import BrowserProfileStore
 from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
 from mote.executor.tool_executor import ToolExecutor
 from mote.parser import infer_native_tool_provider, make_command_channel
 from mote.roles.component_graph import ComponentSpec
+from mote.roles.graph_output_service import GraphOutputService
 
 
 def action_component_specs() -> list[ComponentSpec]:
@@ -18,6 +21,7 @@ def action_component_specs() -> list[ComponentSpec]:
         ComponentSpec("bg_pool", _build_bg_pool),
         ComponentSpec("executor", _build_executor),
         ComponentSpec("command_channel", _build_command_channel),
+        ComponentSpec("graph_output_service", _build_graph_output_service),
         ComponentSpec("browser_profile_store", _build_browser_profile_store),
     ]
 
@@ -103,11 +107,15 @@ def _build_command_channel(ctx):
 
 
 def _build_browser_profile_store(ctx):
-    from mote.common.secrets.cipher import build_cipher
-    from mote.executor.dependency.browser_profile import BrowserProfileStore
-
     secrets_cfg = ctx.role.config.secrets
     return BrowserProfileStore(lambda: build_cipher(secrets_cfg))
+
+
+def _build_graph_output_service(ctx) -> GraphOutputService:
+    return GraphOutputService(
+        take_restore=ctx.role._state_ctl.take_pending_graph_output_restore,
+        current_lease=ctx.role._components.current_graph_lease,
+    )
 
 
 def _build_executor(ctx) -> ToolExecutor:

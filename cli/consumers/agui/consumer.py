@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional
 
 from mote.cli.consumers._wire import agui
+from mote.cli.consumers.core import register_consumer
 from mote.cli.contracts.base import Sink, SinkConsumer
 from mote.cli.contracts.view import Capabilities
 
@@ -83,12 +84,7 @@ def build_agui_consumer(config: Any = None) -> AguiConsumer:
 
 
 # Self-register on import (mirrors the structured consumer's pattern).
-try:
-    from mote.cli.consumers.registry import register_consumer
-
-    register_consumer("agui", capabilities=AGUI_CAPS)(build_agui_consumer)
-except Exception:  # noqa: BLE001
-    pass
+register_consumer("agui", capabilities=AGUI_CAPS)(build_agui_consumer)
 
 
 __all__ = ["AguiConsumer", "build_agui_consumer", "AGUI_CAPS", "Sink"]

@@ -27,7 +27,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, List, Optional
 
+from mote.cli.consumers.textual.screens import ApprovalScreen, QuestionScreen
 from mote.cli.contracts.view.events import ApprovalDecision
+from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
 
 
 class TextualPort:
@@ -122,8 +124,6 @@ class TextualPort:
         with a structured ``(selected, free_text)`` tuple, which we flatten back
         to the single string this legacy shape returns.
         """
-        from mote.cli.consumers.textual.screens import QuestionScreen
-
         result = await self._push_modal(QuestionScreen(question, options, multi))
         selected, free = self._unpack(result)
         if free:
@@ -136,9 +136,6 @@ class TextualPort:
         Pushes one :class:`QuestionScreen` per question and collects the
         structured ``(selected, free_text)`` each dismisses with.
         """
-        from mote.cli.consumers.textual.screens import QuestionScreen
-        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-
         out = []
         multiq = len(questions) > 1
         for q in questions:
@@ -159,8 +156,6 @@ class TextualPort:
 
     async def decide_approval(self, ctx: Any, request: Any) -> Any:
         """Push an :class:`ApprovalScreen` and await the :class:`ApprovalDecision`."""
-        from mote.cli.consumers.textual.screens import ApprovalScreen
-
         approval_id = getattr(request, "approval_id", "") or ""
         result = await self._push_modal(ApprovalScreen(request))
         if isinstance(result, ApprovalDecision):

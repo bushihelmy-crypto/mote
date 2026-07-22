@@ -48,7 +48,13 @@ from mote.roles import Role
 from mote.roles.agents.markdown_loader import register_md_agents
 from mote.roles.role_schema import RoleSchema
 from mote.roles.role_state import RoleState
+from mote.router.cost.report import format_total_cost
 from mote.router.llm.context import Context
+from mote.router.ratelimit import format_rate_limits
+from mote.session.checkpoint import CheckpointStore
+from mote.session.checkpoint import list_checkpoints as _list_checkpoints
+from mote.session.events import CheckpointEvent
+from mote.session.log import SessionLog
 
 
 # ======================================================================
@@ -223,9 +229,6 @@ def list_checkpoints(role: Any) -> list:
     empty list when the feature was inert (non-repo workspace) or nothing yet
     captured.
     """
-    from mote.session.checkpoint import list_checkpoints as _list_checkpoints
-    from mote.session.log import SessionLog
-
     log = SessionLog(role.state.session_id)
     return _list_checkpoints(log)
 
@@ -257,13 +260,6 @@ def rewind_files(role: Any, index: int) -> Optional[RewindResult]:
     :attr:`RewindResult.external`. Returns a :class:`RewindResult` on success, or
     ``None`` when the index is out of range or the restore failed.
     """
-    from pathlib import Path
-
-    from mote.session.checkpoint import CheckpointStore
-    from mote.session.checkpoint import list_checkpoints as _list_checkpoints
-    from mote.session.events import CheckpointEvent
-    from mote.session.log import SessionLog
-
     log = SessionLog(role.state.session_id)
     entries = _list_checkpoints(log)
     if not (0 <= index < len(entries)):
@@ -365,9 +361,6 @@ def usage_report(role: Any) -> str:
     (a bare fake in tests) degrades to a plain "unavailable" line rather than
     raising, keeping the command host-surface total.
     """
-    from mote.router.cost.report import format_total_cost
-    from mote.router.ratelimit import format_rate_limits
-
     try:
         context = role.context
     except Exception:  # noqa: BLE001 — a role without a bound context degrades cleanly

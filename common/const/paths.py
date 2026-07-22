@@ -8,6 +8,7 @@ from typing import List, Optional
 from loguru import logger
 
 import mote
+from mote.common.vcs import find_git_root
 
 #: The per-project config directory name. All project-local mote assets
 #: (skills / agents / mcp.json / settings.local.json) live under ``<dir>/.mote``.
@@ -109,10 +110,6 @@ def mote_project_dirs(subdir: str, cwd: Optional[Path] = None) -> List[Path]:
     Best-effort and side-effect-free: only directories that actually exist are
     returned; the list may be empty.
     """
-    # Local import: git_state lives above const in the import layering, so we
-    # defer it to call-time to keep paths.py a leaf module.
-    from mote.common.utils.git_state import find_git_root
-
     start = Path(cwd) if cwd is not None else Path.cwd()
     try:
         start = start.resolve()
@@ -149,8 +146,6 @@ def mote_project_files(filename: str, cwd: Optional[Path] = None) -> List[Path]:
     git-root boundary; returned **low→high precedence** (git root first, *cwd*
     last) so a closer file overrides a farther one.
     """
-    from mote.common.utils.git_state import find_git_root
-
     start = Path(cwd) if cwd is not None else Path.cwd()
     try:
         start = start.resolve()

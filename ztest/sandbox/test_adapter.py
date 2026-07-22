@@ -120,7 +120,7 @@ class TestBuildRuntime:
         assert limits.cpu_quota == "200%"
 
     def test_resource_guard_adjustment_visible_next_call(self, tmp_path):
-        from mote.executor.permission.sandbox import ResourceGuard
+        from mote.executor.permission.sandbox.resource_guard import ResourceGuard
 
         cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", memory_max="4G")
         rguard = ResourceGuard(cfg)

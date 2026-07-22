@@ -143,7 +143,7 @@ async def test_committed_graph_output_resumes_by_stable_run_id(role_in_tmp):
     )
 
     async with role_in_tmp.graph_run_lease("tool-call-1"):
-        committed = await role_in_tmp.resume_graph_output(
+        committed = await role_in_tmp._components.graph_output_service.resume(
             contract_spec=GraphOutputContractSpec(namespace="test", name="integer", version="1", schema=schema),
             run_id="tool-call-1",
         )
@@ -153,7 +153,7 @@ async def test_committed_graph_output_resumes_by_stable_run_id(role_in_tmp):
     assert committed.run_id == "tool-call-1"
     async with role_in_tmp.graph_run_lease("tool-call-1"):
         assert (
-            await role_in_tmp.resume_graph_output(
+            await role_in_tmp._components.graph_output_service.resume(
                 contract_spec=GraphOutputContractSpec(namespace="test", name="integer", version="1", schema=schema),
                 run_id="tool-call-1",
             )

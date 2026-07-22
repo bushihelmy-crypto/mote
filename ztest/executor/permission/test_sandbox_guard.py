@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 
 from mote.common.schema import SandboxConfig
-from mote.executor.permission.sandbox import SandboxGuard
+from mote.executor.permission.sandbox.guard import SandboxGuard
 
 
 class TestFullMode:

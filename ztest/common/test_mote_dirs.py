@@ -11,7 +11,7 @@ parent directory outside the repo never leak in.
 The git root is faked by monkeypatching ``find_git_root`` on the path module's
 call-time import target, so nothing depends on the test tree's real VCS layout.
 """
-import mote.common.utils.git_state as git_state
+import mote.common.const.paths as paths
 from mote.common.const.paths import (
     CONFIG_ROOT,
     MOTE_DIR_NAME,
@@ -24,7 +24,7 @@ from mote.common.const.paths import (
 
 def _fake_git_root(monkeypatch, root):
     """Make ``find_git_root`` report *root* for every query (deferred-import safe)."""
-    monkeypatch.setattr(git_state, "find_git_root", lambda cwd: str(root))
+    monkeypatch.setattr(paths, "find_git_root", lambda cwd: str(root))
 
 
 class TestUserMoteDir:

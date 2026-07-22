@@ -39,6 +39,7 @@ import string
 import textwrap
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -666,15 +667,19 @@ def _make_compute_node(node: NodeSpec) -> Callable:
             # Run the (synchronous, potentially slow) eval off the event loop and
             # under a wall-clock ceiling: the loop stays responsive and a runaway
             # expression fails the node instead of freezing the whole agent.
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mote-graph-compute")
             try:
+                loop = asyncio.get_running_loop()
                 value = await asyncio.wait_for(
-                    asyncio.to_thread(_eval_expr, expr, symbols, node_id),
+                    loop.run_in_executor(executor, _eval_expr, expr, symbols, node_id),
                     _COMPUTE_TIMEOUT_S,
                 )
             except asyncio.TimeoutError as exc:
                 # Convert to GraphToolError so the runner treats it as a hard node
                 # failure (ABORT), not a transient error worth retrying.
                 raise GraphToolError(f"compute node {node_id!r}: exceeded {_COMPUTE_TIMEOUT_S:g}s time limit") from exc
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
             return {sink: value}
 
         return Stage(submit=submit(), name=node_id)

@@ -29,13 +29,13 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
 from mote.cli.consumers._wire import agui
+from mote.cli.contracts.view.events import ApprovalDecision
 from mote.cli.view.approval import approval_action, approval_preview, approval_risk
 from mote.common.logs import logger
+from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers, AskUserQuestionInput
 
-if TYPE_CHECKING:  # types only — avoid a runtime import cycle
-    from mote.cli.contracts.view.events import ApprovalDecision
+if TYPE_CHECKING:
     from mote.cli.serving.prompt_broker import PromptBroker
-    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionInput
 
 #: Async wire sink (same contract as ``AguiConsumer.Sink``): one dict → the wire.
 Sink = Callable[[Dict[str, Any]], Awaitable[None]]
@@ -148,8 +148,6 @@ class AguiPort:
         which we parse straight back into :class:`AskUserQuestionAnswers`. No
         back-channel → empty answers (non-blocking).
         """
-        from mote.common.schema import AskUserQuestionAnswers
-
         if not self._can_prompt():
             return AskUserQuestionAnswers(answers=[])
         prompt_id = self._broker.new_id("q")  # type: ignore[union-attr]
@@ -172,8 +170,6 @@ class AguiPort:
         ``/respond``. No back-channel (or a timeout) → reject: the fail-safe
         answer to "may I run this?" without a human is no.
         """
-        from mote.cli.contracts.view.events import ApprovalDecision
-
         if not self._can_prompt():
             logger.debug("AguiPort.decide_approval: no HITL back-channel; rejecting (fail-safe)")
             return ApprovalDecision(approval_id="", outcome="reject")
@@ -225,8 +221,6 @@ class AguiPort:
 
     def _parse_answers(self, payload: Any, questions: Any) -> "AskUserQuestionAnswers":
         """Map a ``{answers:[...]}`` reply into structured answers, else empty."""
-        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-
         if not isinstance(payload, dict):
             return AskUserQuestionAnswers(answers=[])
         raw = payload.get("answers")
@@ -252,8 +246,6 @@ class AguiPort:
         A missing/garbled/absent reply rejects (fail-safe). ``outcome`` is
         validated against the four known values; anything else → reject.
         """
-        from mote.cli.contracts.view.events import ApprovalDecision
-
         if not isinstance(payload, dict):
             return ApprovalDecision(approval_id=prompt_id, outcome="reject")
         outcome = payload.get("outcome")

@@ -53,6 +53,7 @@ from mote.common.interface.event_subscriber import DURABLE, DeliveryPolicy, Obse
 from mote.common.logs import log_class, logger
 from mote.common.text.hashing import content_hash
 from mote.session.checkpoint import CheckpointStore, list_checkpoints
+from mote.session.event_policy import is_rollout_event
 from mote.session.events import CheckpointEvent, CompactedEvent, LLMCallEvent, MessageEvent, MetaUpdateEvent
 from mote.session.events import OutputAcceptedEvent as PersistedOutputAcceptedEvent
 from mote.session.events import OutputCandidateReceivedEvent as PersistedOutputCandidateReceivedEvent
@@ -89,7 +90,7 @@ class RecorderSubscriber(ObservationSubscriber):
         return self._log
 
     async def handle(self, event) -> None:
-        if not self.enabled:
+        if not self.enabled or not is_rollout_event(event):
             return
         if isinstance(event, MessageAppendedEvent):
             if event.message is not None:

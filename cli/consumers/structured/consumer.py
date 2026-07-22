@@ -18,6 +18,7 @@ import json
 import sys
 from typing import Any
 
+from mote.cli.consumers.core import register_consumer
 from mote.cli.contracts.base import BaseConsumer
 from mote.cli.contracts.view import STRUCTURED_CAPS, Capabilities
 
@@ -55,12 +56,7 @@ def build_structured_consumer(config: Any = None) -> StructuredConsumer:
 
 
 # Self-register on import.
-try:
-    from mote.cli.consumers.registry import register_consumer
-
-    register_consumer("structured", capabilities=STRUCTURED_CAPS)(build_structured_consumer)
-except Exception:  # noqa: BLE001
-    pass
+register_consumer("structured", capabilities=STRUCTURED_CAPS)(build_structured_consumer)
 
 
 __all__ = ["StructuredConsumer", "build_structured_consumer"]

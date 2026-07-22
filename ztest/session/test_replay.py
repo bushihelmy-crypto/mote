@@ -9,6 +9,8 @@ skipped (counted) without aborting; turn_context is ignored for history.
 """
 from __future__ import annotations
 
+import json
+
 from mote.common.schema import AIMessage, UserMessage
 from mote.session.events import (
     CompactedEvent,
@@ -158,6 +160,37 @@ def test_output_state_survives_message_compaction(tmp_path):
             }
         ],
     }
+
+
+def test_unknown_event_is_ignored_without_hiding_later_facts(tmp_path):
+    log = _fresh_log(tmp_path)
+    list(log.iter_raw())
+    with open(log.path, "a", encoding="utf-8") as file:
+        file.write(json.dumps({"type": "future_event", "payload": {"value": 1}}) + "\n")
+    log.append(MessageEvent(message=UserMessage(content="after-unknown")))
+
+    result = replay(log)
+
+    assert [message.content for message in result.messages] == ["after-unknown"]
+
+
+def test_duplicate_output_fact_is_idempotent(tmp_path):
+    log = _fresh_log(tmp_path)
+    committed = OutputCommittedEvent(
+        candidate_id="candidate-1",
+        contract_id="test.report@1",
+        schema_fingerprint="sha",
+        value={"count": 1},
+        run_id="run-1",
+    )
+    log.append(committed)
+    log.append(committed)
+
+    state = replay(log).output_states["run-1"]
+
+    assert state["status"] == "committed"
+    assert state["value"] == {"count": 1}
+    assert state["candidate_id"] == "candidate-1"
 
 
 def test_turn_context_ignored(tmp_path):

@@ -23,7 +23,10 @@ from __future__ import annotations
 import os
 from typing import Callable, Optional
 
+from mote.common.const.paths import CONFIG_ROOT, browser_profiles_dir
 from mote.common.schema import SandboxRuntimeConfig
+from mote.common.secrets.cipher import KeyFileProvider
+from mote.common.secrets.store import secrets_path
 from mote.executor.permission.sandbox.guard import SandboxGuard
 from mote.executor.permission.sandbox.resource_guard import ResourceGuard
 from mote.sandbox import SandboxRuntime
@@ -58,10 +61,6 @@ def _secret_masks() -> list[str]:
     CA bundle (sandboxed tools must read it to trust the MITM leaf). Only paths
     that exist are returned (bwrap errors on a missing bind source).
     """
-    from mote.common.const.paths import CONFIG_ROOT
-    from mote.common.secrets.cipher import KeyFileProvider
-    from mote.common.secrets.store import secrets_path
-
     candidates = [
         secrets_path(),  # the encrypted vault
         KeyFileProvider().path,  # vault.key (decrypts the vault)
@@ -80,8 +79,6 @@ def _secret_masked_dirs() -> list[str]:
     defense-in-depth: it also hides even the ciphertext + which profiles exist.
     Only returned when the directory actually exists (bwrap errors otherwise).
     """
-    from mote.common.const.paths import browser_profiles_dir
-
     profiles = browser_profiles_dir()
     return [str(profiles)] if profiles.is_dir() else []
 

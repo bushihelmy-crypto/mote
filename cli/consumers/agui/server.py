@@ -27,6 +27,7 @@ opt-out, logged loudly).
 from __future__ import annotations
 
 import asyncio
+import hmac
 import uuid
 from typing import Any, Awaitable, Callable, Optional
 
@@ -94,8 +95,6 @@ async def _auth_middleware(request: web.Request, handler: Callable[[web.Request]
 
 
 def _tokens_match(a: str, b: str) -> bool:
-    import hmac
-
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 

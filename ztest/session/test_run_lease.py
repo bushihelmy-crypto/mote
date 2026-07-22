@@ -19,7 +19,7 @@ class Clock:
 
 def _acquire_without_release(path, ready):
     lease = RunLeaseStore(path).acquire("run-1", "crashed-worker", 0.15)
-    ready.put(lease.fencing_token)
+    ready.put((lease.fencing_token, lease.expires_at))
 
 
 class FailingRenewCoordinator:
@@ -141,11 +141,12 @@ def test_process_crash_expires_then_takeover_fences_old_epoch(tmp_path):
     ready = context.Queue()
     worker = context.Process(target=_acquire_without_release, args=(path, ready))
     worker.start()
-    stale_token = ready.get(timeout=2)
+    stale_token, expires_at = ready.get(timeout=2)
     worker.join(timeout=2)
     assert worker.exitcode == 0
 
-    time.sleep(0.18)
+    while time.time() <= expires_at:
+        time.sleep(0.01)
     current = RunLeaseStore(path).acquire("run-1", "replacement-worker", 10)
 
     assert current.fencing_token == stale_token + 1

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from mote.common.utils.common import aexecute
+from mote.common.vcs import find_git_dir
 
 # How long a collected snapshot stays fresh (seconds). The collector runs once per
 # think cycle; a small TTL coalesces bursts without showing stale state for long.
@@ -46,57 +47,6 @@ class GitState:
     @property
     def clean(self) -> bool:
         return self.staged == 0 and self.unstaged == 0 and self.untracked == 0
-
-
-def _find_git_dir(start: str) -> Optional[tuple[str, str]]:
-    """Walk up from *start* to locate the repo. Returns (repo_root, git_dir) or None.
-
-    Handles both a real ``.git`` directory and a ``.git`` file (worktree/submodule
-    pointer of the form ``gitdir: <path>``).
-    """
-    try:
-        cur = os.path.abspath(start)
-    except (OSError, ValueError):
-        return None
-    while True:
-        dotgit = os.path.join(cur, ".git")
-        if os.path.isdir(dotgit):
-            return cur, dotgit
-        if os.path.isfile(dotgit):
-            git_dir = _resolve_gitfile(dotgit, cur)
-            return cur, (git_dir or dotgit)
-        parent = os.path.dirname(cur)
-        if parent == cur:  # reached filesystem root
-            return None
-        cur = parent
-
-
-def _resolve_gitfile(dotgit_file: str, base: str) -> Optional[str]:
-    """Resolve a ``.git`` file ('gitdir: <path>') to the actual git dir."""
-    try:
-        with open(dotgit_file, encoding="utf-8") as f:
-            content = f.read().strip()
-    except OSError:
-        return None
-    prefix = "gitdir:"
-    if not content.startswith(prefix):
-        return None
-    path = content[len(prefix) :].strip()
-    if not os.path.isabs(path):
-        path = os.path.normpath(os.path.join(base, path))
-    return path
-
-
-def find_git_root(cwd: str) -> Optional[str]:
-    """Return the repo root containing *cwd*, or None when not inside a repo.
-
-    Filesystem-first (no subprocess), handling both a real ``.git`` directory and
-    a ``.git`` file pointer. The public, side-effect-free "are we in a git work
-    tree?" probe — reused wherever a yes/no repo check is needed without the cost
-    of :func:`collect_git_state` (which also shells out for status/log).
-    """
-    found = _find_git_dir(cwd)
-    return found[0] if found is not None else None
 
 
 def _read_branch(git_dir: str) -> tuple[Optional[str], Optional[str]]:
@@ -154,7 +104,7 @@ async def collect_git_state(cwd: str) -> Optional[GitState]:
     """
     if not cwd:
         return None
-    found = _find_git_dir(cwd)
+    found = find_git_dir(cwd)
     if found is None:
         return None
     repo_root, git_dir = found

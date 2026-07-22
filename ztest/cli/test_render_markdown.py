@@ -35,6 +35,7 @@ def _render(markup: str, *, width: int = 60, theme: Theme | None = None) -> str:
     console = Console(
         file=io.StringIO(),
         force_terminal=True,
+        no_color=False,
         width=width,
         color_system="truecolor",
         theme=theme,

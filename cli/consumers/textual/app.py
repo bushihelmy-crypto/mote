@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""``MoteApp`` + ``run_textual`` — the full-screen Textual TUI host.
+"""``MoteApp`` — the full-screen Textual TUI host.
 
 This module owns the asyncio loop for the Textual host. The design (§A–E of the
 plan) is:
@@ -14,25 +14,23 @@ plan) is:
   ``ViewEvent`` as a :class:`ViewEventMessage`; the SINGLE ``on_view_event_message``
   handler below performs all widget mutation on the UI thread, keyed on ``kind``.
 
-``run_textual`` wires the object graph in the one order that resolves the mutual
-references (app ⇄ port, app → consumer → app): build the app, the port and the
-consumer, hand the consumer to ``build_app`` via ``consumer_objs`` + the port via
-``port``, then bind driver+port onto the app and run.
+The object graph is assembled separately in :mod:`mote.cli.consumers.textual.bootstrap`.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
-from textual.message import Message
 from textual.widgets import Static
 from textual.worker import Worker, WorkerState
 
 from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard, native_copy
+from mote.cli.consumers.textual.messages import ViewEventMessage
 from mote.cli.consumers.textual.style import THEME_NAME, Palette, mote_theme, textual_css_vars
 from mote.cli.consumers.textual.surface import TextualSurface
 from mote.cli.consumers.textual.widgets import (
@@ -49,19 +47,6 @@ from mote.cli.consumers.transcript import TranscriptReducer, apply_ops
 from mote.cli.contracts.view import Notice
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
-
-
-class ViewEventMessage(Message):
-    """Carries one ``ViewEvent`` from a consumer onto the app's message pump.
-
-    Posting via ``App.post_message`` is thread-safe and FIFO-ordered, so this is
-    the single funnel that turns the (possibly off-thread) projected event stream
-    into ordered, UI-thread widget mutations (§design C).
-    """
-
-    def __init__(self, event: Any) -> None:
-        super().__init__()
-        self.event = event
 
 
 class MoteApp(App):
@@ -312,8 +297,6 @@ class MoteApp(App):
 
     def _show_interrupt_hint(self) -> None:
         """Mount a dim transcript row prompting a second Ctrl+C to exit."""
-        from rich.text import Text
-
         try:
             self._mount(Static(Text(t(K.KEY_EXIT_HINT), style=Palette.DIM)))
         except Exception:  # noqa: BLE001 — transcript may not be mounted in a test
@@ -598,56 +581,4 @@ class MoteApp(App):
         self._last_user_prompt = rows[-1]._text if rows else ""
 
 
-def run_textual(
-    *,
-    model: Optional[str] = None,
-    tools: Optional[list] = None,
-    cwd: Optional[str] = None,
-    name: str = "Assistant",
-    config: Any = None,
-) -> None:
-    """Build the Textual object graph and run the full-screen TUI to completion.
-
-    Wiring order resolves the mutual references: (1) app, (2) port, (3) consumer
-    (needs the app), (4) driver via ``build_app(consumer_objs=[consumer], port=port)``,
-    (5) bind driver+port onto the app and bind the app onto the port, (6) run.
-    """
-    from mote.cli.app import build_app
-    from mote.cli.consumers.textual.consumer import TextualConsumer
-    from mote.common.logs import resume_console_log, suspend_console_log
-
-    app = MoteApp()
-    port = TextualPort_lazy()
-    consumer = TextualConsumer(app)
-    driver = build_app(
-        model=model,
-        tools=tools,
-        cwd=cwd,
-        name=name,
-        consumer_objs=[consumer],
-        port=port,
-        config=config,
-    )
-    app.attach(driver, port)
-    port.bind_app(app)
-    # A full-screen TUI owns the whole screen, so loguru's live stderr sink would
-    # punch through the alternate-screen buffer and reveal log lines behind the UI
-    # (on every turn's agent work AND on a Ctrl+C interrupt). Suspend it for the
-    # duration — records still reach the file sink — and restore it on exit so the
-    # shell that launched us keeps its console logging.
-    suspended = suspend_console_log()
-    try:
-        app.run()
-    finally:
-        if suspended:
-            resume_console_log()
-
-
-def TextualPort_lazy() -> Any:
-    """Late import of :class:`TextualPort` (keeps this module import-light)."""
-    from mote.cli.io.textual_io import TextualPort
-
-    return TextualPort()
-
-
-__all__ = ["MoteApp", "ViewEventMessage", "run_textual"]
+__all__ = ["MoteApp", "ViewEventMessage"]

@@ -77,6 +77,7 @@ def test_action_module_owns_complete_component_keyset():
         "bg_pool",
         "executor",
         "command_channel",
+        "graph_output_service",
         "browser_profile_store",
     }
 

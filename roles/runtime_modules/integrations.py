@@ -8,7 +8,11 @@ from mote.common.config.sources import discover_source_files
 from mote.common.hook import HookManager, load_global_hooks, merge_hook_configs
 from mote.common.hook.subscriber import HookSubscriber
 from mote.common.schema import SandboxConfig
-from mote.executor.permission.sandbox import ResourceGuard, SandboxGuard, build_runtime
+from mote.common.secrets.cipher import build_cipher
+from mote.common.secrets.store import SecretStore, secrets_config_path, secrets_path
+from mote.executor.permission.sandbox.adapter import build_runtime
+from mote.executor.permission.sandbox.guard import SandboxGuard
+from mote.executor.permission.sandbox.resource_guard import ResourceGuard
 from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
 from mote.roles.component_graph import ComponentSpec
 from mote.roles.lsp import DiagnosticsBuffer, LspService
@@ -82,9 +86,6 @@ def _primary_config_path(cwd) -> Optional[Path]:
 
 
 def _build_secret_store(ctx):
-    from mote.common.secrets.cipher import build_cipher
-    from mote.common.secrets.store import SecretStore, secrets_config_path, secrets_path
-
     secrets_cfg = ctx.role.config.secrets
     cipher = build_cipher(secrets_cfg)
     vault_path = Path(secrets_cfg.vault_path) if secrets_cfg.vault_path else secrets_path()

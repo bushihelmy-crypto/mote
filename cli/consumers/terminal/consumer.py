@@ -25,6 +25,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from mote.cli.consumers.core import register_consumer
 from mote.cli.consumers.render.builders import file_change_verb
 from mote.cli.consumers.render.builders import fold_note_str as _fold_note_str
 from mote.cli.consumers.render.builders import format_usage_line as _format_usage_line
@@ -34,12 +35,12 @@ from mote.cli.contracts.view import TERMINAL_CAPS, Capabilities
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
-try:  # rich is optional; degrade to plain text when absent.
-    import rich  # noqa: F401
-
-    _HAS_RICH = True
+try:
+    from mote.cli.consumers.terminal.rich_adapter import build_rich_terminal_consumer
 except ImportError:  # pragma: no cover — exercised via the plain-text fallback
-    _HAS_RICH = False
+    build_rich_terminal_consumer = None
+
+_HAS_RICH = build_rich_terminal_consumer is not None
 
 
 class PlainTerminalConsumer(BaseConsumer):
@@ -147,21 +148,13 @@ class PlainTerminalConsumer(BaseConsumer):
 
 def build_terminal_consumer(config: Any = None):
     """Return the rich scrolling consumer, or a plain-text one if rich is absent."""
-    if _HAS_RICH:
-        from mote.cli.consumers.terminal.surface import TerminalSurface
-        from mote.cli.consumers.transcript import SurfaceDriver
-
-        return SurfaceDriver(TerminalSurface())
+    if build_rich_terminal_consumer is not None:
+        return build_rich_terminal_consumer()
     return PlainTerminalConsumer()
 
 
 # Self-register on import (the registry imports this module).
-try:
-    from mote.cli.consumers.registry import register_consumer
-
-    register_consumer("terminal", capabilities=TERMINAL_CAPS)(build_terminal_consumer)
-except Exception:  # noqa: BLE001 — registry optional during isolated import/tests
-    pass
+register_consumer("terminal", capabilities=TERMINAL_CAPS)(build_terminal_consumer)
 
 
 __all__ = ["PlainTerminalConsumer", "build_terminal_consumer"]

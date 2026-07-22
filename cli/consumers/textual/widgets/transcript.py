@@ -40,6 +40,7 @@ from mote.cli.consumers.render.builders import (
     render_file_change,
     render_image,
     render_result_detail,
+    session_table,
     task_progress_text,
     tool_body_syntax,
     tool_completed_text,
@@ -667,8 +668,6 @@ class SessionListWidget(SelectableStatic):
     """The resumable-session list rendered as a numbered rich table."""
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        from mote.cli.consumers.render.builders import session_table
-
         items = getattr(ev, "items", None)
         if not items:
             super().__init__(Text("  (no sessions)", style=Palette.DIM), **kwargs)

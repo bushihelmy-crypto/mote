@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, ClassVar, Optional
 
+from mote.common.config.loader import load_config
 from mote.common.exception import ToolNotConfiguredError
 from mote.executor.base_tool import BaseTool
 from mote.executor.tool_registry import register_tool
@@ -45,8 +46,6 @@ def _check_configured(kinds: list[str]) -> None:
     or an unset model would fail deep inside an HTTP call with an opaque error —
     this front-loads it into an actionable notice pointing at ``multimodal.<attr>``.
     """
-    from mote.common.config.loader import load_config
-
     multimodal = load_config().multimodal
     missing: list[str] = []
     for kind in kinds:

@@ -7,13 +7,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Optional
+from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 from mote.common.schema.messages import UserMessage
 from mote.common.schema.node_status import BgStatus
-
-if TYPE_CHECKING:
-    from mote.executor.tool_result import ToolResult
+from mote.executor.tool_result import ToolResult
 
 # Complete model-facing sentence for a submitted background task, kept as one
 # template so the wording lives in a single place (fill via ``.format(...)``).
@@ -179,8 +177,6 @@ class BgTaskResult:
         caller (Role._act) can drive background submission. *tool_name* is the
         fallback label when this result declares no ``command_name``.
         """
-        from mote.executor.tool_result import ToolResult
-
         task_id = None
         if self.poll_factory is not None and pool is not None:
             task_id = pool.submit(

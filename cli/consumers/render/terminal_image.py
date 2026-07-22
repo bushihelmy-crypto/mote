@@ -32,6 +32,11 @@ import base64
 import os
 from typing import List, Optional, Type
 
+try:
+    from mote.cli.consumers.render.pillow_encoding import png_bytes as _pillow_png_bytes
+except ImportError:  # pragma: no cover — Pillow is absent
+    _pillow_png_bytes = None
+
 # Kitty streams pixel data in fixed-size base64 chunks (the protocol caps each
 # APC payload at 4096 bytes of *base64*); 4096 is the canonical chunk size.
 _KITTY_CHUNK = 4096
@@ -150,26 +155,14 @@ class KittyImageProtocol(TerminalImageProtocol):
     @staticmethod
     def _png_bytes(path: str) -> Optional[bytes]:
         """Return PNG bytes for *path* (re-encoding via Pillow), or ``None``."""
+        if _pillow_png_bytes is not None:
+            return _pillow_png_bytes(path)
         try:
-            from PIL import Image
-        except ImportError:
-            # No Pillow: only pass through a file that is already a PNG.
-            try:
-                with open(path, "rb") as handle:
-                    raw = handle.read()
-            except OSError:
-                return None
-            return raw if raw[:8] == b"\x89PNG\r\n\x1a\n" else None
-        try:
-            from io import BytesIO
-
-            with Image.open(path) as im:
-                im = im.convert("RGBA")
-                buf = BytesIO()
-                im.save(buf, format="PNG")
-                return buf.getvalue()
-        except Exception:  # noqa: BLE001 — any decode/encode failure degrades to fallback
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        except OSError:
             return None
+        return raw if raw[:8] == b"\x89PNG\r\n\x1a\n" else None
 
 
 # The protocol registry, in preference order. A new protocol is added here (and

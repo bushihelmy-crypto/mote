@@ -21,7 +21,7 @@ import shutil
 
 from loguru import logger
 
-from mote.executor.dependency._device.backend import DeviceBackend, DeviceError
+from mote.executor.dependency._device.base import DeviceBackend, DeviceError
 from mote.executor.dependency._device.outline import RawOutline, parse_uiautomator_xml
 
 # Where uiautomator writes its dump on the device before we read it back.

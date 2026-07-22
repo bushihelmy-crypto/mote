@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mote.cli.commands.registry import register_command
+from mote.cli.commands.core import register_command
 from mote.common.i18n import current_locale
 from mote.common.i18n import keys as K
 from mote.common.i18n import locales, negotiate_and_set, set_locale, t

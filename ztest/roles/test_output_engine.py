@@ -54,6 +54,27 @@ def test_json_schema_decoder_normalizes_nested_structural_issues():
     assert caught.value.issues[0].code == "type"
 
 
+def test_public_contract_constructors_hide_decoder_assembly():
+    from mote.output import OutputContract as PublicOutputContract
+
+    typed = PublicOutputContract.from_type(
+        Report,
+        namespace="test",
+        name="report",
+        version="1",
+    )
+    schema = PublicOutputContract.from_json_schema(
+        {"type": "object", "properties": {"count": {"type": "integer"}}},
+        namespace="test",
+        name="raw-report",
+        version="1",
+    )
+
+    assert typed.decoder.decode({"count": 2}) == Report(count=2)
+    assert schema.decoder.decode({"count": 2}) == {"count": 2}
+    assert PublicOutputContract.text().is_text
+
+
 @pytest.mark.asyncio
 async def test_text_candidate_is_decoded_and_accepted():
     engine = OutputEngine(text_output_contract())

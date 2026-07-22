@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from mote.common.logs import get_human_input
 from mote.environment.base_env import AgentEnvironment
+from mote.executor.permission.prompts import parse_approval_response, render_approval_prompt
 
 
 class MoteEnv(AgentEnvironment):
@@ -49,8 +50,6 @@ class MoteEnv(AgentEnvironment):
         CLI front-end (``PortHumanChannel``) drives a localized port selector
         instead; this path is the developer/headless console.
         """
-        from mote.executor.permission.prompts import parse_approval_response, render_approval_prompt
-
         rsp = await get_human_input(render_approval_prompt(request))
         return parse_approval_response(rsp)
 

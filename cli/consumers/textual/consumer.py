@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from mote.cli.consumers.textual.messages import ViewEventMessage
 from mote.cli.contracts.base import BaseConsumer
 from mote.cli.contracts.view import TERMINAL_CAPS, Capabilities
 
@@ -37,9 +38,6 @@ class TextualConsumer(BaseConsumer):
         self._app = app
 
     def on_unhandled(self, ev: Any) -> None:
-        # Late import avoids a module-level cycle (app builds this consumer).
-        from mote.cli.consumers.textual.app import ViewEventMessage
-
         self._app.post_message(ViewEventMessage(ev))
 
     async def aclose(self) -> None:

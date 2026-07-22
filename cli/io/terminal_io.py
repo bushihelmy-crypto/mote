@@ -37,7 +37,8 @@ from typing import Any, Callable, Optional
 # row/redraw string builders live in ``terminal_menu`` (no ``self``, no I/O); the
 # port keeps only the stateful reader + raw termios concerns.
 from mote.cli.consumers.render.palette import WARN
-from mote.cli.consumers.terminal.style import ansi_fg
+from mote.cli.consumers.terminal.style import PROMPT, ansi_fg, render_banner
+from mote.cli.contracts.view.events import ApprovalDecision
 from mote.cli.io.terminal_menu import (
     _AMBER_RGB,
     _RULE_WIDTH,
@@ -50,6 +51,12 @@ from mote.cli.io.terminal_menu import (
 from mote.cli.view.approval import approval_action, approval_options, approval_preview, approval_risk
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
+from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+
+try:
+    from mote.cli.io.posix_terminal import enter_raw as _enter_posix_raw
+except ImportError:  # pragma: no cover — non-POSIX host
+    _enter_posix_raw = None
 
 # After a lone ESC byte we wait this long for the rest of a CSI arrow sequence
 # (``ESC [ A/B``). A real arrow key sends all three bytes back-to-back, so a short
@@ -84,8 +91,6 @@ class TerminalPort:
         # Default to the shared terminal look (orange ``❯`` prompt + masthead);
         # the style module is rich-free so importing it keeps the port's plain
         # stream contract. ``prompt``/``banner`` overrides are the test seam.
-        from mote.cli.consumers.terminal.style import PROMPT, render_banner
-
         self._prompt = prompt if prompt is not None else PROMPT
         self._banner = banner if banner is not None else render_banner()
         self._out = out if out is not None else sys.stdout
@@ -276,8 +281,6 @@ class TerminalPort:
         multi). The "Other" branch's raw string becomes ``free_text`` verbatim —
         multi-line or numeric, with zero reverse-parsing (this is the real fix).
         """
-        from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-
         out = []
         multiq = len(questions) > 1
         for q in questions:
@@ -494,8 +497,6 @@ class TerminalPort:
         :class:`ApprovalRequest` via ``mote.cli.view.approval`` — the engine sends
         language-neutral data, all human wording lands under the active locale.
         """
-        from mote.cli.contracts.view.events import ApprovalDecision
-
         action = approval_action(request)
         risk = approval_risk(request)
         preview = approval_preview(request)
@@ -529,9 +530,7 @@ class TerminalPort:
             return False
         if self._read_task is not None and not self._read_task.done():
             return False
-        try:
-            import termios  # noqa: F401
-        except ImportError:
+        if _enter_posix_raw is None:
             return False
         try:
             if not sys.stdin.isatty():
@@ -588,21 +587,10 @@ class TerminalPort:
 
     def _enter_raw(self):
         """Put stdin into raw mode; return a restore callable (no-op on failure)."""
+        if _enter_posix_raw is None:
+            return lambda: None
         try:
-            import termios
-            import tty
-
-            fd = sys.stdin.fileno()
-            saved = termios.tcgetattr(fd)
-            tty.setraw(fd)
-
-            def _restore() -> None:
-                try:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-                except Exception:  # noqa: BLE001
-                    pass
-
-            return _restore
+            return _enter_posix_raw(sys.stdin)
         except Exception:  # noqa: BLE001 — non-tty test / unsupported platform
             return lambda: None
 

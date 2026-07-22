@@ -34,6 +34,10 @@ from mote.common.base.agent import BaseAgent
 from mote.common.const.paths import mote_project_dirs, user_mote_dir
 from mote.common.logs import logger
 from mote.common.utils.markdown_meta_parser import MarkdownMetaParser
+from mote.executor.agent_registry import registry
+from mote.roles.role import Role
+from mote.roles.role_schema import RoleSchema
+from mote.roles.role_state import RoleState
 
 _AGENTS_SUBDIR = "agents"
 
@@ -74,10 +78,6 @@ def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type]:
     aliases_raw = meta.get("aliases")
     aliases = _normalize_tools(aliases_raw) or []
     instruction = body.strip()
-
-    from mote.roles import Role
-    from mote.roles.role_schema import RoleSchema
-    from mote.roles.role_state import RoleState
 
     class _MarkdownAgent(BaseAgent, Role):
         agent_name = name
@@ -155,9 +155,6 @@ def register_md_agents(cwd: Optional[Path] = None) -> List[str]:
     already taken by a *different* class is left as-is (logged), so a hand-written
     Python agent always wins over a same-named markdown file.
     """
-    # Local import to avoid a module-load cycle (registry ← agent tool ← …).
-    from mote.executor.agent_registry import registry
-
     registered: List[str] = []
     for name, agent_cls in discover_md_agents(cwd).items():
         existing = registry.get(name)

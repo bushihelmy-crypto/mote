@@ -20,20 +20,10 @@ from mote.common.events import (
     set_bus,
     span,
 )
-from mote.common.exception import GraphError, RoleContextNotSetError
+from mote.common.exception import RoleContextNotSetError
 from mote.common.interface import RunLeaseCoordinator
 from mote.common.logs import bind_session_logfile, bind_trace, log_class, logger, unbind_session_logfile
-from mote.common.schema import (
-    AIMessage,
-    CauseBy,
-    FinalCandidateAction,
-    Message,
-    OutputContractId,
-    RunKind,
-    RunLeasePolicy,
-    RunResult,
-    TranscriptRef,
-)
+from mote.common.schema import AIMessage, CauseBy, Message, RunLeasePolicy, RunResult, TranscriptRef
 from mote.common.utils.common import any_to_str, role_raise_decorator
 from mote.context import ContextManager
 from mote.context.skills.skill_manager import SkillManager
@@ -41,8 +31,7 @@ from mote.executor.tasks import BackgroundTaskPool
 from mote.executor.tool_executor import ToolExecutor
 from mote.parser import CommandChannel
 from mote.roles.context_provider import ContextProvider
-from mote.roles.output_contract import JsonSchemaOutputDecoder, OutputContract, text_output_contract
-from mote.roles.output_engine import OutputEngine
+from mote.roles.output_contract import OutputContract, text_output_contract
 from mote.roles.role_components import RoleComponents
 from mote.roles.role_schema import RoleSchema
 from mote.roles.role_state import RoleState
@@ -648,8 +637,8 @@ class Role(BaseRole, Generic[OutputT]):
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,
             "list_graph_excluded_tool_names": self.list_graph_excluded_tool_names,
-            "commit_graph_output": self.commit_graph_output,
-            "resume_graph_output": self.resume_graph_output,
+            "commit_graph_output": self._components.graph_output_service.finalize,
+            "resume_graph_output": self._components.graph_output_service.resume,
             "has_graph_output_restore": self._state_ctl.has_pending_graph_output_restore,
             "graph_run_lease": self.graph_run_lease,
             "list_deferred_tools": self.list_deferred_tools,
@@ -917,65 +906,6 @@ class Role(BaseRole, Generic[OutputT]):
         (node-replay), and the ledger guards the graph as a whole.
         """
         return await self.executor.run_command(name, kwargs or {})
-
-    async def commit_graph_output(self, *, output: Any, contract_spec: Any, run_id: str) -> Any:
-        """Validate and commit one model-authored RunGraph terminal value."""
-        contract = OutputContract(
-            OutputContractId(
-                contract_spec.namespace,
-                contract_spec.name,
-                contract_spec.version,
-            ),
-            JsonSchemaOutputDecoder(contract_spec.schema_),
-        )
-        lease = self._components.current_graph_lease(run_id)
-        engine = OutputEngine(
-            contract,
-            run_id=run_id,
-            run_kind=RunKind.GRAPH,
-            commit_fence=lease,
-            fencing_token=lease.fencing_token,
-        )
-        evaluation = await engine.evaluate(FinalCandidateAction(raw=output, representation="run_graph"))
-        if not evaluation.accepted:
-            raise GraphError(
-                "Graph terminal output did not satisfy its output contract",
-                issues=[
-                    {
-                        "path": list(issue.path),
-                        "code": issue.code,
-                        "message": issue.message,
-                    }
-                    for issue in evaluation.issues
-                ],
-            )
-        return await engine.commit()
-
-    async def resume_graph_output(self, *, contract_spec: Any, run_id: str) -> Any:
-        """Finish a replayed accepted graph output without rerunning its graph."""
-        restored = self._state_ctl.take_pending_graph_output_restore(run_id)
-        if restored is None:
-            return None
-        contract = OutputContract(
-            OutputContractId(
-                contract_spec.namespace,
-                contract_spec.name,
-                contract_spec.version,
-            ),
-            JsonSchemaOutputDecoder(contract_spec.schema_),
-        )
-        lease = self._components.current_graph_lease(run_id)
-        engine = OutputEngine(
-            contract,
-            restored_state=restored,
-            run_id=run_id,
-            run_kind=RunKind.GRAPH,
-            commit_fence=lease,
-            fencing_token=lease.fencing_token,
-        )
-        if not engine.has_restored_terminal_output:
-            return None
-        return await engine.commit()
 
     @asynccontextmanager
     async def graph_run_lease(self, run_id: str):

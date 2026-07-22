@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, Optional
 
 from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
 from mote.common.logs import logger
-from mote.common.schema import UserMessage
+from mote.common.schema import AskUserQuestionAnswers, UserMessage
 from mote.common.text.hashing import content_hash
+from mote.loop.durable import begin_timer, complete_timer, resume_timer
 from mote.roles.role_state import RoleState
 from mote.session.hunk_ledger import EXTERNAL
 
@@ -339,8 +340,6 @@ class RoleCapabilities:
         kill switch: a structured selection is not a control channel, so the stop
         semantics stay on the plain ``ask_user`` / ``AskUser`` path.
         """
-        from mote.common.schema import AskUserQuestionAnswers
-
         role = self._role
         env = role.state.env
         if env is None:
@@ -440,8 +439,6 @@ class RoleCapabilities:
         best-effort — if the journal is unavailable the wait still runs bounded,
         just without crash-resumability.
         """
-        from mote.loop.durable import begin_timer, resume_timer
-
         journal = self._run_journal()
         if journal is not None:
             resumed = resume_timer(journal)
@@ -457,8 +454,6 @@ class RoleCapabilities:
 
     def _durable_timer_complete(self, step_id: str) -> None:
         """Record the durable timer's terminal (best-effort)."""
-        from mote.loop.durable import complete_timer
-
         journal = self._run_journal()
         if journal is not None:
             complete_timer(journal, step_id)
