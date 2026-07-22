@@ -12,12 +12,15 @@ after its owning assistant message, choosing the content from the ledger:
   * terminal record (``completed``/``failed``) -> **heal**: emit the recorded
     result verbatim, so the effect is NOT re-run (its result message was simply
     lost to the crash).
-  * ``started`` -> the call was in flight when the crash hit and its EXTERNAL
-    outcome is physically unknowable to the framework, so re-running it risks a
-    duplicate side effect: emit ``<unknown-after-crash>`` and leave the decision
-    (verify / retry / abandon) to the model — the framework never guesses.
-  * no record at all -> the call was PURE/LOCAL (never ledgered) or never
-    started: safe to replay -> emit a note inviting a retry.
+  * ``started`` + EXTERNAL (or unknown/missing effect — fail-closed) -> the call
+    was in flight when the crash hit and its external outcome is physically
+    unknowable to the framework, so re-running it risks a duplicate side effect:
+    emit ``<unknown-after-crash>`` and leave the decision (verify / retry /
+    abandon) to the model — the framework never guesses.
+  * ``started`` + PURE/LOCAL -> a replay-safe call left no unrecoverable
+    external effect, so re-running it is safe -> emit a retry note.
+  * no record at all -> the call was never ledgered or never started: safe to
+    replay -> emit a note inviting a retry.
 
 Injecting a result for every dangling call restores the provider pairing
 invariant unconditionally; the content only differs in what it tells the model.
@@ -41,6 +44,13 @@ from mote.common.schema import Message, ToolMessage
 #: ``session`` package needs no import of ``executor``). Any other non-None
 #: status is terminal (``completed``/``failed``) and carries a result to heal.
 _STARTED = "started"
+
+#: The replay-safe side-effect classes (mirrors ``ToolEffect.PURE``/``LOCAL``
+#: values, kept local so ``session`` needs no import of ``common.schema``). A
+#: dangling ``started`` call of one of these left no unrecoverable external
+#: effect, so it is safe to re-run; any other effect (EXTERNAL, or an unknown/
+#: missing value — fail-closed) is guarded against blind replay.
+_REPLAY_SAFE_EFFECTS = frozenset({"pure", "local"})
 
 _UNKNOWN_AFTER_CRASH = (
     "<unknown-after-crash>\n"
@@ -75,6 +85,10 @@ class EffectRecordView(Protocol):
 
     @property
     def result(self) -> Optional[str]:
+        ...
+
+    @property
+    def effect(self) -> str:
         ...
 
 
@@ -117,19 +131,46 @@ def _iter_calls(message: Message) -> List[dict]:
     return calls if isinstance(calls, list) else []
 
 
+def _is_replay_safe(record: EffectRecordView) -> bool:
+    """Whether a dangling ``started`` *record* is safe to re-run.
+
+    True only for a recorded PURE/LOCAL effect (re-running leaves no
+    unrecoverable external side effect). Fail-closed: an EXTERNAL, unknown, or
+    missing effect is treated as unsafe — never blindly replayed.
+    """
+    return getattr(record, "effect", "external") in _REPLAY_SAFE_EFFECTS
+
+
+def _classify(record: Optional[EffectRecordView]) -> str:
+    """The dangling-call outcome: ``"replay"`` / ``"unknown"`` / ``"heal"``.
+
+    - no record → ``replay`` (never ledgered / never started: safe to reissue).
+    - ``started`` + replay-safe effect → ``replay`` (PURE/LOCAL: nothing external
+      happened, re-running is safe).
+    - ``started`` + EXTERNAL/unknown effect → ``unknown`` (in-flight outcome is
+      physically unknowable; never silently re-run an external effect).
+    - terminal (``completed``/``failed``) → ``heal`` (its result was simply lost
+      to the crash; emit the recorded result verbatim, do NOT re-run).
+    """
+    if record is None:
+        return "replay"
+    if record.status == _STARTED:
+        return "replay" if _is_replay_safe(record) else "unknown"
+    return "heal"
+
+
 def _synthetic_result(call: dict, record: Optional[EffectRecordView]) -> ToolMessage:
     """Build the tool_result to pair a dangling *call*, per its ledger *record*."""
     call_id = call.get("id", "")
     name = call.get("name", "?")
-    if record is None:
+    verdict = _classify(record)
+    if verdict == "replay":
         content = _SAFE_RETRY.format(name=name, call_id=call_id)
-    elif record.status == _STARTED:
-        # In flight when the crash hit: outcome physically unknowable, never
-        # silently re-run an EXTERNAL effect. The model decides what to do next.
+    elif verdict == "unknown":
         content = _UNKNOWN_AFTER_CRASH.format(name=name, call_id=call_id)
     else:
         # Terminal record (completed/failed): heal from the stored result.
-        content = record.result or ""
+        content = (record.result if record is not None else "") or ""
     return ToolMessage(content=content, tool_call_id=call_id)
 
 
@@ -191,9 +232,10 @@ def reconcile_tool_calls(messages: List[Message], ledger: LedgerView) -> Reconci
             # never (a healed EXTERNAL call the model chose not to reissue), at
             # which point it becomes a paired/stale record handled above.
             result.messages.append(_synthetic_result(call, record))
-            if record is None:
+            verdict = _classify(record)
+            if verdict == "replay":
                 result.replayable += 1
-            elif record.status == _STARTED:
+            elif verdict == "unknown":
                 result.flagged += 1
             else:
                 result.healed += 1

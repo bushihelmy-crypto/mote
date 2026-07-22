@@ -36,9 +36,9 @@ async def test_mode_auto_allows_mutating_tool(make_role, tmp_path, mode):
     target = os.path.join(str(tmp_path), "m.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
+        tools=["Edit"],
         permissions=PermissionConfig(mode=mode),
-        turns=[[("Write", {"file_path": target, "content": "ok"})], "done"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "ok"})], "done"],
     )
 
     await role.run(with_message="write under " + mode)
@@ -53,9 +53,9 @@ async def test_mode_blocks_mutating_tool(make_role, tmp_path, mode):
     target = os.path.join(str(tmp_path), "m.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
+        tools=["Edit"],
         permissions=PermissionConfig(mode=mode),
-        turns=[[("Write", {"file_path": target, "content": "blocked"})], "done"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "blocked"})], "done"],
     )
 
     await role.run(with_message="write under " + mode)
@@ -76,9 +76,9 @@ async def test_deny_rule_is_bypass_immune(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "p.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(mode="bypass", deny=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "x"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(mode="bypass", deny=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "x"})], "done"],
     )
 
     await role.run(with_message="go")
@@ -93,9 +93,9 @@ async def test_allow_rule_overrides_dont_ask(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "p.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(mode="dontAsk", allow=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "ok"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(mode="dontAsk", allow=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "ok"})], "done"],
     )
 
     await role.run(with_message="go")
@@ -108,9 +108,9 @@ async def test_allow_rule_overrides_plan(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "p.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(mode="plan", allow=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "ok"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(mode="plan", allow=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "ok"})], "done"],
     )
 
     await role.run(with_message="go")
@@ -138,9 +138,9 @@ async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
     target = os.path.join(str(tmp_path), "ask.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(mode="default", ask=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "approved"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(mode="default", ask=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "approved"})], "done"],
     )
     # request_approval needs an env channel.
     env = MoteEnv()
@@ -158,9 +158,9 @@ async def test_ask_rule_denied_blocks_tool(make_role, tmp_path, monkeypatch):
     target = os.path.join(str(tmp_path), "ask.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(mode="default", ask=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "rejected"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(mode="default", ask=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "rejected"})], "done"],
     )
     env = MoteEnv()
     env.add_role(role)
@@ -177,9 +177,9 @@ async def test_ask_without_env_fails_closed(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "ask.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(mode="default", ask=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "no-channel"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(mode="default", ask=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "no-channel"})], "done"],
     )
     # Deliberately NOT added to an env: state.env is None.
 

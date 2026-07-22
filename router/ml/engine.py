@@ -74,3 +74,43 @@ class SquillaMLEngine:
         except Exception as e:
             logger.warning(f"router ML inference failed ({type(e).__name__}: {e}); falling back")
             return None
+
+
+# ---------------------------------------------------------------------------
+# Process-level shared engine
+# ---------------------------------------------------------------------------
+# The trained bundle is ~75 MB; a per-role SquillaMLEngine would each lazy-load
+# its own copy. Every SquillaStrategy in a process shares one engine per
+# resolved ``model_dir`` (memoized below), so the bundle is loaded at most once.
+#
+# ``InferenceCore.predict`` is stateless after load (all ``self.*`` are read-only
+# artifacts; each call builds fresh locals), so under single-loop asyncio the GIL
+# serializes calls safely — no lock, no ``to_thread`` (which would reintroduce
+# multi-thread reuse risk on that read-only core).
+_SHARED: dict[str, SquillaMLEngine] = {}
+
+
+def shared_engine(model_dir: str | Path | None = None) -> SquillaMLEngine:
+    """Return the process-shared engine for *model_dir* (default dir when None).
+
+    Memoized on the resolved directory string so every caller passing the same
+    (or default) ``model_dir`` shares one engine — and thus one 75 MB load.
+    Distinct directories get distinct engines.
+    """
+    key = str(Path(model_dir) if model_dir else default_model_dir())
+    engine = _SHARED.get(key)
+    if engine is None:
+        engine = SquillaMLEngine(model_dir=key)
+        _SHARED[key] = engine
+    return engine
+
+
+def prewarm(model_dir: str | Path | None = None) -> bool:
+    """Eagerly trigger the shared engine's bundle load (process warmup hook).
+
+    Touching ``available`` forces the one-time lazy load off the hot path (e.g.
+    at process startup) so the first real ``predict`` doesn't pay the 75 MB
+    synchronous load on the event loop. Returns whether the load succeeded;
+    a failed/absent bundle is a silent no-op (the heuristic fallback still runs).
+    """
+    return shared_engine(model_dir).available

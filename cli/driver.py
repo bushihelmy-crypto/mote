@@ -71,6 +71,7 @@ class SessionDriver:
         projector: BaseProjector,
         commands: Optional[CommandRegistry] = None,
         role_factory: Optional[Any] = None,
+        scheduler: Optional[Any] = None,
         quiescent_poll_interval: float = 0.05,
     ):
         self._control = control
@@ -80,6 +81,10 @@ class SessionDriver:
         self._projector = projector
         self._commands = commands or default_registry()
         self._role_factory = role_factory
+        # Optional background scheduler (duck-typed ``start()`` / ``async stop()``);
+        # e.g. a CronService firing scheduled prompts into this live session. Kept
+        # cron-agnostic — the driver only owns its lifecycle, never imports cron.
+        self._scheduler = scheduler
         self._quiescent_poll_interval = quiescent_poll_interval
 
         self._exit = False
@@ -113,6 +118,11 @@ class SessionDriver:
         backend.bind_human_channel(self._role, PortHumanChannel(self._port))
         self._announce_tools()
         self._control.start()
+        if self._scheduler is not None:
+            try:
+                self._scheduler.start()
+            except Exception as exc:  # noqa: BLE001 — scheduling is best-effort
+                logger.warning(f"SessionDriver: scheduler.start() failed: {exc}")
         try:
             while not self._exit:
                 text = await self._port.read_turn()
@@ -271,6 +281,11 @@ class SessionDriver:
 
     async def _teardown(self) -> None:
         self._unsubscribe_projector()
+        if self._scheduler is not None:
+            try:
+                await self._scheduler.stop()
+            except Exception as exc:  # noqa: BLE001 — best-effort shutdown
+                logger.warning(f"SessionDriver: scheduler.stop() failed: {exc}")
         aclose = getattr(self._port, "aclose", None)
         if aclose is not None:
             try:
@@ -297,6 +312,10 @@ class SessionDriver:
 
     def help_text(self) -> str:
         return self._commands.help_text()
+
+    def usage_report(self) -> str:
+        """Session cost + provider rate-limit quota, for the ``/usage`` command."""
+        return backend.usage_report(self._role)
 
     def request_exit(self) -> None:
         self._exit = True
@@ -328,6 +347,27 @@ class SessionDriver:
         here, so no "conversation compacted" boundary marker shows.
         """
         return await backend.delete_react_units(self._role, anchor_ids)
+
+    def list_checkpoints(self) -> list:
+        """List the active agent's whole-tree checkpoints (``/rewind`` targets).
+
+        Returns ``[CheckpointEntry, ...]`` from the session rollout — each a
+        captured user-turn tree snapshot. Empty when the feature is inert (the
+        workspace is not a git repo) or nothing has been captured yet. Safe to
+        call between turns (no turn lock held while a command runs).
+        """
+        return backend.list_checkpoints(self._role)
+
+    def rewind_to(self, index: int) -> Optional[Any]:
+        """Roll the working tree back to checkpoint ``index`` (auto-saving first).
+
+        Delegates to the backend, which snapshots the current tree ("before
+        rewind" — so the rewind is itself reversible) then restores the target.
+        Returns a :class:`~mote.cli.backend.RewindResult` (target entry + any
+        externally-modified paths the rewind overwrote) on success, ``None`` on a
+        bad index or restore failure.
+        """
+        return backend.rewind_files(self._role, index)
 
     @property
     def current_agent_id(self) -> str:

@@ -36,19 +36,13 @@ class TestContract:
     def test_provider_is_stored(self):
         assert NativeToolChannel(provider="anthropic")._provider == "anthropic"
 
-    def test_prompt_vars_command_guide_has_no_end_marker(self):
-        # Native mode ends a turn by making no tool call, so the guidance must
-        # never teach the XML <end></end> marker (the model would leak it).
+    def test_prompt_vars_command_guide_is_empty(self):
+        # Native tools reach the model via the API ``tools=`` param and a turn
+        # ends simply by making no tool call, so the system prompt needs no
+        # "# Using commands" mechanics at all — command_guide is filled empty
+        # (not a literal placeholder), never teaching the XML <end></end> marker.
         guide = NativeToolChannel().prompt_vars()["command_guide"]
-        assert "# Using commands" in guide
-        assert "<end>" not in guide
-
-    def test_command_guide_has_no_task_final_output(self):
-        # The final-delivery contract moved out of the command guide into the
-        # protocol-agnostic, compaction-gated TASK_FINAL_OUTPUT_SECTION. The
-        # command guide is now only command-protocol mechanics.
-        guide = NativeToolChannel().prompt_vars()["command_guide"]
-        assert "Task Final Output" not in guide
+        assert guide == ""
 
     def test_prompt_vars_covers_required_keys(self):
         from mote.common.base.command_channel import PROMPT_VAR_KEYS
@@ -265,6 +259,66 @@ class TestRecordTurn:
         executed = [executed_command(id="a", name="Read", output="unchanged")]
         await NativeToolChannel().record_turn(memory, "t", executed)
         assert TOOL_RESULT_RESOURCE_PATH not in memory.messages[1].metadata
+
+
+class TestRecordArgsLimiter:
+    """record_call runs recorded args through the injected size limiter.
+
+    The limiter (``executor.persist_large_args`` in production) persists a giant
+    tool-call arg before the assistant message enters memory — the arguments twin
+    of the result-output cap. Here a fake limiter proves the seam: it is applied
+    to the args that land in ``tool_calls`` metadata, uses the call id, does NOT
+    mutate the caller's ``executed`` args, and is a no-op when unset.
+    """
+
+    @pytest.mark.asyncio
+    async def test_limiter_applied_to_recorded_args(self):
+        seen: list = []
+
+        def limiter(tool_name, args, call_id):
+            seen.append((tool_name, args, call_id))
+            return "<persisted-output>...pointer..."
+
+        memory = FakeMemory()
+        channel = NativeToolChannel(args_limiter=limiter)
+        executed = [executed_command(id="a", name="Edit", args={"new_string": "BIG"}, output="ok")]
+        await channel.record_turn(memory, "t", executed)
+
+        # The recorded args are the limiter's return (the envelope string),
+        # which AIMessage.to_dict accepts verbatim as the arguments string.
+        assert memory.messages[0].metadata[TOOL_CALLS][0]["args"] == "<persisted-output>...pointer..."
+        # Called with the tool name (lets it specialize per tool), the original
+        # args, + the call id (id names the on-disk file).
+        assert seen == [("Edit", {"new_string": "BIG"}, "a")]
+
+    @pytest.mark.asyncio
+    async def test_limiter_does_not_mutate_execution_args(self):
+        # record_call copies args into a NEW list, so the caller's executed entry
+        # (the value the loop passes to run_command) is never rewritten.
+        memory = FakeMemory()
+        channel = NativeToolChannel(args_limiter=lambda name, args, cid: "SPILLED")
+        entry = executed_command(id="a", name="Edit", args={"new_string": "BIG"}, output="ok")
+        executed = [entry]
+        await channel.record_turn(memory, "t", executed)
+        assert entry["args"] == {"new_string": "BIG"}
+
+    @pytest.mark.asyncio
+    async def test_small_args_returned_unchanged_by_identity_limiter(self):
+        # A limiter that leaves small args alone (the real one returns the
+        # original object under threshold) records them verbatim.
+        memory = FakeMemory()
+        channel = NativeToolChannel(args_limiter=lambda name, args, cid: args)
+        executed = [executed_command(id="a", name="Read", args={"path": "x"}, output="r")]
+        await channel.record_turn(memory, "t", executed)
+        assert memory.messages[0].metadata[TOOL_CALLS][0]["args"] == {"path": "x"}
+
+    @pytest.mark.asyncio
+    async def test_no_limiter_records_args_verbatim(self):
+        # Default (no executor wired / tests): args pass through untouched.
+        memory = FakeMemory()
+        executed = [executed_command(id="a", name="Read", args={"path": "x"}, output="r")]
+        await NativeToolChannel().record_turn(memory, "t", executed)
+        assert memory.messages[0].metadata[TOOL_CALLS][0]["args"] == {"path": "x"}
 
 
 class TestRecordTurnMedia:

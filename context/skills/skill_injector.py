@@ -16,17 +16,6 @@ from typing import Optional
 from mote.common.utils.prompt_sanitizer import count_tokens, sanitize
 from mote.context.skills.skill_pool import SkillPool
 
-_LOADING_GUIDE = (
-    "## Skill Loading Guide\n"
-    "To use a Skill listed in the index above, invoke the `Skill` tool:\n"
-    '  Skill(name="<skill-name>", arguments="<your input>")\n'
-    "The Skill runs on-demand and its instructions/result come back as the tool "
-    "result (inline skills) or as a summary from an isolated sub-agent (fork "
-    "skills). To discover skills not shown in the index, search with "
-    'Skill(query="<keywords>").\n'
-    "If a Skill covers the same capability as a tool, prefer following the Skill."
-)
-
 
 class SkillInjector:
     """Inject the Skills index into system prompts."""
@@ -46,17 +35,6 @@ class SkillInjector:
         if only_names is not None:
             skills = [s for s in skills if s.name in only_names]
         return skills
-
-    def build_guide(self) -> str:
-        """The static Skill Loading Guide — belongs in the cacheable system prompt.
-
-        Constant per session (it merely explains how to invoke the ``Skill``
-        tool), so it stays in the prompt prefix rather than being re-sent every
-        turn. Empty string when no skills are available.
-        """
-        if self._pool.get_skill_count() == 0:
-            return ""
-        return _LOADING_GUIDE
 
     def build_index(self, max_tokens: int = 2000, only_names: Optional[set] = None) -> str:
         """The volatile ``## Available Skills`` index block (no loading guide).
@@ -85,15 +63,13 @@ class SkillInjector:
         return f"## Available Skills\n{sanitize(index_block)}"
 
     def build_content(self, max_tokens: int = 2000) -> str:
-        """Index + loading guide, joined — the full injectable block.
+        """The full injectable block — the ``## Available Skills`` index.
 
-        Convenience composition of :meth:`build_index` and :meth:`build_guide`,
-        kept for :meth:`inject` and standalone rendering. The steady runtime
-        splits these two across the system prompt (guide) and the per-turn
-        reminder (index) instead.
+        Kept for :meth:`inject` and standalone rendering. The steady runtime
+        delivers this index per-turn via the reminder source; the ``Skill`` tool
+        schema itself teaches invocation, so no separate loading guide is added.
         """
-        parts = [p for p in (self.build_index(max_tokens), self.build_guide()) if p]
-        return "\n\n".join(parts)
+        return self.build_index(max_tokens)
 
     def inject(self, system_prompt: str, max_tokens: int = 2000) -> str:
         """Append Skills information to the system prompt.

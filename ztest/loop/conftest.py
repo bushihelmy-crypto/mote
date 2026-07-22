@@ -57,6 +57,8 @@ class FakeThinkEngine:
         self.result = _Result(content)
         self.start_calls: list[dict] = []
         self.join_calls = 0
+        # Results adopted via the durable reinstate path (skip-the-LLM resume).
+        self.reinstated: list = []
 
     async def start(self, req, system_prompt, tool_specs=None, *, llm):
         self.start_calls.append(
@@ -67,6 +69,12 @@ class FakeThinkEngine:
                 "llm": llm,
             }
         )
+
+    def reinstate(self, result) -> None:
+        # Mirror ThinkEngine.reinstate: adopt the journal-recovered result and
+        # mark done (no task) so the loop reads it without re-paying the model.
+        self.result = result
+        self.reinstated.append(result)
 
     async def join(self) -> None:
         self.join_calls += 1
@@ -318,6 +326,7 @@ def make_loop():
         bg_pool: Optional[FakeBgPool] = None,
         turn_context_bus=None,
         get_cwd: Optional[Callable[[], str]] = None,
+        durable_runner=None,
         **ctx_overrides,
     ) -> LoopBundle:
         ctx = ctx or make_loop_context(**ctx_overrides)
@@ -355,6 +364,7 @@ def make_loop():
             report_think_result=report_think_result,
             turn_context_bus=turn_context_bus,
             get_cwd=get_cwd,
+            durable_runner=durable_runner,
         )
         return LoopBundle(
             loop=loop,

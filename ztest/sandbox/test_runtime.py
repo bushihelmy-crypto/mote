@@ -261,6 +261,115 @@ class TestNetnsEgressPolicy:
         assert rt._build_netns_launcher_command(["true"], str(tmp_path)) is None
 
 
+class TestTrustAnchorEnv:
+    """The MITM trust-anchor env is layered only when a MITM CA is active.
+
+    A no-op unless ``_mitm_ca`` is set (the broker had intercept hosts); when it
+    is, every common trust-anchor var points at the combined bundle and
+    ``SSL_CERT_DIR`` is cleared.
+    """
+
+    class _FakeProxy:
+        port = 44399
+        url = "http://127.0.0.1:44399"
+
+        async def shutdown(self):  # pragma: no cover - trivial
+            pass
+
+    def _proxy_runtime(self):
+        rt = SandboxRuntime(backend="none", harden_process=False, network="proxy")
+        rt._proxy = self._FakeProxy()
+        return rt
+
+    def test_no_mitm_ca_leaves_trust_env_untouched(self):
+        rt = self._proxy_runtime()
+        env = rt._apply_network_env({"PATH": "/bin"})
+        # Proxy vars are injected, but no trust-anchor rewrite happens.
+        assert env["HTTP_PROXY"].startswith("http://")
+        assert "SSL_CERT_FILE" not in env
+
+    def test_mitm_ca_sets_bundle_across_all_vars(self, tmp_path):
+        from mote.sandbox.network.tls import MitmCa
+
+        rt = self._proxy_runtime()
+        rt._mitm_ca = MitmCa(ca_dir=tmp_path)
+        env = rt._apply_network_env({"PATH": "/bin", "SSL_CERT_DIR": "/etc/ssl/certs"})
+        bundle = rt._mitm_ca.combined_bundle_path()
+        for var in ("SSL_CERT_FILE", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"):
+            assert env[var] == bundle
+        # A stale hashed-dir store must not shadow the bundle.
+        assert "SSL_CERT_DIR" not in env
+
+    def test_open_network_never_applies_trust_env(self, tmp_path):
+        from mote.sandbox.network.tls import MitmCa
+
+        rt = SandboxRuntime(backend="none", harden_process=False, network="open")
+        rt._mitm_ca = MitmCa(ca_dir=tmp_path)
+        env = rt._apply_network_env({"PATH": "/bin"})
+        # "open" bypasses the proxy branch entirely — no trust-anchor rewrite.
+        assert "SSL_CERT_FILE" not in env
+
+
+class TestMaskedPathsBwrap:
+    """``SandboxPolicy.masked_paths`` → a ``--ro-bind /dev/null <path>`` per
+    existing path in the bwrap argv (reads as empty inside the sandbox).
+    """
+
+    def test_masked_path_emits_ro_bind_devnull(self, tmp_path):
+        from mote.sandbox.bwrap import BwrapBackend
+
+        secret = tmp_path / "vault.key"
+        secret.write_text("s3cr3t")
+        policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_paths=[str(secret)])
+        argv = BwrapBackend().build_argv(policy, ["/bin/true"])
+        joined = " ".join(argv)
+        assert f"--ro-bind /dev/null {os.path.realpath(secret)}" in joined
+
+    def test_missing_masked_path_skipped(self, tmp_path):
+        from mote.sandbox.bwrap import BwrapBackend
+
+        missing = tmp_path / "does-not-exist"
+        policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_paths=[str(missing)])
+        argv = BwrapBackend().build_argv(policy, ["/bin/true"])
+        assert str(missing) not in " ".join(argv)
+
+
+class TestMaskedDirsBwrap:
+    """``SandboxPolicy.masked_dirs`` → a ``--tmpfs <dir>`` per existing directory
+    (reads as an empty directory inside — the directory sibling of masked_paths).
+    """
+
+    def test_masked_dir_emits_tmpfs(self, tmp_path):
+        from mote.sandbox.bwrap import BwrapBackend
+
+        profiles = tmp_path / "browser_profiles"
+        profiles.mkdir()
+        (profiles / "acct.profile").write_bytes(b"ciphertext")
+        policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_dirs=[str(profiles)])
+        argv = BwrapBackend().build_argv(policy, ["/bin/true"])
+        joined = " ".join(argv)
+        assert f"--tmpfs {os.path.realpath(profiles)}" in joined
+
+    def test_missing_masked_dir_skipped(self, tmp_path):
+        from mote.sandbox.bwrap import BwrapBackend
+
+        missing = tmp_path / "no-such-dir"
+        policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_dirs=[str(missing)])
+        argv = BwrapBackend().build_argv(policy, ["/bin/true"])
+        assert str(missing) not in " ".join(argv)
+
+    def test_file_not_treated_as_masked_dir(self, tmp_path):
+        # masked_dirs only overlays directories (--tmpfs needs a dir target); a
+        # plain file path is skipped (it belongs in masked_paths instead).
+        from mote.sandbox.bwrap import BwrapBackend
+
+        f = tmp_path / "a-file"
+        f.write_text("x")
+        policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_dirs=[str(f)])
+        argv = BwrapBackend().build_argv(policy, ["/bin/true"])
+        assert f"--tmpfs {os.path.realpath(f)}" not in " ".join(argv)
+
+
 class TestCgroupLimitsWrapping:
     """Resource-limit (cgroup) prefix prepending — no systemd needed.
 

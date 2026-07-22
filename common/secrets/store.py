@@ -112,9 +112,27 @@ class SecretStore:
         # when the file is absent — clearing a stale entry left by a deleted file.
         self._file_mtime: Any = _UNSET
         self._vault_mtime: Optional[float] = None
+        # Construction is deliberately I/O-free.  Runtime assembly may create a
+        # store while it is only resolving the component graph; touching the
+        # vault here would turn an ordinary property read into filesystem I/O.
+        # The first operation that actually needs durable state prepares the
+        # store, and the runtime may call prepare() explicitly during startup.
+        self._prepared = False
 
-        self._load()  # decrypt whatever is already on disk (fail-open)
-        self.refresh()  # initial config + file harvest + mtime baseline
+    def prepare(self) -> None:
+        """Load and reconcile durable tiers once; idempotent.
+
+        Kept synchronous because the underlying storage is currently local and
+        all existing hot-refresh operations are synchronous.  This explicit
+        lifecycle boundary ensures ``__init__`` remains a pure in-memory step.
+        """
+        if self._prepared:
+            return
+        # Mark first: refresh() is also the public lazy-entry point and must not
+        # recurse while performing the initial reconciliation.
+        self._prepared = True
+        self._load()
+        self.refresh()
 
     # -- reads --------------------------------------------------------------
 
@@ -143,7 +161,65 @@ class SecretStore:
                 merged[value] = f"<agent-vault:{key}>"
         return merged
 
+    def labels(self) -> Dict[str, str]:
+        """Return the ``{name: placeholder}`` map of NAMED secrets for discovery.
+
+        The forward complement of :meth:`as_map` (value→label) and :meth:`get`
+        (key→value): this exposes only the *keys* a model may reference, each
+        paired with the exact placeholder it must write — and never a value. The
+        config tier is keyed by dotted path → ``<secret:llm.api_key>``; the file
+        and user tiers by name → ``<agent-vault:key>``. The **session tier is
+        excluded** — its keys are random ``session-<uuid>`` strings, nothing a
+        model could meaningfully reference.
+
+        This is disclosure-safe: the names are already broadcast to the model as
+        redaction placeholders (a masked value round-trips as ``<agent-vault:k>``
+        in history), so enumerating them adds no leakage — and the value only
+        ever flows out through :meth:`get`, never here. Refreshes first (cheap
+        mtime stats) so a hot ``secrets_config.json`` edit is reflected.
+        """
+        self.refresh()
+        out: Dict[str, str] = {}
+        for dotted, value in self._config_section.items():
+            if value:
+                out[dotted] = f"<secret:{dotted}>"
+        for key, value in self._file_section.items():
+            if value:
+                out[key] = f"<agent-vault:{key}>"
+        for key, value in self._user_section.items():
+            if value:
+                out[key] = f"<agent-vault:{key}>"
+        return out
+
+    def get(self, key: str) -> Optional[str]:
+        """Return a secret *value* by its key, or ``None`` if unknown.
+
+        The inverse lookup of :meth:`as_map` (which is value→label): this
+        resolves a *named* secret to its plaintext value for a trusted consumer
+        (the sandbox credential broker) that references a secret **by key** and
+        must never see the model author the value. Refreshes first (cheap mtime
+        stats) so a hot config / ``secrets_config.json`` edit is honoured.
+
+        Tiers are scanned highest-precedence first (session > user > file), then
+        the config section — which is keyed by *dotted path* not a bare name, so
+        a bare ``key`` also matches its trailing dotted segment (``llm.api_key``
+        matched by ``api_key``). An empty stored value is treated as absent
+        (fail-closed: the broker builds no partial credential).
+        """
+        self.refresh()
+        for tier in (self._session, self._user_section, self._file_section):
+            value = tier.get(key)
+            if value:
+                return value
+        # Config section is keyed by dotted path; match the full path or a
+        # trailing segment so a bare name resolves a nested config secret.
+        for dotted, value in self._config_section.items():
+            if value and (dotted == key or dotted.rsplit(".", 1)[-1] == key):
+                return value
+        return None
+
     def __len__(self) -> int:
+        self.prepare()
         return len(self._config_section) + len(self._file_section) + len(self._user_section) + len(self._session)
 
     # -- writes -------------------------------------------------------------
@@ -154,6 +230,7 @@ class SecretStore:
         Section-isolated write: only the ``secrets`` section is rewritten, so the
         auto-synced config section is preserved.
         """
+        self.prepare()
         self._user_section[key] = value
         self._write_section(_SECRETS_SECTION, self._user_section)
         return f"<agent-vault:{key}>"
@@ -200,6 +277,9 @@ class SecretStore:
         underneath us (an external write, or our own section write), the
         disk-backed tiers are reloaded. The in-memory session tier is untouched.
         """
+        if not self._prepared:
+            self.prepare()
+            return
         self._reseed_config_if_changed()
         self._reseed_file_if_changed()
         self._reload_vault_if_changed()

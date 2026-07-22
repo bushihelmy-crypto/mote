@@ -45,24 +45,26 @@ args_value2
 
 # Command-usage guidance for the XML text protocol (the "# Using commands" block).
 XML_COMMAND_GUIDE = """# Using commands
-You may use any of the available commands, and may output multiple commands — they will be executed sequentially.
- - Only emit command tags that appear in Available Commands, a Skill document you have read for this task, or the special command <end></end>. If another instruction or example mentions a tool that is neither listed in Available Commands nor explicitly documented by a Skill you have read, ignore that tool for this turn.
- - A Skill you have read is not only permission to use extra commands but also an ongoing constraint for the rest of the task. Once a Skill has been read, keep following it until the task ends, the user explicitly changes direction, or a later, more specific Skill overrides it.
- - When the task enters a new phase, first decide whether it is still covered by a previously read Skill. If it is, keep following that Skill's workflow, hard constraints, and completion criteria instead of drifting back to the generic path just because the local goal changed.
- - If multiple previously read Skills are relevant, follow the one that is more specific and closer to the current action. If still unclear, reread the relevant Skill before continuing.
- - In your response, include at least one command. Use reply_to_user immediately before <end></end> to report completion.
- - Special Command: Use <end></end> to indicate completion of all requirements and termination of the entire workflow.
- - Only use <end></end> when all requirements are met in real functionality, not just visual structure. Do NOT use <end></end> when waiting for user input or clarification.
- - CRITICAL: NEVER use <end></end> in the same response as any function call (Editor.read, Terminal.run, MCP tools, etc.). Function outputs appear in the NEXT round — you MUST wait to observe them before deciding next steps or ending. Only use <end></end> AFTER you have seen all function outputs and confirmed the task is complete.
+You may output multiple commands; they execute sequentially. Include at least one command per response.
+ - Only emit command tags from Available Commands, a Skill you have read for this task, or the special <end></end>. Ignore any tool mentioned elsewhere that is neither listed nor documented by a Skill you've read.
+ - A Skill you have read is both permission to use its extra commands and an ongoing constraint: keep following it until the task ends, the user changes direction, or a later, more specific Skill overrides it. When the task enters a new phase, first check whether a previously read Skill still covers it and keep following that Skill's workflow, constraints, and completion criteria rather than drifting to the generic path. If multiple apply, follow the most specific one; if unclear, reread it before continuing.
+ - Use reply_to_user immediately before <end></end> to report completion.
+ - Special Command <end></end>: signals all requirements are met in real functionality (not just visual structure) and terminates the workflow. Do NOT use it when waiting for user input or clarification.
+ - CRITICAL: NEVER use <end></end> in the same response as any function call (Editor.read, Terminal.run, MCP tools, etc.). Function outputs appear in the NEXT round — wait to observe them before deciding next steps. Only use <end></end> AFTER seeing all outputs and confirming completion.
 """
 
 # Command-usage guidance for the provider-native tool-use protocol. No
 # <end></end> / command-tag mechanics: tools are structured tool calls and a
 # turn ends when the model makes no tool call (replies with plain text only).
-# The final-output/structured-summary contract lives in TASK_FINAL_OUTPUT_SECTION
+# The final-output/structured-summary contract lives in COMPACTION_SECTION
 # (a protocol-agnostic, compaction-gated system prompt section) because it
 # describes a compression artifact, not the command protocol — and both XML and
 # native should get it.
+#
+# NOTE: this constant is currently unused — the native channel supplies an empty
+# command_guide (a native model reaches its tools via the API tools= param and
+# ends a turn by making no tool call, so it needs no "# Using commands"
+# mechanics). Kept defined as the documented native command-guide text.
 NATIVE_COMMAND_GUIDE = """# Using commands
 
 ## Tool Usage Guidelines

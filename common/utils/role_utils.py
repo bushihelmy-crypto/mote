@@ -39,7 +39,42 @@ def _ask_user_question_args(problem: str) -> dict:
     }
 
 
-async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str], llm, check_window: int = 10) -> str:
+# Read-only DeviceUse actions (screen inspection / waiting) are legitimately
+# repeated across a GUI observe->act loop and return fresh state each time, so an
+# identical call signature is NOT a stuck loop — exempt them like Terminal below.
+_DEVICE_READONLY_ACTIONS = frozenset({"observe", "wait", "list_apps"})
+
+
+def _all_readonly_device(command_calls: Optional[list[dict]]) -> bool:
+    """True when every call is a read-only DeviceUse inspection/wait action."""
+    calls = command_calls or []
+    if not calls:
+        return False
+    for c in calls:
+        if (c.get("command_name") or c.get("name")) != "DeviceUse":
+            return False
+        action = str((c.get("args") or {}).get("action") or "observe").strip().lower()
+        if action not in _DEVICE_READONLY_ACTIONS:
+            return False
+    return True
+
+
+def _duplicate_prompt(language: str = "") -> str:
+    """Fill the ``{language}`` slot of the duplicate-summary prompt.
+
+    ``response_language`` may be "auto"/empty (no fixed language) — fall back to a
+    phrase so the sentence still reads correctly instead of leaking a raw
+    ``{language}`` placeholder onto the wire.
+    """
+    lang = (language or "").strip()
+    if not lang or lang.lower() == "auto":
+        lang = "the user's language"
+    return SUMMARIZE_PROBLEM_WHEN_DUPLICATE.format(language=lang)
+
+
+async def check_duplicates(
+    req: list[dict], command_rsp: str, rsp_hist: list[str], llm, check_window: int = 10, language: str = ""
+) -> str:
     past_rsp = rsp_hist[-check_window:]
     if command_rsp in past_rsp and '"command_name": "End"' not in command_rsp:
         # Normal response with thought contents are highly unlikely to reproduce
@@ -53,7 +88,7 @@ async def check_duplicates(req: list[dict], command_rsp: str, rsp_hist: list[str
 
         #  Hard rule to ask human for help
         if past_rsp.count(command_rsp) >= 3:
-            context = req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)]
+            context = req + [UserMessage(content=_duplicate_prompt(language))]
             problem = await llm.aask(context)
             # Build a fresh command rather than mutating a shared template in
             # place (that leaked the question across calls and polluted any
@@ -86,6 +121,7 @@ async def check_duplicate_calls(
     sig_hist: list[str],
     llm,
     check_window: int = 10,
+    language: str = "",
 ) -> Optional[list[dict]]:
     """Native counterpart to check_duplicates: dedup by structured-call signature.
 
@@ -104,10 +140,14 @@ async def check_duplicate_calls(
         return None
     if "Terminal" in names and "Editor" not in names:
         return None
+    # Read-only device inspection (observe/wait/list_apps) is inherently repeated
+    # in a GUI observe->act loop and returns fresh state each time — not a loop.
+    if _all_readonly_device(command_calls):
+        return None
     signature = call_signature(command_calls)
     past = sig_hist[-check_window:]
     if past.count(signature) >= 3:
-        context = req + [UserMessage(content=SUMMARIZE_PROBLEM_WHEN_DUPLICATE)]
+        context = req + [UserMessage(content=_duplicate_prompt(language))]
         problem = await llm.aask(context)
         return [{"id": None, "command_name": "AskUserQuestion", "args": _ask_user_question_args(problem)}]
     return None

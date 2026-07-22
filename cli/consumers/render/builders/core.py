@@ -383,10 +383,10 @@ def task_progress_text(ev: Any) -> "Text":
 #
 # This classifier is a pure, host-agnostic builder so both rich hosts (and a
 # future terminal adoption) share one definition; the search/read *count*
-# phrasing below keeps the Grep/Glob vs Read split for the summary.
-_GROUP_SEARCH = {"Grep", "Glob"}
+# phrasing below keeps the Search vs Read split for the summary.
+_GROUP_SEARCH = {"Search"}
 _GROUP_READ = {"Read"}
-_FOLD_NONE = {"Edit", "Write"}
+_FOLD_NONE = {"Edit"}
 
 
 class FoldMode(Enum):

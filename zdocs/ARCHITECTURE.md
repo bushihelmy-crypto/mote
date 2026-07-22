@@ -246,7 +246,7 @@ graph TD
 
     C5 --> D["ContextProvider.resolve_llm(req)"]
     subgraph resolve["resolve_llm — provider.py:76-86"]
-        D --> D1{"role_schema.enable_router 且有 messages?"}
+        D --> D1{"router.routing_enabled 且有 messages?"}
         D1 -->|是| D2["router.aroute(RoutingRequest)<br/>按请求信号智能选模型"]
         D1 -->|否| D3["router.route(config.llm)<br/>固定配置模型"]
     end

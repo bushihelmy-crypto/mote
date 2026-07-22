@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, AsyncGenerator, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Optional, TypeAlias
 
 from mote.common.base.command_channel import CommandChannel, _collect_media, _media_message
 from mote.common.config.config.llm_config import LLMType
 from mote.common.const.llm import supports_native_tool_search
 from mote.common.logs import logger
-from mote.common.prompt.output import NATIVE_COMMAND_GUIDE
 from mote.common.prompt.refs import Sym
 from mote.common.schema import AIMessage, ToolMessage
 from mote.parser.xml_channel import XmlCommandChannel
@@ -18,16 +17,34 @@ if TYPE_CHECKING:
     from mote.common.base import BaseThinkEngine
     from mote.common.interface import MessageStore
 
+# Recorded-args size limiter: (tool_name, args, call_id) -> possibly-compressed
+# args. ``tool_name`` lets a wrapper specialize per tool (e.g. an Edit whole-file
+# write → structural AST summary) before falling back to the tool-agnostic
+# large-blob persist (``ToolExecutor.persist_large_args``).
+ArgsLimiter: TypeAlias = Callable[[str, Any, str | None], Any]
+
 
 class NativeToolChannel(CommandChannel):
     """Provider-native tool-use: structured tool_calls, no XML format text."""
 
-    def __init__(self, provider: str = "openai", model: str | None = None) -> None:
+    def __init__(
+        self,
+        provider: str = "openai",
+        model: str | None = None,
+        args_limiter: ArgsLimiter | None = None,
+    ) -> None:
         self._provider = provider
         # The resolved model name — threaded into get_native_tool_specs so the
         # catalog's server-side tool-search (defer_loading) decision is
         # capability-gated (supports_native_tool_search), not provider-only.
         self._model = model
+        # Optional recorded-args size limiter (executor.persist_large_args). When
+        # set, a giant tool-call ``args`` blob is persisted to disk and replaced
+        # by a ``<persisted-output>`` envelope BEFORE the assistant message enters
+        # memory — the arguments twin of the result-output cap, so an oversized
+        # arg never lives in history uncompressed nor lands in a cached prefix.
+        # None (tests / no executor) → args recorded verbatim.
+        self._args_limiter = args_limiter
 
     @property
     def _server_side_tool_search(self) -> bool:
@@ -62,12 +79,13 @@ class NativeToolChannel(CommandChannel):
         }
 
     def prompt_vars(self) -> dict[str, str]:
-        # Native supplies the tool-call "# Using commands" guidance; it carries no
-        # <end></end> marker the model would echo. tool_usage_guide is empty:
-        # native tools reach the model via the API ``tools=`` param, so the system
-        # prompt needs no catalog orientation (mirrors wants_tool_catalog() False).
+        # Both empty on native: a native model reaches its tools via the API
+        # ``tools=`` param and ends a turn simply by making no tool call, so the
+        # system prompt needs neither the "# Using commands" mechanics
+        # (command_guide) nor catalog orientation (tool_usage_guide) — those are
+        # XML-protocol concerns. (mirrors wants_tool_catalog() False.)
         return {
-            "command_guide": NATIVE_COMMAND_GUIDE,
+            "command_guide": "",
             "tool_usage_guide": "",
         }
 
@@ -96,8 +114,28 @@ class NativeToolChannel(CommandChannel):
             }
 
     async def record_call(self, memory: "MessageStore", command_rsp: str, executed: list[dict]) -> None:
-        tool_calls = [{"id": e["id"], "name": e["name"], "args": e.get("args") or {}} for e in executed if e.get("id")]
+        # Compress each call's RECORDED args through the injected limiter (persist
+        # a giant arg to disk + leave a <persisted-output> pointer) as the message
+        # is built. This reads e["args"] into a NEW list, so the loop's execution
+        # args (entry["args"], passed to run_command) stay untouched — recording
+        # and execution never share the mutated value. Both the checkpoint path
+        # (record_call before execution) and the single-shot record_turn path
+        # funnel through here, so args are limited on exactly one seam.
+        tool_calls = [
+            {"id": e["id"], "name": e["name"], "args": self._limit_args(e["name"], e.get("args") or {}, e["id"])}
+            for e in executed
+            if e.get("id")
+        ]
         await memory.add(AIMessage(content=command_rsp or "", tool_calls=tool_calls))
+
+    def _limit_args(self, tool_name: str, args: Any, call_id: str | None) -> Any:
+        """Run recorded args through the size limiter when one is wired.
+
+        ``tool_name`` lets the limiter specialize per tool (an Edit whole-file
+        write can fold into a structural summary) before the tool-agnostic
+        large-blob persist fallback.
+        """
+        return self._args_limiter(tool_name, args, call_id) if self._args_limiter is not None else args
 
     async def record_results(self, memory: "MessageStore", executed: list[dict]) -> None:
         for e in executed:
@@ -179,15 +217,25 @@ def infer_native_tool_provider(llm_config) -> str:
     return "openai"
 
 
-def make_command_channel(protocol: str, *, provider: str = "openai", model: str | None = None) -> CommandChannel:
+def make_command_channel(
+    protocol: str,
+    *,
+    provider: str = "openai",
+    model: str | None = None,
+    args_limiter: ArgsLimiter | None = None,
+) -> CommandChannel:
     """Build the channel for a RoleSchema.command_protocol value.
 
     "xml" -> XmlCommandChannel; "native" -> NativeToolChannel. Unknown values
     fall back to XML (the safe, model-agnostic default). ``provider`` is the
     native tool-spec envelope; pass the value from infer_native_tool_provider().
     ``model`` is the resolved model name, threaded into the tool-spec build so
-    the server-side tool-search decision is capability-gated.
+    the server-side tool-search decision is capability-gated. ``args_limiter``
+    (native only) is the recorded-args size limiter — pass
+    ``executor.persist_large_args`` so a giant tool-call arg is persisted before
+    it enters context. XML embeds args in the assistant text (no structured
+    args list to limit), so it ignores it.
     """
     if protocol == "native":
-        return NativeToolChannel(provider=provider, model=model)
+        return NativeToolChannel(provider=provider, model=model, args_limiter=args_limiter)
     return XmlCommandChannel()

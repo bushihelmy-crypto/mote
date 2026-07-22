@@ -7,7 +7,9 @@ without importing the executor package.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
 
 from mote.common.text import PERSISTED_OUTPUT_CLOSE, PERSISTED_OUTPUT_OPEN
 
@@ -37,11 +39,9 @@ PERSISTED_OUTPUT_CLOSE_TAG: str = PERSISTED_OUTPUT_CLOSE
 # DEFAULT_MAX_RESULT_SIZE_CHARS. (A tool can also override via its class attr.)
 TOOL_MAX_RESULT_SIZE_CHARS: dict[str, int] = {
     "Read": 100_000,
-    "Glob": 100_000,
-    "Grep": 20_000,
+    "Search": 100_000,
     "Bash": 30_000,
     "Edit": 100_000,
-    "Write": 100_000,
     "Sleep": 1_000,
 }
 
@@ -90,6 +90,131 @@ class EffectLedgerConfig(BaseModel):
     """
 
     enabled: bool = True
+
+
+class LoopGuardConfig(BaseModel):
+    """Knobs for the tool-call loop guard (repeated-failure / no-progress detector).
+
+    Sibling of :class:`EffectLedgerConfig`: a pure-data, tool-execution-scope
+    policy the :class:`~mote.executor.tool_executor.ToolExecutor` wires as a
+    PostToolUse control subscriber (:class:`~mote.executor.loop_guard.LoopGuardSubscriber`).
+    It watches finished calls and, when a call thrashes, appends a nudge to that
+    call's result steering the model to change approach or ask the user for help
+    (via ``AskUserQuestion``) — a soft, in-band signal, never a hard block.
+
+    Two orthogonal thrash shapes are counted per ``(tool_name, args-signature)``:
+
+    - *repeated failure*: the SAME call (same args) fails ``failure_threshold``
+      times in a row. A single success on that signature clears its count (real
+      progress), so only an unbroken streak of identical failures trips it.
+    - *no progress*: a PURE (read-only) call returns the SAME result
+      ``no_progress_threshold`` times in a row. A read that keeps yielding the
+      identical bytes is spinning, not observing fresh state.
+
+    ``enabled=False`` reproduces the prior behavior (calls run untouched; the
+    only duplicate detection is the think-layer ``check_duplicate_calls``).
+    """
+
+    enabled: bool = True
+
+    # Consecutive identical-args failures of one tool before the guard nudges.
+    # Counts a streak: a success on the same signature resets it to zero.
+    failure_threshold: int = 3
+
+    # Consecutive identical results from one PURE (read-only) call before the
+    # guard flags it as making no progress. Only PURE tools are eligible — a
+    # LOCAL/EXTERNAL tool legitimately repeats (a deploy loop, a poll).
+    no_progress_threshold: int = 3
+
+
+class ActivityConfig(BaseModel):
+    """Per-seam Temporal activity retry/timeout policy (Tier 2 only).
+
+    One instance per durable seam (tool / think / timer): mote's three
+    replay-safe seams become Temporal activities under ``backend="temporal"``,
+    and each carries its own execution budget. Mirrors the fields pydantic-ai's
+    Temporal integration exposes on its activity wrappers.
+
+    All fields are plain data (seconds / ints / a string list) so this stays a
+    pure config leaf — the optional ``durable_exec/temporal`` package maps them
+    onto ``temporalio``'s ``RetryPolicy`` / ``execute_activity`` kwargs at wire
+    time, so the core never imports ``temporalio`` to hold this shape.
+
+    - ``start_to_close_timeout_seconds``: the wall-clock ceiling for one activity
+      attempt (the seam's body). ``None`` defers to the Temporal server default.
+    - ``max_retry_attempts``: retry ceiling for a failed attempt (``0`` = unbounded,
+      deferring to timeouts). Transient failures retry; a mote *user-logic* error
+      (``ToolError`` / ``UserError``) is marked non-retryable by the seam wrapper
+      so it fails fast rather than burning the retry budget (see ``B4``).
+    - ``initial_retry_interval_seconds`` / ``retry_backoff_coefficient`` /
+      ``max_retry_interval_seconds``: the retry backoff curve.
+    - ``non_retryable_error_types``: extra fully-qualified error names the seam
+      should treat as permanent (in addition to mote's user-logic errors).
+    """
+
+    start_to_close_timeout_seconds: Optional[float] = None
+    max_retry_attempts: int = 0
+    initial_retry_interval_seconds: float = 1.0
+    retry_backoff_coefficient: float = 2.0
+    max_retry_interval_seconds: Optional[float] = None
+    non_retryable_error_types: list[str] = Field(default_factory=list)
+
+
+class TemporalConfig(BaseModel):
+    """Connection + per-seam activity policy for the opt-in Temporal backend.
+
+    Consulted ONLY when :class:`DurableConfig` selects ``backend="temporal"``;
+    inert under the default JSONL backend. Pure data — the optional
+    ``durable_exec/temporal`` package reads it to connect a client + register a
+    worker; the core schema never imports ``temporalio`` to hold this shape.
+
+    - ``server_address``: the Temporal frontend to connect to.
+    - ``namespace``: the Temporal namespace the run's workflow lives in.
+    - ``task_queue``: the queue the workflow + its activities are polled from.
+    - ``tool_activity`` / ``think_activity`` / ``timer_activity``: the per-seam
+      :class:`ActivityConfig` (retry/timeout) for the three durable seams. Each
+      defaults to a plain :class:`ActivityConfig` so a minimal config just names
+      the server + queue and inherits sane per-seam budgets.
+    """
+
+    server_address: str = "localhost:7233"
+    namespace: str = "default"
+    task_queue: str = "mote"
+    tool_activity: ActivityConfig = Field(default_factory=ActivityConfig)
+    think_activity: ActivityConfig = Field(default_factory=ActivityConfig)
+    timer_activity: ActivityConfig = Field(default_factory=ActivityConfig)
+
+
+class DurableConfig(BaseModel):
+    """Selects the durable-execution backend for the run's replay-safe steps.
+
+    Orthogonal to :class:`EffectLedgerConfig` (which guards EXTERNAL-tool
+    idempotency — a *correctness* concern that is never weakened): this config
+    governs whether a run's *replay-safe* steps (an LLM think turn, a LOCAL tool
+    write, a durable timer) have their result memoized so a resume can skip an
+    already-completed step instead of re-paying for it — and, when
+    ``backend="temporal"``, whether those steps are dispatched through the
+    optional Temporal backend instead of the always-on JSONL journal.
+
+    ``enabled=False`` reproduces the prior behavior byte-for-byte (no step
+    memoization; every step simply re-runs on resume). ``backend`` selects the
+    transport for the durable steps:
+
+    - ``"jsonl"`` (default, zero-dependency): the :class:`RunJournal` records a
+      started/completed/failed entry per step; a resume replays a completed
+      step's result from the journal. This is NOT a deterministic replay engine
+      — it only promises "skip completed steps + heal the crash frontier".
+    - ``"temporal"`` (opt-in): the three seams (tool / think / spawn) become
+      Temporal activities and the loop runs inside a Temporal workflow sandbox.
+      Requires the optional ``[temporal]`` extra; the core never imports
+      ``temporalio`` — only this string selects the optional backend package.
+      ``temporal`` carries that backend's connection + per-seam activity policy
+      (consulted only on this branch).
+    """
+
+    enabled: bool = True
+    backend: Literal["jsonl", "temporal"] = "jsonl"
+    temporal: TemporalConfig = Field(default_factory=TemporalConfig)
 
 
 class ToolSearchConfig(BaseModel):

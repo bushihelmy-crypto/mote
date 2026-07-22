@@ -75,6 +75,10 @@ dependencies = [
     "pdfminer.six",
     "markdownify",
     "pylatexenc",  # flatten LaTeX math ($…$/$$…$$) to Unicode for terminal render
+    # Multi-language CodeMap (JS/TS/Go/Rust/Java/C#/C/C++ via tree-sitter). Behind
+    # an import guard in ts_runtime.py: a failed native build degrades to Python-only.
+    "tree-sitter>=0.22",  # NEW get_parser / Parser(Language(ptr)) API
+    "tree-sitter-language-pack>=1.0",
     # Observability
     "langfuse",
     "sentry-sdk",
@@ -84,6 +88,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "isort", "flake8", "pyright", "pre-commit"]
+# Tier 2 durable execution (opt-in). The core never imports ``temporalio``; only
+# ``DurableConfig.backend="temporal"`` selects the optional ``durable_exec/temporal``
+# package, which requires this extra. Its pydantic data converter reuses mote's
+# existing pydantic dep (no custom converter).
+temporal = ["temporalio>=1.7"]
 
 [project.scripts]
 mote = "mote.cli.__main__:main"

@@ -28,38 +28,17 @@ from mote.common.const.context import (
     MODEL_CONTEXT_WINDOW_DEFAULT,
     WARNING_THRESHOLD_BUFFER_TOKENS,
 )
+from mote.common.schema.messages import to_role_content_dicts
 from mote.common.utils.token_counter import TOKEN_MAX, count_message_tokens
 
 MessageLike = Union[Message, dict]
-
-
-def _to_dicts(messages: Sequence[MessageLike]) -> list[dict]:
-    """Normalize messages to the {role, content} dicts the counter expects.
-
-    Only ``role`` and ``content`` are kept. ``Message.to_dict()`` may also emit
-    a ``tool_calls`` key (a list of function-call dicts on native-channel
-    assistant turns); the token counter encodes every value it sees, so leaving
-    that list in would make it try to ``encode()`` a list and raise. Token
-    estimation only needs the textual content, so the call structure is dropped
-    here — the small undercount for the tool_calls envelope is acceptable.
-    """
-    out: list[dict] = []
-    for m in messages:
-        if isinstance(m, Message):
-            d = m.to_dict()
-            out.append({"role": d.get("role", "user"), "content": d.get("content", "")})
-        elif isinstance(m, dict):
-            out.append({"role": m.get("role", "user"), "content": m.get("content", "")})
-        else:
-            out.append({"role": "user", "content": str(m)})
-    return out
 
 
 def count_tokens(messages: Sequence[MessageLike], model: str) -> int:
     """Count tokens for *messages* under *model* (best-effort via tiktoken)."""
     if not messages:
         return 0
-    return count_message_tokens(_to_dicts(messages), model=model)
+    return count_message_tokens(to_role_content_dicts(messages), model=model)
 
 
 def context_window(model: str) -> int:

@@ -19,6 +19,8 @@ vendor exceptions.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from mote.common.exception.base import MoteError
 from mote.common.exception.llm import (
@@ -28,6 +30,7 @@ from mote.common.exception.llm import (
     LLMBillingError,
     LLMConnectionError,
     LLMContentPolicyError,
+    LLMError,
     LLMImageTooLargeError,
     LLMInvalidRequestStateError,
     LLMMultimodalToolContentError,
@@ -206,8 +209,82 @@ def classify_llm_error(exc: BaseException | None) -> MoteError | None:
     return None
 
 
+def _parse_retry_after(raw: str) -> float | None:
+    """Parse a ``Retry-After`` header value into a positive cool-off in seconds.
+
+    RFC 7231 §7.1.3 defines TWO forms; we honour both:
+
+    - ``delta-seconds`` — a non-negative integer (``"120"``);
+    - ``HTTP-date`` — an absolute instant (``"Wed, 21 Oct 2026 07:28:00 GMT"``),
+      converted to a delay by subtracting *now*. A date already in the past yields
+      a non-positive delta → ``None`` (retry immediately via the normal backoff).
+
+    Non-positive / unparseable → ``None``. The date branch is computed against
+    timezone-aware UTC, so it is correct regardless of the local clock's zone.
+    """
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except (TypeError, ValueError):
+        seconds = None
+    if seconds is not None:
+        return seconds if seconds > 0 else None
+    # Second form: an HTTP-date. ``parsedate_to_datetime`` returns an aware
+    # datetime for the mandatory GMT/offset; subtract from aware ``now``.
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delta = (when - datetime.now(timezone.utc)).total_seconds()
+    return delta if delta > 0 else None
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Parse a ``Retry-After`` response header off a raw SDK exception (seconds).
+
+    Both the OpenAI and Anthropic SDK errors expose the failed HTTP response as
+    ``exc.response`` with a ``headers`` mapping. Both RFC 7231 forms (delta-seconds
+    and HTTP-date) are honoured via :func:`_parse_retry_after`. Non-positive /
+    unparseable / absent → ``None`` (degrades to the normal exponential backoff).
+    """
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("retry-after") or headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    return _parse_retry_after(str(raw))
+
+
 def _classify_api_status_error(exc: BaseException) -> MoteError | None:
-    """Map an OpenAI/Anthropic ``APIError`` (with a ``status_code``) to a typed LLMError."""
+    """Map an OpenAI/Anthropic ``APIError`` (with a ``status_code``) to a typed LLMError.
+
+    Stamps the provider-advertised ``Retry-After`` (when present) onto the typed
+    error so ``router.llm._retry.wait_retry_after`` can honour the exact cool-off.
+    """
+    err = _map_api_status_error(exc)
+    # ``retry_after`` is an LLMError facet; every status-mapped error is one, but
+    # narrow explicitly so the assignment is type-checked (not a duck-typed setattr).
+    if isinstance(err, LLMError) and err.retry_after is None:
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            err.retry_after = retry_after
+            err.context.setdefault("retry_after", retry_after)
+    return err
+
+
+def _map_api_status_error(exc: BaseException) -> MoteError | None:
+    """Status/message-pattern classification (retry-after stamping done by caller)."""
     status = getattr(exc, "status_code", None)
     message = str(getattr(exc, "message", "") or exc)
     code = str(getattr(exc, "code", "") or "")

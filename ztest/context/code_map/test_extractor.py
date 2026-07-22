@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from mote.context.code_map.extractor import CodeMapExtractor
+from mote.context.code_map.model import SUMMARY_MAX_CHARS
 
 
 def _write(tmp_path, name: str, source: str) -> str:
@@ -199,6 +200,42 @@ def run(x):
     assert extract.calls == []
 
 
+def test_shadowing_param_named_like_def_not_a_call_edge(tmp_path):
+    # A param named like a module-level def must NOT produce a false call edge:
+    # the scope walk binds `helper` to the param, not the def.
+    src = """
+def helper():
+    pass
+
+def run(helper):
+    helper()
+"""
+    path = _write(tmp_path, "shadow.py", src)
+    extract = CodeMapExtractor().extract(path)
+    edges = [(c.caller, c.callee) for c in extract.calls]
+    assert ("run", "helper") not in edges
+    assert extract.calls == []
+
+
+def test_nested_def_call_not_double_attributed(tmp_path):
+    # A call inside a nested function is attributed ONLY to that nested function,
+    # never also to its enclosing function (no ast.walk double-attribution).
+    src = """
+def target():
+    pass
+
+def outer():
+    def inner():
+        target()
+    return inner
+"""
+    path = _write(tmp_path, "nested.py", src)
+    extract = CodeMapExtractor().extract(path)
+    edges = [(c.caller, c.callee) for c in extract.calls]
+    assert ("outer.inner", "target") in edges
+    assert ("outer", "target") not in edges
+
+
 def test_syntax_error_yields_empty_extract(tmp_path):
     path = _write(tmp_path, "bad.py", "def broken(:\n")
     extract = CodeMapExtractor().extract(path)
@@ -271,6 +308,51 @@ def test_import_refs_multiple_names_one_from(tmp_path):
     names = {r.name for r in extract.import_refs}
     assert names == {"a", "b", "c"}
     assert all(r.module == "pkg" for r in extract.import_refs)
+
+
+# -- Symbol-level import bindings + scope graph -------------------------------
+
+
+def test_import_bindings_from_import_carries_symbol(tmp_path):
+    # A from-import binds the local name to (module, imported_name) — the
+    # symbol-level cross-file seam.
+    src = "from pkg.other import thing as t\n"
+    path = _write(tmp_path, "ib.py", src)
+    extract = CodeMapExtractor().extract(path)
+    by_local = {b.local_name: b for b in extract.import_bindings}
+    assert "t" in by_local
+    b = by_local["t"]
+    assert b.module == "pkg.other"
+    assert b.imported_name == "thing"
+
+
+def test_import_bindings_plain_import_has_no_symbol(tmp_path):
+    # A plain `import a.b.c` binds the top package name; imported_name is empty.
+    src = "import a.b.c\nimport os as o\n"
+    path = _write(tmp_path, "ib2.py", src)
+    extract = CodeMapExtractor().extract(path)
+    by_local = {b.local_name: b for b in extract.import_bindings}
+    assert by_local["a"].module == "a.b.c"
+    assert by_local["a"].imported_name == ""
+    assert by_local["o"].module == "os"
+    assert by_local["o"].imported_name == ""
+
+
+def test_import_bindings_star_skipped(tmp_path):
+    src = "from pkg import *\n"
+    path = _write(tmp_path, "ib3.py", src)
+    extract = CodeMapExtractor().extract(path)
+    assert extract.import_bindings == []
+
+
+def test_scope_graph_exposed_on_extract(tmp_path):
+    # The resolved graph is attached so the store can persist it without reparse.
+    src = "def f():\n    pass\n"
+    path = _write(tmp_path, "sg.py", src)
+    extract = CodeMapExtractor().extract(path)
+    assert extract.scope_graph is not None
+    # module scope always present.
+    assert any(s.kind == "module" for s in extract.scope_graph.scopes.values())
 
 
 # -- Layer C: content_hash ----------------------------------------------------
@@ -359,5 +441,5 @@ def test_summary_truncated_when_long(tmp_path):
     src = f'def f():\n    """{long_line}"""\n    pass\n'
     path = _write(tmp_path, "longdoc.py", src)
     sym = CodeMapExtractor().extract(path).symbols[0]
-    assert len(sym.summary) <= CodeMapExtractor._SUMMARY_MAX_CHARS
+    assert len(sym.summary) <= SUMMARY_MAX_CHARS
     assert sym.summary.endswith("…")

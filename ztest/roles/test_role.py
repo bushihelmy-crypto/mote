@@ -16,7 +16,7 @@ from mote.common.exception import RoleContextNotSetError
 from mote.common.schema import AIMessage, Message
 from mote.common.utils.common import any_to_str
 from mote.roles import Role, RoleSchema, RoleState
-from mote.roles.role_components import _dedupe_tools
+from mote.roles.runtime_modules import dedupe_tools
 
 from .conftest import FakeContextManager, FakeEnv
 
@@ -225,6 +225,11 @@ class TestTurnContextBus:
         # builtin), so it rides the ephemeral reminder tail.
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
+        # The credential index is OPT-IN and gated on the ambient user config
+        # (context.turn_context.credential_index) + secrets + WebBrowser, so its
+        # presence is developer-config-dependent — discount it here so this
+        # default-roster assertion stays deterministic across machines.
+        names.discard("credential_index")
         assert names == {
             "tool_catalog",
             "git",
@@ -358,18 +363,50 @@ class TestEventSubscriberRoster:
         # Redirect the key file + vault into tmp and skip config discovery so the
         # test never touches the real ~/.mote or harvests a real config.yaml.
         from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
-        from mote.roles import role_components as rc
+        from mote.roles.runtime_modules import integrations
 
         monkeypatch.setattr("mote.common.secrets.cipher.CONFIG_ROOT", tmp_path)
-        monkeypatch.setattr(rc, "_primary_config_path", lambda cwd: None)
+        monkeypatch.setattr(integrations, "_primary_config_path", lambda cwd: None)
         role.config.secrets.enabled = True
         role.config.secrets.vault_path = str(tmp_path / "vault.json")
 
         store = role._components.secret_store
         assert store is not None
+        assert not (tmp_path / "vault.key").exists()
+        assert not (tmp_path / "vault.json").exists()
         subs = _wired_subscribers(role)
         assert any(isinstance(s, SecretUploadSubscriber) for s in subs)
         assert any(isinstance(s, RedactionSubscriber) for s in subs)
+
+    def test_checkpoint_subscriber_absent_when_disabled(self, role):
+        # ``record_checkpoints=False`` drops the /rewind recorder regardless of
+        # backend — the builder returns None so it never lands on the bus.
+        from mote.session.subscribers import CheckpointSubscriber
+
+        role.role_schema.record_checkpoints = False
+        subs = _wired_subscribers(role)
+        assert not any(isinstance(s, CheckpointSubscriber) for s in subs)
+
+    def test_checkpoint_subscriber_absent_on_non_git_backend(self, role, monkeypatch):
+        # A non-repo workspace (blob backend) leaves the feature inert — no
+        # per-turn capture is wired even with the flag on.
+        from mote.roles.runtime_modules import session as session_module
+        from mote.session.subscribers import CheckpointSubscriber
+
+        role.role_schema.record_checkpoints = True
+        monkeypatch.setattr(session_module, "detect_blob_backend", lambda _wd: "blob")
+        subs = _wired_subscribers(role)
+        assert not any(isinstance(s, CheckpointSubscriber) for s in subs)
+
+    def test_checkpoint_subscriber_wired_on_git_backend(self, role, monkeypatch):
+        # A git-backed code workspace engages the whole-tree checkpoint recorder.
+        from mote.roles.runtime_modules import session as session_module
+        from mote.session.subscribers import CheckpointSubscriber
+
+        role.role_schema.record_checkpoints = True
+        monkeypatch.setattr(session_module, "detect_blob_backend", lambda _wd: "git")
+        subs = _wired_subscribers(role)
+        assert any(isinstance(s, CheckpointSubscriber) for s in subs)
 
     def test_lsp_service_wired_and_gets_bus_backref(self):
         # The LSP service is an observer that also *produces* DiagnosticsEvent:
@@ -664,6 +701,217 @@ class TestToolSearchWiring:
         r.config.tools.tool_search.enabled = False
         assert r.turn_context_source("deferred_tool_index") is None
 
+    # -- DeviceUse registration (default schema) ------------------------------
+    def test_deviceuse_registered_in_default_schema(self):
+        # DeviceUse ships in the default toolset AND is deferred by default
+        # (small, heavy, niche — search-gated like WebBrowser).
+        schema = RoleSchema(name="X")
+        assert "DeviceUse" in schema.tools
+        assert "DeviceUse" in schema.deferred_tools
+
+    def test_deviceuse_deferred_but_dispatchable(self, context):
+        # A deferred tool is still bound + dispatchable (revelation only lifts
+        # schema visibility) and appears in the searchable menu. Pin the master
+        # switch on BEFORE building (the deferred set is fixed at build time) —
+        # a sibling test mutates the shared config cache off.
+        context.config.tools.tool_search.enabled = True
+        schema = RoleSchema(name="X", tools=["Read", "DeviceUse"], deferred_tools=["DeviceUse"])
+        r = Role(name="X", role_schema=schema, context=context)
+        assert "DeviceUse" in r._components.executor._tools  # bound
+        assert "DeviceUse" in r.list_deferred_tools()  # searchable in the menu
+
+
+# =============================================================================
+# Turn-context registry: the global opt-out blacklist + the credential index
+# =============================================================================
+class TestTurnContextRegistry:
+    """`context.turn_context.disabled` is a name blacklist that suppresses any
+    normally-on ephemeral source; the credential index is the one OPT-IN source,
+    CONSTRUCTED only when (toggle on) AND (secrets enabled) AND (WebBrowser
+    equipped), and RENDERS only on a turn where WebBrowser was recently used."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_shared_config(self, context):
+        # ``Context().config`` is the process-cached singleton, so a mutation here
+        # would leak into later tests (and a prior test's mutation into ours).
+        # Snapshot the fields this class touches and restore them after each test.
+        tc = context.config.context.turn_context
+        ts = context.config.tools.tool_search
+        saved = (
+            list(tc.disabled),
+            tc.credential_index,
+            ts.enabled,
+            list(tc.credential_keys),
+            dict(tc.credential_values),
+        )
+        yield
+        tc.disabled = list(saved[0])
+        tc.credential_index = saved[1]
+        ts.enabled = saved[2]
+        tc.credential_keys = list(saved[3])
+        tc.credential_values = dict(saved[4])
+
+    @staticmethod
+    def _xml_role(context):
+        # XML path keeps the deferred-tool menu as a normally-on source to filter.
+        schema = RoleSchema(
+            name="X", tools=["Read", "WebBrowser"], deferred_tools=["WebBrowser"], command_protocol="xml"
+        )
+        return Role(name="X", role_schema=schema, context=context)
+
+    @staticmethod
+    def _wb_role(context, *, tools=("Read", "WebBrowser")):
+        return Role(name="X", role_schema=RoleSchema(name="X", tools=list(tools)), context=context)
+
+    @staticmethod
+    def _enable_secrets(role, tmp_path, monkeypatch):
+        # Redirect the key file + vault into tmp and skip config discovery so the
+        # test never touches the real ~/.mote or harvests a real config.yaml.
+        from mote.roles.runtime_modules import integrations
+
+        monkeypatch.setattr("mote.common.secrets.cipher.CONFIG_ROOT", tmp_path)
+        monkeypatch.setattr(integrations, "_primary_config_path", lambda cwd: None)
+        role.config.secrets.enabled = True
+        role.config.secrets.vault_path = str(tmp_path / "vault.json")
+        role.config.secrets.secrets_config_path = str(tmp_path / "secrets_config.json")
+
+    # -- opt-out blacklist -----------------------------------------------------
+    def test_disabled_blacklist_suppresses_named_source(self, context):
+        r = self._xml_role(context)
+        r.config.context.turn_context.disabled = ["deferred_tool_index"]
+        assert r.turn_context_source("deferred_tool_index") is None
+
+    def test_disabled_blacklist_leaves_other_sources(self, context):
+        # Blacklisting an unrelated name does not drop the menu. Pin tool_search on
+        # so the deferred menu is present regardless of prior shared-config state.
+        r = self._xml_role(context)
+        r.config.tools.tool_search.enabled = True
+        r.config.context.turn_context.disabled = ["some_other_source"]
+        assert r.turn_context_source("deferred_tool_index") is not None
+
+    # -- credential index (opt-in, three gates) --------------------------------
+    def test_credential_index_default_off(self, context):
+        # Opt-in: the schema default is off, and a role with it off wires nothing
+        # even when WebBrowser-equipped. (Assert the SCHEMA default directly — the
+        # ambient user config may enable it, so pin the role's toggle off here.)
+        from mote.common.config.config.context_config import TurnContextConfig
+
+        assert TurnContextConfig().credential_index is False
+        r = self._wb_role(context)
+        r.config.context.turn_context.credential_index = False
+        assert r.turn_context_source("credential_index") is None
+
+    def test_credential_index_off_without_webbrowser(self, context, tmp_path, monkeypatch):
+        # Toggle on + secrets on, but the role does not declare WebBrowser → not wired.
+        r = self._wb_role(context, tools=["Read"])
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        assert r.turn_context_source("credential_index") is None
+
+    def test_credential_index_off_when_secrets_disabled(self, context):
+        # Toggle on + WebBrowser, but secrets disabled → no live vault → not wired.
+        r = self._wb_role(context)
+        r.config.secrets.enabled = False
+        r.config.context.turn_context.credential_index = True
+        assert r.turn_context_source("credential_index") is None
+
+    def test_credential_index_wired_when_all_gates_pass(self, context, tmp_path, monkeypatch):
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        src = r.turn_context_source("credential_index")
+        assert src is not None
+        assert src.name == "credential_index"
+        assert src.save_to_context is False
+
+    # -- credential index (dynamic render gate: recent WebBrowser use) ---------
+    def test_credential_index_silent_without_recent_browser_use(self, context, tmp_path, monkeypatch):
+        # Constructed (all gates pass) but no WebBrowser call in history → the
+        # render gate self-suppresses even though a secret is configured.
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        r._components.secret_store.add_user_secret("gh_token", "ghp_uservalue123")
+        src = r.turn_context_source("credential_index")
+        assert asyncio.run(src.render()) is None
+
+    def test_credential_index_renders_after_recent_browser_use(self, context, tmp_path, monkeypatch):
+        # A WebBrowser tool call in the recent tail flips the render gate on.
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        r.config.context.turn_context.credential_keys = []  # ambient config may whitelist
+        r._components.secret_store.add_user_secret("gh_token", "ghp_uservalue123")
+        self._mark_browser_used(r)
+        out = asyncio.run(r.turn_context_source("credential_index").render())
+        assert out is not None
+        assert "- gh_token: <agent-vault:gh_token>" in out
+
+    @staticmethod
+    def _mark_browser_used(role):
+        # Put a WebBrowser tool call in the recent tail so the render gate opens.
+        role.context_manager.messages.append(
+            AIMessage(content="", tool_calls=[{"id": "c1", "name": "WebBrowser", "args": {}}])
+        )
+
+    # -- credential index (config: key whitelist + inline non-secret values) ---
+    def test_credential_keys_whitelist_narrows_to_listed(self, context, tmp_path, monkeypatch):
+        # A non-empty whitelist exposes ONLY the listed secret; others drop out.
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        r._components.secret_store.add_user_secret("gh_token", "ghp_x")
+        r._components.secret_store.add_user_secret("aws_key", "akia_y")
+        r.config.context.turn_context.credential_keys = ["gh_token"]
+        self._mark_browser_used(r)
+        out = asyncio.run(r.turn_context_source("credential_index").render())
+        assert out is not None
+        assert "- gh_token: <agent-vault:gh_token>" in out
+        assert "aws_key" not in out
+
+    def test_credential_keys_empty_exposes_all(self, context, tmp_path, monkeypatch):
+        # Empty whitelist (default) exposes every configured secret.
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        r._components.secret_store.add_user_secret("gh_token", "ghp_x")
+        r._components.secret_store.add_user_secret("aws_key", "akia_y")
+        r.config.context.turn_context.credential_keys = []
+        self._mark_browser_used(r)
+        out = asyncio.run(r.turn_context_source("credential_index").render())
+        assert out is not None
+        assert "gh_token" in out and "aws_key" in out
+
+    def test_inline_non_secret_values_render_literally(self, context, tmp_path, monkeypatch):
+        # Inline name:value pairs are non-secrets → shown as their literal value
+        # (no placeholder, not stored in the vault), merged alongside secrets.
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        r.config.context.turn_context.credential_keys = []  # ambient config may whitelist
+        r._components.secret_store.add_user_secret("gh_token", "ghp_x")
+        r.config.context.turn_context.credential_values = {"username": "alice"}
+        self._mark_browser_used(r)
+        out = asyncio.run(r.turn_context_source("credential_index").render())
+        assert out is not None
+        assert "- username: alice" in out  # literal, no placeholder
+        assert "- gh_token: <agent-vault:gh_token>" in out
+
+    def test_secret_placeholder_wins_over_inline_on_collision(self, context, tmp_path, monkeypatch):
+        # A real vault secret must never be shadowed by an inline plaintext of the
+        # same name — the placeholder takes precedence.
+        r = self._wb_role(context)
+        self._enable_secrets(r, tmp_path, monkeypatch)
+        r.config.context.turn_context.credential_index = True
+        r.config.context.turn_context.credential_keys = []  # ambient config may whitelist
+        r._components.secret_store.add_user_secret("token", "real_secret_val")
+        r.config.context.turn_context.credential_values = {"token": "PLAINTEXT_LEAK"}
+        self._mark_browser_used(r)
+        out = asyncio.run(r.turn_context_source("credential_index").render())
+        assert out is not None
+        assert "- token: <agent-vault:token>" in out
+        assert "PLAINTEXT_LEAK" not in out
+
 
 # =============================================================================
 # Task-completion wake wiring (bg-task completion -> new turn)
@@ -815,7 +1063,7 @@ class TestFileWatchHotReload:
         """
         from mote.common.schema import FileWatchConfig
 
-        monkeypatch.setattr("mote.roles.role_components.find_git_root", lambda cwd: "/proj/repo")
+        monkeypatch.setattr("mote.roles.runtime_modules.watching.find_git_root", lambda cwd: "/proj/repo")
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         svc = role.file_watch_service
         assert os.path.abspath("/proj/repo") in svc.watcher._roots
@@ -824,7 +1072,7 @@ class TestFileWatchHotReload:
         """Outside a repo the cwd is NOT added — no whole-tree walk from home."""
         from mote.common.schema import FileWatchConfig
 
-        monkeypatch.setattr("mote.roles.role_components.find_git_root", lambda cwd: None)
+        monkeypatch.setattr("mote.roles.runtime_modules.watching.find_git_root", lambda cwd: None)
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         svc = role.file_watch_service
         # The cwd is never pulled in as a root when there is no repo boundary.
@@ -842,13 +1090,37 @@ class TestFileWatchHotReload:
         assert svc is not None  # config handler alone engaged the hook layer
 
         sentinel = object()
-        monkeypatch.setattr("mote.roles.role_components.load_config", lambda *a, **k: sentinel)
+        monkeypatch.setattr("mote.roles.runtime_maintenance.load_config", lambda *a, **k: sentinel)
 
         async def scenario():
             await role.hook_manager.fire("FileChanged", {"path": "/proj/mote/config.yaml", "change_type": "modified"})
 
         asyncio.run(scenario())
         assert role.config is sentinel
+
+    def test_reload_mcp_watches_files_not_the_mote_dir(self, role):
+        """reload_mcp watches the mcp.json FILES, never the whole .mote dir.
+
+        Regression: watching ``<cwd>/.mote`` recursively pulled the agent's own
+        ``logs/`` into the baseline, so each debug-log write was detected as a
+        FileChanged and logged again — a self-amplifying poll->log->poll storm
+        that eventually killed the CLI. Every watched root here must be an
+        ``mcp.json`` file (a bare directory root would recurse).
+        """
+        from mote.common.schema import FileWatchConfig
+
+        role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_mcp=True)
+        svc = role.file_watch_service
+        assert svc is not None
+        cwd = os.path.abspath(role.get_cwd())
+        # The bare .mote dir is NEVER a root (that is the feedback-loop bug).
+        assert os.path.join(cwd, ".mote") not in svc.watcher._roots
+        # The cwd-local mcp.json file IS watched, even before it exists.
+        assert os.path.join(cwd, ".mote", "mcp.json") in svc.watcher._roots
+        # Every root the reload added is an mcp.json file, not a directory.
+        mcp_roots = [r for r in svc.watcher._roots if r.endswith("mcp.json")]
+        assert mcp_roots  # at least the user + cwd files
+        assert all(not os.path.isdir(r) for r in mcp_roots)
 
 
 # =============================================================================
@@ -1025,6 +1297,8 @@ class TestCapabilities:
             "record_file_glimpsed",
             "is_resource_visible",
             "record_file_snapshot",
+            "record_file_baseline",
+            "attribute_external_change",
             "get_tool_session",
             "set_tool_session",
             "record_terminal_state",
@@ -1037,6 +1311,12 @@ class TestCapabilities:
             "get_browser_stealth",
             "get_browser_locale",
             "get_browser_proxy",
+            "get_browser_profile",
+            "load_browser_profile",
+            "save_browser_profile",
+            "get_browser_client_certs",
+            "get_browser_cdp_endpoint",
+            "get_secret",
             "wait_interruptible",
             "get_bg_pool",
             "get_skill_pool",
@@ -1045,6 +1325,7 @@ class TestCapabilities:
             "register_task_result",
             "retire_task_result",
             "get_sandbox_runtime",
+            "get_device_config",
             "dispatch_tool",
             "list_tool_names",
             "list_graph_tool_names",
@@ -1100,6 +1381,39 @@ class TestBrowserProxy:
         r = Role(name="X")
         r.config = types.SimpleNamespace(tools=types.SimpleNamespace(proxy=""))
         assert r.get_browser_proxy() == ""
+
+
+# =============================================================================
+# Browser profile capability (durable encrypted login store)
+# =============================================================================
+class TestBrowserProfile:
+    def test_get_browser_profile_empty_by_default(self):
+        assert Role(name="X").get_browser_profile() == ""
+
+    def test_get_browser_profile_from_schema(self):
+        r = Role(name="X", role_schema=RoleSchema(name="X", browser_profile="xhs"))
+        assert r.get_browser_profile() == "xhs"
+
+    def test_load_save_delegate_to_store(self, monkeypatch):
+        r = Role(name="X")
+        calls = []
+
+        class _FakeStore:
+            def load(self, name):
+                calls.append(("load", name))
+                return {"cookies": [name]}
+
+            def save(self, name, state):
+                calls.append(("save", name, state))
+
+        monkeypatch.setattr(
+            type(r._components),
+            "browser_profile_store",
+            property(lambda self: _FakeStore()),
+        )
+        assert r.load_browser_profile("p") == {"cookies": ["p"]}
+        r.save_browser_profile("p", {"a": 1})
+        assert calls == [("load", "p"), ("save", "p", {"a": 1})]
 
 
 # =============================================================================
@@ -1267,6 +1581,35 @@ class TestWaitInterruptible:
         # not non-negative, since the wall clock can skew backward (e.g. WSL2).
         assert isinstance(slept, float)
 
+    def test_bounded_wait_wakes_on_deadline(self, context):
+        # A positive duration caps the wait: with no event, it returns when the
+        # deadline elapses rather than blocking forever.
+        r = Role(name="X", context=context)
+
+        async def scenario():
+            return await asyncio.wait_for(r.wait_interruptible(0.1), timeout=2.0)
+
+        slept = asyncio.run(scenario())
+        assert isinstance(slept, float)
+
+    def test_bounded_wait_journals_durable_timer(self, context):
+        # A bounded wait opens+closes a durable timer in the run journal so a
+        # crash-resume could continue by remaining time. After it returns the
+        # timer's terminal is recorded (its countdown is over).
+        from mote.common.ledger import COMPLETED, KIND_TIMER
+
+        r = Role(name="X", context=context)
+        journal = r.executor.journal
+        assert journal is not None  # durable config enabled by default
+
+        async def scenario():
+            return await asyncio.wait_for(r.wait_interruptible(0.1), timeout=2.0)
+
+        asyncio.run(scenario())
+        timers = [rec for rec in journal.records() if rec.kind == KIND_TIMER]
+        assert len(timers) == 1
+        assert timers[0].status == COMPLETED
+
 
 # =============================================================================
 # end_session
@@ -1300,19 +1643,19 @@ class TestGetMemories:
 # =============================================================================
 class TestDedupeTools:
     def test_bash_kept_as_is(self):
-        assert _dedupe_tools(["Bash"]) == ["Bash"]
+        assert dedupe_tools(["Bash"]) == ["Bash"]
 
     def test_bash_and_terminal_coexist(self):
-        assert _dedupe_tools(["Bash", "Terminal"]) == ["Bash", "Terminal"]
+        assert dedupe_tools(["Bash", "Terminal"]) == ["Bash", "Terminal"]
 
     def test_non_shell_tools_untouched(self):
-        assert _dedupe_tools(["Read", "Write"]) == ["Read", "Write"]
+        assert dedupe_tools(["Read", "Write"]) == ["Read", "Write"]
 
     def test_duplicates_removed(self):
-        assert _dedupe_tools(["Terminal", "Bash", "Terminal"]) == ["Terminal", "Bash"]
+        assert dedupe_tools(["Terminal", "Bash", "Terminal"]) == ["Terminal", "Bash"]
 
     def test_order_preserved(self):
-        assert _dedupe_tools(["Read", "Bash", "Write"]) == [
+        assert dedupe_tools(["Read", "Bash", "Write"]) == [
             "Read",
             "Bash",
             "Write",

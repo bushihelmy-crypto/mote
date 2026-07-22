@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 from pydantic import field_validator, model_validator
@@ -85,6 +85,14 @@ class LLMConfig(YamlModel):
     max_token: int = 4096
     temperature: float = 0.0
     timeout: int = 600
+
+    # Unified reasoning / thinking effort. ``None`` (default) leaves thinking OFF.
+    # Each provider translates this single enum into its own wire shape, gated by
+    # ``ModelProfile.supports_thinking`` (an incapable model silently ignores it):
+    # Anthropic → ``thinking={"type":"enabled","budget_tokens":...}`` (temperature
+    # dropped, as the API requires); OpenAI Responses → ``reasoning={"effort":...}``;
+    # OpenAI Chat Completions → ``reasoning_effort=...``.
+    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None
 
     # For Network
     proxy: Optional[str] = None
@@ -313,8 +321,8 @@ PROVIDER_CATALOG: Dict[str, ProviderPreset] = {
     "dashscope": ProviderPreset(
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         api_type=LLMType.OPENAI,
-        env_keys=["DASHSCOPE_API_KEY"],
-        aliases=("qwen", "tongyi", "aliyun"),
+        env_keys=["DASHSCOPE_API_KEY", "ALIBABA_API_KEY"],
+        aliases=("qwen", "tongyi", "aliyun", "alibaba"),
         model_markers=("qwen",),
     ),
     "zhipuai": ProviderPreset(
@@ -359,6 +367,77 @@ PROVIDER_CATALOG: Dict[str, ProviderPreset] = {
         api_type=LLMType.OPENAI,
         env_keys=["COPILOT_GITHUB_TOKEN"],
         oauth_provider="github-copilot",
+    ),
+    # --- OpenAI-compatible brands mirrored from the pydantic-ai catalog. Each
+    # speaks the OpenAI wire at a brand-specific base_url, so it needs only a
+    # preset here (no dedicated LLMType / transport). Brands that require a
+    # different wire (Azure per-deployment endpoints, AWS Bedrock SigV4, Google
+    # Vertex ADC) are intentionally NOT faked as base_url presets.
+    "google": ProviderPreset(
+        # Gemini via its OpenAI-compatible surface (the native GenAI/Vertex SDK
+        # is a separate transport, not wired here).
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_type=LLMType.OPENAI,
+        env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        aliases=("gemini",),
+        model_markers=("gemini",),
+    ),
+    "cohere": ProviderPreset(
+        # Cohere Command models via their OpenAI-compatibility endpoint.
+        base_url="https://api.cohere.ai/compatibility/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["CO_API_KEY", "COHERE_API_KEY"],
+    ),
+    "huggingface": ProviderPreset(
+        base_url="https://router.huggingface.co/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["HF_TOKEN", "HUGGINGFACE_API_KEY"],
+        aliases=("hf",),
+    ),
+    "github": ProviderPreset(
+        # GitHub Models — distinct from the github-copilot coding endpoint above.
+        base_url="https://models.github.ai/inference",
+        api_type=LLMType.OPENAI,
+        env_keys=["GITHUB_API_KEY"],
+        aliases=("github-models",),
+    ),
+    "heroku": ProviderPreset(
+        base_url="https://us.inference.heroku.com/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["HEROKU_INFERENCE_KEY"],
+    ),
+    "nebius": ProviderPreset(
+        base_url="https://api.studio.nebius.com/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["NEBIUS_API_KEY"],
+    ),
+    "ollama": ProviderPreset(
+        # Local Ollama server (override base_url for a remote instance).
+        base_url="http://localhost:11434/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["OLLAMA_API_KEY"],
+    ),
+    "ovhcloud": ProviderPreset(
+        base_url="https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["OVHCLOUD_API_KEY"],
+        aliases=("ovh",),
+    ),
+    "sambanova": ProviderPreset(
+        base_url="https://api.sambanova.ai/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["SAMBANOVA_API_KEY"],
+    ),
+    "vercel": ProviderPreset(
+        base_url="https://ai-gateway.vercel.sh/v1",
+        api_type=LLMType.OPENAI,
+        env_keys=["VERCEL_AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN"],
+    ),
+    "litellm": ProviderPreset(
+        # Self-hosted LiteLLM proxy; override base_url to point at your instance.
+        base_url="http://localhost:4000",
+        api_type=LLMType.OPENAI,
+        env_keys=["LITELLM_API_KEY", "LITELLM_MASTER_KEY"],
     ),
 }
 

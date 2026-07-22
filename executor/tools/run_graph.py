@@ -75,237 +75,51 @@ class RunGraph(BaseTool):
     list_graph_excluded_tool_names: ListGraphExcludedToolNames
 
     async def call(self, *, graph: GraphSpec, inputs: dict[str, Any] | None = None) -> ToolResult:
-        """Orchestrate many tool calls as one graph — map, branch, parallel in one call.
+        """Run a deterministic multi-tool workflow as one foreground graph.
 
-        Orchestrate multiple tool calls as one declarative graph — map
-        (batch/fan-out), if/else branching, and parallel execution — in a single
-        call.
+        Use for repetitive or mechanical work: parallel independent calls, a fixed
+        pipeline, collection fan-out, conditional routing, or pure data shaping.
+        Use ordinary tool calls when one call suffices or the next action requires
+        human/model judgment of an intermediate result.
 
-        Principle: whatever reduces to ``for`` + ``if`` + parallel — a mechanical,
-        repetitive workflow — belongs in a graph. When the task is looping over a
-        collection, branching on a condition, or firing several independent calls
-        at once (``map`` nodes are that ``for``, ``when`` edges are that ``if``,
-        and any nodes with no data dependency between them are that parallel —
-        they run concurrently by construction), express it as a graph and let this
-        tool run it, rather than re-improvising the calls yourself turn by turn. In
-        particular, whenever you would emit multiple tool calls in parallel within
-        a single turn, put them in one graph instead of scattering them as
-        independent calls — the batch is then scheduled, bounded, and reported as
-        one unit. The engine guarantees the flow — the loop can't silently skip or
-        duplicate items, the branch is evaluated the same way every time, dependent
-        steps stay ordered, independent ones run in parallel — so execution is
-        reliable and repeatable.
+        Node kinds:
+          - ``tool``: one tool call (``tool`` + ``args``).
+          - ``map``: run a tool concurrently over ``over``; the item is ``$ref`` to
+            ``as``. ``concurrency`` defaults to 8. Item errors default to ``skip``;
+            all items failing still fails the node.
+          - ``fold``: serial ``map`` with an accumulator (``acc``, ``initial``,
+            ``reduce``); use when items depend on earlier results. Errors default
+            to ``fail``.
+          - ``compute``: pure restricted Python over ``args`` locals. Supported
+            modules are already in scope; imports, I/O, tools, and generator
+            expressions are unavailable.
 
-        Prefer it for: parallel tool calls (several INDEPENDENT calls that don't
-        depend on each other's results — different tools, or the same tool with
-        fixed different args — run them concurrently as sibling nodes with no edge
-        between them, instead of emitting N parallel tool calls in one turn);
-        fan-out (the SAME tool over every item in a collection, via ``map``); fixed
-        pipelines (each step's input is a known function of earlier outputs);
-        conditional routing (pick between tools on a prior result); and pure
-        data-shaping between steps (filter/reshape/aggregate, via ``compute``).
+        Bindings may appear in args, over, output, and predicates:
+          - ``{"$input": "x"}``: declared graph input.
+          - ``{"$ref": "node"}`` or ``{"$ref": "node.key"}``: node result,
+            channel, or map/fold variable.
+          - ``{"$fmt": "{x}", "x": <binding>}``: string formatting.
+          - Other values are literals; dicts/lists may contain bindings.
 
-        Skip it when a single tool call suffices, or when your next step genuinely
-        depends on reading/judging an intermediate result before you can decide —
-        issue those one turn at a time.
+        A node-result ``$ref`` automatically orders its consumer after its producer;
+        unrelated nodes run in parallel. Usually omit ``edges``. Add edges only for
+        ordering without a data dependency, branching (guarded edges are first-match,
+        with an optional unguarded else), or cycles. Use ``map``/``fold`` for known
+        collections; reserve back-edge loops for unknown iteration counts and bound
+        them with ``recursion_limit``.
 
-        Submit ``graph`` (a GraphSpec) and ``inputs`` (the values for its declared
-        inputs).
+        Channels carry mutable loop state. They have a literal ``initial`` value and
+        a ``reduce`` operation; nodes update them via ``writes``. Reading a channel
+        creates no ordering edge, so add an explicit edge when ordering is required.
 
-        Nodes (``graph.nodes``), each with a unique ``id`` and a ``kind``:
-          - "tool":    call a tool — set ``tool`` (its name) and ``args``.
-          - "map":     run a tool in parallel over a collection — set ``over`` (the
-            list binding), ``as`` (the per-item variable name), and the tool body
-            (``tool`` + ``args``, referencing the item as {"$ref": "<as>"}). Its
-            result is the list of results. Optional ``concurrency`` (a positive int,
-            default 8) caps how many items run at once so a large collection doesn't
-            launch every item's tool call simultaneously; raise it for cheap items,
-            lower it for heavy ones. Because map items are INDEPENDENT, one item's
-            permanent failure is isolated by default (``on_item_error:"skip"``): it
-            drops from the result, the rest still run, and the skips are reported
-            back to you. (If EVERY item fails the node fails anyway — systematic,
-            not isolated.) Set ``on_item_error:"fail"`` to sink the node on any one
-            failure.
-          - "fold":    map's SERIAL twin — run a tool over a collection ONE ITEM AT
-            A TIME, threading an accumulator so each step sees what earlier steps
-            built. Set ``over`` + ``as`` (as map), plus ``acc`` (the accumulator
-            variable name, read in the body via {"$ref": "<acc>"}), ``initial`` (its
-            literal starting value, e.g. {} or [] or 0), and ``reduce`` (how each
-            item's result folds into the accumulator: last | append | extend | add |
-            or | and | min | max | merge — same vocabulary as a channel). Its result
-            is the FINAL accumulator. Use ``fold`` when items DEPEND on each other
-            (later items read earlier results — a running glossary, a cumulative
-            summary); use ``map`` when they're independent. This replaces the channel
-            + guarded back-edge idiom for the common "iterate a known collection
-            carrying state" case — reach for a loop (back-edge) only when the number
-            of iterations isn't known up front. Because fold items are DEPENDENT,
-            ``on_item_error`` defaults to "fail" (a skipped item breaks the chain the
-            later ones read); set "skip" only if the accumulation tolerates gaps.
-          - "compute": evaluate ``expr`` (a restricted Python expression, or a short
-            statement block ending in an expression) over ``args`` (bound as local
-            variables). Pure stdlib modules are in scope for data-shaping: re, json,
-            math, statistics, itertools, functools, collections, textwrap, string,
-            datetime, base64, hashlib (e.g. re.findall(pat, s), json.loads(s),
-            collections.Counter(xs)) — already in scope, so ``import`` is unnecessary
-            AND fails (writing ``import re`` errors the node). Statement blocks, incl.
-            nested for/if, are fine. Unavailable builtins: open, print, type, id, dir,
-            input (I/O + introspection are removed) — don't use them, not even to
-            debug. No tool call, no file/network. NOTE: use list comprehensions, not
-            generator expressions (e.g. sum([x for x in xs]), not sum(x for x in xs)).
-
-        Bindings — any value in ``args`` / ``over`` / ``output`` / a predicate operand:
-          - {"$input": "field"}          — a value from ``inputs``.
-          - {"$ref": "node"} / {"$ref": "node.key"} — another node's result (a node
-            stores its result under its own id), OR a channel's current value (see
-            ``channels`` below). Inside a map body, "<as>" is the item.
-          - {"$fmt": "template", "<name>": <binding>, ...} — a STRING TEMPLATE: the
-            ``$fmt`` value is a Python str.format template and every other key is a
-            binding filling one {name} placeholder, e.g.
-            {"$fmt": "process {f}", "f": {"$ref": "item"}} → "process foo.txt". Use
-            it to splice a value into a string arg (a path, a URL, a command) inline
-            instead of adding a compute node just to concatenate. Placeholders are
-            {name} (graph-level), unrelated to any shell $var.
-          - anything else is a literal (dicts/lists nest bindings).
-
-        Feeding a value into a Bash command (IMPORTANT — a common mistake). A
-        binding ($ref/$input) becomes a VALUE in ``args``; it is NOT a shell
-        variable. Writing {"command": "process $item"} does NOT interpolate the
-        loop item — the shell just sees an unset ``$item``. Bash has a dedicated
-        ``inputs`` arg for this: pass {"inputs": {"item": {"$ref": "<as>"}}} and the
-        scalar is exported as the env var ``$item`` for the command to use. So a
-        map over Bash looks like:
-            {"id": "run", "kind": "map", "tool": "Bash", "over": {"$ref": "files"},
-             "as": "f",
-             "args": {"command": "wc -l \\"$f\\"", "inputs": {"f": {"$ref": "f"}}}}
-        (Alternatively, build the command string with a $fmt binding — {"command":
-        {"$fmt": "wc -l {f}", "f": {"$ref": "f"}}} — or in a ``compute`` node and
-        $ref it into ``command``; but ``inputs`` keeps the command literal and lets
-        the shell quote the value.)
-
-        Reading a Bash result — use ``data``, do NOT scrape ``output`` with a loose
-        regex. A node reads a tool's STRUCTURED ``data`` (Bash parses JSON stdout
-        into it, so ``echo 42`` yields the int 42 and a JSON line yields the parsed
-        object); {"$ref": "<node>"} is that clean value. Pulling numbers out of the
-        human-readable text with e.g. re.findall(r"\\d+", ...) is fragile: if the
-        command FAILED, its error text (exit codes, line numbers) contains stray
-        digits that get scraped as if they were results — a silent wrong answer.
-        And by default Bash treats a non-zero exit as SUCCESS (its error text rides
-        in ``data``/``output``), so a failed item is NOT isolated unless you ask for
-        it: pass {"check": true} in the Bash ``args`` so a non-zero exit fails the
-        call — then a map/fold ``on_item_error`` isolates the bad item (and reports
-        it back) instead of feeding its error text downstream. Leave ``check`` off
-        only when a non-zero exit is expected/meaningful (grep with no match, diff
-        with changes).
-
-        Channels (``graph.channels``) — mutable loop-carried state. A ``$ref`` names
-        one of two things: a NODE RESULT (single-assignment, produced once — consuming
-        it adds an automatic edge so the consumer runs after the producer) or a CHANNEL
-        (this). A channel is what a loop needs: it has an ``initial`` value so a node
-        can read it on the FIRST lap before anything writes it (a node-result ref
-        before its producer runs is an error), repeated/parallel writes fold through
-        its ``reduce`` (last | append | extend | add | or | and | min | max | merge),
-        and — crucially — reading a channel adds NO edge, so a loop body reading state
-        seeded by a prior lap is not forced into a spurious ordering. A node writes a
-        channel by setting ``writes`` to the channel name (its value is merged via the
-        channel's reducer, instead of being stored under the node id). Each channel is
-        {"type", "initial", "reduce", "description"}; ``initial`` is a literal (not a
-        binding).
-
-        Looping. Execution is langgraph forward-frontier, NOT a static DAG — an edge
-        may point BACKWARD, so cycles are allowed and bounded by ``recursion_limit``
-        (total node activations across the run; set ``graph.recursion_limit`` to raise
-        the budget, default 100, hard cap 10000). For a FIXED collection prefer ``map``
-        (independent items, parallel) or ``fold`` (dependent items, serial, carrying an
-        accumulator) — neither needs any edge. Reach for a back-edge ``while`` loop ONLY
-        when the number of iterations is not known up front (e.g. paginate until no next
-        cursor, retry until converged): a channel to carry the loop state, a guarded
-        edge from the loop's tail back to its head while the condition holds, and an
-        unguarded (else) edge to the exit.
-
-        Edges. By default you do NOT write any — whenever a node's ``args``/``over``
-        references another via ``$ref``, an edge is inferred so the referenced node
-        runs first, and nodes with no ``$ref`` between them run in parallel. Only add
-        explicit ``edges`` in two cases:
-          1. Branching — route to different nodes based on a prior result. Add several
-             edges out of one node, each with a ``when`` guard; they form an if/elif
-             chain (first true wins), and one unguarded edge is the else (optional —
-             with no else, an unmatched node just never runs).
-          2. Ordering — force node A to run before node B when there is NO ``$ref``
-             between them (e.g. B must observe a side effect of A, or B reads a CHANNEL
-             A seeded — a channel ref adds no edge, so seed it with an ordering edge).
-             Add one unguarded edge {"from": "A", "to": "B"}. The special node
-             ``__start__`` is an entry and ``__end__`` is an exit; add
-             {"from": "__start__", "to": "X"} to make X a loop's entry when nothing
-             else feeds it.
-          3. Looping — a guarded edge whose ``to`` points BACK to an earlier node
-             repeats it while the guard holds; a sibling unguarded edge to ``__end__``
-             (or the next node) is the exit.
-        An edge is {"from", "to", and optional "when": a predicate {"left", "op",
-        "right"} where left/right are bindings}. Ops: eq, ne, gt, lt, ge, le, in,
-        not_in, contains, truthy, falsy.
-
-        Branch example — route on a classifier's result (else skips to output):
-          "nodes": [
-            {"id": "c", "kind": "tool", "tool": "Classify", "args": {"x": {"$input": "v"}}},
-            {"id": "big", "kind": "tool", "tool": "Handle", "args": {"s": "yes"}},
-            {"id": "small", "kind": "tool", "tool": "Handle", "args": {"s": "no"}}
-          ],
-          "edges": [
-            {"from": "c", "to": "big", "when": {"left": {"$ref": "c"}, "op": "eq", "right": "big"}},
-            {"from": "c", "to": "small"}
-          ]
-        The unmatched branch's node never runs, so a $ref to it in ``output`` is null.
-
-        Fold example — translate each module in order, carrying a glossary so every
-        module reuses the terms chosen by the earlier ones (a serial, order-dependent
-        iteration over a FIXED collection — one node, no channel, no back-edge):
-        {
-          "inputs": {"modules": {"type": "list", "description": "source texts, in order"}},
-          "nodes": [
-            {"id": "glossary", "kind": "fold", "tool": "TranslateModule",
-             "over": {"$input": "modules"}, "as": "m",
-             "acc": "acc", "initial": {}, "reduce": "merge",
-             "args": {"text": {"$ref": "m"}, "glossary_so_far": {"$ref": "acc"}}}
-          ],
-          "output": {"$ref": "glossary"}
-        }
-        The ``fold`` walks ``modules`` one at a time; each call sees the current module
-        (``m``) AND the glossary built so far (``acc``), and its result is merged into
-        ``acc`` via ``reduce:"merge"``, so the FINAL accumulator (the complete glossary)
-        is the node's value. To ACCUMULATE A LIST instead use ``reduce:"append"`` with
-        ``initial:[]``; to keep only the last result, ``reduce:"last"``. (When the
-        iteration count is NOT known up front — paginate until no next cursor, retry
-        until converged — use a channel + guarded back-edge instead, as described under
-        Looping above.)
-
-        ``output`` is a binding tree resolved against the final state and returned. A
-        ref into a branch that was skipped resolves to null (not an error).
-
-        Hard rules (violate → the call fails):
-          - Every {"$input": x} MUST be declared in ``graph.inputs`` first.
-          - ``compute`` reads data ONLY via ``args`` (bound as locals) — never embed a
-            ``$ref``/``$input`` inside the ``expr`` string; put it in ``args`` and use
-            the name.
-          - ``output`` is required.
-
-        Minimal example — find every Python file, then grep each of them for a
-        pattern in parallel:
-        {
-          "inputs": {"needle": {"type": "string", "description": "regex to search for"}},
-          "nodes": [
-            {"id": "files", "kind": "tool", "tool": "Glob", "args": {"pattern": "**/*.py"}},
-            {"id": "paths", "kind": "compute", "expr": "text.splitlines()",
-             "args": {"text": {"$ref": "files"}}},
-            {"id": "hits", "kind": "map", "tool": "Grep",
-             "over": {"$ref": "paths"}, "as": "f",
-             "args": {"pattern": {"$input": "needle"}, "path": {"$ref": "f"},
-                      "output_mode": "content"}}
-          ],
-          "output": {"$ref": "hits"}
-        }
-        Called with inputs {"needle": "TODO"} → Glob lists the .py files, compute
-        splits that output into a path list, and the map node greps every file for
-        "TODO" concurrently, returning the per-file matches.
+        Important:
+          - Declare every ``$input`` in ``graph.inputs`` and always provide ``output``.
+          - ``compute`` receives references through ``args``; never put ``$ref`` or
+            ``$input`` syntax inside ``expr``.
+          - For Bash, pass bound values through Bash ``inputs`` or ``$fmt``; shell
+            ``$var`` text alone does not bind graph values. Use structured ``data``
+            downstream, and set ``check:true`` when non-zero exit must fail the item.
+          - A reference to a skipped branch resolves to null.
 
         Args:
             graph: the graph spec (nodes + edges + output).

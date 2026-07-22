@@ -24,11 +24,10 @@ from mote.common.const import DEFAULT_WORKSPACE_ROOT
 from mote.common.prompt.memory import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
 from mote.common.prompt.refs import assert_no_symbols
 from mote.common.prompt.role import (
-    FRC_SECTION,
+    COMPACTION_SECTION,
     LANGUAGE_SECTION,
     SCRATCHPAD_SECTION,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-    TASK_FINAL_OUTPUT_SECTION,
 )
 
 
@@ -57,6 +56,9 @@ class ThinkInputs:
     project_root: Any = None
     memory_dir: Any = None
     scratchpad_dir: Any = None
+    # The role's charter (RoleSchema.role_info) — the task DOMAIN + its
+    # conventions, rendered last in the dynamic region. "" emits nothing.
+    role_info: str = ""
 
 
 @dataclass
@@ -97,17 +99,17 @@ class ThinkContext:
     # Environment
     env_section: str = ""
 
-    # Skills — the static loading guide only (the volatile index lives in the
-    # per-turn SkillListingContextSource).
-    skills_info: str = ""
-
     # Dynamic system-prompt sections (below the cache boundary). Each is the
     # fully-rendered section text, or "" when the feature is inactive.
     memory: str = ""
     language: str = ""
     scratchpad: str = ""
-    frc: str = ""
-    task_final_output: str = ""
+    # Merged compaction-survival section (former frc + task_final_output). Empty
+    # unless adaptive compaction is enabled.
+    compaction: str = ""
+    # The role's charter — task DOMAIN + conventions — rendered last in the
+    # dynamic region (${role_info}). "" emits nothing.
+    role_info: str = ""
 
     # Protocol-specific ${placeholder} fills supplied by the active command
     # channel's prompt_vars() — command_guide (system "# Using commands"
@@ -182,12 +184,10 @@ class PromptBuilder:
         """Map ThinkContext fields to the system template's $placeholders."""
         return dict(
             env_section=ctx.env_section,
-            skills_info=ctx.skills_info,
             memory=ctx.memory,
             language=ctx.language,
-            scratchpad=ctx.scratchpad,
-            frc=ctx.frc,
-            task_final_output=ctx.task_final_output,
+            compaction=ctx.compaction,
+            role_info=ctx.role_info,
             # command_guide + tool_usage_guide (+ any future protocol section).
             **ctx.prompt_vars,
         )
@@ -293,13 +293,15 @@ class PromptBuilder:
             subsystems.model_name,
             working_dir=inputs.original_working_dir or ctx.working_dir,
         )
-        ctx.skills_info = PromptBuilder._make_skills_guide(subsystems.skill_manager, config.context.skills.enabled)
 
         # Dynamic sections (below the cache boundary).
         ctx.memory, ctx.memory_context = PromptBuilder._make_memory(inputs.memory_dir)
         ctx.language = PromptBuilder._make_language(config.models.response_language)
         ctx.scratchpad = PromptBuilder._make_scratchpad(inputs.scratchpad_dir)
-        ctx.frc, ctx.task_final_output = PromptBuilder._make_compaction_sections(config)
+        ctx.compaction = PromptBuilder._make_compaction_section(config)
+        # The role's charter is a static string on the schema (no rendering /
+        # feature gate) — carry it straight through. "" emits nothing.
+        ctx.role_info = inputs.role_info
 
         # Per-turn ephemeral context (git / token pressure / background tasks /
         # LSP diagnostics) gathered by the turn_context bus and injected into the
@@ -383,24 +385,23 @@ class PromptBuilder:
         return Template(SCRATCHPAD_SECTION).safe_substitute(scratchpad_dir=str(scratchpad_dir))
 
     @staticmethod
-    def _make_compaction_sections(config) -> tuple[str, str]:
-        """Build the compaction-gated sections: # Function Result Clearing and
-        # Task Final Output Specifications.
+    def _make_compaction_section(config) -> str:
+        """Build the compaction-survival section (# Surviving compaction).
 
         Emitted only when adaptive (token-based) compaction is active, since
-        that is what actually clears old tool results from mote.context. Both
-        describe compression artifacts: FRC warns the model that old results get
-        cleared (and to write down anything it needs before that happens), and
-        the final-output contract is the durable record that survives clearing.
-        keep_recent comes from protected_recent_messages. Returns ("", "")
-        otherwise.
+        that is what actually clears old tool results from mote.context. It
+        merges what were two sections sharing one premise (context gets
+        compressed): the mid-loop note-taking guidance (old results get cleared,
+        so write down what you'll need — bounded by keep_recent, from
+        protected_recent_messages) and the end-of-task durable-record contract
+        (the final reply is all that survives a cleared loop). Returns "" when
+        compaction is off.
         """
         compaction = config.context.compaction
         if not getattr(compaction, "enabled", False):
-            return "", ""
+            return ""
         keep_recent = getattr(compaction, "protected_recent_messages", 8)
-        frc = Template(FRC_SECTION).safe_substitute(keep_recent=str(keep_recent))
-        return frc, TASK_FINAL_OUTPUT_SECTION
+        return Template(COMPACTION_SECTION).safe_substitute(keep_recent=str(keep_recent))
 
     @staticmethod
     def _make_env_section(model_name: str, working_dir: str = "") -> str:
@@ -416,19 +417,3 @@ class PromptBuilder:
             "",
         ]
         return "\n".join(lines)
-
-    @staticmethod
-    def _make_skills_guide(skill_manager, enabled: bool) -> str:
-        """The static Skill Loading Guide for the system prompt.
-
-        Rendered only when the Skills subsystem is enabled in config
-        (``config.context.skills.enabled``) — the guide's presence is a
-        config-driven decision, not a function of whether any skill happens to
-        exist. Only the guide (constant per session) lives here; the volatile
-        Skills index is delivered per-turn by SkillListingContextSource.
-        """
-        if not enabled:
-            return ""
-        if skill_manager.injector:
-            return skill_manager.injector.build_guide()
-        return ""

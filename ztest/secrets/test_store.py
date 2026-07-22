@@ -35,6 +35,15 @@ def _bump_mtime(path) -> None:
 
 
 class TestConfigHarvest:
+    def test_construction_is_io_free(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        vault = tmp_path / "vault.json"
+        _write_config(cfg, _API_KEY)
+
+        SecretStore(_cipher(), vault_path=vault, config_path=cfg)
+
+        assert not vault.exists()
+
     def test_config_secrets_seeded_into_map(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         _write_config(cfg, _API_KEY)
@@ -143,7 +152,8 @@ class TestSecretsConfigFile:
         sc = tmp_path / "secrets_config.json"
         self._write_sc(sc, {"k": "plaintext-file-secret-xyz"})
         vault = tmp_path / "vault.json"
-        SecretStore(_cipher(), vault_path=vault, secrets_config_file=sc)
+        store = SecretStore(_cipher(), vault_path=vault, secrets_config_file=sc)
+        store.prepare()
         # The value is vaulted encrypted, not stored raw in the vault blob.
         assert b"plaintext-file-secret-xyz" not in vault.read_bytes()
 
@@ -220,6 +230,56 @@ class TestSecretsConfigFile:
         m = store.as_map()
         assert "keepme-secret-value" in m
         assert 12345 not in m and "12345" not in m
+
+
+class TestLabels:
+    """``labels()`` — the {name: placeholder} discovery map (names only, no values)."""
+
+    def _write_sc(self, path, mapping: dict) -> None:
+        path.write_text(json.dumps(mapping))
+
+    def test_empty_when_nothing_configured(self, tmp_path):
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
+        assert store.labels() == {}
+
+    def test_three_tier_merge_with_prefixes(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_config(cfg, _API_KEY)
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"xhs_phone": "13800000000"})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg, secrets_config_file=sc)
+        store.add_user_secret("gh_token", "ghp_uservalue123")
+        labels = store.labels()
+        # config tier keyed by dotted path
+        assert labels["llm.api_key"] == "<secret:llm.api_key>"
+        # file tier keyed by name
+        assert labels["xhs_phone"] == "<agent-vault:xhs_phone>"
+        # user tier keyed by name
+        assert labels["gh_token"] == "<agent-vault:gh_token>"
+
+    def test_excludes_session_tier(self, tmp_path):
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
+        store.add_session_secret("anon-value-xyz")
+        # Session keys are random session-<uuid> names → never surfaced for discovery.
+        assert store.labels() == {}
+
+    def test_labels_never_leak_values(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"pw": "super-secret-plaintext-value"})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        labels = store.labels()
+        assert "pw" in labels
+        # Only the placeholder, never the plaintext.
+        assert "super-secret-plaintext-value" not in labels
+        assert "super-secret-plaintext-value" not in "".join(labels.values())
+
+    def test_empty_valued_entries_skipped(self, tmp_path):
+        sc = tmp_path / "secrets_config.json"
+        self._write_sc(sc, {"has_value": "vvvv-secret", "blank": ""})
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
+        labels = store.labels()
+        assert "has_value" in labels
+        assert "blank" not in labels
 
 
 class TestFailOpen:

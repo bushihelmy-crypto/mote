@@ -7,7 +7,7 @@ and its sklearn/lightgbm/onnxruntime deps are reached lazily through
 :class:`~mote.router.ml.engine.SquillaMLEngine`).
 """
 from mote.router.ml.config import default_model_dir, load_runtime_config
-from mote.router.ml.engine import SquillaMLEngine
+from mote.router.ml.engine import SquillaMLEngine, prewarm, shared_engine
 from mote.router.ml.features import (
     ContextMetadata,
     extract_context_features,
@@ -21,6 +21,8 @@ from mote.router.ml.trajectory import Trajectory, TurnDecision, classify
 
 __all__ = [
     "SquillaMLEngine",
+    "shared_engine",
+    "prewarm",
     "InferenceRequest",
     "InferenceResult",
     "FinalDecision",

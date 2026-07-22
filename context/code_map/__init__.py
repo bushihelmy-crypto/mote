@@ -18,13 +18,15 @@ The facade adds the two operations a turn-context source actually needs:
   touched files import it (reverse deps). Everything is clamped to the touched
   set, so the map never leaks structure from files the agent has not opened.
 
-Reverse-dependency resolution is deliberately heuristic. We have no cross-file
-symbol resolver (an explicit non-goal); instead :meth:`_module_candidates` turns
-a file path into the dotted module names by which it could plausibly be imported
-(``a/b/c.py`` -> ``c``, ``b.c``, ``a.b.c`` and their relative-dot variants), and
+Reverse-dependency resolution is deliberately heuristic and *per-language*. We
+have no cross-file symbol resolver (an explicit non-goal); instead each file's
+:class:`~mote.context.code_map.providers.base.ModuleResolver` (chosen by
+extension) turns a path into the module names by which it could plausibly be
+imported (Python ``a/b/c.py`` -> ``c``, ``b.c``, ``a.b.c`` ...), and
 :meth:`CodeMapStore.importers_within` string-matches those against recorded
-import targets. This is a locality heuristic, not a compiler — good enough to say
-"these touched files import this one" without a resolution pass.
+import targets. The touched set is grouped *by resolver* so a ``.py`` import
+target is never matched against a ``.go`` file's candidates — cross-language
+edges cannot be forged. This is a locality heuristic, not a compiler.
 """
 
 from __future__ import annotations
@@ -35,12 +37,22 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from mote.common.text import uri_to_path
-from mote.context.code_map.extractor import CallEdge, CodeMapExtractor, FileExtract, Symbol
+from mote.context.code_map.extractor import CodeMapExtractor
+from mote.context.code_map.languages import all_registered_providers, provider_for
+from mote.context.code_map.model import CallEdge, FileExtract, Symbol
+from mote.context.code_map.providers.base import ModuleResolver
+from mote.context.code_map.scopes import Def
 from mote.context.code_map.store import CodeMapStore
 
-_INIT = "__init__.py"
-
-__all__ = ["CodeMap", "FileNeighborhood", "CodeMapExtractor", "CodeMapStore", "FileExtract", "Symbol", "CallEdge"]
+__all__ = [
+    "CodeMap",
+    "FileNeighborhood",
+    "CodeMapExtractor",
+    "CodeMapStore",
+    "FileExtract",
+    "Symbol",
+    "CallEdge",
+]
 
 
 @dataclass
@@ -54,9 +66,16 @@ class FileNeighborhood:
     imported_by: list[str] = field(default_factory=list)  # touched files importing it (abspaths)
     calls: list[CallEdge] = field(default_factory=list)  # intra-file symbol->symbol calls
     imports_unread: list[str] = field(default_factory=list)  # repo files imported but NOT touched (abspaths)
-    # Layer B: {unread_target_abspath: [symbol names]} resolved live via LSP so
-    # the model sees what a dangling import defines without opening the file.
+    # {unread_target_abspath: [symbol names]} — what a dangling import defines.
+    # Baseline sourced LSP-free from the persistent whole-repo index; LSP (Layer
+    # B) merges over it per target when present (more precise → wins).
     unread_symbols: dict[str, list[str]] = field(default_factory=dict)
+    # Opt B: {unread_target_abspath: module-docstring first line} — the dangling
+    # import's *purpose*, from the whole-repo index (LSP-free).
+    unread_module_summary: dict[str, str] = field(default_factory=dict)
+    # Opt A: {unread_target_abspath: [whole-repo importer abspaths]} — who else
+    # depends on the dangling import, from the whole-repo index (LSP-free).
+    unread_imported_by: dict[str, list[str]] = field(default_factory=dict)
 
 
 class CodeMap:
@@ -133,35 +152,47 @@ class CodeMap:
         abs_files = [os.path.abspath(f) for f in files]
         self.ensure_all_fresh(abs_files)
 
-        # Map each touched file to the module names it could be imported by, so a
-        # recorded ``imports`` target string can be matched back to a touched file.
-        candidates_by_file: dict[str, set[str]] = {f: self._module_candidates(f) for f in abs_files}
-        # Reverse index: module-candidate -> touched files offering it.
-        file_by_candidate: dict[str, list[str]] = {}
-        for f, cands in candidates_by_file.items():
-            for c in cands:
-                file_by_candidate.setdefault(c, []).append(f)
+        # Group the touched set BY resolver (=by language). Import edges are only
+        # ever drawn within a group, so a ``.py`` never resolves against a ``.go``.
+        groups = self._group_by_resolver(abs_files)
 
-        # Package roots the touched files sit under, so an absolute dotted import
-        # (``a.b.c``) can be mapped back to a repo file on disk without a cwd or a
-        # resolver — the anchors are inferred purely from the touched set. See
-        # :meth:`_import_roots`.
-        roots = self._import_roots(abs_files)
+        # Per-group: the candidate index (module spelling -> touched files that
+        # offer it) and the import roots, each computed by that group's own
+        # resolver. ``candidates_by_file`` stays flat (used for the reverse query).
+        candidates_by_file: dict[str, set[str]] = {}
+        # f -> (its resolver, its group's candidate index, its group's roots).
+        context_of: dict[str, tuple[ModuleResolver, dict[str, list[str]], set[str]]] = {}
+        for resolver, members in groups:
+            file_by_candidate: dict[str, list[str]] = {}
+            for f in members:
+                cands = resolver.module_candidates(f)
+                candidates_by_file[f] = cands
+                for c in cands:
+                    file_by_candidate.setdefault(c, []).append(f)
+            roots = resolver.import_roots(members)
+            for f in members:
+                context_of[f] = (resolver, file_by_candidate, roots)
 
         scope = set(abs_files)
         out: list[FileNeighborhood] = []
         for f in abs_files:
+            if f not in context_of:
+                # Unknown language — listed (so the caller sees the full touched
+                # set) but structure-less, exactly as a non-Python path was before.
+                out.append(FileNeighborhood(path=f))
+                continue
+            resolver, file_by_candidate, roots = context_of[f]
             symbols = self._store.symbols_in(f)
             module_summary = self._store.module_summary_of(f)
             calls = self._store.calls_in(f)
             # Forward: which touched files does f import? Match f's import targets
-            # against the module candidates of every other touched file.
+            # against the module candidates of every other touched file in-group.
             raw_imports = self._store.imports_of(f)
             imports = self._resolve_imports_within(raw_imports, file_by_candidate, exclude=f)
             # Dangling: internal repo files f imports that are NOT in the touched
             # set (nor already a within-set edge) — the "you haven't opened these
             # yet" hint. stdlib / third-party targets map to nothing and drop out.
-            unread = self._dangling_imports(raw_imports, roots, within=file_by_candidate, exclude_paths=scope)
+            unread = self._dangling_imports(raw_imports, roots, resolver, within=file_by_candidate, exclude_paths=scope)
             # Reverse: which files import f? Layer C sources this from the whole
             # repo (repo_importers) when wired; otherwise the touched-set-scoped
             # query. Either way f's own path is excluded.
@@ -182,6 +213,168 @@ class CodeMap:
                 )
             )
         return out
+
+    # -- unified navigation API (Decision C) ---------------------------------
+    #
+    # The LSP-free go-to-definition / find-references surface, built purely off
+    # the persisted scope graph + symbol-level import bindings. A future
+    # navigation tool consumes these unchanged; the passive context source uses
+    # ``references_to`` for symbol-precise reverse-deps. All three are cheap cold
+    # reads (no re-parse) and best-effort (an unindexed file resolves to nothing).
+
+    def resolve_import(self, local_name: str, importer_path: str) -> Optional[tuple[str, str]]:
+        """Where ``local_name`` (as bound in ``importer_path``) is imported from.
+
+        Reads ``importer_path``'s persisted :class:`ImportBinding`s for the one
+        binding ``local_name`` and maps its dotted ``module`` back to a repo file
+        on disk (via the importer's own package roots). Returns
+        ``(target_path, imported_name)`` — ``imported_name`` is the symbol pulled
+        by a ``from module import name`` (``""`` for a plain ``import a.b.c``,
+        where the local name binds the module itself). ``None`` when the name is
+        not an import, or its module maps to no file (stdlib / third-party).
+        """
+        importer = os.path.abspath(importer_path)
+        resolver = self._resolver_for(importer)
+        if resolver is None:
+            return None
+        binding = next(
+            (b for b in self._store.import_bindings_of(importer) if b.local_name == local_name),
+            None,
+        )
+        if binding is None:
+            return None
+        target = resolver.module_to_path(binding.module, resolver.import_roots([importer]))
+        if target is None:
+            return None
+        return (target, binding.imported_name)
+
+    def definition_of(self, name: str, *, in_file: Optional[str] = None) -> Optional[Def]:
+        """The :class:`Def` ``name`` resolves to when used in ``in_file`` (or None).
+
+        Intra-file first: a module-scope ``def``/``class`` named ``name`` in
+        ``in_file`` wins. Otherwise cross-file: if ``name`` is an import in
+        ``in_file``, follow :meth:`resolve_import` to its defining file and return
+        that file's exported definition. ``in_file`` is required (a bare name has
+        no resolution context); returns None when nothing binds it.
+        """
+        if in_file is None:
+            return None
+        in_file = os.path.abspath(in_file)
+        local = self._store.definition_of(in_file, name)
+        if local is not None:
+            return local
+        resolved = self.resolve_import(name, in_file)
+        if resolved is None:
+            return None
+        target, symbol = resolved
+        return self._store.definition_of(target, symbol or name)
+
+    def references_to(self, target_path: str, symbol: str) -> list[tuple[str, int]]:
+        """Whole-repo ``(path, line)`` uses of ``symbol`` defined in ``target_path``.
+
+        Two precise sources joined, no LSP: the *intra-file* true use sites (refs
+        whose resolved local target is the module-scope def of ``symbol``) plus the
+        *cross-file* import sites (files whose ``import_bindings`` pull ``symbol``
+        from one of ``target_path``'s module candidates). The target's own path is
+        never listed as a cross-file importer.
+        """
+        target = os.path.abspath(target_path)
+        refs: list[tuple[str, int]] = list(self._store.references_to(target, symbol))
+        for path, line in self._store.symbol_importers(self._candidates(target), symbol):
+            if path != target:
+                refs.append((path, line))
+        return refs
+
+    # -- LSP-free unread resolution from the whole-repo index ----------------
+
+    def resolve_unread_from_index(
+        self,
+        unread_paths: list[str],
+        *,
+        symbols_of: Callable[[str], list],
+        module_summary_of: Callable[[str], str],
+        importers_of: Callable[[set], list],
+        references_of: Optional[Callable[[str, str], list]] = None,
+    ) -> tuple[dict[str, list[str]], dict[str, str], dict[str, list[str]]]:
+        """Resolve each dangling-import target from the persistent index, LSP-free.
+
+        The whole-repo cold scan already extracted every ``.py``'s symbols,
+        module docstring, and import edges, so an *untouched* imported file's
+        public surface / purpose / reverse-deps are answerable without any LSP.
+        For each target: ``symbols`` = its public top-level symbol names (capped
+        at :data:`_UNREAD_SYMBOL_CAP`); ``summary`` = its module purpose (Opt B);
+        ``used_by`` = the whole-repo files depending on it, minus the target
+        itself (Opt A).
+
+        Decision B (symbol-level used-by): when a ``references_of(target, name)``
+        reader is wired, ``used_by`` is the union of the files that *reference*
+        the target's public symbols — who uses the file's API, not merely who
+        imports its module. Falls back to the coarse module-name ``importers_of``
+        when no references reader is given or the symbol query surfaces nobody.
+
+        Every input is a duck-typed callable (the :class:`RepoIndexer` readers),
+        so this low ``context`` layer names nothing above it. Best-effort per
+        target — a raising reader for one target skips it, never breaks the map.
+        """
+        symbols: dict[str, list[str]] = {}
+        summaries: dict[str, str] = {}
+        imported_by: dict[str, list[str]] = {}
+        for target in unread_paths:
+            try:
+                names = self._public_top_level_names(symbols_of(target))[: self._UNREAD_SYMBOL_CAP]
+                if names:
+                    symbols[target] = names
+                summary = module_summary_of(target)
+                if summary:
+                    summaries[target] = summary
+                importers: list[str] = []
+                if references_of is not None and names:
+                    importers = self._symbol_level_importers(target, names, references_of)
+                if not importers:
+                    importers = [p for p in importers_of(self._candidates(target)) if p != target]
+                if importers:
+                    imported_by[target] = sorted(set(importers))
+            except Exception:  # noqa: BLE001 — a bad target must not break the map
+                continue
+        return symbols, summaries, imported_by
+
+    @staticmethod
+    def _symbol_level_importers(target: str, names: list[str], references_of: Callable[[str, str], list]) -> list[str]:
+        """Files referencing any public symbol of *target* (symbol-precise used-by).
+
+        Unions ``references_of(target, name)`` over the target's public top-level
+        names, dropping the intra-file sites (the target itself). Decision B: this
+        answers "who uses this file's API", where the coarse module-name query
+        only answers "who imports this module".
+        """
+        importers: set[str] = set()
+        for name in names:
+            for path, _line in references_of(target, name) or []:
+                if path != target:
+                    importers.add(path)
+        return sorted(importers)
+
+    @staticmethod
+    def _public_top_level_names(symbols: list) -> list[str]:
+        """Public top-level names from a :class:`Symbol` list (dedup, order kept).
+
+        A caller imports a file's *public top-level surface* — a def/class whose
+        name is public (no leading ``_``) and is not nested (no dotted
+        ``qualified_name``). Methods/closures/privates are dropped, mirroring the
+        risk-label's ``_is_public_interface`` filter but over the index's
+        :class:`Symbol` rows rather than LSP dicts.
+        """
+        names: list[str] = []
+        seen: set[str] = set()
+        for s in symbols or []:
+            qn = getattr(s, "qualified_name", "") or ""
+            name = getattr(s, "name", "") or ""
+            if not name or "." in qn or name.startswith("_"):
+                continue
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+        return names
 
     # -- Layer B: resolve dangling-import symbols via LSP --------------------
 
@@ -407,88 +600,90 @@ class CodeMap:
                     hit.add(f)
         return hit
 
-    @staticmethod
-    def _import_roots(abs_files: list[str]) -> set[str]:
-        """Directory anchors under which an absolute dotted import maps to a file.
+    # -- per-file resolver routing -------------------------------------------
+    #
+    # module⇄file arithmetic is language-specific, so every such call routes
+    # through the file's own :class:`ModuleResolver` (picked by extension). A
+    # ``.py`` and a ``.go`` never share a resolver, so their candidate spellings
+    # can't collide into a forged edge. Python-only environments resolve exactly
+    # one resolver, byte-for-byte identical to the former inline statics.
 
-        A touched file at ``.../repo/pkg/sub/mod.py`` imported as ``pkg.sub.other``
-        tells us ``.../repo`` is an import root: walking up past every package
-        directory (those with an ``__init__.py``) lands on the path prefix that
-        ``a.b.c`` -> ``a/b/c`` is relative to. We infer these purely from the
-        touched set — no cwd, no ``sys.path`` — so mapping stays locality-driven.
-        Non-package files (a bare script) anchor at their own directory.
+    @staticmethod
+    def _resolver_for(abspath: str) -> Optional[ModuleResolver]:
+        """The :class:`ModuleResolver` for *abspath*'s language (or None if unknown)."""
+        provider = provider_for(abspath)
+        return provider.module_resolver() if provider is not None else None
+
+    @staticmethod
+    def _candidates(abspath: str) -> set[str]:
+        """Import-name candidates for *abspath* via its resolver (empty if unknown)."""
+        resolver = CodeMap._resolver_for(abspath)
+        return resolver.module_candidates(abspath) if resolver is not None else set()
+
+    @staticmethod
+    def _group_by_resolver(abs_files: list[str]) -> list[tuple[ModuleResolver, list[str]]]:
+        """Partition *abs_files* by their language resolver (identity-grouped).
+
+        Files of unknown languages (no provider) are dropped — the caller lists
+        them structure-less. Grouping is by resolver identity so all files of one
+        language share a single candidate index + root set; import edges are only
+        ever drawn within a group, never across languages.
         """
-        roots: set[str] = set()
+        groups: list[tuple[ModuleResolver, list[str]]] = []
+        by_id: dict[int, tuple[ModuleResolver, list[str]]] = {}
         for f in abs_files:
-            if not f.endswith(".py"):
-                continue
-            d = os.path.dirname(f)
-            # Climb out of the package chain: while the dir is itself a package,
-            # its parent is the more-rooted anchor for a top-level dotted name.
-            while os.path.exists(os.path.join(d, _INIT)):
-                parent = os.path.dirname(d)
-                if parent == d:
-                    break
-                d = parent
-            roots.add(d)
-        return roots
+            resolver = CodeMap._resolver_for(f)
+            if resolver is None:
+                continue  # unknown language — no resolver, listed structure-less
+            entry = by_id.get(id(resolver))
+            if entry is None:
+                entry = (resolver, [])
+                by_id[id(resolver)] = entry
+                groups.append(entry)
+            entry[1].append(f)
+        return groups
 
     @staticmethod
     def _dangling_imports(
         raw_imports: list[str],
         roots: set[str],
+        resolver: ModuleResolver,
         *,
         within: dict[str, list[str]],
         exclude_paths: set[str],
     ) -> set[str]:
         """Repo files a file imports that are NOT in the touched set (abspaths).
 
-        Classifies each import target three ways: already a within-set edge (skip,
-        it's in ``imports``); maps to a real repo file under one of ``roots`` but
+        Classifies each import target three ways via *resolver*: already a
+        within-set edge (skip, it's in ``imports``); maps to a real repo file but
         is not touched (a *dangling* internal edge — the return value); or maps to
-        nothing on disk (stdlib / third-party — dropped). Relative imports (leading
-        dots) are skipped: without the importer's package context they cannot be
-        anchored reliably, and their in-set cases are already covered by
+        nothing on disk (stdlib / third-party — dropped). Relative imports are
+        skipped: without the importer's package context they cannot be anchored
+        reliably, and their in-set cases are already covered by
         :meth:`_resolve_imports_within`.
         """
         hit: set[str] = set()
         for target in raw_imports:
-            if target.startswith("."):
+            if resolver.is_relative(target):
                 continue  # relative import — no reliable absolute anchor
             if target in within:
                 continue  # already a within-set edge (dedup)
-            rel = target.replace(".", os.sep)
-            for root in roots:
-                mod = os.path.join(root, rel + ".py")
-                pkg = os.path.join(root, rel, _INIT)
-                path = mod if os.path.exists(mod) else (pkg if os.path.exists(pkg) else None)
-                if path and path not in exclude_paths:
-                    hit.add(path)
-                    break  # first root that resolves wins
+            path = resolver.module_to_path(target, roots)
+            if path and path not in exclude_paths:
+                hit.add(path)
         return hit
 
     @staticmethod
-    def _module_candidates(abspath: str) -> set[str]:
-        """Dotted module names *abspath* could be imported by (locality heuristic).
+    def _module_to_path_any(module: str, roots: set[str]) -> Optional[str]:
+        """First repo file *module* maps to across all registered resolvers (or None).
 
-        ``.../a/b/c.py`` -> {``c``, ``b.c``, ``a.b.c``}. A package ``__init__.py``
-        also offers its parent-dir name (``.../pkg/__init__.py`` -> ``pkg`` ...).
-        Not a resolver — just the plausible import spellings to string-match.
+        The indexer's whole-repo definition lookup is language-agnostic — it does
+        not know which language defines ``module`` — so it tries every registered
+        resolver and takes the first hit. Python-only environments iterate exactly
+        one resolver, identical to the former direct ``_module_to_path`` call.
         """
-        if not abspath.endswith(".py"):
-            return set()
-        directory, filename = os.path.split(abspath)
-        stem = filename[:-3]  # drop ".py"
-        parts = [p for p in directory.split(os.sep) if p]
-        if stem == "__init__":
-            # A package's importable name is its directory chain, not "__init__".
-            segments = parts
-        else:
-            segments = parts + [stem]
-        if not segments:
-            return set()
-        # Progressive right-anchored dotted suffixes: c, b.c, a.b.c ...
-        cands: set[str] = set()
-        for i in range(len(segments)):
-            cands.add(".".join(segments[i:]))
-        return cands
+        for provider in all_registered_providers():
+            path = provider.module_resolver().module_to_path(module, roots)
+            if path is not None:
+                return path
+        return None

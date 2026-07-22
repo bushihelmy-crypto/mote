@@ -27,8 +27,9 @@ reverse.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
-from typing import Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -77,6 +78,35 @@ class AesGcmCipher:
             raise ValueError("ciphertext token too short to contain a nonce")
         nonce, ciphertext = token[:_NONCE_BYTES], token[_NONCE_BYTES:]
         return self._aead.decrypt(nonce, ciphertext, None)
+
+
+class DeferredVaultCipher:
+    """Resolve a concrete cipher on first cryptographic operation.
+
+    Component construction can safely retain this object without reading or
+    generating key material. Resolution is synchronized because event
+    subscribers and tools may race on first use.
+    """
+
+    def __init__(self, factory: Callable[[], VaultCipher]) -> None:
+        self._factory = factory
+        self._cipher: Optional[VaultCipher] = None
+        self._lock = threading.Lock()
+
+    def _get(self) -> VaultCipher:
+        cipher = self._cipher
+        if cipher is not None:
+            return cipher
+        with self._lock:
+            if self._cipher is None:
+                self._cipher = self._factory()
+            return self._cipher
+
+    def encrypt(self, data: bytes) -> bytes:
+        return self._get().encrypt(data)
+
+    def decrypt(self, token: bytes) -> bytes:
+        return self._get().decrypt(token)
 
 
 class KeyFileProvider:
@@ -135,7 +165,7 @@ def build_cipher(config) -> VaultCipher:
 def _build_aes(config) -> VaultCipher:
     key_path = getattr(config, "key_path", None)
     provider = KeyFileProvider(Path(key_path) if key_path else None)
-    return AesGcmCipher(provider.key())
+    return DeferredVaultCipher(lambda: AesGcmCipher(provider.key()))
 
 
 #: name → cipher builder. Add a strategy here (one line) to make it selectable
@@ -143,4 +173,4 @@ def _build_aes(config) -> VaultCipher:
 _REGISTRY = {"aes": _build_aes}
 
 
-__all__ = ["VaultCipher", "AesGcmCipher", "KeyFileProvider", "build_cipher"]
+__all__ = ["VaultCipher", "AesGcmCipher", "DeferredVaultCipher", "KeyFileProvider", "build_cipher"]

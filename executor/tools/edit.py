@@ -1,35 +1,37 @@
-"""Edit (update) file tool.
+"""Edit (and write) file tool.
 
-Performs exact string replacements in a file: ``old_string`` is located in the
-file and swapped for ``new_string`` (one occurrence by default, or every
-occurrence when ``replace_all`` is set). This is the in-place counterpart to the
-Write tool — prefer it when only part of a file changes.
+The single file-mutation tool. ``old_string`` selects a range in the file and
+swaps it for ``new_string``. The range scales with the anchor:
+
+- ``old_string`` NON-EMPTY → a substring replacement (one occurrence by default,
+  or every occurrence when ``replace_all`` is set) — a precise in-place edit.
+- ``old_string`` EMPTY → the range is the WHOLE file, so new_string becomes the
+  entire content: create a new file or fully overwrite an existing one. This is
+  the former Write tool, now expressed as the empty-anchor special case of Edit.
 
 Behavior:
-- Read-before-edit is enforced via the Role's shared file-read state
+- Read-before-write is enforced via the Role's shared file-read state
   (Role.get_file_read_mtime): an existing file must have been read this session
-  and be unchanged on disk since that read. Skipped when unbound (no Role).
-- A forgiving match cascade: exact match, then curly→straight
+  and be unchanged on disk since that read, whether the range is a substring or
+  the whole file. Skipped when unbound (no Role) and for brand-new files.
+- A forgiving match cascade (substring edits): exact match, then curly→straight
   quote normalization, then tab↔space normalization, then both combined. This
   recovers matches when the model copies from Read output (tabs rendered as
   spaces) or the file uses typographic quotes.
 - When the match only succeeded after quote normalization, new_string's quotes
   are re-styled to the file's curly form so the edit preserves typography.
-- old_string == '' creates a new file (or fills an empty one) with new_string,
-  via the create-via-edit path.
 - The existing file's newline style (LF vs CRLF) is detected and preserved on
-  write, the same as the Write tool.
+  write, for both substring edits and whole-file overwrites.
 
-Differences by design: no LSP/skills/analytics/git-diff/file-history
-side effects, and encoding handling matches the Write tool (UTF-8) rather than
-round-tripping UTF-16.
+Differences by design: no LSP/skills/analytics/git-diff side effects, and
+encoding handling is UTF-8 rather than round-tripping UTF-16.
 """
 from __future__ import annotations
 
 import os
 from typing import ClassVar, Optional
 
-from mote.common.const.tools import MAX_EDIT_FILE_SIZE_BYTES
+from mote.common.const.tools import MAX_CONTENT_SIZE_BYTES, MAX_EDIT_FILE_SIZE_BYTES
 from mote.common.text import count_noun, verb_agree
 from mote.executor.dependency._file_base import FileMutatingTool
 from mote.executor.tool_registry import register_tool
@@ -62,12 +64,11 @@ _MSG_NO_CHANGE_PRODUCED = "Error: applying the edit produced no change to the fi
 _MSG_CANNOT_WRITE = "Error: cannot write '{path}': {error}"
 _MSG_UPDATED_ALL = "The file {path} has been updated. All {count} {verb} successfully replaced."
 _MSG_UPDATED = "The file {path} has been updated successfully."
-_MSG_CANNOT_CLOBBER = (
-    "Error: cannot create new file — '{path}' already exists with content. "
-    "Provide a non-empty old_string to edit it."
-)
 _MSG_CANNOT_MKDIR = "Error: cannot create parent directory for '{path}': {error}"
-_MSG_CREATED = "The file {path} has been {verb} successfully."
+# Whole-file write (empty old_string): reuse Write's create/update wording so
+# the view-layer summary extractor keeps working unchanged.
+_MSG_CONTENT_TOO_LARGE = "Error: content ({size} bytes) exceeds the maximum allowed size ({max_size} bytes)."
+_MSG_WHOLE_FILE_OK = "{verb} {path} ({lines}, {size} bytes written)."
 
 # Curly quotes. The model emits straight quotes; files may contain curly ones.
 # We normalize curly→straight for matching, then re-apply curly on write.
@@ -226,10 +227,10 @@ def _apply_edit(content: str, old_string: str, new_string: str, replace_all: boo
 
 @register_tool
 class Edit(FileMutatingTool):
-    """Perform an exact string replacement in a file (the update tool)."""
+    """Create, overwrite, or edit a file — the one file-mutation tool."""
 
     name = "Edit"
-    aliases: ClassVar[list[str]] = ["Edit.run", "edit", "Update", "update"]
+    aliases: ClassVar[list[str]] = ["Edit.run", "edit", "Update", "update", "Write", "Write.run", "write"]
     # The effect (edited file) is durable and re-readable, so the success-message
     # body can be cleared without losing recoverable information.
     reconstructable: ClassVar[bool] = True
@@ -240,36 +241,38 @@ class Edit(FileMutatingTool):
         self,
         *,
         file_path: str,
-        old_string: str,
         new_string: str,
+        old_string: str = "",
         replace_all: bool = False,
     ) -> ToolResult:
-        """Edit a file by replacing an exact string — precise in-place changes.
+        """Create, overwrite, or edit a file — old_string picks the range.
 
-        Performs exact string replacements in files. Locates old_string in the
-        file and replaces it with new_string. By default exactly one occurrence
-        is replaced and old_string must be unique; set replace_all to replace
-        every occurrence. Pass an empty old_string to create a new file (or fill
-        an empty one) with new_string as its content.
+        old_string selects what to replace; the range scales with it:
+        - OMITTED or EMPTY → the WHOLE file: new_string becomes the entire
+          content. This creates a new file or overwrites one wholesale.
+        - NON-EMPTY → a precise in-place edit: swap old_string for new_string.
+          One occurrence is replaced; old_string must be unique unless
+          replace_all is set (e.g. renaming across a file).
 
-        You must use the Read tool at least once on the file before editing it —
-        the edit fails otherwise. Preserve the exact indentation (tabs/spaces) as
-        it appears in the file, but do NOT include the line-number prefix that
-        Read adds to its output.
-
-        The edit fails if old_string is not unique in the file: either add more
-        surrounding context so the match is unique, or set replace_all=true to
-        change every occurrence (useful for renaming a variable across the file).
-        Prefer editing an existing file over rewriting it whole with Write.
+        Before overwriting or editing an EXISTING file you must Read it this
+        session, or the write fails (new files need no read) — so you never
+        clobber unseen changes. For substring edits, match the file's exact
+        indentation but do NOT include Read's line-number prefix; if old_string
+        isn't unique, add context or set replace_all. Prefer a substring edit
+        over a whole-file rewrite when only part changes. NEVER proactively
+        create docs (*.md) or README files unless asked.
 
         Args:
-            file_path: Absolute path to the file to modify (~ is expanded;
-                relative paths resolve against the current working directory).
-            old_string: The text to replace. Must match the file exactly
+            file_path: Absolute path to write or modify (~ expanded; relative
+                paths resolve against the working directory).
+            new_string: Replacement text — the full file content when old_string
+                is omitted/empty, else the substring to swap in. Must differ from
+                old_string.
+            old_string: Text to replace. Optional; omit or pass "" to write the
+                whole file (create/overwrite). Non-empty must match exactly
                 (including indentation) and be unique unless replace_all is set.
-                Empty string means "create the file with new_string".
-            new_string: The replacement text. Must differ from old_string.
-            replace_all: Replace all occurrences of old_string (default False).
+            replace_all: Replace all occurrences (default False; ignored when
+                old_string is empty).
         """
         if not file_path or not file_path.strip():
             raise ToolError(_MSG_FILE_PATH_REQUIRED)
@@ -277,21 +280,28 @@ class Edit(FileMutatingTool):
             raise ToolError(_MSG_STRINGS_REQUIRED)
         if not isinstance(old_string, str) or not isinstance(new_string, str):
             raise ToolError(_MSG_STRINGS_MUST_BE_STR)
-        if old_string == new_string:
+        # The no-op guard applies to substring edits only; an empty old_string is
+        # a whole-file write where new_string="" legitimately creates/empties a
+        # file, so it must not trip this.
+        if old_string != "" and old_string == new_string:
             raise ToolError(_MSG_NO_CHANGES)
 
         full_path = self._resolve_path(file_path.strip())
 
         if os.path.isdir(full_path):
             raise ToolError(_MSG_IS_DIRECTORY.format(path=file_path))
-        if full_path.endswith(".ipynb"):
-            raise ToolError(_MSG_IS_NOTEBOOK.format(path=file_path))
 
         existed = os.path.exists(full_path)
 
-        # --- New-file creation path: empty old_string ---
+        # --- Whole-file write path: empty old_string (range = the entire file) ---
+        # Checked BEFORE the .ipynb guard so a whole-file write can emit raw
+        # notebook JSON; only substring edits of .ipynb are refused (use the
+        # notebook edit tool for cell-level changes).
         if old_string == "":
-            return self._create_file(file_path, full_path, new_string, existed)
+            return self._write_whole_file(file_path, full_path, new_string, existed)
+
+        if full_path.endswith(".ipynb"):
+            raise ToolError(_MSG_IS_NOTEBOOK.format(path=file_path))
 
         if not existed:
             raise ToolError(_MSG_FILE_NOT_EXIST.format(base=self._base_cwd()))
@@ -360,22 +370,35 @@ class Edit(FileMutatingTool):
             file_changes=[FileChange(path=full_path, old=content, new=updated)],
         )
 
-    def _create_file(self, file_path: str, full_path: str, content: str, existed: bool) -> ToolResult:
-        """Handle the empty-old_string create path.
+    def _write_whole_file(self, file_path: str, full_path: str, content: str, existed: bool) -> ToolResult:
+        """Handle the empty-old_string whole-file write (the former Write tool).
 
-        Valid only when the file doesn't exist, or exists but is empty/whitespace
-        (the create-via-edit path). Otherwise refuses to clobber content.
+        Creates the file (with any missing parent dirs) or fully overwrites an
+        existing one. Overwriting an existing file goes through the same
+        read-before-write guard as a substring edit — the file must have been
+        read this session and be unchanged since — so a whole-file write can
+        never silently clobber content the model has not seen. When overwriting,
+        the file's existing newline style is preserved.
         """
+        encoded_size = len(content.encode("utf-8"))
+        if encoded_size > MAX_CONTENT_SIZE_BYTES:
+            raise ToolError(_MSG_CONTENT_TOO_LARGE.format(size=encoded_size, max_size=MAX_CONTENT_SIZE_BYTES))
+
+        # Read-before-overwrite: an existing file must have been read this
+        # session and be unchanged on disk since. New files skip this; unbound
+        # use self-skips inside the guard.
         old = ""
         if existed:
+            self._check_read_before_write(file_path, full_path, noun="file", verb="overwriting")
+            # Before-image (LF-normalized) for the structured FileChange fact.
             try:
                 with open(full_path, "r", encoding="utf-8", newline="") as f:
-                    current = f.read()
+                    old = f.read().replace("\r\n", "\n")
             except (OSError, UnicodeDecodeError):
-                current = "non-empty"  # treat unreadable as non-empty → refuse
-            if current.strip() != "":
-                raise ToolError(_MSG_CANNOT_CLOBBER.format(path=file_path))
-            old = current.replace("\r\n", "\n")
+                old = ""
+
+        # Preserve the existing newline style on overwrite; LF for new files.
+        line_ending = self._detect_line_ending(full_path) if existed else "\n"
 
         parent = os.path.dirname(full_path)
         if parent and not os.path.exists(parent):
@@ -387,17 +410,25 @@ class Edit(FileMutatingTool):
         # Capture a before-image for file history just before we write.
         self._snapshot_pre_write(full_path)
         try:
+            normalized = content
+            if line_ending != "\n":
+                normalized = content.replace("\r\n", "\n").replace("\n", line_ending)
             with open(full_path, "w", encoding="utf-8", newline="") as f:
-                f.write(content)
+                f.write(normalized)
         except OSError as e:
             raise ToolError(_MSG_CANNOT_WRITE.format(path=file_path, error=e))
 
         self._refresh_read_state(full_path)
-        verb = "updated" if existed else "created"
-        # ``new`` is LF-normalized to match the update path's convention (the
-        # written bytes may carry the detected line ending, but the *fact* the
+
+        line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+        verb = "Updated" if existed else "Created"
+        message = _MSG_WHOLE_FILE_OK.format(
+            verb=verb, path=full_path, lines=count_noun(line_count, "line"), size=encoded_size
+        )
+        # ``new`` is LF-normalized to match the substring-edit path's convention
+        # (written bytes may carry the detected line ending, but the *fact* the
         # view renders is the logical content).
         return ToolResult(
-            output=_MSG_CREATED.format(path=full_path, verb=verb),
+            output=message,
             file_changes=[FileChange(path=full_path, old=old, new=content.replace("\r\n", "\n"))],
         )

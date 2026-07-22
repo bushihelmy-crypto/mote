@@ -211,13 +211,11 @@ class TestResolveEffect:
         assert PureButFs.resolve_effect() is ToolEffect.PURE
 
     def test_read_tools_are_pure(self):
-        from mote.executor.tools.glob import Glob
-        from mote.executor.tools.grep import Grep
         from mote.executor.tools.read import Read
+        from mote.executor.tools.search import Search
 
         assert Read.resolve_effect() is ToolEffect.PURE
-        assert Grep.resolve_effect() is ToolEffect.PURE
-        assert Glob.resolve_effect() is ToolEffect.PURE
+        assert Search.resolve_effect() is ToolEffect.PURE
 
     def test_external_tools_derive_external(self):
         from mote.executor.tools.bash import Bash

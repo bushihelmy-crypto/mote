@@ -69,3 +69,21 @@ class TestConsKwargsDrops:
         kw = llm._cons_kwargs([{"role": "user", "content": "hi"}])
         assert "temperature" in kw
         assert "max_tokens" in kw
+
+
+class TestReasoningEffort:
+    def test_capable_model_gets_reasoning_effort(self):
+        llm = _make_llm("gpt-5.4", reasoning_effort="high")  # gpt-5 → supports_thinking
+        kw = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert kw["reasoning_effort"] == "high"
+
+    def test_incapable_model_never_gets_effort(self):
+        # The latent-bug guard: an old model must not receive reasoning_effort.
+        llm = _make_llm("gpt-4o", reasoning_effort="high")
+        kw = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert "reasoning_effort" not in kw
+
+    def test_no_effort_no_param(self):
+        llm = _make_llm("gpt-5.4")
+        kw = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert "reasoning_effort" not in kw

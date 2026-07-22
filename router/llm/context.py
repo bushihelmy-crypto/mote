@@ -12,6 +12,7 @@ from mote.common.config.meta_config import Config
 from mote.router.cost import CostTracker, PricingMode
 from mote.router.llm.base_llm import BaseLLM
 from mote.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
+from mote.router.ratelimit import RateLimitTracker
 
 
 class Context(BaseModel):
@@ -27,6 +28,11 @@ class Context(BaseModel):
 
     config: Config = Field(default_factory=load_config)
     cost_manager: CostTracker = Field(default_factory=CostTracker)
+    # Fleet-wide rate-limit quota (provider account state, last-write-wins per
+    # endpoint) — the ``/usage`` limit side, counterpart to ``cost_manager``.
+    # Shared by every LLM this Context builds; each provider's response hook
+    # observes into it. See :mod:`mote.router.ratelimit`.
+    rate_limit_tracker: RateLimitTracker = Field(default_factory=RateLimitTracker)
     # Explicit reference to the live control plane (an ``AgentControl``), when a
     # caller that holds this Context knows its plane. Duck-typed to ``Any`` to
     # keep the router layer free of any ``environment`` import; ``resolve_control``
@@ -58,6 +64,7 @@ class Context(BaseModel):
         llm = create_llm_instance(default)
         if llm.cost_manager is None:
             llm.cost_manager = self._select_cost_manager(default)
+        llm.rate_limit_tracker = self.rate_limit_tracker
         return llm
 
     def llm_with_cost_manager_from_llm_config(self, llm_config: LLMConfig) -> BaseLLM:
@@ -65,4 +72,5 @@ class Context(BaseModel):
         llm = create_llm_instance(llm_config)
         if llm.cost_manager is None:
             llm.cost_manager = self._select_cost_manager(llm_config)
+        llm.rate_limit_tracker = self.rate_limit_tracker
         return llm

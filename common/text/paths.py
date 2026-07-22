@@ -6,7 +6,7 @@ other (AGENTS.md layering) share one implementation:
 
 - ``uri_to_path`` / ``path_to_uri`` are needed by both
   ``roles/lsp/server.py`` (the LSP transport) and ``context/code_map/__init__.py``
-  (the low ``context`` layer, which must NOT import ``roles``). LSP
+  (the low ``common`` layer, which must NOT import ``roles``). LSP
   ``Location.uri`` values arrive as ``file://`` URIs and get turned back into
   filesystem paths on both sides.
 - ``display_path`` (path relativised against a cwd for a compact reminder line)

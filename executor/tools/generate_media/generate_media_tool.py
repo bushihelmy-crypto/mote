@@ -16,7 +16,12 @@ from typing import Any, ClassVar, Optional
 from mote.common.exception import ToolNotConfiguredError
 from mote.executor.base_tool import BaseTool
 from mote.executor.tool_registry import register_tool
-from mote.executor.tools.generate_media.creators import AudioCreator, ImageCreator, MusicCreator, VideoCreator
+
+# Importing ``creators`` fires the ``@register_media_provider`` decorators that
+# populate the registry with the built-in "openai" provider for each kind (the
+# discovery seam, mirroring ``router/llm/__init__.py``).
+from mote.executor.tools.generate_media import creators  # noqa: F401
+from mote.executor.tools.generate_media.registry import create_media_provider
 
 # Requested-kind -> (multimodal sub-config attribute, human label, model-field
 # names). The tool refuses a kind up-front when its service endpoint/key is
@@ -109,9 +114,10 @@ class GenerateMedia(BaseTool):
     ) -> dict:
         """Generate images, speech, music, and/or video assets and wait for the URLs.
 
-        Runs every requested kind concurrently and blocks until all assets finish,
-        then returns each asset's final URL (and local file path, if ``output_dir``
-        is set). Omit any kind you don't need — an empty request returns at once.
+        Runs every requested kind concurrently, blocks until all assets finish,
+        then returns each asset's URL (and local path if ``output_dir`` is set).
+        Omit any kind you don't need. Partial successes are kept; fails only when
+        every asset failed.
 
         Args:
             images: Image specs, each ``{description, filename, size?, image?}``.
@@ -121,13 +127,8 @@ class GenerateMedia(BaseTool):
             music: Music specs, each ``{prompt, filename, lyrics?, seed?}``.
             videos: Video specs, each ``{prompt, filename, size?, seconds?, image?}``.
                 ``image`` (or ``first_frame``) is a reference frame.
-            output_dir: Directory to download generated assets into. When omitted,
-                only the remote URLs are returned (no local files).
-
-        Returns a compact ``{kind: [{filename, url, local_path?}]}`` map. Partial
-        successes are kept; fails only when every requested asset failed. Raises
-        :class:`ToolNotConfiguredError` when a requested kind's ``multimodal.*``
-        service (endpoint/key) is unset.
+            output_dir: Directory to download assets into. Omit to return only
+                remote URLs (no local files).
         """
         requested = [
             kind
@@ -141,13 +142,13 @@ class GenerateMedia(BaseTool):
 
         jobs: list[tuple[str, Any]] = []
         if images:
-            jobs.append(("images", ImageCreator(output_dir).generate_images(images)))
+            jobs.append(("images", create_media_provider("image", output_dir).generate(images)))
         if audios:
-            jobs.append(("audios", AudioCreator(output_dir).generate_audios(audios)))
+            jobs.append(("audios", create_media_provider("audio", output_dir).generate(audios)))
         if music:
-            jobs.append(("music", MusicCreator(output_dir).generate_music(music)))
+            jobs.append(("music", create_media_provider("music", output_dir).generate(music)))
         if videos:
-            jobs.append(("videos", VideoCreator(output_dir).generate_videos(videos)))
+            jobs.append(("videos", create_media_provider("video", output_dir).generate(videos)))
 
         settled = await asyncio.gather(*(coro for _, coro in jobs), return_exceptions=True)
 

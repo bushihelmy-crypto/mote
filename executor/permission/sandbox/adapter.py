@@ -28,6 +28,7 @@ from mote.executor.permission.sandbox.guard import SandboxGuard
 from mote.executor.permission.sandbox.resource_guard import ResourceGuard
 from mote.sandbox import SandboxRuntime
 from mote.sandbox.backend import SandboxPolicy
+from mote.sandbox.network.credentials import CredentialBroker, CredentialRule, SecretLookup
 
 # Paths (relative to a writable root) that must stay read-only even inside the
 # workspace: config + VCS metadata + the session rollout store. A sandboxed
@@ -46,20 +47,89 @@ def _metadata_overrides(writable_roots: list[str]) -> list[str]:
     return overrides
 
 
+def _secret_masks() -> list[str]:
+    """Absolute paths of secret material to mask from the sandbox.
+
+    The read-only root baseline (``--ro-bind / /``) would otherwise expose the
+    encrypted vault, its key, and the MITM CA private key to any sandboxed
+    process. Masking them with ``/dev/null`` makes the credential-brokering
+    guarantee real (the secret only ever exists in the trusted runtime) AND
+    closes a pre-existing exposure of the vault itself. Never masks the *public*
+    CA bundle (sandboxed tools must read it to trust the MITM leaf). Only paths
+    that exist are returned (bwrap errors on a missing bind source).
+    """
+    from mote.common.const.paths import CONFIG_ROOT
+    from mote.common.secrets.cipher import KeyFileProvider
+    from mote.common.secrets.store import secrets_path
+
+    candidates = [
+        secrets_path(),  # the encrypted vault
+        KeyFileProvider().path,  # vault.key (decrypts the vault)
+        CONFIG_ROOT / "sandbox_ca" / "ca.key",  # MITM CA private key
+    ]
+    return [str(p) for p in candidates if p.exists()]
+
+
+def _secret_masked_dirs() -> list[str]:
+    """Absolute directory paths of secret material to mask from the sandbox.
+
+    The directory sibling of :func:`_secret_masks`. The durable browser-profile
+    store holds encrypted logins in dynamically-named files, so it is masked as a
+    whole directory (overlaid with an empty tmpfs) rather than file-by-file. The
+    profiles are already encrypted with the (masked) vault key, so this is
+    defense-in-depth: it also hides even the ciphertext + which profiles exist.
+    Only returned when the directory actually exists (bwrap errors otherwise).
+    """
+    from mote.common.const.paths import browser_profiles_dir
+
+    profiles = browser_profiles_dir()
+    return [str(profiles)] if profiles.is_dir() else []
+
+
 def build_policy(guard: SandboxGuard, *, cwd: Optional[str] = None) -> SandboxPolicy:
     """Build a runtime :class:`SandboxPolicy` from the live *guard*.
 
     Recomputes writable roots every call (so an interactive "always" grant via
-    ``SandboxGuard.add_session_root`` is honoured on the next command) and pins
-    the sensitive metadata paths read-only.
+    ``SandboxGuard.add_session_root`` is honoured on the next command), pins the
+    sensitive metadata paths read-only, and masks secret material (vault + keys
+    as files, the browser-profile store as a directory) so it never leaks into
+    the sandbox despite the read-only root baseline.
     """
     roots = guard.writable_roots()
     return SandboxPolicy(
         writable_roots=list(roots),
         readonly_overrides=_metadata_overrides(roots),
+        masked_paths=_secret_masks(),
+        masked_dirs=_secret_masked_dirs(),
         unshare_net=False,  # P1: rely on proxy env injection, not a netns.
         cwd=cwd,
     )
+
+
+def _build_broker(
+    config: SandboxRuntimeConfig,
+    secret_lookup: Optional[SecretLookup],
+) -> Optional[CredentialBroker]:
+    """Compile the config's credential rules into a :class:`CredentialBroker`.
+
+    Returns ``None`` when no rules are configured OR no secret lookup is wired
+    (secrets disabled) — the proxy then behaves exactly as before. A rule whose
+    secret is missing at request time still fail-closes at the broker, but with
+    no lookup at all there is nothing to broker, so the whole feature is inert.
+    """
+    if not config.credentials or secret_lookup is None:
+        return None
+    rules = [
+        CredentialRule(
+            domains=tuple(rule.domains),
+            secret_key=rule.secret,
+            scheme=rule.scheme,
+            header=rule.header,
+            username=rule.username,
+        )
+        for rule in config.credentials
+    ]
+    return CredentialBroker(rules, secret_lookup)
 
 
 def build_runtime(
@@ -68,6 +138,7 @@ def build_runtime(
     get_cwd: Callable[[], str],
     guard_factory: Callable[[], SandboxGuard],
     resource_guard: Optional[ResourceGuard] = None,
+    secret_lookup: Optional[SecretLookup] = None,
 ) -> SandboxRuntime:
     """Construct a configured :class:`SandboxRuntime`.
 
@@ -83,9 +154,15 @@ def build_runtime(
             session-adjusted cap takes effect on the next command (mirroring how
             ``guard_factory``'s guard backs the policy provider). When omitted,
             a default :class:`ResourceGuard` seeded from *config* is used.
+        secret_lookup: resolve a secret *key* to its plaintext value (the
+            ``SecretStore.get`` accessor). Wired only when the config has
+            credential rules AND secrets are enabled; drives the credential
+            broker so a sandboxed tool reaches authenticated endpoints without
+            the secret ever entering the sandbox. ``None`` => no brokering.
     """
     guard = guard_factory()
     rguard = resource_guard if resource_guard is not None else ResourceGuard(config)
+    broker = _build_broker(config, secret_lookup)
 
     def policy_provider() -> SandboxPolicy:
         return build_policy(guard, cwd=get_cwd())
@@ -100,6 +177,7 @@ def build_runtime(
         allowed_domains=config.allowed_domains,
         policy_provider=policy_provider,
         limits_provider=rguard.limits,
+        credential_broker=broker,
     )
 
 

@@ -404,34 +404,26 @@ class Read(BaseTool):
     ):
         """Read a local file's contents — text, images, PDFs, notebooks — with line numbers.
 
-        Reads a file from the local filesystem. The file_path may be absolute, or
-        relative to the working directory; ~ is expanded.
+        file_path may be absolute or relative to the working directory; ~ is
+        expanded. Reads the whole file from the start by default; use offset
+        (1-indexed start line) + limit to slice a large file — a Search hit at
+        path:42 is read with offset=42.
 
-        - By default it reads the whole file from the start. Use offset
-          (1-indexed start line) and limit to read a specific slice of a large
-          file; a Grep hit reported as path:42 is read with offset=42.
-        - Output is returned with cat -n style line numbers (a right-aligned
-          number then an arrow then the line). These numbers are for your
-          reference only — never reproduce the number+arrow prefix when quoting
-          or editing content.
-        - Images (png/jpg/jpeg/gif/webp) and PDFs (mode='visual') are shown to
-          you visually; Jupyter notebooks (.ipynb) are rendered as text; rich
-          documents (PDF/Word/Excel) are extracted to text with line numbers by
-          default.
-        - You may read multiple distinct files in a single turn by making several
-          Read calls at once; prefer this over reading them one at a time.
-        - ALWAYS use this tool to read files instead of shell commands like cat /
-          head / tail: it handles line numbering, large-file slicing, and media.
-          If a file was read and is unchanged, a short 'unchanged' note may be
-          returned in place of the body — that is expected.
+        - Output carries cat -n style line numbers (number, arrow, line) for
+          reference ONLY — never reproduce the number+arrow prefix when quoting
+          or editing.
+        - Images (png/jpg/jpeg/gif/webp) and PDFs (mode='visual') are shown
+          visually; notebooks (.ipynb) render as text; rich documents
+          (PDF/Word/Excel) extract to text with line numbers by default.
+        - Read several files in one turn by issuing multiple Read calls at once —
+          prefer this over one at a time.
+        - ALWAYS use this tool instead of cat/head/tail: it handles line
+          numbering, slicing, and media. An unchanged re-read may return a short
+          'unchanged' note in place of the body — that is expected.
 
-        Rich documents are read two ways, selected by ``mode``:
-        - ``"text"`` (default): extract the document's text and return it with
-          line numbers, honoring offset/limit. Line numbers match what the Grep
-          tool reports, so a Grep hit at ``report.pdf:42`` is read with
-          ``offset=42``. Works for PDF, Word and Excel.
-        - ``"visual"``: send the raw bytes to the model to view (base64). Only
-          PDFs (and images) support this; offset/limit are ignored.
+        ``mode`` (rich documents): "text" (default) extracts text with line
+        numbers aligned to Search's offsets (PDF/Word/Excel); "visual" sends raw
+        bytes to view (PDF/images only; offset/limit ignored).
 
         Args:
             file_path: Absolute path to the file to read (~ is expanded;

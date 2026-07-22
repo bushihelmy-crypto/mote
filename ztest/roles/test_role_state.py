@@ -104,6 +104,28 @@ class TestRevealController:
         assert restored.context.messages[0].content == "remembered"
 
 
+class TestTurnIndex:
+    def test_default_zero_and_serialized(self):
+        st = RoleState()
+        assert st.turn_index == 0
+        assert "turn_index" in st.model_dump()
+
+    def test_survives_resume(self):
+        # Hunk attribution: the monotonic turn counter rides the checkpoint so a
+        # resumed session keeps counting from where it left off.
+        st = RoleState()
+        st.turn_index = 5
+        restored = RoleState.model_validate(st.model_dump())
+        assert restored.turn_index == 5
+
+    def test_advance_and_read(self):
+        ctl = RoleStateController(RoleState())
+        assert ctl.current_turn_index() == 0
+        assert ctl.advance_turn() == 1
+        assert ctl.advance_turn() == 2
+        assert ctl.current_turn_index() == 2
+
+
 class TestRuntimeMutation:
     def test_file_read_state_is_mutable_runtime_only(self):
         st = RoleState()

@@ -34,6 +34,19 @@ DEFAULT_WORKSPACE_ROOT = CONFIG_ROOT / "workspace"
 SERDESER_PATH = DEFAULT_WORKSPACE_ROOT / "storage"
 
 
+# Durable browser-login store (under the config home): each named profile is an
+# ENCRYPTED Playwright ``storage_state`` (cookies + localStorage), reusing the
+# vault key. Anchored at the config home (not a session workspace) because a
+# login identity outlives any single session. Single source of truth for both
+# the profile store and the sandbox mask that hides it from confined commands.
+BROWSER_PROFILES_DIRNAME = "browser_profiles"
+
+
+def browser_profiles_dir() -> Path:
+    """The ``~/.mote/browser_profiles`` directory (durable browser-login store)."""
+    return CONFIG_ROOT / BROWSER_PROFILES_DIRNAME
+
+
 # ============================================================================
 # Workspace layout — the per-session artifact tree.
 # ----------------------------------------------------------------------------

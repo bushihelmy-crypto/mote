@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Mote">
+  <rect width="128" height="128" rx="28" fill="#1f1b18"/>
+  <circle cx="64" cy="64" r="10" fill="#e8925a"/>
+  <circle cx="64" cy="64" r="30" fill="none" stroke="#e8925a" stroke-width="3" stroke-opacity="0.55"/>
+  <circle cx="64" cy="64" r="46" fill="none" stroke="#e8925a" stroke-width="2" stroke-opacity="0.28"/>
+</svg>

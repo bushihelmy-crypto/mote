@@ -96,6 +96,11 @@ class ContextManager(ObservationSubscriber):
             live ToolExecutor (``reconstructable_tool_names()``) so the set tracks
             whatever tools are actually bound. Defaults to the empty set —
             standalone/test use folds nothing until a set is injected.
+        write_fold_names: Names (primary + aliases) routing to the Edit tool, so
+            the fold reducer can recognise a whole-file write's
+            ``new_string`` (recorded under the raw emitted name) and fold it to
+            the neutral marker alongside tool-result bodies. Derived by the Role
+            from the executor (``tool_alias_names("Edit")``). Empty by default.
         session_id: Owning session id; scopes where the spill reducer persists an
             oversized part. Empty in standalone/test use.
         store: Workspace layout owner resolving the on-disk spill location.
@@ -113,6 +118,7 @@ class ContextManager(ObservationSubscriber):
         sticky_provider=None,
         rehydrate_provider=None,
         compactable: frozenset[str] = frozenset(),
+        write_fold_names: frozenset[str] = frozenset(),
         session_id: str = "",
         store: "WorkspaceStore | None" = None,
         limit_config: "ToolResultLimitConfig | None" = None,
@@ -138,6 +144,16 @@ class ContextManager(ObservationSubscriber):
         # flag). Derived by the Role from the live executor; empty by default
         # (standalone/test use folds nothing until a set is injected).
         self._compactable = compactable
+        # Names (primary + aliases) routing to the Edit tool, so the fold reducer
+        # can recognise a whole-file-write's ``new_string`` (recorded under
+        # the RAW emitted name) and fold it to the neutral marker in the same pass
+        # as tool-result bodies. Derived by the Role from the live executor
+        # (``tool_alias_names("Edit")``); empty by default (standalone/test use
+        # folds no write args until injected). Unlike ``_compactable`` this is NOT
+        # refreshed on ToolsChangedEvent: Edit is a static built-in whose alias set
+        # is fixed at class definition, so hot tool (de)registration never changes
+        # it (and it is baked into the reducer at _build_compression time anyway).
+        self._write_fold_names = write_fold_names
         # Optional zero-arg callable returning sticky Messages to re-insert right
         # after an autocompaction summary (e.g. loaded Skill bodies from the
         # ResourceRegistry). None => nothing re-projected (standalone/test use).
@@ -190,7 +206,7 @@ class ContextManager(ObservationSubscriber):
         """
         model = self.model
         self._erase = EraseReducer(self.config, model=model)
-        self._fold = FoldReducer(self.config, model=model)
+        self._fold = FoldReducer(self.config, model=model, write_fold_names=self._write_fold_names)
         # Lossless spill of runaway single parts (message content / tool-call
         # args) to disk, leaving a ``<persisted-output>`` pointer. FREE, so the
         # pipeline's cost-sort runs it opportunistically before summarize (LLM)

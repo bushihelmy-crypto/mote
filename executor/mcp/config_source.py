@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
+from mote.common.config.config.oauth_config import OAuthProviderConfig
 from mote.common.const.paths import load_mote_json_section, mote_layered_files
 from mote.common.logs import logger
 
@@ -80,7 +81,28 @@ def _to_server_config(name: str, spec: dict) -> Optional[MCPServerConfig]:
         args=list(spec.get("args") or []),
         env=dict(spec.get("env") or {}),
         aliases=dict(spec.get("aliases") or {}),
+        oauth=_to_oauth_config(name, spec.get("oauth")),
     )
+
+
+def _to_oauth_config(name: str, raw: object) -> Optional[OAuthProviderConfig]:
+    """Adapt an optional ``oauth`` block into an :class:`OAuthProviderConfig`.
+
+    Absent => ``None`` (the server stays unauthenticated). A malformed block is
+    dropped (logged) rather than raised, so one bad ``oauth`` entry never sinks
+    the whole server — it just loads without auth, matching the loader's
+    best-effort contract.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        logger.warning(f"MCP config: server '{name}' has a non-object 'oauth' block, ignoring it.")
+        return None
+    try:
+        return OAuthProviderConfig(**raw)
+    except Exception as e:
+        logger.warning(f"MCP config: server '{name}' has an invalid 'oauth' block ({e}); loading without auth.")
+        return None
 
 
 def load_mcp_servers(cwd: Optional[Path] = None) -> List[MCPServerConfig]:

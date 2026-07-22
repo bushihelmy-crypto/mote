@@ -289,15 +289,15 @@ def test_terminal_retry_cleared_by_stream_delta():
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_groups_read_search_into_one_summary_line():
-    # A Read/Grep/Glob run coalesces into a single ``● 搜索 N · 读取 M`` line
+    # A Read/Search run coalesces into a single ``● 搜索 N · 读取 M`` line
     # (buffered until the run breaks) — the terminal now shares the Textual host's
     # collapse-read-search behaviour via the reducer.
     console = _rich_console()
     driver, _ = _terminal_pair(console)
     driver.on_unhandled(ToolCallStarted(tool_name="Read", headline="a.py", tool_use_id="t1"))
     driver.on_unhandled(ToolCallCompleted(tool_name="Read", ok=True, summary="", tool_use_id="t1"))
-    driver.on_unhandled(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2"))
-    driver.on_unhandled(ToolCallCompleted(tool_name="Grep", ok=True, summary="", tool_use_id="t2"))
+    driver.on_unhandled(ToolCallStarted(tool_name="Search", headline="foo", tool_use_id="t2"))
+    driver.on_unhandled(ToolCallCompleted(tool_name="Search", ok=True, summary="", tool_use_id="t2"))
     # A non-transparent event breaks the run and flushes the one summary line.
     driver.on_unhandled(Notice(text="done"))
     out = console.file.getvalue()

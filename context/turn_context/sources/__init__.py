@@ -8,6 +8,7 @@ Protocol; they are injected by ``Role`` rather than re-exported here.
 from mote.context.turn_context.sources.changed_files import ChangedFilesContextSource
 from mote.context.turn_context.sources.code_map import CodeMapContextSource
 from mote.context.turn_context.sources.compaction import CompactionNoticeContextSource
+from mote.context.turn_context.sources.credential_index import CredentialIndexContextSource
 from mote.context.turn_context.sources.deferred_tool_index import DeferredToolIndexContextSource
 from mote.context.turn_context.sources.fold_pressure import FoldPressureContextSource
 from mote.context.turn_context.sources.git import GitContextSource
@@ -23,6 +24,7 @@ __all__ = [
     "ChangedFilesContextSource",
     "CodeMapContextSource",
     "CompactionNoticeContextSource",
+    "CredentialIndexContextSource",
     "DeferredToolIndexContextSource",
     "FoldPressureContextSource",
     "GitContextSource",

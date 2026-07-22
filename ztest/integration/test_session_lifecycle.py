@@ -30,8 +30,8 @@ async def test_run_writes_rollout(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "a.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "x"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "x"})], "done"],
     )
 
     await role.run(with_message="make a.txt")
@@ -67,8 +67,8 @@ async def test_resume_rebuilds_history(make_role, context, tmp_path):
     target = os.path.join(str(tmp_path), "b.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "y"})], "finished"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "y"})], "finished"],
     )
     await role.run(with_message="make b.txt")
     sid = role.state.session_id
@@ -80,7 +80,7 @@ async def test_resume_rebuilds_history(make_role, context, tmp_path):
     from mote.roles import Role
     from mote.roles.role_schema import RoleSchema
 
-    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Write"]), context=context)
+    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
     revived.state.session_id = sid
 
     assert revived.resume_session() is True
@@ -103,8 +103,8 @@ async def test_fork_branches_independent_child(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "c.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "z"})], "finished"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "z"})], "finished"],
     )
     await role.run(with_message="make c.txt")
     parent_sid = role.state.session_id
@@ -135,8 +135,8 @@ async def test_resume_then_continue_running(make_role, context, tmp_path):
     one = os.path.join(str(tmp_path), "one.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": one, "content": "1"})], "first done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": one, "old_string": "", "new_string": "1"})], "first done"],
     )
     await role.run(with_message="first task")
     sid = role.state.session_id
@@ -146,8 +146,8 @@ async def test_resume_then_continue_running(make_role, context, tmp_path):
     two = os.path.join(str(tmp_path), "two.txt")
     revived = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": two, "content": "2"})], "second done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": two, "old_string": "", "new_string": "2"})], "second done"],
     )
     revived.state.session_id = sid
     assert revived.resume_session() is True
@@ -169,8 +169,8 @@ async def test_fork_child_runs_independently(make_role, tmp_path):
     p_file = os.path.join(str(tmp_path), "p.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": p_file, "content": "p"})], "parent done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": p_file, "old_string": "", "new_string": "p"})], "parent done"],
     )
     await role.run(with_message="parent task")
     parent_sid = role.state.session_id
@@ -182,7 +182,7 @@ async def test_fork_child_runs_independently(make_role, tmp_path):
     from .conftest import ScriptedLLM, ScriptedRouter
 
     c_file = os.path.join(str(tmp_path), "c.txt")
-    llm = ScriptedLLM([[("Write", {"file_path": c_file, "content": "c"})], "child done"])
+    llm = ScriptedLLM([[("Edit", {"file_path": c_file, "old_string": "", "new_string": "c"})], "child done"])
     child._components._graph.seed("router", ScriptedRouter(llm))
     child.scripted_llm = llm  # type: ignore[attr-defined]
 
@@ -199,11 +199,145 @@ async def test_fork_child_runs_independently(make_role, tmp_path):
     assert any("child task" in c for c in child_contents)
 
 
+async def test_resume_reaps_think_already_in_history(make_role, context, tmp_path):
+    """The G1 double-record guard, wired through a real resume.
+
+    A completed think whose assistant message IS already durable in the rebuilt
+    history must be reaped on resume — reinstating it would double-record that
+    assistant turn. We seed such a record into the run journal after a real run,
+    then prove ``resume_session`` (via ``_reconcile_think_journal``) drops it.
+    """
+    from mote.common.ledger import KIND_THINK
+    from mote.common.schema import ThinkResult
+    from mote.roles import Role
+    from mote.roles.role_schema import RoleSchema
+
+    role = make_role(
+        working_dir=str(tmp_path),
+        tools=["Edit"],
+        turns=[
+            [("Edit", {"file_path": os.path.join(str(tmp_path), "g.txt"), "old_string": "", "new_string": "g"})],
+            "all done",
+        ],
+    )
+    await role.run(with_message="go")
+    sid = role.state.session_id
+
+    # Pick the last assistant message the run committed to history; seed a
+    # completed think whose payload matches it exactly (so it IS present).
+    last_ai = next(m for m in reversed(role.context_manager.get()) if m.is_ai_message())
+    journal = role.executor.journal
+    assert journal is not None
+    journal.record_started("think:99", KIND_THINK, "pure", seq=99)
+    journal.record_completed("think:99", payload=ThinkResult(content=last_ai.content or "").model_dump_json())
+    assert journal.replay("think:99") is not None
+
+    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived.state.session_id = sid
+    assert revived.resume_session() is True
+
+    # The matched completed think was reaped by the resume guard.
+    assert revived.executor.journal is not None
+    assert revived.executor.journal.replay("think:99") is None
+
+
+async def test_resume_keeps_unmatched_completed_think(make_role, context, tmp_path):
+    """A completed think whose assistant message never reached history survives.
+
+    This is the reinstate candidate: a crash between the model returning and the
+    turn being recorded. The resume guard must LEAVE it so the loop can reinstate
+    it (skip the LLM) on its first think.
+    """
+    from mote.common.ledger import KIND_THINK
+    from mote.common.schema import ThinkResult
+    from mote.roles import Role
+    from mote.roles.role_schema import RoleSchema
+
+    role = make_role(
+        working_dir=str(tmp_path),
+        tools=["Edit"],
+        turns=[
+            [("Edit", {"file_path": os.path.join(str(tmp_path), "h.txt"), "old_string": "", "new_string": "h"})],
+            "all done",
+        ],
+    )
+    await role.run(with_message="go")
+    sid = role.state.session_id
+
+    journal = role.executor.journal
+    assert journal is not None
+    journal.record_started("think:99", KIND_THINK, "pure", seq=99)
+    journal.record_completed(
+        "think:99", payload=ThinkResult(content="a thought that never reached history").model_dump_json()
+    )
+
+    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived.state.session_id = sid
+    assert revived.resume_session() is True
+
+    assert revived.executor.journal is not None
+    rec = revived.executor.journal.replay("think:99")
+    assert rec is not None and rec.status == "completed"
+
+
+async def test_resume_continues_durable_timer_by_remaining_time(make_role, context, tmp_path):
+    """The G4 durable-timer resume, wired through a real Role's capability.
+
+    A bounded Sleep journals a wall-clock deadline. If a crash strikes mid-wait,
+    a fresh Role's first ``wait_interruptible`` must continue for the time
+    REMAINING to that deadline, not restart the full countdown. We seed an
+    in-flight timer whose deadline is ~100s out, then prove the resumed role's
+    capability adopts it (waits ~100s remaining, not a fresh 5s) — asserted via
+    the resolved remaining time, without actually sleeping.
+    """
+    import time as _time
+
+    from mote.common.ledger import KIND_TIMER
+    from mote.roles import Role
+    from mote.roles.role_schema import RoleSchema
+
+    role = make_role(
+        working_dir=str(tmp_path),
+        tools=["Edit"],
+        turns=[
+            [("Edit", {"file_path": os.path.join(str(tmp_path), "t.txt"), "old_string": "", "new_string": "t"})],
+            "done",
+        ],
+    )
+    await role.run(with_message="go")
+    sid = role.state.session_id
+
+    # Seed an in-flight durable timer whose deadline is ~100s in the future.
+    journal = role.executor.journal
+    assert journal is not None
+    deadline = _time.time() + 100.0
+    journal.record_started("timer:1", KIND_TIMER, "pure", seq=1, payload=repr(deadline))
+
+    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived.state.session_id = sid
+    assert revived.resume_session() is True
+
+    # The resumed capability adopts the in-flight timer's remaining time.
+    from mote.loop.durable import resume_timer
+
+    rj = revived.executor.journal
+    assert rj is not None
+    resumed = resume_timer(rj)
+    assert resumed is not None
+    step_id, resumed_deadline = resumed
+    assert step_id == "timer:1"
+    # Remaining time is close to 100s (the seeded deadline), NOT a fresh countdown.
+    assert 90.0 < (resumed_deadline - _time.time()) <= 100.0
+
+
 async def test_list_sessions_sees_run(make_role, tmp_path, redirect_sessions):
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": os.path.join(str(tmp_path), "d.txt"), "content": "d"})], "done"],
+        tools=["Edit"],
+        turns=[
+            [("Edit", {"file_path": os.path.join(str(tmp_path), "d.txt"), "old_string": "", "new_string": "d"})],
+            "done",
+        ],
     )
     await role.run(with_message="go")
 

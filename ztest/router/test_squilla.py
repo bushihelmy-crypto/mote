@@ -18,6 +18,7 @@ from mote.router.control import build_control_targets
 from mote.router.schema import RoutingRequest
 from mote.router.squilla import (
     RoutingHistoryStore,
+    SeedFloorStore,
     SquillaStrategy,
     _normalize_decisions,
     detect_complaint,
@@ -145,6 +146,117 @@ class TestRoutingHistoryStore:
         store.append("a", "R1", now=1.0)
         store.clear()
         assert store.previous_within_window("a", window=600.0, now=2.0) is None
+
+
+class TestSeedFloorStore:
+    def test_set_and_get_within_ttl(self):
+        store = SeedFloorStore(ttl_seconds=600.0)
+        store.set("s", "R2", now=100.0)
+        assert store.get_valid("s", now=200.0) == "R2"
+
+    def test_expires_after_ttl(self):
+        store = SeedFloorStore(ttl_seconds=10.0)
+        store.set("s", "R3", now=100.0)
+        assert store.get_valid("s", now=200.0) is None
+
+    def test_expiry_deletes_entry(self):
+        store = SeedFloorStore(ttl_seconds=10.0)
+        store.set("s", "R3", now=100.0)
+        store.get_valid("s", now=200.0)  # triggers eviction
+        # A fresh get (even inside a would-be window) stays None: entry gone.
+        assert store.get_valid("s", now=201.0) is None
+
+    def test_unknown_session_returns_none(self):
+        assert SeedFloorStore().get_valid("missing", now=1.0) is None
+
+    def test_clear_one_and_all(self):
+        store = SeedFloorStore()
+        store.set("a", "R1", now=1.0)
+        store.set("b", "R2", now=1.0)
+        store.clear("a")
+        assert store.get_valid("a", now=2.0) is None
+        assert store.get_valid("b", now=2.0) == "R2"
+        store.clear()
+        assert store.get_valid("b", now=2.0) is None
+
+    def test_two_stores_are_isolated(self):
+        # Seed floors are per-strategy-instance, never a process global — two
+        # stores must not share state.
+        a = SeedFloorStore()
+        b = SeedFloorStore()
+        a.set("s", "R3", now=1.0)
+        assert a.get_valid("s", now=2.0) == "R3"
+        assert b.get_valid("s", now=2.0) is None
+
+
+class TestSeedSession:
+    @pytest.mark.asyncio
+    async def test_records_raw_route_class(self, squilla):
+        seeded = await squilla.seed_session("sess", "redesign the whole architecture everywhere")
+        assert seeded in ("R0", "R1", "R2", "R3")
+        assert squilla.seed_floors.get_valid("sess") == seeded
+
+    @pytest.mark.asyncio
+    async def test_does_not_append_history(self, squilla):
+        # seed_session must not pollute the anti-downgrade baseline of the real
+        # first turn — it appends nothing to history.
+        await squilla.seed_session("sess", "some complex system architecture task")
+        assert squilla.history.previous_within_window("sess", window=600.0) is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_run_finalize(self, squilla, monkeypatch):
+        # seed_session runs only the prediction segment, never _finalize.
+        called = {"n": 0}
+        orig = squilla._finalize
+
+        def spy(*a, **k):
+            called["n"] += 1
+            return orig(*a, **k)
+
+        monkeypatch.setattr(squilla, "_finalize", spy)
+        await squilla.seed_session("sess", "hello")
+        assert called["n"] == 0
+
+
+class TestSeedFloorInFinalize:
+    @pytest.mark.asyncio
+    async def test_seed_lifts_final_when_higher(self, squilla, cards):
+        # A trivial prompt routes low; a live R3 seed lifts the final tier up.
+        squilla.seed_floors.set("sess", "R3")
+        d = await squilla.select(cards, RoutingRequest(text="好的，谢谢", session_key="sess"), default="mid")
+        assert d.tier == "R3"
+        assert any("seed floor" in r for r in d.reasons)
+
+    @pytest.mark.asyncio
+    async def test_seed_no_op_when_not_higher(self, squilla, cards):
+        # A low seed never caps a naturally-higher tier (raise-only floor).
+        prompt = "请重新设计整个系统架构，迁移生产数据库，这是不可逆的高风险操作，需要跨所有模块进行重构并评估安全影响。"
+        squilla.seed_floors.set("sess", "R0")
+        d = await squilla.select(cards, RoutingRequest(text=prompt, session_key="sess"), default="mid")
+        assert d.tier in ("R2", "R3")
+        assert not any("seed floor" in r for r in d.reasons)
+
+    @pytest.mark.asyncio
+    async def test_no_seed_leaves_routing_unchanged(self, squilla, cards):
+        d = await squilla.select(cards, RoutingRequest(text="好的，谢谢", session_key="sess"), default="mid")
+        assert not any("seed floor" in r for r in d.reasons)
+
+    @pytest.mark.asyncio
+    async def test_confidence_gate_cannot_pull_below_seed(self, squilla, cards):
+        # A low-confidence trivial prompt hits the confidence gate (→ default R1),
+        # but the seed floor (placed AFTER the gate) still lifts the final to R3.
+        squilla.seed_floors.set("sess", "R3")
+        d = await squilla.select(cards, RoutingRequest(text="ok", session_key="sess"), default="mid")
+        assert route_index(d.tier) >= route_index("R3")
+
+    @pytest.mark.asyncio
+    async def test_seed_never_caps_ml_escalation(self, squilla, cards):
+        # The seed is a floor, not a ceiling: a strong caller flag escalates
+        # above a modest seed.
+        squilla.seed_floors.set("sess", "R1")
+        req = RoutingRequest(text="好的", flags={"high_risk"}, session_key="sess")
+        d = await squilla.select(cards, req, default="mid")
+        assert route_index(d.tier) >= route_index("R2")
 
 
 class TestSquillaSelectFallback:

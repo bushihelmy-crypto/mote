@@ -21,12 +21,61 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from mote.common.net.host_match import matches_pattern
 
 # Which OS-level isolation backend to use. ``auto`` probes the host
 # (``shutil.which("bwrap")`` + platform); ``bwrap`` forces bubblewrap; ``none``
 # disables OS-level isolation (the runtime becomes a passthrough).
 SandboxBackendKind = Literal["auto", "bwrap", "none"]
+
+# How to shape the injected credential into an HTTP request header:
+#   * ``bearer`` — ``Authorization: Bearer <secret>`` (OAuth / GitHub PAT).
+#   * ``basic``  — ``Authorization: Basic base64(<username>:<secret>)``.
+#   * ``header`` — a raw ``<header>: <secret>`` (e.g. ``X-Api-Key``).
+CredentialScheme = Literal["bearer", "basic", "header"]
+
+
+class CredentialConfig(BaseModel):
+    """Per-domain credential-brokering rule for the sandbox egress proxy.
+
+    Injects an authentication header at the trusted egress proxy so a sandboxed
+    tool (``git`` / ``curl`` / ``wget``) reaches an authenticated endpoint while
+    the secret **never enters the sandbox process** — it is referenced *by key*
+    into the :class:`~mote.common.secrets.store.SecretStore` and resolved lazily
+    in the app runtime. The model never authors the value.
+
+    Every rule ``domains`` entry must also appear in
+    :attr:`SandboxRuntimeConfig.allowed_domains` (validated fail-closed) — a
+    credential is meaningless for a host the proxy would refuse anyway.
+    """
+
+    domains: list[str] = Field(
+        description=(
+            "Hosts this credential applies to (glob: '*.x' / '**.x' / exact — "
+            "reuses the NetworkPolicy matcher). Must be a subset of the runtime's "
+            "allowed_domains."
+        ),
+    )
+    secret: str = Field(
+        description=(
+            "KEY into the SecretStore (NOT the value) — the named secret whose "
+            "plaintext value the proxy injects. Kept out of config.yaml."
+        ),
+    )
+    scheme: CredentialScheme = Field(
+        default="bearer",
+        description="Header shape: bearer | basic | header.",
+    )
+    header: str = Field(
+        default="Authorization",
+        description="Header name (used by 'header' and 'bearer'; default Authorization).",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Username for 'basic' auth (base64(username:secret)); ignored otherwise.",
+    )
 
 
 class SandboxRuntimeConfig(BaseModel):
@@ -126,9 +175,42 @@ class SandboxRuntimeConfig(BaseModel):
         ),
     )
 
+    credentials: list[CredentialConfig] = Field(
+        default_factory=list,
+        description=(
+            "Per-domain credential-brokering rules. When non-empty the egress "
+            "proxy injects the referenced secret's auth header for matching hosts "
+            "(HTTP inline; HTTPS via per-domain MITM). Empty = no brokering "
+            "(the proxy behaves exactly as before). Each rule's domains must be a "
+            "subset of allowed_domains."
+        ),
+    )
+
     def network_enforced(self) -> bool:
         """True when the local network proxy should run (``network == 'proxy'``)."""
         return self.network == "proxy"
 
+    @model_validator(mode="after")
+    def _validate_credential_domains(self) -> "SandboxRuntimeConfig":
+        """Fail closed: every credential domain must match an allowed domain.
 
-__all__ = ["SandboxRuntimeConfig", "SandboxBackendKind"]
+        A credentialed host the proxy would refuse anyway is a misconfiguration
+        that could mask an intended-but-unlisted domain — reject at config time.
+        Reuses the shared :mod:`mote.common.net.host_match` glob matcher so this
+        subset check is the exact matching the proxy uses (one source of truth,
+        no upward dependency on the sandbox runtime package).
+        """
+        if not self.credentials:
+            return self
+
+        for rule in self.credentials:
+            for domain in rule.domains:
+                if not any(matches_pattern(domain, allowed) for allowed in self.allowed_domains):
+                    raise ValueError(
+                        f"credential domain {domain!r} is not covered by allowed_domains "
+                        f"{self.allowed_domains!r} — add it to allowed_domains or remove the rule"
+                    )
+        return self
+
+
+__all__ = ["SandboxRuntimeConfig", "SandboxBackendKind", "CredentialConfig", "CredentialScheme"]

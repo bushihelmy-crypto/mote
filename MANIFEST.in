@@ -4,6 +4,10 @@ include NOTICE
 include README.md
 include ruff.toml
 
+# First-run bootstrap reads this to seed ~/.mote/config.yaml
+# (see common/config/bootstrap.py). It MUST ship in the package.
+include config.example.yaml
+
 # Third-party license texts (see NOTICE for attributions).
 recursive-include zthird_party_licenses *.txt
 

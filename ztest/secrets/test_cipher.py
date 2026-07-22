@@ -70,6 +70,7 @@ class TestBuildCipher:
 
         cfg = SimpleNamespace(cipher="aes", key_path=str(tmp_path / "vault.key"))
         cipher = build_cipher(cfg)
+        assert not (tmp_path / "vault.key").exists()
         assert cipher.decrypt(cipher.encrypt(b"x")) == b"x"
 
     def test_unknown_strategy_fails_loud(self):

@@ -12,11 +12,14 @@ the router.
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from mote.common.config.config.llm_config import LLMConfig
+from mote.common.events import breaker_bus_hook
 from mote.common.exception import ModelNotFoundError
 from mote.common.logs import log_class, logger
+from mote.common.resilience import get_health_registry
+from mote.router.llm._validators import default_response_validator
 from mote.router.llm.base_llm import BaseLLM
 from mote.router.llm.context import Context
 from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
@@ -76,6 +79,15 @@ class LLMRouter:
 
         self.context: "Context" = context or Context()
         self.strategy: RoutingStrategy = strategy or RuleBasedStrategy()
+        # Whether per-step routing is enabled at all. The single per-role
+        # construction point (``_build_router``) turns this ON only when the
+        # agent's configured ``strategy`` is concrete ("rule"/"squilla"); a
+        # ``None`` strategy leaves it off so the role runs the fixed
+        # ``models.default``. Defaults to False so direct/standalone construction
+        # (tests, tools, the module-level ``LLM()`` helper) stays inert —
+        # preserving the zero-behavior-change contract; only an explicit strategy
+        # (via ``_build_router`` or ``set_strategy``-side wiring) enables it.
+        self.routing_enabled: bool = False
         self.task_map: dict[str, str] = dict(task_map or {})
         self._cards: dict[str, ModelCard] = {}
         self._instances: dict[tuple[str, LLMVariant], BaseLLM] = {}
@@ -85,6 +97,13 @@ class LLMRouter:
         # the recovery loop can shrink+re-issue an overflowing wire payload. None
         # (standalone/test use) => COMPRESS degrades to a re-raise.
         self.context_reducer: Optional["ContextReducer"] = None
+        # RESPONSE-based FALLBACK (③): a ``(result) -> Optional[str]`` validator
+        # stamped onto every built/routed LLM. Checked after a successful send;
+        # a non-empty rejection reason sheds to another provider via FALLBACK.
+        # Defaults to the conservative empty-response detector; a caller may set a
+        # richer one, or ``None`` to disable. Orthogonal to variant (unlike the
+        # COMPRESS reducer), so it is stamped uniformly.
+        self.response_validator: Optional[Callable[[Any], Optional[str]]] = default_response_validator
         self._auto_register_from_config()
 
     # ------------------------------------------------------------------ setup
@@ -177,12 +196,28 @@ class LLMRouter:
         # Wire FALLBACK recovery: on a deterministic refusal (e.g. content policy),
         # the provider's recovery loop fails over to the next registered model.
         instance._fallback_supplier = self.make_fallback_supplier(exclude=name)
+        self._wire_health_registry(instance)
+        # Wire RESPONSE-based FALLBACK: reject an unusable HTTP-200 response and
+        # shed to another provider. Orthogonal to variant → stamped uniformly.
+        instance._response_validator = self.response_validator
         # Wire COMPRESS recovery: shrink+re-issue an overflowing wire payload.
         # Withheld for the COMPRESSION variant (see docstring) so summarize's
         # inner aask cannot re-enter _compress.
         instance.context_reducer = None if variant is LLMVariant.COMPRESSION else self.context_reducer
         self._instances[cache_key] = instance
         return instance
+
+    def _wire_health_registry(self, instance: BaseLLM) -> None:
+        """Hand the provider the shared per-resource health registry (circuit-breaking).
+
+        Its call chokepoint then gates on (and records to) the resource's breaker.
+        The bus-mirror hook is installed on the shared registry so a breaker
+        tripping/recovering emits a BreakerStateChangeEvent; set here (before any
+        call creates a breaker) so every breaker inherits it.
+        """
+        registry = get_health_registry()
+        registry.set_transition_hook(breaker_bus_hook)
+        instance._health_registry = registry
 
     def make_fallback_supplier(self, *, exclude: Optional[str] = None) -> Callable[[], Optional[BaseLLM]]:
         """Build a stateful supplier yielding each registered model once (FALLBACK recovery).
@@ -222,6 +257,8 @@ class LLMRouter:
             # routes per-request through here with ``role.config.models.default``.
             instance = self.context.llm_with_cost_manager_from_llm_config(llm_config)
             instance.context_reducer = self.context_reducer
+            instance._response_validator = self.response_validator
+            self._wire_health_registry(instance)
             return instance
         if name is not None:
             return self._build(name)

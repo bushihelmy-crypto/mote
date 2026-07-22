@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from mote.common.logs import logger
 from mote.common.schema import UserMessage
+from mote.common.text.hashing import content_hash
 from mote.roles.role_state import RoleState
+from mote.session.hunk_ledger import EXTERNAL
 
 if TYPE_CHECKING:
     from mote.common.schema.permission_types import ApprovalChoice, ApprovalRequest
@@ -160,6 +164,80 @@ class RoleCapabilities:
         Best-effort — never raises into the tool.
         """
         self._role.file_snapshot_recorder.snapshot(full_path, tool=tool)
+
+    def record_file_baseline(self, full_path: str) -> None:
+        """Acknowledge a file's current on-disk content as mote's known baseline.
+
+        Called after every agent Write/Edit (via the file tools'
+        ``_refresh_read_state``): the just-written content becomes the baseline
+        the read-before-write guard diffs against when it later detects an
+        *external* modification, so the external delta is attributed cleanly
+        without mis-crediting the agent's own edits. The content is blobbed into
+        the session's content-addressed store under its digest (so the guard can
+        fetch it back) and the digest is recorded in the Role's file-baseline
+        state. No-op when hunk recording is disabled; best-effort (never raises).
+        """
+        if not self._role.role_schema.record_hunks:
+            return
+        try:
+            content = Path(full_path).read_bytes()
+        except OSError:
+            return  # missing/unreadable (e.g. a delete) — nothing to baseline
+        try:
+            digest = self._role.file_snapshot_recorder.blobs.put(content)
+            self._role._state_ctl.record_file_baseline(full_path, digest)
+        except Exception as exc:  # noqa: BLE001 — baseline capture must not break a write
+            logger.warning(f"record_file_baseline: failed for '{full_path}': {exc}")
+
+    def attribute_external_change(self, full_path: str) -> None:
+        """Attribute an out-of-band file modification as ``external`` hunks.
+
+        Called by the read-before-write guard the instant it detects that a file
+        changed on disk since mote last knew it (mtime mismatch), *before* the
+        guard aborts the write. Diffs the current on-disk content against the
+        recorded baseline (the content mote last wrote/knew; empty when mote only
+        ever read the file, so the whole current content reads as external), and
+        hands the delta to :meth:`HunkLedger.record_delta`, which splits it into
+        ``source=external`` hunks — stamped with the live turn index and no
+        tool-call id (there is no agent tool call). Then re-baselines to the
+        current content so mote acknowledges what it now sees.
+
+        No-op when hunk recording is disabled or the file is unreadable;
+        best-effort (never raises into the guard).
+        """
+        if not self._role.role_schema.record_hunks:
+            return
+        ledger = self._role.hunk_ledger
+        if ledger is None:
+            return
+        try:
+            current = Path(full_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        blobs = self._role.file_snapshot_recorder.blobs
+        baseline_digest = self._role._state_ctl.get_file_baseline(full_path)
+        baseline = ""
+        if baseline_digest:
+            blob = blobs.get(baseline_digest)
+            if blob is not None:
+                baseline = blob.decode("utf-8", errors="replace")
+        # A stable, content-derived id base: an external edit has no tool-call id,
+        # and re-detecting the same unchanged external state must fold onto the
+        # same records rather than duplicate them.
+        base = content_hash(f"external|{full_path}|{content_hash(baseline)}|{content_hash(current)}")
+        ledger.record_delta(
+            blobs,
+            path=full_path,
+            old=baseline,
+            new=current,
+            source=EXTERNAL,
+            turn_index=self._role.current_turn_index(),
+            id_base=base,
+        )
+        # Acknowledge the now-seen content as the baseline going forward (also
+        # preserves it in the blob store), so a follow-up guard fire before any
+        # further change is a content-identical no-op.
+        self.record_file_baseline(full_path)
 
     def register_resource(self, *, id: str, kind: str, content: str) -> None:
         """Register a loaded capability body for post-compaction re-projection.
@@ -305,13 +383,22 @@ class RoleCapabilities:
     # Loop coordination
     # ------------------------------------------------------------------
 
-    async def wait_interruptible(self) -> float:
-        """Block until an event wakes the agent — no duration, event-driven only.
+    async def wait_interruptible(self, duration: Optional[float] = None) -> float:
+        """Block until an event wakes the agent, optionally bounded by a deadline.
 
         Wake conditions: a new message arrives in the message buffer (user
-        input, background-task notification, etc.) or a background task
-        completes. Owns the wait coordination so the Sleep tool stays a thin
-        trigger and never touches RoleState, the msg_buffer, or the bg pool.
+        input, background-task notification, etc.), a background task completes,
+        or — when *duration* is given — the wall-clock deadline elapses. Owns the
+        wait coordination so the Sleep tool stays a thin trigger and never
+        touches RoleState, the msg_buffer, or the bg pool.
+
+        When *duration* is a positive number the wait is a **durable timer**: its
+        wall-clock deadline is journaled (via the executor's run journal) so a
+        crash-resume continues waiting the *remaining* time instead of restarting
+        the countdown. A resume adopts a still-in-flight timer's deadline in
+        preference to *duration*, and returns at once if it has already passed. A
+        ``None`` (or non-positive) *duration* keeps the historical indefinite,
+        purely event-driven wait — no timer is journaled.
 
         Returns:
             slept_seconds — elapsed wait time rounded to 0.1s.
@@ -320,11 +407,14 @@ class RoleCapabilities:
         msg_buffer = role.state.msg_buffer
         bg_pool = role._peek_bg_pool()
 
+        remaining, step_id = self._durable_timer_setup(duration)
+
         start = time.time()
         waiters: set[asyncio.Task] = {asyncio.create_task(msg_buffer.wait_for_message())}
-
         if bg_pool is not None:
             waiters.add(asyncio.create_task(bg_pool.wait_for_completion()))
+        if remaining is not None:
+            waiters.add(asyncio.create_task(asyncio.sleep(remaining)))
 
         try:
             await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
@@ -332,7 +422,53 @@ class RoleCapabilities:
             for t in waiters:
                 t.cancel()
 
+        if step_id is not None:
+            self._durable_timer_complete(step_id)
+
         return round(time.time() - start, 1)
+
+    def _durable_timer_setup(self, duration: Optional[float]) -> tuple[Optional[float], Optional[str]]:
+        """Resolve the wait's remaining time + journal a durable timer if bounded.
+
+        Returns ``(remaining, step_id)``: ``remaining`` is the seconds to wait
+        (``None`` = indefinite, event-driven only); ``step_id`` is the journaled
+        timer's id to complete afterwards (``None`` when unbounded or unjournaled).
+
+        A resume adopts a still-in-flight timer's deadline (waiting only the time
+        left, clamped to 0 if already past) ahead of *duration*; otherwise a
+        positive *duration* opens a fresh journaled timer. Journaling is
+        best-effort — if the journal is unavailable the wait still runs bounded,
+        just without crash-resumability.
+        """
+        from mote.loop.durable import begin_timer, resume_timer
+
+        journal = self._run_journal()
+        if journal is not None:
+            resumed = resume_timer(journal)
+            if resumed is not None:
+                step_id, deadline = resumed
+                return max(0.0, deadline - time.time()), step_id
+        if duration is None or duration <= 0:
+            return None, None
+        if journal is None:
+            return duration, None
+        step_id, _deadline = begin_timer(journal, duration)
+        return duration, step_id
+
+    def _durable_timer_complete(self, step_id: str) -> None:
+        """Record the durable timer's terminal (best-effort)."""
+        from mote.loop.durable import complete_timer
+
+        journal = self._run_journal()
+        if journal is not None:
+            complete_timer(journal, step_id)
+
+    def _run_journal(self):
+        """The executor's shared run journal, or ``None`` when durability is off."""
+        try:
+            return self._role.executor.journal
+        except Exception:
+            return None
 
     async def end_session(self) -> str:
         """End the current session.

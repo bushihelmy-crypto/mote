@@ -50,6 +50,15 @@ _LAUNCH_TIMEOUT_S = 60.0
 # dropping the middle here.
 TEXT_MAX_CHARS = 10_000_000
 
+# Cross-frame snapshot bounds. A page can nest arbitrarily many iframes (ad
+# networks routinely inject dozens, several levels deep); walking every one is
+# unbounded work + token blowup. We cap total frames traversed and nesting
+# depth — the interactive login/consent forms that motivated iframe support sit
+# one or two levels down, so a shallow cap keeps the common case while refusing
+# to chase ad/tracker frame trees. Matches browser-use's ``max_iframe_depth``.
+_MAX_FRAMES = 24
+_MAX_FRAME_DEPTH = 5
+
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).
 _MSG_START_FAILED = "Error: web browser failed to start: {error}"
@@ -244,13 +253,41 @@ _IMPLICIT_ROLE = {
 #     ``data-agent-ref`` across re-snapshots; only genuinely new elements get a
 #     fresh index counted up from the current ``maxRef`` (so the ``*`` is-new
 #     marker in the serializer is meaningful).
+#   * **visibility is two distinct questions** (see ``isRendered`` /
+#     ``isActionable`` below): prose text uses strict *rendered* visibility
+#     (opacity/size count), while genuine controls use Playwright's
+#     *actionability* model which IGNORES opacity — so transparent custom-styled
+#     controls (the classic "I agree to terms" checkbox whose real ``<input>`` is
+#     drawn ``opacity:0``) still surface with a clickable ref. Only
+#     ``display:none`` prunes a whole subtree; every other hidden state can be
+#     overridden/bypassed by a descendant, so recursion continues past it.
+#   * **the walk follows the FLATTENED (composed) tree** (see ``childrenOf``):
+#     it descends OPEN shadow roots and resolves ``<slot>`` to its assigned
+#     light-DOM nodes, so Web-Component login forms are not invisible. Playwright's
+#     CSS engine already pierces open shadow DOM, so a ``data-agent-ref`` stamped
+#     inside a shadow tree is directly clickable via ``wait_for_selector`` — no
+#     click-path change is needed (the blocker hit-test is made shadow-aware in
+#     ``_BLOCKER_JS``). CLOSED shadow roots are inaccessible to any script by
+#     design.
+#   * **cross-document ``<iframe>`` content IS traversed** (see
+#     ``_collect_frames`` / ``snapshot``): the Same-Origin Policy makes a
+#     cross-origin iframe's document unreadable from the top frame, so ``_TREE_JS``
+#     cannot inline it. Instead the snapshot walks Playwright's ``page.frames``
+#     (which unifies same- AND cross-origin frames into one Frame list, each with
+#     a uniform ``evaluate``/locator API — Playwright hides the separate-CDP-target
+#     juggling a raw-CDP client like browser-use must hand-roll). Each frame runs
+#     the SAME ``_TREE_JS`` seeded with a session-wide monotonic ``refSeed`` so the
+#     model sees ONE flat ``[N]`` namespace across all frames; a Python-side
+#     ``_ref_frame`` map records which Frame owns each ref so ``click``/``type``/
+#     ``wait`` resolve it against the right frame. Bounded by ``_MAX_FRAMES`` /
+#     ``_MAX_FRAME_DEPTH`` to refuse ad/tracker frame-tree blowup.
 #
 # Returns ``{nodes: [...], viewportHeight, maxRef}`` where each node is either
 # ``{kind:"text", depth, text}`` or
 # ``{kind:"element", depth, ref, tag, role, type, name, value, placeholder,
 #    href, checked, inViewport, bbox}``.
 _TREE_JS = r"""
-() => {
+(refSeed) => {
   const INTERACTIVE_TAGS = new Set([
     'a','button','input','select','textarea','details','summary','option','label'
   ]);
@@ -264,13 +301,46 @@ _TREE_JS = r"""
   const SKIP_TAGS = new Set(['script','style','noscript','template','head','title']);
   const TEXT_CAP = 200;
 
-  function isVisible(el) {
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') return false;
-    if (parseFloat(style.opacity || '1') === 0) return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return false;
-    return true;
+  // The snapshot answers TWO different questions and therefore needs TWO
+  // visibility predicates — conflating them is what silently dropped functional
+  // login controls (e.g. custom "I agree to terms" checkboxes):
+  //
+  //   * isRendered  — "would a HUMAN see this painted?"  Used for prose text and
+  //     non-interactive containers. Strict: display:none, visibility:hidden/
+  //     collapse, opacity:0, or a zero-size box all mean not-rendered.
+  //
+  //   * isActionable — "could the agent INTERACT with this?"  Used for genuine
+  //     controls. Deliberately aligned with Playwright's own actionability
+  //     model, which IGNORES opacity: the ubiquitous custom-styled control
+  //     pattern draws the real <input>/<button> transparent (opacity:0) beneath
+  //     a decorative visual, yet it is fully clickable. Only display:none,
+  //     visibility:hidden/collapse, or a zero-size box truly remove interaction.
+  //
+  // The only difference between the two is the opacity test — but naming both
+  // makes the intent (read vs. act) explicit and self-documenting.
+  function displayNone(el) {
+    return window.getComputedStyle(el).display === 'none';
+  }
+
+  function hiddenVisibility(el) {
+    const v = window.getComputedStyle(el).visibility;
+    return v === 'hidden' || v === 'collapse';
+  }
+
+  function zeroBox(el) {
+    const r = el.getBoundingClientRect();
+    return r.width === 0 && r.height === 0;
+  }
+
+  function isRendered(el) {
+    if (displayNone(el) || hiddenVisibility(el)) return false;
+    if (parseFloat(window.getComputedStyle(el).opacity || '1') === 0) return false;
+    return !zeroBox(el);
+  }
+
+  function isActionable(el) {
+    if (displayNone(el) || hiddenVisibility(el)) return false;
+    return !zeroBox(el);  // opacity is intentionally ignored (Playwright does too)
   }
 
   function isInteractive(el) {
@@ -291,6 +361,30 @@ _TREE_JS = r"""
     try {
       if (window.getComputedStyle(el).cursor === 'pointer') return true;
     } catch (e) {}
+    return false;
+  }
+
+  // A node with an INDEPENDENT strong interactive signal — a genuine control
+  // (real interactive tag, explicit ARIA role, own inline handler, or
+  // contentEditable) as opposed to weak/ambient interactivity inherited from a
+  // clickable wrapper (cursor:pointer) or a stray tabindex. Strong controls are
+  // never containment-collapsed as "decorative", so a real button/link nested
+  // inside a clickable wrapper still gets its own [ref] to act on. Without this,
+  // e.g. a "获取验证码" (get SMS code) button wrapped in a cursor:pointer div
+  // whose innerText contains the button's label would be dropped entirely.
+  function strongInteractive(el) {
+    const tag = el.tagName.toLowerCase();
+    if (INTERACTIVE_TAGS.has(tag)) {
+      if (tag === 'a' && !el.getAttribute('href') && !el.onclick) {
+        // bare <a> without href / handler is weak; fall through
+      } else {
+        return true;
+      }
+    }
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (role && INTERACTIVE_ROLES.has(role)) return true;
+    for (const a of EVENT_ATTRS) { if (el.hasAttribute(a)) return true; }
+    if (el.isContentEditable) return true;
     return false;
   }
 
@@ -334,12 +428,46 @@ _TREE_JS = r"""
            child.right <= anc.right + 1 && child.bottom <= anc.bottom + 1;
   }
 
+  // Flattened-tree children — the composed tree a user actually sees, crossing
+  // Web-Component boundaries so shadow-DOM login forms are not invisible:
+  //   * a shadow HOST (open shadow root) exposes its SHADOW tree, not its light
+  //     children (light children are only rendered where a <slot> places them);
+  //   * a <slot> exposes its assigned (light-DOM) nodes, falling back to its
+  //     default content when nothing is slotted;
+  //   * everything else exposes its ordinary childNodes.
+  // Closed shadow roots (attachShadow({mode:'closed'})) return null shadowRoot
+  // and are inaccessible to any script by design — a hard browser boundary.
+  function childrenOf(node) {
+    if (node.nodeType === 1) {
+      const sr = node.shadowRoot;
+      if (sr) return sr.childNodes;
+      if (node.tagName.toLowerCase() === 'slot' &&
+          typeof node.assignedNodes === 'function') {
+        const assigned = node.assignedNodes({ flatten: true });
+        if (assigned && assigned.length) return assigned;
+      }
+    }
+    return node.childNodes;
+  }
+
   // Stable numbering: keep an element's existing ref, else mint the next one.
-  let maxRef = 0;
-  document.querySelectorAll('[data-agent-ref]').forEach((e) => {
-    const v = parseInt(e.getAttribute('data-agent-ref'), 10);
-    if (!isNaN(v) && v > maxRef) maxRef = v;
-  });
+  // The scan must pierce shadow roots too, or a ref stamped inside a shadow tree
+  // would not raise maxRef and a new light-DOM element could be minted the SAME
+  // number on the next snapshot — a silent ref collision breaking click/type.
+  //
+  // ``refSeed`` is the caller's cross-frame high-water mark: this frame's refs
+  // are minted strictly ABOVE it so numbers never collide with another frame's
+  // (each iframe is a separate document with its own data-agent-ref attributes,
+  // which would otherwise all restart at 1). scanRefs can only RAISE maxRef, so
+  // a frame's own previously-stamped refs are preserved across re-snapshots.
+  let maxRef = refSeed || 0;
+  (function scanRefs(root) {
+    root.querySelectorAll('*').forEach((e) => {
+      const a = e.getAttribute && e.getAttribute('data-agent-ref');
+      if (a) { const v = parseInt(a, 10); if (!isNaN(v) && v > maxRef) maxRef = v; }
+      if (e.shadowRoot) scanRefs(e.shadowRoot);
+    });
+  })(document);
   function stamp(el) {
     let ref = el.getAttribute('data-agent-ref');
     if (ref === null || ref === '') {
@@ -354,12 +482,28 @@ _TREE_JS = r"""
   const vw = window.innerWidth || 0;
   const nodes = [];
 
-  // DFS. ``anc`` = the nearest emitted interactive-element info {el,name,rect}
-  // (or null): while inside one, text is folded into its name (not re-emitted)
-  // and nested interactive children may be containment-collapsed.
-  function walk(node, depth, anc) {
+  // DFS. Parameters:
+  //   ``anc``          — nearest emitted interactive-element info {el,name,rect}
+  //                      (or null): while inside one, text is folded into its
+  //                      name (not re-emitted) and nested interactive children
+  //                      may be containment-collapsed.
+  //   ``proseVisible`` — whether the ancestor chain is RENDERED for reading, so
+  //                      text nodes under a hidden wrapper (opacity:0 /
+  //                      visibility:hidden / zero-size) are not emitted as prose.
+  //                      Controls are judged independently (isActionable), so an
+  //                      actionable control under a non-rendered wrapper is still
+  //                      discovered — we only gate PROSE on this flag.
+  //
+  // Subtree pruning: ONLY ``display:none`` (and SKIP_TAGS) prune the whole
+  // subtree — that is the one state that definitively removes every descendant
+  // from layout. Every other "hidden" state can be overridden or bypassed by a
+  // descendant (a visibility:visible child under a visibility:hidden parent, an
+  // actionable control under an opacity:0 wrapper, an overflowing child of a
+  // zero-size box), so we must keep recursing and judge each node on its own
+  // computed style.
+  function walk(node, depth, anc, proseVisible) {
     if (node.nodeType === 3) {  // text node
-      if (anc) return;  // folded into the ancestor element's name
+      if (anc || !proseVisible) return;  // folded into ancestor, or not readable
       const t = cleanText(node.nodeValue || '');
       if (t.length > 1) {
         nodes.push({ kind: 'text', depth: depth, text: t.slice(0, TEXT_CAP) });
@@ -369,16 +513,28 @@ _TREE_JS = r"""
     if (node.nodeType !== 1) return;  // comments, etc.
     const tag = node.tagName.toLowerCase();
     if (SKIP_TAGS.has(tag)) return;
-    if (!isVisible(node)) return;  // skip element + its whole subtree
+    if (displayNone(node)) return;  // sole subtree-pruning condition
 
-    if (isInteractive(node)) {
+    // A genuine control is judged by ACTIONABILITY (opacity ignored, matching
+    // Playwright) so transparent custom-styled controls survive; everything else
+    // is judged by strict RENDERED visibility. isInteractive is a superset of
+    // strongInteractive (it also flags weak cursor:pointer / tabindex signals),
+    // so weak/ambient clickables still require full rendered visibility and
+    // never re-introduce opacity:0 decorative noise.
+    const strong = strongInteractive(node);
+    const showable = strong ? isActionable(node) : isRendered(node);
+
+    if (showable && isInteractive(node)) {
       const name = accessibleName(node);
       const rect = rectOf(node);
       if (anc && contained(rect, anc.rect) &&
-          (name === '' || anc.name.indexOf(name) !== -1)) {
+          (name === '' || anc.name.indexOf(name) !== -1) &&
+          !strong) {
         // Decorative nested clickable (icon in a button, span in a link): do
         // not emit, but keep recursing at the same depth under the ancestor.
-        for (const child of node.childNodes) walk(child, depth, anc);
+        // Exempt genuine controls (strongInteractive) — a real button/link
+        // inside a clickable wrapper is a distinct action, not decoration.
+        for (const child of childrenOf(node)) walk(child, depth, anc, proseVisible);
         return;
       }
       const ref = stamp(node);
@@ -401,18 +557,22 @@ _TREE_JS = r"""
                Math.round(rect.width), Math.round(rect.height)],
       });
       const childAnc = { el: node, name: name, rect: rect };
-      for (const child of node.childNodes) walk(child, depth + 1, childAnc);
+      for (const child of childrenOf(node)) walk(child, depth + 1, childAnc, proseVisible);
       return;
     }
 
-    // Non-interactive wrapper: emit nothing, recurse children at the SAME depth
-    // so indentation tracks semantic (interactive) nesting, not raw DOM depth.
-    for (const child of node.childNodes) walk(child, depth, anc);
+    // Not emitted (non-interactive wrapper, or a hidden/non-actionable control):
+    // recurse children at the SAME depth so indentation tracks semantic
+    // (interactive) nesting, not raw DOM depth. Prose stays visible only while
+    // this node is itself rendered — so text under a hidden wrapper is dropped,
+    // yet actionable descendants beneath it remain discoverable.
+    const childProse = proseVisible && isRendered(node);
+    for (const child of childrenOf(node)) walk(child, depth, anc, childProse);
   }
 
   const root = document.body;
   if (root) {
-    for (const child of root.childNodes) walk(child, 0, null);
+    for (const child of childrenOf(root)) walk(child, 0, null, true);
   }
   return { nodes: nodes, viewportHeight: vh, maxRef: maxRef };
 }
@@ -432,11 +592,34 @@ _BLOCKER_JS = r"""
   if (rect.width === 0 && rect.height === 0) return null;
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
-  let hit = document.elementFromPoint(x, y);
+  // Shadow-aware hit test: document.elementFromPoint RETARGETS to the shadow
+  // host for elements inside an open shadow root, so a shadow-DOM control would
+  // otherwise be reported as "covered" by its own host. Descend shadow roots to
+  // the real deep target, and walk ancestry across shadow boundaries (via the
+  // root node's host) so host/descendant relationships resolve correctly.
+  function deepHit(px, py) {
+    let e = document.elementFromPoint(px, py);
+    while (e && e.shadowRoot) {
+      const inner = e.shadowRoot.elementFromPoint(px, py);
+      if (!inner || inner === e) break;
+      e = inner;
+    }
+    return e;
+  }
+  function stepUp(n) {
+    if (n.parentElement) return n.parentElement;
+    const r = n.getRootNode && n.getRootNode();
+    return (r && r.host) || null;  // cross the shadow boundary to the host
+  }
+  function flatContains(a, b) {  // does a contain b in the flattened tree?
+    for (let n = b; n; n = stepUp(n)) { if (n === a) return true; }
+    return false;
+  }
+  let hit = deepHit(x, y);
   if (!hit) return null;  // off-screen; click() will scroll it in
   if (hit === el) return null;
-  for (let n = hit; n; n = n.parentElement) { if (n === el) return null; }
-  for (let n = el; n; n = n.parentElement) { if (n === hit) return null; }
+  if (flatContains(el, hit)) return null;  // hit is a descendant of the target
+  if (flatContains(hit, el)) return null;  // hit is an ancestor of the target
   const lab = hit.closest && hit.closest('label');
   if (lab && (lab.control === el || lab.contains(el))) return null;
   let desc = hit.tagName.toLowerCase();
@@ -725,6 +908,8 @@ class BrowserSession:
         stealth: bool = False,
         browser_locale: str = "en",
         proxy: str = "",
+        client_certs: Optional[List[Dict[str, Any]]] = None,
+        cdp_endpoint: str = "",
     ) -> None:
         self.session_key = session_key
         self.cwd = cwd
@@ -741,6 +926,17 @@ class BrowserSession:
         # stealth, but pairs with it: the proxy's region should match ``locale``/
         # timezone so the fingerprint stays coherent with the exit IP.
         self.proxy = _parse_proxy(proxy)
+        # Client TLS certificates for mutual-TLS logins (Playwright
+        # ``client_certificates`` entries: origin + PEM/PKCS#12 paths +
+        # passphrase). Applied to the context at creation. Ignored when attached
+        # over CDP (the real browser owns its TLS config).
+        self.client_certs = list(client_certs) if client_certs else []
+        # CDP endpoint to attach to an already-running Chrome (empty = launch our
+        # own). When set, ``start`` connects instead of launching, reuses the
+        # existing context, and teardown only DISCONNECTS (never closes the
+        # human's browser). ``_attached`` records which mode we are in.
+        self.cdp_endpoint = cdp_endpoint or ""
+        self._attached = False
         self._cm = None  # async_playwright() context manager
         self._pw = None  # the started Playwright object
         self._browser = None  # launched Browser
@@ -753,6 +949,19 @@ class BrowserSession:
         # (Tier-2 _locate) when a ref is acted on. Stamped onto the DOM as
         # data-agent-ref, so refs survive until the next snapshot or navigation.
         self._ref_meta: Dict[str, Dict[str, Any]] = {}
+        # Which frame owns each ref: {ref(str): Playwright Frame}. A ref may live
+        # in the main document or in any (same- or cross-origin) iframe; click/
+        # type/wait must resolve the ``[data-agent-ref]`` selector against the
+        # OWNING frame (Playwright selectors do not cross frame boundaries).
+        # Populated per-frame by snapshot(); cleared by _invalidate_refs().
+        self._ref_frame: Dict[str, Any] = {}
+        # Session-wide monotonic ref high-water mark. Threaded into _TREE_JS as
+        # ``refSeed`` so each frame mints refs strictly above every number used
+        # so far this page — a single flat namespace across all frames with no
+        # cross-frame collision even when frames are inserted between snapshots.
+        # Reset to 0 by _invalidate_refs() on navigation (the whole document
+        # tree, and all its data-agent-ref attributes, is replaced).
+        self._ref_high_water: int = 0
         # Refs present in the *previous* snapshot (the ``*`` is-new diff
         # baseline). Refreshed by snapshot(), cleared by _invalidate_refs() on
         # navigation so a new page's refs all read as new.
@@ -776,13 +985,26 @@ class BrowserSession:
         try:
             self._cm = async_playwright()
             self._pw = await asyncio.wait_for(self._cm.start(), timeout=_LAUNCH_TIMEOUT_S)
-            self._browser = await self._pw.chromium.launch(**self._launch_kwargs())
-            self._context = await self._browser.new_context(**self._context_kwargs(storage_state))
-            # Under stealth, run the fingerprint patches before any page script.
-            if self.stealth:
-                await self._context.add_init_script(_stealth_init_js(self.locale))
-            # Start with one blank tab so the model always has a page to act on.
-            await self._context.new_page()
+            if self.cdp_endpoint:
+                # Attach to an already-running Chrome instead of launching one.
+                # We reuse its existing context (the human's logins / passkeys /
+                # extensions), so stealth / proxy / storage_state seeding do NOT
+                # apply — the real browser owns that config.
+                self._browser = await self._pw.chromium.connect_over_cdp(self.cdp_endpoint)
+                self._attached = True
+                contexts = list(self._browser.contexts)
+                self._context = contexts[0] if contexts else await self._browser.new_context()
+                # Ensure at least one tab so the model always has a page to act on.
+                if not self._context.pages:
+                    await self._context.new_page()
+            else:
+                self._browser = await self._pw.chromium.launch(**self._launch_kwargs())
+                self._context = await self._browser.new_context(**self._context_kwargs(storage_state))
+                # Under stealth, run the fingerprint patches before any page script.
+                if self.stealth:
+                    await self._context.add_init_script(_stealth_init_js(self.locale))
+                # Start with one blank tab so the model always has a page to act on.
+                await self._context.new_page()
             self._active = 0
         except ToolError:
             raise
@@ -809,6 +1031,8 @@ class BrowserSession:
         kwargs: Dict[str, Any] = {}
         if storage_state:
             kwargs["storage_state"] = storage_state
+        if self.client_certs:
+            kwargs["client_certificates"] = [dict(c) for c in self.client_certs]
         if self.stealth:
             profile = _LOCALE_PROFILES.get(self.locale, _LOCALE_PROFILES[_DEFAULT_LOCALE])
             kwargs.update(
@@ -861,6 +1085,22 @@ class BrowserSession:
             return f'[data-agent-ref="{inner}"]', inner
         return t, None
 
+    def _frame_for_ref(self, page, ref: Optional[str]):
+        """Return the Playwright Frame that owns *ref* (else the main frame).
+
+        A ``[N]`` ref may live in the main document or in any iframe; selectors do
+        not cross frame boundaries, so click/type/wait must resolve against the
+        frame that :meth:`snapshot` recorded in ``_ref_frame``. A raw CSS selector
+        (``ref is None``) or an unknown/stale ref falls back to the main frame
+        (raw selectors are a top-frame power-user path; a stale ref then fails
+        through the normal Tier-2/Tier-3 "re-snapshot" error).
+        """
+        if ref is not None:
+            frame = self._ref_frame.get(ref)
+            if frame is not None:
+                return frame
+        return page.main_frame
+
     def _invalidate_refs(self) -> None:
         """Drop the snapshot ref state after a page change.
 
@@ -871,6 +1111,8 @@ class BrowserSession:
         and its refs all read as new.
         """
         self._ref_meta = {}
+        self._ref_frame = {}
+        self._ref_high_water = 0
         self._prev_refs = set()
 
     async def navigate(self, url: str, *, timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS) -> str:
@@ -891,8 +1133,9 @@ class BrowserSession:
         """
         page = self._active_page()
         selector, ref = self._resolve_target(target)
-        handle = await self._locate(page, selector, ref, timeout_ms)
-        blocker = await self._blocker(page, handle)
+        frame = self._frame_for_ref(page, ref)
+        handle = await self._locate(frame, selector, ref, timeout_ms)
+        blocker = await self._blocker(frame, handle)
         if blocker:
             raise ToolError(
                 f"Error: {target} is covered by <{blocker}> — dismiss/handle that "
@@ -923,7 +1166,8 @@ class BrowserSession:
         """
         page = self._active_page()
         selector, ref = self._resolve_target(target)
-        handle = await self._locate(page, selector, ref, timeout_ms)
+        frame = self._frame_for_ref(page, ref)
+        handle = await self._locate(frame, selector, ref, timeout_ms)
         if clear:
             await handle.fill(text, timeout=timeout_ms)
         else:
@@ -933,6 +1177,11 @@ class BrowserSession:
 
     async def _locate(self, page, selector: str, ref: Optional[str], timeout_ms: int):
         """Return a Playwright ElementHandle for *selector*, resolving in tiers.
+
+        *page* is the resolution context — a Playwright ``Page`` (main frame) OR
+        a child ``Frame`` (when the ref lives in an iframe). Both expose the same
+        ``wait_for_selector``/``get_by_role``/``get_by_text``/``evaluate`` API, so
+        the tiers below work unchanged against whichever frame owns the ref.
 
         Three-tier resolution for ``[N]`` refs (raw CSS selectors use Tier 1
         only):
@@ -1058,20 +1307,44 @@ class BrowserSession:
         controls-only view of the same tree.
         """
         page = self._active_page()
-        try:
-            data = await page.evaluate(_TREE_JS)
-        except Exception as e:  # noqa: BLE001
-            raise ToolError(_MSG_SNAPSHOT_FAILED.format(error=e))
-        nodes = (data or {}).get("nodes", []) or []
-        elements = [n for n in nodes if n.get("kind") == "element" and n.get("ref")]
-        self._ref_meta = {el["ref"]: el for el in elements}
+        frames = self._collect_frames(page)
+        # Thread a session-wide monotonic seed through every frame so the model
+        # sees ONE flat [N] namespace across the main document and all iframes.
+        seed = self._ref_high_water
+        ref_meta: Dict[str, Dict[str, Any]] = {}
+        ref_frame: Dict[str, Any] = {}
+        sections: List[Tuple[Optional[str], List[Dict[str, Any]]]] = []
+        main_failed = False
+        for i, frame in enumerate(frames):
+            try:
+                data = await frame.evaluate(_TREE_JS, seed)
+            except Exception as e:  # noqa: BLE001 — a detached/racing sub-frame is skipped
+                if i == 0:
+                    main_failed = e  # the main frame failing is a real error
+                continue
+            nodes = (data or {}).get("nodes", []) or []
+            seed = max(seed, int((data or {}).get("maxRef", seed) or seed))
+            for n in nodes:
+                if n.get("kind") == "element" and n.get("ref"):
+                    ref_meta[n["ref"]] = n
+                    ref_frame[n["ref"]] = frame
+            # Only surface a sub-frame section when it has content; the main
+            # frame (i == 0) is always shown (it carries the page header).
+            if i == 0 or any(nodes):
+                label = None if i == 0 else self._frame_label(frame)
+                sections.append((label, nodes))
+        if main_failed:
+            raise ToolError(_MSG_SNAPSHOT_FAILED.format(error=main_failed))
+        self._ref_meta = ref_meta
+        self._ref_frame = ref_frame
+        self._ref_high_water = seed
         header = f"[{page.url}] {await page.title()}"
-        body = _format_tree(nodes, prev_refs=self._prev_refs, interactive_only=interactive_only)
+        body = self._format_sections(sections, interactive_only=interactive_only)
         # Refresh the is-new baseline for the next snapshot on this page.
-        self._prev_refs = set(self._ref_meta)
-        if not elements and not body.strip():
+        self._prev_refs = set(ref_meta)
+        if not ref_meta and not body.strip():
             return f"{header}\n[no interactive elements found]"
-        offscreen = sum(1 for el in elements if not el.get("inViewport", True))
+        offscreen = sum(1 for el in ref_meta.values() if not el.get("inViewport", True))
         parts = [header]
         if body:
             parts.append(body)
@@ -1079,6 +1352,91 @@ class BrowserSession:
             is_are = verb_agree(offscreen, "is", "are")
             parts.append(f"[{count_noun(offscreen, 'element')} {is_are} off-screen; scroll to bring into view]")
         return cap_head_tail("\n".join(parts), TEXT_MAX_CHARS)[0]
+
+    def _collect_frames(self, page) -> List[Any]:
+        """Return the page's frames to snapshot: main first, then descendants.
+
+        Bounded by :data:`_MAX_FRAME_DEPTH` (nesting) and :data:`_MAX_FRAMES`
+        (total), skipping detached frames. ``page.frames`` already flattens the
+        whole frame tree (same- and cross-origin) in a stable order with the main
+        frame first, so we simply filter it — Playwright abstracts away the
+        separate-CDP-target handling a raw-CDP client would need for cross-origin
+        (out-of-process) iframes.
+        """
+        frames: List[Any] = []
+        try:
+            all_frames = list(page.frames)
+        except Exception:  # noqa: BLE001 — defensive; page may be closing
+            main = getattr(page, "main_frame", None)
+            return [main] if main is not None else []
+        for frame in all_frames:
+            try:
+                if frame.is_detached():
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            if self._frame_depth(frame) > _MAX_FRAME_DEPTH:
+                continue
+            frames.append(frame)
+            if len(frames) >= _MAX_FRAMES:
+                break
+        return frames
+
+    @staticmethod
+    def _frame_depth(frame) -> int:
+        """Nesting depth of *frame* (main frame == 0), walking parent links."""
+        depth = 0
+        try:
+            parent = frame.parent_frame
+            while parent is not None and depth <= _MAX_FRAME_DEPTH + 1:
+                depth += 1
+                parent = parent.parent_frame
+        except Exception:  # noqa: BLE001 — treat unknowable lineage as deep
+            return _MAX_FRAME_DEPTH + 1
+        return depth
+
+    @staticmethod
+    def _frame_label(frame) -> str:
+        """A short human/agent-facing tag for a sub-frame section header."""
+        try:
+            name = (frame.name or "").strip()
+        except Exception:  # noqa: BLE001
+            name = ""
+        try:
+            url = (frame.url or "").strip()
+        except Exception:  # noqa: BLE001
+            url = ""
+        ident = name or url or "iframe"
+        if len(ident) > 120:
+            ident = ident[:117] + "…"
+        return f"[frame: {ident}]"
+
+    def _format_sections(
+        self,
+        sections: List[Tuple[Optional[str], List[Dict[str, Any]]]],
+        *,
+        interactive_only: bool,
+    ) -> str:
+        """Serialize main + per-frame node sections into one indented listing.
+
+        The main frame's tree renders at the top level; each sub-frame's tree is
+        introduced by its ``[frame: …]`` label and indented one level beneath it,
+        so the model can tell which controls live inside an iframe (the SOP makes
+        precise inline placement impossible for cross-origin frames, so grouping
+        by frame is the honest, uniform representation).
+        """
+        chunks: List[str] = []
+        for label, nodes in sections:
+            tree = _format_tree(nodes, prev_refs=self._prev_refs, interactive_only=interactive_only)
+            if label is None:
+                if tree:
+                    chunks.append(tree)
+                continue
+            if not tree.strip():
+                continue
+            indented = "\n".join(f"  {line}" for line in tree.split("\n"))
+            chunks.append(f"{label}\n{indented}")
+        return "\n".join(chunks)
 
     async def wait(
         self,
@@ -1099,8 +1457,9 @@ class BrowserSession:
             raise ToolError(_MSG_WAIT_NEEDS_ONE)
         if selector:
             sel, ref = self._resolve_target(selector)
+            frame = self._frame_for_ref(page, ref)
             try:
-                await page.wait_for_selector(sel, timeout=timeout_ms, state="visible")
+                await frame.wait_for_selector(sel, timeout=timeout_ms, state="visible")
             except Exception:  # noqa: BLE001
                 raise ToolError(_MSG_WAIT_TIMED_OUT.format(timeout_ms=timeout_ms, target=selector, suffix=""))
             return f"[{selector} appeared]"
@@ -1175,6 +1534,29 @@ class BrowserSession:
         )
         reply = await ask_user(question)  # blocks until the user replies
         return f"[user replied] now at {page.url}\n" f"screenshot: {shot_path}\n" f"user said: {reply}"
+
+    async def handoff_headed(self) -> str:
+        """Relaunch this session in a VISIBLE window for a live human step.
+
+        For interactive login steps a screenshot cannot cover — a drag / slider
+        captcha, a live QR scan, a click-through challenge. We capture the
+        current session (cookies + open tabs), tear the headless browser down,
+        and relaunch HEADED seeded with that same session, so the user can act
+        directly in a real window. The session STAYS headed afterward. No-op when
+        already headed, or attached over CDP (there is already a real window / a
+        real browser the human controls). Returns a short status line.
+        """
+        if self._attached or not self.headless:
+            return f"[browser already visible] now at {self._active_page().url}"
+        captured = await self.capture_state()
+        urls, active, storage_state = captured if captured else ([], 0, None)
+        await self.shutdown()
+        # shutdown() marked us closed + dropped the handles; reopen headed.
+        self._closed = False
+        self.headless = False
+        await self.start(storage_state=storage_state)
+        await self.restore_state(urls, active, storage_state)
+        return f"[opened a visible browser window] now at {self._active_page().url}"
 
     async def _save_assist_screenshot(self) -> str:
         """Capture the active tab and write it to a session-scoped PNG file.
@@ -1424,17 +1806,24 @@ class BrowserSession:
     # --- teardown ----------------------------------------------------------
 
     async def shutdown(self) -> None:
-        """Graceful async teardown (close context + browser + driver)."""
+        """Graceful async teardown (close context + browser + driver).
+
+        When ATTACHED over CDP we own neither the context nor the browser (they
+        are the human's real Chrome), so we skip closing them and only stop our
+        local Playwright driver — disconnecting cleanly without killing their
+        browser or tabs.
+        """
         self._closed = True
-        for closer in (
-            getattr(self._context, "close", None),
-            getattr(self._browser, "close", None),
-        ):
-            if closer is not None:
-                try:
-                    await closer()
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug(f"Browser: close during shutdown failed: {exc}")
+        if not self._attached:
+            for closer in (
+                getattr(self._context, "close", None),
+                getattr(self._browser, "close", None),
+            ):
+                if closer is not None:
+                    try:
+                        await closer()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"Browser: close during shutdown failed: {exc}")
         if self._cm is not None:
             try:
                 await self._cm.__aexit__(None, None, None)

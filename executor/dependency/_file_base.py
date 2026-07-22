@@ -49,9 +49,18 @@ class FileMutatingTool(BaseTool):
 
     # Read-before-write needs both shared file-read capabilities; the snapshot
     # capability records a before-image just before a mutation; get_cwd is the
-    # stable base for resolving relative paths. bind() injects only these;
-    # absent (unbound) they stay unset and the helpers self-skip / fall back.
-    requires = ("get_file_read_mtime", "record_file_read", "record_file_snapshot", "get_cwd")
+    # stable base for resolving relative paths. ``record_file_baseline`` marks the
+    # just-written content as mote's known baseline, and ``attribute_external_change``
+    # ledgers an out-of-band edit the guard detects before it aborts. bind() injects
+    # only these; absent (unbound) they stay unset and the helpers self-skip / fall back.
+    requires = (
+        "get_file_read_mtime",
+        "record_file_read",
+        "record_file_snapshot",
+        "record_file_baseline",
+        "attribute_external_change",
+        "get_cwd",
+    )
 
     # Permission metadata: these tools write to disk — high risk, and eligible
     # for the ``acceptEdits`` permission mode.
@@ -62,6 +71,8 @@ class FileMutatingTool(BaseTool):
     get_file_read_mtime: Callable[[str], Optional[int]]
     record_file_read: Callable[[str, int], None]
     record_file_snapshot: Callable[..., None]
+    record_file_baseline: Callable[[str], None]
+    attribute_external_change: Callable[[str], None]
     get_cwd: Callable[[], str]
 
     def _resolve_path(self, path: str) -> str:
@@ -127,6 +138,12 @@ class FileMutatingTool(BaseTool):
         except OSError:
             return  # can't stat; let the read/write attempt surface the error
         if current_mtime != read_mtime:
+            # The file changed out-of-band since mote last read it. Attribute the
+            # delta as ``external`` hunks *before* aborting, so the change is
+            # ledgered even though this write is refused (attribution-then-guard).
+            attribute = getattr(self, "attribute_external_change", None)
+            if attribute is not None:
+                attribute(full_path)
             raise ToolError(_MSG_MODIFIED_SINCE_READ.format(noun=noun, path=display_path, verb=verb))
 
     def _refresh_read_state(self, full_path: str) -> None:
@@ -140,6 +157,12 @@ class FileMutatingTool(BaseTool):
                 recorder(full_path, os.stat(full_path).st_mtime_ns)
             except OSError:
                 pass
+        # Acknowledge the just-written content as mote's known baseline so a later
+        # external-change guard fire diffs against what the agent actually wrote
+        # (not a stale before-image, which would mis-credit the agent's own edit).
+        baseline = getattr(self, "record_file_baseline", None)
+        if baseline is not None:
+            baseline(full_path)
 
     def _snapshot_pre_write(self, full_path: str) -> None:
         """Record a before-image of the file just before mutating it. No-op when

@@ -38,7 +38,6 @@ from mote.environment.spawn_gate import SpawnGate
 from mote.environment.spawn_usage_gate import SpawnUsageGate
 from mote.environment.store import ResidencyStore
 from mote.environment.turn_scheduler import EventDrivenScheduler
-from mote.environment.watching import FileChangeEvent, FileWatcher, FileWatchService
 
 __all__ = [
     "AgentControl",
@@ -62,9 +61,6 @@ __all__ = [
     "CronTask",
     "DeliveryMode",
     "EventDrivenScheduler",
-    "FileChangeEvent",
-    "FileWatcher",
-    "FileWatchService",
     "InterAgentCommunication",
     "Lifecycle",
     "Mailbox",

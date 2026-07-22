@@ -24,13 +24,11 @@ from mote.common.i18n import t
 
 # A Read body line: right-justified number + ``→`` (U+2192) + content.
 _NUMBERED_LINE_RE = re.compile(r"^\s*\d+\u2192")
-# Grep ``count`` mode summary: "Found N total occurrences across M files".
+# Search ``count`` mode summary: "Found N total occurrences across M files".
 _GREP_COUNT_RE = re.compile(r"Found (\d+) total occurrences? across (\d+) files?")
-# Grep ``files_with_matches`` header: "Found N file(s)".
+# Search ``files_with_matches`` header: "Found N file(s)".
 _GREP_FILES_RE = re.compile(r"^Found (\d+) files?")
-# Write success message tail: "(N line(s), B bytes written)" after Created/Updated.
-_WRITE_RE = re.compile(r"(Created|Updated) .*?\((\d+) line")
-# Glob's trailing non-path note emitted at the result cap.
+# A search's trailing non-path note emitted at the result cap.
 _GLOB_TRUNC = "(Results are truncated"
 
 
@@ -65,7 +63,16 @@ def _summary_read(text: str) -> Optional[str]:
     return t(K.SUMMARY_READ_LINES, count=n) if n else None
 
 
-def _summary_grep(text: str) -> Optional[str]:
+def _summary_search(text: str) -> Optional[str]:
+    """Count summary for the unified Search tool (name + content axes).
+
+    Search emits byte-identical shapes to the retired Grep/Glob tools, so one
+    dispatcher covers them all:
+      * ``count`` mode  -> "Found N total occurrences across M files";
+      * ``files_with_matches`` header -> "Found N file(s)";
+      * a "No files/matches found" sentinel;
+      * ``content`` mode or a bare file listing -> count the non-empty lines.
+    """
     m = _GREP_COUNT_RE.search(text)
     if m:
         return t(K.SUMMARY_GREP_MATCHES_FILES, matches=int(m.group(1)), files=int(m.group(2)))
@@ -73,30 +80,16 @@ def _summary_grep(text: str) -> Optional[str]:
     m = _GREP_FILES_RE.match(head)
     if m:
         return t(K.SUMMARY_FOUND_FILES, count=int(m.group(1)))
-    if head.startswith(("No files found", "No matches found")):
-        return t(K.SUMMARY_NO_MATCHES)
-    # ``content`` mode has no header — count the matching body lines.
-    n = sum(1 for ln in text.splitlines() if ln.strip())
-    return t(K.SUMMARY_GREP_MATCHES, count=n) if n else t(K.SUMMARY_NO_MATCHES)
-
-
-def _summary_glob(text: str) -> Optional[str]:
-    head = text.lstrip()
     if head.startswith("No files found"):
         return t(K.SUMMARY_NO_FILES)
+    if head.startswith("No matches found"):
+        return t(K.SUMMARY_NO_MATCHES)
+    # Either content-mode rows or a bare (header-less) file listing — both are
+    # one meaningful entry per non-empty line. Drop a trailing truncation note.
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if lines and lines[-1].lstrip().startswith(_GLOB_TRUNC):
         lines = lines[:-1]
-    return t(K.SUMMARY_FOUND_FILES, count=len(lines)) if lines else t(K.SUMMARY_NO_FILES)
-
-
-def _summary_write(text: str) -> Optional[str]:
-    m = _WRITE_RE.search(text)
-    if not m:
-        return None
-    count = int(m.group(2))
-    key = K.SUMMARY_CREATED_LINES if m.group(1) == "Created" else K.SUMMARY_UPDATED_LINES
-    return t(key, count=count)
+    return t(K.SUMMARY_GREP_MATCHES, count=len(lines)) if lines else t(K.SUMMARY_NO_MATCHES)
 
 
 def _summary_edit(event: Any, text: str) -> Optional[str]:
@@ -136,12 +129,8 @@ def _result_summary(name: str, event: Any, text: str) -> Optional[str]:
     """
     if name == "Read":
         return _summary_read(text)
-    if name == "Grep":
-        return _summary_grep(text)
-    if name == "Glob":
-        return _summary_glob(text)
-    if name == "Write":
-        return _summary_write(text)
+    if name == "Search":
+        return _summary_search(text)
     if name == "Edit":
         return _summary_edit(event, text)
     return None
@@ -151,9 +140,7 @@ __all__ = [
     "_count_numbered_lines",
     "_diff_counts",
     "_summary_read",
-    "_summary_grep",
-    "_summary_glob",
-    "_summary_write",
+    "_summary_search",
     "_summary_edit",
     "_result_summary",
 ]

@@ -42,12 +42,12 @@ class FakeExecutor:
 
 
 class FakeInjector:
-    """Skill injector — build_content/build_index return canned text; build_guide
-    returns the static loading guide (what the system prompt now uses)."""
+    """Skill injector — build_content/build_index return canned text. The
+    volatile index rides the per-turn listing source; the system prompt carries
+    no Skill section (the Skill tool schema teaches invocation)."""
 
-    def __init__(self, content: str = "SKILLS_TEXT", guide: str = "SKILL_GUIDE"):
+    def __init__(self, content: str = "SKILLS_TEXT"):
         self.content = content
-        self.guide = guide
         self.max_tokens_seen = None
 
     def build_content(self, max_tokens=None):
@@ -57,9 +57,6 @@ class FakeInjector:
     def build_index(self, max_tokens=None, only_names=None):
         self.max_tokens_seen = max_tokens
         return self.content
-
-    def build_guide(self):
-        return self.guide
 
 
 class FakeSkillManager:

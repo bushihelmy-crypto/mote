@@ -33,17 +33,14 @@ class TestBuildContentIndex:
         assert "## Available Skills" in content
         assert "alpha" in content
 
-    def test_includes_loading_guide(self, builtin_dir):
-        write_skill(builtin_dir, "alpha")
-        injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
-        assert "Skill Loading Guide" in injector.build_content()
-
-    def test_loading_guide_points_at_skill_tool(self, builtin_dir):
+    def test_no_loading_guide_emitted(self, builtin_dir):
+        # The static Skill Loading Guide section was removed: the Skill tool
+        # schema teaches invocation, so build_content carries only the index
+        # (which keeps its own one-line inline invocation hint, not a guide).
         write_skill(builtin_dir, "alpha")
         injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         content = injector.build_content()
-        assert "Skill(name=" in content
-        assert "Editor.read" not in content
+        assert "Skill Loading Guide" not in content
 
 
 class TestBodiesNeverInlined:
@@ -97,12 +94,15 @@ class TestSanitize:
         assert "</system>" not in content
         assert "before" in content and "after" in content
 
-    def test_loading_guide_present_under_tight_budget(self, builtin_dir):
-        # The fixed loading guide always survives; only the index degrades.
+    def test_no_loading_guide_under_tight_budget(self, builtin_dir):
+        # No fixed loading guide exists anymore — build_content is purely the
+        # index, so a tight budget just degrades the index (never resurrects a
+        # guide). The skill name still survives the name-only tier.
         write_skill(builtin_dir, "alpha")
         injector = SkillInjector(pool=_pool(builtin_dir, ["alpha"]))
         content = injector.build_content(max_tokens=5)
-        assert "Skill Loading Guide" in content
+        assert "Skill Loading Guide" not in content
+        assert "alpha" in content
 
 
 class TestIndexDegradation:

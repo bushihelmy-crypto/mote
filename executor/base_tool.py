@@ -113,7 +113,7 @@ class BaseTool(ABC):
     stateful: ClassVar[bool] = False
 
     # Whether this tool's result is *reconstructable* — re-derivable by re-running
-    # the tool (a read-only or idempotent observation like Read/Grep/Glob, or a
+    # the tool (a read-only or idempotent observation like Read/Search, or a
     # write whose effect is durable on disk like Write/Edit). The compaction
     # pipeline may fold/clear a reconstructable result's body in place, since the
     # information is recoverable from the live filesystem on demand. Tools whose
@@ -156,7 +156,7 @@ class BaseTool(ABC):
     # means "derive from existing metadata" (see :meth:`resolve_effect`): a
     # filesystem-mutating tool derives LOCAL, everything else derives the
     # conservative EXTERNAL. A tool sets this explicitly only when that
-    # derivation is wrong for it — e.g. a read-only observation (Read/Grep/Glob)
+    # derivation is wrong for it — e.g. a read-only observation (Read/Search)
     # declares PURE to opt out of ledgering, or a provably-idempotent external
     # tool declares its narrower class. Consumed by the ToolExecutor at the
     # run_command chokepoint — only EXTERNAL calls are ledgered and guarded
@@ -220,7 +220,7 @@ class BaseTool(ABC):
         Note ``reconstructable`` is deliberately *not* a signal here: it means
         "result re-derivable" (a compaction concern) and does NOT imply
         side-effect-free — ``Bash`` is ``reconstructable`` yet plainly EXTERNAL.
-        The genuinely read-only tools (Read/Grep/Glob) opt out of ledgering by
+        The genuinely read-only tools (Read/Search) opt out of ledgering by
         declaring ``effect = ToolEffect.PURE`` explicitly.
         """
         if cls.effect is not None:

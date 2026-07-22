@@ -7,9 +7,9 @@ subsystems use. The file shape follows the ``settings.local.json`` convention::
 
     {
       "permissions": {
-        "allow": ["Read", "Grep", "Bash(git*)"],
+        "allow": ["Read", "Search", "Bash(git*)"],
         "deny":  ["Bash(rm -rf*)"],
-        "ask":   ["Write", "Bash(npm publish*)"]
+        "ask":   ["Edit", "Bash(npm publish*)"]
       }
     }
 

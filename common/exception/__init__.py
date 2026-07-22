@@ -14,7 +14,7 @@ A single, extensible hierarchy rooted at :class:`MoteError`:
 
 from __future__ import annotations
 
-from mote.common.exception.agent import AgentError, RoleContextNotSetError
+from mote.common.exception.agent import AgentError, RoleContextNotSetError, SessionResumeIdentityError
 from mote.common.exception.base import MoteError, NonRetryableError, RetryableError
 from mote.common.exception.codes import ErrorCode, RecoveryAction
 from mote.common.exception.config import (
@@ -63,9 +63,11 @@ from mote.common.exception.llm import (
     LLMOverloadedError,
     LLMPayloadTooLargeError,
     LLMRateLimitError,
+    LLMResourceUnavailableError,
     LLMResponseParseError,
     LLMServerError,
     LLMTimeoutError,
+    LLMUnusableResponseError,
 )
 from mote.common.exception.oauth import JWTDecodeError, OAuthConfigError, OAuthError, OAuthHTTPError, OAuthRefreshError
 from mote.common.exception.recovery import Call, RecoveryRunner, RecoveryStrategy
@@ -115,11 +117,13 @@ __all__ = [
     "LLMBadRequestError",
     "LLMResponseParseError",
     "LLMContentPolicyError",
+    "LLMResourceUnavailableError",
     "ContextWindowExceededError",
     "LLMPayloadTooLargeError",
     "LLMImageTooLargeError",
     "LLMMultimodalToolContentError",
     "LLMInvalidRequestStateError",
+    "LLMUnusableResponseError",
     # router tier
     "RouterError",
     "ModelNotFoundError",
@@ -160,6 +164,7 @@ __all__ = [
     # agent tier
     "AgentError",
     "RoleContextNotSetError",
+    "SessionResumeIdentityError",
     # agent control-plane tier
     "AgentControlError",
     "AgentLimitReached",

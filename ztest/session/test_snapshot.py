@@ -153,7 +153,7 @@ def test_replay_ignores_file_snapshot_events(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# End-to-end through the Write / Edit tools
+# End-to-end through the Edit tool (whole-file write + substring edit)
 # ---------------------------------------------------------------------------
 
 
@@ -167,35 +167,36 @@ def _bind_snapshot(tool, rec):
 
 
 def test_write_overwrite_captures_before_image(tmp_path):
-    from mote.executor.tools.write import Write
+    # Whole-file overwrite = Edit with an empty old_string (the former Write).
+    from mote.executor.tools.edit import Edit
 
     target = tmp_path / "f.txt"
     target.write_text("original")
 
     rec, log = _recorder(tmp_path)
-    tool = Write()
+    tool = Edit()
     read_state = _bind_snapshot(tool, rec)
     # Mark the file as read this session so read-before-overwrite passes.
     read_state[str(target)] = os.stat(target).st_mtime_ns
 
-    asyncio.run(tool.call(file_path=str(target), content="replacement"))
+    asyncio.run(tool.call(file_path=str(target), old_string="", new_string="replacement"))
 
     assert target.read_text() == "replacement"
     snaps = [r for r in log.iter_raw() if r["type"] == FILE_SNAPSHOT]
     assert len(snaps) == 1
     assert snaps[0]["payload"]["pre_hash"] == hashlib.sha256(b"original").hexdigest()
-    assert snaps[0]["payload"]["tool"] == "Write"
+    assert snaps[0]["payload"]["tool"] == "Edit"
 
 
 def test_write_new_file_records_create(tmp_path):
-    from mote.executor.tools.write import Write
+    from mote.executor.tools.edit import Edit
 
     target = tmp_path / "new.txt"
     rec, log = _recorder(tmp_path)
-    tool = Write()
+    tool = Edit()
     _bind_snapshot(tool, rec)
 
-    asyncio.run(tool.call(file_path=str(target), content="fresh"))
+    asyncio.run(tool.call(file_path=str(target), old_string="", new_string="fresh"))
 
     snaps = [r for r in log.iter_raw() if r["type"] == FILE_SNAPSHOT]
     assert len(snaps) == 1
@@ -224,8 +225,8 @@ def test_edit_captures_before_image(tmp_path):
 
 def test_unbound_tool_snapshot_is_noop(tmp_path):
     # A tool used standalone (no Role injected the capability) must not blow up.
-    from mote.executor.tools.write import Write
+    from mote.executor.tools.edit import Edit
 
-    tool = Write()
+    tool = Edit()
     # _snapshot_pre_write self-skips when the capability is absent.
     tool._snapshot_pre_write(str(tmp_path / "x"))

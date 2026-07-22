@@ -277,17 +277,37 @@ class ToolCallWidget(FoldableRow):
         self._blink = False
         self._blink_timer: Any = None
         self._folds_detail = fold_mode(getattr(ev, "tool_name", "")) is FoldMode.DETAIL
+        # Structured file changes (Edit/Write) folded INTO this row so the
+        # invocation + its diff are ONE select/fold unit; each entry is the
+        # ``[caption, diff]`` parts of one changed file (a tool may touch several).
+        self._file_diffs: list[list[Any]] = []
+        self._rebuild()
+
+    def set_file_diff(self, ev: Any) -> None:
+        """Fold a structured ``FileDiffBlock`` into this row (Edit/Write's diff).
+
+        The diff becomes part of the tool row instead of a standalone
+        :class:`FileDiffRow`, so clicking selects — and ``ctrl+o`` folds — the
+        invocation line and its change together. A file change's diff is the point
+        of an Edit/Write, so attaching one **expands** the row (a NONE-fold tool
+        that otherwise always rendered full); ``ctrl+o`` then folds it to the
+        ``● Tool`` + ``⎿ summary`` lines.
+        """
+        self._file_diffs.append(file_diff_parts(ev))
+        if not self._folds_detail:
+            self.expanded = True
         self._rebuild()
 
     @property
     def _folds(self) -> bool:
         # Detail-folding calls (Bash/Terminal/WebBrowser) toggle under ctrl+o; a
-        # standalone Read/Edit/Write always renders full, so it shows no fold hint
-        # — EXCEPT when the call was DENIED. A rejection never ran, so its body
-        # (the would-be diff/content) is dead weight; folding it to just the
-        # ``● Tool`` + ``⎿ rejected`` lines reclaims the wasted space and makes the
-        # row click-selectable + ctrl+o-toggleable like any detail row.
-        return self._folds_detail or is_rejection(self._completed)
+        # standalone Read always renders full, so it shows no fold hint — EXCEPT
+        # when the call was DENIED, or when it carries a folded-in file diff
+        # (Edit/Write). A rejection never ran, so its body (the would-be
+        # diff/content) is dead weight; folding it to just the ``● Tool`` +
+        # ``⎿ rejected`` lines reclaims the space. An Edit/Write's diff folds
+        # away too so the invocation + change collapse as one row.
+        return self._folds_detail or is_rejection(self._completed) or bool(self._file_diffs)
 
     @property
     def _fold_hint(self) -> bool:
@@ -316,8 +336,8 @@ class ToolCallWidget(FoldableRow):
     def _rebuild(self) -> None:
         if self._folds and not self.expanded:
             # Folded: keep only the invocation line and (once done) the result
-            # summary, hiding the body + full output. The ctrl+o affordance shows
-            # only on the selected block (its bottom-right), not on every row.
+            # summary, hiding the body + full output (and any folded-in diff). The
+            # ctrl+o affordance shows only on the selected block, not every row.
             ok = None if self._completed is None else bool(getattr(self._completed, "ok", True))
             head = tool_started_text(
                 self._started,
@@ -330,7 +350,12 @@ class ToolCallWidget(FoldableRow):
                 return
             self.update(Group(head, tool_completed_text(self._completed)))
             return
-        self.update(Group(*build_tool_parts(self._started, self._completed, blink=self._blink)))
+        parts = build_tool_parts(self._started, self._completed, blink=self._blink)
+        # Append any structured file diffs (Edit/Write) so the change renders
+        # inside this row, below the invocation + result — one select/fold unit.
+        for diff_parts in self._file_diffs:
+            parts.extend(diff_parts)
+        self.update(Group(*parts))
 
 
 class ToolGroupWidget(FoldableRow):
@@ -495,23 +520,51 @@ class MediaRow(SelectableStatic):
             super().__init__(caption, **kwargs)
 
 
-class FileDiffRow(SelectableStatic):
-    """A structured file change (e.g. Edit) — a caption + coloured diff.
+def file_diff_parts(ev: Any) -> list:
+    """Renderables for one structured file change: ``⎿ path (verb)`` caption + diff.
 
     The change rides as ``old``/``new`` full contents on the ``FileDiffBlock``;
     this text host synthesizes a coloured unified diff from them via the shared
-    ``render_file_change`` builder (identical look to the rich terminal). A future
-    media-capable host could instead mount an interactive side-by-side from the
-    same facts — the block carries the fact, not a pre-formatted diff string.
+    ``render_file_change`` builder (identical look to the rich terminal). Shared by
+    :class:`ToolCallWidget` (which folds an Edit/Write's diff *into* the tool row
+    so the invocation + change select/fold as ONE unit) and the standalone
+    :class:`FileDiffRow` fallback (a diff with no owning tool row).
+    """
+    old = getattr(ev, "old", "") or ""
+    new = getattr(ev, "new", "") or ""
+    path = getattr(ev, "path", "") or ""
+    return [file_change_caption(ev), indent(render_file_change(old, new, path), RESULT_INDENT)]
+
+
+class FileDiffRow(FoldableRow):
+    """A structured file change with **no owning tool row** — caption + coloured diff.
+
+    The normal Edit/Write path folds the diff *into* its :class:`ToolCallWidget`
+    (so the invocation + change are one select/fold unit); this standalone row is
+    the fallback for a ``FileDiffBlock`` whose ``tool_use_id`` matched no mounted
+    tool widget. A future media-capable host could mount an interactive
+    side-by-side from the same ``old``/``new`` facts instead of the synthesized
+    diff — the block carries the fact, not a pre-formatted diff string.
+
+    As a :class:`FoldableRow` it is click-selectable and folds under ``ctrl+o``:
+    collapsed it keeps only the ``⎿ path (verb)`` caption; expanded it renders the
+    caption + full diff. It starts **expanded** — the "what changed" is the point.
     """
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        old = getattr(ev, "old", "") or ""
-        new = getattr(ev, "new", "") or ""
-        path = getattr(ev, "path", "") or ""
-        caption = file_change_caption(ev)
-        diff = indent(render_file_change(old, new, path), RESULT_INDENT)
-        super().__init__(Group(caption, diff), **kwargs)
+        # Default expanded: the diff is the point of a file change; ctrl+o (global
+        # or scoped to a click-selected row) folds it to just the caption after.
+        super().__init__(expanded=True, **kwargs)
+        self._parts = file_diff_parts(ev)
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        if self.expanded:
+            self.update(Group(*self._parts))
+            return
+        # Folded: keep only the caption naming the file + verb; the diff lives
+        # behind ctrl+o now (the affordance shows on the selected row's corner).
+        self.update(self._parts[0])
 
 
 class NoticeRow(SelectableStatic):

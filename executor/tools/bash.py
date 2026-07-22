@@ -148,63 +148,42 @@ class Bash(BaseTool):
     ) -> ToolResult:
         """Run a one-shot shell command — also fetches web pages via curl/wget.
 
-        Runs a bash command against the session's stable working directory. Use
-        the ``workdir`` param to run in a subdirectory; a ``cd`` does not persist
-        across calls. Optionally pass ``inputs`` (an object) to feed typed values
-        into the command: the whole object is exported as the ``$INPUTS`` env var
-        (JSON), and each scalar entry with an identifier-safe key is also
-        exported as its own env var. If the command's stdout is valid JSON it is
-        parsed into the structured result (so a caller can index into it), else
-        the structured result is the raw stdout text.
+        Runs against the session's stable working directory; use ``workdir`` to
+        run in a subdirectory, since a ``cd`` does not persist across calls.
 
-        By default a non-zero exit is NOT an error — the exit code is annotated in
-        the output and the call still succeeds (a ``grep`` with no match, a
-        ``diff`` that finds changes, etc. exit non-zero legitimately). Pass
-        ``check=True`` when the command MUST succeed to be meaningful: a non-zero
-        exit then fails the call (``success=False``), so a ``run_graph`` map/fold
-        node isolates it via ``on_item_error`` instead of reading the error text
-        as if it were a normal value.
+        By default a non-zero exit is NOT an error — it is annotated in the output
+        and the call still succeeds (``grep`` with no match, ``diff`` that finds
+        changes, etc. exit non-zero legitimately). Pass ``check=True`` when the
+        command MUST succeed, so a ``run_graph`` map/fold node isolates a failure
+        via ``on_item_error`` rather than reading the error text as a value.
 
-        To fetch a web page, run ``curl <url>`` (or ``wget -qO- <url>``): a
-        fetched HTML page is automatically cleaned into readable Markdown
-        (scripts, nav and styling stripped), so this is the fast way to read a
-        page's text. Use the WebBrowser tool instead when you need to interact
-        (click/type/log in) or the page renders its content with JavaScript.
+        To fetch a web page, run ``curl <url>`` (or ``wget -qO- <url>``): HTML is
+        auto-cleaned into readable Markdown. Use the WebBrowser tool instead when
+        you must interact (click/type/log in) or the page is JS-rendered.
 
         Args:
             command: The bash command to execute.
-            inputs: Optional object of typed values to feed the command. The whole
-                object is exported as the ``$INPUTS`` env var (JSON); each scalar
-                entry with an identifier-safe key is also exported as its own env
-                var (``$name``) for direct shell use. This is how a graph node
-                hands upstream values to a command. Being a structured (non-scalar)
-                param, it is carried only on the native tool-use channel — omit it
-                (the command runs unchanged) when driving Bash over the XML protocol.
-            timeout: Maximum seconds to wait for the command (default 300). On
-                timeout the command is terminated and whatever output it produced
-                so far is returned (rather than raising), mirroring codex.
-            workdir: Optional directory to run this one command in. Relative
-                paths resolve against the session's stable working directory.
-                Use this to operate in a subdirectory — a ``cd`` inside the
-                command does NOT persist across calls (the cwd is a stable value,
-                not shell state), so ``workdir`` is the way to scope a command to
-                another directory.
-            check: When True, a non-zero exit code fails the call
-                (``success=False``) instead of merely annotating it — so a command
-                whose failure would otherwise pass silently (e.g. inside a
-                ``run_graph`` map, where a failed item must be isolated, not read
-                as data) is surfaced as an error. Leave False (the default) for
-                commands whose non-zero exit is expected/meaningful (``grep`` with
-                no hit, ``diff`` with changes). A timeout is unaffected by ``check``
-                (it already carries its own message and is not a normal exit code).
+            inputs: Optional object of typed values fed to the command: the whole
+                object as ``$INPUTS`` (JSON) and each identifier-safe scalar as its
+                own ``$name`` env var — how a graph node passes upstream values.
+                Native-channel only (structured param); omit under the XML protocol.
+            timeout: Max seconds to wait (default 300). On timeout the command is
+                terminated and the output so far is returned (not raised).
+            workdir: Optional directory to run this one command in (relative to the
+                session cwd). Use it to scope to a subdirectory — a ``cd`` inside
+                the command does NOT persist across calls.
+            check: When True, a non-zero exit fails the call (``success=False``)
+                instead of annotating it — surfaces a failure that would otherwise
+                pass silently (e.g. an isolated ``run_graph`` map item). Leave False
+                when a non-zero exit is expected (``grep`` no-hit, ``diff``). A
+                timeout is unaffected by ``check``.
 
         Returns:
-            A ``ToolResult`` whose ``output`` is the human-readable stdout /
-            stderr / exit-code text and whose ``data`` is the *structured*
-            result: the command's stdout parsed as JSON when it is valid JSON,
-            else the raw stdout string — so a downstream graph ``$ref`` can
-            index into it. With ``check=True`` a non-zero exit yields
-            ``success=False`` (and ``error`` set), leaving ``data`` unset.
+            A ``ToolResult`` whose ``output`` is the stdout/stderr/exit-code text
+            and whose ``data`` is structured: stdout parsed as JSON when valid,
+            else the raw stdout string, so a downstream graph ``$ref`` can index
+            it. With ``check=True`` a non-zero exit yields ``success=False``
+            (``error`` set), leaving ``data`` unset.
         """
         if not command or not command.strip():
             raise ToolError(_MSG_COMMAND_REQUIRED)

@@ -7,6 +7,7 @@ from string import Template
 from typing import ClassVar
 
 from mote.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
+from mote.common.logs import logger
 from mote.common.prompt.agent import AGENT_TASK_PROMPT
 from mote.common.schema import UserMessage
 from mote.common.utils.docstring import description_body
@@ -51,12 +52,11 @@ class Agent(BaseTool):
     async def call(self, *, agent_type: str, prompt: str, context: str = "") -> str:
         """Spawn a typed child agent for a bounded subtask — returns its summary.
 
-        Delegate a self-contained subtask to a fresh child agent of the named
-        type. The child runs its own react loop with its own toolset and config
-        (defined by that agent type's RoleSchema), then returns only its final
-        summary — so the long working process never pollutes your history. Pick
-        an ``agent_type`` from the list embedded in this tool's schema; put the
-        concrete instruction in ``prompt`` and any background the agent needs in
+        Delegate a self-contained subtask to a fresh child of the named type. The
+        child runs its own react loop with its own toolset and config, then
+        returns only its final summary — so its long working process never
+        pollutes your history. Pick an ``agent_type`` from the list in this tool's
+        schema; put the instruction in ``prompt`` and any background in
         ``context``.
 
         Args:
@@ -103,7 +103,33 @@ class Agent(BaseTool):
             parent_id=self.session_id,
             lifecycle=Lifecycle.EPHEMERAL,
         )
-        report = await spawn_and_run(spec, build_message)
+
+        async def _seed(role):
+            # Spawn-time seed floor: decide an initial tier from this first
+            # prompt and record it as a raise-only floor for the child's step
+            # routing. ``getattr`` guards keep this a safe no-op for rule-based
+            # children (no ``seed_session``), independent of the config switch.
+            strat = getattr(role.router, "strategy", None)
+            seed = getattr(strat, "seed_session", None)
+            if seed is None:
+                return
+            if not role.config.router.spawn_routing:
+                return
+            # Seed is only ever *consumed* by a child that runs step routing.
+            # The presence of ``seed_session`` (squilla strategy installed) already
+            # implies routing is enabled for this child — this is a belt-and-suspenders
+            # guard against a routing-disabled router that somehow exposes a seed hook.
+            if not role.router.routing_enabled:
+                logger.warning(
+                    f"Agent '{agent_type}': router.spawn_routing is on but this "
+                    f"agent_type does not route (router.sub_agent.strategy is null) — "
+                    f"the seed floor would never be read. Set sub_agent.strategy to "
+                    f"'squilla' to consume it."
+                )
+                return
+            await seed(role.session_id, prompt)
+
+        report = await spawn_and_run(spec, build_message, on_spawn=_seed)
         if report is None:
             return _MSG_SPAWN_FAILED.format(agent_type=agent_type)
         return report or _MSG_NO_SUMMARY

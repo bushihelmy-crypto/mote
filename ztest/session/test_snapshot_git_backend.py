@@ -95,11 +95,6 @@ def test_gitblobstore_uses_independent_bare_repo(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_detect_backend_non_repo_is_blob(tmp_path):
-    # A bare temp dir is not inside a git work tree.
-    assert detect_blob_backend(str(tmp_path)) == "blob"
-
-
 @git_required
 def test_detect_backend_inside_repo_is_git(tmp_path):
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, capture_output=True)

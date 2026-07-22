@@ -24,6 +24,8 @@ class BaseThinkEngine(ABC):
 
     Contract used by the react loop and the command channels:
       - ``start(...)`` launches the think round (typically in the background).
+      - ``reinstate(...)`` primes a result recovered from the durable journal,
+        skipping the LLM (the durable resume path — closes the re-pay window).
       - ``result`` holds the latest ``ThinkResult`` (text + optional tool calls).
       - ``done`` reports whether the in-flight round has finished.
       - ``join()`` awaits the round and clears the task.
@@ -45,6 +47,17 @@ class BaseThinkEngine(ABC):
         When ``tool_specs`` is provided the native tool-use channel is used;
         otherwise the XML text channel is used. ``llm`` is the per-request
         resolved client the loop passes after intelligent routing selects it.
+        """
+
+    @abstractmethod
+    def reinstate(self, result: ThinkResult) -> None:
+        """Prime *result* recovered from the durable journal, skipping the LLM.
+
+        The durable resume path: instead of launching a think round, adopt a
+        completed :class:`ThinkResult` the run journal memoized before the crash
+        and mark the round finished, so ``done`` is True and the channel reads
+        the reinstated result without ever re-calling the model (closes G1's
+        re-pay window). Synchronous — no task is launched.
         """
 
     @abstractmethod

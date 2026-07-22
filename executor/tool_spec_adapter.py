@@ -27,6 +27,7 @@ from typing import Any, Callable, Union
 
 from pydantic import BaseModel
 
+from mote.common.model_profile import profile_for
 from mote.common.utils.docstring import parse_section
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types
@@ -167,13 +168,21 @@ def build_json_schema(call_fn: Callable) -> dict:
     return schema
 
 
-def to_native_tool_specs(tool_schemas: dict[str, dict], provider: str = "anthropic") -> list[dict]:
+def to_native_tool_specs(
+    tool_schemas: dict[str, dict], provider: str = "anthropic", model: str | None = None
+) -> list[dict]:
     """Wrap a {name: schema} mapping into provider-specific native tool specs.
 
     ``tool_schemas`` values must each carry at least ``name``, ``description``,
     and a JSON Schema ``input_schema`` (the structured params). Use
     ToolExecutor.get_native_tool_specs() to obtain a ready mapping; this fn is
     the pure envelope step.
+
+    When ``model`` resolves a :attr:`ModelProfile.json_schema_transformer` (a
+    per-model tool-schema rewrite hook), it is applied to each tool's JSON Schema
+    BEFORE the provider envelope is wrapped — the seam for a model that rejects a
+    schema construct other models accept. ``model=None`` (or a model with no
+    transformer, the common case) → identity, so the wire shape is unchanged.
 
     provider:
       - "anthropic":        {"name", "description", "input_schema": <schema>}
@@ -183,11 +192,14 @@ def to_native_tool_specs(tool_schemas: dict[str, dict], provider: str = "anthrop
         Completions' nested ``function`` object.)
     """
     provider = provider.lower()
+    transformer = profile_for(model).json_schema_transformer if model else None
     specs: list[dict] = []
     for schema in tool_schemas.values():
         name = schema["name"]
         description = schema.get("description", "") or ""
         params = schema.get("input_schema") or {"type": "object", "properties": {}}
+        if transformer is not None:
+            params = transformer(params)
         if provider == "openai_responses":
             specs.append({"type": "function", "name": name, "description": description, "parameters": params})
         elif provider == "openai":

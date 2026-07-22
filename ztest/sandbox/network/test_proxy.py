@@ -12,7 +12,9 @@ All within a single ``asyncio.run`` per test (no pytest-asyncio dependency).
 from __future__ import annotations
 
 import asyncio
+import ssl
 
+from mote.sandbox.network.credentials import CredentialBroker, CredentialRule
 from mote.sandbox.network.policy import NetworkPolicy
 from mote.sandbox.network.proxy import EgressProxy
 
@@ -225,6 +227,229 @@ def test_proxy_dials_pinned_ip_end_to_end(monkeypatch):
             status, body = await _http_get_via_proxy(proxy.port, "upstream.test", up_port)
             assert "200" in status
             assert "hello-from-upstream" in body
+        finally:
+            await proxy.shutdown()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(scenario())
+
+
+# --- credential brokering: HTTP header injection -----------------------------
+
+
+async def _start_recording_upstream(captured: dict):
+    """An HTTP/1.1 server that records received request headers into *captured*."""
+
+    async def handle(reader, writer):
+        await reader.readline()  # request line
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            name, _, value = line.decode("latin1").partition(":")
+            captured[name.strip().lower()] = value.strip()
+        body = b"ok"
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n" + body)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, port
+
+
+def _bearer_broker(host: str, token: str = "tok") -> CredentialBroker:
+    """A broker that brokers ``Authorization: Bearer <token>`` for *host*."""
+    rule = CredentialRule(domains=(host,), secret_key="k", scheme="bearer")
+    return CredentialBroker([rule], lambda key: token if key == "k" else None)
+
+
+def test_http_injects_credential_header():
+    """A credentialed host: the upstream sees the broker-injected auth header."""
+
+    async def scenario():
+        captured: dict = {}
+        upstream, up_port = await _start_recording_upstream(captured)
+        broker = _bearer_broker("127.0.0.1")
+        proxy = EgressProxy(_AllowHosts(["127.0.0.1"]), validate_resolved_ips=False, broker=broker)
+        await proxy.start()
+        try:
+            status, _ = await _http_get_via_proxy(proxy.port, "127.0.0.1", up_port)
+            assert "200" in status
+            assert captured.get("authorization") == "Bearer tok"
+        finally:
+            await proxy.shutdown()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_http_non_credentialed_no_injection():
+    """A host with no matching rule: no auth header is added."""
+
+    async def scenario():
+        captured: dict = {}
+        upstream, up_port = await _start_recording_upstream(captured)
+        # Broker only knows a different domain → 127.0.0.1 gets nothing.
+        broker = _bearer_broker("other.test")
+        proxy = EgressProxy(_AllowHosts(["127.0.0.1"]), validate_resolved_ips=False, broker=broker)
+        await proxy.start()
+        try:
+            status, _ = await _http_get_via_proxy(proxy.port, "127.0.0.1", up_port)
+            assert "200" in status
+            assert "authorization" not in captured
+        finally:
+            await proxy.shutdown()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_http_broker_none_forwards_verbatim():
+    """``broker=None`` → the request is forwarded with no injected header."""
+
+    async def scenario():
+        captured: dict = {}
+        upstream, up_port = await _start_recording_upstream(captured)
+        proxy = EgressProxy(_AllowHosts(["127.0.0.1"]), validate_resolved_ips=False)
+        await proxy.start()
+        try:
+            status, _ = await _http_get_via_proxy(proxy.port, "127.0.0.1", up_port)
+            assert "200" in status
+            assert "authorization" not in captured
+        finally:
+            await proxy.shutdown()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(scenario())
+
+
+# --- credential brokering: HTTPS MITM ----------------------------------------
+
+
+async def _start_recording_tls_upstream(captured: dict, server_ctx: ssl.SSLContext):
+    """A TLS HTTP/1.1 server recording request headers into *captured*."""
+
+    async def handle(reader, writer):
+        await reader.readline()  # request line
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            name, _, value = line.decode("latin1").partition(":")
+            captured[name.strip().lower()] = value.strip()
+        body = b"ok"
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n" + body)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0, ssl=server_ctx)
+    port = server.sockets[0].getsockname()[1]
+    return server, port
+
+
+async def _connect_established(reader, writer, target: str):
+    """Send a CONNECT and read through the ``200 Connection Established`` block."""
+    writer.write(f"CONNECT {target} HTTP/1.1\r\n".encode() + b"Host: x\r\n\r\n")
+    await writer.drain()
+    while True:
+        line = await reader.readline()
+        if line in (b"\r\n", b"\n", b""):
+            break
+
+
+def test_https_mitm_injects_header(monkeypatch, tmp_path):
+    """A credentialed HTTPS host is MITM'd and the auth header reaches the origin.
+
+    Two CAs: ``mitm_ca`` signs the leaf the proxy presents to the client;
+    ``upstream_ca`` signs the real origin's cert. The proxy verifies the origin
+    against ``upstream_ca`` (via a monkeypatched default context); the client
+    trusts ``mitm_ca``.
+    """
+    import mote.sandbox.network.proxy as proxy_mod
+    from mote.sandbox.network.tls import MitmCa
+
+    async def scenario():
+        captured: dict = {}
+        upstream_ca = MitmCa(ca_dir=tmp_path / "up")
+        mitm_ca = MitmCa(ca_dir=tmp_path / "mitm")
+
+        upstream_ctx = upstream_ca.leaf_context("localhost")
+        upstream, up_port = await _start_recording_tls_upstream(captured, upstream_ctx)
+
+        # Proxy → origin: verify against the upstream test CA (not real roots).
+        orig_cdc = ssl.create_default_context
+        monkeypatch.setattr(
+            proxy_mod.ssl,
+            "create_default_context",
+            lambda *a, **k: orig_cdc(cafile=str(upstream_ca.cert_path)),
+        )
+
+        broker = _bearer_broker("localhost")
+        proxy = EgressProxy(
+            _AllowHosts(["localhost"]),
+            validate_resolved_ips=False,
+            broker=broker,
+            mitm_ca=mitm_ca,
+        )
+        await proxy.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+            await _connect_established(reader, writer, f"localhost:{up_port}")
+            # Client trusts the MITM CA and upgrades the tunnel to TLS.
+            client_ctx = orig_cdc(cafile=str(mitm_ca.cert_path))
+            await writer.start_tls(client_ctx, server_hostname="localhost")
+            writer.write(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            data = await reader.read(-1)
+            assert b"200" in data
+            assert captured.get("authorization") == "Bearer tok"
+        finally:
+            await proxy.shutdown()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_https_non_credentialed_raw_splice(tmp_path):
+    """A non-credentialed CONNECT stays a raw byte-splice (no interception).
+
+    Even with a broker + CA present, a host with no matching rule must NOT be
+    MITM'd — the tunnel relays raw bytes end-to-end (proven by an echo upstream).
+    """
+    from mote.sandbox.network.tls import MitmCa
+
+    async def scenario():
+        async def handle(reader, writer):
+            data = await reader.read(11)
+            writer.write(data)
+            await writer.drain()
+            writer.close()
+
+        upstream = await asyncio.start_server(handle, "127.0.0.1", 0)
+        up_port = upstream.sockets[0].getsockname()[1]
+
+        mitm_ca = MitmCa(ca_dir=tmp_path)
+        broker = _bearer_broker("other.test")  # does NOT match 127.0.0.1
+        proxy = EgressProxy(
+            _AllowHosts(["127.0.0.1"]),
+            validate_resolved_ips=False,
+            broker=broker,
+            mitm_ca=mitm_ca,
+        )
+        await proxy.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+            await _connect_established(reader, writer, f"127.0.0.1:{up_port}")
+            writer.write(b"hello-raw!!")
+            await writer.drain()
+            echoed = await reader.read(11)
+            assert echoed == b"hello-raw!!"
         finally:
             await proxy.shutdown()
             upstream.close()

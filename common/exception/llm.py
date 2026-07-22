@@ -22,14 +22,28 @@ from mote.common.exception.codes import ErrorCode, RecoveryAction
 class LLMError(MoteError):
     """Base for all LLM/provider-layer failures.
 
-    Adds an optional ``status_code`` (upstream HTTP status) on top of the base
-    error fields; it is also mirrored into ``context`` so ``to_dict`` surfaces it.
+    Adds an optional ``status_code`` (upstream HTTP status) and ``retry_after``
+    (seconds parsed from a ``Retry-After`` response header, when the provider
+    supplied one) on top of the base error fields; both are also mirrored into
+    ``context`` so ``to_dict`` surfaces them. ``retry_after`` lets the retry
+    backoff honour the provider's advertised cool-off instead of guessing (see
+    ``router.llm._retry.wait_retry_after``).
     """
 
-    def __init__(self, message: str = "", *, status_code: int | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.status_code = status_code
+        self.retry_after = retry_after
         if status_code is not None:
             kwargs.setdefault("status_code", status_code)
+        if retry_after is not None:
+            kwargs.setdefault("retry_after", retry_after)
         super().__init__(message, **kwargs)
 
 
@@ -111,6 +125,22 @@ class LLMContentPolicyError(LLMError, NonRetryableError):
     default_recovery: ClassVar[RecoveryAction] = RecoveryAction.FALLBACK
 
 
+class LLMResourceUnavailableError(LLMError, NonRetryableError):
+    """A resource's circuit breaker is OPEN — the call was shed, not attempted.
+
+    Raised by the breaker admit-gate in the LLM chokepoint when a provider/model/
+    credential has been failing enough to trip its
+    :class:`~mote.common.resilience.CircuitBreaker`. Recovery is FALLBACK: fail
+    over to another registered provider (whose own breaker is then checked in
+    turn), so a sustained outage on one resource sheds to a healthy one instead
+    of retrying the dead one. Never counts as a health failure itself (no call
+    reached the provider).
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.LLM_RESOURCE_UNAVAILABLE
+    default_recovery: ClassVar[RecoveryAction] = RecoveryAction.FALLBACK
+
+
 class ContextWindowExceededError(LLMError, NonRetryableError):
     """The request exceeded the model's context window; compress then retry."""
 
@@ -164,3 +194,20 @@ class LLMInvalidRequestStateError(LLMError, NonRetryableError):
 
     default_code: ClassVar[ErrorCode] = ErrorCode.LLM_INVALID_REQUEST_STATE
     default_recovery: ClassVar[RecoveryAction] = RecoveryAction.STRIP_REQUEST_STATE
+
+
+class LLMUnusableResponseError(LLMError, NonRetryableError):
+    """A successful HTTP-200 response the caller can't use (refusal / empty / wrong shape).
+
+    Raised by the injectable response validator on :class:`BaseLLM` AFTER a
+    ``send()`` returns without error, when the model's output is unusable (a bare
+    refusal, an empty body, or a structurally wrong shape). Retrying the same
+    request against the same provider reproduces the same unusable output, so the
+    recovery is FALLBACK — shed to a different model/provider. Being a
+    ``NonRetryableError`` it bypasses the inner transient-retry tenacity loop and
+    goes straight to the outer ``RecoveryRunner``; FALLBACK never counts as a
+    resource-health failure, so a rejection doesn't trip the circuit breaker.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.LLM_UNUSABLE_RESPONSE
+    default_recovery: ClassVar[RecoveryAction] = RecoveryAction.FALLBACK

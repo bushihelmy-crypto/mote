@@ -13,8 +13,10 @@ Public surface:
   * The :mod:`~mote.common.events.outcomes` typed per-event control outcomes.
 """
 
+from mote.common.events.breaker import breaker_bus_hook
 from mote.common.events.bus import EventBus
 from mote.common.events.context import current_bus, observe_event, observe_event_sync, set_bus
+from mote.common.events.journal import emit_journal_event
 from mote.common.events.log_subscriber import LogSubscriber
 from mote.common.events.outcomes import (
     CompactOutcome,
@@ -31,6 +33,7 @@ from mote.common.events.types import (
     ACTIVITY_COMPLETED,
     ACTIVITY_STARTED,
     AGENT_LIFECYCLE,
+    BREAKER_STATE_CHANGE,
     BUDGET,
     COMPACTION_CHECKPOINT,
     DIAGNOSTICS,
@@ -39,6 +42,7 @@ from mote.common.events.types import (
     FILE_SNAPSHOT,
     HISTORY_EDITED,
     HISTORY_RESET_EVENTS,
+    JOURNAL,
     LLM_ERROR,
     LLM_REQUEST,
     LLM_RESPONSE,
@@ -66,6 +70,7 @@ from mote.common.events.types import (
     ActivityStartedEvent,
     AgentEvent,
     AgentLifecycleEvent,
+    BreakerStateChangeEvent,
     BudgetEvent,
     CompactionCheckpointEvent,
     DiagnosticsEvent,
@@ -73,6 +78,7 @@ from mote.common.events.types import (
     FileMutatedEvent,
     FileSnapshotEvent,
     HistoryEditedEvent,
+    JournalEvent,
     LLMErrorEvent,
     LLMRequestEvent,
     LLMResponseEvent,
@@ -151,6 +157,10 @@ __all__ = [
     "ToolsChangedEvent",
     "DiagnosticsEvent",
     "RecoveryEvent",
+    "BreakerStateChangeEvent",
+    "breaker_bus_hook",
+    "JournalEvent",
+    "emit_journal_event",
     "TaskProgressEvent",
     "ResourceReportEvent",
     "SpanStartEvent",
@@ -185,6 +195,8 @@ __all__ = [
     "TOOLS_CHANGED",
     "DIAGNOSTICS",
     "RECOVERY",
+    "BREAKER_STATE_CHANGE",
+    "JOURNAL",
     "TASK_PROGRESS",
     "RESOURCE_REPORT",
     "AGENT_LIFECYCLE",

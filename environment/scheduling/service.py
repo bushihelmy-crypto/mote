@@ -39,6 +39,26 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def validate_new_task(cron: str, existing_count: int, *, now_ms: Optional[int] = None) -> None:
+    """Raise ``ValueError`` if a new task with ``cron`` cannot be admitted.
+
+    The control-free admission gate shared by :meth:`CronService.create_task`
+    (in-process) and the ``mote cron add`` CLI (no live control): the cron string
+    must parse, must have a next fire within the 366-day horizon, and the total
+    task count must be under :data:`MAX_CRON_TASKS`. Keeping it a free function
+    means the CLI reuses the exact same rules without constructing an
+    ``AgentControl``.
+    """
+    if parse_cron_expression(cron) is None:
+        raise ValueError(f"invalid cron expression: {cron!r}")
+    now = now_ms if now_ms is not None else _now_ms()
+    nxt = _next_cron_run_ms(cron, now)
+    if nxt is None or nxt - now > _MAX_HORIZON_MS:
+        raise ValueError(f"cron {cron!r} has no fire time within the next 366 days")
+    if existing_count >= MAX_CRON_TASKS:
+        raise ValueError(f"scheduled task limit reached ({MAX_CRON_TASKS})")
+
+
 @log_class(level="DEBUG")
 class CronService:
     """Owns the store/lock/scheduler trio and routes fires to ``AgentControl``."""
@@ -91,14 +111,8 @@ class CronService:
         Raises ``ValueError`` on an invalid cron string, a next fire beyond the
         366-day horizon, or when the task cap is reached.
         """
-        if parse_cron_expression(cron) is None:
-            raise ValueError(f"invalid cron expression: {cron!r}")
         now = _now_ms()
-        nxt = _next_cron_run_ms(cron, now)
-        if nxt is None or nxt - now > _MAX_HORIZON_MS:
-            raise ValueError(f"cron {cron!r} has no fire time within the next 366 days")
-        if len(self._store.list()) >= MAX_CRON_TASKS:
-            raise ValueError(f"scheduled task limit reached ({MAX_CRON_TASKS})")
+        validate_new_task(cron, len(self._store.list()), now_ms=now)
 
         task = CronTask.new(
             cron,
@@ -127,8 +141,14 @@ class CronService:
     # Scheduler hooks
     # ------------------------------------------------------------------
     def _on_fire(self, task: CronTask) -> None:
-        """Inject the task's prompt into its target agent as a new turn."""
-        target = task.target_session_id
+        """Inject the task's prompt into its target agent as a new turn.
+
+        A task with no explicit ``target_session_id`` (e.g. one created off-process
+        via ``mote cron add``) fires into the session that owns this scheduler —
+        whatever live session started the service — so CLI-authored tasks reach the
+        running agent without the CLI needing to know a session id at write time.
+        """
+        target = task.target_session_id or self._session_id
         if not target:
             return
         message = UserMessage(content=task.prompt)
@@ -155,4 +175,4 @@ class CronService:
         await self._scheduler.stop()
 
 
-__all__ = ["CronService", "MAX_CRON_TASKS"]
+__all__ = ["CronService", "MAX_CRON_TASKS", "validate_new_task"]

@@ -48,6 +48,30 @@ class TestBuildPolicy:
         assert policy.unshare_net is False
 
 
+class TestSecretMaskedDirs:
+    """The durable browser-profile store (encrypted logins) is masked as a whole
+    directory (tmpfs overlay) so a sandboxed command never even sees the ciphertext.
+    """
+
+    def test_profiles_dir_masked_when_present(self, tmp_path, monkeypatch):
+        from mote.common.const import paths
+
+        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
+        (tmp_path / "browser_profiles").mkdir()
+        policy = build_policy(_guard(str(tmp_path)), cwd=str(tmp_path))
+        masked = [os.path.realpath(p) for p in policy.masked_dirs]
+        assert os.path.realpath(str(tmp_path / "browser_profiles")) in masked
+
+    def test_profiles_dir_absent_not_masked(self, tmp_path, monkeypatch):
+        from mote.common.const import paths
+
+        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
+        # No browser_profiles dir created -> nothing to mask (bwrap errors on a
+        # missing bind source, so only existing dirs are returned).
+        policy = build_policy(_guard(str(tmp_path)), cwd=str(tmp_path))
+        assert policy.masked_dirs == []
+
+
 class TestBuildRuntime:
     def test_runtime_config_passthrough(self, tmp_path):
         cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", harden_process=True)

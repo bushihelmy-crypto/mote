@@ -1,11 +1,11 @@
 """CodeMapContextSource — a local structure map of the touched files, per turn.
 
-The passive *navigation layer* distilled from CodeGraph. Where grep/read/glob
+The passive *navigation layer* distilled from CodeGraph. Where Search/Read
 are the agent's *query-driven* tools (it must decide to reach for them), this
 source *pushes* a small structural picture of the files the session has already
 worked with — for each: the symbols it defines, which other touched files it
 imports, and which import it. The map never carries source bodies (that stays a
-Read away); it is a table of contents the model can use to target grep/read
+Read away); it is a table of contents the model can use to target Search/Read
 instead of re-scanning files it has already opened.
 
 Locality-scoped by construction: it only ever reflects the ``record_file_read``
@@ -51,6 +51,9 @@ from mote.context.code_map import CodeMap, FileNeighborhood
 # When a file defines more than this many symbols, fold the tail behind a
 # "(+N more)" summary so one large file cannot dominate the map block.
 _MAX_SYMBOLS_PER_FILE = 12
+# Cap on whole-repo importers shown per unread dependency (Opt A), so a widely-
+# imported dangling target's "used by:" cannot dominate the block.
+_UNREAD_USEDBY_CAP = 8
 # Default token ceiling for the whole rendered block. Degrades in three tiers
 # to fit (full → drop signatures/calls → names + edge counts only).
 _DEFAULT_MAX_TOKENS = 1200
@@ -78,7 +81,7 @@ class CodeMapContextSource(ObservationSubscriber):
         surface_callers: bool = False,
     ) -> None:
         self._get_touched_files = get_touched_files
-        # P2: duck-typed provider of files surfaced by a Grep/Glob match but not
+        # P2: duck-typed provider of files surfaced by a Search match but not
         # read in full. Merged into the map's file set so a searched-but-unopened
         # file's structure (defines + intent) can guide "what should I read".
         # None -> the map reflects only the read trajectory.
@@ -157,7 +160,7 @@ class CodeMapContextSource(ObservationSubscriber):
         """The map's file set: the read trajectory plus glimpsed search hits (P2).
 
         Read files come first (the working set), then glimpsed-only files a
-        Grep/Glob surfaced but the model has not opened — deduped, order-preserved
+        Search surfaced but the model has not opened — deduped, order-preserved
         so an already-read file is never demoted to a glimpse. Best-effort: a
         raising provider contributes nothing.
         """
@@ -185,7 +188,14 @@ class CodeMapContextSource(ObservationSubscriber):
         except Exception:  # noqa: BLE001 — best-effort; never break a turn
             return None
 
-        # Layer B: resolve dangling-import symbols for the changed rows via LSP.
+        # Baseline: resolve dangling-import symbols / purpose / used-by from the
+        # persistent whole-repo index (LSP-free). Runs first so LSP (below) only
+        # *overrides* symbols where it has a more precise answer.
+        if self._repo_index is not None:
+            self._fill_unread_from_index(neighborhoods)
+
+        # Layer B: refine dangling-import symbols for the changed rows via LSP —
+        # merges over the index baseline (LSP wins per target).
         if self._lsp_query is not None:
             await self._fill_unread_symbols(neighborhoods)
 
@@ -245,20 +255,60 @@ class CodeMapContextSource(ObservationSubscriber):
             return False  # body in history, no edges → suppressed row is empty
         return bool(nb.symbols or nb.calls)
 
-    async def _fill_unread_symbols(self, neighborhoods: list) -> None:
-        """Resolve dangling-import target symbols via LSP, per neighborhood.
+    def _fill_unread_from_index(self, neighborhoods: list) -> None:
+        """LSP-free baseline: resolve unread targets from the whole-repo index.
 
-        Best-effort: a raising resolver leaves ``unread_symbols`` empty (the row
-        still renders the bare unread path). Only rows that actually have unread
-        imports are queried.
+        For every row with dangling imports, ask the persistent index (via the
+        duck-typed readers on ``self._repo_index``) what each untouched target
+        *defines*, its *purpose* (Opt B), and who else *depends on* it (Opt A).
+        This is the baseline any session gets without an LSP; the LSP pass below
+        only overrides the symbol view where it can. Best-effort throughout — a
+        missing reader or a raise leaves the fields empty (bare path renders).
+        """
+        symbols_of = getattr(self._repo_index, "symbols_in", None)
+        module_summary_of = getattr(self._repo_index, "module_summary_of", None)
+        importers_of = getattr(self._repo_index, "importers", None)
+        if symbols_of is None or module_summary_of is None or importers_of is None:
+            return
+        # Decision B: prefer the symbol-precise whole-repo reverse-dep query when
+        # the index exposes it, so an unread target's ``used by:`` names who uses
+        # its API, not merely who imports its module. None -> module-level query.
+        references_of = getattr(self._repo_index, "references_to", None)
+        for nb in neighborhoods:
+            if not nb.imports_unread:
+                continue
+            try:
+                syms, summaries, used_by = self._map.resolve_unread_from_index(
+                    nb.imports_unread,
+                    symbols_of=symbols_of,
+                    module_summary_of=module_summary_of,
+                    importers_of=importers_of,
+                    references_of=references_of,
+                )
+                nb.unread_symbols = syms
+                nb.unread_module_summary = summaries
+                nb.unread_imported_by = used_by
+            except Exception:  # noqa: BLE001 — never break a turn on a bad resolve
+                pass
+
+    async def _fill_unread_symbols(self, neighborhoods: list) -> None:
+        """Refine dangling-import target symbols via LSP — overlay on the index baseline.
+
+        Keeps the LSP-free index baseline (:meth:`_fill_unread_from_index`) and
+        merges the LSP-resolved symbols over it per target, so LSP (more precise)
+        wins where it answers but the index insight stands where it does not.
+        Purpose / used-by stay index-sourced (LSP resolves symbols only). Best-
+        effort: a raising resolver leaves the baseline untouched. Only rows that
+        actually have unread imports are queried.
         """
         for nb in neighborhoods:
             if not nb.imports_unread:
                 continue
             try:
-                nb.unread_symbols = await self._map.resolve_unread(nb.path, nb.imports_unread, self._lsp_query)
+                lsp_syms = await self._map.resolve_unread(nb.path, nb.imports_unread, self._lsp_query)
             except Exception:  # noqa: BLE001 — never break a turn on a bad resolve
-                nb.unread_symbols = {}
+                lsp_syms = {}
+            nb.unread_symbols = {**nb.unread_symbols, **lsp_syms}
 
     # -- F1: read-state / in-context frontier --------------------------------
 
@@ -418,7 +468,7 @@ class CodeMapContextSource(ObservationSubscriber):
             "# Code map",
             "Structure of files you're working with — what each defines and how "
             "they depend on each other (within this set). Use it to target "
-            "grep/read instead of re-scanning:",
+            "Search/Read instead of re-scanning:",
             "",
         ]
         for nb in changed:
@@ -463,8 +513,17 @@ class CodeMapContextSource(ObservationSubscriber):
             targets = ", ".join(display_path(p, cwd) for p in nb.imports)
             out.append(f"    imports: {targets}")
         if nb.imports_unread:
-            unread = ", ".join(self._render_unread(p, nb.unread_symbols, cwd, tier) for p in nb.imports_unread)
+            unread = ", ".join(
+                self._render_unread(p, nb.unread_symbols, nb.unread_module_summary, cwd, tier)
+                for p in nb.imports_unread
+            )
             out.append(f"    also imports (unread): {unread}")
+            # Opt A: whole-repo reverse-deps of each unread target (tier 0 only —
+            # drops first under budget pressure). Shows who else in the repo
+            # depends on a file the agent has not opened, capped so a hub file's
+            # importer list stays bounded.
+            if tier < 1:
+                out.extend(self._render_unread_used_by(nb, cwd))
         if interface_changed:
             out.extend(self._render_risk(nb, cwd))
         elif nb.imported_by:
@@ -511,19 +570,46 @@ class CodeMapContextSource(ObservationSubscriber):
                 out.append(f"    {sym} called by: {names}")
         return out
 
-    def _render_unread(self, path: str, unread_symbols: dict, cwd: Optional[str], tier: int) -> str:
-        """One unread-import target: ``pkg/other.py (thing, helper)`` when resolved.
+    def _render_unread(
+        self, path: str, unread_symbols: dict, unread_module_summary: dict, cwd: Optional[str], tier: int
+    ) -> str:
+        """One unread-import target: ``pkg/other.py (thing, helper) — <purpose>``.
 
-        At tier ≥1 the resolved-symbol annotation is dropped to respect the
-        token budget — the bare path still orients the model to the dependency.
+        At tier 0 the resolved symbols ``(names)`` and the module *purpose* (Opt
+        B) ride alongside the path. At tier ≥1 both annotations are dropped to
+        respect the token budget — the bare path still orients the model to the
+        dependency.
         """
         display = display_path(path, cwd)
         if tier >= 1:
             return display
         names = unread_symbols.get(path) if unread_symbols else None
         if names:
-            return f"{display} ({', '.join(names)})"
+            display = f"{display} ({', '.join(names)})"
+        summary = unread_module_summary.get(path) if unread_module_summary else None
+        if summary:
+            display = f"{display} — {summary}"
         return display
+
+    def _render_unread_used_by(self, nb: FileNeighborhood, cwd: Optional[str]) -> list[str]:
+        """Opt A ``<unread.py> used by: a.py, b.py (+N more)`` lines (tier 0).
+
+        Per unread dependency target that has whole-repo reverse-deps, a nested
+        line naming its importers, capped at :data:`_UNREAD_USEDBY_CAP`. Empty
+        when no target resolved any importers (index off / none found).
+        """
+        out: list[str] = []
+        for target in nb.imports_unread:
+            importers = nb.unread_imported_by.get(target) if nb.unread_imported_by else None
+            if not importers:
+                continue
+            head = importers[:_UNREAD_USEDBY_CAP]
+            names = ", ".join(display_path(p, cwd) for p in head)
+            overflow = len(importers) - len(head)
+            if overflow > 0:
+                names = f"{names} (+{overflow} more)"
+            out.append(f"      {display_path(target, cwd)} used by: {names}")
+        return out
 
     def _render_defines(self, symbols: list, tier: int) -> list[str]:
         """The ``defines:`` sub-lines for a file, honouring the tier's verbosity.
@@ -616,6 +702,10 @@ class CodeMapContextSource(ObservationSubscriber):
         # Fold resolved unread symbols so a newly-resolved "defines" view
         # re-surfaces the row (Layer B). Sorted by target for a stable key.
         resolved = ";".join(f"{p}:{','.join(nb.unread_symbols[p])}" for p in sorted(nb.unread_symbols or {}))
+        # Opt B/A: fold the unread targets' purpose + whole-repo used-by so a
+        # newly-resolved purpose or a changed importer set re-surfaces the row.
+        unread_purpose = ";".join(f"{p}:{nb.unread_module_summary[p]}" for p in sorted(nb.unread_module_summary or {}))
+        unread_used = ";".join(f"{p}:{','.join(nb.unread_imported_by[p])}" for p in sorted(nb.unread_imported_by or {}))
         in_ctx = "1" if nb.path in self._in_context else "0"
         risk = ",".join(self._changed_names.get(nb.path, []))
         precise = ";".join(
@@ -624,7 +714,10 @@ class CodeMapContextSource(ObservationSubscriber):
         surfaced = ";".join(
             f"{sym}:{','.join(callers)}" for sym, callers in sorted((self._surfaced.get(nb.path) or {}).items())
         )
-        return f"{mod}|{syms}|{imps}|{unread}|{used}|{calls}|{resolved}|{in_ctx}|{risk}|{precise}|{surfaced}"
+        return (
+            f"{mod}|{syms}|{imps}|{unread}|{used}|{calls}|{resolved}|"
+            f"{unread_purpose}|{unread_used}|{in_ctx}|{risk}|{precise}|{surfaced}"
+        )
 
 
 __all__ = ["CodeMapContextSource"]

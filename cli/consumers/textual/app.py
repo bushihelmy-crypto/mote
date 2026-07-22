@@ -123,6 +123,12 @@ class MoteApp(App):
         self._open_block: Optional[AssistantBlock] = None
         # Tool widgets awaiting their completion event, keyed by tool_use_id.
         self._tool_widgets: dict[str, ToolCallWidget] = {}
+        # tool_use_id → its mounted ToolCallWidget, kept PAST completion so a
+        # structured ``FileDiffBlock`` (which the projector emits right after the
+        # completion) folds its diff INTO the owning tool row — Edit/Write's
+        # invocation + change select/fold as one unit. Distinct from
+        # ``_tool_widgets`` (which pops on completion for result correlation).
+        self._diff_targets: dict[str, ToolCallWidget] = {}
         # The open collapsible search/read group: a run of consecutive
         # Read/Grep/Glob calls coalesces into ONE
         # ``ToolGroupWidget``. ``None`` between runs — the reducer emits a

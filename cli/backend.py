@@ -30,6 +30,7 @@ building a parallel type system.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -40,11 +41,11 @@ from mote.common.schema.file_watch_config import FileWatchConfig
 from mote.common.utils.git_state import find_git_root
 from mote.environment.control import AgentControl
 from mote.environment.runtime import AgentRuntime
-from mote.executor.agent_md_loader import register_md_agents
 from mote.executor.agent_registry import registry as agent_registry
 from mote.executor.mcp.config_source import load_mcp_servers
 from mote.executor.permission.settings_source import load_permission_rules
 from mote.roles import Role
+from mote.roles.agents.markdown_loader import register_md_agents
 from mote.roles.role_schema import RoleSchema
 from mote.roles.role_state import RoleState
 from mote.router.llm.context import Context
@@ -214,6 +215,87 @@ async def delete_react_units(role: Any, anchor_ids) -> int:
     return await cm.delete_react_units(anchor_ids)
 
 
+def list_checkpoints(role: Any) -> list:
+    """List the role's whole-tree checkpoints as ``[CheckpointEntry, ...]``.
+
+    Reads the session's rollout log; each entry is a captured user-turn snapshot
+    (index, prompt preview, timestamp, commit) the user can ``/rewind`` to. An
+    empty list when the feature was inert (non-repo workspace) or nothing yet
+    captured.
+    """
+    from mote.session.checkpoint import list_checkpoints as _list_checkpoints
+    from mote.session.log import SessionLog
+
+    log = SessionLog(role.state.session_id)
+    return _list_checkpoints(log)
+
+
+@dataclass
+class RewindResult:
+    """The outcome of a ``/rewind`` — the target plus any external-edit warning.
+
+    ``target`` is the :class:`CheckpointEntry` the tree was rolled back to.
+    ``external`` lists paths a process *other* than the agent changed since that
+    turn ended (the diff of the turn's after-image against the tree captured just
+    before rewinding). Non-empty means the rewind overwrote edits the agent did
+    not make — surfaced so the user knows what was clobbered; the rewind still
+    proceeds (and is itself reversible via the auto-saved "before rewind" point).
+    """
+
+    target: Any
+    external: List[str]
+
+
+def rewind_files(role: Any, index: int) -> Optional[RewindResult]:
+    """Roll the working tree back to checkpoint ``index``; return the outcome.
+
+    Auto-captures the *current* tree state first (a checkpoint labelled "before
+    rewind") so the rewind itself is reversible, then restores the target
+    checkpoint's commit. Before restoring, diffs the target turn's after-image
+    (the tree the agent left) against that just-captured current tree to detect
+    files an external process changed since the agent finished — reported as
+    :attr:`RewindResult.external`. Returns a :class:`RewindResult` on success, or
+    ``None`` when the index is out of range or the restore failed.
+    """
+    from pathlib import Path
+
+    from mote.session.checkpoint import CheckpointStore
+    from mote.session.checkpoint import list_checkpoints as _list_checkpoints
+    from mote.session.events import CheckpointEvent
+    from mote.session.log import SessionLog
+
+    log = SessionLog(role.state.session_id)
+    entries = _list_checkpoints(log)
+    if not (0 <= index < len(entries)):
+        return None
+    target = entries[index]
+    work_dir = role.state.working_dir
+    if not work_dir:
+        return None
+    store = CheckpointStore(log.path.parent / "git", Path(work_dir))
+    # Reversibility: snapshot the current tree before overwriting it, chained
+    # onto the latest checkpoint so it appears at the tail of the list.
+    parent = entries[-1].commit if entries else None
+    safety = store.capture(parent=parent, message="before rewind")
+    if safety is not None:
+        log.append(
+            CheckpointEvent(
+                commit=safety,
+                prompt_index=len(entries),
+                prompt_preview="(before rewind)",
+                working_dir=work_dir,
+            )
+        )
+    # External-modification detection: files that differ between what the agent
+    # left at that turn's end (after-image) and the live tree we just captured.
+    external: List[str] = []
+    if target.after_commit and safety:
+        external = store.diff_tree(target.after_commit, safety)
+    if not store.restore(target.commit):
+        return None
+    return RewindResult(target=target, external=external)
+
+
 def runtime_name(runtime: Any) -> str:
     """The display name of a runtime's role (``?`` when unavailable)."""
     return getattr(getattr(runtime.role, "role_schema", None), "name", "?")
@@ -273,6 +355,28 @@ def role_deferred_tool_count(role: Any) -> int:
     return len(set(deferred))
 
 
+def usage_report(role: Any) -> str:
+    """The ``/usage`` block: session cost + provider rate-limit quota.
+
+    Reads the two rolling trackers off the role's shared router
+    :class:`~mote.router.llm.context.Context` — ``cost_manager`` (accumulated
+    spend) and ``rate_limit_tracker`` (latest observed provider quota) — and
+    renders each via its own report module. A role without a resolvable context
+    (a bare fake in tests) degrades to a plain "unavailable" line rather than
+    raising, keeping the command host-surface total.
+    """
+    from mote.router.cost.report import format_total_cost
+    from mote.router.ratelimit import format_rate_limits
+
+    try:
+        context = role.context
+    except Exception:  # noqa: BLE001 — a role without a bound context degrades cleanly
+        return "Usage unavailable (no active context)."
+    cost_block = format_total_cost(context.cost_manager)
+    limit_block = format_rate_limits(context.rate_limit_tracker)
+    return f"{cost_block}\n\n{limit_block}"
+
+
 def resume_role(role: Any) -> bool:
     """Resume a role's rollout. Returns whether a rollout was found."""
     return role.resume_session()
@@ -320,6 +424,9 @@ __all__ = [
     "role_cleanup",
     "clear_messages",
     "delete_react_units",
+    "list_checkpoints",
+    "rewind_files",
+    "RewindResult",
     "runtime_name",
     "runtime_role",
     "fork_role",

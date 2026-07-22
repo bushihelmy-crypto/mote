@@ -13,20 +13,23 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt
 
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.const import USE_CONFIG_TIMEOUT
 from mote.common.events import log_llm_stream
 from mote.common.exception import LLMEmptyResponseError, classify_llm_error, is_retryable
 from mote.common.logs import logger
+from mote.common.model_profile import profile_for
 from mote.common.utils.common import decode_image, log_and_reraise
 from mote.common.utils.exceptions import handle_exception
 from mote.common.utils.token_counter import count_message_tokens, count_string_tokens, get_max_completion_tokens
 from mote.router.cost import CostTracker
+from mote.router.llm._retry import wait_retry_after
 from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
+from mote.router.ratelimit.capture import install_rate_limit_hook
 
 # Model-name substrings whose models reject standard chat params → the set of
 # request kwargs to drop. FAMILY match: a key matches when it is a substring of
@@ -97,7 +100,14 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         self.aclient = self._rebuild_client()
 
     def _rebuild_client(self) -> AsyncOpenAI:
-        return AsyncOpenAI(**self._make_client_kwargs())
+        client = AsyncOpenAI(**self._make_client_kwargs())
+        install_rate_limit_hook(
+            client,
+            get_tracker=lambda: self.rate_limit_tracker,
+            provider=self.provider_label,
+            model=self.model or "unknown",
+        )
+        return client
 
     def _make_client_kwargs(self) -> dict:
         kwargs: dict[str, Any]
@@ -266,6 +276,13 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
+        # Reasoning models take the effort as a first-class Chat Completions param.
+        # Gate on the model's declared capability so an old model never receives it
+        # (the latent-bug guard: same shape as the tool-search capability gate).
+        effort = self.config.reasoning_effort
+        if effort and profile_for(self.model).supports_thinking:
+            kwargs["reasoning_effort"] = effort
+
         for param in _unsupported_request_params(self.model):
             kwargs.pop(param, None)
 
@@ -320,7 +337,7 @@ class OpenAILLM(CredentialRotationMixin, BaseLLM):
         return await self._achat_completion(messages, timeout=self.get_timeout(timeout), raise_if_empty=raise_if_empty)
 
     @retry(
-        wait=wait_random_exponential(min=1, max=60),
+        wait=wait_retry_after(),
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),

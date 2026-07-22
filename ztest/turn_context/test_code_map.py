@@ -338,15 +338,43 @@ def test_lsp_query_off_reproduces_bare_path(tmp_path):
 
 
 class _FakeRepoIndex:
-    """Duck-typed repo_index: reports whole-repo importers for any candidates."""
+    """Duck-typed repo_index: whole-repo importers + LSP-free symbols/purpose.
 
-    def __init__(self, importers: list) -> None:
-        self._importers = importers
+    ``importers`` returns a fixed list for any candidate set (back-compat with
+    the used-by tests); pass ``by_candidate`` instead to return per-candidate
+    importer lists (so an unread target's used-by can be isolated from a touched
+    file's own used-by). ``symbols``/``summaries`` are keyed by abspath and feed
+    the LSP-free unread resolution (``symbols_in`` / ``module_summary_of``).
+    """
+
+    def __init__(
+        self,
+        importers: list | None = None,
+        *,
+        by_candidate: dict | None = None,
+        symbols: dict | None = None,
+        summaries: dict | None = None,
+    ) -> None:
+        self._importers = importers or []
+        self._by_candidate = by_candidate or {}
+        self._symbols = symbols or {}
+        self._summaries = summaries or {}
         self.asked: list = []
 
     def importers(self, candidates) -> list:
         self.asked.append(set(candidates))
+        if self._by_candidate:
+            out: list = []
+            for c in candidates:
+                out.extend(self._by_candidate.get(c, []))
+            return out
         return list(self._importers)
+
+    def symbols_in(self, path) -> list:
+        return list(self._symbols.get(path, []))
+
+    def module_summary_of(self, path) -> str:
+        return self._summaries.get(path, "")
 
 
 def test_repo_index_lists_untouched_importer(tmp_path):
@@ -904,3 +932,144 @@ def test_surfaced_caller_change_resurfaces_row(tmp_path):
     out = run(src.render(cwd=str(tmp_path)))
     assert out is not None
     assert "b.py" in out
+
+
+# -- Layer C (LSP-free): unread coverage resolved from the whole-repo index ----
+
+
+def _sym(name: str, qualified_name: str | None = None):
+    from mote.context.code_map import Symbol
+
+    return Symbol(
+        name=name,
+        qualified_name=qualified_name or name,
+        kind="function",
+        start_line=1,
+        signature="()",
+        summary="",
+    )
+
+
+def test_unread_symbols_from_index_without_lsp(tmp_path):
+    # CORE: an unread dangling target's defines surface from the persistent index
+    # with NO LSP wired — impossible before (Layer B returned {} without an LSP).
+    _write(tmp_path, "pkg/__init__.py", "")
+    other = _write(tmp_path, "pkg/other.py", "def thing():\n    pass\n\ndef helper():\n    pass\n")
+    consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
+    other_abs = os.path.abspath(other)
+    repo = _FakeRepoIndex(symbols={other_abs: [_sym("thing"), _sym("helper")]})
+    src = CodeMapContextSource(get_touched_files=lambda: [consumer], repo_index=repo)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "also imports (unread):" in out
+    assert os.path.join("pkg", "other.py") in out
+    # The index-resolved symbol names ride alongside the bare path — LSP-free.
+    assert "thing" in out and "helper" in out
+
+
+def test_unread_purpose_from_index(tmp_path):
+    # Opt B: the unread target's module purpose renders at tier 0.
+    _write(tmp_path, "pkg/__init__.py", "")
+    other = _write(tmp_path, "pkg/other.py", '"""Other things live here."""\ndef thing():\n    pass\n')
+    consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
+    other_abs = os.path.abspath(other)
+    repo = _FakeRepoIndex(summaries={other_abs: "Other things live here."})
+    src = CodeMapContextSource(get_touched_files=lambda: [consumer], repo_index=repo)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "— Other things live here." in out
+
+
+def test_unread_used_by_from_index_capped_and_tier_gated(tmp_path):
+    # Opt A: an unread target's whole-repo "used by:" renders (nested) at tier 0,
+    # capped at _UNREAD_USEDBY_CAP, and drops entirely under a tight budget.
+    from mote.context.turn_context.sources.code_map import _UNREAD_USEDBY_CAP
+
+    _write(tmp_path, "pkg/__init__.py", "")
+    other = _write(tmp_path, "pkg/other.py", "def thing():\n    pass\n")
+    consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
+    # Ten whole-repo importers of the unread target, keyed on its module candidate
+    # so the touched consumer's own used-by (a different candidate) stays empty.
+    importers = [os.path.abspath(_write(tmp_path, f"dep{i}.py", "import pkg.other\n")) for i in range(10)]
+    repo = _FakeRepoIndex(by_candidate={"pkg.other": importers})
+
+    full = CodeMapContextSource(get_touched_files=lambda: [consumer], repo_index=repo)
+    out = run(full.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert f"{os.path.join('pkg', 'other.py')} used by:" in out
+    overflow = len(importers) - _UNREAD_USEDBY_CAP
+    assert f"(+{overflow} more)" in out  # capped
+    assert "dep0.py" in out  # a shown importer
+    assert "dep9.py" not in out  # a folded-away importer
+
+    tight = CodeMapContextSource(get_touched_files=lambda: [consumer], repo_index=repo, max_tokens=1)
+    tight_out = run(tight.render(cwd=str(tmp_path)))
+    assert tight_out is not None
+    # Tier ≥1 drops the nested unread used-by; the bare unread path remains.
+    assert "used by:" not in tight_out
+    assert os.path.join("pkg", "other.py") in tight_out
+
+
+def test_unread_index_resolution_change_resurfaces_row(tmp_path):
+    # A change in the index-resolved purpose re-surfaces the row; an unchanged
+    # resolution stays quiet (byte-stability of the change frontier).
+    _write(tmp_path, "pkg/__init__.py", "")
+    other = _write(tmp_path, "pkg/other.py", "def thing():\n    pass\n")
+    consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
+    other_abs = os.path.abspath(other)
+    summaries = {other_abs: "First purpose."}
+    repo = _FakeRepoIndex(summaries=summaries)
+    src = CodeMapContextSource(get_touched_files=lambda: [consumer], repo_index=repo)
+    first = run(src.render(cwd=str(tmp_path)))
+    assert first is not None and "First purpose." in first
+    assert run(src.render(cwd=str(tmp_path))) is None  # unchanged: quiet
+
+    # The index now reports a different purpose — no mtime bump needed, the index
+    # resolver reads live each render (unlike the mtime-cached LSP path).
+    summaries[other_abs] = "Second purpose."
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "Second purpose." in out
+
+
+def test_lsp_overrides_index_symbols_keeps_index_purpose_and_used_by(tmp_path):
+    # LSP wins per-target for SYMBOLS (more precise); purpose/used-by stay
+    # index-sourced (LSP resolves symbols only).
+    _write(tmp_path, "pkg/__init__.py", "")
+    other = _write(tmp_path, "pkg/other.py", "def indexthing():\n    pass\n")
+    consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
+    other_abs = os.path.abspath(other)
+    far = os.path.abspath(_write(tmp_path, "far.py", "import pkg.other\n"))
+    repo = _FakeRepoIndex(
+        symbols={other_abs: [_sym("indexthing")]},
+        summaries={other_abs: "Index purpose."},
+        by_candidate={"pkg.other": [far]},
+    )
+    lsp = _FakeLspQuery({other_abs: [{"name": "lspthing"}]})
+    src = CodeMapContextSource(get_touched_files=lambda: [consumer], repo_index=repo, lsp_query=lsp)
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    # LSP overrides the index symbol view.
+    assert "lspthing" in out
+    assert "indexthing" not in out
+    # Purpose + whole-repo used-by remain from the index.
+    assert "Index purpose." in out
+    assert f"{os.path.join('pkg', 'other.py')} used by:" in out
+    assert "far.py" in out
+
+
+def test_no_repo_index_leaves_unread_bare(tmp_path):
+    # No repo_index (and no LSP) -> touched-set behavior unchanged: the unread
+    # line shows the bare path with no symbols/purpose/used-by, and no crash.
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "pkg/other.py", '"""Purpose."""\ndef thing():\n    pass\n')
+    consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
+    src = CodeMapContextSource(get_touched_files=lambda: [consumer])
+    out = run(src.render(cwd=str(tmp_path)))
+    assert out is not None
+    assert "also imports (unread):" in out
+    assert os.path.join("pkg", "other.py") in out
+    # Nothing resolved: no symbol annotation, no purpose, no nested used-by.
+    assert "(thing)" not in out
+    assert "Purpose." not in out
+    assert f"{os.path.join('pkg', 'other.py')} used by:" not in out

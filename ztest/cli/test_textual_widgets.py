@@ -830,6 +830,93 @@ async def test_file_diff_row_caption_verb_for_creation():
         assert "(created)" in caption.plain
 
 
+@pytest.mark.asyncio
+async def test_file_diff_row_folds_under_ctrl_o():
+    """``FileDiffRow`` is a FoldableRow: ctrl+o folds the diff down to its caption.
+
+    A Write/Edit change starts expanded (the diff is the point), then ``set_expanded``
+    (driven by the global/scoped ctrl+o) collapses it to just the ``⎿ path (verb)``
+    caption, hiding the +/- body, and re-expands it back to the full diff.
+    """
+    from mote.cli.consumers.textual.widgets import FileDiffRow, FoldableRow
+    from mote.cli.contracts.view import FileDiffBlock
+
+    async with _Harness().run_test() as pilot:
+        row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")))
+        assert isinstance(row, FoldableRow) and row.expanded is True
+        expanded = _widget_text(row)
+        assert "/tmp/a.py" in expanded and "x = 2" in expanded  # caption + diff body
+        row.set_expanded(False)
+        await pilot.pause()
+        collapsed = _widget_text(row)
+        assert "/tmp/a.py" in collapsed  # caption kept
+        assert "x = 2" not in collapsed  # diff body folded away
+        row.set_expanded(True)
+        await pilot.pause()
+        assert "x = 2" in _widget_text(row)  # re-expands to the full diff
+
+
+@pytest.mark.asyncio
+async def test_file_diff_row_plain_click_posts_selected():
+    """A plain click on a file-diff row posts ``Clicked`` so the host selects it."""
+    from rich.style import Style
+    from textual.events import Click
+
+    from mote.cli.consumers.textual.widgets import FileDiffRow, FoldableRow
+    from mote.cli.contracts.view import FileDiffBlock
+
+    async with _Harness().run_test() as pilot:
+        row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")))
+        posted = _click_spy(row)
+        event = Click(
+            widget=row,
+            x=0,
+            y=0,
+            delta_x=0,
+            delta_y=0,
+            button=1,
+            shift=False,
+            meta=False,
+            ctrl=False,
+            style=Style(),
+        )
+        await row._on_click(event)
+        assert len(posted) == 1
+        assert isinstance(posted[0], FoldableRow.Clicked)
+        assert posted[0].row is row
+
+
+@pytest.mark.asyncio
+async def test_write_diff_folds_into_tool_widget_as_one_unit():
+    """An Edit/Write's diff folds INTO its ToolCallWidget — one select/fold row.
+
+    ``set_file_diff`` attaches the structured change below the invocation +
+    result inside the SAME widget (not a separate FileDiffRow), and expands the
+    row so the diff shows; ctrl+o then folds the whole unit — invocation, result
+    AND diff — down to just the ``● Write`` + ``⎿ summary`` lines.
+    """
+    from mote.cli.consumers.textual.widgets import FoldableRow
+    from mote.cli.contracts.view import FileDiffBlock
+
+    async with _Harness().run_test() as pilot:
+        started = ToolCallStarted(tool_name="Edit", title="Edit", headline="a.py", tool_use_id="w-1")
+        widget = await pilot.app.add(ToolCallWidget(started))
+        widget.complete(ToolCallCompleted(tool_name="Edit", tool_use_id="w-1", summary="wrote 1 file"))
+        widget.set_file_diff(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n", tool_use_id="w-1"))
+        await pilot.pause()
+        # A file change makes the NONE-fold Write row foldable + expands it: the
+        # diff body renders inside the tool row.
+        assert isinstance(widget, FoldableRow) and widget._folds is True and widget.expanded is True
+        expanded = _widget_text(widget)
+        assert "x = 2" in expanded and "wrote 1 file" in expanded
+        # ctrl+o folds the whole unit — diff away, summary kept.
+        widget.set_expanded(False)
+        await pilot.pause()
+        collapsed = _widget_text(widget)
+        assert "x = 2" not in collapsed  # diff folded away with the row
+        assert "wrote 1 file" in collapsed  # ⎿ summary kept
+
+
 def _has_link_span(text, url: str) -> bool:
     """True when *text* has a span whose style links to *url*."""
     from rich.style import Style

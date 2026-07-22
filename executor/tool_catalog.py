@@ -150,6 +150,19 @@ class ToolCatalog:
         """All names (aliases included) routing to an MCP-category tool."""
         return [n for n, t in self._tools.items() if self.category(t) == "mcp"]
 
+    def names_of(self, primary: str) -> frozenset[str]:
+        """Every bound name (primary + aliases) routing to the tool whose canonical
+        primary name is ``primary`` — empty if no such tool is bound.
+
+        Lets a consumer identify a tool by its ONE stable primary name across all
+        the aliases the model may have emitted (``write`` / ``Update`` → ``Edit``),
+        without a live per-call resolve. Resolves the primary first (so an alias
+        passed as ``primary`` still finds the instance), then returns every name
+        pointing at that same instance by identity.
+        """
+        tool = self._tools.get(primary)
+        return frozenset(self.names_for(tool)) if tool is not None else frozenset()
+
     # ------------------------------------------------------------------
     # Deferral (tool-search visibility)
     # ------------------------------------------------------------------
@@ -261,7 +274,7 @@ class ToolCatalog:
                 # so the tool's cached class schema is never mutated.
                 schema = {**schema, "description": SPLIT_TOOLSPEC_DESC}
             native[schema["name"]] = schema
-        specs = to_native_tool_specs(native, provider=provider)
+        specs = to_native_tool_specs(native, provider=provider, model=model)
         if defer_names:
             for spec in specs:
                 if spec.get("name") in defer_names:

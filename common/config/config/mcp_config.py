@@ -3,6 +3,7 @@ from typing import Optional
 
 from pydantic import Field, model_validator
 
+from mote.common.config.config.oauth_config import OAuthProviderConfig
 from mote.common.utils.yaml_model import YamlModel
 
 
@@ -38,6 +39,14 @@ class MCPServerConfig(YamlModel):
     tool_call_timeout: Optional[float] = Field(
         default=60 * 60,
         description="Tool call timeout in seconds, if the tool call is not completed within this timeout, the tool call will be cancelled",
+    )
+
+    # Optional OAuth for a remote (SSE/HTTP) server that requires a bearer token.
+    # When set, the MCP client authenticates via the shared OAuth runtime
+    # (``router.oauth.OAuthManager``) instead of a static header; STDIO servers
+    # are local processes and ignore this.
+    oauth: Optional[OAuthProviderConfig] = Field(
+        default=None, description="OAuth settings for a remote server that requires a bearer token (SSE only)."
     )
 
     @model_validator(mode="after")

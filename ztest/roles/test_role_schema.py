@@ -24,7 +24,6 @@ class TestDefaults:
     def test_memory_defaults(self):
         s = RoleSchema()
         assert s.enable_memory is True
-        assert s.enable_router is False
 
     def test_behavior_flag_defaults(self):
         s = RoleSchema()

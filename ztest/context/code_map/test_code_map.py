@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 
-from mote.context.code_map import CodeMap
+from mote.context.code_map import CodeMap, Symbol
+from mote.context.code_map.providers.resolvers.python import PythonModuleResolver
 
 
 def _write(base, relpath: str, source: str) -> str:
@@ -108,20 +109,20 @@ def test_neighborhood_reflects_edit_on_reparse(tmp_path):
 
 
 def test_module_candidates_progressive_suffixes():
-    cands = CodeMap._module_candidates("/root/a/b/c.py")
+    cands = CodeMap._candidates("/root/a/b/c.py")
     assert "c" in cands
     assert "b.c" in cands
     assert "a.b.c" in cands
 
 
 def test_module_candidates_package_init_uses_dir_name():
-    cands = CodeMap._module_candidates("/root/pkg/__init__.py")
+    cands = CodeMap._candidates("/root/pkg/__init__.py")
     assert "pkg" in cands
     assert "__init__" not in cands
 
 
 def test_module_candidates_non_python_empty():
-    assert CodeMap._module_candidates("/root/readme.md") == set()
+    assert CodeMap._candidates("/root/readme.md") == set()
 
 
 # -- Feature 1: intra-file call edges surface in the neighborhood --------------
@@ -254,7 +255,7 @@ def test_import_roots_climbs_out_of_package(tmp_path):
     _write(base, "pkg/__init__.py", "")
     _write(base, "pkg/sub/__init__.py", "")
     mod = _write(base, "pkg/sub/mod.py", "x = 1\n")
-    roots = CodeMap._import_roots([os.path.abspath(mod)])
+    roots = PythonModuleResolver().import_roots([os.path.abspath(mod)])
     # mod sits in the pkg.sub package, so the anchor is the repo dir above pkg.
     assert os.path.abspath(base) in roots
 
@@ -262,7 +263,7 @@ def test_import_roots_climbs_out_of_package(tmp_path):
 def test_import_roots_bare_script_anchors_at_its_dir(tmp_path):
     base = str(tmp_path)
     script = _write(base, "solo.py", "x = 1\n")  # no __init__.py alongside
-    roots = CodeMap._import_roots([os.path.abspath(script)])
+    roots = PythonModuleResolver().import_roots([os.path.abspath(script)])
     assert os.path.abspath(base) in roots
 
 
@@ -279,6 +280,131 @@ def test_evict_stale_drops_prior_version_rows():
     }
     CodeMap._evict_stale(cache, identity=("a.py",), keep=("a.py", "hash2"))
     assert cache == {("a.py", "hash2"): ["y"], ("b.py", "hash1"): ["z"]}
+
+
+# -- LSP-free unread resolution from the whole-repo index ----------------------
+
+
+def _sym(name: str, qualified_name: str | None = None) -> Symbol:
+    return Symbol(
+        name=name,
+        qualified_name=qualified_name or name,
+        kind="function",
+        start_line=1,
+        signature="()",
+        summary="",
+    )
+
+
+def test_resolve_unread_from_index_returns_three_dicts():
+    cm = CodeMap()
+    target = "/repo/pkg/other.py"
+    syms, summaries, used_by = cm.resolve_unread_from_index(
+        [target],
+        symbols_of=lambda p: [_sym("thing"), _sym("Widget")],
+        module_summary_of=lambda p: "Purpose line.",
+        importers_of=lambda cands: ["/repo/a.py", "/repo/b.py"],
+    )
+    assert syms == {target: ["thing", "Widget"]}
+    assert summaries == {target: "Purpose line."}
+    assert used_by == {target: ["/repo/a.py", "/repo/b.py"]}
+
+
+def test_resolve_unread_from_index_filters_private_and_nested_and_caps():
+    cm = CodeMap()
+    target = "/repo/pkg/other.py"
+    many = [_sym(f"f{i}") for i in range(12)]
+    mixed = [_sym("_hidden"), _sym("C.method", "C.method")] + many
+    syms, _, _ = cm.resolve_unread_from_index(
+        [target],
+        symbols_of=lambda p: mixed,
+        module_summary_of=lambda p: "",
+        importers_of=lambda cands: [],
+    )
+    names = syms[target]
+    assert "_hidden" not in names  # private dropped
+    assert "C.method" not in names  # nested dropped
+    assert len(names) == CodeMap._UNREAD_SYMBOL_CAP  # capped at 8
+
+
+def test_resolve_unread_from_index_excludes_self_from_used_by():
+    cm = CodeMap()
+    target = "/repo/pkg/other.py"
+    _, _, used_by = cm.resolve_unread_from_index(
+        [target],
+        symbols_of=lambda p: [],
+        module_summary_of=lambda p: "",
+        importers_of=lambda cands: [target, "/repo/a.py"],
+    )
+    assert used_by == {target: ["/repo/a.py"]}  # target itself filtered out
+
+
+def test_resolve_unread_from_index_per_target_best_effort():
+    cm = CodeMap()
+    good, bad = "/repo/good.py", "/repo/bad.py"
+
+    def symbols_of(p):
+        if p == bad:
+            raise RuntimeError("boom")
+        return [_sym("ok")]
+
+    syms, _, _ = cm.resolve_unread_from_index(
+        [bad, good],
+        symbols_of=symbols_of,
+        module_summary_of=lambda p: "",
+        importers_of=lambda cands: [],
+    )
+    # The bad target is skipped; the good one still resolves.
+    assert syms == {good: ["ok"]}
+
+
+def test_resolve_unread_from_index_omits_empty_entries():
+    cm = CodeMap()
+    target = "/repo/pkg/other.py"
+    syms, summaries, used_by = cm.resolve_unread_from_index(
+        [target],
+        symbols_of=lambda p: [],
+        module_summary_of=lambda p: "",
+        importers_of=lambda cands: [],
+    )
+    assert syms == {} and summaries == {} and used_by == {}
+
+
+# -- Decision B: symbol-level used-by (references_of overrides module heuristic) --
+
+
+def test_resolve_unread_from_index_symbol_level_used_by_when_references_wired():
+    cm = CodeMap()
+    target = "/repo/pkg/other.py"
+    # references over the target's public symbols name the precise consumers; the
+    # coarse module-name importers_of must NOT be consulted (it would over-report).
+    refs = {
+        "thing": [("/repo/a.py", 3), (target, 5)],  # intra-file self ref filtered
+        "Widget": [("/repo/b.py", 7)],
+    }
+    _, _, used_by = cm.resolve_unread_from_index(
+        [target],
+        symbols_of=lambda p: [_sym("thing"), _sym("Widget")],
+        module_summary_of=lambda p: "",
+        importers_of=lambda cands: ["/repo/should_not_appear.py"],
+        references_of=lambda t, name: refs.get(name, []),
+    )
+    assert used_by == {target: ["/repo/a.py", "/repo/b.py"]}
+
+
+def test_resolve_unread_from_index_symbol_level_falls_back_to_module_when_empty():
+    cm = CodeMap()
+    target = "/repo/pkg/other.py"
+    # references reader resolves nobody -> fall back to the module-name query so a
+    # module-imported-but-symbol-unreferenced target still shows its importers.
+    _, _, used_by = cm.resolve_unread_from_index(
+        [target],
+        symbols_of=lambda p: [_sym("thing")],
+        module_summary_of=lambda p: "",
+        importers_of=lambda cands: ["/repo/a.py"],
+        references_of=lambda t, name: [],
+    )
+    assert used_by == {target: ["/repo/a.py"]}
 
 
 def _run(coro):
@@ -319,3 +445,95 @@ def test_precise_callers_cache_bounded_across_edits(tmp_path):
     # Only the current version's row survives for foo — not one per edit.
     keys = [k for k in cm._refs_cache if k[0] == os.path.abspath(api)]
     assert len(keys) == 1
+
+
+# -- unified navigation API (Decision C): resolve_import / definition_of / references_to
+
+
+def test_resolve_import_from_import_maps_to_target_and_symbol(tmp_path):
+    base = str(tmp_path)
+    _write(base, "pkg/__init__.py", "")
+    other = _write(base, "pkg/other.py", "def thing():\n    pass\n")
+    consumer = _write(base, "pkg/consumer.py", "from pkg.other import thing\n")
+    cm = CodeMap()
+    cm.ensure_all_fresh([os.path.abspath(other), os.path.abspath(consumer)])
+    got = cm.resolve_import("thing", consumer)
+    assert got == (os.path.abspath(other), "thing")
+
+
+def test_resolve_import_plain_import_binds_module_no_symbol(tmp_path):
+    base = str(tmp_path)
+    _write(base, "pkg/__init__.py", "")
+    other = _write(base, "pkg/other.py", "def thing():\n    pass\n")
+    consumer = _write(base, "pkg/consumer.py", "import pkg.other\n")
+    cm = CodeMap()
+    cm.ensure_all_fresh([os.path.abspath(consumer)])
+    # `import pkg.other` binds the top name `pkg` to the full dotted module
+    # `pkg.other`; imported_name is empty (the name binds the module, not a symbol).
+    got = cm.resolve_import("pkg", consumer)
+    assert got is not None
+    target, symbol = got
+    assert target == os.path.abspath(other)
+    assert symbol == ""
+
+
+def test_resolve_import_none_for_unknown_or_stdlib(tmp_path):
+    base = str(tmp_path)
+    consumer = _write(base, "consumer.py", "import os\nfrom sys import path\n")
+    cm = CodeMap()
+    cm.ensure_fresh(consumer)
+    assert cm.resolve_import("nope", consumer) is None  # not imported
+    assert cm.resolve_import("os", consumer) is None  # stdlib maps to no repo file
+    assert cm.resolve_import("path", consumer) is None  # stdlib symbol import
+
+
+def test_definition_of_intra_file(tmp_path):
+    base = str(tmp_path)
+    mod = _write(base, "m.py", "def helper():\n    pass\n\ndef run():\n    helper()\n")
+    cm = CodeMap()
+    cm.ensure_fresh(mod)
+    d = cm.definition_of("helper", in_file=mod)
+    assert d is not None and d.kind == "function" and d.qualified_name == "helper"
+
+
+def test_definition_of_cross_file_via_import(tmp_path):
+    base = str(tmp_path)
+    _write(base, "pkg/__init__.py", "")
+    other = _write(base, "pkg/other.py", "def thing():\n    pass\n")
+    consumer = _write(base, "pkg/consumer.py", "from pkg.other import thing\n\nthing()\n")
+    cm = CodeMap()
+    cm.ensure_all_fresh([os.path.abspath(other), os.path.abspath(consumer)])
+    # `thing` used in consumer resolves across the import to its def in other.py.
+    d = cm.definition_of("thing", in_file=consumer)
+    assert d is not None and d.kind == "function" and d.qualified_name == "thing"
+
+
+def test_definition_of_none_without_file_or_binding(tmp_path):
+    base = str(tmp_path)
+    mod = _write(base, "m.py", "def f():\n    pass\n")
+    cm = CodeMap()
+    cm.ensure_fresh(mod)
+    assert cm.definition_of("f") is None  # no in_file context
+    assert cm.definition_of("ghost", in_file=mod) is None  # neither local nor imported
+
+
+def test_references_to_joins_intra_and_cross_file(tmp_path):
+    base = str(tmp_path)
+    _write(base, "pkg/__init__.py", "")
+    other = _write(base, "pkg/other.py", "def thing():\n    pass\n\ndef run():\n    thing()\n")
+    consumer = _write(base, "pkg/consumer.py", "from pkg.other import thing\n")
+    cm = CodeMap()
+    cm.ensure_all_fresh([os.path.abspath(other), os.path.abspath(consumer)])
+    refs = cm.references_to(other, "thing")
+    paths = {p for p, _ in refs}
+    # intra-file: run() calls thing() in other.py; cross-file: consumer imports it.
+    assert os.path.abspath(other) in paths
+    assert os.path.abspath(consumer) in paths
+
+
+def test_references_to_empty_for_unused_symbol(tmp_path):
+    base = str(tmp_path)
+    mod = _write(base, "m.py", "def lonely():\n    pass\n")
+    cm = CodeMap()
+    cm.ensure_fresh(mod)
+    assert cm.references_to(mod, "lonely") == []

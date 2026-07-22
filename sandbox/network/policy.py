@@ -15,37 +15,18 @@ Two independent checks compose into the proxy's allow/deny decision:
 
 Ported from Codex ``network-proxy/src/policy.rs``; our blocked-range table is a
 touch more conservative.
+
+``normalize_host`` and the glob matcher live in :mod:`mote.common.net.host_match`
+(a pure leaf module) so the config layer can validate against the exact same
+matcher without reaching up into this runtime package; they are re-exported here
+for the proxy's own use and backward compatibility.
 """
 from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
 
-
-def normalize_host(host: str) -> str:
-    """Lower-case, strip brackets/trailing dot, and drop a ``:port`` suffix.
-
-    Returns ``""`` for empty/invalid input. IPv6 literals may arrive bracketed
-    (``[::1]``) and/or with a port; we strip both. A trailing dot (FQDN root) is
-    removed so ``example.com.`` matches ``example.com``.
-    """
-    if not host:
-        return ""
-    h = host.strip().lower()
-
-    # Bracketed IPv6 (optionally with :port) — "[::1]:8080" / "[::1]".
-    if h.startswith("["):
-        end = h.find("]")
-        if end != -1:
-            return h[1:end]
-        return h.lstrip("[")
-
-    # Strip a trailing :port for a plain host/IPv4 (an unbracketed IPv6 has many
-    # colons, so only strip when there's exactly one).
-    if h.count(":") == 1:
-        h = h.split(":", 1)[0]
-
-    return h.rstrip(".")
+from mote.common.net.host_match import matches_pattern, normalize_host
 
 
 def is_blocked_host(host: str) -> bool:
@@ -82,29 +63,6 @@ def is_blocked_host(host: str) -> bool:
     return False
 
 
-def _matches_pattern(host: str, pattern: str) -> bool:
-    """Match *host* against one allowlist *pattern* (see module docstring)."""
-    host = normalize_host(host)
-    pattern = pattern.strip().lower().rstrip(".")
-    if not pattern:
-        return False
-
-    if pattern.startswith("**."):
-        suffix = pattern[3:]
-        # Apex or any-depth subdomain.
-        return host == suffix or host.endswith("." + suffix)
-
-    if pattern.startswith("*."):
-        suffix = pattern[2:]
-        # Exactly one extra label: strip the first label and compare.
-        if "." not in host:
-            return False
-        first, rest = host.split(".", 1)
-        return bool(first) and rest == suffix
-
-    return host == pattern
-
-
 @dataclass
 class NetworkPolicy:
     """A domain allowlist + SSRF gate for the egress proxy.
@@ -123,7 +81,7 @@ class NetworkPolicy:
             return False
         if is_blocked_host(h):
             return False
-        return any(_matches_pattern(h, p) for p in self.allowed_domains)
+        return any(matches_pattern(h, p) for p in self.allowed_domains)
 
 
-__all__ = ["NetworkPolicy", "is_blocked_host", "normalize_host"]
+__all__ = ["NetworkPolicy", "is_blocked_host", "normalize_host", "matches_pattern"]

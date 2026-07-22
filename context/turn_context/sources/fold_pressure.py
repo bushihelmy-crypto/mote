@@ -1,9 +1,10 @@
-"""FoldPressureContextSource — warn before old tool results get folded away.
+"""FoldPressureContextSource — warn before old tool results and Edit bodies fold.
 
 The count-based sibling of :class:`TokenPressureContextSource`. That source
 watches the *token* budget and warns before the autocompact summarize/rebuild;
 this one watches the *count* of live reconstructable tool results and warns
-before the FREE microcompact fold clears the oldest of them.
+before the FREE microcompact fold clears the oldest of them together with any
+paired whole-file Edit ``new_string`` arguments.
 
 The two triggers are independent: fold fires on the NUMBER of reconstructable
 results (regardless of token budget), so a run of many small reads hits the fold
@@ -89,10 +90,12 @@ class FoldPressureContextSource:
             return None
         keep_recent = getattr(state, "keep_recent", 0)
         return (
-            "# Tool-result clearing imminent\n"
-            f"Old tool results are about to be cleared — only the {keep_recent} most "
-            "recent survive. Now, note down any earlier findings, paths, or values "
-            "you still need; unwritten ones are lost."
+            "# Tool-result clearing threshold approaching\n"
+            "Old tool results and whole-file Edit contents are nearing the clearing "
+            f"threshold. If context pressure continues, only the {keep_recent} most "
+            "recent tool results will survive. Note down any earlier findings, paths, "
+            "or values you still need before they are cleared. Edited files remain "
+            "available on disk and can be Read again."
         )
 
 

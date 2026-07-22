@@ -99,6 +99,10 @@ class ScriptedRouter:
     def __init__(self, llm: ScriptedLLM):
         self.llm = llm
         self.task_calls: list[str] = []
+        # Inert by default (mirrors a real router with no configured strategy):
+        # resolve_llm takes the fixed models.default path and returns the
+        # scripted LLM via route(). Tests exercising intelligent routing flip this.
+        self.routing_enabled = False
 
     def route_for_task(self, task: str) -> ScriptedLLM:
         self.task_calls.append(task)
@@ -168,7 +172,7 @@ def build_role(
     from mote.roles.role_schema import RoleSchema
 
     if tools is None:
-        tools = ["Read", "Write", "Edit", "Glob", "Grep"]
+        tools = ["Read", "Edit", "Search"]
 
     # The RoleSchema default now engages the approval engine in "default" mode
     # (every tool prompts). These tests have no interactive channel, so unless a

@@ -54,77 +54,39 @@ type: {user, feedback, project, reference}
 # Behavioral rules only — NO MEMORY.md content. Placeholder: ${memory_dir}.
 MEMORY_INSTRUCTIONS = """
 # Memory
-You have a persistent, file-based memory system at `${memory_dir}`. This directory already exists — write to it directly with Editor.write (do not check for its existence first).
+You have a persistent, file-based memory at `${memory_dir}` (already exists — write directly). Build it up over time so future conversations know who the user is, how to collaborate, what to repeat or avoid, and the context behind their work. If the user asks you to remember something, save it now as the best-fit type; if they ask you to forget something, remove that entry.
 
-You should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.
+## Types (capture only what is NOT derivable from current project state)
+- user: the user's role, goals, preferences, responsibilities, knowledge — to tailor your behavior.
+- feedback: how to approach work (what to avoid / keep doing), from failure AND success. Include *why*, so you can judge edge cases. Structure as: rule/fact, then **Why:** and **How to apply:**.
+- project: ongoing work, goals, bugs, or incidents not in code or git. Convert relative dates to absolute (e.g. "Thursday" → "2026-03-05").
+- reference: pointers to external systems (issue trackers, chat channels, dashboards).
 
-If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.
+## What NOT to save (even if asked)
+Anything derivable from current state: code patterns/architecture/paths/structure (read the project), git history/who-changed-what (`git log`/`blame`), fix recipes (the fix is in the code). Nor ephemeral state: in-progress work, current-conversation context, step-by-step task progress — that belongs in working state, not long-term memory. If asked to save a PR list or activity summary, keep only what was *surprising* or *non-obvious*.
 
-## Types of memory
-- user: The user's role, goals, preferences, responsibilities, and knowledge. Use these to tailor your behavior to the user.
-- feedback: Guidance from the user about how to approach work — what to avoid and what to keep doing. Record from failure AND success. Include *why* so you can judge edge cases later. Structure content as: rule/fact, then **Why:** and **How to apply:** lines.
-- project: Information about ongoing work, goals, initiatives, bugs, or incidents not derivable from code or git history. Convert relative dates to absolute dates when saving (e.g., "Thursday" → "2026-03-05").
-- reference: Pointers to external systems where information can be found (e.g., issue trackers, chat channels, dashboards).
+## How to save (two steps)
+**Step 1** — write the memory to its own file (e.g. `user_role.md`, `feedback_testing.md`) with this frontmatter:
 
-## What NOT to save in memory
-- Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state.
-- Git history, recent changes, or who-changed-what — `git log` / `git blame` are authoritative.
-- Debugging solutions or fix recipes — the fix is in the code; the commit message has the context.
-- Ephemeral task details: in-progress work, temporary state, current conversation context.
+${frontmatter_example}
 
-These exclusions apply even when the user explicitly asks to save. If they ask you to save a PR list or activity summary, ask what was *surprising* or *non-obvious* about it — that is the part worth keeping.
+**Step 2** — add a one-line pointer in `MEMORY.md` (an index, not a memory; no frontmatter; never put memory content here): `- [Title](file.md) — one-line hook`.
 
-## How to save memories
-Saving a memory is a two-step process:
+- `MEMORY.md` is always loaded into context — keep it concise.
+- Organize semantically by topic, not chronologically. Keep name/description/type up-to-date.
+- Before writing, check for an existing memory to update instead — no duplicates. Remove memories that prove wrong or outdated.
 
-**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:
-
-```markdown
----
-name: {memory name}
-description: {one-line description — used to decide relevance in future conversations, so be specific}
-type: {user, feedback, project, reference}
----
-
-{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}
-```
-
-**Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.
-
-- `MEMORY.md` is always loaded into your conversation context — keep the index concise.
-- Keep the name, description, and type fields in memory files up-to-date with the content.
-- Organize memory semantically by topic, not chronologically.
-- Update or remove memories that turn out to be wrong or outdated.
-- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.
-
-## When to access memories
-- When memories seem relevant, or the user references prior-conversation work.
-- You MUST access memory when the user explicitly asks you to check, recall, or remember.
-- If the user says to *ignore* or *not use* memory: proceed as if MEMORY.md were empty. Do not apply remembered facts, cite, compare against, or mention memory content.
-- Memory records can become stale. Use memory as context for what was true at a given point in time. Before answering or building assumptions solely on memory, verify it is still correct by reading the current state of the files or resources. If a recalled memory conflicts with current information, trust what you observe now — and update or remove the stale memory rather than acting on it.
-
-## Before recommending from memory
-A memory that names a specific function, file, or flag is a claim that it existed *when the memory was written*. It may have been renamed, removed, or never merged. Before recommending it:
-
-- If the memory names a file path: check the file exists.
-- If the memory names a function or flag: grep for it.
-- If the user is about to act on your recommendation (not just asking about history), verify first.
-
-"The memory says X exists" is not the same as "X exists now."
-
-A memory that summarizes repo state (activity logs, architecture snapshots) is frozen in time. If the user asks about *recent* or *current* state, prefer `git log` or reading the code over recalling the snapshot.
-
-## Memory and other forms of persistence
-Memory can be recalled in future conversations; do not use it for information that is only useful within the current conversation.
-- Do not store the current task's step-by-step progress in memory — that belongs in the conversation's working state, not in long-term memory.
-- Memory is for information that will be useful in *future* conversations, not for tracking what you are doing right now.
-
-## Searching past context
-When looking for past context, search the topic files in your memory directory with narrow terms (error messages, file paths, function names) rather than broad keywords:
+## Accessing memory
+- Access when relevant or when the user references prior work; you MUST access when explicitly asked to check/recall/remember.
+- If the user says to *ignore* memory: proceed as if MEMORY.md were empty — don't apply, cite, or mention it.
+- Memory is a snapshot of what was true when written — it can be stale. A memory naming a file/function/flag claims it existed *then*; it may be renamed or gone. Before recommending it (or when the user is about to act on it), verify: check the path exists, grep the symbol. For *recent*/*current* repo state, prefer `git log` or reading the code over a frozen snapshot. If memory conflicts with what you observe, trust the observation and update the stale memory.
+- Search past context with narrow terms (error messages, paths, function names), not broad keywords:
 ```
 Terminal.run: grep -rn "<search term>" ${memory_dir} --include="*.md"
 ```
-"""
+""".replace(
+    "${frontmatter_example}", MEMORY_FRONTMATTER_EXAMPLE
+)
 
 # --- User-context attachment (dynamic, per-turn) ---------------------------
 # Current MEMORY.md content only. Placeholder: ${memory_content}. Injected each

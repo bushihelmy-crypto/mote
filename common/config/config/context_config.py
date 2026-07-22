@@ -73,6 +73,58 @@ class SkillsConfig(YamlModel):
     )
 
 
+class TurnContextConfig(YamlModel):
+    """Which per-turn *ephemeral* context sources are active — an opt-out registry.
+
+    Every normally-on ephemeral source (git status, token / fold pressure, the
+    code map, the deferred-tool menu, timestamp, ...) is active by default; list
+    a source's ``name`` in ``disabled`` to suppress it (opt-out / blacklist). The
+    filter matches the source's stable ``name`` attribute, so e.g.
+    ``disabled: ["git", "code_map"]`` drops those two blocks from the reminder
+    envelope while leaving every other feed untouched.
+
+    The credential index is the one **opt-in exception**: it presents a login-fill
+    menu to the model, so it stays off until ``credential_index: true`` — and even
+    then only renders on a turn where WebBrowser was recently used (its consumer).
+    Two orthogonal knobs shape WHAT it lists:
+
+    - ``credential_keys`` — a whitelist of which configured *secret* names to
+      expose (as ``<agent-vault:key>`` placeholders, never values). Empty (the
+      default) exposes every configured secret; a non-empty list narrows it to
+      exactly those keys.
+    - ``credential_values`` — inline **non-secret** ``name: value`` pairs (e.g. a
+      username / display name). These are NOT stored in the vault and are rendered
+      as their literal value for the model to type directly — use only for
+      non-sensitive fields you are comfortable placing in plaintext config.
+    """
+
+    disabled: list[str] = Field(
+        default_factory=list,
+        description="Names of ephemeral turn-context sources to suppress (opt-out blacklist).",
+    )
+    credential_index: bool = Field(
+        default=False,
+        description=(
+            "Master toggle for the login-credential menu (secret NAMES + inline "
+            "non-secret values). Opt-in; only renders when WebBrowser was recently used."
+        ),
+    )
+    credential_keys: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Whitelist of configured secret names to expose as login placeholders. "
+            "Empty = expose all configured secrets."
+        ),
+    )
+    credential_values: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Inline NON-secret name:value pairs (e.g. username) shown as literal "
+            "values for the model to type directly. Not stored in the vault."
+        ),
+    )
+
+
 class ContextConfig(YamlModel):
     """Top-level context-engineering configuration."""
 
@@ -80,3 +132,4 @@ class ContextConfig(YamlModel):
     code_map: CodeMapConfig = Field(default_factory=CodeMapConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     bggraph: BgGraphConfig = Field(default_factory=BgGraphConfig)
+    turn_context: TurnContextConfig = Field(default_factory=TurnContextConfig)

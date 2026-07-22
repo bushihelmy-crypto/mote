@@ -182,9 +182,9 @@ def test_generic_role_uses_curated_default_when_none_passed():
 
 
 def test_generic_role_explicit_tools_are_respected():
-    role = backend.build_role(context=_context(), name="Tester", tools=["Read", "Grep"])
+    role = backend.build_role(context=_context(), name="Tester", tools=["Read", "Search"])
     # An explicit list still wins over the empty ⇒ load-all default.
-    assert role.role_schema.tools == ["Read", "Grep"]
+    assert role.role_schema.tools == ["Read", "Search"]
 
 
 def test_role_tool_count_reports_builtin_only():

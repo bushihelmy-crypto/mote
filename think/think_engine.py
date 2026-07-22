@@ -69,6 +69,7 @@ class ThinkEngine(BaseThinkEngine):
         # native compares a structured-call signature (the text may be empty or
         # repeat while the calls differ), and on a hard repeat overrides the calls
         # with a synthesized ask_user call.
+        language = getattr(getattr(self.config, "models", None), "response_language", "") or ""
         if tool_calls is None:
             rsp_hist = [mem.content for mem in self.memory.get()]
             content = await check_duplicates(
@@ -76,6 +77,7 @@ class ThinkEngine(BaseThinkEngine):
                 command_rsp=content,
                 rsp_hist=rsp_hist,
                 llm=llm,
+                language=language,
             )
         else:
             sig_hist = [
@@ -86,10 +88,22 @@ class ThinkEngine(BaseThinkEngine):
                 command_calls=tool_calls,
                 sig_hist=sig_hist,
                 llm=llm,
+                language=language,
             )
             if override is not None:
                 tool_calls = override
         self.result = ThinkResult(content=content, tool_calls=tool_calls)
+
+    def reinstate(self, result: ThinkResult) -> None:
+        """Adopt a journal-recovered result without launching the LLM.
+
+        The durable resume path (see BaseThinkEngine.reinstate): set the result
+        the run journal memoized before the crash and leave ``_task`` None so
+        ``done`` is True — the channel then reads this reinstated result instead
+        of re-paying the model.
+        """
+        self.result = result
+        self._task = None
 
     async def join(self):
         """Await the current think task and clean up."""

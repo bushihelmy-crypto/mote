@@ -36,13 +36,24 @@ class TestSystemPromptBoundary:
             "${tool_usage_guide}",
             "${memory}",
             "${language}",
-            "${scratchpad}",
             "${env_section}",
-            "${skills_info}",
-            "${frc}",
-            "${task_final_output}",
+            "${compaction}",
+            "${role_info}",
         ):
             assert ph in below, ph
+
+
+class TestRoleInfoExtraction:
+    def test_role_info_holds_software_charter(self):
+        # The SE-specific charter was extracted OUT of the shared prefix into
+        # ROLE_INFO — so the domain heading lives here, not in SYSTEM_PROMPT.
+        assert "Software engineering tasks" in R.ROLE_INFO
+
+    def test_prefix_carries_only_universal_principles(self):
+        # The cacheable prefix (above the boundary) must no longer name a
+        # specific task domain — that now rides role_info below the boundary.
+        prefix = R.SYSTEM_PROMPT.split(R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[0]
+        assert "software engineering tasks" not in prefix.lower()
 
 
 class TestDynamicSectionPlaceholders:
@@ -52,8 +63,8 @@ class TestDynamicSectionPlaceholders:
     def test_scratchpad_section(self):
         assert "${scratchpad_dir}" in R.SCRATCHPAD_SECTION
 
-    def test_frc_section(self):
-        assert "${keep_recent}" in R.FRC_SECTION
+    def test_compaction_section(self):
+        assert "${keep_recent}" in R.COMPACTION_SECTION
 
 
 class TestAgentPrompts:

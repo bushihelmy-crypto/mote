@@ -1,0 +1,134 @@
+name: Publish to PyPI
+
+# Triggered by SemVer tag pushes (e.g. v1.1.0, v1.2.0). Can also be run
+# manually from the Actions tab as an escape hatch against an existing tag.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      confirm_tag:
+        description: "Tag to publish (e.g. v1.1.0). Must already exist."
+        required: true
+        type: string
+
+# Restrict the default token to read-only; each job escalates as needed.
+permissions:
+  contents: read
+
+# Never let two publishes race (e.g. a hotfix tag pushed right after a release).
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # On workflow_dispatch, check out the confirmed tag.
+          ref: ${{ inputs.confirm_tag || github.ref }}
+          fetch-tags: true
+
+      - name: Validate tag exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if ! git tag -l "${{ inputs.confirm_tag }}" | grep -q .; then
+            echo "::error::Tag '${{ inputs.confirm_tag }}' does not exist in the repo"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --wheel
+
+      # Guard against the packaging bug this workflow is meant to prevent:
+      # config.example.yaml is read at first-run by bootstrap and MUST ship
+      # inside the wheel.
+      - name: Verify runtime data files are packaged
+        run: |
+          python -m pip install --upgrade twine
+          twine check dist/*
+          wheel=$(ls dist/*.whl | head -n1)
+          if ! python -m zipfile -l "$wheel" | grep -q "mote/config.example.yaml"; then
+            echo "::error::config.example.yaml missing from wheel — bootstrap will break on install"
+            exit 1
+          fi
+          if ! python -m zipfile -l "$wheel" | grep -q "mote/router/ml/router.runtime.yaml"; then
+            echo "::error::router.runtime.yaml missing from wheel — ML router bundle incomplete"
+            exit 1
+          fi
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mote
+    permissions:
+      id-token: write # OIDC trusted publishing — no API token needed
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  sign:
+    name: Sign and attach to GitHub Release
+    # Only meaningful for real tag pushes (a Release exists to attach to).
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/attach the release + assets
+      id-token: write # Sigstore keyless signing
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Sign with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.0.0
+        with:
+          inputs: >-
+            ./dist/*.tar.gz
+            ./dist/*.whl
+
+      - name: Create GitHub Release and attach signed artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # Idempotent: create the release if release.py/maintainer hasn't yet,
+        # otherwise upload the Sigstore signatures alongside existing assets.
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/* \
+            || gh release upload "$GITHUB_REF_NAME" dist/* \
+                 --repo "$GITHUB_REPOSITORY" --clobber

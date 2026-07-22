@@ -6,7 +6,12 @@ output* and nothing else. Two classes of oversized content slip past it straight
 into stored history, and no other reducer can surgically reach them:
 
 - a **runaway assistant response** (a model generation that blows up to 100k+ chars);
-- a **giant tool-call ``args`` blob** the model placed into a call's arguments;
+- a **giant tool-call ``args`` blob** the model placed into a call's arguments —
+  now normally persisted *at record time* (the native channel's ``record_call``
+  runs :meth:`ToolExecutor.persist_large_args` before the message enters memory),
+  so for fresh turns this reducer's args-branch is a **backstop** that only fires
+  on resumed/legacy content or args written by some other path; it stays because
+  it is idempotent (already-``<persisted-output>`` args are left alone);
 - (bonus) a **stray oversized tool result loaded from a resumed session** that
   predates limiting.
 
@@ -37,10 +42,8 @@ that matches the executor's own default.
 
 from __future__ import annotations
 
-import json
-
 from mote.common.const import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
-from mote.common.schema import ContextManagerConfig, ToolResultLimitConfig
+from mote.common.schema import ContextManagerConfig, ToolResultLimitConfig, serialize_tool_call_args
 from mote.common.utils.token_counter import count_string_tokens
 from mote.common.workspace import WorkspaceStore
 from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
@@ -129,8 +132,7 @@ class OversizedSpillReducer:
                 if not calls:
                     continue
                 for call in calls:
-                    args = call.get("args")
-                    serialized = args if isinstance(args, str) else json.dumps(args or {})
+                    serialized = serialize_tool_call_args(call.get("args"))
                     spilled = self._spill(serialized, f"{call.get('id') or ''}-args")
                     if spilled != serialized:
                         tokens_freed += count_string_tokens(serialized, model) - count_string_tokens(spilled, model)

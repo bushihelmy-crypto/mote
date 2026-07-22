@@ -3,7 +3,7 @@
 """``TranscriptReducer`` parity — the "run-twice" golden that proves both hosts agree.
 
 One :func:`_script` of :class:`ViewEvent`\\ s covers every timing tension: a
-streamed reply, a reasoning stream, a Read/Grep/Glob group, a NONE tool + file
+streamed reply, a reasoning stream, a Read/Search group, a NONE tool + file
 diff, a DETAIL (Bash) tool, a retry that a following delta self-clears, a
 transparent usage update, an error, and a compaction boundary.
 
@@ -53,10 +53,10 @@ def _script() -> List[Any]:
         ReasoningDelta(text="pondering"),
         ToolCallStarted(tool_name="Read", headline="a.py", tool_use_id="t1"),
         ToolCallCompleted(tool_name="Read", ok=True, summary="42 lines", tool_use_id="t1"),
-        ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2"),
-        ToolCallCompleted(tool_name="Grep", ok=True, summary="3 matches", tool_use_id="t2"),
-        ToolCallStarted(tool_name="Glob", headline="*.py", tool_use_id="t3"),
-        ToolCallCompleted(tool_name="Glob", ok=True, summary="5 files", tool_use_id="t3"),
+        ToolCallStarted(tool_name="Search", headline="foo", tool_use_id="t2"),
+        ToolCallCompleted(tool_name="Search", ok=True, summary="3 matches", tool_use_id="t2"),
+        ToolCallStarted(tool_name="Search", headline="*.py", tool_use_id="t3"),
+        ToolCallCompleted(tool_name="Search", ok=True, summary="5 files", tool_use_id="t3"),
         ToolCallStarted(tool_name="Edit", headline="a.py", tool_use_id="t4"),
         ToolCallCompleted(tool_name="Edit", ok=True, summary="1 change", tool_use_id="t4"),
         FileDiffBlock(path="a.py", old="x = 1\n", new="x = 2\n"),
@@ -109,10 +109,10 @@ _GOLDEN: List[Tuple[Any, ...]] = [
     ("open_group",),
     ("add_to_group", "Read"),
     ("complete_in_group", "Read"),
-    ("add_to_group", "Grep"),
-    ("complete_in_group", "Grep"),
-    ("add_to_group", "Glob"),
-    ("complete_in_group", "Glob"),
+    ("add_to_group", "Search"),
+    ("complete_in_group", "Search"),
+    ("add_to_group", "Search"),
+    ("complete_in_group", "Search"),
     ("flush_group",),
     ("tool_started", "Edit", "none"),
     ("tool_completed", "Edit", "none"),
@@ -169,7 +169,7 @@ def test_terminal_landing():
         driver.on_unhandled(ev)
     out = console.file.getvalue()
 
-    # The Read/Grep/Glob run collapsed into one summary line (2 searches, 1 read).
+    # The Read/Search run collapsed into one summary line (2 searches, 1 read).
     assert t(K.GROUP_SEARCH, count=2) in out
     assert t(K.GROUP_READ, count=1) in out
     # The DETAIL Bash tool renders expanded (headline visible) on the linear host.

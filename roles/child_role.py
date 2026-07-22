@@ -49,15 +49,20 @@ def build_child_role(
         name=name,
         profile=name,
         command_protocol="native",
-        tools=["Read", "Grep", "Glob"] if tools is None else list(tools),
+        tools=["Read", "Search"] if tools is None else list(tools),
         permissions=PermissionConfig(mode="bypass"),
         system_prompt=system_prompt,
+        # The custom system_prompt already fixes this leaf agent's task; it
+        # carries no separate domain charter (mirrors the pre-extraction default,
+        # whose SE guidance lived in SYSTEM_PROMPT — which this override replaces).
+        role_info="",
         enable_memory=False,
         # No durable session artifacts for these ephemeral leaf agents.
         record_file_history=False,
         record_terminal_state=False,
         record_kernel_state=False,
         record_browser_state=False,
+        generate_title=False,
     )
     state = RoleState(parent_session_id=parent_session_id or "")
     if repo_dir:

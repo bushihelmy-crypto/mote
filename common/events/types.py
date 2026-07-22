@@ -79,6 +79,7 @@ FILE_MUTATED = "file_mutated"
 TOOLS_CHANGED = "tools_changed"
 DIAGNOSTICS = "diagnostics"
 RECOVERY = "recovery"
+BREAKER_STATE_CHANGE = "breaker_state_change"
 TASK_PROGRESS = "task_progress"
 RESOURCE_REPORT = "resource_report"
 AGENT_LIFECYCLE = "agent_lifecycle"
@@ -87,6 +88,7 @@ SPAN_END = "span_end"
 BUDGET = "budget"
 ACTIVITY_STARTED = "activity_started"
 ACTIVITY_COMPLETED = "activity_completed"
+JOURNAL = "journal"
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +454,26 @@ class RecoveryEvent:
 
 
 @dataclass
+class BreakerStateChangeEvent:
+    """A resource's :class:`~mote.common.resilience.CircuitBreaker` changed state.
+
+    Emitted (observation-only) when a breaker transitions closed→open,
+    open→half_open, or half_open→closed/open, so a frontend/logger can see a
+    provider being shed and recovering. The breaker's own ``admit``/``record``
+    verdicts are the source of truth; this just mirrors *that a resource's health
+    state flipped*. ``key`` is the opaque resource label (for LLM:
+    ``api_type::model::key_index``); ``reason`` is the breaker's human note.
+    """
+
+    key: str = ""
+    old_state: str = ""  # BreakerState.value
+    new_state: str = ""
+    reason: str = ""
+
+    name: ClassVar[str] = BREAKER_STATE_CHANGE
+
+
+@dataclass
 class TaskProgressEvent:
     """A background task reported a progress line (already rendered).
 
@@ -601,6 +623,34 @@ class SpanEndEvent:
     attributes: dict = field(default_factory=dict)
 
     name: ClassVar[str] = SPAN_END
+
+
+@dataclass
+class JournalEvent:
+    """A durable run-journal step crossed a lifecycle boundary.
+
+    Emitted (observation-only) by the durable-execution seams
+    (:class:`~mote.loop.durable.runner.DurableRunner` think steps, durable
+    timers, and the EXTERNAL/LOCAL tool ledger) whenever a step is started,
+    completed, failed, or reaped, so a frontend/logger can watch the otherwise
+    invisible crash-resume bookkeeping (which thinks were memoized, which
+    dangling calls were healed, how the long-session journal stays bounded).
+
+    Purely a mirror: the journal's own on-disk log is the source of truth; this
+    just announces *that* a record moved. ``kind`` is the step class
+    (``think`` / ``tool`` / ``timer``); ``phase`` is the lifecycle transition
+    (``started`` / ``completed`` / ``failed`` / ``reaped``); ``effect`` is the
+    step's side-effect class (``pure`` / ``local`` / ``external``); ``step_id``
+    is the journal's self-anchored key.
+    """
+
+    step_id: str = ""
+    kind: str = ""  # think | tool | timer
+    phase: str = ""  # started | completed | failed | reaped
+    effect: str = ""  # pure | local | external
+    seq: int = 0
+
+    name: ClassVar[str] = JOURNAL
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +845,7 @@ __all__ = [
     "TOOLS_CHANGED",
     "DIAGNOSTICS",
     "RECOVERY",
+    "BREAKER_STATE_CHANGE",
     "TASK_PROGRESS",
     "RESOURCE_REPORT",
     "AGENT_LIFECYCLE",
@@ -803,6 +854,7 @@ __all__ = [
     "BUDGET",
     "ACTIVITY_STARTED",
     "ACTIVITY_COMPLETED",
+    "JOURNAL",
     # rewrite provenance
     "Rewrite",
     "Rewritable",
@@ -828,6 +880,7 @@ __all__ = [
     "ToolsChangedEvent",
     "DiagnosticsEvent",
     "RecoveryEvent",
+    "BreakerStateChangeEvent",
     "TaskProgressEvent",
     "BudgetEvent",
     "ResourceReportEvent",
@@ -836,6 +889,7 @@ __all__ = [
     "SpanEndEvent",
     "ActivityStartedEvent",
     "ActivityCompletedEvent",
+    "JournalEvent",
     # control events
     "UserPromptSubmitEvent",
     "PreToolUseEvent",

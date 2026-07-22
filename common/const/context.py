@@ -26,6 +26,20 @@ from __future__ import annotations
 # Placeholder that replaces an old tool-result's content once folded away.
 TOOL_RESULT_CLEARED_MESSAGE: str = "[Old tool result content cleared]"
 
+# Neutral marker that REPLACES an old Edit whole-file write's ``new_string``
+# once the fold reducer clears it (the arguments twin of
+# ``TOOL_RESULT_CLEARED_MESSAGE`` for a tool RESULT). It reads in the SYSTEM's
+# voice — "the environment folded this value away" — never as the model's own
+# input, so re-reading the call after the fold does NOT look like "I typed a
+# placeholder into the file". It points at the paired result and at the on-disk
+# file for exact current content. It deliberately asserts nothing about success and names no specific
+# result section.
+FOLDED_WRITE_MARKER: str = (
+    "[folded: the full file content of this write is omitted from the recorded "
+    "arguments to save context. Its outcome is in the paired tool result; Read "
+    "the file for its exact current content.]"
+)
+
 # Marker prepended in place of the oldest turns the (destructive) head-drop
 # reducer irreversibly discarded when nothing cheaper could free enough room.
 HEAD_DROPPED_MESSAGE: str = "[earlier turns truncated to fit the context window]"

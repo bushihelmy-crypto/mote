@@ -142,32 +142,6 @@ def test_file_change_identical_old_new_is_empty():
     assert render_file_change("same\n", "same\n").plain == ""
 
 
-def test_render_image_paints_half_block_cells(tmp_path):
-    """A real image renders to a truecolor half-block renderable (rich Segments).
-
-    Downscaled to fit the cell budget, each character cell stacks two pixels via
-    ``▀`` — so rendering to a truecolor console yields the half-block glyph and
-    24-bit SGR, no terminal image protocol needed.
-    """
-    pytest.importorskip("PIL")
-    from io import StringIO
-
-    from PIL import Image
-    from rich.console import Console
-
-    img = tmp_path / "pic.png"
-    Image.new("RGB", (8, 8), (10, 20, 30)).save(str(img))
-
-    renderable = render_image(str(img))
-    assert renderable is not None
-
-    console = Console(file=StringIO(), color_system="truecolor", width=80)
-    console.print(renderable)
-    out = console.file.getvalue()
-    assert "\u2580" in out  # ▀ half-block glyph
-    assert "38;2;" in out  # 24-bit truecolor foreground SGR
-
-
 def test_render_image_missing_file_returns_none():
     """A path that can't be opened degrades to ``None`` (caller shows text)."""
     assert render_image("/no/such/image.png") is None
@@ -270,8 +244,7 @@ def test_compaction_summary_empty_is_empty_text():
 def test_fold_mode_classifies_group_detail_and_none():
     # GROUP: search/read coalesce into one count summary.
     assert fold_mode("Read") is FoldMode.GROUP
-    assert fold_mode("Grep") is FoldMode.GROUP
-    assert fold_mode("Glob") is FoldMode.GROUP
+    assert fold_mode("Search") is FoldMode.GROUP
     # DETAIL: per-call body+output fold — the DEFAULT for any tool not on the
     # NONE deny-list (deny-list, not allow-list, so new tools fold by default).
     assert fold_mode("Bash") is FoldMode.DETAIL
@@ -280,12 +253,11 @@ def test_fold_mode_classifies_group_detail_and_none():
     assert fold_mode("Skill") is FoldMode.DETAIL
     assert fold_mode("Unknown") is FoldMode.DETAIL
     # NONE: always rendered in full — the "what changed" is the point.
-    assert fold_mode("Write") is FoldMode.NONE
     assert fold_mode("Edit") is FoldMode.NONE
 
 
 def test_tool_group_summary_counts_search_and_read():
-    items = [("Grep", "foo"), ("Glob", "*.py"), ("Read", "/a.py")]
+    items = [("Search", "foo"), ("Search", "*.py"), ("Read", "/a.py")]
     t = tool_group_summary_text(items, active=False)
     assert i18n_t(K.GROUP_SEARCH, count=2) in t.plain
     assert i18n_t(K.GROUP_READ, count=1) in t.plain

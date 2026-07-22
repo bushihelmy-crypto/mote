@@ -26,8 +26,8 @@ async def test_real_role_processes_routed_message(make_role, tmp_path):
     role = make_role(
         name="worker",
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "from-env"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "from-env"})], "done"],
     )
 
     env = MoteEnv()
@@ -50,8 +50,8 @@ async def test_unaddressed_role_stays_idle(make_role, tmp_path):
     role = make_role(
         name="idle_worker",
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "nope"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "nope"})], "done"],
     )
 
     env = MoteEnv()
@@ -72,14 +72,14 @@ async def test_two_real_roles_scheduled_independently(make_role, tmp_path):
     role_a = make_role(
         name="alpha",
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": a_file, "content": "A"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": a_file, "old_string": "", "new_string": "A"})], "done"],
     )
     role_b = make_role(
         name="beta",
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": b_file, "content": "B"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": b_file, "old_string": "", "new_string": "B"})], "done"],
     )
 
     env = MoteEnv()

@@ -88,11 +88,16 @@ async def test_spawn_and_run_no_plane_raises():
 
 
 class _FakeHandle:
-    def __init__(self, summary):
+    def __init__(self, summary, *, role=None, events=None):
         self._summary = summary
         self.closed = False
+        # A minimal runtime.role surface so on_spawn / builder messages resolve.
+        self.runtime = types.SimpleNamespace(role=role)
+        self._events = events  # shared ordered log of lifecycle events
 
     async def run_to_completion(self, message):
+        if self._events is not None:
+            self._events.append("run")
         return self._summary
 
     async def __aenter__(self):
@@ -104,16 +109,18 @@ class _FakeHandle:
 
 
 class _FakeControl:
-    def __init__(self, *, summary="planed", raise_limit=False):
+    def __init__(self, *, summary="planed", raise_limit=False, role=None, events=None):
         self._summary = summary
         self._raise_limit = raise_limit
+        self._role = role
+        self._events = events
         self.spawned = []
 
     async def spawn_agent(self, spec):
         self.spawned.append(spec)
         if self._raise_limit:
             raise AgentLimitReached(1)
-        return _FakeHandle(self._summary)
+        return _FakeHandle(self._summary, role=self._role, events=self._events)
 
 
 @pytest.mark.asyncio
@@ -142,3 +149,35 @@ async def test_spawn_and_run_cap_returns_none():
     with set_control(control):
         out = await spawn_and_run(spec, "msg")
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# on_spawn seed window
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_on_spawn_runs_on_role_before_first_turn():
+    # The hook must run on the built role AFTER it exists but BEFORE run.
+    events: list[str] = []
+    role = object()
+    control = _FakeControl(summary="ok", role=role, events=events)
+    seen = {}
+
+    async def on_spawn(r):
+        events.append("seed")
+        seen["role"] = r
+
+    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    with set_control(control):
+        await spawn_and_run(spec, "msg", on_spawn=on_spawn)
+    assert seen["role"] is role
+    assert events == ["seed", "run"]  # seeded strictly before the first turn
+
+
+@pytest.mark.asyncio
+async def test_no_on_spawn_is_noop():
+    # Absent hook: spawn_and_run behaves exactly as before.
+    control = _FakeControl(summary="ok", role=object())
+    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    with set_control(control):
+        out = await spawn_and_run(spec, "msg")
+    assert out == "ok"

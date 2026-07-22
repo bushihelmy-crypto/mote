@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, List, Optional
 
 from mote.cli import backend
 from mote.cli.commands.registry import default_registry
@@ -25,6 +26,69 @@ from mote.cli.io.terminal_io import TerminalPort
 from mote.cli.view.projector import ViewProjector
 from mote.common.config.bootstrap import ensure_mote_home
 from mote.common.i18n import negotiate_and_set
+from mote.environment.scheduling.service import CronService
+
+
+@dataclass(frozen=True)
+class EngineBuild:
+    """The shared engine construction result — everything before ``control``.
+
+    Both the single-session terminal app (:func:`build_app`) and the multi-session
+    network server (``cli.serving.SessionRegistry``) construct their sessions from
+    this same bundle: one loaded ``config``, one shared engine ``context``, and a
+    ``role_factory`` closure that mints roles (new / resume / typed) sharing them.
+    Extracting it keeps "how a session is built" in one place so the two hosts can
+    never drift (§4 template: hosts swap consumers+port, spine is identical).
+    """
+
+    config: Any
+    context: Any
+    role_factory: Callable[..., Any]
+
+
+def build_engine(
+    *,
+    model: Optional[str] = None,
+    tools: Optional[List[str]] = None,
+    cwd: Optional[str] = None,
+    name: str = "Assistant",
+    config: Any = None,
+) -> EngineBuild:
+    """Run first-run scaffolding + build the shared ``config / context / role_factory``.
+
+    The common prefix of the old ``build_app`` body, lifted so a multi-session
+    server reuses the exact same construction (no parallel bootstrap path). Side
+    effects (``ensure_mote_home`` seeding, locale negotiation) run once here.
+    """
+    # First-run scaffolding: seed ~/.mote with editable config templates before
+    # anything reads it. Idempotent + best-effort — never overwrites, never raises.
+    ensure_mote_home()
+
+    if config is None:
+        config = backend.load_config(model)
+
+    # Resolve the human display locale once, at assembly time, before any consumer
+    # renders a line: config.ui.language ("auto" → host LANG/LC_*), then env.
+    negotiate_and_set(config_language=getattr(getattr(config, "ui", None), "language", None))
+
+    context = backend.build_context(config)
+
+    # Default to the shell's launch directory so the agent starts where the user
+    # invoked the CLI; an explicit --cwd still overrides this.
+    resolved_cwd = cwd or os.getcwd()
+
+    def role_factory(*, name: str = name, session_id: Optional[str] = None, agent_type: Optional[str] = None):
+        """Build a role sharing this app's config + context (initial / new / resume / typed)."""
+        return backend.build_role(
+            context=context,
+            name=name,
+            tools=tools,
+            cwd=resolved_cwd,
+            agent_type=agent_type,
+            session_id=session_id,
+        )
+
+    return EngineBuild(config=config, context=context, role_factory=role_factory)
 
 
 def build_app(
@@ -48,52 +112,36 @@ def build_app(
     because it depends on live host state (e.g. the Textual consumer needs the
     running ``App``). When present it takes precedence over ``consumers``.
     """
-    # First-run scaffolding: seed ~/.mote with editable config templates before
-    # anything reads it. Idempotent + best-effort — never overwrites, never raises.
-    ensure_mote_home()
-
-    if config is None:
-        config = backend.load_config(model)
-
-    # Resolve the human display locale once, at assembly time, before any consumer
-    # renders a line: config.ui.language ("auto" → host LANG/LC_*), then env. This
-    # covers both hosts (Textual routes through build_app too). We deliberately do
-    # NOT call locale.setlocale() — only our own process-scoped active locale.
-    negotiate_and_set(config_language=getattr(getattr(config, "ui", None), "language", None))
-
-    context = backend.build_context(config)
-
-    # Default to the shell's launch directory so the agent starts where the user
-    # invoked the CLI; an explicit --cwd still overrides this.
-    cwd = cwd or os.getcwd()
-
-    def role_factory(*, name: str = name, session_id: Optional[str] = None, agent_type: Optional[str] = None):
-        """Build a role sharing this app's config + context (initial / new / resume / typed)."""
-        return backend.build_role(
-            context=context,
-            name=name,
-            tools=tools,
-            cwd=cwd,
-            agent_type=agent_type,
-            session_id=session_id,
-        )
+    # Shared engine construction (config / context / role_factory) — the exact
+    # same bundle a multi-session server builds from, so the two hosts can never
+    # drift. All side effects (scaffolding, locale) run once inside build_engine.
+    eng = build_engine(model=model, tools=tools, cwd=cwd, name=name, config=config)
+    config = eng.config
+    role_factory = eng.role_factory
 
     role = role_factory(name=name)
     control, _ = backend.build_control(role)
+    session_id = backend.role_session_id(role)
 
     # Presentation stack: consumers ← projector ← AgentEvent spine.
     active_consumers = consumer_objs if consumer_objs else build_consumers(config, active=consumers or ["terminal"])
     projector = BaseProjector(active_consumers, projector=ViewProjector())
     terminal_port = port if port is not None else TerminalPort()
 
+    # Fire durable ``mote cron add`` tasks into this live session. Tasks with no
+    # explicit target default to this session_id (see CronService._on_fire); the
+    # driver owns start/stop so the scheduler runs only while the session is up.
+    scheduler = CronService(control, session_id=session_id)
+
     return SessionDriver(
         control,
-        backend.role_session_id(role),
+        session_id,
         role,
         port=terminal_port,
         projector=projector,
         commands=default_registry(),
         role_factory=role_factory,
+        scheduler=scheduler,
     )
 
 

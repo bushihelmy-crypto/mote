@@ -85,6 +85,7 @@ def test_core_modules_are_pure_stdlib():
         "humanize.py",
         "whitespace.py",
         "hashing.py",
+        "hunks.py",
     ):
         for module in _mote_imports(pkg_dir / name):
             offenders.append(f"{name}: imports {module}")
@@ -103,4 +104,5 @@ def test_package_has_modules():
         "humanize.py",
         "whitespace.py",
         "hashing.py",
+        "hunks.py",
     } <= files

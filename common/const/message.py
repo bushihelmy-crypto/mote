@@ -81,5 +81,14 @@ CACHE_INTENT = "cache_intent"
 CACHE_INTENT_DURABLE = "durable"
 CACHE_INTENT_EPHEMERAL_TAIL = "ephemeral_tail"
 
+# Interjection framing (carried in Message.metadata on a user message).
+# INTERJECTION: True => this user message arrived *mid-turn* (the agent was
+# already working) and has been wrapped with framing so the model can tell it
+# apart from the turn's original prompt. The flag makes the wrap idempotent (a
+# message is never double-framed) and lets consumers identify a steering
+# message. Metadata-as-truth: survives dump/load into the durable rollout, so a
+# resumed session still reads the message as the interjection it was.
+INTERJECTION = "interjection"
+
 # Message id
 IGNORED_MESSAGE_ID = "0"

@@ -1,8 +1,8 @@
 """Disk-backed output writer for background tasks with incremental reads.
 
 Each task gets a file on disk;
-a per-task async drain loop flushes a write queue so callers never block on
-IO.  Consumers read incrementally via ``get_delta(from_offset)`` or grab the
+a per-task async drain loop batches a write queue so append callers stay
+non-blocking. Consumers read incrementally via ``get_delta(from_offset)`` or grab the
 tail with ``get_tail(max_bytes)``.
 
 This module is standalone — it does **not** modify ``BackgroundTaskPool`` or
@@ -17,6 +17,7 @@ from typing import Callable, Optional, Union
 
 from mote.common.const.tasks import DEFAULT_MAX_READ_BYTES, MAX_TASK_OUTPUT_BYTES, MAX_TASK_OUTPUT_BYTES_DISPLAY
 from mote.common.disk import disk_io
+from mote.common.disk.async_io import run_disk_io
 from mote.common.logs import logger
 from mote.common.workspace import ArtifactKind, WorkspaceStore
 
@@ -82,12 +83,12 @@ class DiskTaskOutput:
         Returns ``(content, new_offset)`` so the caller can pass
         ``new_offset`` back on the next call for incremental reads.
         """
-        content = await asyncio.to_thread(disk_io.read_range, self._file_path, from_offset, max_bytes)
+        content = await run_disk_io(disk_io.read_range, self._file_path, from_offset, max_bytes)
         return content, from_offset + len(content)
 
     async def get_tail(self, max_bytes: int = DEFAULT_MAX_READ_BYTES) -> bytes:
         """Read the last *max_bytes* of the output."""
-        return await asyncio.to_thread(disk_io.read_tail, self._file_path, max_bytes)
+        return await run_disk_io(disk_io.read_tail, self._file_path, max_bytes)
 
     def get_size(self) -> int:
         """Return the number of bytes written so far."""
@@ -191,7 +192,7 @@ class DiskTaskOutput:
             if self._bytes_written + len(payload) > MAX_TASK_OUTPUT_BYTES
             else b""
         )
-        written_data, capped = await asyncio.to_thread(
+        written_data, capped = await run_disk_io(
             disk_io.write_capped,
             self._file_path,
             payload,

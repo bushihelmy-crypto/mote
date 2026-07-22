@@ -8,6 +8,7 @@ from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportTy
 from mote.common.exception import ToolNotFoundError
 from mote.common.logs import logger
 from mote.executor.mcp.config_source import load_mcp_servers
+from mote.executor.mcp.oauth import build_mcp_auth
 from mote.executor.mcp_adapter import MCPToolAdapter
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -194,7 +195,10 @@ class UniversalMCP:
     def _build_client(self, server_config: MCPServerConfig) -> Client:
         if server_config.type == MCPTransportType.SSE:
             assert server_config.url is not None, "SSE server config requires a url"
-            return Client(server_config.url)
+            # A remote server may require an OAuth bearer; STDIO (local process)
+            # has no HTTP auth surface, so auth is SSE-only. build_mcp_auth
+            # returns None when no oauth is configured (unauthenticated client).
+            return Client(server_config.url, auth=build_mcp_auth(server_config))
         return Client(
             {
                 "mcpServers": {

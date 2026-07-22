@@ -7,11 +7,14 @@ from mote.common.config.config.mcp_config import MCPConfig
 from mote.common.config.config.models_config import ModelsConfig
 from mote.common.config.config.multimodal_config import MultimodalConfig
 from mote.common.config.config.observability_config import ObservabilityConfig
+from mote.common.config.config.resilience_config import ResilienceConfig
+from mote.common.config.config.router_config import RouterConfig
 from mote.common.config.config.secrets_config import SecretsConfig
 from mote.common.config.config.tools_config import ToolsConfig
 from mote.common.config.config.ui_config import UIConfig
 from mote.common.config.config.workspace_config import WorkspaceConfig
 from mote.common.observability.langfuse_integration import init_langfuse
+from mote.common.resilience import configure_health_registry
 from mote.common.utils.yaml_model import YamlModel
 
 
@@ -59,10 +62,30 @@ class Config(YamlModel):
     # task_outputs). Grouped here so the workspace tree has one config home.
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
 
+    # Circuit-breaker thresholds for per-resource health gating (LLM provider
+    # failover today; MCP / egress tomorrow).
+    resilience: ResilienceConfig = Field(default_factory=ResilienceConfig)
+
+    # Intelligent-routing knobs — the routing *strategy* every per-role
+    # LLMRouter is built with, plus the spawn-time seed-floor switch. A concern
+    # of its own (orthogonal to *which* models exist under ``models``), so it
+    # lives here at top level. Defaults reproduce today's behavior (rule-based,
+    # no spawn routing), so this block is inert until explicitly enabled.
+    router: RouterConfig = Field(default_factory=RouterConfig)
+
     @model_validator(mode="after")
     def activate_langfuse(self):
         """Idempotently activate Langfuse so env/client are ready before any
         LLM client is built. No-op (and no langfuse import) when disabled."""
 
         init_langfuse(self.observability.langfuse)
+        return self
+
+    @model_validator(mode="after")
+    def configure_resilience(self):
+        """Apply the configured breaker thresholds to the shared health registry
+        before any LLM client (and thus any breaker) is built. The bus-mirror
+        hook is installed separately by the LLM router at wire time."""
+
+        configure_health_registry(self.resilience.to_breaker_config())
         return self

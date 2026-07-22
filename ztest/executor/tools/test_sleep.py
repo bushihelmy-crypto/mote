@@ -9,7 +9,7 @@ step is a no-op here. Covers the slept / interrupted return wording.
 """
 from __future__ import annotations
 
-from mote.executor.tools.sleep import Sleep
+from mote.executor.tools.sleep import _MAX_WAIT_SECONDS, Sleep
 
 from .conftest import CapRole, bind, run
 
@@ -26,16 +26,18 @@ class TestSleep:
         out = _sleep(tool)
         assert out == "Woke after 0.0s"
 
-    def test_takes_no_arguments(self, workspace):
-        # Sleep has no duration parameter — call with no args.
-        role = CapRole(wait_result=5.0)
-        tool = bind(Sleep(), role)
-        out = _sleep(tool)
-        assert out == "Woke after 5.0s"
-
     def test_returns_reported_slept_seconds(self, workspace):
         # The reported seconds come from wait_interruptible.
         role = CapRole(wait_result=10.0)
         tool = bind(Sleep(), role)
         out = _sleep(tool)
         assert out == "Woke after 10.0s"
+
+    def test_caps_wait_at_ceiling(self, workspace):
+        # Sleep takes no args now — it always passes the safety ceiling to
+        # wait_interruptible so a stuck agent can never park forever.
+        role = CapRole(wait_result=3.0)
+        tool = bind(Sleep(), role)
+        out = _sleep(tool)
+        assert out == "Woke after 3.0s"
+        assert role.wait_durations == [_MAX_WAIT_SECONDS]

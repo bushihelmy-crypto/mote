@@ -5,7 +5,15 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from mote.common.schema import EffectLedgerConfig, ToolResultLimitConfig, ToolSearchConfig
+from mote.common.schema import (
+    DeviceConfig,
+    DurableConfig,
+    EffectLedgerConfig,
+    LoopGuardConfig,
+    ToolResultLimitConfig,
+    ToolSearchConfig,
+    WebSearchConfig,
+)
 from mote.common.utils.yaml_model import YamlModel
 
 
@@ -15,12 +23,13 @@ class ToolsConfig(YamlModel):
     This is the config home for the whole *tool-execution scope*: the runtime
     knobs above (proxy / browser fingerprint) plus the two cross-cutting policies
     the :class:`~mote.executor.tool_executor.ToolExecutor` owns —
-    :class:`ToolResultLimitConfig` (large-result persistence) and
-    :class:`EffectLedgerConfig` (EXTERNAL-effect idempotency ledger). Grouping
-    both under ``tools`` keeps their single-owner discipline: the executor reads
-    them from here, and the compaction spill reducer borrows ``result_limit`` off
-    the built executor (never a second instance), so there is exactly one source
-    for each and no drift.
+    :class:`ToolResultLimitConfig` (large-result persistence),
+    :class:`EffectLedgerConfig` (EXTERNAL-effect idempotency ledger), and
+    :class:`DurableConfig` (durable-execution backend for replay-safe steps).
+    Grouping them under ``tools`` keeps their single-owner discipline: the
+    executor reads them from here, and the compaction spill reducer borrows
+    ``result_limit`` off the built executor (never a second instance), so there
+    is exactly one source for each and no drift.
     """
 
     # Global proxy for tools such as the browser (the LLM clients use
@@ -49,6 +58,15 @@ class ToolsConfig(YamlModel):
     # prior no-ledger behavior (every call simply runs).
     effect_ledger: EffectLedgerConfig = Field(default_factory=EffectLedgerConfig)
 
+    # Durable-execution backend selector for the run's replay-safe steps (LLM
+    # think turn / LOCAL tool write / durable timer). Orthogonal to
+    # ``effect_ledger`` (EXTERNAL idempotency, never weakened): this memoizes a
+    # completed step's result so a resume skips it instead of re-paying, and
+    # ``backend="temporal"`` dispatches the three seams through the optional
+    # Temporal backend. ``enabled=False`` reproduces the prior no-memoization
+    # behavior; ``backend="jsonl"`` (default) is zero-dependency.
+    durable: DurableConfig = Field(default_factory=DurableConfig)
+
     # Tool Search master switch (deferred-tool discovery). Per-role
     # ``RoleSchema.deferred_tools`` declares WHICH tools are hidden-until-searched;
     # this ``enabled`` flag is the global OVERRIDE gating whether that declaration
@@ -57,3 +75,26 @@ class ToolsConfig(YamlModel):
     # built, and no native tool-search path fires; every declared tool is simply
     # fully visible (the plain no-deferral path).
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
+
+    # Tool-call loop guard: watches finished calls for a repeated-failure streak
+    # (same tool + same args failing N times) or a no-progress streak (a PURE
+    # read returning the identical result N times), and appends an in-band nudge
+    # to that result steering the model to change approach or ask the user.
+    # Fail-open and default-on; ``enabled=False`` reproduces prior behavior.
+    loop_guard: LoopGuardConfig = Field(default_factory=LoopGuardConfig)
+
+    # DeviceUse tool's pluggable device backend (Android over adb today). Selects
+    # the backend (``auto``/``android``/``none``) and how to reach an adb device
+    # (``adb_path`` + ``serial``). The DeviceUse tool reads this via the
+    # ``get_device_config`` capability. Defaults to ``auto`` (Android when adb is
+    # reachable, else a null no-device backend), so it is inert until a device is
+    # attached.
+    device: DeviceConfig = Field(default_factory=DeviceConfig)
+
+    # WebSearch tool's pluggable search backend. Selects the backend
+    # (``"provider"`` = provider-native server-side search, the default) and holds
+    # credentials for a future direct-API vendor. The WebSearch tool resolves the
+    # active backend from here via the search-backend registry, so adding a vendor
+    # is a new ``@register_search_backend`` + pointing ``backend`` at it — no tool
+    # change.
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)

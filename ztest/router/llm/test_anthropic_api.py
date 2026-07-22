@@ -562,6 +562,66 @@ class TestAutoDetection:
         assert isinstance(create_llm_instance(cfg), OpenAILLM)
 
 
+# -- reasoning effort (unified thinking) ------------------------------------
+class TestReasoningEffort:
+    def test_effort_enables_thinking_and_drops_temperature(self):
+        llm = _make_llm(reasoning_effort="high", temperature=0.7)  # opus-4 supports thinking
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 16384}
+        # The API forbids temperature alongside thinking → dropped even if set.
+        assert "temperature" not in kwargs
+
+    def test_effort_budget_table(self):
+        for effort, budget in [("minimal", 1024), ("low", 4096), ("medium", 8192), ("high", 16384)]:
+            llm = _make_llm(reasoning_effort=effort)
+            kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+            assert kwargs["thinking"]["budget_tokens"] == budget
+
+    def test_no_effort_no_thinking(self):
+        llm = _make_llm(temperature=0.5)
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.5
+
+    def test_incapable_model_ignores_effort(self):
+        llm = _make_llm(reasoning_effort="high")
+        llm.model = "claude-2"  # not a thinking model
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert "thinking" not in kwargs
+
+    def test_thinking_grows_max_tokens_for_answer_headroom(self):
+        # config max_token=2048 < high budget (16384): the API requires
+        # max_tokens > budget_tokens, so the envelope grows to budget + answer
+        # floor rather than 400-ing (and never shrinks the requested budget).
+        llm = _make_llm(reasoning_effort="high")  # budget 16384, config max_token=2048
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs["thinking"]["budget_tokens"] == 16384
+        assert kwargs["max_tokens"] == 16384 + 4096  # budget + _ANSWER_TOKEN_FLOOR
+        assert kwargs["max_tokens"] > kwargs["thinking"]["budget_tokens"]
+
+    def test_thinking_keeps_large_configured_max_tokens(self):
+        # A configured ceiling already roomy enough is preserved (never shrunk).
+        cfg = LLMConfig(
+            api_type="anthropic",
+            base_url="https://api.anthropic.com",
+            model="claude-opus-4-8",
+            api_key="sk-test",
+            max_token=100_000,
+            reasoning_effort="low",  # budget 4096
+        )
+        llm = AnthropicLLM(cfg)
+        llm.cost_manager = CostTracker()
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs["max_tokens"] == 100_000
+        assert kwargs["max_tokens"] > kwargs["thinking"]["budget_tokens"]
+
+    def test_no_thinking_leaves_max_tokens_untouched(self):
+        # Without thinking the envelope is the plain configured ceiling.
+        llm = _make_llm()  # max_token=2048, no effort
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs["max_tokens"] == 2048
+
+
 # -- error classification (handlers) ---------------------------------------
 class TestErrorClassification:
     def test_anthropic_status_errors_mapped(self):
@@ -582,6 +642,88 @@ class TestErrorClassification:
         overloaded = anthropic.InternalServerError("boom", response=httpx.Response(500, request=request), body=None)
         # InternalServerError is in the transient allowlist.
         assert is_retryable(overloaded) is True
+
+    def test_retry_after_header_stamped_onto_typed_error(self):
+        import anthropic
+        import httpx
+
+        from mote.common.exception import LLMRateLimitError, classify_llm_error
+
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request, headers={"retry-after": "17"})
+        rate = anthropic.RateLimitError("slow down", response=response, body=None)
+
+        err = classify_llm_error(rate)
+        assert isinstance(err, LLMRateLimitError)
+        assert err.retry_after == 17.0
+        assert err.context.get("retry_after") == 17.0
+
+    def test_missing_retry_after_header_leaves_none(self):
+        import anthropic
+        import httpx
+
+        from mote.common.exception import LLMRateLimitError, classify_llm_error
+
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request)  # no Retry-After header
+        rate = anthropic.RateLimitError("slow down", response=response, body=None)
+
+        err = classify_llm_error(rate)
+        assert isinstance(err, LLMRateLimitError)
+        assert err.retry_after is None
+
+    def test_future_http_date_retry_after_parsed_to_delta(self):
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+
+        import anthropic
+        import httpx
+
+        from mote.common.exception import classify_llm_error
+
+        # RFC 7231 second form: an absolute HTTP-date → converted to a positive
+        # delay by subtracting *now* (aware UTC). Use a far-future instant so the
+        # delta stays comfortably positive regardless of test-run latency.
+        future = datetime.now(timezone.utc) + timedelta(seconds=120)
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request, headers={"retry-after": format_datetime(future)})
+        rate = anthropic.RateLimitError("slow down", response=response, body=None)
+
+        err = classify_llm_error(rate)
+        assert err.retry_after is not None
+        # ~120s minus the tiny elapsed since we computed ``future``.
+        assert 100.0 < err.retry_after <= 120.0
+
+    def test_past_http_date_retry_after_ignored(self):
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+
+        import anthropic
+        import httpx
+
+        from mote.common.exception import classify_llm_error
+
+        past = datetime.now(timezone.utc) - timedelta(seconds=60)
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request, headers={"retry-after": format_datetime(past)})
+        rate = anthropic.RateLimitError("slow down", response=response, body=None)
+
+        err = classify_llm_error(rate)
+        # A date already in the past → non-positive delta → None (normal backoff).
+        assert getattr(err, "retry_after", None) is None
+
+    def test_garbage_retry_after_header_ignored(self):
+        import anthropic
+        import httpx
+
+        from mote.common.exception import classify_llm_error
+
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request, headers={"retry-after": "not-a-date-or-number"})
+        rate = anthropic.RateLimitError("slow down", response=response, body=None)
+
+        err = classify_llm_error(rate)
+        assert getattr(err, "retry_after", None) is None
 
 
 class TestDescribeImage:

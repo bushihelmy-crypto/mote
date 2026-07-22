@@ -21,7 +21,7 @@ from mote.cli.consumers.render.builders.core import (
     fold_note_str,
     tool_group_summary_text,
 )
-from mote.cli.view.summaries import _summary_edit, _summary_grep, _summary_read, _summary_write
+from mote.cli.view.summaries import _summary_edit, _summary_read, _summary_search
 from mote.common.i18n import use_locale
 
 # A minimal Read body: right-justified ``N→`` numbered lines the summary counts.
@@ -62,7 +62,7 @@ def test_read_many_lines_is_plural(code: str, expected: str) -> None:
 def test_grep_matches_files_singular(code: str, expected: str) -> None:
     text = "Found 1 total occurrence across 1 files"
     with use_locale(code):
-        assert _summary_grep(text) == expected
+        assert _summary_search(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -75,7 +75,7 @@ def test_grep_matches_files_singular(code: str, expected: str) -> None:
 def test_grep_matches_files_plural(code: str, expected: str) -> None:
     text = "Found 7 total occurrences across 3 files"
     with use_locale(code):
-        assert _summary_grep(text) == expected
+        assert _summary_search(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -83,9 +83,13 @@ def test_grep_matches_files_plural(code: str, expected: str) -> None:
     [("zh", "\u65b0\u5efa 5 \u884c"), ("en", "created 5 lines")],
 )
 def test_write_created(code: str, expected: str) -> None:
-    text = "Created /tmp/x.py (5 lines, 42 bytes written)"
+    # A whole-file write now flows through Edit: an empty ``old`` + all-new
+    # ``new`` reads as "created N lines".
+    event = SimpleNamespace(
+        file_changes=[SimpleNamespace(old="", new="a\nb\nc\nd\ne\n")],
+    )
     with use_locale(code):
-        assert _summary_write(text) == expected
+        assert _summary_edit(event, "") == expected
 
 
 @pytest.mark.parametrize(
@@ -130,7 +134,7 @@ def test_fold_hidden_lines_singular(code: str, expected: str) -> None:
     ],
 )
 def test_tool_group_summary(code: str, expected_tail: str) -> None:
-    items = [("Grep", None), ("Glob", None), ("Read", "/a.py")]
+    items = [("Search", None), ("Search", None), ("Read", "/a.py")]
     with use_locale(code):
         got = _plain(tool_group_summary_text(items, active=False))
     assert got.endswith(expected_tail)

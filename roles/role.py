@@ -25,12 +25,14 @@ from mote.roles.role_schema import RoleSchema
 from mote.roles.role_state import RoleState
 from mote.router.router import LLMRouter
 from mote.session import list_sessions as _list
+from mote.session.events import SessionMetaEvent
 
 if TYPE_CHECKING:
-    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem
+    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem, DeviceConfig
     from mote.common.schema.permission_types import ApprovalChoice, ApprovalRequest
     from mote.context.skills.skill_pool import SkillPool
     from mote.executor.capability_types import CapabilityMap
+    from mote.executor.dependency.browser_profile import BrowserProfileStore
     from mote.executor.tool_result import ToolResult
     from mote.router.llm.llm_response import WebSearchHit
     from mote.sandbox import SandboxRuntime
@@ -41,6 +43,8 @@ if TYPE_CHECKING:
         SessionLog,
         TerminalStateRecorder,
     )
+    from mote.session.attribution import HunkAttribution
+    from mote.session.hunk_ops import HunkOps
 
 
 @log_class(
@@ -254,6 +258,56 @@ class Role(BaseRole):
         return self._components.file_snapshot_recorder
 
     @property
+    def hunk_ledger(self):
+        """The session's durable change-attribution ledger (always present)."""
+        return self._components.hunk_ledger
+
+    @property
+    def hunk_ops(self) -> "HunkOps":
+        """Accept / reject / undo engine over the session's hunk ledger.
+
+        Coordinates the ledger, the blob store, and this Role's baseline +
+        read-state maps (reached through narrow callbacks so the session-layer
+        engine stays roles-independent). Built once and cached — the ledger and
+        the state controller it binds to are stable for the Role's lifetime.
+        """
+        ops = getattr(self, "_hunk_ops", None)
+        if ops is None:
+            from mote.common.disk import mtime_ns
+            from mote.session.hunk_ops import HunkOps
+
+            def _refresh_read_state(path: str) -> None:
+                m = mtime_ns(path)
+                if m is not None:
+                    self._state_ctl.record_file_read(path, m)
+
+            ops = HunkOps(
+                self.hunk_ledger,
+                self.file_snapshot_recorder.blobs,
+                set_baseline=self._state_ctl.record_file_baseline,
+                refresh_read_state=_refresh_read_state,
+            )
+            self._hunk_ops = ops
+        return ops
+
+    @property
+    def hunk_attribution(self) -> "HunkAttribution":
+        """Read-side projection of the hunk ledger for review UIs.
+
+        Groups the ledger's records (by turn / file / source) and rehydrates
+        each hunk's before/after text on demand from the blob store. Built once
+        and cached — the ledger and blob store it binds to are stable for the
+        Role's lifetime.
+        """
+        attr = getattr(self, "_hunk_attribution", None)
+        if attr is None:
+            from mote.session.attribution import HunkAttribution
+
+            attr = HunkAttribution(self.hunk_ledger, self.file_snapshot_recorder.blobs)
+            self._hunk_attribution = attr
+        return attr
+
+    @property
     def resource_registry(self):
         return self._components.resource_registry
 
@@ -268,6 +322,10 @@ class Role(BaseRole):
     @property
     def browser_state_recorder(self) -> "BrowserStateRecorder":
         return self._components.browser_state_recorder
+
+    @property
+    def browser_profile_store(self) -> "BrowserProfileStore":
+        return self._components.browser_profile_store
 
     @property
     def hook_manager(self):
@@ -395,6 +453,24 @@ class Role(BaseRole):
         """
         self._state_ctl.set_cwd(path)
 
+    def current_turn_index(self) -> int:
+        """The current turn (prompt) index used to attribute change hunks.
+
+        Capability surface for the hunk-attribution path (executor settle and
+        the read-before-write guard): each captured hunk is stamped with this
+        value so the review layer can group pending changes by turn. Delegates
+        to the state controller.
+        """
+        return self._state_ctl.current_turn_index()
+
+    def _advance_turn(self) -> int:
+        """Advance the turn index by one (injected into the react loop).
+
+        Called once per think round so hunks captured during a turn carry a
+        stable, monotonic index. Framework-internal (not a tool capability).
+        """
+        return self._state_ctl.advance_turn()
+
     def get_default_model(self) -> Optional[str]:
         """Name of the default (main think-loop) model, or None if unconfigured.
 
@@ -513,6 +589,8 @@ class Role(BaseRole):
             "record_file_glimpsed": self.record_file_glimpsed,
             "is_resource_visible": self.is_resource_visible,
             "record_file_snapshot": self._capabilities.record_file_snapshot,
+            "record_file_baseline": self._capabilities.record_file_baseline,
+            "attribute_external_change": self._capabilities.attribute_external_change,
             "record_terminal_state": self._capabilities.record_terminal_state,
             "take_pending_terminal_restore": self._state_ctl.take_pending_terminal_restore,
             "record_kernel_state": self._capabilities.record_kernel_state,
@@ -523,6 +601,12 @@ class Role(BaseRole):
             "get_browser_stealth": self.get_browser_stealth,
             "get_browser_locale": self.get_browser_locale,
             "get_browser_proxy": self.get_browser_proxy,
+            "get_browser_profile": self.get_browser_profile,
+            "load_browser_profile": self.load_browser_profile,
+            "save_browser_profile": self.save_browser_profile,
+            "get_browser_client_certs": self.get_browser_client_certs,
+            "get_browser_cdp_endpoint": self.get_browser_cdp_endpoint,
+            "get_secret": self.get_secret,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
             "wait_interruptible": self.wait_interruptible,
@@ -532,6 +616,7 @@ class Role(BaseRole):
             "register_task_result": self._capabilities.register_task_result,
             "retire_task_result": self._capabilities.retire_task_result,
             "get_sandbox_runtime": self.get_sandbox_runtime,
+            "get_device_config": self.get_device_config,
             "dispatch_tool": self.dispatch_tool,
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,
@@ -572,6 +657,16 @@ class Role(BaseRole):
         which case those tools run un-sandboxed (the historical behavior).
         """
         return self._components.sandbox_runtime
+
+    def get_device_config(self) -> DeviceConfig:
+        """Return the DeviceUse tool's device-backend config (``config.tools.device``).
+
+        Capability surface for the DeviceUse tool: selects the device backend
+        (``auto``/``android``/``none``) and how to reach an adb device
+        (``adb_path`` + ``serial``), without the executor layer reaching into the
+        config. Defaults to ``auto`` (Android when adb is reachable, else null).
+        """
+        return self.config.tools.device
 
     def get_browser_headless(self) -> bool:
         """Return the role's ``browser_headless`` flag (True => run headless).
@@ -635,6 +730,92 @@ class Role(BaseRole):
                 return value
         return ""
 
+    def get_browser_profile(self) -> str:
+        """Return the role's durable browser-login profile name (empty = ephemeral).
+
+        Capability surface for the WebBrowser tool: when non-empty, the tool
+        seeds/persists the logged-in session from an encrypted profile under
+        ``~/.mote/browser_profiles/`` instead of leaving login ephemeral.
+        """
+        return self.role_schema.browser_profile
+
+    def load_browser_profile(self, name: str) -> Optional[dict]:
+        """Return the decrypted ``storage_state`` saved under *name* (or None).
+
+        Capability surface for the WebBrowser tool; delegates to the encrypted
+        :class:`BrowserProfileStore`. Best-effort (None on any miss/failure).
+        """
+        return self.browser_profile_store.load(name)
+
+    def save_browser_profile(self, name: str, storage_state: Optional[dict]) -> None:
+        """Persist *storage_state* under *name* in the encrypted profile store.
+
+        Capability surface for the WebBrowser tool; delegates to the encrypted
+        :class:`BrowserProfileStore`. Best-effort (never raises).
+        """
+        self.browser_profile_store.save(name, storage_state)
+
+    def get_browser_client_certs(self) -> list[dict]:
+        """Return the role's client TLS certs as Playwright-shaped dicts.
+
+        Capability surface for the WebBrowser tool (mutual-TLS logins). Maps each
+        ``role_schema.browser_client_certs`` entry to a Playwright
+        ``client_certificates`` dict: ``origin`` plus whichever of ``certPath`` /
+        ``keyPath`` / ``pfxPath`` / ``passphrase`` are set (omitting empties). The
+        ``passphrase`` is returned VERBATIM — it may be a secret placeholder that
+        the tool expands from the vault at launch time — so no plaintext leaves
+        the vault here. Empty list (default) means no mTLS.
+        """
+        out: list[dict] = []
+        for cert in self.role_schema.browser_client_certs:
+            entry: dict = {"origin": cert.origin}
+            if cert.cert_path:
+                entry["certPath"] = cert.cert_path
+            if cert.key_path:
+                entry["keyPath"] = cert.key_path
+            if cert.pfx_path:
+                entry["pfxPath"] = cert.pfx_path
+            if cert.passphrase:
+                entry["passphrase"] = cert.passphrase
+            out.append(entry)
+        return out
+
+    def get_browser_cdp_endpoint(self) -> str:
+        """Return the CDP endpoint to attach to (empty = launch our own browser).
+
+        Capability surface for the WebBrowser tool: when non-empty the tool
+        attaches to an already-running Chrome over the DevTools Protocol instead
+        of launching a private browser (reusing the human's real logins).
+        """
+        return self.role_schema.browser_cdp_endpoint
+
+    def get_secret(self, key: str) -> Optional[str]:
+        """Resolve a named secret to its plaintext value, or ``None`` if unknown.
+
+        Capability surface for autonomous login-fill (WebBrowser): a tool
+        references a credential **by key** (e.g. a ``<agent-vault:KEY>`` /
+        ``<totp:KEY>`` placeholder the model wrote) and this resolves it against
+        the encrypted vault — the model never authors or sees the value. Returns
+        ``None`` when the key is unknown or secrets are disabled (no store),
+        which the reference expander treats as fail-closed.
+        """
+        store = self._components.secret_store
+        return store.get(key) if store is not None else None
+
+    def list_secret_names(self) -> dict[str, str]:
+        """Return the ``{name: placeholder}`` map of configured secret NAMES.
+
+        The discovery complement of :meth:`get_secret`: the credential-index
+        turn-context source reads this to show the model WHICH named secrets it
+        can reference (and the exact placeholder to write), never any value.
+        Reads the same vault; returns ``{}`` when secrets are disabled (no
+        store). Wired into the context source by a lambda in ``role_components``
+        (like the deferred-tool menu) — not published as a tool capability,
+        because no tool consumes it.
+        """
+        store = self._components.secret_store
+        return store.labels() if store is not None else {}
+
     async def ask_user(self, question: str) -> str:
         """Ask the user a question and return their response.
 
@@ -667,13 +848,14 @@ class Role(BaseRole):
         """
         return await self._capabilities.reply_to_user(content)
 
-    async def wait_interruptible(self) -> float:
-        """Block until an event wakes the agent — event-driven only, no timer.
+    async def wait_interruptible(self, duration: "float | None" = None) -> float:
+        """Block until an event wakes the agent, optionally bounded by *duration*.
 
         Capability surface for the Sleep tool; delegates to
-        :class:`RoleCapabilities` (which owns the wait coordination).
+        :class:`RoleCapabilities` (which owns the wait coordination). A positive
+        *duration* opens a durable timer whose deadline survives a crash-resume.
         """
-        return await self._capabilities.wait_interruptible()
+        return await self._capabilities.wait_interruptible(duration)
 
     async def dispatch_tool(self, name: str, kwargs: "dict | None" = None) -> "ToolResult":
         """Dispatch a nested tool call through the executor chokepoint.
@@ -853,13 +1035,27 @@ class Role(BaseRole):
         """Emit ``SessionStartEvent`` exactly once across this Role's run() calls.
 
         The HookSubscriber fires the SessionStart hook; the recorder's meta line
-        is already written when the session_log was built. Also starts the opt-in
+        is written here at the explicit startup boundary. Also starts the opt-in
         external-file watcher (the property is None when disabled / no hook
         layer); its polling loop is stopped in :meth:`cleanup`.
         """
         if self._session_started:
             return
         self._session_started = True
+
+        # Establish the append-only log before SessionStart observers can append
+        # anything. Component resolution itself is intentionally I/O-free.
+        self.session_log.create(
+            SessionMetaEvent(
+                session_id=self.state.session_id,
+                parent_session_id=self.state.parent_session_id,
+                working_dir=self.state.working_dir,
+                original_working_dir=self.state.original_working_dir,
+                project_root=self.state.project_root,
+                model=getattr(self.config.models.default, "model", None),
+                role_class=f"{type(self).__module__}.{type(self).__qualname__}",
+            )
+        )
 
         # Open this session's own log file (logs/{session_id}.txt), named to
         # match its workspace session folder. run() has bound session_id as the

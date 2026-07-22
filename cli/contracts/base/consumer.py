@@ -16,9 +16,15 @@ the structural contract it implements is
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
 from mote.cli.contracts.view.capabilities import Capabilities
+from mote.common.logs import logger
+
+#: An async sink the transport injects: one wire payload dict → written out (SSE
+#: frame / JSON-RPC notification / ...). The transport owns the socket; a
+#: :class:`SinkConsumer` only produces payloads and calls this.
+Sink = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
 class BaseConsumer:
@@ -80,4 +86,60 @@ class BaseConsumer:
         return None
 
 
-__all__ = ["BaseConsumer"]
+class SinkConsumer(BaseConsumer):
+    """A :class:`BaseConsumer` that folds each ViewEvent into wire payloads and
+    pushes them to an injected async ``sink`` — the shared machinery behind every
+    streaming network consumer (AG-UI SSE, ACP ``session/update``, ...).
+
+    A subclass supplies only the pure fold via :meth:`_fold` (delegating to its
+    ``_wire`` mapper) and its per-session correlation state; this base owns the
+    sink binding, the guarded emit (a dead pipe must never crash a turn), and the
+    close flag. The consumer touches NO socket itself — the transport binds
+    ``sink`` to the real writer — so it stays fully unit-testable with a
+    list-appending fake sink.
+
+    The pure mapper already owns per-kind fan-out, so ``handle`` is a thin
+    "fold → emit" loop over :meth:`_fold` (no per-``on_<kind>`` methods). The
+    sync path is a no-op: sinks are async-only, so a sync-delivered event is
+    dropped rather than leaking a coroutine (subclasses declare
+    ``streaming=True`` and are fed the async ``handle`` path for text).
+    """
+
+    #: Log label for a failed sink write (subclass sets its consumer name).
+    _log_label: str = "SinkConsumer"
+
+    def __init__(self, sink: Optional[Sink] = None) -> None:
+        self._sink = sink
+        self._closed = False
+
+    def set_sink(self, sink: Sink) -> None:
+        """Bind (or rebind) the async wire sink — the server calls this once."""
+        self._sink = sink
+
+    def _fold(self, ev: Any) -> Iterable[Dict[str, Any]]:
+        """Map one ViewEvent to zero+ wire payloads (subclass delegates to its
+        pure ``_wire`` mapper). Unknown / display-only kinds → empty."""
+        raise NotImplementedError
+
+    async def handle(self, ev: Any) -> None:
+        """Fold one projected ViewEvent through the wire table and emit each payload."""
+        for payload in self._fold(ev):
+            await self._emit(payload)
+
+    def handle_sync(self, ev: Any) -> None:
+        """No-op: sinks are async-only, so sync-delivered events are dropped."""
+        return None
+
+    async def _emit(self, payload: Dict[str, Any]) -> None:
+        if self._sink is None or self._closed:
+            return
+        try:
+            await self._sink(payload)
+        except Exception as exc:  # noqa: BLE001 — a dead pipe must not crash the turn
+            logger.warning(f"{self._log_label}: sink write failed: {exc}")
+
+    async def aclose(self) -> None:
+        self._closed = True
+
+
+__all__ = ["BaseConsumer", "SinkConsumer", "Sink"]

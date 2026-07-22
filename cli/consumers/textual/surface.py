@@ -94,6 +94,9 @@ class TextualSurface(BaseSurface):
         self._app._mount(widget)
         if widget.tool_use_id:
             self._app._tool_widgets[widget.tool_use_id] = widget
+            # Keep a reference PAST completion so a structured FileDiffBlock
+            # (Edit/Write) folds its diff into this row (see render_file_diff).
+            self._app._diff_targets[widget.tool_use_id] = widget
 
     def tool_completed(self, ev: Any, fold: FoldMode, truncation: Truncation) -> None:
         self._app._close_block()
@@ -169,6 +172,14 @@ class TextualSurface(BaseSurface):
         self._app._mount(MediaRow(ev))
 
     def render_file_diff(self, ev: Any) -> None:
+        # Fold the diff INTO its owning tool row (Edit/Write) so the invocation +
+        # change are one select/fold unit; fall back to a standalone FileDiffRow
+        # when no tool widget owns it (e.g. an unmatched/idless change).
+        tid = getattr(ev, "tool_use_id", None)
+        widget = self._app._diff_targets.get(tid) if tid else None
+        if widget is not None:
+            widget.set_file_diff(ev)
+            return
         self._app._close_block()
         self._app._mount(FileDiffRow(ev))
 
@@ -245,6 +256,7 @@ class TextualSurface(BaseSurface):
         self._app._close_block()
         self._app._open_block = None
         self._app._tool_widgets.clear()
+        self._app._diff_targets.clear()
         self._app._grouped_tool_ids.clear()
         self._app._tool_group = None
         self._app._activity_widgets.clear()

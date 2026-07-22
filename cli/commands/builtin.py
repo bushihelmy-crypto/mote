@@ -126,6 +126,55 @@ async def cmd_clear(ctx: Any, _arg: str) -> None:
     ctx.notice(f"cleared conversation ({cleared} messages).\n", level="success")
 
 
+@register_command("rewind", help="list/rollback file checkpoints: /rewind [index]")
+async def cmd_rewind(ctx: Any, arg: str) -> None:
+    """List whole-tree checkpoints, or roll the working tree back to one.
+
+    No arg → list every captured user-turn checkpoint (index, preview, time).
+    ``/rewind <index>`` → restore the working tree to that checkpoint (the
+    current state is auto-saved first, so the rewind is itself reversible).
+    """
+    arg = arg.strip()
+    if not arg:
+        entries = ctx.list_checkpoints()
+        if not entries:
+            ctx.notice("(no checkpoints — /rewind needs a git-backed workspace)\n")
+            return
+        lines = ["Checkpoints:"]
+        for e in entries:
+            preview = (e.prompt_preview or "").replace("\n", " ").strip()
+            ts = (e.ts or "")[:19]
+            lines.append(f" [{e.index}] {ts}  {preview}" if preview else f" [{e.index}] {ts}")
+        lines.append("\nRewind with: /rewind <index>")
+        ctx.notice("\n".join(lines) + "\n")
+        return
+    if not arg.isdigit():
+        ctx.notice("usage: /rewind [index]\n")
+        return
+    result = ctx.rewind_to(int(arg))
+    if result is None:
+        ctx.notice(f"could not rewind to checkpoint {arg}.\n", level="error")
+        return
+    ctx.notice(f"rewound working tree to checkpoint [{result.target.index}].\n", level="success")
+    external = getattr(result, "external", None)
+    if external:
+        lines = ["warning: overwrote files changed since that turn (outside the agent):"]
+        lines += [f"  - {path}" for path in external]
+        ctx.notice("\n".join(lines) + "\n", level="warning")
+
+
+@register_command("usage", help="show session cost + provider rate-limit quota", aliases=("cost",))
+async def cmd_usage(ctx: Any, _arg: str) -> None:
+    """Render the session's accumulated cost and the latest provider rate limits.
+
+    Both are read off the shared router context: ``cost_manager`` (spend) and
+    ``rate_limit_tracker`` (the quota captured from each response's
+    ``*-ratelimit-*`` headers). Rate limits read ``(none reported yet)`` until
+    the first provider response of the session lands.
+    """
+    ctx.notice(ctx.usage_report() + "\n")
+
+
 @register_command("lang", help="show or switch the display language: /lang [auto|en|zh]")
 async def cmd_lang(ctx: Any, arg: str) -> None:
     """Show the active display language, or switch it (``auto`` re-reads the env).
@@ -162,5 +211,7 @@ __all__ = [
     "cmd_sessions",
     "cmd_resume",
     "cmd_clear",
+    "cmd_rewind",
+    "cmd_usage",
     "cmd_lang",
 ]

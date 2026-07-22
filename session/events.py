@@ -77,6 +77,7 @@ COMPACTED = "compacted"
 TURN_CONTEXT = "turn_context"
 META_UPDATE = "meta_update"
 FILE_SNAPSHOT = "file_snapshot"
+CHECKPOINT = "checkpoint"
 LLM_CALL = "llm_call"
 TERMINAL_STATE = "terminal_state"
 KERNEL_STATE = "kernel_state"
@@ -227,6 +228,53 @@ class FileSnapshotEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "FileSnapshotEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class CheckpointEvent:
+    """A whole-working-tree checkpoint captured at a user-turn boundary.
+
+    The user-facing sibling of :class:`FileSnapshotEvent`: where the file-snapshot
+    layer captures a single file's before-image just before a tool mutates it,
+    this captures the *entire* working tree once per user prompt so the user can
+    roll the whole tree back to any prior turn (the ``/rewind`` command).
+
+    ``commit`` is a commit id in the session's dedicated ``{session}/git`` object
+    db (never the user's own repo). ``prompt_index`` is the 0-based ordinal of the
+    user turn this snapshot precedes; ``prompt_preview`` is the leading slice of
+    that prompt (for the ``/rewind`` listing), and ``working_dir`` is the tree
+    root the checkpoint was taken against.
+
+    ``after_commit`` is the twin snapshot taken at *turn end* — the tree the agent
+    left behind after acting on this prompt. It is recorded as a separate event
+    (``commit=""`` + this field set, same ``prompt_index``) so
+    :func:`~mote.session.checkpoint.list_checkpoints` can fold it back onto the
+    matching before-checkpoint. Diffing it against the live tree at rewind time is
+    how the ``/rewind`` command detects files an external process (or the user)
+    changed *after* the agent finished — the whole-tree analogue of grok's
+    per-file ``after_snapshots`` conflict detection.
+    """
+
+    commit: str
+    prompt_index: int = 0
+    prompt_preview: str = ""
+    working_dir: str = ""
+    after_commit: str = ""
+
+    type = CHECKPOINT
+
+    def payload(self) -> Dict[str, Any]:
+        return {
+            "commit": self.commit,
+            "prompt_index": self.prompt_index,
+            "prompt_preview": self.prompt_preview,
+            "working_dir": self.working_dir,
+            "after_commit": self.after_commit,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "CheckpointEvent":
         return cls(**_dataclass_kwargs(cls, payload))
 
 
@@ -383,6 +431,7 @@ SessionEvent = Union[
     TurnContextEvent,
     MetaUpdateEvent,
     FileSnapshotEvent,
+    CheckpointEvent,
     LLMCallEvent,
     TerminalStateEvent,
     KernelStateEvent,
@@ -397,6 +446,7 @@ _EVENT_TYPES = {
     TURN_CONTEXT: TurnContextEvent,
     META_UPDATE: MetaUpdateEvent,
     FILE_SNAPSHOT: FileSnapshotEvent,
+    CHECKPOINT: CheckpointEvent,
     LLM_CALL: LLMCallEvent,
     TERMINAL_STATE: TerminalStateEvent,
     KERNEL_STATE: KernelStateEvent,
@@ -461,6 +511,7 @@ __all__ = [
     "TURN_CONTEXT",
     "META_UPDATE",
     "FILE_SNAPSHOT",
+    "CHECKPOINT",
     "LLM_CALL",
     "TERMINAL_STATE",
     "KERNEL_STATE",
@@ -471,6 +522,7 @@ __all__ = [
     "TurnContextEvent",
     "MetaUpdateEvent",
     "FileSnapshotEvent",
+    "CheckpointEvent",
     "LLMCallEvent",
     "TerminalStateEvent",
     "KernelStateEvent",

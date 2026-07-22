@@ -202,3 +202,165 @@ class TestContextReducerInjection:
         router.map_task("some-task", "strong")
         llm = router.route_for_task("some-task")
         assert llm.context_reducer is sentinel
+
+
+class TestSharedEngine:
+    """The process-level shared ML engine memoizes on the resolved model_dir."""
+
+    def test_same_dir_returns_same_instance(self, tmp_path):
+        from mote.router.ml.engine import shared_engine
+
+        a = shared_engine(tmp_path / "bundle")
+        b = shared_engine(tmp_path / "bundle")
+        assert a is b
+
+    def test_different_dir_returns_different_instance(self, tmp_path):
+        from mote.router.ml.engine import shared_engine
+
+        a = shared_engine(tmp_path / "one")
+        b = shared_engine(tmp_path / "two")
+        assert a is not b
+
+    def test_default_dir_memoized(self):
+        from mote.router.ml.engine import shared_engine
+
+        assert shared_engine() is shared_engine()
+
+
+class TestBuildRouterStrategy:
+    """_build_router picks a strategy per agent kind (main vs sub); None = inert.
+
+    The main/sub discriminator is ``role.state.parent_session_id`` — None for
+    the root/main agent, a non-empty string for a spawned child.
+    """
+
+    def _ctx(self, *, main=None, sub=None, is_sub=False):
+        import types
+
+        from mote.common.config.config.router_config import AgentRouterConfig, RouterConfig
+        from mote.router.llm.context import Context
+
+        context = Context()
+        router_cfg = RouterConfig(
+            main_agent=AgentRouterConfig(strategy=main),
+            sub_agent=AgentRouterConfig(strategy=sub),
+        )
+        state = types.SimpleNamespace(parent_session_id=("parent" if is_sub else None))
+        role = types.SimpleNamespace(
+            context=context,
+            state=state,
+            config=types.SimpleNamespace(router=router_cfg),
+        )
+        return types.SimpleNamespace(role=role)
+
+    def test_default_none_is_inert(self):
+        # Default (both None) → routing disabled, default RuleBasedStrategy left
+        # in place but never consulted (routing_enabled False).
+        from mote.roles.runtime_modules.cognition import _build_router
+        from mote.router.strategy import RuleBasedStrategy
+
+        built = _build_router(self._ctx())
+        assert built.routing_enabled is False
+        assert isinstance(built.strategy, RuleBasedStrategy)
+
+    def test_main_rule_installs_rule_based(self):
+        from mote.roles.runtime_modules.cognition import _build_router
+        from mote.router.strategy import RuleBasedStrategy
+
+        built = _build_router(self._ctx(main="rule"))
+        assert built.routing_enabled is True
+        assert isinstance(built.strategy, RuleBasedStrategy)
+
+    def test_main_squilla_installs_squilla_strategy(self):
+        from mote.roles.runtime_modules.cognition import _build_router
+        from mote.router.squilla import SquillaStrategy
+
+        built = _build_router(self._ctx(main="squilla"))
+        assert built.routing_enabled is True
+        assert isinstance(built.strategy, SquillaStrategy)
+
+    def test_sub_agent_reads_sub_config(self):
+        # A spawned child reads sub_agent, ignoring main_agent entirely.
+        from mote.roles.runtime_modules.cognition import _build_router
+        from mote.router.squilla import SquillaStrategy
+
+        built = _build_router(self._ctx(main="rule", sub="squilla", is_sub=True))
+        assert built.routing_enabled is True
+        assert isinstance(built.strategy, SquillaStrategy)
+
+    def test_main_agent_ignores_sub_config(self):
+        # The root agent reads main_agent; a squilla sub_agent must not leak in.
+        from mote.roles.runtime_modules.cognition import _build_router
+
+        built = _build_router(self._ctx(main=None, sub="squilla", is_sub=False))
+        assert built.routing_enabled is False
+
+    def test_sub_none_is_inert_even_if_main_routes(self):
+        from mote.roles.runtime_modules.cognition import _build_router
+
+        built = _build_router(self._ctx(main="squilla", sub=None, is_sub=True))
+        assert built.routing_enabled is False
+
+    def test_squilla_strategy_shares_engine(self):
+        from mote.roles.runtime_modules.cognition import _build_router
+        from mote.router.ml.engine import shared_engine
+
+        a = _build_router(self._ctx(main="squilla"))
+        b = _build_router(self._ctx(main="squilla"))
+        # Both per-role strategies share the one process engine (default dir).
+        assert a.strategy.engine is b.strategy.engine is shared_engine()
+
+
+class TestSeedSessionCapability:
+    """The Agent tool's ``_seed`` guard is a getattr no-op for rule-based
+    children: only SquillaStrategy exposes ``seed_session``."""
+
+    def test_rule_based_has_no_seed_session(self):
+        from mote.router.strategy import RuleBasedStrategy
+
+        assert getattr(RuleBasedStrategy(), "seed_session", None) is None
+
+    def test_squilla_exposes_seed_session(self, tmp_path):
+        from mote.router.squilla import SquillaStrategy
+
+        strat = SquillaStrategy(model_dir=tmp_path / "no-bundle")
+        assert callable(getattr(strat, "seed_session", None))
+
+
+class TestBreakerWiring:
+    """Every built/routed LLM is stamped with the shared health registry + bus hook."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self):
+        # The registry is a process-global singleton; isolate it per test so
+        # the installed transition hook / breakers don't leak across the suite.
+        from mote.common.resilience import reset_health_registry
+
+        reset_health_registry()
+        yield
+        reset_health_registry()
+
+    def test_build_wires_shared_registry_and_bus_hook(self, router):
+        from mote.common.events import breaker_bus_hook
+        from mote.common.resilience import get_health_registry
+
+        llm = router.route(name="strong")
+        assert llm._health_registry is get_health_registry()
+        # The bus-mirror hook is installed so breaker transitions emit events.
+        assert get_health_registry()._on_transition is breaker_bus_hook
+
+    def test_all_routes_share_one_registry(self, router):
+        a = router.route(name="strong")
+        b = router.route(name="mid")
+        c = router.route()  # default
+        d = router.route(llm_config=LLMConfig(api_key="sk-test", model="custom"))
+        registries = {id(x._health_registry) for x in (a, b, c, d)}
+        assert len(registries) == 1  # one shared registry across every path
+
+    def test_llm_config_branch_wires_registry(self, router):
+        from mote.common.resilience import get_health_registry
+
+        # The llm_config branch bypasses ``_build`` (fresh instance) but must
+        # still stamp the registry — it is the main think path.
+        llm = router.route(llm_config=LLMConfig(api_key="sk-test", model="custom"))
+        assert llm._health_registry is get_health_registry()

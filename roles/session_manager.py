@@ -21,7 +21,9 @@ from typing import TYPE_CHECKING
 
 from mote.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
 from mote.common.events.types import HistoryEditedEvent
+from mote.common.exception import SessionResumeIdentityError
 from mote.common.interface.event_subscriber import ObservationSubscriber, ObserverPriority
+from mote.loop.durable import reconcile_think_journal
 from mote.roles.role_state import RoleState
 from mote.session import SessionLog, fork, reconcile_tool_calls, replay
 
@@ -58,7 +60,13 @@ class RoleSessionManager:
             return False
 
         result = replay(log)  # replay scans via iter_raw, whose drain flushes queued writes first
+        self._validate_identity(result.meta or {})
         messages = self._reconcile_dangling_calls(result.messages)
+        # Reap think records that need no reinstatement (their assistant message
+        # is already durable, or the round never completed), leaving at most the
+        # single completed think the loop will reinstate on its first _step_think
+        # — the G1 re-pay guard, adjacent to the dangling-call reconcile above.
+        self._reconcile_think_journal(messages)
         # Assign in place so the ContextManager (which backs onto this same list)
         # sees the rebuilt history without re-recording it.
         role.state.context.messages[:] = messages
@@ -88,6 +96,36 @@ class RoleSessionManager:
             state_ctl.set_pending_browser_restore(result.browser_state)
         return True
 
+    @staticmethod
+    def _role_identity(role: "Role") -> str:
+        """The stable identity string recorded in ``session_meta.role_class``."""
+        return f"{type(role).__module__}.{type(role).__qualname__}"
+
+    def _validate_identity(self, meta: dict) -> None:
+        """Refuse to resume a session recorded by a different Role class.
+
+        ``session_meta`` records the ``role_class`` that created the log (see
+        ``Role.start_session``). Replaying that history into an incompatible Role
+        would feed it a transcript it was never built for, so a genuine mismatch
+        is refused fail-closed with :class:`SessionResumeIdentityError` (rather
+        than silently replaying).
+
+        Deliberately lenient in one direction only: a log with no recorded
+        ``role_class`` (pre-dating the field, or an external writer) carries no
+        identity to check, so it is allowed through — validation guards against a
+        *known* mismatch, never against absence. Model is intentionally NOT part
+        of identity (a session may resume under a different model).
+        """
+        recorded = meta.get("role_class")
+        if not recorded:
+            return
+        current = self._role_identity(self._role)
+        if recorded != current:
+            raise SessionResumeIdentityError(
+                f"cannot resume session recorded by role '{recorded}' into role "
+                f"'{current}': resumed sessions must use the same role class."
+            )
+
     def _reconcile_dangling_calls(self, messages):
         """Heal tool calls left dangling by a mid-turn crash, using the ledger.
 
@@ -109,6 +147,25 @@ class RoleSessionManager:
         if outcome.resolved_ids:
             ledger.reap(outcome.resolved_ids)
         return outcome.messages
+
+    def _reconcile_think_journal(self, messages) -> None:
+        """Reap resolved think records so the loop reinstates only the right one.
+
+        On resume the run journal may hold a completed think whose assistant
+        message never reached the rebuilt history (crash between the model
+        returning and the turn being recorded). :func:`reconcile_think_journal`
+        reaps every think that needs no reinstatement — non-completed rounds
+        (their result was lost) and completed rounds already durable in history
+        (reinstating one would DOUBLE-record its assistant message) — leaving at
+        most the single unmatched completed think for the loop to reinstate.
+
+        A no-op when the executor has no journal (durability disabled) — the
+        rebuilt history is untouched.
+        """
+        journal = self._role.executor.journal
+        if journal is None:
+            return
+        reconcile_think_journal(journal, messages)
 
     def reconcile_resources(self, messages) -> None:
         """Rebuild the resource side-store to match a freshly-rebuilt history.

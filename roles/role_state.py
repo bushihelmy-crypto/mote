@@ -70,6 +70,15 @@ class RoleState(SerializationMixin):
     # withhold; the ``RoleStateController`` owns the validated union.
     revealed_tools: set[str] = Field(default_factory=set)
 
+    # Hunk attribution: the current turn (prompt) index — a monotonic counter the
+    # react loop advances once per think round. Change hunks captured during a
+    # turn are stamped with this value so the review layer can group "pending
+    # changes by turn" and attribute each agent edit to the turn that made it.
+    # Serialized so a resumed session keeps counting from where it left off
+    # (rides the checkpoint like ``revealed_tools``); the ``RoleStateController``
+    # owns the advance.
+    turn_index: int = 0
+
     # Environment (not serialized)
     env: Optional[Any] = Field(default=None, exclude=True)
 
@@ -83,7 +92,7 @@ class RoleState(SerializationMixin):
     # Runtime-only (not part of the serialized checkpoint).
     _file_read_state: dict[str, int] = PrivateAttr(default_factory=dict)
 
-    # Files the session merely *glimpsed* — surfaced by a Grep/Glob match but not
+    # Files the session merely *glimpsed* — surfaced by a Search match but not
     # read in full. Distinct from ``_file_read_state`` (which means "body was in
     # context, mtime tracked for read-before-write"); a glimpse carries no body,
     # so it feeds only the code map's navigation view (defines + intent to help
@@ -91,6 +100,17 @@ class RoleState(SerializationMixin):
     # code map's F1 in-context suppression. An ordered set (dict for insertion
     # order); paths are absolute. Runtime-only, like ``_file_read_state``.
     _file_glimpsed_state: dict[str, None] = PrivateAttr(default_factory=dict)
+
+    # Per-path baseline: absolute path -> the content_hash (== blob-store digest)
+    # of the last *full* content mote definitively knew for that file. Recorded
+    # after every agent write (the just-written content) so the read-before-write
+    # guard can, on detecting an external modification, diff the current on-disk
+    # content against this exact baseline and attribute the delta as an
+    # ``external`` hunk — without mis-crediting the agent's own prior edits. The
+    # baseline content is blobbed into the session's content-addressed store under
+    # this same digest, so the guard can fetch it back. Runtime-only, like the
+    # read/glimpsed maps.
+    _file_baseline: dict[str, str] = PrivateAttr(default_factory=dict)
 
     # Live, per-Role session state for stateful tools (a persistent terminal
     # shell, a Python kernel, ...), keyed by tool name -> the tool's live
@@ -176,6 +196,18 @@ class RoleStateController:
         """Return the mtime_ns recorded when `path` was last read, else None."""
         return self._state._file_read_state.get(path)
 
+    def record_file_baseline(self, path: str, content_hash: str) -> None:
+        """Record the content_hash of the last full content mote knew for `path`.
+
+        The digest doubles as the blob-store key under which that content is
+        preserved, so external-change attribution can fetch the baseline back.
+        """
+        self._state._file_baseline[path] = content_hash
+
+    def get_file_baseline(self, path: str) -> Optional[str]:
+        """Return the recorded baseline content_hash for `path`, else None."""
+        return self._state._file_baseline.get(path)
+
     def record_file_glimpsed(self, path: str) -> None:
         """Record that `path` surfaced in a search result (Grep/Glob), un-read.
 
@@ -206,6 +238,20 @@ class RoleStateController:
         the discovery; a name revealed twice is a harmless no-op.
         """
         self._state.revealed_tools |= set(names)
+
+    def current_turn_index(self) -> int:
+        """The current turn (prompt) index — the value hunks are attributed to.
+
+        Read live by the hunk-attribution path (at executor settle and in the
+        read-before-write guard) to stamp each captured hunk with the turn that
+        produced it. Monotonic, advanced by :meth:`advance_turn`.
+        """
+        return self._state.turn_index
+
+    def advance_turn(self) -> int:
+        """Increment and return the turn index (called once per react think round)."""
+        self._state.turn_index += 1
+        return self._state.turn_index
 
     def get_tool_session(self, key: str) -> Any:
         """Return a stateful tool's live session (keyed by tool name), else None."""

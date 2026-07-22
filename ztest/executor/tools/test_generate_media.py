@@ -1,8 +1,9 @@
 """Unit tests for the GenerateMedia tool (executor/tools/generate_media/).
 
-The tool is a direct fan-out (NOT a graph orchestrator): it calls the four
-creators concurrently and blocks until every asset resolves, returning one
-compact ``{kind: {...}}`` dict. All tests are offline — the creator classes are
+The tool is a direct fan-out (NOT a graph orchestrator): it resolves each
+requested kind's provider via ``create_media_provider`` and calls their
+``generate`` concurrently, blocking until every asset resolves, returning one
+compact ``{kind: {...}}`` dict. All tests are offline — the provider factory is
 monkeypatched so no network or run_rollout import is needed.
 """
 from __future__ import annotations
@@ -50,51 +51,40 @@ def _patch_config(monkeypatch, **flags: bool):
     monkeypatch.setattr(loader, "load_config", lambda *a, **k: fake)
 
 
-class _FakeCreator:
-    """A creator whose generate_* method returns a canned poll-style result dict."""
+class _FakeProvider:
+    """A media provider whose ``generate`` returns a canned poll-style result dict."""
 
     def __init__(self, label: str, result: Any = None, *, raise_batch: bool = False):
         self._label = label
         self._result = result if result is not None else {"summary": f"{label} ok", "results": []}
         self._raise_batch = raise_batch
+        self.output_dir = None
 
-    def __call__(self, output_dir=None):
-        # Creators are constructed as Creator(output_dir); return self so the
-        # bound generate_* method below runs.
-        self.output_dir = output_dir
-        return self
-
-    async def _generate(self, items, **_):
+    async def generate(self, items):
         if self._raise_batch:
             raise RuntimeError(f"{self._label} batch failed")
         return self._result
 
 
-def _patch_creators(monkeypatch, **creators: _FakeCreator):
-    """Route each creator's generate_* method to a fake, keyed by kind."""
-    mapping = {
-        "images": ("ImageCreator", "generate_images"),
-        "audios": ("AudioCreator", "generate_audios"),
-        "music": ("MusicCreator", "generate_music"),
-        "videos": ("VideoCreator", "generate_videos"),
-    }
-    for kind, fake in creators.items():
-        cls_name, method = mapping[kind]
+def _patch_creators(monkeypatch, **providers: _FakeProvider):
+    """Route the ``create_media_provider`` factory to fakes, keyed by (plural) kind.
 
-        # Bind ``method``/``fake`` as defaults so each iteration's values are
-        # captured (avoids the late-binding closure trap).
-        def _make_cls(_method=method, _fake=fake):
-            class _Cls:
-                def __init__(self, output_dir=None):
-                    setattr(self, _method, _fake._generate)
+    The tool dispatches by singular kind (``image``/``audio``/``music``/``video``);
+    tests key by plural (matching the tool's list params) for readability, so the
+    fake factory bridges singular→plural.
+    """
+    to_plural = {"image": "images", "audio": "audios", "music": "music", "video": "videos"}
 
-            return _Cls
+    def _factory(kind, output_dir=None):
+        fake = providers[to_plural[kind]]
+        fake.output_dir = output_dir
+        return fake
 
-        monkeypatch.setattr(gm, cls_name, _make_cls())
+    monkeypatch.setattr(gm, "create_media_provider", _factory)
 
     # Mark each patched kind's service as configured so the up-front config
     # check (``_check_configured``) lets these fan-out tests through.
-    _patch_config(monkeypatch, **{kind: True for kind in creators})
+    _patch_config(monkeypatch, **{kind: True for kind in providers})
 
 
 class TestFanOut:
@@ -110,11 +100,11 @@ class TestFanOut:
     async def test_two_kinds_compacted(self, monkeypatch):
         _patch_creators(
             monkeypatch,
-            images=_FakeCreator(
+            images=_FakeProvider(
                 "images",
                 {"summary": "1/1 images", "results": [{"status": "success", "filename": "cat.png", "url": "u1"}]},
             ),
-            audios=_FakeCreator(
+            audios=_FakeProvider(
                 "audios",
                 {"summary": "1/1 audios", "results": [{"status": "success", "filename": "hi.mp3", "url": "u2"}]},
             ),
@@ -131,10 +121,10 @@ class TestFanOut:
     async def test_all_kinds(self, monkeypatch):
         _patch_creators(
             monkeypatch,
-            images=_FakeCreator("images"),
-            audios=_FakeCreator("audios"),
-            music=_FakeCreator("music"),
-            videos=_FakeCreator("videos"),
+            images=_FakeProvider("images"),
+            audios=_FakeProvider("audios"),
+            music=_FakeProvider("music"),
+            videos=_FakeProvider("videos"),
         )
         res = await GenerateMedia().call(
             images=[{"description": "x", "filename": "x.png"}],
@@ -148,11 +138,11 @@ class TestFanOut:
         # One kind's whole batch raises; the sibling's success is preserved.
         _patch_creators(
             monkeypatch,
-            images=_FakeCreator(
+            images=_FakeProvider(
                 "images",
                 {"summary": "1/1 images", "results": [{"status": "success", "filename": "x.png", "url": "u"}]},
             ),
-            videos=_FakeCreator("videos", raise_batch=True),
+            videos=_FakeProvider("videos", raise_batch=True),
         )
         res = await GenerateMedia().call(
             images=[{"description": "x", "filename": "x.png"}],
@@ -164,8 +154,8 @@ class TestFanOut:
     async def test_all_failed_raises(self, monkeypatch):
         _patch_creators(
             monkeypatch,
-            images=_FakeCreator("images", raise_batch=True),
-            videos=_FakeCreator("videos", raise_batch=True),
+            images=_FakeProvider("images", raise_batch=True),
+            videos=_FakeProvider("videos", raise_batch=True),
         )
         with pytest.raises(RuntimeError, match="All media generation failed"):
             await GenerateMedia().call(
@@ -215,7 +205,7 @@ class TestNotConfigured:
         # configured succeeds (the check is scoped to requested kinds).
         _patch_creators(
             monkeypatch,
-            images=_FakeCreator(
+            images=_FakeProvider(
                 "images",
                 {"summary": "1/1 images", "results": [{"status": "success", "filename": "x.png", "url": "u"}]},
             ),

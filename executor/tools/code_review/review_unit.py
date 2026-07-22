@@ -1,7 +1,7 @@
 """Agent leaf — review one file's diff with a full Role tool-loop.
 
 Each reviewed file gets its own child :class:`Role` configured with read-only
-investigation tools (Read/Grep/Glob), the native command protocol, and a bypass
+investigation tools (Read/Search), the native command protocol, and a bypass
 permission stance. The Role is told to investigate the diff (dynamically
 recalling surrounding context via its tools) and emit its findings as a JSON
 array in its final summary. We parse that JSON, then hand each comment's
@@ -24,8 +24,8 @@ from .resolver import resolve_comment
 
 _REVIEW_SYSTEM_PROMPT = """\
 You are an expert code reviewer. You are given the diff of a single changed file.
-Investigate the change using your tools (Read the full file, Grep for related
-usages, Glob for related files) so your review is grounded in the surrounding
+Investigate the change using your tools (Read the full file, Search for related
+usages and related files) so your review is grounded in the surrounding
 code — do not guess.
 
 Review focus (in priority order):
@@ -136,7 +136,7 @@ def _build_review_role(repo_dir: str, parent_session_id: str = ""):
         system_prompt=_REVIEW_SYSTEM_PROMPT,
         repo_dir=repo_dir,
         parent_session_id=parent_session_id,
-        tools=["Read", "Grep", "Glob"],
+        tools=["Read", "Search"],
     )
 
 

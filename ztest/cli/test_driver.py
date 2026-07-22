@@ -253,6 +253,77 @@ async def test_clear_conversation_clears_history_and_emits_transcript_cleared():
 
 
 # --------------------------------------------------------------------------
+# Scheduler lifecycle (optional background scheduler, e.g. CronService)
+# --------------------------------------------------------------------------
+
+
+class FakeScheduler:
+    def __init__(self) -> None:
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class RunOncePort:
+    """A port whose read_turn returns None so run() breaks after one pass."""
+
+    def __init__(self) -> None:
+        self._on_interrupt = None
+        self._is_turn_running = None
+        self._on_steer = None
+        self.closed = False
+
+    async def start(self) -> None:
+        pass
+
+    async def read_turn(self):
+        return None
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_scheduler_started_and_stopped_across_run(monkeypatch):
+    import mote.cli.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod.backend, "role_event_bus", lambda role: None)
+    monkeypatch.setattr(driver_mod.backend, "bind_human_channel", lambda role, ch: None)
+    monkeypatch.setattr(driver_mod.backend, "role_tool_count", lambda role: 0)
+    monkeypatch.setattr(driver_mod.backend, "role_cleanup", lambda role: None)
+
+    role = FakeRole()
+    control = FakeControl({role.session_id: FakeRuntime(role)})
+    sched = FakeScheduler()
+    drv = SessionDriver(
+        control,
+        role.session_id,
+        role,
+        port=RunOncePort(),
+        projector=FakeProjector(),
+        scheduler=sched,
+    )
+    await drv.run()
+    assert sched.started is True
+    assert sched.stopped is True
+    assert control.started is True
+    assert control.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_teardown_without_scheduler_is_fine():
+    drv, _c, port, _p = make_driver()
+    # Default make_driver passes no scheduler; teardown must not choke.
+    await drv._teardown()
+    assert drv._scheduler is None
+
+
+# --------------------------------------------------------------------------
 # Reference resolution
 # --------------------------------------------------------------------------
 

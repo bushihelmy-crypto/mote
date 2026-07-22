@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from mote.common.schema import EffectLedgerConfig, ToolResultLimitConfig
+from mote.common.schema import DurableConfig, EffectLedgerConfig, ToolResultLimitConfig
 from mote.executor.base_tool import BaseTool
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_executor import ToolExecutor
@@ -159,6 +159,7 @@ def fresh_registry() -> ToolRegistry:
 @pytest.fixture
 def restore_global_registry():
     """Snapshot the real global registry and restore it after the test."""
+    global_registry.discover()
     saved = dict(global_registry._registry)
     saved_discovered = ToolRegistry._discovered
     try:
@@ -179,6 +180,7 @@ def make_executor(
     role: FakeRole | None = None,
     limit_config: ToolResultLimitConfig | None = None,
     ledger_config: EffectLedgerConfig | None = None,
+    durable_config: DurableConfig | None = None,
     recovery_strategies: dict | None = None,
     workspace_store=None,
 ) -> ToolExecutor:
@@ -193,6 +195,7 @@ def make_executor(
         tools=None,
         limit_config=limit_config,
         ledger_config=ledger_config,
+        durable_config=durable_config,
         recovery_strategies=recovery_strategies,
         workspace_store=workspace_store,
     )

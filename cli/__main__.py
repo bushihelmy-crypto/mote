@@ -29,9 +29,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--model", default=None, help="Override the LLM model.")
-    parser.add_argument(
-        "--tools", default=None, help="Comma-separated tool names (default Read,Write,Edit,Bash,Glob,Grep)."
-    )
+    parser.add_argument("--tools", default=None, help="Comma-separated tool names (default Read,Edit,Search,Bash).")
     parser.add_argument("--cwd", default=None, help="Working directory for the agent.")
     parser.add_argument("--name", default="Assistant", help="Agent name.")
     parser.add_argument(
@@ -50,6 +48,25 @@ def _parse_args(argv=None) -> argparse.Namespace:
             "else the terminal host."
         ),
     )
+    # Network server host (AG-UI SSE). When --serve is set the interactive UI is
+    # bypassed and an aiohttp server is run instead (one turn per POST /run).
+    parser.add_argument(
+        "--serve",
+        choices=["agui", "acp"],
+        default=None,
+        help=(
+            "Run as a server instead of an interactive session. 'agui' = AG-UI SSE "
+            "(network); 'acp' = Agent Client Protocol over stdio (editor host)."
+        ),
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Server bind host (default 127.0.0.1).")
+    parser.add_argument("--port", type=int, default=8808, help="Server bind port (default 8808).")
+    parser.add_argument("--token", default=None, help="Bearer auth token for the server (required unless --insecure).")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Run the server WITHOUT auth (explicit opt-out; do not expose publicly).",
+    )
     return parser.parse_args(argv)
 
 
@@ -64,9 +81,46 @@ def _resolve_ui(choice: str) -> str:
     return "rich"
 
 
+def _run_server(args: argparse.Namespace, tools) -> None:
+    """Build the shared engine once and serve it over the chosen network protocol."""
+    from mote.cli.app import build_engine
+
+    eng = build_engine(model=args.model, tools=tools, cwd=args.cwd, name=args.name)
+    if args.serve == "agui":
+        from mote.cli.consumers.agui.server import serve as serve_agui
+
+        serve_agui(
+            eng.role_factory,
+            host=args.host,
+            port=args.port,
+            token=args.token,
+            insecure=args.insecure,
+            name=args.name,
+        )
+    elif args.serve == "acp":
+        # ACP is stdio JSON-RPC — no network bind / token (the editor process that
+        # launched us IS the trust boundary), so host/port/token are ignored.
+        from mote.cli.consumers.acp.server import serve as serve_acp
+
+        serve_acp(eng.role_factory, name=args.name)
+
+
 def main(argv=None) -> None:
-    args = _parse_args(argv)
+    raw = list(argv) if argv is not None else sys.argv[1:]
+    # ``mote.cli cron ...`` — imperative scheduled-task CRUD. Routed before the
+    # interactive parser so the session flag surface stays untouched.
+    if raw and raw[0] == "cron":
+        from mote.cli.cron_cli import main as cron_main
+
+        sys.exit(cron_main(raw[1:]))
+
+    args = _parse_args(raw)
     tools = [t.strip() for t in args.tools.split(",") if t.strip()] if args.tools else None
+
+    if args.serve:
+        _run_server(args, tools)
+        return
+
     ui = _resolve_ui(args.ui)
 
     if ui == "textual":

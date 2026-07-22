@@ -40,6 +40,20 @@ if TYPE_CHECKING:
     from mote.router.llm.base_llm import BaseLLM
 
 
+def serialize_tool_call_args(args: Any) -> str:
+    """Serialize a tool call's ``args`` to its wire JSON string.
+
+    The single source of truth for the "tool-call args → string" contract: a
+    string passes through unchanged (already serialized — e.g. a persisted-arg
+    ``<persisted-output>`` envelope), anything else is ``json.dumps``'d with an
+    empty-object fallback. Used by ``Message.to_dict`` (wire projection) and by
+    both large-arg persistence seams (``ToolExecutor.persist_large_args`` at
+    record time + the compaction spill backstop), so their on-disk content and
+    change-detection stay byte-identical.
+    """
+    return args if isinstance(args, str) else json.dumps(args or {})
+
+
 class Message(BaseModel):
     """list[<role>: <content>]"""
 
@@ -148,7 +162,7 @@ class Message(BaseModel):
                     "type": "function",
                     "function": {
                         "name": c["name"],
-                        "arguments": c["args"] if isinstance(c["args"], str) else json.dumps(c.get("args") or {}),
+                        "arguments": serialize_tool_call_args(c.get("args")),
                     },
                 }
                 for c in self.metadata[TOOL_CALLS]
@@ -238,6 +252,28 @@ class Message(BaseModel):
 
     def is_tool_message(self) -> bool:
         return self.role == "tool"
+
+
+def to_role_content_dicts(messages) -> list[dict]:
+    """Normalize messages to plain ``{role, content}`` dicts.
+
+    Accepts ``Message`` objects, already-wire dicts, or anything else (coerced
+    to a user string). Only ``role`` and ``content`` are kept: ``Message.to_dict()``
+    may also emit a ``tool_calls`` list on native-channel assistant turns, and
+    consumers that ``encode()`` every value (the token counter) would choke on a
+    list. The textual ``{role, content}`` shape is what token estimation and
+    prompt flattening need, so the call structure is dropped here.
+    """
+    out: list[dict] = []
+    for m in messages:
+        if isinstance(m, Message):
+            d = m.to_dict()
+            out.append({"role": d.get("role", "user"), "content": d.get("content", "")})
+        elif isinstance(m, dict):
+            out.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+        else:
+            out.append({"role": "user", "content": str(m)})
+    return out
 
 
 class UserMessage(Message):

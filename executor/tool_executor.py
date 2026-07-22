@@ -18,46 +18,52 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from typing import TYPE_CHECKING, Any, Callable, Mapping, cast
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
-from mote.common.events import EventBus, FileMutatedEvent, PostToolUseEvent, PreToolUseEvent, ToolsChangedEvent, span
-from mote.common.events.scope import current_scope
+from mote.common.events import EventBus
 from mote.common.exception import (
     ErrorReport,
     RecoveryAction,
     RecoveryRunner,
     RecoveryStrategy,
-    ToolNotFoundError,
-    ToolPermissionDeniedError,
     ToolValidationError,
     render_error_block,
 )
-from mote.common.logs import log_class, logger
+from mote.common.ledger import RunJournal
+from mote.common.logs import log_class
 from mote.common.schema import (
-    DEFAULT_MAX_RESULT_SIZE_CHARS,
+    DurableConfig,
     EffectLedgerConfig,
+    LoopGuardConfig,
     PermissionConfig,
-    PermissionFacts,
     ToolEffect,
     ToolResultLimitConfig,
+    serialize_tool_call_args,
 )
 from mote.common.text import plural
+from mote.common.utils.role_utils import call_signature
 from mote.common.workspace import WorkspaceStore
 from mote.executor import tool_result_limit
 from mote.executor.base_executor import BaseToolExecutor
-from mote.executor.compress.tool_output import compress_tool_result
-from mote.executor.effect_ledger import COMPLETED, EffectLedger
+from mote.executor.effect_ledger import EffectLedger
+from mote.executor.loop_guard import LoopGuardSubscriber, ThrashDetector
 from mote.executor.mcp_lifecycle import McpLifecycle
 from mote.executor.permission import PermissionEngine, PermissionSubscriber, RuleStore
 from mote.executor.permission.sandbox import SandboxGuard
-from mote.executor.tasks.bggraph.marker import is_pipeline_tool
-from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_catalog import ToolCatalog
-from mote.executor.tool_registry import registry as tool_registry
+from mote.executor.tool_lifecycle import ToolLifecycle
+from mote.executor.tool_pipeline import ToolExecutionPipeline
 from mote.executor.tool_result import ToolResult
+from mote.executor.tool_settlement import ToolSettlement
+from mote.executor.tool_views import ToolExecutorViews
 
 if TYPE_CHECKING:
     from mote.executor.mcp.universal import UniversalMCP
+
+
+def _call_arg_signature(name: str, args: dict[str, Any]) -> str:
+    return call_signature([{"name": name, "args": args}])
+
 
 # Signature params that are framework plumbing, never LLM-facing arguments.
 # (``*args``/``**kwargs`` are detected by parameter *kind*, not by name.)
@@ -158,7 +164,7 @@ def _failed_result(exc: Exception, *, terminate: bool = False) -> "ToolResult":
         "get_native_tool_specs",
     },
 )
-class ToolExecutor(BaseToolExecutor):
+class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
     """Dispatch LLM tool calls to BaseTool instances.
 
     Lifecycle:
@@ -181,7 +187,9 @@ class ToolExecutor(BaseToolExecutor):
         role=None,
         limit_config: ToolResultLimitConfig | None = None,
         ledger_config: EffectLedgerConfig | None = None,
+        durable_config: DurableConfig | None = None,
         permission_config: PermissionConfig | None = None,
+        loop_guard_config: LoopGuardConfig | None = None,
         bus: EventBus | None = None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
         get_bg_pool: Callable[[], Any] | None = None,
@@ -232,8 +240,14 @@ class ToolExecutor(BaseToolExecutor):
         # shared workspace store; ``None`` when disabled → run_command skips all
         # ledger work (identical to the prior no-ledger behavior).
         self._ledger_config = ledger_config or EffectLedgerConfig()
+        self._durable_config = durable_config or DurableConfig()
+        self._journal: RunJournal | None = (
+            RunJournal(session_id, store=self._workspace_store)
+            if (self._ledger_config.enabled or self._durable_config.enabled)
+            else None
+        )
         self._ledger: EffectLedger | None = (
-            EffectLedger(session_id, store=self._workspace_store) if self._ledger_config.enabled else None
+            EffectLedger(journal=self._journal) if self._ledger_config.enabled and self._journal is not None else None
         )
 
         # Permission engine. Built ONLY when a Role opts in with a
@@ -267,32 +281,47 @@ class ToolExecutor(BaseToolExecutor):
             # carries (resolved by the executor, which owns the tool).
             self._bus.subscribe(PermissionSubscriber(self._permission_engine))
 
-        # Ensure all @register_tool classes under the scanned packages are loaded
-        # before we look them up by name. Idempotent — runs the package scan once.
-        tool_registry.discover()
+        loop_guard = loop_guard_config or LoopGuardConfig()
+        if loop_guard.enabled:
+            self._bus.subscribe(
+                LoopGuardSubscriber(
+                    ThrashDetector(
+                        failure_threshold=loop_guard.failure_threshold,
+                        no_progress_threshold=loop_guard.no_progress_threshold,
+                    ),
+                    resolve_readonly=self._is_readonly_tool,
+                    sig_of=_call_arg_signature,
+                )
+            )
+        self._settlement = ToolSettlement(
+            session_id=self._session_id,
+            bus=self._bus,
+            get_tool=self._get_tool,
+            ledger=self._ledger,
+            limit_config=self._limit_config,
+            workspace_store=self._workspace_store,
+        )
+        self._lifecycle = ToolLifecycle(
+            session_id=self._session_id,
+            declared_tools=tuple(tools or ()),
+            role=role,
+            pipelines_enabled=pipelines_enabled,
+            catalog=self._catalog,
+            mcp_lifecycle=self._mcp_lifecycle,
+            settlement=self._settlement,
+        )
+        self._pipeline = ToolExecutionPipeline(
+            get_tool=self._get_tool,
+            available_names=self._catalog.names,
+            bus=self._bus,
+            ledger=self._ledger,
+            recovery_runner=self._recovery_runner,
+            get_bg_pool=self._get_bg_pool,
+            settlement=self._settlement,
+        )
 
-        # Pre-bind declared static tools
-        if tools:
-            bound: dict[type, Any] = {}  # tool_cls -> instance (dedup)
-            skipped: set[type] = set()  # pipeline tools gated off (dedup)
-            for name in tools:
-                tool_cls = tool_registry.get(name)
-                if tool_cls is None or tool_cls in skipped:
-                    continue
-                if tool_cls not in bound:
-                    instance = tool_cls()
-                    instance.bind(session_id, role=role)
-                    # Pipeline tools (compiled BgGraph backed) load only when the
-                    # bggraph switch is on. Off → never bound, so neither the
-                    # native tool set (askllm) nor the XML catalog (CLI) ever sees
-                    # them. Detected post-bind since the compiled-executor stamp
-                    # lives on the instance, not the class.
-                    if not pipelines_enabled and is_pipeline_tool(instance):
-                        skipped.add(tool_cls)
-                        continue
-                    bound[tool_cls] = instance
-                # Register under all names (primary + aliases)
-                self._catalog.register(bound[tool_cls], tool_registry.all_names(tool_cls))
+    def prepare(self) -> None:
+        self._lifecycle.prepare()
 
     def register_tool_instance(self, tool: Any, names: list[str]) -> None:
         """Register an already-constructed BaseTool instance under given names.
@@ -305,41 +334,10 @@ class ToolExecutor(BaseToolExecutor):
             tool: A BaseTool instance.
             names: All names (primary + aliases) that route to this instance.
         """
-        self._catalog.register(tool, names)
+        self._lifecycle.register(tool, names)
 
     async def deregister_tool(self, name: str) -> bool:
-        """Remove a bound tool by any of its names — aliases and resources together.
-
-        The inverse of registration (constructor pre-bind / register_tool_instance).
-        Resolves the instance ``name`` routes to, then removes *every* alias key in
-        ``_tools`` that routes to that **same instance** (identity, not name — so no
-        orphan alias survives), reclaims the instance's per-session resources
-        (``cleanup_session`` — the same teardown :meth:`cleanup` runs, but for this
-        one tool), and announces the change on the bus (:class:`ToolsChangedEvent`)
-        so the volatile views refresh instead of silently drifting: the per-turn
-        tool catalog drops the vanished names from its incremental frontier, and the
-        compaction pipeline refreshes its reconstructable-tool-name set.
-
-        Returns True when a tool was removed, False when ``name`` is unbound (no-op).
-        """
-        tool = self._catalog.get(name)
-        if tool is None:
-            return False
-        # Every alias routing to the SAME instance goes together (by identity, so
-        # aliases pointing at other tools are untouched).
-        removed = self._catalog.names_for(tool)
-        self._catalog.remove(removed)
-        # Reclaim per-session resources, mirroring cleanup() for this one instance.
-        self._cleanup_tool_session(tool, name)
-        # Announce so views refresh. Pure observation (no control fold) — the live
-        # _tools map is already the source of truth; this only says it changed and
-        # carries the post-change facts consumers need (which names went away, the
-        # fresh reconstructable set) so no consumer needs a back-ref to the executor.
-        await self._safe_observe(
-            ToolsChangedEvent(removed=removed, reconstructable=sorted(self.reconstructable_tool_names())),
-            ctx=f"ToolsChangedEvent for {name} not delivered",
-        )
-        return True
+        return await self._lifecycle.deregister(name)
 
     @property
     def _tools(self) -> dict[str, Any]:
@@ -348,11 +346,21 @@ class ToolExecutor(BaseToolExecutor):
         Kept as a read accessor so external introspection (and tests) can do
         ``name in executor._tools`` without reaching into the collaborator.
         """
+        self.prepare()
         return self._catalog.tools
 
     def _get_tool(self, name: str):
         """Resolve a tool by name. Returns the BaseTool instance, or None."""
+        self.prepare()
         return self._catalog.get(name)
+
+    def canonical_tool_name(self, name: str) -> str | None:
+        tool = self._get_tool(name)
+        return (tool.name or name) if tool is not None else None
+
+    def _is_readonly_tool(self, name: str) -> bool:
+        tool = self._get_tool(name)
+        return tool is not None and tool.resolve_effect() is ToolEffect.PURE
 
     async def run_command(
         self,
@@ -361,579 +369,42 @@ class ToolExecutor(BaseToolExecutor):
         *,
         result_id: str | None = None,
     ) -> ToolResult:
-        """Dispatch a single tool call by name.
-
-        Args:
-            name: Tool name (primary or alias).
-            kwargs: LLM-specified parameters for the tool's call() method.
-            result_id: Stable id for this result (the tool-use id). Used to name
-                the on-disk file when a large result is persisted, so re-runs
-                stay byte-identical. Falls back to a fresh uuid when not given.
-
-        Returns:
-            ToolResult with output, success status, and optional structured data.
-            If the tool returns a BgTaskResult, it is wrapped in ToolResult.data
-            for the caller (Role._act) to handle background submission.
-
-            A large text result is capped per the tool's ``max_result_size_chars``
-            (persisted to disk + replaced with a ``<persisted-output>`` preview),
-            unless the result carries media or the limit is disabled.
-        """
-        args = kwargs or {}
-
-        tool = self._get_tool(name)
-        if tool is None:
-            available = self._catalog.names()
-            return await self._reject(
-                name,
-                args,
-                _failed_result(ToolNotFoundError(f"unknown tool '{name}'. Available: {available}")),
-                result_id,
-            )
-
-        async with span(f"tool:{name}", attributes=args):
-            # PreToolUse: the single control-plane chokepoint before execution.
-            # Control subscribers run as an ordered reduce — first the hook layer
-            # (may rewrite args / block), then the permission gate (evaluates the
-            # already-rewritten args and folds allow/deny). The event carries a
-            # tool-bound ``resolve_facts`` closure so the gate reads what it needs
-            # (targets / mutates_fs / tool_check / segments) without the bus or
-            # subscriber layer ever importing a tool. A deny (hook or gate) or a
-            # stop halts the call; ``updated_args`` narrows it.
-            def _resolve_facts(a: dict) -> PermissionFacts:
-                return PermissionFacts(
-                    targets=tool.permission_targets(a),
-                    mutates_fs=getattr(tool, "mutates_filesystem", False),
-                    tool_check=tool.check_permissions(a),
-                    segments=tool.permission_segments(a),
-                )
-
-            outcome = await self._bus.emit(
-                PreToolUseEvent(
-                    tool_name=name,
-                    tool_input=args,
-                    tool_use_id=result_id,
-                    resolve_facts=_resolve_facts,
-                    scope=current_scope(),
-                )
-            )
-            # ``None`` when no control subscriber maps the event (no hook, no gate).
-            # ``emit`` infers ``ToolCallOutcome | None`` from ``PreToolUseEvent``'s
-            # ``ControlEvent[ToolCallOutcome]`` binding — no cast needed.
-            if outcome is not None:
-                if outcome.updated_args is not None:
-                    args = outcome.updated_args
-                if outcome.behavior == "deny" or outcome.stop:
-                    reason = outcome.system_message or outcome.stop_reason or "blocked before tool use"
-                    # ``stop`` marks a terminal block (a real user rejection at the
-                    # approval prompt, or a hook veto) — the call fails AND the react
-                    # loop ends. A plain ``deny`` (rule/mode/policy/sandbox) only
-                    # fails this call; the loop keeps going so the model can replan.
-                    return await self._reject(
-                        name,
-                        args,
-                        _failed_result(ToolPermissionDeniedError(reason), terminate=outcome.stop),
-                        result_id,
-                    )
-
-            # EXTERNAL-effect idempotency guard. Only EXTERNAL calls with a
-            # stable id are ledgered (PURE reads / LOCAL fs writes are already
-            # replay-safe). A precheck may short-circuit before the body runs
-            # (idempotent replay of an already-completed call, or refusal of an
-            # unknown-after-crash one); otherwise mark the call started (durably,
-            # before the body) so a mid-call crash is detectable on resume.
-            ledgered = self._is_ledgered(tool, result_id)
-            if ledgered:
-                short_circuit = self._ledger_precheck(name, cast(str, result_id))
-                if short_circuit is not None:
-                    return await self._reject(name, args, short_circuit, result_id)
-                cast(EffectLedger, self._ledger).mark_started(cast(str, result_id), name)
-
-            async def _call():
-                # Validate inside the recovery loop so a strategy that repairs
-                # args is re-checked on retry. A bad-args ToolValidationError is
-                # non-retryable (recovery=ABORT): the runner re-raises on the
-                # first attempt and the except-ToolError arm below turns it into
-                # a failed ToolResult — no extra branch needed here.
-                _validate_call_args(tool.call, name, args)
-                return await tool.call(**args)
-
-            try:
-                # Run under the recovery loop. With an empty registry this is a
-                # plain ``await tool.call(**args)`` — a typed ``ToolError`` (a
-                # deliberate, expected failure: bad args, missing file) or an
-                # unexpected exception both re-raise here.
-                raw = await self._recovery_runner.run(_call)
-            except Exception as e:
-                # Both cases normalize to the same failed <error> shape via
-                # ``_failed_result``: ``ErrorReport.from_exception`` maps the code
-                # (a typed ToolError keeps its code; an unexpected exception
-                # degrades to UNKNOWN), so every tool failure has one shape and
-                # downstream consumers (hooks/telemetry) get structure. The tool
-                # *ran*, so the failure ``_settle``s on the control plane, where a
-                # PostToolUse hook may still rewrite/annotate/block it.
-                return await self._finish(name, args, _failed_result(e), result_id, ledgered)
-
-            # BgTaskResult owns its own settlement: it submits the poll (when a
-            # pool exists) and shapes the mode-specific output. The executor just
-            # supplies the pool + fallback name and settles the returned result.
-            if isinstance(raw, BgTaskResult):
-                pool = self._get_bg_pool() if self._get_bg_pool is not None else None
-                result = raw.to_tool_result(pool, name)
-                return await self._finish(name, args, result, result_id, ledgered)
-
-            # Normalize the raw return into a ToolResult. A returned ToolResult is
-            # used as-is; a plain value is always treated as success — failure is
-            # signalled structurally (raise ToolError above, or return
-            # ToolResult(success=False)), never by sniffing the output text.
-            result = ToolResult.from_tool_return(raw)
-            return await self._finish(name, args, result, result_id, ledgered)
-
-    def _is_ledgered(self, tool: Any, result_id: str | None) -> bool:
-        """The single EXTERNAL-effect ledger gate: enabled + stable id + EXTERNAL.
-
-        One definition shared by :meth:`run_command` (which has the resolved
-        tool) and :meth:`will_ledger` (the loop's pre-execution probe), so the
-        two can never disagree on which calls are ledgered.
-        """
-        return self._ledger is not None and result_id is not None and tool.resolve_effect() is ToolEffect.EXTERNAL
+        return await self._pipeline.run(name, kwargs or {}, result_id)
 
     def will_ledger(self, name: str, result_id: str | None) -> bool:
-        """Whether :meth:`run_command` would ledger this call (see base contract).
-
-        Resolves ``name`` to its tool then applies the shared :meth:`_is_ledgered`
-        gate; an unknown name (no bound tool) is never ledgered.
-        """
         tool = self._get_tool(name)
-        return tool is not None and self._is_ledgered(tool, result_id)
-
-    def _ledger_precheck(self, name: str, call_id: str) -> ToolResult | None:
-        """Decide an EXTERNAL call's fate BEFORE its body runs, per the ledger.
-
-        Returns a :class:`ToolResult` to short-circuit (skip the body), or
-        ``None`` to proceed and run the tool. Dormant in normal operation — a
-        provider-assigned ``call_id`` is unique per call, so a prior record for
-        the same id only appears after a resume replays the same tool call:
-
-        - ``completed`` → idempotent replay: return the recorded result verbatim
-          so the effect is not re-run (its result message was simply lost).
-        - ``started`` → the call was in flight when the crash hit and its EXTERNAL
-          outcome is physically unknowable to the framework, so re-running it
-          might duplicate a side effect. Refused with ``<unknown-after-crash>``;
-          whether to verify / retry / abandon is the model's call, not ours.
-        """
-        ledger = cast(EffectLedger, self._ledger)
-        prior = ledger.status(call_id)
-        if prior is None:
-            return None
-        if prior.status == COMPLETED:
-            return ToolResult(output=prior.result or "", success=prior.success)
-        # started → outcome lost to the crash; never silently re-run an EXTERNAL effect.
-        return _failed_result(ToolPermissionDeniedError(_UNKNOWN_AFTER_CRASH.format(name=name, call_id=call_id)))
-
-    async def _finish(
-        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None, ledgered: bool
-    ) -> ToolResult:
-        """Settle a ran call, then record its terminal ledger state (if ledgered).
-
-        The single tail every post-body exit (success, ``raise``, BgTask submit)
-        funnels through: :meth:`_settle` runs the PostToolUse control plane +
-        compression + size cap, THEN — only for a ledgered EXTERNAL call — the
-        terminal record is written carrying the settled output forward, so a
-        resume can heal a dangling call from it without re-running the effect.
-        Marking happens after settlement so the stored result matches exactly
-        what the model saw.
-        """
-        result = await self._settle(name, args, result, result_id)
-        if ledgered and result_id is not None and self._ledger is not None:
-            if result.success:
-                self._ledger.mark_completed(result_id, name, result=result.output)
-            else:
-                self._ledger.mark_failed(result_id, name, result=result.output)
-        return result
-
-    def _apply_post_outcome(self, result: ToolResult, outcome) -> ToolResult:
-        """Fold a PostToolUse :class:`ControlOutcome` into the result.
-
-        A subscriber (the hook layer) may rewrite the output text
-        (``updated_response``), append extra context to it, or block (mark the
-        result failed with a reason) for the model to react to. ``None`` when no
-        control subscriber maps the event (no hook wired) — the result is
-        returned untouched.
-        """
-        if outcome is None:
-            return result
-        # An output-rewrite (truncate/redact) replaces the base text before any
-        # context is appended on top of it.
-        if outcome.updated_response is not None:
-            result.output = outcome.updated_response
-        if outcome.additional_context:
-            extra = "\n".join(outcome.additional_context)
-            result.output = f"{result.output}\n{extra}" if result.output else extra
-        if outcome.is_blocking:
-            reason = outcome.system_message or outcome.stop_reason or "blocked by PostToolUse hook"
-            result.success = False
-            result.output = f"{result.output}\n[PostToolUse] {reason}" if result.output else f"[PostToolUse] {reason}"
-        return result
-
-    def _post_event(
-        self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None
-    ) -> PostToolUseEvent:
-        """Build the one PostToolUse event shape, from the settled result's facts.
-
-        The single place the event is constructed, so every exit — whether the
-        tool ran (:meth:`_settle`) or was rejected before running
-        (:meth:`_reject`) — ships identical structure (``success``/``error``/
-        ``media``/``file_changes``). A new fact added to the event is a one-line
-        change here that both planes inherit; the shape can never drift between them.
-        """
-        return PostToolUseEvent(
-            tool_name=name,
-            tool_input=args,
-            tool_response=result.output,
-            success=result.success,
-            error=result.error,
-            media=result.media,
-            file_changes=result.file_changes,
-            tool_use_id=result_id,
-            scope=current_scope(),
+        return (
+            tool is not None
+            and self._ledger is not None
+            and result_id is not None
+            and tool.resolve_effect() is ToolEffect.EXTERNAL
         )
 
-    async def _safe_observe(self, event, *, ctx: str) -> None:
-        """Fan a fire-and-forget notice to the bus, swallowing any delivery error.
-
-        The trailing notices (tool-catalog churn, file-mutation, not-ran
-        lifecycle-end) are pure observation — they only announce a change the
-        live ``_tools`` map / result already reflects. A subscriber that fails
-        must never mask or break the operation the notice trails, so any error
-        is logged at debug and dropped. ``ctx`` names the site for the log line.
-        """
-        try:
-            await self._bus.observe(event)
-        except Exception as exc:  # noqa: BLE001 — a notice never breaks the caller
-            logger.debug(f"ToolExecutor: {ctx}: {exc}")
-
-    async def _reject(self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None) -> ToolResult:
-        """Close the lifecycle for a call whose tool **never ran**.
-
-        Used by the pre-execution exits (unknown tool / pre-flight hook or
-        permission deny). The PostToolUse event is fanned to **observers only**
-        (``observe``): the front-end still gets its one lifecycle-end event (the
-        row closes) but no hook control fires (PostToolUse does not
-        fire when PreToolUse blocked the call). The ``terminate`` marker on the
-        failed result is preserved. Best-effort — a notice never masks the failure.
-        """
-        await self._safe_observe(
-            self._post_event(name, args, result, result_id),
-            ctx=f"not-ran notice for {name} not delivered",
-        )
-        return result
-
-    async def _settle(self, name: str, args: dict[str, Any], result: ToolResult, result_id: str | None) -> ToolResult:
-        """Close the lifecycle for a call whose tool body **ran** (success, ``raise``,
-        or BgTask).
-
-        The PostToolUse event goes on the **control plane** (``emit``), so a
-        PostToolUse hook may rewrite/annotate/block the result (PostToolUse
-        hooks fire on tool errors too). Then the mutated-filesystem
-        notice, semantic compression and the size cap run over the settled result.
-        """
-        outcome = await self._bus.emit(self._post_event(name, args, result, result_id))
-        result = self._apply_post_outcome(result, outcome)
-
-        # After-edit notification: a successful filesystem-mutating tool emits a
-        # FileMutatedEvent carrying the written path, so any subscriber can react
-        # — the LSP service syncs the doc + collects diagnostics, the file-watcher
-        # suppresses echoing our own edit back as an external change. Observation
-        # only; best-effort.
-        tool = self._get_tool(name)
-        if result.success and tool is not None and getattr(tool, "mutates_filesystem", False):
-            path = tool.permission_target(args)
-            if path:
-                # A fan-out event (no control subscriber maps it) — observe, not
-                # emit, so it goes straight to observers as the pure notice it is.
-                await self._safe_observe(
-                    FileMutatedEvent(path=path, tool=name),
-                    ctx=f"FileMutatedEvent for {path} not delivered",
-                )
-
-        # Semantic compression runs BEFORE the size cap: it structurally shrinks
-        # known verbose output (git/pytest/ruff) while stashing the full original
-        # on disk for retrieval. The cap then bounds whatever remains. Both are
-        # fail-safe and never touch ``result.success``.
-        result = compress_tool_result(result, name, args, session_id=self._session_id, config=self._limit_config)
-        return self._limit_result(result, name, result_id)
-
-    def _limit_result(self, result: ToolResult, name: str, result_id: str | None) -> ToolResult:
-        """Cap a tool result's text per the tool's declared size limit.
-
-        Per-tool persistence: when the text output exceeds the tool's effective
-        threshold, the full output is written to disk and the inline content is
-        replaced by a ``<persisted-output>`` preview. Skipped when disabled, when
-        the result carries media (images/PDFs go to the model as-is), or when the
-        output is short.
-        """
-        cfg = self._limit_config
-        if not cfg.enable_tool_result_limit or not result.output:
-            return result
-        # Media results are sent to the model verbatim (persistence is skipped for
-        # image/PDF tool_result blocks).
-        if result.media:
-            return result
-
-        tool = self._get_tool(name)
-        cap = getattr(tool, "max_result_size_chars", DEFAULT_MAX_RESULT_SIZE_CHARS)
-        result.output = tool_result_limit.enforce_tool_result_limit(
-            result.output,
-            name,
-            result_id=result_id or uuid.uuid4().hex,
+    def persist_large_args(self, args: Any, call_id: str | None) -> Any:
+        config = self._limit_config
+        if not config.enable_tool_result_limit:
+            return args
+        serialized = serialize_tool_call_args(args)
+        spilled = tool_result_limit.enforce_tool_result_limit(
+            serialized,
+            "toolcall-args",
+            result_id=f"{call_id or uuid.uuid4().hex}-args",
             session_id=self._session_id,
-            max_result_size_chars=cap,
-            persist=cfg.persist_large_tool_results,
+            max_result_size_chars=config.default_max_result_size_chars,
+            persist=config.persist_large_tool_results,
             store=self._workspace_store,
         )
-        return result
-
-    # ------------------------------------------------------------------
-    # Schema introspection — thin delegations to the tool catalog
-    # ------------------------------------------------------------------
-
-    def get_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for built-in tools only (excludes MCP and pipeline).
-
-        dict mapping primary tool name -> schema dict; aliases deduped.
-        """
-        return self._catalog.schemas_for("builtin")
-
-    def get_mcp_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for MCP tools only (namespaced ``server:tool`` names)."""
-        return self._catalog.schemas_for("mcp")
-
-    def get_pipeline_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for pipeline tools only (compiled-graph backed)."""
-        return self._catalog.schemas_for("pipeline")
-
-    def get_all_tool_schemas(self) -> dict[str, dict]:
-        """Return schemas for all declared tools (built-in + MCP + pipeline)."""
-        return self._catalog.schemas_for(None)
-
-    def tool_names(self) -> list[str]:
-        """All bound tool names (primary + aliases) currently in the catalog.
-
-        A public read for capabilities that need the live tool set (e.g. the
-        ``run_graph`` orchestrator validating node tool references) without
-        reaching into the catalog collaborator.
-        """
-        return self._catalog.names()
-
-    def reconstructable_tool_names(self) -> frozenset[str]:
-        """Names (primary + aliases) of bound tools whose results are re-derivable.
-
-        A tool self-declares this via the ``reconstructable`` ClassVar (see
-        :class:`~mote.executor.base_tool.BaseTool`). The compaction pipeline
-        folds/clears only these tools' result bodies, since the information is
-        recoverable (re-read the file, re-run the query).
-        """
-        return self._catalog.reconstructable_names()
-
-    @property
-    def limit_config(self) -> ToolResultLimitConfig:
-        """The single large-result persistence policy (threshold + persist flag).
-
-        The executor is the owner of this cross-cutting "big blob → disk pointer"
-        policy: it enforces it at the tool chokepoint (``run_command``). The
-        compaction pipeline's ``OversizedSpillReducer`` applies the *same* policy
-        to runaway history parts, so it borrows this one instance rather than
-        defaulting its own — one owner, no drift. When a config source is later
-        wired here, compaction follows automatically.
-        """
-        return self._limit_config
-
-    @property
-    def ledger_config(self) -> EffectLedgerConfig:
-        """The EXTERNAL-effect idempotency-ledger policy (the enable switch).
-
-        The executor owns this cross-cutting crash-replay policy (mirrors
-        :attr:`limit_config`); the resume reconciler borrows this one instance
-        rather than defaulting its own, so there is one owner and no drift.
-        """
-        return self._ledger_config
-
-    @property
-    def ledger(self) -> EffectLedger | None:
-        """The session's effect ledger, or ``None`` when the policy is disabled.
-
-        Exposed so the resume reconciler can read ``unresolved()`` / heal a
-        dangling call from a recorded result — all through the one instance the
-        executor owns.
-        """
-        return self._ledger
-
-    def graph_tool_names(self) -> frozenset[str]:
-        """Names (primary + aliases) of bound tools that are graph orchestrators.
-
-        A tool self-declares this via the ``is_graph_tool`` ClassVar (see
-        :class:`~mote.executor.base_tool.BaseTool`). The run_graph orchestrator
-        refuses to reference any of these from a node, so a declarative graph can
-        never nest another graph.
-        """
-        return self._catalog.graph_tool_names()
-
-    def graph_excluded_tool_names(self) -> frozenset[str]:
-        """Names (primary + aliases) of bound tools that must not be graph nodes.
-
-        A tool self-declares this via the ``graph_excluded`` ClassVar (see
-        :class:`~mote.executor.base_tool.BaseTool`). The run_graph orchestrator
-        refuses to reference any of these from a node — e.g. Sleep, which blocks
-        on an external wake event a foreground graph never delivers.
-        """
-        return self._catalog.graph_excluded_tool_names()
-
-    def deferred_tool_index(self, *, include_revealed: bool = True) -> dict[str, str]:
-        """The compact menu of deferred tools → ``{name: one-line desc}``.
-
-        Pure one-line summaries — for what the model *reads*. ``SearchTools``
-        matches against the enriched :meth:`deferred_search_index` instead. Empty
-        when no tool is deferred.
-
-        *include_revealed* selects the caller's view (see
-        :meth:`ToolCatalog.deferred_index`): ``True`` (default) = the whole
-        deferred corpus, the identity/validation view (e.g.
-        :meth:`~mote.roles.role.Role.reveal_tools`); ``False`` = drop
-        already-revealed tools, the DISPLAY view for the ephemeral reminder tail
-        (a revealed tool's schema is already live, so it should leave the "search
-        to enable" menu — the tail rides after the cache breakpoint so this costs
-        no cache churn).
-        """
-        return self._catalog.deferred_index(include_revealed=include_revealed)
-
-    def deferred_search_index(self) -> dict[str, str]:
-        """The deferred tools' MATCH corpus → ``{name: summary + keywords}``.
-
-        The search-only sibling of :meth:`deferred_tool_index`: each entry folds
-        in the tool's recall keywords so ``SearchTools`` matches synonyms the
-        one-line summary omits, without those words ever reaching a menu or the
-        wire. Empty when no tool is deferred.
-        """
-        return self._catalog.deferred_search_index()
-
-    def split_tool_menu(self) -> dict[str, str]:
-        """Reveal-aware description menu for the client-side SPLIT native path.
-
-        Complement of the split ``native_specs`` projection: brief hint per
-        unrevealed corpus tool, full description once revealed. Injected into the
-        ephemeral reminder tail so the byte-stable ``tools=`` prefix (name +
-        params) is never touched. See :meth:`ToolCatalog.split_tool_menu`.
-        """
-        return self._catalog.split_tool_menu()
-
-    def describe_deferred_tools(self, names: list[str]) -> dict[str, str]:
-        """Full descriptions for the given deferred tool names → ``{name: desc}``.
-
-        Capability surface for the ``SearchTools`` meta-tool: on reveal it reads
-        the newly-revealed tools' full prose (stripped off the split ``tools=``
-        wire) to persist it into the conversation + ResourceRegistry. See
-        :meth:`ToolCatalog.describe_deferred`.
-        """
-        return self._catalog.describe_deferred(names)
-
-    def get_native_tool_specs(self, provider: str = "anthropic", model: str | None = None) -> list[dict]:
-        """Return native tool-use specs for all declared tools (static + MCP).
-
-        Each tool contributes a {name, description, input_schema} record wrapped
-        into the provider envelope. The native-protocol counterpart to
-        get_tool_schemas(); not used by the XML path. ``model`` gates the
-        server-side tool-search (``defer_loading``) decision — see
-        :meth:`ToolCatalog.native_specs`.
-        """
-        return self._catalog.native_specs(provider, model)
-
-    # ------------------------------------------------------------------
-    # MCP lifecycle
-    # ------------------------------------------------------------------
+        return spilled if spilled != serialized else args
 
     async def init_mcp(self, mcps: list[str] | None = None, *, enabled: bool = False) -> None:
-        """Initialize MCP servers and register discovered tools as adapters.
-
-        Mirrors the Skills master switch: the subsystem engages purely on the
-        global ``config.mcp.enabled`` switch — a role that lists servers does not
-        implicitly turn it on. With the switch on and no per-role list, every
-        server in ``mcp_config.json`` is loaded; a role's ``mcps`` list narrows
-        to those names.
-
-        Args:
-            mcps: Server names to initialize (from Role.mcps). None/empty means
-                  "all servers" when ``enabled``.
-            enabled: The global MCP master switch (the sole gate).
-        """
-        if not enabled:
-            return
-        if self._mcp_lifecycle.active:
-            return  # already initialized
-        await self._mcp_lifecycle.bind(mcps or None, self)
+        await self._lifecycle.init_mcp(self, mcps, enabled=enabled)
 
     async def reload_mcp(self, mcps: list[str] | None = None, *, enabled: bool = False) -> bool:
-        """Re-initialize MCP from the current ``mcp_config.json`` (hot-reload).
-
-        The reentrant sibling of :meth:`init_mcp`, driven by the file watcher
-        when ``mcp_config.json`` changes (mirrors skill hot-reload). Tears the
-        old MCP adapters out of the catalog by identity, drops the old clients,
-        then re-runs discovery against the freshly read config and re-registers
-        whatever is now defined. A single ``ToolsChangedEvent`` carries the
-        removed names so the volatile views refresh: the per-turn tool catalog
-        drops them from its incremental frontier (so a server that is still
-        present is re-announced next turn with any new schema), and the native
-        channel simply rebuilds ``tool_specs`` on the next request.
-
-        Best-effort and non-throwing. Returns True when a reload ran, False when
-        it was a no-op (subsystem off: the ``config.mcp.enabled`` switch is off).
-        """
-        if not enabled:
-            return False
-
-        # Snapshot the currently-bound MCP adapter names before teardown, so we
-        # can announce exactly what went away, reclaiming each unique instance's
-        # session once (identity-deduped like cleanup()).
-        removed = self._catalog.mcp_names()
-        seen_ids: set[int] = set()
-        for name in removed:
-            tool = self._catalog.get(name)
-            if id(tool) not in seen_ids:
-                seen_ids.add(id(tool))
-                self._cleanup_tool_session(tool, name)
-        self._catalog.remove(removed)
-
-        # Drop the old MCP manager (closes its clients) and rebuild from disk.
-        await self._mcp_lifecycle.teardown()
-        await self._mcp_lifecycle.bind(mcps or None, self)
-
-        # Announce the churn so volatile views refresh (same contract as
-        # deregister_tool). Report the removed names — the catalog re-announces
-        # any that re-registered; native rebuilds tool_specs regardless.
-        await self._safe_observe(
-            ToolsChangedEvent(removed=removed, reconstructable=sorted(self.reconstructable_tool_names())),
-            ctx="ToolsChangedEvent after MCP reload not delivered",
-        )
-        return True
+        return await self._lifecycle.reload_mcp(self, mcps, enabled=enabled)
 
     @property
     def mcp(self) -> "UniversalMCP | None":
-        return self._mcp_lifecycle.mcp
-
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
-
-    def _cleanup_tool_session(self, tool: Any, name: str) -> None:
-        """Reclaim one tool's per-session resources; a teardown never raises."""
-        try:
-            tool.cleanup_session(self._session_id)
-        except Exception as exc:  # noqa: BLE001 — teardown must not raise
-            logger.debug(f"ToolExecutor: cleanup_session for {name} failed: {exc}")
+        return self._lifecycle.mcp
 
     async def cleanup(self) -> None:
-        """Clean up all tool sessions and MCP clients. Called when Role exits."""
-        for tool in self._catalog.iter_unique():
-            tool.cleanup_session(self._session_id)
-        self._catalog.clear()
-        await self._mcp_lifecycle.teardown()
+        await self._lifecycle.cleanup()

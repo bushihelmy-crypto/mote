@@ -57,6 +57,21 @@ class TestDataclasses:
 # --------------------------------------------------------------------------
 # join_sections
 # --------------------------------------------------------------------------
+class TestRoleInfo:
+    def test_role_info_flows_into_system_prompt(self):
+        # role_info is a static schema string carried straight through: it lands
+        # in ctx.role_info and substitutes into the ${role_info} placeholder.
+        ctx = ThinkContext(role_info="# My charter\nDo the thing.")
+        sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
+        assert "# My charter" in sys_p
+        assert "${role_info}" not in sys_p
+
+    def test_empty_role_info_leaves_no_placeholder(self):
+        ctx = ThinkContext(role_info="")
+        sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
+        assert "${role_info}" not in sys_p
+
+
 class TestJoinSections:
     def test_drops_none_and_blank(self):
         out = PromptBuilder.join_sections(["a", None, "", "   ", "b"])
@@ -237,20 +252,23 @@ class TestMakeScratchpad:
         assert "${scratchpad_dir}" not in out
 
 
-class TestMakeCompactionSections:
-    def test_inactive_returns_empty_pair(self):
+class TestMakeCompactionSection:
+    def test_inactive_returns_empty(self):
         cfg = make_config(compaction_enabled=False)
-        assert PromptBuilder._make_compaction_sections(cfg) == ("", "")
+        assert PromptBuilder._make_compaction_section(cfg) == ""
 
-    def test_active_emits_all_sections(self):
+    def test_active_emits_merged_section(self):
         cfg = make_config(
             compaction_enabled=True,
             protected_recent_messages=5,
         )
-        frc, final_output = PromptBuilder._make_compaction_sections(cfg)
-        assert "5" in frc  # keep_recent substituted
-        assert "${keep_recent}" not in frc
-        assert final_output == R.TASK_FINAL_OUTPUT_SECTION
+        section = PromptBuilder._make_compaction_section(cfg)
+        assert "5" in section  # keep_recent substituted
+        assert "${keep_recent}" not in section
+        # The merged section carries both the mid-loop note guidance and the
+        # end-of-task durable-record contract (with its <lesson> tag).
+        assert "# Surviving compaction" in section
+        assert "<lesson>" in section
 
 
 class TestMakeEnvSection:
@@ -262,25 +280,6 @@ class TestMakeEnvSection:
     def test_renders_project_directory(self):
         out = PromptBuilder._make_env_section("m", working_dir="/w")
         assert "Project directory: /w" in out
-
-
-class TestMakeSkillsGuide:
-    """The system prompt now carries only the static Skill Loading Guide; the
-    volatile index migrated to the per-turn SkillListingContextSource
-    (see ztest/turn_context/test_skill_listing)."""
-
-    def test_no_injector_returns_empty(self):
-        assert PromptBuilder._make_skills_guide(FakeSkillManager(injector=None), True) == ""
-
-    def test_with_injector_returns_guide(self):
-        inj = FakeInjector(guide="SKILL_GUIDE")
-        out = PromptBuilder._make_skills_guide(FakeSkillManager(injector=inj), True)
-        assert out == "SKILL_GUIDE"
-
-    def test_disabled_returns_empty_even_with_injector(self):
-        inj = FakeInjector(guide="SKILL_GUIDE")
-        out = PromptBuilder._make_skills_guide(FakeSkillManager(injector=inj), False)
-        assert out == ""
 
 
 # --------------------------------------------------------------------------
@@ -349,11 +348,15 @@ class TestCollectContext:
         ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
         assert ctx.reminders == ""
 
-    def test_compaction_sections_active(self):
+    def test_role_info_carried_from_inputs(self):
+        inputs = ThinkInputs(role_info="# Charter\nBe helpful.")
+        ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
+        assert ctx.role_info == "# Charter\nBe helpful."
+
+    def test_compaction_section_active(self):
         cfg = make_config(compaction_enabled=True)
         ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(config=cfg)))
-        assert ctx.frc
-        assert ctx.task_final_output
+        assert ctx.compaction
 
     def test_end_to_end_build_from_collected_context(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("mem-idx", encoding="utf-8")

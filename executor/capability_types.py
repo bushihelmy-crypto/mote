@@ -35,7 +35,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Optional, TypeAlias, TypedDict
 
 if TYPE_CHECKING:
-    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem
+    from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem, DeviceConfig
     from mote.common.schema.permission_types import ApprovalChoice, ApprovalRequest
     from mote.context.skills.skill_pool import SkillPool
     from mote.executor.tasks import BackgroundTaskPool
@@ -91,6 +91,9 @@ IsResourceVisible: TypeAlias = Callable[[str], bool]
 # ---------------------------------------------------------------------------
 
 RecordFileSnapshot: TypeAlias = Callable[..., None]
+# Both take a single absolute-path str; the file tools' baseline/attribution seam.
+RecordFileBaseline: TypeAlias = Callable[[str], None]
+AttributeExternalChange: TypeAlias = Callable[[str], None]
 RecordTerminalState: TypeAlias = Callable[..., None]
 TakePendingTerminalRestore: TypeAlias = Callable[[], Optional[dict]]
 RecordKernelState: TypeAlias = Callable[..., None]
@@ -106,6 +109,28 @@ GetBrowserHeadless: TypeAlias = Callable[[], bool]
 GetBrowserStealth: TypeAlias = Callable[[], bool]
 GetBrowserLocale: TypeAlias = Callable[[], str]
 GetBrowserProxy: TypeAlias = Callable[[], str]
+# Durable browser-login profile: the configured profile name (empty = ephemeral),
+# a loader returning a saved ``storage_state`` (or None), and a saver persisting
+# one. The store is encrypted at rest (reuses the vault key); the value never
+# rides the rollout when a profile is in use.
+GetBrowserProfile: TypeAlias = Callable[[], str]
+LoadBrowserProfile: TypeAlias = Callable[[str], Optional[dict]]
+SaveBrowserProfile: TypeAlias = Callable[[str, Optional[dict]], None]
+# Client TLS certificates for mutual-TLS logins: each dict is a Playwright
+# ``client_certificates`` entry (origin + PEM/PKCS#12 paths + optional
+# passphrase, which may still be a secret placeholder the tool expands).
+GetBrowserClientCerts: TypeAlias = Callable[[], "list[dict]"]
+# CDP endpoint to attach to an already-running Chrome (empty = launch our own).
+GetBrowserCdpEndpoint: TypeAlias = Callable[[], str]
+
+# ---------------------------------------------------------------------------
+# Secret resolution (autonomous login-fill — resolve a secret by KEY, never
+# by value). Returns the plaintext for a named secret or ``None`` when the key
+# is unknown / secrets are disabled. The value is used transiently inside a tool
+# (typed into a page) and never returned to the model or recorded to history.
+# ---------------------------------------------------------------------------
+
+GetSecret: TypeAlias = Callable[[str], Optional[str]]
 
 # ---------------------------------------------------------------------------
 # Stateful-tool session slots (terminal shell / python kernel)
@@ -116,9 +141,12 @@ SetToolSession: TypeAlias = Callable[[str, Any], None]
 
 # ---------------------------------------------------------------------------
 # Interruptible sleep
+#
+# Optional ``duration`` (a durable-timer deadline) → ``Callable[...]``: it may be
+# called with no args (indefinite wait) or one (bounded wait).
 # ---------------------------------------------------------------------------
 
-WaitInterruptible: TypeAlias = Callable[[], Awaitable[float]]
+WaitInterruptible: TypeAlias = Callable[..., Awaitable[float]]
 
 # ---------------------------------------------------------------------------
 # Skills / resources
@@ -137,6 +165,12 @@ RetireTaskResult: TypeAlias = Callable[[str], None]
 # ---------------------------------------------------------------------------
 
 GetSandboxRuntime: TypeAlias = Callable[[], "Optional[SandboxRuntime]"]
+
+# ---------------------------------------------------------------------------
+# Device backend configuration (DeviceUse tool)
+# ---------------------------------------------------------------------------
+
+GetDeviceConfig: TypeAlias = Callable[[], "DeviceConfig"]
 
 # ---------------------------------------------------------------------------
 # Nested tool dispatch (run_graph orchestrator)
@@ -206,6 +240,8 @@ class CapabilityMap(TypedDict):
     record_file_glimpsed: RecordFileGlimpsed
     is_resource_visible: IsResourceVisible
     record_file_snapshot: RecordFileSnapshot
+    record_file_baseline: RecordFileBaseline
+    attribute_external_change: AttributeExternalChange
     record_terminal_state: RecordTerminalState
     take_pending_terminal_restore: TakePendingTerminalRestore
     record_kernel_state: RecordKernelState
@@ -216,6 +252,12 @@ class CapabilityMap(TypedDict):
     get_browser_stealth: GetBrowserStealth
     get_browser_locale: GetBrowserLocale
     get_browser_proxy: GetBrowserProxy
+    get_browser_profile: GetBrowserProfile
+    load_browser_profile: LoadBrowserProfile
+    save_browser_profile: SaveBrowserProfile
+    get_browser_client_certs: GetBrowserClientCerts
+    get_browser_cdp_endpoint: GetBrowserCdpEndpoint
+    get_secret: GetSecret
     get_tool_session: GetToolSession
     set_tool_session: SetToolSession
     wait_interruptible: WaitInterruptible
@@ -225,6 +267,7 @@ class CapabilityMap(TypedDict):
     register_task_result: RegisterTaskResult
     retire_task_result: RetireTaskResult
     get_sandbox_runtime: GetSandboxRuntime
+    get_device_config: GetDeviceConfig
     dispatch_tool: DispatchTool
     list_tool_names: ListToolNames
     list_graph_tool_names: ListGraphToolNames

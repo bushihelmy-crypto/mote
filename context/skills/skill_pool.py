@@ -5,6 +5,7 @@ from typing import Optional
 
 from mote.common.logs import logger
 from mote.common.utils.markdown_meta_parser import MarkdownMetaParser
+from mote.context.skills.audit import audit_skill_body
 from mote.context.skills.skill_definition import SkillDefinition
 
 # Default skills directory relative to this package (the lowest-priority,
@@ -133,6 +134,17 @@ class SkillPool:
         if not skill.is_valid():
             logger.debug(f"Skipping skill at {skill_md}: invalid name/description")
             return
+
+        # Supply-chain gate: the body is injected verbatim (inline) or run as a
+        # child-agent prompt (fork), so a hostile body is refused before it can
+        # ever reach a prompt. CRITICAL → skip; softer findings → warn + keep.
+        report = audit_skill_body(skill.instructions)
+        if report.has_findings:
+            if report.ok:
+                logger.warning(f"Skill {skill.name!r} at {skill_md} audit warnings: {report.summary()}")
+            else:
+                logger.warning(f"Refusing skill {skill.name!r} at {skill_md} — audit blocked: {report.summary()}")
+                return
 
         self._skills[skill.name] = skill
 

@@ -56,9 +56,9 @@ VCS_DIRECTORIES_TO_EXCLUDE = (".git", ".svn", ".hg", ".bzr", ".jj", ".sl")
 SEARCH_TIMEOUT = 60.0 if _is_wsl() else 20.0  # search timeout in seconds
 
 # ---------------------------------------------------------------------------
-# Code-map glimpse (Grep/Glob → code map navigation hint)
+# Code-map glimpse (Search → code map navigation hint)
 # ---------------------------------------------------------------------------
-# Cap on how many matched files a single Grep/Glob call records as "glimpsed"
+# Cap on how many matched files a single Search call records as "glimpsed"
 # for the code map. A search can match hundreds of files; recording them all
 # would flood the map (and its per-turn parse). Only the top-N (result order —
 # mtime-sorted, so the most recently touched) become navigation hints.

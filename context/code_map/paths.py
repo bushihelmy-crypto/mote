@@ -22,14 +22,13 @@ from mote.common.const.paths import CONFIG_ROOT
 def codemap_db_path(project_root: str) -> str:
     """Absolute path to the persistent code-map DB for *project_root*.
 
-    Creates the per-repo directory (``mkdir -p``) so the caller can open the
-    SQLite file directly. The directory name is a 16-hex-char sha256 prefix of
+    Pure path derivation; the storage owner creates the directory when it opens
+    the database. The directory name is a 16-hex-char sha256 prefix of
     the repo's realpath — collision-safe in practice, and stable for one repo.
     """
     real = os.path.realpath(project_root)
     digest = hashlib.sha256(real.encode("utf-8")).hexdigest()[:16]
     repo_dir = os.path.join(str(CONFIG_ROOT), "codemap", digest)
-    os.makedirs(repo_dir, exist_ok=True)
     return os.path.join(repo_dir, "codemap.db")
 
 

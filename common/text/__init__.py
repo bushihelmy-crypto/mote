@@ -6,6 +6,18 @@ from mote.common.text.elision import Elision, ElisionStrategy, ElisionUnit, cap_
 from mote.common.text.hashing import content_hash
 from mote.common.text.html import html_to_markdown
 from mote.common.text.humanize import format_elapsed, format_file_size, format_token_count
+from mote.common.text.hunks import (
+    MAX_DIFF_SIZE_BYTES,
+    Hunk,
+    HunkApplyError,
+    apply_hunk,
+    apply_hunks,
+    patch_lines,
+    revert_hunk,
+    revert_hunks,
+    slice_lines,
+    split_hunks,
+)
 from mote.common.text.markers import (
     PERSISTED_OUTPUT_CLOSE,
     PERSISTED_OUTPUT_OPEN,
@@ -29,6 +41,16 @@ __all__ = [
     "strip_ansi",
     "content_hash",
     "html_to_markdown",
+    "Hunk",
+    "HunkApplyError",
+    "MAX_DIFF_SIZE_BYTES",
+    "patch_lines",
+    "slice_lines",
+    "split_hunks",
+    "apply_hunk",
+    "revert_hunk",
+    "apply_hunks",
+    "revert_hunks",
     "count_noun",
     "plural",
     "verb_agree",

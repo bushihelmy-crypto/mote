@@ -22,9 +22,9 @@ async def test_write_then_read_then_finish(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "hello.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Read", "Write"],
+        tools=["Read", "Edit"],
         turns=[
-            [("Write", {"file_path": target, "content": "hello world"})],
+            [("Edit", {"file_path": target, "old_string": "", "new_string": "hello world"})],
             [("Read", {"file_path": target})],
             "All done.",  # terminal: no tool_calls
         ],
@@ -54,9 +54,9 @@ async def test_history_records_assistant_and_tool_results(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "note.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
+        tools=["Edit"],
         turns=[
-            [("Write", {"file_path": target, "content": "abc"})],
+            [("Edit", {"file_path": target, "old_string": "", "new_string": "abc"})],
             "finished",
         ],
     )
@@ -99,12 +99,12 @@ async def test_unknown_tool_call_is_filtered_by_valid_names(make_role, tmp_path)
     target = os.path.join(str(tmp_path), "ok.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],  # Bash NOT declared
+        tools=["Edit"],  # Bash NOT declared
         turns=[
             # Bash is filtered out (not in valid_names); Write runs.
             [
                 ("Bash", {"command": "echo nope"}),
-                ("Write", {"file_path": target, "content": "yes"}),
+                ("Edit", {"file_path": target, "old_string": "", "new_string": "yes"}),
             ],
             "done",
         ],
@@ -119,7 +119,7 @@ async def test_unknown_tool_call_is_filtered_by_valid_names(make_role, tmp_path)
 
 async def test_no_news_short_circuits(make_role, tmp_path):
     """With no observed message the loop never thinks."""
-    role = make_role(working_dir=str(tmp_path), tools=["Write"], turns=["unused"])
+    role = make_role(working_dir=str(tmp_path), tools=["Edit"], turns=["unused"])
 
     rsp = await role.run()  # no with_message, empty buffer
 
@@ -133,11 +133,11 @@ async def test_multiple_tool_calls_in_one_turn(make_role, tmp_path):
     b = os.path.join(str(tmp_path), "b.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
+        tools=["Edit"],
         turns=[
             [
-                ("Write", {"file_path": a, "content": "AAA"}),
-                ("Write", {"file_path": b, "content": "BBB"}),
+                ("Edit", {"file_path": a, "old_string": "", "new_string": "AAA"}),
+                ("Edit", {"file_path": b, "old_string": "", "new_string": "BBB"}),
             ],
             "both written",
         ],
@@ -162,15 +162,15 @@ async def test_failure_mid_turn_skips_rest_then_replans(make_role, tmp_path):
     out = os.path.join(str(tmp_path), "out.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Read", "Write"],
+        tools=["Read", "Edit"],
         turns=[
             # Read fails -> the same-turn Write is SKIPPED, not executed.
             [
                 ("Read", {"file_path": missing}),
-                ("Write", {"file_path": out, "content": "skipped-content"}),
+                ("Edit", {"file_path": out, "old_string": "", "new_string": "skipped-content"}),
             ],
             # Replan: the Write now runs and lands "final" (not the skipped text).
-            [("Write", {"file_path": out, "content": "final"})],
+            [("Edit", {"file_path": out, "old_string": "", "new_string": "final"})],
             "done",
         ],
     )
@@ -185,7 +185,7 @@ async def test_failure_mid_turn_skips_rest_then_replans(make_role, tmp_path):
 
 
 async def test_glob_then_grep_search_end_to_end(make_role, tmp_path):
-    """Real Glob + Grep run against a seeded workspace and surface their hits."""
+    """Real Search (files axis then content axis) against a seeded workspace."""
     foo = os.path.join(str(tmp_path), "foo.py")
     bar = os.path.join(str(tmp_path), "bar.py")
     with open(foo, "w", encoding="utf-8") as f:
@@ -195,10 +195,10 @@ async def test_glob_then_grep_search_end_to_end(make_role, tmp_path):
 
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Glob", "Grep"],
+        tools=["Search"],
         turns=[
-            [("Glob", {"pattern": "*.py"})],
-            [("Grep", {"pattern": "hello", "path": str(tmp_path), "output_mode": "content"})],
+            [("Search", {"files": "*.py"})],
+            [("Search", {"content": "hello", "path": str(tmp_path), "output_mode": "content"})],
             "done",
         ],
     )
@@ -206,7 +206,7 @@ async def test_glob_then_grep_search_end_to_end(make_role, tmp_path):
     await role.run(with_message="find the hello function")
 
     blob = "\n".join(m.content for m in role.context_manager.get())
-    # Glob listed the python files; Grep located the match inside foo.py.
+    # The files axis listed the python files; the content axis located the match.
     assert "foo.py" in blob
     assert "hello" in blob
 
@@ -216,9 +216,9 @@ async def test_empty_terminal_text_finishes_cleanly(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "e.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
+        tools=["Edit"],
         turns=[
-            [("Write", {"file_path": target, "content": "x"})],
+            [("Edit", {"file_path": target, "old_string": "", "new_string": "x"})],
             "",  # terminal turn carrying no text
         ],
     )

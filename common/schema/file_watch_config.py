@@ -2,7 +2,7 @@
 
 Lives in ``common/schema`` alongside the other declarative role policies so
 ``RoleSchema`` (which declares it) can reference it without importing the watch
-service. The service itself lives in ``mote.environment.watching``; this is
+service. The service itself lives in ``mote.common.watching``; this is
 only the declarative shape: which roots to watch and how often to poll.
 
 Default: a Role with ``file_watch=None`` (the default) runs with no watcher. ``FileWatchConfig.enabled`` is an explicit master switch so the

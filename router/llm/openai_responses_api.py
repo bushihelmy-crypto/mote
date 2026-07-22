@@ -32,7 +32,7 @@ import json
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from json_repair import repair_json
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt
 
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.const import USE_CONFIG_TIMEOUT
@@ -40,13 +40,16 @@ from mote.common.const.llm import supports_web_search
 from mote.common.events import log_llm_stream
 from mote.common.exception import LLMEmptyResponseError, LLMTimeoutError, classify_llm_error, is_retryable
 from mote.common.logs import logger
+from mote.common.model_profile import profile_for
 from mote.common.utils.common import log_and_reraise
 from mote.common.utils.token_counter import count_message_tokens, count_string_tokens
 from mote.router.cost import CostTracker, TokenUsage
+from mote.router.llm._retry import wait_retry_after
 from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
 from mote.router.llm.llm_response import WebSearchHit
+from mote.router.ratelimit.capture import install_rate_limit_hook
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -110,7 +113,14 @@ class OpenAIResponsesLLM(CredentialRotationMixin, BaseLLM):
                 kwargs["http_client"] = AsyncHttpxClientWrapper(proxy=self.config.proxy, base_url=self.config.base_url)
             except Exception:  # noqa: BLE001 — proxy is best-effort
                 logger.warning("httpx wrapper unavailable; ignoring proxy for OpenAIResponsesLLM.")
-        return AsyncOpenAI(**kwargs)
+        client = AsyncOpenAI(**kwargs)
+        install_rate_limit_hook(
+            client,
+            get_tracker=lambda: self.rate_limit_tracker,
+            provider=self.provider_label,
+            model=self.model or "unknown",
+        )
+        return client
 
     # -- message conversion (OpenAI wire shape -> Responses input items) ----
     def _convert_messages(
@@ -331,6 +341,12 @@ class OpenAIResponsesLLM(CredentialRotationMixin, BaseLLM):
         # models reject the parameter outright.
         if "temperature" in getattr(self.config, "model_fields_set", set()):
             kwargs["temperature"] = self.config.temperature
+        # Reasoning effort: the Responses API takes a ``reasoning.effort`` block.
+        # Gated by the model's declared thinking capability so an incapable model
+        # never receives it.
+        effort = self.config.reasoning_effort
+        if effort and profile_for(self.model).supports_thinking:
+            kwargs["reasoning"] = {"effort": effort}
         if responses_tools is not None:
             kwargs["tools"] = responses_tools
 
@@ -439,7 +455,7 @@ class OpenAIResponsesLLM(CredentialRotationMixin, BaseLLM):
         return final_response
 
     @retry(
-        wait=wait_random_exponential(min=1, max=60),
+        wait=wait_retry_after(),
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),

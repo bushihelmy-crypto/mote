@@ -233,8 +233,10 @@ class TestFoldPressureContextSource:
         src = FoldPressureContextSource(_FakeFoldProvider(_fold(8)))
         out = run(src.render())
         assert out is not None
-        assert "clearing imminent" in out.lower()
+        assert "clearing threshold approaching" in out.lower()
+        assert "if context pressure continues" in out.lower()
         assert "5 most recent" in out  # keep_recent surfaced
+        assert "whole-file Edit contents" in out
 
     def test_past_trigger_returns_none(self):
         # Once past the trigger the fold has (or is about to have) already run —

@@ -105,7 +105,7 @@ async def filter_findings(
         system_prompt=_FILTER_SYSTEM_PROMPT,
         repo_dir=repo_dir,
         parent_session_id=parent_session_id,
-        tools=["Read", "Grep", "Glob"],
+        tools=["Read", "Search"],
     )
     prompt = _FILTER_USER_TEMPLATE.format(comment_list=_render_comments(findings))
     output = await run_child_for_text(role, prompt, label="review_filter")

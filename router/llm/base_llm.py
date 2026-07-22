@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Mapping, Optional, Union
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Callable, Mapping, Optional, Union
 from uuid import uuid4
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt
 
 from mote.common.config.config.llm_config import LLMConfig
 from mote.common.const import IMAGES, LLM_API_TIMEOUT, PDFS, USE_CONFIG_TIMEOUT
@@ -23,21 +24,44 @@ from mote.common.events import (
     observe_event,
     observe_event_sync,
 )
-from mote.common.exception import RecoveryAction, RecoveryRunner, is_retryable
+from mote.common.exception import (
+    LLMEmptyResponseError,
+    LLMResourceUnavailableError,
+    LLMUnusableResponseError,
+    RecoveryAction,
+    RecoveryRunner,
+    is_retryable,
+)
 from mote.common.interface import ContextReducer
 from mote.common.logs import current_trace_id, logger
+from mote.common.resilience import ResourceHealthRegistry
 from mote.common.schema import Message
 from mote.common.utils.common import build_data_url, log_and_reraise, pdfs_within_limits
 from mote.common.utils.token_counter import TOKEN_MAX, count_message_tokens
 from mote.router.cost import Costs, CostTracker, TokenUsage
+from mote.router.llm._retry import wait_retry_after
+from mote.router.llm.health import counts_as_health_failure, resource_key
 from mote.router.llm.llm_response import LLMResponse, LLMToolCall, WebSearchHit
 from mote.router.llm.recovery import build_llm_strategies
 from mote.router.llm.transformers import DEFAULT_MESSAGE_TRANSFORMERS
+from mote.router.ratelimit import RateLimitTracker
 
-# Tenacity retry budget for a single LLM call (the transient-error RETRY tier).
-# Shared by the base ``acompletion_text`` and provider overrides so the retry
-# count isn't silently different depending on which provider you land on.
+# ── LLM retry budget: two composed tiers, co-located so the total is surveyable ──
+# A single LLM call may touch the wire at most
+#     LLM_RETRY_ATTEMPTS * (LLM_MAX_RECOVERIES + 1)
+# times. The two tiers are deliberately distinct mechanisms, not one merged loop:
+#   • LLM_RETRY_ATTEMPTS — the inner tenacity tier: a *transient* (``is_retryable``)
+#     failure is backed-off and re-issued IN PLACE (same resource). Shared by the
+#     base ``acompletion_text`` and every provider override so the count isn't
+#     silently different depending on which provider you land on.
+#   • LLM_MAX_RECOVERIES — the outer ``RecoveryRunner`` tier: each *condition-
+#     changing* recovery (COMPRESS / ROTATE_CREDENTIAL / FALLBACK) re-enters the
+#     tenacity tier once. Bounds a pathological recover-fail-recover cycle.
+# Keeping both numbers here (rather than one in base_llm and the other buried as a
+# RecoveryRunner default) is the single pane of glass for "how many times can one
+# aask hit the network".
 LLM_RETRY_ATTEMPTS = 6
+LLM_MAX_RECOVERIES = 3
 
 
 class BaseLLM(ABC):
@@ -50,6 +74,11 @@ class BaseLLM(ABC):
     # OpenAI / Azure / Others
     aclient: Optional[AsyncOpenAI] = None
     cost_manager: Optional[CostTracker] = None
+    # Shared, fleet-wide rate-limit state (account quota, not per-agent spend), set
+    # by the router's Context alongside ``cost_manager``. The provider's response
+    # hook reads it LAZILY at response time, so injecting it after the SDK client
+    # is built (the normal order) is fine. ``None`` leaves rate-limit capture inert.
+    rate_limit_tracker: Optional["RateLimitTracker"] = None
     # Maintain model name in own instance in case the global config has changed,
     # Should always use model not config.model within this class
     model: Optional[str] = None
@@ -70,6 +99,19 @@ class BaseLLM(ABC):
     # tool content, strip opaque request state); an upper layer may override per
     # provider. A transformer that returns None leaves that recovery a re-raise.
     _message_transformers: Optional[Mapping[RecoveryAction, Callable]] = DEFAULT_MESSAGE_TRANSFORMERS
+    # Injected by the upper layer (LLMRouter) to enable circuit-breaking: the
+    # shared per-resource :class:`ResourceHealthRegistry`. When set, each call is
+    # gated by the resource's breaker (an OPEN breaker sheds the call → FALLBACK)
+    # and its outcome recorded. ``None`` (the default for a directly-constructed
+    # provider / tests) leaves the path inert — behaviourally identical to today.
+    _health_registry: "Optional[ResourceHealthRegistry]" = None
+    # Injected by the upper layer (LLMRouter) to enable RESPONSE-based fallback:
+    # a validator ``(result) -> Optional[str]`` run AFTER a successful ``send()``.
+    # Returning a non-empty rejection reason means the HTTP-200 response is unusable
+    # (a refusal / empty body / wrong shape); the caller raises a FALLBACK-classified
+    # :class:`LLMUnusableResponseError` so the recovery loop sheds to another
+    # provider. ``None`` (the default) leaves the path inert — every send passes.
+    _response_validator: Optional[Callable[[Any], Optional[str]]] = None
 
     @abstractmethod
     def __init__(self, config: LLMConfig):
@@ -235,6 +277,17 @@ class BaseLLM(ABC):
             return Costs.zero()
         return self.cost_manager.get_costs()
 
+    @property
+    def provider_label(self) -> str:
+        """Human-facing provider name for rate-limit keying (e.g. ``anthropic``).
+
+        The configured ``api_type`` value — the same identity the cost/health
+        layers key on — so a rate-limit snapshot reads under the provider the
+        user recognizes. Falls back to ``unknown`` when unset.
+        """
+        api_type = getattr(getattr(self, "config", None), "api_type", "")
+        return getattr(api_type, "value", api_type) or "unknown"
+
     def _build_messages(
         self,
         msg: Union[str, list[dict[str, str]], list["Message"]],
@@ -329,6 +382,8 @@ class BaseLLM(ABC):
             tool_calls = [
                 LLMToolCall(id=c.get("id", ""), name=c["name"], arguments=c.get("arguments") or {}) for c in raw_calls
             ]
+            if not content.strip() and not tool_calls:
+                raise LLMEmptyResponseError("The LLM's response is empty.")
             return LLMResponse(content=content, tool_calls=tool_calls)
 
         return await self._run_with_recovery(_send, message)
@@ -433,6 +488,12 @@ class BaseLLM(ABC):
         Each callback degrades to a no-op when unavailable (no extra key / no fallback
         supplier), so with the default single-key, single-model config this is
         behaviourally equivalent to calling ``send(self, messages)`` directly.
+
+        The two retry tiers compose to a bounded worst case of
+        ``LLM_RETRY_ATTEMPTS * (LLM_MAX_RECOVERIES + 1)`` wire attempts (see the
+        budget constants at module top). Each wire attempt is additionally
+        admission-gated + outcome-recorded by :meth:`_resource_health` when a
+        circuit-breaker registry is wired.
         """
         # Shared request state the strategy closures mutate across recovery attempts:
         # ``messages`` (re-compressed / repaired) and ``llm`` (swapped on FALLBACK).
@@ -490,7 +551,7 @@ class BaseLLM(ABC):
             on_fallback=_on_fallback,
             transformers=transformers or None,
         )
-        runner = RecoveryRunner(strategies)
+        runner = RecoveryRunner(strategies, max_recoveries=LLM_MAX_RECOVERIES)
 
         # The transient-RETRY tier: an ``is_retryable`` failure (transport hiccup, 5xx,
         # rate-limit, or a relay gateway middling an upstream 401/429 as an overloaded
@@ -524,7 +585,7 @@ class BaseLLM(ABC):
 
         @retry(
             stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
-            wait=wait_random_exponential(min=1, max=60),
+            wait=wait_retry_after(),
             after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
             retry=retry_if_exception(is_retryable),
             retry_error_callback=log_and_reraise,
@@ -533,52 +594,109 @@ class BaseLLM(ABC):
         async def _call():
             llm = _active()
             msgs = state["messages"]
-            # Open the LLM-call observation on the shared event spine. One
-            # request → response|error pair per recovery attempt (so retries /
-            # rotations / fallbacks each trace independently), correlated by
-            # ``request_id``. ``observe_event`` is a no-op when no bus is bound
-            # (standalone client use / tests), so this stays zero-cost there.
-            request_id = uuid4().hex
-            model = llm.model or "unknown"
-            await observe_event(
-                LLMRequestEvent(
-                    request_id=request_id,
-                    model=model,
-                    provider=self._provider_label(llm),
-                    messages=msgs,
-                    parent_span_id=current_span_id(),
-                    trace_id=current_trace_id() or "",
-                )
-            )
-            started = time.monotonic()
-            try:
-                result = await send(llm, msgs)
-            except Exception as exc:  # noqa: BLE001 — mirror the failure, then re-raise
+            # The circuit breaker is ONE cohesive unit — admission gate on entry,
+            # outcome recording on exit — owned by ``_resource_health`` rather than
+            # smeared through this call. Tracing (request/response/error spine
+            # events) is a separate concern, kept inline within the guarded body.
+            async with self._resource_health(llm):
+                # Open the LLM-call observation on the shared event spine. One
+                # request → response|error pair per recovery attempt (so retries /
+                # rotations / fallbacks each trace independently), correlated by
+                # ``request_id``. ``observe_event`` is a no-op when no bus is bound
+                # (standalone client use / tests), so this stays zero-cost there.
+                request_id = uuid4().hex
+                model = llm.model or "unknown"
                 await observe_event(
-                    LLMErrorEvent(
+                    LLMRequestEvent(
                         request_id=request_id,
                         model=model,
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                        latency_ms=(time.monotonic() - started) * 1000.0,
+                        provider=self._provider_label(llm),
+                        messages=msgs,
+                        parent_span_id=current_span_id(),
+                        trace_id=current_trace_id() or "",
                     )
                 )
-                raise
-            await observe_event(
-                self._build_response_event(request_id, llm, result, (time.monotonic() - started) * 1000.0)
-            )
+                started = time.monotonic()
+                try:
+                    result = await send(llm, msgs)
+                except Exception as exc:  # noqa: BLE001 — mirror the failure, then re-raise
+                    await observe_event(
+                        LLMErrorEvent(
+                            request_id=request_id,
+                            model=model,
+                            error_type=type(exc).__name__,
+                            error=str(exc),
+                            latency_ms=(time.monotonic() - started) * 1000.0,
+                        )
+                    )
+                    raise
+                await observe_event(
+                    self._build_response_event(request_id, llm, result, (time.monotonic() - started) * 1000.0)
+                )
+            # Outside ``_resource_health``: the wire call succeeded, so the resource
+            # is already recorded HEALTHY. A response-CONTENT rejection is a separate
+            # concern — the model answered, it's just unusable — so it must NOT impugn
+            # the resource's health; it sheds via FALLBACK. Being a NonRetryableError,
+            # LLMUnusableResponseError bypasses the inner transient-retry loop and goes
+            # straight to the outer RecoveryRunner.
+            if self._response_validator is not None:
+                reason = self._response_validator(result)
+                if reason:
+                    raise LLMUnusableResponseError(reason)
             return result
 
         return await runner.run(_call)
 
+    @asynccontextmanager
+    async def _resource_health(self, llm: "BaseLLM") -> AsyncIterator[None]:
+        """Circuit-breaker admission gate + outcome recording around one wire attempt.
+
+        The single cohesive home for this provider's resilience touchpoints (was
+        three raw ``admit`` / ``record`` statements smeared through ``_call``),
+        levelled to the same abstraction as the recovery-strategy registry:
+
+        - on entry, when a health registry is wired, SHED a call to a resource
+          whose breaker is OPEN *before* touching the wire by raising
+          :class:`LLMResourceUnavailableError` (FALLBACK-classified, so the
+          recovery loop swaps to another provider whose own breaker is then gated
+          in turn — a sustained outage sheds to a healthy resource instead of
+          hammering the dead one);
+        - on exit, record the outcome: success records health; a RESOURCE-health
+          failure (transient / credential, per :func:`counts_as_health_failure`)
+          is recorded so a sustained outage trips the breaker, while an our-fault
+          error (context overflow, 400, content-policy) is NOT recorded (it would
+          wrongly shed a healthy provider).
+
+        Fully inert (no gate, no record) when no registry is wired — the default,
+        so this is behaviourally transparent for the single-model config.
+        """
+        registry = self._health_registry
+        if registry is None:
+            yield
+            return
+        key = resource_key(llm)
+        if not registry.admit(key):
+            raise LLMResourceUnavailableError(f"circuit breaker open for {key}; failing over")
+        try:
+            yield
+        except Exception as exc:  # noqa: BLE001 — record health, then re-raise
+            if counts_as_health_failure(exc):
+                registry.record(key, False)
+            raise
+        else:
+            registry.record(key, True)
+
     @staticmethod
     def _provider_label(llm: "BaseLLM") -> str:
-        """Best-effort wire-protocol label (``api_type`` value) for tracing."""
+        """Best-effort wire-protocol label (``api_type`` value) for tracing.
+
+        Delegates to the canonical :attr:`provider_label` so there is one source
+        of truth for "what provider am I" across the tracing and rate-limit paths.
+        """
         try:
-            api_type = getattr(llm.config, "api_type", "")
-            return str(getattr(api_type, "value", api_type) or "")
+            return llm.provider_label
         except Exception:  # noqa: BLE001
-            return ""
+            return "unknown"
 
     @staticmethod
     def _build_response_event(request_id: str, llm: "BaseLLM", result, latency_ms: float) -> LLMResponseEvent:
@@ -654,7 +772,7 @@ class BaseLLM(ABC):
 
     @retry(
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
-        wait=wait_random_exponential(min=1, max=60),
+        wait=wait_retry_after(),
         after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),
         retry_error_callback=log_and_reraise,

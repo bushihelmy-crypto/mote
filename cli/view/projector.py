@@ -72,25 +72,34 @@ from mote.common.text import PERSISTED_OUTPUT_OPEN
 # Which arg holds the "headline" target shown next to the tool name
 # (e.g. ``Write  scraper.py``). Absent => no headline (e.g. Bash).
 _HEADLINE_ARG = {
-    "Write": "file_path",
     "Edit": "file_path",
     "Read": "file_path",
-    "Glob": "pattern",
-    "Grep": "pattern",
+    "Search": "content",
 }
 
+
+def _search_headline(args: dict) -> str:
+    """Headline for a Search call: prefer the content regex, else the files glob."""
+    for key in ("content", "files"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
 # Which arg holds the body to highlight, paired with its lexer. ``None`` lexer =>
-# infer from the headline file extension. Grep/Glob are intentionally absent
-# (their pattern already shows in the headline).
+# infer from the headline file extension. Search is intentionally absent (its
+# query already shows in the headline).
 _BODY = {
     "Bash": ("command", "bash"),
     "terminal": ("input", "bash"),
-    "Write": ("content", None),
+    # Edit covers both substring edits and whole-file writes (empty old_string);
+    # ``new_string`` carries the changed text / full content in both cases.
     "Edit": ("new_string", None),
     "python": ("code", "python"),
 }
 
-# Map a file extension to a Pygments lexer name for Write/Edit content.
+# Map a file extension to a Pygments lexer name for Edit content.
 _EXT_LEXER = {
     ".py": "python",
     ".js": "javascript",
@@ -465,9 +474,14 @@ class ViewProjector:
             )
 
         headline = ""
-        head_arg = _HEADLINE_ARG.get(name)
-        if head_arg and isinstance(args.get(head_arg), str):
-            headline = args[head_arg]
+        if name == "Search":
+            # Search has two optional query axes; show whichever is present
+            # (content regex preferred, else the files glob).
+            headline = _search_headline(args)
+        else:
+            head_arg = _HEADLINE_ARG.get(name)
+            if head_arg and isinstance(args.get(head_arg), str):
+                headline = args[head_arg]
 
         body, lexer = self._body_and_lexer(name, args)
         return ToolCallStarted(

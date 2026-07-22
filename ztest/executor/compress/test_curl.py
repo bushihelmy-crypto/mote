@@ -11,10 +11,12 @@ package's fail-safe + grow-guard wrapper.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from mote.executor.compress import compress_output
-from mote.executor.compress.curl import CurlCompressor, _looks_like_binary, _looks_like_html
+from mote.executor.compress.curl import CurlCompressor, _looks_like_binary, _looks_like_html, _looks_like_json
 
 # Conversion depends on the optional markdownify/bs4 stack.
 pytest.importorskip("markdownify")
@@ -147,13 +149,87 @@ class TestCompressApplied:
         assert r.compressed_chars < r.original_chars
 
 
-class TestDecline:
-    def test_json_declined(self):
+class TestJsonDetection:
+    def test_object_is_json(self):
+        assert _looks_like_json('  {"a": 1}')
+
+    def test_array_is_json(self):
+        assert _looks_like_json("\n[1, 2, 3]")
+
+    def test_html_is_not_json(self):
+        assert not _looks_like_json("<!doctype html><html></html>")
+
+    def test_headers_are_not_json(self):
+        assert not _looks_like_json("HTTP/2 200\ncontent-type: application/json\n")
+
+
+class TestJsonCompress:
+    def test_large_array_sampled(self):
+        # A dict with one big list (the {"data": [...], "meta": ...} shape) is
+        # sampled: head + tail records kept, the middle elided with a count.
         body = '{"items": [' + ",".join(f'{{"id": {i}}}' for i in range(200)) + "]}"
         r = CurlCompressor().compress(body, argv=["curl", "https://api.x.com"])
-        assert r.applied is False
-        assert r.text == body  # untouched — never mangled into markdown
+        assert r.applied is True
+        assert r.compressed_chars < r.original_chars
+        parsed = json.loads(r.text)
+        items = parsed["items"]
+        # 5 head + 1 marker + 2 tail == 8, with the marker naming the omission.
+        assert len(items) == 8
+        assert items[0] == {"id": 0}
+        assert items[-1] == {"id": 199}
+        assert {"__omitted_items__": 193} in items
 
+    def test_top_level_array_sampled(self):
+        body = json.dumps([{"n": i} for i in range(100)])
+        r = CurlCompressor().compress(body, argv=["curl", "https://api.x.com"])
+        assert r.applied is True
+        parsed = json.loads(r.text)
+        assert parsed[0] == {"n": 0}
+        assert parsed[-1] == {"n": 99}
+        assert {"__omitted_items__": 93} in parsed
+
+    def test_pretty_json_minified_losslessly(self):
+        # A small pretty-printed object is not sampled — only minified. The
+        # value survives round-trip exactly; only whitespace is removed.
+        original = {"status": "ok", "count": 3, "nested": {"a": [1, 2, 3]}}
+        body = json.dumps(original, indent=4)
+        r = CurlCompressor().compress(body, argv=["curl", "https://api.x.com"])
+        assert r.applied is True
+        assert r.compressed_chars < r.original_chars
+        assert json.loads(r.text) == original
+
+    def test_short_array_not_sampled(self):
+        # Below the sampling floor: minified but every record kept.
+        original = [{"id": i} for i in range(5)]
+        body = json.dumps(original, indent=2)
+        r = CurlCompressor().compress(body, argv=["curl", "https://api.x.com"])
+        assert r.applied is True
+        assert json.loads(r.text) == original
+
+    def test_already_compact_json_declined_by_grow_guard(self):
+        # Minifying an already-minified small body saves nothing -> grow-guard
+        # collapses it to unchanged (via the package wrapper).
+        body = '{"a":1,"b":2}'
+        r = compress_output("curl https://x.com", body, min_chars=1, max_input_chars=2_000_000)
+        assert r.applied is False
+        assert r.text == body
+
+    def test_invalid_json_declined(self):
+        # Opens like JSON ('[') but is not valid -> parse fails, left untouched.
+        body = "[INFO] starting\n[INFO] processing\n[INFO] done\n" * 20
+        r = CurlCompressor().compress(body, argv=["curl", "https://x.com/log"])
+        assert r.applied is False
+        assert r.text == body
+
+    def test_routed_via_compress_output(self):
+        body = '{"items": [' + ",".join(f'{{"id": {i}}}' for i in range(200)) + "]}"
+        r = compress_output("curl https://api.x.com", body, min_chars=100, max_input_chars=2_000_000)
+        assert r.applied is True
+        assert r.compressed_chars < r.original_chars
+        assert json.loads(r.text)["items"][0] == {"id": 0}
+
+
+class TestDecline:
     def test_headers_declined(self):
         body = "HTTP/2 200\n" + "".join(f"x-header-{i}: value\n" for i in range(100))
         r = CurlCompressor().compress(body, argv=["curl", "-I", "https://x.com"])

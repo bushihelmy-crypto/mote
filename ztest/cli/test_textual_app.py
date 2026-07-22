@@ -117,20 +117,59 @@ async def test_tool_started_then_completed_correlates_one_widget():
 
 
 @pytest.mark.asyncio
+async def test_write_file_diff_folds_into_tool_widget_not_standalone():
+    """A Write's structured diff folds INTO its ToolCallWidget — no FileDiffRow.
+
+    The projector emits ``FileDiffBlock`` right after the completion; the host
+    routes it into the owning tool row (matched by ``tool_use_id``) so the
+    invocation + change are one select/fold unit, rather than mounting a separate
+    ``FileDiffRow``.
+    """
+    from mote.cli.consumers.textual.widgets import FileDiffRow
+    from mote.cli.contracts.view import FileDiffBlock
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Edit", headline="a.py", tool_use_id="w-1")))
+        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Edit", tool_use_id="w-1", summary="wrote")))
+        app.post_message(ViewEventMessage(FileDiffBlock(path="/tmp/a.py", old="x=1\n", new="x=2\n", tool_use_id="w-1")))
+        await pilot.pause()
+        assert len(app.query(FileDiffRow)) == 0  # diff folded into the tool row
+        widgets = app.query(ToolCallWidget)
+        assert len(widgets) == 1
+        widget = widgets.first()
+        assert widget._file_diffs  # the diff was attached to the tool widget
+        assert widget._folds is True and widget.expanded is True
+
+
+@pytest.mark.asyncio
+async def test_unmatched_file_diff_falls_back_to_standalone_row():
+    """A ``FileDiffBlock`` whose id matches no tool widget still renders standalone."""
+    from mote.cli.consumers.textual.widgets import FileDiffRow
+    from mote.cli.contracts.view import FileDiffBlock
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(FileDiffBlock(path="/tmp/x.py", old="", new="hi\n", tool_use_id="nope")))
+        await pilot.pause()
+        assert len(app.query(FileDiffRow)) == 1  # no owning widget → standalone
+
+
+@pytest.mark.asyncio
 async def test_consecutive_search_read_coalesce_into_one_group():
-    """Read+Grep+Glob in a row → ONE ToolGroupWidget, zero standalone widgets."""
+    """Read+Search+Search in a row → ONE ToolGroupWidget, zero standalone widgets."""
     app = MoteApp()
     async with app.run_test() as pilot:
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="t1")))
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2")))
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Glob", headline="*.py", tool_use_id="t3")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Search", headline="foo", tool_use_id="t2")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Search", headline="*.py", tool_use_id="t3")))
         await pilot.pause()
         assert len(app.query(ToolGroupWidget)) == 1
         assert len(app.query(ToolCallWidget)) == 0
         # Complete them all → the summary reflects the counts.
         app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Read", tool_use_id="t1", summary="ok")))
-        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Grep", tool_use_id="t2", summary="ok")))
-        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Glob", tool_use_id="t3", summary="ok")))
+        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Search", tool_use_id="t2", summary="ok")))
+        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Search", tool_use_id="t3", summary="ok")))
         await pilot.pause()
         group = app.query(ToolGroupWidget).first()
         # ``Static.update`` stashes the raw renderable in the mangled ``__content``;
@@ -149,7 +188,7 @@ async def test_noncollapsible_tool_flushes_group_and_mounts_standalone():
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="t1")))
         await pilot.pause()
         assert len(app.query(ToolGroupWidget)) == 1
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Write", headline="/b.py", tool_use_id="t2")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Edit", headline="/b.py", tool_use_id="t2")))
         await pilot.pause()
         assert app._tool_group is None  # group flushed
         assert len(app.query(ToolGroupWidget)) == 1  # still just the one (unmounted-but-present)
@@ -167,7 +206,7 @@ async def test_assistant_text_breaks_group_so_next_tool_starts_new_group():
         app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="some reply", streamed=False)))
         await pilot.pause()
         assert app._tool_group is None
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Search", headline="foo", tool_use_id="t2")))
         await pilot.pause()
         groups = app.query(ToolGroupWidget)
         assert len(groups) == 2  # a second group started
@@ -189,7 +228,7 @@ async def test_ctrl_o_toggles_tool_group_expansion():
         assert group.expanded is True
         # A NEW group created afterward honours the current expanded state.
         app.post_message(ViewEventMessage(MessageBlockCompleted(markdown="reply", streamed=False)))
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="t2")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Search", headline="foo", tool_use_id="t2")))
         await pilot.pause()
         assert app.query(ToolGroupWidget).last().expanded is True
 
@@ -298,15 +337,15 @@ async def test_compaction_clears_tool_selection():
 
 @pytest.mark.asyncio
 async def test_click_selects_whole_search_read_group_and_scopes_ctrl_o():
-    """Coalesced Read/Grep/Glob form ONE group → a click selects the whole unit."""
+    """Coalesced Read/Search form ONE group → a click selects the whole unit."""
     from mote.cli.consumers.textual.widgets import FoldableRow, ToolGroupWidget
 
     app = MoteApp()
     async with app.run_test() as pilot:
         # Three consecutive search/read calls coalesce into a single group row.
         app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", headline="/a.py", tool_use_id="g1")))
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Grep", headline="foo", tool_use_id="g2")))
-        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Glob", headline="*.py", tool_use_id="g3")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Search", headline="foo", tool_use_id="g2")))
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Search", headline="*.py", tool_use_id="g3")))
         await pilot.pause()
         groups = app.query(ToolGroupWidget)
         assert len(groups) == 1

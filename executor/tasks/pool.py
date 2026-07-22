@@ -681,7 +681,7 @@ class BackgroundTaskPool:
           a dropped-size notice.
 
         Result-scoping only — compression + media handling stay in
-        ``ToolExecutor._settle`` (genuinely sync-tool-transport concerns), so
+        ``ToolSettlement`` (genuinely sync-tool-transport concerns), so
         there is no upward coupling of the pool onto the executor.
         """
         cfg = self._limit_config

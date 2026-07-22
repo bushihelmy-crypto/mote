@@ -13,7 +13,7 @@ from mote.environment.control import AgentControl
 from mote.environment.mailbox import DeliveryMode
 from mote.environment.registry import AgentMetadata
 from mote.environment.runtime import AgentRuntime
-from mote.environment.scheduling.service import MAX_CRON_TASKS, CronService
+from mote.environment.scheduling.service import MAX_CRON_TASKS, CronService, validate_new_task
 from mote.environment.scheduling.store import CronTaskStore
 from mote.environment.scheduling.task import CronTask
 
@@ -94,6 +94,23 @@ def test_delete_tasks(tmp_path):
     assert svc.list_tasks() == []
 
 
+# --- validate_new_task (shared control-free admission gate) ----------------
+
+
+def test_validate_accepts_valid_cron():
+    validate_new_task("*/5 * * * *", 0)  # no raise
+
+
+def test_validate_rejects_invalid_cron():
+    with pytest.raises(ValueError):
+        validate_new_task("not a cron", 0)
+
+
+def test_validate_rejects_at_cap():
+    with pytest.raises(ValueError):
+        validate_new_task("* * * * *", MAX_CRON_TASKS)
+
+
 # --- _on_fire / _is_idle ---------------------------------------------------
 
 
@@ -117,9 +134,22 @@ def test_on_fire_missing_target_does_not_raise(tmp_path):
     assert control.sent == []
 
 
-def test_on_fire_no_target_noop(tmp_path):
-    control = FakeControl()
+def test_on_fire_no_target_falls_back_to_service_session(tmp_path):
+    # A task with no explicit target fires into the session that owns the
+    # scheduler (CLI-authored tasks reach the running agent).
+    control = FakeControl()  # session_id == "ctrl"
     svc = make_service(tmp_path, control)
+    task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15))
+    svc._on_fire(task)
+    assert len(control.sent) == 1
+    assert control.sent[0][0] == "ctrl"
+
+
+def test_on_fire_no_target_no_service_session_noop(tmp_path):
+    # No explicit target AND no owning session id -> genuine no-op.
+    control = FakeControl()
+    svc = make_service(tmp_path, control, session_id="")
+    svc._session_id = ""  # override the "cron" default to prove the guard
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15))
     svc._on_fire(task)
     assert control.sent == []

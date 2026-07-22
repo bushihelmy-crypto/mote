@@ -16,12 +16,13 @@
   "typeCheckingMode": "basic",
   "pythonVersion": "3.11",
 
-  "//optional-deps": "Not installed on purpose; ignore their missing imports. manager.py guards the optional `rag` module behind try/except ImportError -- kept as an optional-feature placeholder, not cleaned.",
+  "//optional-deps": "Not installed on purpose; ignore their missing imports. manager.py guards the optional `rag` module behind try/except ImportError -- kept as an optional-feature placeholder, not cleaned. durable_exec/temporal is the opt-in `[temporal]` backend (imports temporalio), reached lazily only when DurableConfig.backend='temporal'; the core degrades to JSONL when absent.",
   "ignore": [
     "common/observability/langfuse_backend.py",
     "common/observability/langfuse_integration.py",
     "router/ml/v4_features.py",
-    "memory/procedural_memory/manager.py"
+    "memory/procedural_memory/manager.py",
+    "durable_exec/temporal"
   ],
 
   "reportMissingImports": "error",

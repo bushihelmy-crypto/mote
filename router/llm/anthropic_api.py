@@ -20,7 +20,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from tenacity import after_log, retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+from tenacity import after_log, retry, retry_if_exception, stop_after_attempt
 
 from mote.common.config.config.llm_config import LLMConfig, LLMType
 from mote.common.const import USE_CONFIG_TIMEOUT
@@ -28,16 +28,34 @@ from mote.common.const.llm import supports_web_search
 from mote.common.events import log_llm_stream
 from mote.common.exception import LLMEmptyResponseError, LLMTimeoutError, classify_llm_error, is_retryable
 from mote.common.logs import logger
+from mote.common.model_profile import profile_for
 from mote.common.utils.common import log_and_reraise, parse_data_url, resolve_image_media_type
 from mote.common.utils.token_counter import count_message_tokens, count_string_tokens
 from mote.router.cost import CostTracker, TokenUsage
+from mote.router.llm._retry import wait_retry_after
 from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
 from mote.router.llm.llm_response import WebSearchHit
+from mote.router.ratelimit.capture import install_rate_limit_hook
 
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
+
+# Anthropic's ``thinking`` takes a concrete ``budget_tokens``, not an effort enum,
+# so the provider owns the effort→budget mapping (its wire shape, its table). The
+# 1024 floor is the API's minimum enabled-thinking budget.
+_EFFORT_BUDGET: dict[str, int] = {
+    "minimal": 1024,
+    "low": 4096,
+    "medium": 8192,
+    "high": 16384,
+}
+# Thinking tokens and the visible answer draw from the SAME ``max_tokens`` envelope,
+# and the API requires ``max_tokens > budget_tokens``. Reserve at least this much
+# room for the visible answer ON TOP of the thinking budget, so a small configured
+# ``max_tokens`` (e.g. the 4096 default) can never 400 against a larger effort budget.
+_ANSWER_TOKEN_FLOOR = 4096
 
 
 @register_provider([LLMType.ANTHROPIC])
@@ -80,7 +98,14 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
             kwargs["api_key"] = self._current_api_key()
         if http_client := self._make_http_client():
             kwargs["http_client"] = http_client
-        return AsyncAnthropic(**kwargs)
+        client = AsyncAnthropic(**kwargs)
+        install_rate_limit_hook(
+            client,
+            get_tracker=lambda: self.rate_limit_tracker,
+            provider=self.provider_label,
+            model=self.model or "unknown",
+        )
+        return client
 
     def _make_http_client(self):
         """Build an httpx async client for proxy support, or None."""
@@ -321,10 +346,25 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
             "messages": converted,
             "timeout": self.get_timeout(timeout),
         }
+        # Extended thinking: translate the unified effort enum into Anthropic's
+        # ``thinking`` block, gated by the model's declared capability. The API
+        # forbids ``temperature`` alongside thinking, so the branch is exclusive.
+        effort = self.config.reasoning_effort
+        thinking_on = bool(effort) and profile_for(self.model).supports_thinking
+        if thinking_on:
+            budget = _EFFORT_BUDGET.get(effort or "", _EFFORT_BUDGET["low"])
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            # Thinking + answer share ``max_tokens`` and the API requires
+            # ``max_tokens > budget_tokens``. Grow the envelope to guarantee answer
+            # headroom ON TOP of the thinking budget — never shrink the budget to
+            # fit a small configured ceiling (that would silently weaken the
+            # requested effort, the same anti-pattern as clamping an effort enum).
+            kwargs["max_tokens"] = max(kwargs["max_tokens"], budget + _ANSWER_TOKEN_FLOOR)
         # Only send ``temperature`` when the user set it explicitly: it carries a
         # default (0.0) that can't be distinguished from an intentional value,
-        # and newer Claude models reject/deprecate the parameter outright.
-        if "temperature" in getattr(self.config, "model_fields_set", set()):
+        # and newer Claude models reject/deprecate the parameter outright. Never
+        # sent while thinking is enabled (the API rejects the combination).
+        elif "temperature" in self.config.model_fields_set:
             kwargs["temperature"] = self.config.temperature
         if system:
             kwargs["system"] = system
@@ -550,7 +590,7 @@ class AnthropicLLM(CredentialRotationMixin, BaseLLM):
         return final_message
 
     @retry(
-        wait=wait_random_exponential(min=1, max=60),
+        wait=wait_retry_after(),
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         after=after_log(logger, logger.level("WARNING").name),  # type: ignore[arg-type]  # loguru logger + str level vs tenacity stdlib-logging stub
         retry=retry_if_exception(is_retryable),

@@ -14,6 +14,11 @@ from mote.common.utils.yaml_model import YamlModel
 class ImageGenerationConfig(YamlModel):
     """Image generation service config."""
 
+    # Which registered MediaProvider drives this kind (see
+    # ``executor/tools/generate_media/registry.py``). The built-in
+    # OpenAI-compatible async-task backend is ``"openai"``; point this at another
+    # registered provider name to swap the vendor.
+    provider: str = "openai"
     api_key: str = ""
     base_url: str = ""
     model: str = "gpt-image-1.5"
@@ -22,6 +27,7 @@ class ImageGenerationConfig(YamlModel):
 class AudioGenerationConfig(YamlModel):
     """TTS audio generation config."""
 
+    provider: str = "openai"
     api_key: str = ""
     base_url: str = ""
     model: str = "eleven_v3"
@@ -30,6 +36,7 @@ class AudioGenerationConfig(YamlModel):
 class MusicGenerationConfig(YamlModel):
     """Music generation config."""
 
+    provider: str = "openai"
     api_key: str = ""
     base_url: str = ""
     model: str = ""
@@ -39,6 +46,7 @@ class MusicGenerationConfig(YamlModel):
 class VideoGenerationConfig(YamlModel):
     """Video generation config."""
 
+    provider: str = "openai"
     api_key: str = ""
     base_url: str = ""
     text_to_video_model: str = "wan2.6-t2v"

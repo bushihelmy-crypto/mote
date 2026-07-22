@@ -62,6 +62,30 @@ def test_tail_meta_update_title_and_last_prompt(tmp_path):
     assert info.last_prompt == "fix the bug"
 
 
+def test_head_title_read_past_line_window(tmp_path):
+    # TitleSubscriber appends its title fire-and-forget during the first turn,
+    # so it lands after the first turn's own events — well past a tight leading
+    # line window. The head byte-window must still catch it.
+    log = _make(tmp_path, "s1", first="please fix the parser")
+    for i in range(40):  # bury the title far past the old 16-line head window
+        log.append(MessageEvent(message=AIMessage(content=f"step {i}")))
+    log.append(MetaUpdateEvent(title="Fix The Parser", last_prompt="please fix the parser"))
+    info = list_sessions(base_dir=str(tmp_path))[0]
+    assert info.title == "Fix The Parser"
+    assert info.last_prompt == "please fix the parser"
+
+
+def test_tail_rename_overrides_head_title(tmp_path):
+    # A head title exists, but a later end-of-session rename in the tail wins.
+    log = _make(tmp_path, "s1", first="hi")
+    log.append(MetaUpdateEvent(title="Original", last_prompt="hi"))
+    log.append(MetaUpdateEvent(title="Renamed"))
+    info = list_sessions(base_dir=str(tmp_path))[0]
+    assert info.title == "Renamed"
+    # last_prompt has no tail override → falls back to the head value.
+    assert info.last_prompt == "hi"
+
+
 def test_cwd_filter(tmp_path):
     _make(tmp_path, "a", working_dir="/repo-a", project_root="/repo-a")
     _make(tmp_path, "b", working_dir="/repo-b", project_root="/repo-b")

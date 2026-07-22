@@ -3,9 +3,11 @@
 The generators are thin wrappers around the platform's async task API:
   POST submit → GET poll → collect URLs.
 
-They have no heavy dependencies. Each ``generate_*`` method runs synchronously
-(submit every asset, then poll them all to their final URLs) and returns a plain
-result dict, which the ``GenerateMedia`` tool fans out over concurrently.
+They have no heavy dependencies. Each provider's ``generate`` method runs
+synchronously (submit every asset, then poll them all to their final URLs) and
+returns a plain result dict, which the ``GenerateMedia`` tool fans out over
+concurrently. They register into the :mod:`registry` under the built-in
+provider name ``"openai"``.
 """
 
 from __future__ import annotations
@@ -18,11 +20,11 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from mote.common.config.loader import load_config
 from mote.common.exception import RecoveryAction, RecoveryRunner
 from mote.common.exception.media import MediaGenerationError, PermanentMediaGenerationError, classify_media_failure
 from mote.common.logs import logger
 from mote.common.text import count_noun
+from mote.executor.tools.generate_media.registry import MediaProvider, register_media_provider
 
 # ---------------------------------------------------------------------------
 # Shared async-task polling
@@ -231,7 +233,8 @@ def _failure_entry(filename: str, exc: BaseException) -> dict:
 # ---------------------------------------------------------------------------
 
 
-class AudioCreator:
+@register_media_provider("audio", "openai")
+class AudioCreator(MediaProvider):
     """Async TTS audio generation via POST /v1/audio/speech/async."""
 
     # Voice mapping: (model, gender) -> voice name
@@ -246,11 +249,10 @@ class AudioCreator:
         ("gpt-4o-mini-tts", "female"): "nova",
     }
 
-    def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = load_config().multimodal.audio_generation
-        self._api_key: str = cfg.api_key
-        self._base_url: str = cfg.base_url.rstrip("/")
-        self._model: str = cfg.model
+    def __init__(self, config: Any, output_dir: Optional[str] = None) -> None:
+        self._api_key: str = config.api_key
+        self._base_url: str = config.base_url.rstrip("/")
+        self._model: str = config.model
         self._output_dir: Optional[Path] = Path(output_dir) if output_dir else None
 
     def _headers(self) -> dict:
@@ -259,7 +261,7 @@ class AudioCreator:
     def _voice(self, model: str, gender: str) -> str:
         return self.VOICE_MAP.get((model, gender)) or ("echo" if gender == "male" else "alloy")
 
-    async def generate_audios(self, audios: list[dict], **_: Any) -> dict:
+    async def generate(self, audios: list[dict], **_: Any) -> dict:
         """Generate every TTS clip synchronously and return their final URLs.
 
         Each item: {text, filename, gender?, model?, speed?}
@@ -348,21 +350,21 @@ class AudioCreator:
 # ---------------------------------------------------------------------------
 
 
-class MusicCreator:
+@register_media_provider("music", "openai")
+class MusicCreator(MediaProvider):
     """Async music generation via POST /v1/audio/music/async."""
 
-    def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = load_config().multimodal.music_generation
-        self._api_key: str = cfg.api_key
-        self._base_url: str = cfg.base_url.rstrip("/")
-        self._model: str = cfg.model
-        self._response_format: str = cfg.response_format or "url"
+    def __init__(self, config: Any, output_dir: Optional[str] = None) -> None:
+        self._api_key: str = config.api_key
+        self._base_url: str = config.base_url.rstrip("/")
+        self._model: str = config.model
+        self._response_format: str = config.response_format or "url"
         self._output_dir: Optional[Path] = Path(output_dir) if output_dir else None
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
 
-    async def generate_music(self, tracks: list[dict], **_: Any) -> dict:
+    async def generate(self, tracks: list[dict], **_: Any) -> dict:
         """Generate every music track synchronously and return their final URLs.
 
         Each item: {prompt, filename, model?, n?, negative_prompt?, seed?, lyrics?, ...}
@@ -447,17 +449,17 @@ class MusicCreator:
 # ---------------------------------------------------------------------------
 
 
-class ImageCreator:
+@register_media_provider("image", "openai")
+class ImageCreator(MediaProvider):
     """Async image generation via POST /v1/images/generations/async.
 
     Supports text-to-image (JSON) and image-to-image editing (multipart).
     """
 
-    def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = load_config().multimodal.image_generation
-        self._api_key: str = cfg.api_key
-        self._base_url: str = cfg.base_url.rstrip("/")
-        self._model: str = cfg.model
+    def __init__(self, config: Any, output_dir: Optional[str] = None) -> None:
+        self._api_key: str = config.api_key
+        self._base_url: str = config.base_url.rstrip("/")
+        self._model: str = config.model
         self._output_dir: Optional[Path] = Path(output_dir) if output_dir else None
 
     def _headers(self, content_type: str = "application/json") -> dict:
@@ -466,7 +468,7 @@ class ImageCreator:
             h["Content-Type"] = content_type
         return h
 
-    async def generate_images(self, images: list[dict], **_: Any) -> dict:
+    async def generate(self, images: list[dict], **_: Any) -> dict:
         """Generate every image synchronously and return their final URLs.
 
         Each item: {description, filename, style?, size?, image?(ref for i2i)}
@@ -589,18 +591,18 @@ class ImageCreator:
 # ---------------------------------------------------------------------------
 
 
-class VideoCreator:
+@register_media_provider("video", "openai")
+class VideoCreator(MediaProvider):
     """Async video generation via POST /v1/videos (OpenAI-compatible endpoint).
 
     Uses the OpenAI SDK's `client.videos.create` / `client.videos.retrieve`.
     """
 
-    def __init__(self, output_dir: Optional[str] = None) -> None:
-        cfg = load_config().multimodal.video_generation
-        self._api_key: str = cfg.api_key
-        self._base_url: str = cfg.base_url.rstrip("/")
-        self._t2v_model: str = cfg.text_to_video_model
-        self._i2v_model: str = cfg.reference_guided_video_model
+    def __init__(self, config: Any, output_dir: Optional[str] = None) -> None:
+        self._api_key: str = config.api_key
+        self._base_url: str = config.base_url.rstrip("/")
+        self._t2v_model: str = config.text_to_video_model
+        self._i2v_model: str = config.reference_guided_video_model
         self._output_dir: Optional[Path] = Path(output_dir) if output_dir else None
 
     def _client(self):
@@ -608,7 +610,7 @@ class VideoCreator:
 
         return AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
 
-    async def generate_videos(self, videos: list[dict], **_: Any) -> dict:
+    async def generate(self, videos: list[dict], **_: Any) -> dict:
         """Generate every video synchronously and return their final URLs.
 
         Each item: {prompt, filename, model?, size?, seconds?, image?, first_frame?}

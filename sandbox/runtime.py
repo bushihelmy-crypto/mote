@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 import shlex
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from mote.common.logs import logger
 from mote.sandbox.backend import NullBackend, SandboxBackend, SandboxPolicy
@@ -49,6 +49,10 @@ from mote.sandbox.resources import (
 )
 from mote.sandbox.seccomp import build_hardening_filter, seccomp_available
 from mote.sandbox.violations import SandboxViolation, parse_violations
+
+if TYPE_CHECKING:
+    from mote.sandbox.network.credentials import CredentialBroker
+    from mote.sandbox.network.tls import MitmCa
 
 # The shell used to run the hardening prelude + inner command inside the sandbox.
 _INNER_SHELL = "/bin/sh"
@@ -82,6 +86,7 @@ class SandboxRuntime:
         cpu_quota: Optional[str] = None,
         policy_provider: Optional[Callable[[], SandboxPolicy]] = None,
         limits_provider: Optional[Callable[[], ResourceLimits]] = None,
+        credential_broker: Optional["CredentialBroker"] = None,
     ) -> None:
         self._requested_backend = backend
         self._fail_if_unavailable = fail_if_unavailable
@@ -91,6 +96,10 @@ class SandboxRuntime:
         self._network_enforcement = network_enforcement
         self._allowed_domains = list(allowed_domains or [])
         self._policy_provider = policy_provider
+        # Optional per-domain credential broker (injects an auth header at the
+        # proxy for configured hosts). None => the proxy runs unchanged. When it
+        # has intercept hosts, HTTPS MITM + trust-anchor env engage.
+        self._credential_broker = credential_broker
         # Group-level (process-tree) resource caps applied via the outermost
         # ``systemd-run --user --scope`` wrapper. Orthogonal to the isolation
         # backend: even a NullBackend command gets the cgroup limits.
@@ -110,6 +119,9 @@ class SandboxRuntime:
 
         self._backend: SandboxBackend = NullBackend()
         self._proxy: Optional[EgressProxy] = None
+        # Local MITM CA, built lazily at start() only when the broker has
+        # intercept hosts (Phase 2 HTTPS interception + trust-anchor bundle).
+        self._mitm_ca: Optional["MitmCa"] = None
         self._started = False
         # Path to the compiled seccomp BPF (hardening filter), built once at
         # start() when seccomp is enabled and available. None => no filter.
@@ -186,7 +198,22 @@ class SandboxRuntime:
                 )
 
         if self._network == "proxy":
-            self._proxy = EgressProxy(NetworkPolicy(self._allowed_domains))
+            # Build the MITM CA up front when the broker will intercept HTTPS,
+            # so the proxy can mint per-host leaf certs and the trust-anchor env
+            # can point tools at the combined bundle.
+            if self._credential_broker is not None and self._credential_broker.intercept_hosts:
+                from mote.sandbox.network.tls import MitmCa
+
+                try:
+                    self._mitm_ca = MitmCa()
+                except Exception as exc:  # noqa: BLE001 — degrade to HTTP-only brokering
+                    logger.warning(f"SandboxRuntime: MITM CA init failed ({exc}); HTTPS brokering disabled")
+                    self._mitm_ca = None
+            self._proxy = EgressProxy(
+                NetworkPolicy(self._allowed_domains),
+                broker=self._credential_broker,
+                mitm_ca=self._mitm_ca,
+            )
             await self._proxy.start()
             # Upgrade to a real netns sole-egress chain when requested, we have
             # a bwrap backend to host it, and the slirp/nft toolchain exists.
@@ -267,11 +294,39 @@ class SandboxRuntime:
                 # tools at the gateway URL (the nft lock backstops everything
                 # else regardless of whether the tool honours the proxy).
 
-                return inject_proxy_env(env, proxy_url_in_netns(self._proxy.port))
-            return inject_proxy_env(env, self._proxy.url)
+                out = inject_proxy_env(env, proxy_url_in_netns(self._proxy.port))
+            else:
+                out = inject_proxy_env(env, self._proxy.url)
+            return self._apply_trust_anchor_env(out)
         if self._network == "off":
             return block_all_network_env(env)
         return env  # "open" — no network env changes
+
+    def _apply_trust_anchor_env(self, env: dict[str, str]) -> dict[str, str]:
+        """Point TLS-using tools at the combined CA bundle (MITM interception).
+
+        A no-op unless a MITM CA is active (the broker has intercept hosts). When
+        it is, sandboxed tools must trust the per-host leaf we mint for
+        credentialed domains, so every common trust-anchor var is set to the
+        combined bundle (real public roots **plus** our CA) and ``SSL_CERT_DIR``
+        is cleared so a stale hashed-dir store can't shadow the bundle. The bundle
+        lives under ``~/.mote/`` — already visible read-only inside the sandbox
+        via the ``--ro-bind / /`` baseline (the CA *private* key is masked). Every
+        non-MITM'd origin still validates against the real roots in the bundle, so
+        interception stays scoped to exactly the configured domains.
+        """
+        if self._mitm_ca is None:
+            return env
+        try:
+            bundle = self._mitm_ca.combined_bundle_path()
+        except Exception as exc:  # noqa: BLE001 — never break the command path
+            logger.warning(f"SandboxRuntime: trust-anchor bundle unavailable ({exc}); skipping")
+            return env
+        out = dict(env)
+        for var in ("SSL_CERT_FILE", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"):
+            out[var] = bundle
+        out.pop("SSL_CERT_DIR", None)
+        return out
 
     def _rlimit_prelude_now(self) -> str:
         """Per-process ``ulimit`` fallback snippet for the live limits, or "".

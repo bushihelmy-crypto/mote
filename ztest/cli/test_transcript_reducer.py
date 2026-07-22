@@ -142,17 +142,17 @@ def test_usage_is_thinking_transparent():
 def test_consecutive_search_read_coalesce():
     r = TranscriptReducer()
     assert _kinds(r.feed(_started("Read", "t1", "/a.py"))) == ["open_group", "add_to_group"]
-    assert _kinds(r.feed(_started("Grep", "t2", "foo"))) == ["add_to_group"]
-    assert _kinds(r.feed(_started("Glob", "t3", "*.py"))) == ["add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t3", "*.py"))) == ["add_to_group"]
     # Completions fold into the group (no standalone rows).
     assert _kinds(r.feed(_completed("Read", "t1"))) == ["complete_in_group"]
-    assert _kinds(r.feed(_completed("Grep", "t2"))) == ["complete_in_group"]
+    assert _kinds(r.feed(_completed("Search", "t2"))) == ["complete_in_group"]
 
 
 def test_noncollapsible_tool_flushes_group_then_stands_alone():
     r = TranscriptReducer()
     r.feed(_started("Read", "t1", "/a.py"))
-    ops = r.feed(_started("Write", "t2", "/b.py"))
+    ops = r.feed(_started("Edit", "t2", "/b.py"))
     assert _kinds(ops) == ["flush_group", "tool_started"]
     assert isinstance(ops[1], ToolStarted) and ops[1].fold is FoldMode.NONE
 
@@ -164,7 +164,7 @@ def test_assistant_text_breaks_group_then_next_tool_opens_new_group():
     ops = r.feed(MessageBlockCompleted(markdown="reply", streamed=False))
     assert _kinds(ops) == ["flush_group", "close_block"]
     # The next grouped tool opens a fresh group.
-    assert _kinds(r.feed(_started("Grep", "t2", "foo"))) == ["open_group", "add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["open_group", "add_to_group"]
 
 
 def test_detail_tool_started_carries_detail_fold():
@@ -231,7 +231,7 @@ def test_compaction_resets_group_and_block_state():
     assert isinstance(ops[1], ClearForCompaction)
     assert ops[1].summary == "recap" and ops[1].message_count == 3
     # State reset: a following grouped tool opens a brand-new group.
-    assert _kinds(r.feed(_started("Grep", "t2", "foo"))) == ["open_group", "add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["open_group", "add_to_group"]
 
 
 def test_transcript_cleared_resets_state():
@@ -247,7 +247,7 @@ def test_usage_does_not_break_open_group():
     r.feed(_started("Read", "t1", "/a.py"))
     assert _kinds(r.feed(UsageUpdated(model="m"))) == ["update_usage"]
     # The group is still open — a second grouped call keeps coalescing.
-    assert _kinds(r.feed(_started("Grep", "t2", "foo"))) == ["add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["add_to_group"]
     assert isinstance(r.feed(UsageUpdated(model="m"))[0], UpdateUsage)
 
 

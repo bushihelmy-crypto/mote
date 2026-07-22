@@ -101,6 +101,24 @@ class TestConvertMessages:
         assert items[0]["content"][0]["text"] == "look here"
 
 
+class TestReasoningEffort:
+    def test_effort_becomes_reasoning_block(self):
+        llm = _make_llm(reasoning_effort="medium")  # gpt-5.4 → supports_thinking
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs["reasoning"] == {"effort": "medium"}
+
+    def test_no_effort_no_reasoning(self):
+        llm = _make_llm()
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert "reasoning" not in kwargs
+
+    def test_incapable_model_ignores_effort(self):
+        llm = _make_llm(reasoning_effort="high")
+        llm.model = "gpt-4.1"  # vision+web but no thinking
+        kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
+        assert "reasoning" not in kwargs
+
+
 class TestToolSearchPair:
     """A SearchTools discovery result → tool_search_call + tool_search_output pair."""
 

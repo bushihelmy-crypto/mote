@@ -17,13 +17,27 @@
 - **事件总线脊柱**：屏幕（renderer）与磁盘（recorder）由同一事件流喂养，hook 可在生命周期切点拦截。
 - **零侵入可观测性与日志**：loguru + trace-id + 装饰器/mixin 自动埋点；Langfuse 追踪默认关、懒加载。
 
+## 安装
+
+```bash
+pip install mote                   # 从 PyPI 安装
+pip install -e ".[dev]"            # 从源码检出安装，附带开发工具
+```
+
+首次使用浏览器工具需要一个 Chromium 运行时：
+
+```bash
+python -m playwright install chromium
+```
+
 ## 快速开始
 
 启动交互式 REPL：
 
 ```bash
-python -m mote.cli                 # 默认 Assistant + 默认工具集
-python -m mote.cli --model <name> --tools Read,Write,Edit,Bash,Glob,Grep --cwd .
+mote                               # 控制台入口（默认 Assistant + 工具集）
+python -m mote.cli                 # 等价的模块形式
+python -m mote.cli --model <name> --tools Read,Edit,Search,Bash --cwd .
 ```
 
 - Ctrl+C：turn 进行中 → 中断本轮；prompt 处双击 → 退出。Ctrl+D：退出。
@@ -77,5 +91,5 @@ python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tas
 
 ## 进一步阅读
 
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) —— 逐包的详尽架构文档 + 全景图 + 一次 turn 的全链路数据流。
+- [`zdocs/ARCHITECTURE.md`](./zdocs/ARCHITECTURE.md) —— 逐包的详尽架构文档 + 全景图 + 一次 turn 的全链路数据流。
 - [`AGENTS.md`](./AGENTS.md) —— 在本代码库写代码的约定（分层、工具开发、协议、测试、改动纪律）。

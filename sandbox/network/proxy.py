@@ -38,11 +38,16 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import Awaitable, Callable, Optional
+import ssl
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 from urllib.parse import urlsplit
 
 from mote.common.logs import logger
+from mote.sandbox.network.credentials import CredentialBroker
 from mote.sandbox.network.policy import NetworkPolicy, is_blocked_host
+
+if TYPE_CHECKING:
+    from mote.sandbox.network.tls import MitmCa
 
 _CRLF = b"\r\n"
 _BUF = 65536
@@ -72,6 +77,46 @@ async def _default_resolver(host: str, port: int) -> list[str]:
     return out
 
 
+def _inject_header(header_block: bytes, name: str, value: str) -> bytes:
+    """Return *header_block* with ``name: value`` set (replacing any same-name).
+
+    ``header_block`` is the raw request header region as read by
+    :meth:`EgressProxy._read_headers` — every header line CRLF-terminated,
+    followed by the terminating blank line. Existing headers whose name matches
+    *name* case-insensitively are dropped, and the new header is inserted just
+    before the terminating blank line. Robust to a block that is only the blank
+    line (no headers yet) or lacks a trailing blank line.
+    """
+    name_lc = name.lower().encode("latin1")
+    new_line = f"{name}: {value}".encode("latin1") + _CRLF
+
+    kept: list[bytes] = []
+    trailing_blank = b""
+    # Split on CRLF but keep it simple: iterate over lines including terminator.
+    lines = header_block.split(_CRLF)
+    # ``split`` on the trailing blank-line CRLF leaves a final empty element;
+    # rebuild line-by-line, tracking the header lines vs the terminator.
+    for idx, raw in enumerate(lines):
+        if raw == b"":
+            # Blank line — the header/body separator (last real element before
+            # the split artefact). Record it once; ignore the split artefact.
+            if idx == len(lines) - 1:
+                continue
+            trailing_blank = _CRLF
+            continue
+        field_name = raw.split(b":", 1)[0].strip().lower()
+        if field_name == name_lc:
+            continue  # drop the client-supplied same-name header
+        kept.append(raw + _CRLF)
+
+    out = bytearray()
+    for line in kept:
+        out += line
+    out += new_line
+    out += trailing_blank or _CRLF
+    return bytes(out)
+
+
 class EgressProxy:
     """An asyncio forward proxy enforcing a :class:`NetworkPolicy`."""
 
@@ -82,9 +127,19 @@ class EgressProxy:
         host: str = "127.0.0.1",
         validate_resolved_ips: bool = True,
         resolver: Optional[Resolver] = None,
+        broker: Optional[CredentialBroker] = None,
+        mitm_ca: Optional["MitmCa"] = None,
     ) -> None:
         self._policy = policy
         self._host = host
+        # Optional credential broker: when set, the proxy injects a per-host auth
+        # header for matching domains (HTTP inline here; HTTPS via MITM in
+        # ``_handle_connect``). ``None`` => byte-for-byte the pre-brokering path.
+        self._broker = broker
+        # Optional MITM CA: required to intercept HTTPS for credentialed hosts
+        # (mint a per-host leaf, terminate TLS, inject the header, re-originate).
+        # ``None`` => every CONNECT is raw-spliced (no interception possible).
+        self._mitm_ca = mitm_ca
         # When True (default), resolve every allowed host and reject if ANY
         # resolved address is internal (SSRF via allowlisted name), then pin the
         # connection to a validated IP (no second resolution → no rebinding).
@@ -190,6 +245,13 @@ class EgressProxy:
             await self._reject(writer, 403, "Forbidden by sandbox network policy")
             return
 
+        # Credentialed host + a CA to sign leaves → terminate TLS and inject the
+        # broker header (interception is scoped to exactly configured domains).
+        # Every other CONNECT keeps the untouched end-to-end raw-splice path.
+        if self._broker is not None and self._mitm_ca is not None and self._broker.should_intercept(host):
+            await self._handle_mitm(host, port, dial_ip, reader, writer)
+            return
+
         try:
             up_reader, up_writer = await asyncio.open_connection(dial_ip, port)
         except Exception:  # noqa: BLE001
@@ -198,6 +260,76 @@ class EgressProxy:
 
         writer.write(b"HTTP/1.1 200 Connection Established" + _CRLF + _CRLF)
         await writer.drain()
+
+        await self._splice(reader, writer, up_reader, up_writer)
+
+    async def _handle_mitm(
+        self,
+        host: str,
+        port: int,
+        dial_ip: str,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """MITM a credentialed HTTPS tunnel: terminate, inject header, re-originate.
+
+        Steps: (1) accept the tunnel so the client begins its TLS handshake; (2)
+        upgrade the *client* side to TLS with a per-host leaf we sign (client
+        trusts it via the combined bundle env); (3) read the now-plaintext request
+        and splice in the broker header; (4) open a **verified** TLS connection to
+        the pinned origin IP (SNI = host, validated against the real public roots);
+        (5) forward the request and relay the response.
+
+        Fail-closed: any setup failure closes the connection rather than falling
+        back to a path that could leak the request or bypass injection. TLS stays
+        end-to-end *authenticated* to the origin (we verify its real cert); we only
+        interpose so the secret is added here instead of inside the sandbox.
+
+        Scope (matches the plaintext path): the header is injected on the first
+        request of the tunnel; subsequent keep-alive requests are relayed verbatim.
+        """
+        # 1. Accept the tunnel; the client will now start TLS against us.
+        writer.write(b"HTTP/1.1 200 Connection Established" + _CRLF + _CRLF)
+        await writer.drain()
+
+        # 2. Upgrade the client side to TLS with a leaf minted for this host.
+        assert self._mitm_ca is not None and self._broker is not None
+        try:
+            server_ctx = self._mitm_ca.leaf_context(host)
+            await writer.start_tls(server_ctx)
+        except Exception as exc:  # noqa: BLE001 — handshake failed → close (fail-closed)
+            logger.debug(f"EgressProxy MITM client handshake failed for {host!r}: {exc}")
+            return
+
+        # 3. Read the plaintext request line + headers and inject the auth header.
+        try:
+            request_line = await reader.readline()
+            if not request_line:
+                return
+            header_block = await self._read_headers(reader)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"EgressProxy MITM request read failed for {host!r}: {exc}")
+            return
+        injected = self._broker.header_for(host)
+        if injected is not None:
+            header_block = _inject_header(header_block, injected[0], injected[1])
+
+        # 4. Open a verified TLS connection to the pinned origin IP (SNI = host).
+        try:
+            client_ctx = ssl.create_default_context()
+            up_reader, up_writer = await asyncio.open_connection(dial_ip, port, ssl=client_ctx, server_hostname=host)
+        except Exception as exc:  # noqa: BLE001 — origin TLS failed → close (fail-closed)
+            logger.debug(f"EgressProxy MITM origin connect failed for {host!r}: {exc}")
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        # 5. Forward the (injected) request and relay the rest of the exchange.
+        up_writer.write(request_line)
+        up_writer.write(header_block)
+        await up_writer.drain()
 
         await self._splice(reader, writer, up_reader, up_writer)
 
@@ -243,8 +375,15 @@ class EgressProxy:
             path += "?" + split.query
         origin_line = f"{method} {path} HTTP/1.1".encode("latin1") + _CRLF
         up_writer.write(origin_line)
-        # Forward the remaining request headers + body verbatim.
-        up_writer.write(await self._read_headers(reader))
+        # Forward the remaining request headers + body. When a credential broker
+        # yields a header for this host, splice it into the header block
+        # (replacing any client-supplied same-name header) so the sandboxed tool
+        # never had to hold the secret. Verbatim when there is no broker/match.
+        header_block = await self._read_headers(reader)
+        injected = self._broker.header_for(host) if self._broker is not None else None
+        if injected is not None:
+            header_block = _inject_header(header_block, injected[0], injected[1])
+        up_writer.write(header_block)
         await up_writer.drain()
 
         await self._splice(reader, writer, up_reader, up_writer)

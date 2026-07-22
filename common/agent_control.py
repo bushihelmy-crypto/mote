@@ -26,7 +26,7 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Awaitable, Callable, Iterator, Optional
 
 from mote.common.exception import AgentLimitReached
 from mote.common.logs import logger
@@ -157,7 +157,13 @@ class SpawnSpec:
 # ----------------------------------------------------------------------
 # Unified spawn → run → release helper
 # ----------------------------------------------------------------------
-async def spawn_and_run(spec: SpawnSpec, message: Any, *, ctx: Any = None) -> Optional[str]:
+async def spawn_and_run(
+    spec: SpawnSpec,
+    message: Any,
+    *,
+    ctx: Any = None,
+    on_spawn: Optional[Callable[[Any], Awaitable[None]]] = None,
+) -> Optional[str]:
     """Spawn a child through the resolved plane, run it to completion, release it.
 
     The one helper every ephemeral spawn site funnels through. Resolves the
@@ -168,6 +174,11 @@ async def spawn_and_run(spec: SpawnSpec, message: Any, *, ctx: Any = None) -> Op
     ``message`` may be a plain message/string or a builder
     ``Callable[[role], message]`` invoked once the child role exists (so a
     caller can lower its brief through the child's own command channel).
+
+    ``on_spawn`` is an optional async hook run on the built child role *after* it
+    exists but *before* its first turn — the window a caller uses to seed
+    per-agent routing state (spawn-time tier floor). It runs inside the handle's
+    context manager so any teardown still fires on every exit path.
 
     Every child is born through the control plane — there is no plane-less
     fallback. Production always binds a plane (REPL root / scheduler turn /
@@ -191,10 +202,14 @@ async def spawn_and_run(spec: SpawnSpec, message: Any, *, ctx: Any = None) -> Op
         logger.warning(f"spawn_and_run: agent limit reached for '{spec.nickname or spec.agent_role or 'agent'}': {exc}")
         return None
     async with handle:
+        role = handle.runtime.role
         # Only reach into the spawned role when ``message`` is a builder — a
-        # plain message/string never needs the role, so we don't touch the
-        # handle's runtime in that (common) case.
-        msg = message(handle.runtime.role) if callable(message) else message
+        # plain message/string never needs the role.
+        msg = message(role) if callable(message) else message
+        # Seed window: run any spawn-time hook on the built role before its
+        # first turn (e.g. seed the routing tier floor from the first prompt).
+        if on_spawn is not None:
+            await on_spawn(role)
         return await handle.run_to_completion(msg)
 
 

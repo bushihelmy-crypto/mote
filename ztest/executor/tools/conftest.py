@@ -64,7 +64,7 @@ class CapRole:
         self.default_model = default_model
         # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
         self.read_state: dict[str, int] = {}
-        # Files glimpsed via a Grep/Glob match (P2) — recorded, un-read; feeds
+        # Files glimpsed via a Search match (P2) — recorded, un-read; feeds
         # the code map's navigation view. Insertion order preserved.
         self.glimpsed: list[str] = []
         # ContextVisibility stand-in: what is_resource_visible(path) returns.
@@ -77,6 +77,10 @@ class CapRole:
         self.tool_sessions: dict[str, Any] = {}
         # Before-image snapshot calls: (full_path, tool) recorded for assertions.
         self.snapshots: list[tuple[str, str]] = []
+        # External-change attribution: known baselines (path -> content) recorded
+        # by record_file_baseline; paths passed to attribute_external_change.
+        self.baselines: dict[str, str] = {}
+        self.external_attributions: list[str] = []
         # Persistent-terminal state captures: (cwd, env, unset, tool) recorded.
         self.terminal_states: list[tuple] = []
         # Persistent-kernel state captures: (cwd, env, unset, tool) recorded.
@@ -100,6 +104,23 @@ class CapRole:
         self.browser_locale: str = "auto"
         # Optional proxy URL for the browser (WebBrowser get_browser_proxy).
         self.browser_proxy: str = ""
+        # Durable-login profile name (WebBrowser get_browser_profile). Empty =>
+        # ephemeral (no persistence). ``browser_profiles`` is the in-memory
+        # encrypted-store stand-in keyed by profile name -> storage_state dict.
+        self.browser_profile: str = ""
+        self.browser_profiles: dict[str, Optional[dict]] = {}
+        # Client TLS certs (WebBrowser get_browser_client_certs) — Playwright
+        # ``client_certificates`` shape; a passphrase may be a secret placeholder.
+        self.browser_client_certs: list[dict] = []
+        # CDP endpoint (WebBrowser get_browser_cdp_endpoint). Empty => launch.
+        self.browser_cdp_endpoint: str = ""
+        # DeviceUse backend config (get_device_config). Defaults to a fresh
+        # DeviceConfig ("auto"); a test can reassign to force a backend.
+        from mote.common.schema import DeviceConfig
+
+        self.device_config: Any = DeviceConfig()
+        # Named-secret vault stand-in for autonomous login-fill (get_secret).
+        self.secrets: dict[str, str] = {}
         # Scriptable human/session behaviour.
         self.ask_reply = ask_reply
         self.ask_questions: list[str] = []  # records every prompt sent to ask_user
@@ -112,6 +133,9 @@ class CapRole:
         self.end_calls = 0
         # slept_seconds returned by wait_interruptible; defaults to 0.0.
         self._wait_result = wait_result
+        # Records each `duration` arg wait_interruptible was called with, so a
+        # test can assert the durable-timer Sleep threaded its bound through.
+        self.wait_durations: list[Optional[float]] = []
         # Optional OS-level sandbox runtime for the command-execution tools.
         # None => those tools run un-sandboxed (the historical test behavior).
         self._sandbox_runtime = sandbox_runtime
@@ -167,7 +191,7 @@ class CapRole:
     def get_file_read_mtime(self, path: str) -> Optional[int]:
         return self.read_state.get(path)
 
-    # --- glimpse state (Grep/Glob record matched files for the code map) ---
+    # --- glimpse state (Search records matched files for the code map) ---
     def record_file_glimpsed(self, path: str) -> None:
         if path not in self.glimpsed:
             self.glimpsed.append(path)
@@ -182,6 +206,19 @@ class CapRole:
     # --- file-history snapshot (Write/Edit capture before-images) ---
     def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
         self.snapshots.append((full_path, tool))
+
+    # --- external-change attribution (Write/Edit ledger out-of-band edits) ---
+    def record_file_baseline(self, full_path: str) -> None:
+        # Store the just-written content as mote's known baseline (path -> content).
+        try:
+            self.baselines[full_path] = open(full_path, encoding="utf-8").read()
+        except OSError:
+            pass
+
+    def attribute_external_change(self, full_path: str) -> None:
+        # Record the guard's attribution call so a test can assert it fired
+        # before the write was refused (attribution-then-guard).
+        self.external_attributions.append(full_path)
 
     # --- persistent-terminal state (Terminal captures cwd+env for resume) ---
     def record_terminal_state(self, cwd, env, unset, *, tool: str = "") -> None:
@@ -222,6 +259,26 @@ class CapRole:
     def get_browser_proxy(self) -> str:
         return self.browser_proxy
 
+    # --- durable-login profile (WebBrowser seeds from / persists to it) ---
+    def get_browser_profile(self) -> str:
+        return self.browser_profile
+
+    def load_browser_profile(self, name: str) -> Optional[dict]:
+        return self.browser_profiles.get(name)
+
+    def save_browser_profile(self, name: str, storage_state: Optional[dict]) -> None:
+        self.browser_profiles[name] = storage_state
+
+    def get_browser_client_certs(self) -> list[dict]:
+        return [dict(c) for c in self.browser_client_certs]
+
+    def get_browser_cdp_endpoint(self) -> str:
+        return self.browser_cdp_endpoint
+
+    # --- named-secret resolution (autonomous login-fill) ---
+    def get_secret(self, key: str) -> Optional[str]:
+        return self.secrets.get(key) or None
+
     # --- stateful-tool sessions (Terminal/Python live state on RoleState) ---
     def get_tool_session(self, key: str) -> Any:
         return self.tool_sessions.get(key)
@@ -261,7 +318,8 @@ class CapRole:
         return self.end_output
 
     # --- sleep ---
-    async def wait_interruptible(self) -> float:
+    async def wait_interruptible(self, duration: Optional[float] = None) -> float:
+        self.wait_durations.append(duration)
         if self._wait_result is not None:
             return self._wait_result
         return 0.0
@@ -269,6 +327,10 @@ class CapRole:
     # --- OS-level sandbox runtime (Bash/terminal/python) ---
     def get_sandbox_runtime(self) -> Any:
         return self._sandbox_runtime
+
+    # --- DeviceUse backend config ---
+    def get_device_config(self) -> Any:
+        return self.device_config
 
     # --- run_graph orchestration (fake executor chokepoint) ---
     async def dispatch_tool(self, name: str, kwargs: Optional[dict] = None) -> Any:
@@ -338,6 +400,8 @@ class CapRole:
             "record_file_glimpsed": self.record_file_glimpsed,
             "is_resource_visible": self.is_resource_visible,
             "record_file_snapshot": self.record_file_snapshot,
+            "record_file_baseline": self.record_file_baseline,
+            "attribute_external_change": self.attribute_external_change,
             "record_terminal_state": self.record_terminal_state,
             "take_pending_terminal_restore": self.take_pending_terminal_restore,
             "record_kernel_state": self.record_kernel_state,
@@ -348,6 +412,12 @@ class CapRole:
             "get_browser_stealth": self.get_browser_stealth,
             "get_browser_locale": self.get_browser_locale,
             "get_browser_proxy": self.get_browser_proxy,
+            "get_browser_profile": self.get_browser_profile,
+            "load_browser_profile": self.load_browser_profile,
+            "save_browser_profile": self.save_browser_profile,
+            "get_browser_client_certs": self.get_browser_client_certs,
+            "get_browser_cdp_endpoint": self.get_browser_cdp_endpoint,
+            "get_secret": self.get_secret,
             "get_tool_session": self.get_tool_session,
             "set_tool_session": self.set_tool_session,
             "ask_user": self.ask_user,
@@ -356,6 +426,7 @@ class CapRole:
             "end_session": self.end_session,
             "wait_interruptible": self.wait_interruptible,
             "get_sandbox_runtime": self.get_sandbox_runtime,
+            "get_device_config": self.get_device_config,
             "dispatch_tool": self.dispatch_tool,
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,

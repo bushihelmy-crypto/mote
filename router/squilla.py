@@ -260,6 +260,23 @@ class _HistoryEntry:
     ts: float
 
 
+@dataclass
+class _PredictResult:
+    """The output of the shared prediction segment (pre-finalization).
+
+    ``route_class`` is the post-flag route (the value ``seed_session`` records as
+    the seed floor); the rest are the artifacts ``select`` carries into
+    finalization + the decision envelope.
+    """
+
+    route_class: str  # post-caller-flag route class ("floored")
+    decision: object  # FinalDecision (thinking_mode / prompt_policy / margin / ...)
+    probs: dict
+    merged_flags: object  # MLRoutingFlags
+    reasons: list
+    ml: bool  # True when the ML engine produced the decision (else heuristic)
+
+
 class RoutingHistoryStore:
     """Per-session routing history, bounded and time-windowed (opensquilla port)."""
 
@@ -292,6 +309,51 @@ class RoutingHistoryStore:
             self._entries.pop(session_key, None)
 
 
+@dataclass
+class _SeedEntry:
+    route_class: str
+    ts: float
+
+
+class SeedFloorStore:
+    """Per-session spawn-time seed floors, time-windowed (mirrors the hold TTL).
+
+    A *seed floor* is the initial tier decided from a child agent's first user
+    prompt at spawn. It is a soft, raise-only floor consumed by ``_finalize``:
+    step routing may escalate above it but never drop below it while it is live.
+
+    Kept as an **instance** attribute of the SquillaStrategy (alongside
+    ``history``), NOT a process global — the seed is written and read by the
+    child agent's own strategy instance, so a global store would only add a
+    cross-agent collision surface for no benefit. The TTL bounds the per-session
+    dict so it cannot grow without bound; ``get_valid`` deletes on expiry.
+    """
+
+    def __init__(self, ttl_seconds: float = 600.0) -> None:
+        self._seeds: dict[str, _SeedEntry] = {}
+        self._ttl = ttl_seconds
+
+    def set(self, session_key: str, route_class: str, *, now: Optional[float] = None) -> None:
+        now = time.monotonic() if now is None else now
+        self._seeds[session_key] = _SeedEntry(route_class=route_class, ts=now)
+
+    def get_valid(self, session_key: str, *, now: Optional[float] = None) -> Optional[str]:
+        now = time.monotonic() if now is None else now
+        entry = self._seeds.get(session_key)
+        if entry is None:
+            return None
+        if now - entry.ts >= self._ttl:
+            self._seeds.pop(session_key, None)
+            return None
+        return entry.route_class
+
+    def clear(self, session_key: Optional[str] = None) -> None:
+        if session_key is None:
+            self._seeds.clear()
+        else:
+            self._seeds.pop(session_key, None)
+
+
 def detect_complaint(message: str, *, max_chars: int = 160) -> list[str]:
     """Return matched complaint terms (empty when message is long or clean)."""
     text = (message or "").strip()
@@ -317,6 +379,11 @@ class SquillaStrategy(RoutingStrategy):
     ):
         self.config = config or SquillaConfig()
         self.history = history or RoutingHistoryStore(self.config.max_routing_history)
+        # Spawn-time seed floors, keyed per session — an instance attribute
+        # (not a process global): the seed is written + read by this same
+        # strategy instance, so global sharing would only add collisions. TTL
+        # reuses the hold window magnitude to bound the per-session dict.
+        self.seed_floors = SeedFloorStore(ttl_seconds=self.config.kv_cache_anti_downgrade_window_seconds)
         self.control_holds = control_holds or RouterControlHoldStore()
         self.engine = engine or SquillaMLEngine(model_dir=model_dir)
         # the runtime config (thresholds / tier mapping / flag rules) backing the
@@ -442,51 +509,32 @@ class SquillaStrategy(RoutingStrategy):
             reasons.append(f"large-context floor ({tokens} tok) → {floor}")
             final = floor
 
+        # 6. seed floor — the spawn-time decision's initial tier (raise-only).
+        # A soft floor: it only ever lifts ``final`` up to the seeded tier, never
+        # caps it — the ML/complaint/large-context layers above may still escalate
+        # past the seed. Placed last (after the confidence gate) so the gate can
+        # never pull ``final`` below the seed; like the other floors it is a max,
+        # so its position among them is immaterial.
+        seed = self.seed_floors.get_valid(request.session_key)
+        if seed and route_index(seed) > route_index(final):
+            reasons.append(f"seed floor → {seed}")
+            final = seed
+
         return final, reasons
 
-    # --------------------------------------------------------- entry point
-    async def select(
-        self,
-        candidates: dict[str, ModelCard],
-        request: RoutingRequest,
-        *,
-        default: str,
-    ) -> RoutingDecision:
-        cards = list(candidates.values())
-        if not cards:
-            return RoutingDecision(name=default, confidence=0.5, source="squilla", fallback=True)
+    # ------------------------------------------------- prediction segment
+    def _predict_route_class(self, request: RoutingRequest) -> _PredictResult:
+        """Run the pre-finalization prediction segment shared by both entry points.
 
+        Builds the inference request, runs the ML engine (or the deterministic
+        heuristic fallback), then applies the caller-supplied flag floor. Stops
+        at the post-flag route class (``floored``) — finalization
+        (confidence gate / complaint / anti-downgrade / floors incl. seed) is the
+        caller's job. ``select`` and ``seed_session`` share this so there is a
+        single prediction path, no parallel logic.
+        """
         prompt = request.prompt_text()
         context_signals = signals_from_messages(request.messages)
-
-        # 0. router-control hold takes precedence (operator pinned a model).
-        hold = self.control_holds.get_valid(request.session_key, decrement=True)
-        if hold is not None and hold.name in candidates:
-            return RoutingDecision(
-                name=hold.name,
-                confidence=0.99,
-                source="squilla",
-                reasons=[f"router-control hold → {hold.name}"],
-                extra={"hold": True, "hold_target": hold.target_id},
-            )
-
-        # vision / pdf requirement is mandatory — restrict to capable cards.
-        pool = cards
-        vision_required = request.requires_vision or request.requires_pdf
-        if vision_required:
-            vision_cards = [c for c in cards if c.supports_vision]
-            if not vision_cards:
-                return RoutingDecision(
-                    name=default,
-                    confidence=0.5,
-                    source="squilla",
-                    fallback=True,
-                    reasons=["requires vision/pdf but no capable card"],
-                )
-            pool = vision_cards
-
-        # 1. ML inference (real LightGBM ⊕ MLP) OR heuristic fallback. Both
-        #    converge on opensquilla's authoritative post-processing pipeline.
         infer_req = self._build_inference_request(request, context_signals)
         reasons: list[str] = []
         result = self.engine.predict(infer_req)
@@ -514,14 +562,93 @@ class SquillaStrategy(RoutingStrategy):
                     f"{'; '.join(tier_decision.reasons)}"
                 )
 
-        # 2. caller-supplied flags floor (request.flags can only escalate).
+        # caller-supplied flags floor (request.flags can only escalate).
         base_route_class = decision.route_class
         merged_flags = _merge_caller_flags(decision.flags, request.flags)
         floored = _apply_flag_overrides(base_route_class, merged_flags, self.runtime_config)
         if floored != base_route_class:
             reasons.append(f"request flags → {floored}")
 
-        # 3. finalization (confidence gate / complaint / anti-downgrade / floor).
+        return _PredictResult(
+            route_class=floored,
+            decision=decision,
+            probs=probs,
+            merged_flags=merged_flags,
+            reasons=reasons,
+            ml=result is not None,
+        )
+
+    # ------------------------------------------------------- spawn seeding
+    async def seed_session(self, session_key: str, prompt: str) -> str:
+        """Seed a spawn-time initial tier from a child agent's first user prompt.
+
+        Runs only the shared prediction segment (:meth:`_predict_route_class`) on
+        a one-shot request and records the resulting route class as the session's
+        seed floor. It deliberately does NOT run ``_finalize`` and does NOT append
+        to routing history: with no prior turns the complaint / anti-downgrade
+        layers have nothing meaningful to act on, and appending here would
+        pollute the real first turn's anti-downgrade baseline. The seed is a pure
+        raise-only floor that ``_finalize`` consumes on subsequent step routing.
+
+        Returns the seeded route class (e.g. ``"R2"``).
+        """
+        request = RoutingRequest(text=prompt, session_key=session_key)
+        predicted = self._predict_route_class(request)
+        self.seed_floors.set(session_key, predicted.route_class)
+        return predicted.route_class
+
+    # --------------------------------------------------------- entry point
+    async def select(
+        self,
+        candidates: dict[str, ModelCard],
+        request: RoutingRequest,
+        *,
+        default: str,
+    ) -> RoutingDecision:
+        cards = list(candidates.values())
+        if not cards:
+            return RoutingDecision(name=default, confidence=0.5, source="squilla", fallback=True)
+
+        prompt = request.prompt_text()
+
+        # 0. router-control hold takes precedence (operator pinned a model).
+        hold = self.control_holds.get_valid(request.session_key, decrement=True)
+        if hold is not None and hold.name in candidates:
+            return RoutingDecision(
+                name=hold.name,
+                confidence=0.99,
+                source="squilla",
+                reasons=[f"router-control hold → {hold.name}"],
+                extra={"hold": True, "hold_target": hold.target_id},
+            )
+
+        # vision / pdf requirement is mandatory — restrict to capable cards.
+        pool = cards
+        vision_required = request.requires_vision or request.requires_pdf
+        if vision_required:
+            vision_cards = [c for c in cards if c.supports_vision]
+            if not vision_cards:
+                return RoutingDecision(
+                    name=default,
+                    confidence=0.5,
+                    source="squilla",
+                    fallback=True,
+                    reasons=["requires vision/pdf but no capable card"],
+                )
+            pool = vision_cards
+
+        # 1-2. shared prediction segment: ML (or heuristic fallback) → caller-flag
+        #      floor. Same path ``seed_session`` runs, so no parallel logic.
+        predicted = self._predict_route_class(request)
+        decision = predicted.decision
+        probs = predicted.probs
+        merged_flags = predicted.merged_flags
+        reasons = predicted.reasons
+        result_ml = predicted.ml
+        base_route_class = decision.route_class
+        floored = predicted.route_class
+
+        # 3. finalization (confidence gate / complaint / anti-downgrade / floors).
         confidence = max(probs.values()) if probs else 0.5
         final_class, reasons = self._finalize(floored, confidence, reasons, request=request, cards=pool, prompt=prompt)
 
@@ -551,7 +678,7 @@ class SquillaStrategy(RoutingStrategy):
                 "prompt_hint": _get_prompt_hint(prompt_policy, self.runtime_config, prompt),
                 "flags": vars(merged_flags),
                 "probs": probs,
-                "ml": result is not None,
+                "ml": result_ml,
                 "aux_downgrade_applied": decision.aux_downgrade_applied,
                 "sticky_applied": decision.sticky_applied,
             },

@@ -36,6 +36,10 @@ from mote.parser.xml_channel import XmlCommandChannel
 # not ${...} template holes, remain to inspect.
 _SHARED_PROMPTS = {
     "SYSTEM_PROMPT": R.SYSTEM_PROMPT,
+    # The read-before-edit mechanic (⟦cap:read⟧ ⟦ctl:separate_steps⟧) lives in the
+    # role charter now (extracted out of SYSTEM_PROMPT), so ROLE_INFO is shared
+    # prose too — it must pass the same protocol-isolation matrix.
+    "ROLE_INFO": R.ROLE_INFO,
     "AGENT_TASK_PROMPT": Template(R.AGENT_TASK_PROMPT).safe_substitute(parent_name="P", context="C", task="T"),
 }
 
@@ -86,8 +90,9 @@ class TestNativeNeverLeaksXmlMechanics:
         # block, proving the symbol was live (not silently dropped by both sides).
         lowered = _CHANNELS["xml"].lower(_SHARED_PROMPTS["AGENT_TASK_PROMPT"])
         assert "command block" in lowered
-        lowered_sys = _CHANNELS["xml"].lower(_SHARED_PROMPTS["SYSTEM_PROMPT"])
-        assert "Editor.read" in lowered_sys
+        # The read-before-edit mechanic now lives in the role charter.
+        lowered_role = _CHANNELS["xml"].lower(_SHARED_PROMPTS["ROLE_INFO"])
+        assert "Editor.read" in lowered_role
 
 
 class TestSharedProseHasNoRawLiterals:

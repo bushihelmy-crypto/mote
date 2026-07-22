@@ -111,6 +111,28 @@ class BwrapBackend(SandboxBackend):
                 continue
             argv += ["--ro-bind", real, real]
 
+        # Mask secret material: bind ``/dev/null`` over each path so it reads as
+        # empty inside, defeating the read-only root baseline. Applied LAST among
+        # the binds so a mask wins even over a writable root that contains the
+        # file (bwrap applies binds in order; last match wins). Only existing
+        # paths (nothing to hide otherwise; a missing bind source errors bwrap).
+        for path in policy.masked_paths:
+            real = os.path.realpath(path)
+            if not os.path.exists(real):
+                continue
+            argv += ["--ro-bind", "/dev/null", real]
+
+        # Mask secret DIRECTORIES: overlay an empty ``tmpfs`` so the directory
+        # reads as empty inside (the directory sibling of the /dev/null file
+        # masks above). Applied after them so a directory mask likewise wins over
+        # the read-only root baseline. Only existing dirs (a missing tmpfs target
+        # would error bwrap). Used to hide the encrypted browser-profile store.
+        for path in policy.masked_dirs:
+            real = os.path.realpath(path)
+            if not os.path.isdir(real):
+                continue
+            argv += ["--tmpfs", real]
+
         if policy.unshare_net:
             argv += ["--unshare-net"]
 

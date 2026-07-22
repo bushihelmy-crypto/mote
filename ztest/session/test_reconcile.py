@@ -30,10 +30,16 @@ from mote.session.reconcile import reconcile_tool_calls
 
 @dataclass
 class _Rec:
-    """Duck-typed EffectRecord slice the reconciler reads."""
+    """Duck-typed EffectRecord slice the reconciler reads.
+
+    ``effect`` defaults to EXTERNAL — the only class the ledger historically
+    recorded — so a ``started`` record with no explicit effect is still flagged
+    unknown-after-crash (the fail-closed bias the reconciler preserves).
+    """
 
     status: str
     result: Optional[str] = None
+    effect: str = "external"
 
 
 class _FakeLedger:
@@ -102,6 +108,45 @@ def test_started_external_flags_unknown_after_crash():
     assert out.flagged == 1 and out.healed == 0 and out.replayable == 0
     # Dangling started record -> kept so a second resume re-flags it, not reaped.
     assert out.resolved_ids == set()
+
+
+def test_started_local_is_safe_replay():
+    # Once ALL tools are ledgered, a dangling LOCAL call carries a ``started``
+    # record — but LOCAL effects are replay-safe (before-image protected), so it
+    # must be a safe replay, NOT flagged unknown-after-crash.
+    ledger = _FakeLedger({"t1": _Rec(status="started", effect="local")})
+    out = reconcile_tool_calls([_assistant("t1", name="Write")], ledger)
+
+    note = out.messages[1]
+    assert "<not-executed>" in note.content
+    assert "<unknown-after-crash>" not in note.content
+    assert out.replayable == 1 and out.flagged == 0
+
+
+def test_started_pure_is_safe_replay():
+    # A dangling PURE read step is likewise replay-safe.
+    ledger = _FakeLedger({"t1": _Rec(status="started", effect="pure")})
+    out = reconcile_tool_calls([_assistant("t1", name="Read")], ledger)
+    assert "<not-executed>" in out.messages[1].content
+    assert out.replayable == 1
+
+
+def test_started_unknown_effect_fails_closed_to_unknown():
+    # A record whose effect is neither PURE nor LOCAL (an unrecognised/garbled
+    # value) is treated as EXTERNAL — never blindly replayed.
+    ledger = _FakeLedger({"t1": _Rec(status="started", effect="weird")})
+    out = reconcile_tool_calls([_assistant("t1", name="Mystery")], ledger)
+    assert "<unknown-after-crash>" in out.messages[1].content
+    assert out.flagged == 1
+
+
+def test_completed_local_heals_verbatim():
+    # A completed LOCAL step heals from its recorded result (no re-run of the
+    # possibly-expensive local write) — status terminal wins over effect.
+    ledger = _FakeLedger({"t1": _Rec(status="completed", result="wrote 3 files", effect="local")})
+    out = reconcile_tool_calls([_assistant("t1", name="Write")], ledger)
+    assert out.messages[1].content == "wrote 3 files"
+    assert out.healed == 1
 
 
 def test_no_ledger_record_is_safe_replay():
@@ -332,3 +377,21 @@ def test_real_ledger_started_no_key_flags_unknown(tmp_path):
     assert out.flagged == 1
     # Dangling started record -> kept (not reaped) for a later resume to re-flag.
     assert out.resolved_ids == set()
+
+
+def test_real_ledger_started_local_is_safe_replay(tmp_path):
+    # The real ledger persists ``effect`` — a started LOCAL record survives a
+    # rebuild and reconcile reads it back as replay-safe (not unknown).
+    from mote.common.workspace import WorkspaceStore
+    from mote.executor.effect_ledger import EffectLedger
+
+    store = WorkspaceStore(root=str(tmp_path))
+    ledger = EffectLedger("sess_local", store=store)
+    ledger.mark_started("t1", "Write", effect="local")
+
+    # Rebuild in a fresh instance (post-crash) then reconcile.
+    rebuilt = EffectLedger("sess_local", store=store)
+    out = reconcile_tool_calls([_assistant("t1", name="Write")], rebuilt)
+
+    assert "<not-executed>" in out.messages[1].content
+    assert out.replayable == 1

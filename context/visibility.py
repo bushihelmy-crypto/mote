@@ -1,6 +1,6 @@
 """ContextVisibility — the single authority on "is this result still visible?".
 
-A *reconstructable* tool result (Read, Grep, Glob, ...) may have its body folded
+A *reconstructable* tool result (Read, Search, ...) may have its body folded
 away in place (:mod:`mote.context.compaction.reducers.fold` replaces the content
 with :data:`TOOL_RESULT_CLEARED_MESSAGE`) or pair-erased outright
 (:mod:`~mote.context.compaction.reducers.erase` removes the message). Both are

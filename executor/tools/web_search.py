@@ -33,53 +33,6 @@ from mote.executor.tool_registry import register_tool
 from mote.executor.tool_result import ToolResult
 
 
-def _web_search_description() -> str:
-    """The WebSearch tool's model-facing description (dynamic current month/year).
-
-    This is the one legitimate exception to docstring-native prose: the
-    description carries "use the current year" guidance whose month/year must be
-    computed fresh on each call (the process is long-running), so it cannot be a
-    static docstring. The first line here MUST match the ``call()`` docstring's
-    summary line, since :meth:`summary` reads that for the tool-search menu.
-
-    Aligned verbatim to Claude Code's ``getWebSearchPrompt()``: the bullet
-    summary, the CRITICAL "Sources:" requirement, usage notes, and the
-    "use the correct year" guidance (mirroring CC's ``getLocalMonthYear()``).
-    """
-    import datetime
-
-    current_month_year = datetime.datetime.now().strftime("%B %Y")
-    return f"""\
-Search the web for current information — returns ranked source links.
-
-- Allows Claude to search the web and use the results to inform responses
-- Provides up-to-date information for current events and recent data
-- Returns search result information formatted as search result blocks, including links as markdown hyperlinks
-- Use this tool for accessing information beyond Claude's knowledge cutoff
-- Searches are performed automatically within a single API call
-
-CRITICAL REQUIREMENT - You MUST follow this:
-  - After answering the user's question, you MUST include a "Sources:" section at the end of your response
-  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
-  - This is MANDATORY - never skip including sources in your response
-  - Example format:
-
-    [Your answer here]
-
-    Sources:
-    - [Source Title 1](https://example.com/1)
-    - [Source Title 2](https://example.com/2)
-
-Usage notes:
-  - Domain filtering is supported to include or block specific websites
-  - Web search is only available in the US
-
-IMPORTANT - Use the correct year in search queries:
-  - The current month is {current_month_year}. You MUST use this year when searching for recent information, documentation, or current events.
-  - Example: If the user asks for "latest React docs", search for "React documentation" with the current year, NOT last year
-"""
-
-
 def _unavailable_msg(query: str) -> str:
     """The not-configured notice: name the config gap + steer to WebBrowser.
 
@@ -137,20 +90,6 @@ class WebSearch(BaseTool):
     # Injected from Role by bind():
     web_search: WebSearchCapability
 
-    @classmethod
-    def get_schema(cls) -> dict:
-        """Auto-generated schema, but with the dynamic (current-month) description.
-
-        The description carries "use the current year" guidance whose month/year
-        must be computed fresh (the process is long-running), so it cannot be a
-        static docstring — we inject :func:`_web_search_description` here. The XML
-        native schema (:meth:`get_native_schema`) builds on this, so both channels
-        get the live description.
-        """
-        schema = super().get_schema()
-        schema["description"] = _web_search_description()
-        return schema
-
     async def call(
         self,
         *,
@@ -161,10 +100,31 @@ class WebSearch(BaseTool):
     ) -> ToolResult:
         """Search the web for current information — returns ranked source links.
 
-        Issues a provider-native server-side web search and returns matching
-        source pages as a markdown link list. The full operating manual (with the
-        mandatory "Sources:" requirement and current-year guidance) is injected
-        dynamically at schema-build time; see :func:`_web_search_description`.
+        - Allows Claude to search the web and use the results to inform responses
+        - Provides up-to-date information for current events and recent data
+        - Returns search result information formatted as search result blocks, including links as markdown hyperlinks
+        - Use this tool for accessing information beyond Claude's knowledge cutoff
+        - Searches are performed automatically within a single API call
+
+        CRITICAL REQUIREMENT - You MUST follow this:
+          - After answering the user's question, you MUST include a "Sources:" section at the end of your response
+          - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
+          - This is MANDATORY - never skip including sources in your response
+          - Example format:
+
+            [Your answer here]
+
+            Sources:
+            - [Source Title 1](https://example.com/1)
+            - [Source Title 2](https://example.com/2)
+
+        Usage notes:
+          - Domain filtering is supported to include or block specific websites
+          - Web search is only available in the US
+
+        IMPORTANT - Use the correct year in search queries:
+          - You MUST use the current year when searching for recent information, documentation, or current events.
+          - Example: If the user asks for "latest React docs", search for "React documentation" with the current year, NOT last year
 
         Args:
             query: The search query to use.
@@ -185,8 +145,15 @@ class WebSearch(BaseTool):
             raise ToolValidationError("Cannot specify both allowed_domains and blocked_domains in the same request.")
 
         limit = num_results if isinstance(num_results, int) and num_results > 0 else 8
+        # Resolve the active backend from config (default "provider" = the routed
+        # model's server-side search, wrapping the injected ``web_search``
+        # capability). Swapping in a direct-API vendor is config-only.
+        from mote.common.config.loader import load_config
+        from mote.executor.tools.web_search_registry import create_search_backend
+
+        backend = create_search_backend(load_config().tools.web_search, provider_search=self.web_search)
         try:
-            hits = await self.web_search(
+            hits = await backend.search(
                 query,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,

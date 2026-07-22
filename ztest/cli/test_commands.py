@@ -42,6 +42,10 @@ class FakeCtx:
     def help_text(self) -> str:
         return "Commands:\n  /help  show this help\n"
 
+    def usage_report(self) -> str:
+        self.calls.append(("usage_report", None))
+        return "Total cost: $0.0000\n\nRate limits: (none reported yet)"
+
     def request_exit(self) -> None:
         self.exited = True
 
@@ -185,6 +189,21 @@ async def test_help_command(reg, ctx):
 async def test_exit_command(reg, ctx):
     await reg.handle(ctx, "/exit")
     assert ctx.exited is True
+
+
+@pytest.mark.asyncio
+async def test_usage_command(reg, ctx):
+    await reg.handle(ctx, "/usage")
+    assert ("usage_report", None) in ctx.calls
+    out = "\n".join(ctx.notices)
+    assert "Total cost:" in out
+    assert "Rate limits:" in out
+
+
+@pytest.mark.asyncio
+async def test_usage_alias_cost(reg, ctx):
+    await reg.handle(ctx, "/cost")
+    assert ("usage_report", None) in ctx.calls
 
 
 @pytest.mark.asyncio

@@ -213,11 +213,12 @@ def test_system_reminder_split_tool_menu_lists_names():
 
 def test_pre_tool_headline_and_body():
     p = ViewProjector()
-    out = p.project(ev_pre_tool("Write", {"file_path": "a.py", "content": "print(1)\n"}))
+    # A whole-file write = Edit with an empty old_string; new_string is the body.
+    out = p.project(ev_pre_tool("Edit", {"file_path": "a.py", "old_string": "", "new_string": "print(1)\n"}))
     assert len(out) == 1
     started = out[0]
     assert isinstance(started, ToolCallStarted)
-    assert started.tool_name == "Write"
+    assert started.tool_name == "Edit"
     assert started.headline == "a.py"
     assert started.body == "print(1)\n"  # body kept verbatim (only line-count truncated)
     assert started.lexer == "python"  # inferred from .py
@@ -326,43 +327,59 @@ def test_summary_read_image_and_pdf():
     assert pdf[0].summary == t(K.SUMMARY_READ_PDF)
 
 
-def test_summary_grep_files_mode():
+def test_summary_search_files_mode():
     p = ViewProjector()
-    out = p.project(ev_post_tool("Grep", "Found 3 files\n/a:1\n/b:2\n/c:3", success=True))
+    out = p.project(ev_post_tool("Search", "Found 3 files\n/a:1\n/b:2\n/c:3", success=True))
     assert out[0].summary == t(K.SUMMARY_FOUND_FILES, count=3)
 
 
-def test_summary_grep_count_mode():
+def test_summary_search_count_mode():
     p = ViewProjector()
-    out = p.project(ev_post_tool("Grep", "/a:5\n/b:2\n\nFound 7 total occurrences across 2 files", success=True))
+    out = p.project(ev_post_tool("Search", "/a:5\n/b:2\n\nFound 7 total occurrences across 2 files", success=True))
     assert out[0].summary == t(K.SUMMARY_GREP_MATCHES_FILES, matches=7, files=2)
 
 
-def test_summary_grep_content_mode_counts_lines():
+def test_summary_search_content_mode_counts_lines():
     p = ViewProjector()
-    out = p.project(ev_post_tool("Grep", "/a:1:foo\n/a:5:bar\n/b:3:baz", success=True))
+    out = p.project(ev_post_tool("Search", "/a:1:foo\n/a:5:bar\n/b:3:baz", success=True))
     assert out[0].summary == t(K.SUMMARY_GREP_MATCHES, count=3)
 
 
-def test_summary_grep_no_match():
+def test_summary_search_no_match():
     p = ViewProjector()
-    out = p.project(ev_post_tool("Grep", "No files found", success=True))
+    out = p.project(ev_post_tool("Search", "No matches found", success=True))
     assert out[0].summary == t(K.SUMMARY_NO_MATCHES)
 
 
-def test_summary_glob_counts_paths_dropping_truncation_note():
+def test_summary_search_no_files():
+    p = ViewProjector()
+    out = p.project(ev_post_tool("Search", "No files found", success=True))
+    assert out[0].summary == t(K.SUMMARY_NO_FILES)
+
+
+def test_summary_search_counts_paths_dropping_truncation_note():
     p = ViewProjector()
     body = "/a.py\n/b.py\n(Results are truncated. Consider using a more specific path or pattern.)"
-    out = p.project(ev_post_tool("Glob", body, success=True))
-    assert out[0].summary == t(K.SUMMARY_FOUND_FILES, count=2)
+    out = p.project(ev_post_tool("Search", body, success=True))
+    assert out[0].summary == t(K.SUMMARY_GREP_MATCHES, count=2)
 
 
-def test_summary_write_created_and_updated():
+def test_summary_whole_file_write_created_and_overwritten():
+    # A whole-file write is an Edit with an empty ``old``: all-additions reads
+    # as "created N lines"; an overwrite carries both old and new.
+    from types import SimpleNamespace
+
     p = ViewProjector()
-    created = p.project(ev_post_tool("Write", "Created /a.py (42 lines, 100 bytes written).", success=True))
+    fc_create = [SimpleNamespace(path="/a.py", old="", new="x\n" * 42)]
+    created = p.project(
+        ev_post_tool("Edit", "The file /a.py has been created successfully.", success=True, file_changes=fc_create)
+    )
     assert created[0].summary == t(K.SUMMARY_CREATED_LINES, count=42)
-    updated = p.project(ev_post_tool("Write", "Updated /a.py (3 lines, 10 bytes written).", success=True))
-    assert updated[0].summary == t(K.SUMMARY_UPDATED_LINES, count=3)
+    fc_overwrite = [SimpleNamespace(path="/a.py", old="a\nb\nc\n", new="X\nY\n")]
+    updated = p.project(
+        ev_post_tool("Edit", "The file /a.py has been updated successfully.", success=True, file_changes=fc_overwrite)
+    )
+    assert updated[0].summary == t(K.SUMMARY_EDIT_ADDED_REMOVED, added=2, removed=3)
 
 
 def test_summary_edit_reports_added_removed_from_file_changes():

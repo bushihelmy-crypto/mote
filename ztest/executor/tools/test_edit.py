@@ -84,27 +84,118 @@ class TestExactReplace:
         assert open(p, encoding="utf-8").read() == "keep\nkeep2\n"
 
 
-class TestCreateViaEmptyOld:
+class TestWholeFileWrite:
+    """Empty old_string = the range is the WHOLE file (the former Write tool).
+
+    Creates a new file or fully overwrites an existing one; overwriting goes
+    through the same read-before-write guard as a substring edit.
+    """
+
     def test_creates_new_file(self, workspace):
         p = str(workspace / "new.py")
         out = _edit(Edit(), file_path=p, old_string="", new_string="print('hi')\n")
-        assert "has been created successfully" in out.output
+        assert "Created" in out.output
         assert open(p, encoding="utf-8").read() == "print('hi')\n"
         # A creation carries an empty ``old`` and the new content.
         assert len(out.file_changes) == 1
         assert out.file_changes[0].old == ""
         assert out.file_changes[0].new == "print('hi')\n"
 
-    def test_refuses_to_clobber_nonempty(self, workspace):
-        p = write_file(workspace / "exists.py", "existing\n")
-        with pytest.raises(ToolError, match="already exists with content"):
-            _edit(Edit(), file_path=p, old_string="", new_string="new")
+    def test_reports_line_and_byte_counts(self, workspace):
+        p = str(workspace / "n.txt")
+        out = _edit(Edit(), file_path=p, old_string="", new_string="ab\ncd")
+        # 2 lines (the last unterminated line counts), 5 bytes.
+        assert "2 lines" in out.output
+        assert "5 bytes" in out.output
 
-    def test_fills_existing_empty_file(self, workspace):
-        p = write_file(workspace / "empty.py", "   \n")
-        out = _edit(Edit(), file_path=p, old_string="", new_string="filled")
-        assert "has been updated successfully" in out.output
-        assert open(p, encoding="utf-8").read() == "filled"
+    def test_creates_missing_parent_dirs(self, workspace):
+        p = str(workspace / "a" / "b" / "c.txt")
+        _edit(Edit(), file_path=p, old_string="", new_string="x")
+        assert os.path.isfile(p)
+
+    def test_creates_empty_file(self, workspace):
+        # old_string="" and new_string="" is a legitimate create-empty (the no-op
+        # guard applies to substring edits only).
+        p = str(workspace / "e.txt")
+        out = _edit(Edit(), file_path=p, old_string="", new_string="")
+        assert "Created" in out.output
+        assert open(p, encoding="utf-8").read() == ""
+
+    def test_overwrites_existing_after_read(self, workspace):
+        # A whole-file write over an existing file is now allowed (was refused),
+        # gated by read-before-write — mark it read, then it overwrites.
+        p = write_file(workspace / "exists.py", "existing\n")
+        role = CapRole()
+        mark_read(role, p)
+        tool = bind(Edit(), role)
+        out = _edit(tool, file_path=p, old_string="", new_string="brand new\n")
+        assert "Updated" in out.output
+        assert open(p, encoding="utf-8").read() == "brand new\n"
+        # Carries before/after as a structured change.
+        assert out.file_changes[0].old == "existing\n"
+        assert out.file_changes[0].new == "brand new\n"
+
+    def test_overwrite_unread_file_blocked(self, workspace):
+        # Overwriting an existing file the model has not read this session is
+        # refused — the same guard a substring edit enforces.
+        p = write_file(workspace / "exists.py", "existing\n")
+        tool = bind(Edit(), CapRole())
+        with pytest.raises(ToolError, match="has not been read this session"):
+            _edit(tool, file_path=p, old_string="", new_string="clobber")
+
+    def test_overwrite_modified_since_read_blocked(self, workspace):
+        p = write_file(workspace / "exists.py", "existing\n")
+        role = CapRole()
+        role.record_file_read(p, os.stat(p).st_mtime_ns - 5_000_000)  # stale => modified
+        tool = bind(Edit(), role)
+        with pytest.raises(ToolError, match="has been modified since"):
+            _edit(tool, file_path=p, old_string="", new_string="clobber")
+
+    def test_unbound_overwrite_skips_guard(self, workspace):
+        # No role bound => the read-before-write guard self-skips (isolation/tests).
+        p = write_file(workspace / "exists.txt", "old")
+        out = _edit(Edit(), file_path=p, old_string="", new_string="new")
+        assert "Updated" in out.output
+        assert open(p, encoding="utf-8").read() == "new"
+
+    def test_content_too_large_raises(self, workspace):
+        from mote.common.const.tools import MAX_CONTENT_SIZE_BYTES
+
+        p = str(workspace / "big.txt")
+        oversized = "x" * (MAX_CONTENT_SIZE_BYTES + 1)
+        with pytest.raises(ToolError, match="exceeds the maximum"):
+            _edit(Edit(), file_path=p, old_string="", new_string=oversized)
+
+    def test_whole_file_result_has_no_structural_summary(self, workspace):
+        body = '"""Sample module."""\n\ndef alpha():\n    return 1\n'
+        p = str(workspace / "big.py")
+        out = _edit(Edit(), file_path=p, old_string="", new_string=body)
+        assert "Created" in out.output
+        assert "<file-outline" not in out.output
+        assert "function alpha()" not in out.output
+        assert open(p, encoding="utf-8").read() == body
+
+    def test_ipynb_whole_file_write_allowed(self, workspace):
+        # A whole-file write CAN emit a .ipynb (raw notebook JSON) — only
+        # substring edits of .ipynb are refused (use the notebook edit tool).
+        p = str(workspace / "nb.ipynb")
+        out = _edit(Edit(), file_path=p, old_string="", new_string='{"cells": []}')
+        assert "Created" in out.output
+        assert open(p, encoding="utf-8").read() == '{"cells": []}'
+
+    def test_overwrite_preserves_crlf(self, workspace):
+        p = write_file(workspace / "crlf.txt", "a\r\nb\r\n", newline="")
+        role = CapRole()
+        mark_read(role, p)
+        tool = bind(Edit(), role)
+        # Content arrives LF-normalized; the tool translates to the file's CRLF.
+        _edit(tool, file_path=p, old_string="", new_string="x\ny\n")
+        assert open(p, "rb").read() == b"x\r\ny\r\n"
+
+    def test_new_file_uses_lf(self, workspace):
+        p = str(workspace / "lf.txt")
+        _edit(Edit(), file_path=p, old_string="", new_string="x\ny\n")
+        assert open(p, "rb").read() == b"x\ny\n"
 
 
 class TestEditGuards:

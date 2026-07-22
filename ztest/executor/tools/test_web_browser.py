@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 
 from mote.common.text import cap_head_tail
-from mote.executor.dependency._browser import TEXT_MAX_CHARS
+from mote.executor.dependency._browser import TEXT_MAX_CHARS, BrowserSession
 from mote.executor.tools.web_browser import WebBrowser
 
 from .conftest import CapRole, bind, run
@@ -134,6 +134,105 @@ _DELAYED = (
     "<script>setTimeout(function(){"
     "var d=document.createElement('div');d.id='late';d.textContent='ready';"
     "document.body.appendChild(d);window.__done=true;}, 300);</script>"
+    "</body>"
+)
+
+# A real control nested inside a clickable (cursor:pointer) wrapper whose own
+# innerText contains the control's label. This is the shape that caused a
+# "获取验证码" (send SMS code) button to be dropped from the snapshot: the
+# wrapper is interactive (cursor:pointer), the inner button's rect is contained
+# in it, and the wrapper's accessibleName includes the button's text — so the
+# containment-collapse heuristic treated the button as decorative. A genuine
+# <button> must still surface with its own [N] ref (strongInteractive exemption).
+_NESTED_CONTROL = (
+    "data:text/html;charset=utf-8,<title>SmsForm</title><body>"
+    "<div style='cursor:pointer'>"
+    "<input id='phone' placeholder='请输入手机号'>"
+    "<button id='sendcode'>获取验证码</button>"
+    "</div>"
+    "</body>"
+)
+
+# The classic custom-styled "I agree to terms" checkbox: the real
+# <input type=checkbox> is drawn transparent (opacity:0) with a styled visual on
+# top, yet it stays fully clickable. It used to be dropped from the snapshot
+# because the visibility test treated opacity:0 as invisible — so an agent could
+# not tick the consent box required to log in. A genuine control is judged by
+# ACTIONABILITY (opacity ignored, like Playwright) and gets its own [N] ref.
+_OPACITY_CHECKBOX = (
+    "data:text/html;charset=utf-8,<title>Consent</title><body>"
+    "<label for='agree'>I agree to the terms</label>"
+    "<input id='agree' type='checkbox' style='opacity:0' "
+    "aria-label='agree to terms'>"
+    "</body>"
+)
+
+# An actionable control living UNDER an opacity:0 wrapper: the wrapper's prose is
+# not readable (transparent), but the control beneath it is still clickable. The
+# redesigned walker recurses past non-rendered wrappers (only display:none prunes
+# a subtree), so the button surfaces while the invisible prose is suppressed.
+_HIDDEN_WRAPPER_CONTROL = (
+    "data:text/html;charset=utf-8,<title>Wrapped</title><body>"
+    "<div style='opacity:0'>"
+    "<p>invisible legalese</p>"
+    "<button id='go'>Continue</button>"
+    "</div>"
+    "</body>"
+)
+
+# A child that overrides its parent's visibility:hidden with visibility:visible.
+# The old walker pruned the whole subtree on the parent, dropping the visible
+# child; the redesigned walker judges each node on its own computed style.
+_VISIBILITY_OVERRIDE = (
+    "data:text/html;charset=utf-8,<title>Override</title><body>"
+    "<div style='visibility:hidden'>"
+    "<button id='shown' style='visibility:visible'>Reveal me</button>"
+    "</div>"
+    "</body>"
+)
+
+# A control living inside an OPEN shadow root (Web Component). node.childNodes
+# never descends into a shadow tree, so the old walker was blind to it — a login
+# form built as a web component would be invisible. The walker now follows the
+# flattened tree (childrenOf descends shadowRoot), and Playwright's CSS engine
+# pierces open shadow DOM so the stamped ref is directly clickable.
+_SHADOW_CONTROL = (
+    "data:text/html;charset=utf-8,<title>Shadow</title><body>"
+    "<div id='host'></div>"
+    "<script>"
+    "var sr=document.getElementById('host').attachShadow({mode:'open'});"
+    "sr.innerHTML='<button id=\"sbtn\">Shadow Login</button>';"
+    "</script>"
+    "</body>"
+)
+
+# A light-DOM control projected into the shadow tree via <slot>. The flattened
+# walk resolves a <slot> to its assigned light nodes, so the slotted button
+# surfaces exactly once (no double-count with the host's light children).
+_SHADOW_SLOT = (
+    "data:text/html;charset=utf-8,<title>Slot</title><body>"
+    "<div id='host2'><button id='slotted'>Slotted Btn</button></div>"
+    "<script>"
+    "var sr2=document.getElementById('host2').attachShadow({mode:'open'});"
+    "sr2.innerHTML='<slot></slot>';"
+    "</script>"
+    "</body>"
+)
+
+
+# A login form living inside a same-origin <iframe srcdoc="...">. The top frame
+# cannot read into the iframe's document via page.evaluate, so the old top-frame-
+# only walker was blind to it. The snapshot now walks page.frames and runs the
+# same _TREE_JS in the child frame, giving its controls refs in one flat [N]
+# namespace and resolving click/type against the owning frame. (A srcdoc iframe
+# is same-origin; a cross-origin frame differs only in that Playwright routes it
+# to a separate target internally — the frame.evaluate / frame.wait_for_selector
+# API surface exercised here is identical, so this faithfully covers the path.)
+_IFRAME_LOGIN = (
+    "data:text/html;charset=utf-8,<title>Outer</title><body>"
+    "<button id='outer'>Outer Button</button>"
+    "<iframe srcdoc=\"<body><input id='u' placeholder='frame-username'>"
+    "<button id='fb'>Frame Login</button></body>\"></iframe>"
     "</body>"
 )
 
@@ -473,6 +572,486 @@ class TestStatePersistence:
 
 
 # ---------------------------------------------------------------------------
+# durable-login profile (seed from / persist to the encrypted store)
+# ---------------------------------------------------------------------------
+
+
+class TestBrowserProfile:
+    def test_profile_persists_login_and_keeps_rollout_clean(self, caprole):
+        """With a profile set, storage_state goes to the profile store; the
+        rollout recorder receives ``storage_state=None`` (no plaintext cookies).
+        """
+        caprole.browser_profile = "acct"
+        tool = bind(WebBrowser(), caprole, session_id="b_profile")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_PAGE_A)
+            await tool.call(action="close")
+
+        run(scenario())
+        # The logged-in state was persisted into the (fake) encrypted profile...
+        assert caprole.browser_profiles.get("acct") is not None
+        # ...and the rollout event carries NO storage_state (cookies stay out).
+        assert caprole.browser_states
+        _urls, _active, storage_state, _name = caprole.browser_states[-1]
+        assert storage_state is None
+
+    def test_no_profile_keeps_cookies_in_rollout(self, caprole):
+        """Legacy behavior: without a profile, storage_state rides the rollout."""
+        tool = bind(WebBrowser(), caprole, session_id="b_noprofile")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_PAGE_A)
+            await tool.call(action="close")
+
+        run(scenario())
+        assert caprole.browser_profiles == {}  # nothing persisted
+        _urls, _active, storage_state, _name = caprole.browser_states[-1]
+        assert storage_state is not None  # rides the rollout as before
+
+    def test_profile_storage_state_seeds_fresh_session(self, caprole):
+        """A saved profile is loaded and seeds the launched context (rung L0).
+
+        Priority over session-resume state is asserted at the seam: the profile
+        load is consulted and its value flows to ``session.start``.
+        """
+        seed = {"cookies": [], "origins": []}
+        caprole.browser_profile = "acct"
+        caprole.browser_profiles["acct"] = seed
+        # A resume also staged state — the profile must win over it.
+        caprole._pending_browser_restore = {"urls": [], "active": 0, "storage_state": {"cookies": [1]}}
+
+        seen = {}
+        tool = bind(WebBrowser(), caprole, session_id="b_seed")
+        orig_ensure = tool._ensure_session
+
+        async def scenario():
+            session = await orig_ensure()
+            # The live session was seeded from the profile, not the resume state.
+            seen["state"] = await session.capture_state()
+            await tool.call(action="close")
+
+        # Patch BrowserSession.start to capture what storage_state it was seeded with.
+        from mote.executor.dependency import _browser as browser_mod
+
+        real_start = browser_mod.BrowserSession.start
+
+        async def spy_start(self, *, storage_state=None):
+            seen["seed"] = storage_state
+            return await real_start(self, storage_state=storage_state)
+
+        browser_mod.BrowserSession.start = spy_start
+        try:
+            run(scenario())
+        finally:
+            browser_mod.BrowserSession.start = real_start
+        assert seen["seed"] == seed
+
+
+# ---------------------------------------------------------------------------
+# Secret fill (Login Ladder L1) — <agent-vault:…> / <totp:…> resolved at fill
+# time; the plaintext lands in the DOM but never in the recorded call args.
+# ---------------------------------------------------------------------------
+
+
+class TestSecretFill:
+    def test_type_expands_vault_placeholder_into_dom(self, caprole):
+        caprole.secrets["xhs_password"] = "hunter2-secret"
+        tool = bind(WebBrowser(), caprole, session_id="b_sec_type")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_LOGIN_FORM)
+            # The model types a PLACEHOLDER, never the raw value.
+            await tool.call(action="type", selector="#pass", text="<agent-vault:xhs_password>")
+            val = await tool.call(action="eval", expression="document.getElementById('pass').value")
+            assert "hunter2-secret" in val
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_fill_form_expands_placeholders(self, caprole):
+        caprole.secrets["u"] = "alice-account"
+        caprole.secrets["p"] = "s3cret-pass!!"
+        tool = bind(WebBrowser(), caprole, session_id="b_sec_fill")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_LOGIN_FORM)
+            await tool.call(
+                action="fill_form",
+                fields={"#user": "<agent-vault:u>", "#pass": "<agent-vault:p>"},
+            )
+            u = await tool.call(action="eval", expression="document.getElementById('user').value")
+            p = await tool.call(action="eval", expression="document.getElementById('pass').value")
+            assert "alice-account" in u and "s3cret-pass!!" in p
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_totp_placeholder_types_six_digits(self, caprole):
+        # base32("12345678901234567890") — a valid TOTP seed.
+        caprole.secrets["tf"] = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+        tool = bind(WebBrowser(), caprole, session_id="b_sec_totp")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_LOGIN_FORM)
+            await tool.call(action="type", selector="#user", text="<totp:tf>")
+            val = await tool.call(action="eval", expression="document.getElementById('user').value")
+            digits = val.strip().strip('"')  # eval returns the JSON-quoted string
+            assert digits.isdigit() and len(digits) == 6
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_unknown_secret_fails_closed(self, caprole):
+        from mote.common.exception import ToolError
+
+        tool = bind(WebBrowser(), caprole, session_id="b_sec_unknown")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_LOGIN_FORM)
+            with pytest.raises(ToolError):
+                await tool.call(action="type", selector="#pass", text="<agent-vault:nope>")
+            # The literal placeholder was NOT typed into the field.
+            val = await tool.call(action="eval", expression="document.getElementById('pass').value")
+            assert "agent-vault" not in val
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_plain_text_unaffected(self, caprole):
+        tool = bind(WebBrowser(), caprole, session_id="b_sec_plain")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_LOGIN_FORM)
+            await tool.call(action="type", selector="#user", text="ordinary-name")
+            val = await tool.call(action="eval", expression="document.getElementById('user').value")
+            assert "ordinary-name" in val
+            await tool.call(action="close")
+
+        run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Client TLS certificates (Login Ladder L2 — mutual-TLS logins). The passphrase
+# may be a secret placeholder, resolved fail-closed at launch time via the same
+# seam as `type`, so plaintext never rides config or history.
+# ---------------------------------------------------------------------------
+
+
+class TestClientCerts:
+    def test_resolve_client_certs_expands_passphrase(self, caprole):
+        caprole.secrets["cert_pw"] = "topsecret-pfx"
+        caprole.browser_client_certs = [
+            {
+                "origin": "https://mtls.example.com",
+                "pfxPath": "/certs/c.pfx",
+                "passphrase": "<agent-vault:cert_pw>",
+            }
+        ]
+        tool = bind(WebBrowser(), caprole, session_id="b_certs")
+        resolved = tool._resolve_client_certs()
+        assert resolved == [
+            {
+                "origin": "https://mtls.example.com",
+                "pfxPath": "/certs/c.pfx",
+                "passphrase": "topsecret-pfx",
+            }
+        ]
+
+    def test_resolve_client_certs_fails_closed_on_unknown_secret(self, caprole):
+        from mote.common.exception import ToolError
+
+        caprole.browser_client_certs = [
+            {"origin": "https://mtls.example.com", "pfxPath": "/c.pfx", "passphrase": "<agent-vault:nope>"}
+        ]
+        tool = bind(WebBrowser(), caprole, session_id="b_certs_fail")
+        with pytest.raises(ToolError):
+            tool._resolve_client_certs()
+
+    def test_resolve_client_certs_without_passphrase_passthrough(self, caprole):
+        caprole.browser_client_certs = [
+            {"origin": "https://mtls.example.com", "certPath": "/c.pem", "keyPath": "/k.pem"}
+        ]
+        tool = bind(WebBrowser(), caprole, session_id="b_certs_plain")
+        resolved = tool._resolve_client_certs()
+        assert resolved == [{"origin": "https://mtls.example.com", "certPath": "/c.pem", "keyPath": "/k.pem"}]
+
+    def test_context_kwargs_includes_client_certs(self):
+        session = BrowserSession(
+            session_key="k",
+            client_certs=[{"origin": "https://x", "pfxPath": "/c.pfx"}],
+        )
+        kwargs = session._context_kwargs(None)
+        assert kwargs["client_certificates"] == [{"origin": "https://x", "pfxPath": "/c.pfx"}]
+
+    def test_context_kwargs_omits_client_certs_when_none(self):
+        session = BrowserSession(session_key="k")
+        kwargs = session._context_kwargs(None)
+        assert "client_certificates" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# CDP attach — drive an already-running Chrome (reuse the human's real logins /
+# passkeys / extensions). Uses a fake Playwright so no real Chrome is needed;
+# asserts we connect-over-cdp (never launch), reuse the existing context, and on
+# teardown only DISCONNECT (never close the human's browser).
+# ---------------------------------------------------------------------------
+
+
+class _FakePage:
+    def __init__(self, url="https://real.example/app"):
+        self.url = url
+
+
+class _FakeContext:
+    def __init__(self, pages=None):
+        self.pages = list(pages) if pages is not None else []
+        self.closed = False
+
+    async def new_page(self):
+        page = _FakePage("about:blank")
+        self.pages.append(page)
+        return page
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self, contexts):
+        self.contexts = list(contexts)
+        self.closed = False
+
+    async def new_context(self, **kwargs):
+        ctx = _FakeContext()
+        self.contexts.append(ctx)
+        return ctx
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeChromium:
+    def __init__(self, contexts):
+        self.connected_to = None
+        self.launched = False
+        self._contexts = list(contexts)
+
+    async def connect_over_cdp(self, endpoint):
+        self.connected_to = endpoint
+        return _FakeBrowser(self._contexts)
+
+    async def launch(self, **kwargs):
+        self.launched = True
+        return _FakeBrowser([])
+
+
+class _FakePw:
+    def __init__(self, chromium):
+        self.chromium = chromium
+
+
+class _FakeCM:
+    def __init__(self, pw):
+        self._pw = pw
+        self.exited = False
+
+    async def start(self):
+        return self._pw
+
+    async def __aexit__(self, *a):
+        self.exited = True
+
+
+def _install_fake_pw(monkeypatch, chromium):
+    """Point the engine's ``async_playwright`` factory at our fakes."""
+    cm = _FakeCM(_FakePw(chromium))
+    monkeypatch.setattr(playwright, "async_playwright", lambda: cm)
+    return cm
+
+
+class TestCdpAttach:
+    def test_attach_reuses_existing_context_and_skips_launch(self, monkeypatch):
+        existing = _FakeContext(pages=[_FakePage("https://real.example/app")])
+        chromium = _FakeChromium(contexts=[existing])
+        _install_fake_pw(monkeypatch, chromium)
+        session = BrowserSession(session_key="k", cdp_endpoint="http://127.0.0.1:9222")
+
+        async def scenario():
+            await session.start()
+            assert session._attached is True
+            assert chromium.connected_to == "http://127.0.0.1:9222"
+            assert chromium.launched is False  # we attached, never launched
+            assert session._context is existing  # reused, not re-created
+
+        run(scenario())
+
+    def test_attach_with_no_contexts_creates_a_fresh_one(self, monkeypatch):
+        chromium = _FakeChromium(contexts=[])
+        _install_fake_pw(monkeypatch, chromium)
+        session = BrowserSession(session_key="k", cdp_endpoint="ws://localhost:9222/x")
+
+        async def scenario():
+            await session.start()
+            assert session._attached is True
+            assert session._context is not None
+            assert session._context.pages  # a tab was ensured
+
+        run(scenario())
+
+    def test_shutdown_when_attached_does_not_close_the_humans_browser(self, monkeypatch):
+        existing = _FakeContext(pages=[_FakePage()])
+        chromium = _FakeChromium(contexts=[existing])
+        cm = _install_fake_pw(monkeypatch, chromium)
+        session = BrowserSession(session_key="k", cdp_endpoint="http://127.0.0.1:9222")
+
+        async def scenario():
+            await session.start()
+            browser = session._browser
+            await session.shutdown()
+            assert existing.closed is False  # human's context untouched
+            assert browser.closed is False  # human's browser untouched
+            assert cm.exited is True  # only our driver disconnected
+
+        run(scenario())
+
+    def test_shutdown_when_owned_closes_context_and_browser(self, monkeypatch):
+        chromium = _FakeChromium(contexts=[])
+        cm = _install_fake_pw(monkeypatch, chromium)
+        session = BrowserSession(session_key="k")  # no cdp -> launch path
+
+        async def scenario():
+            await session.start()
+            ctx = session._context
+            browser = session._browser
+            await session.shutdown()
+            assert ctx.closed is True  # we own it -> close it
+            assert browser.closed is True
+            assert cm.exited is True
+
+        run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Headed handoff (Login Ladder L3, Phase 3) — relaunch a headless session as a
+# VISIBLE window for a live interactive step a screenshot can't cover (drag /
+# slider captcha, live QR scan). No-op when already visible / attached; the
+# relaunch reuses capture_state -> shutdown -> start(headed) -> restore_state.
+# ---------------------------------------------------------------------------
+
+
+class TestHeadedHandoff:
+    def test_handoff_noop_when_already_headed(self):
+        session = BrowserSession(session_key="k", headless=False)
+        session._context = _FakeContext(pages=[_FakePage("https://x/here")])
+
+        async def scenario():
+            out = await session.handoff_headed()
+            assert "already visible" in out
+            assert "https://x/here" in out
+            assert session.headless is False
+
+        run(scenario())
+
+    def test_handoff_noop_when_attached(self):
+        session = BrowserSession(session_key="k", headless=True)
+        session._attached = True
+        session._context = _FakeContext(pages=[_FakePage("https://y/page")])
+
+        async def scenario():
+            out = await session.handoff_headed()
+            assert "already visible" in out
+
+        run(scenario())
+
+    def test_handoff_relaunches_headed_with_captured_state(self, monkeypatch):
+        session = BrowserSession(session_key="k", headless=True)
+        session._context = _FakeContext(pages=[_FakePage("https://z/login")])
+        calls = []
+
+        async def fake_capture():
+            calls.append("capture")
+            return (["https://z/login"], 0, {"cookies": [1]})
+
+        async def fake_shutdown():
+            calls.append("shutdown")
+
+        async def fake_start(*, storage_state=None):
+            calls.append(("start", session.headless, storage_state))
+            session._context = _FakeContext(pages=[_FakePage("https://z/login")])
+
+        async def fake_restore(urls, active=0, storage_state=None):
+            calls.append(("restore", urls, active, storage_state))
+
+        monkeypatch.setattr(session, "capture_state", fake_capture)
+        monkeypatch.setattr(session, "shutdown", fake_shutdown)
+        monkeypatch.setattr(session, "start", fake_start)
+        monkeypatch.setattr(session, "restore_state", fake_restore)
+
+        async def scenario():
+            out = await session.handoff_headed()
+            assert session.headless is False  # flipped to headed
+            assert "visible browser window" in out
+            # Ordered: capture -> shutdown -> start(headed, seeded) -> restore.
+            assert calls[0] == "capture"
+            assert calls[1] == "shutdown"
+            assert calls[2] == ("start", False, {"cookies": [1]})
+            assert calls[3][0] == "restore"
+            assert calls[3][1] == ["https://z/login"]
+            assert calls[3][3] == {"cookies": [1]}
+
+        run(scenario())
+
+    def test_handoff_action_requires_prompt(self, caprole):
+        from mote.common.exception import ToolError
+
+        tool = bind(WebBrowser(), caprole, session_id="b_handoff_noprompt")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_PAGE_A)  # launches headless
+            with pytest.raises(ToolError):
+                await tool.call(action="handoff")  # guard fires before any relaunch
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_handoff_action_hands_off_then_assists(self, caprole, monkeypatch):
+        """The ``handoff`` action opens a window, then runs the headed assist.
+
+        The real headed relaunch would need a display (unsafe on CI / WSL2), so
+        we stub ``handoff_headed`` to a flag-free no-op; ``assist`` then runs its
+        real headed path (text-channel ask_user, no window needed).
+        """
+        caprole.ask_reply = "logged in"
+        tool = bind(WebBrowser(), caprole, session_id="b_handoff_action")
+        from mote.executor.dependency import _browser as browser_mod
+
+        calls = []
+
+        async def fake_handoff(self):
+            calls.append("handoff")
+            return "[opened a visible browser window] now at about:blank"
+
+        monkeypatch.setattr(browser_mod.BrowserSession, "handoff_headed", fake_handoff)
+
+        async def scenario():
+            await tool.call(action="navigate", url=_PAGE_A)
+            out = await tool.call(action="handoff", prompt="solve the slider captcha")
+            assert calls == ["handoff"]  # the handoff ran first
+            assert "visible browser window" in out  # its status line surfaced
+            # Then the headed assist prompted the user with our instruction.
+            assert len(caprole.ask_questions) == 1
+            asked = caprole.ask_questions[0]
+            assert "solve the slider captcha" in asked
+            assert "browser handoff" in asked
+            assert "resumed by user" in out
+            assert "logged in" in out
+            await tool.call(action="close")
+
+        run(scenario())
+
+
+# ---------------------------------------------------------------------------
 # snapshot + [N] index refs (batch A)
 # ---------------------------------------------------------------------------
 
@@ -538,6 +1117,155 @@ class TestSnapshot:
             await tool.call(action="type", selector=f"[{ref}]", text="phone")
             val = await tool.call(action="eval", expression="document.getElementById('search').value")
             assert "phone" in val
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_nested_control_in_clickable_wrapper_still_gets_ref(self, caprole):
+        """A real <button> inside a cursor:pointer wrapper whose innerText
+        contains the button label must NOT be containment-collapsed — it gets
+        its own [N] ref so the agent can click it. Regression for the dropped
+        "获取验证码" (send SMS code) button."""
+        tool = bind(WebBrowser(), caprole, session_id="b_nested_ctl")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_NESTED_CONTROL)
+            snap = await tool.call(action="snapshot")
+            # The nested button surfaces with a clickable [N] index.
+            ref = _ref_for(snap, "获取验证码")
+            assert ref is not None, snap
+            # And it is actually actionable by that index.
+            out = await tool.call(action="click", selector=ref)
+            assert "clicked" in out
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_opacity_zero_checkbox_still_gets_ref(self, caprole):
+        """A genuine control made opacity:0 (custom-styled "agree to terms"
+        checkbox) must stay in the snapshot with a clickable [N] ref — Playwright
+        ignores opacity for actionability. Regression for filtered-out consent
+        boxes blocking login."""
+        tool = bind(WebBrowser(), caprole, session_id="b_opacity_cb")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_OPACITY_CHECKBOX)
+            snap = await tool.call(action="snapshot")
+            ref = _ref_for(snap, "agree to terms")
+            assert ref is not None, snap
+            # And it is actually actionable (can be ticked) by that index.
+            out = await tool.call(action="click", selector=ref)
+            assert "clicked" in out
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_actionable_control_under_opacity_wrapper_survives(self, caprole):
+        """Only display:none prunes a subtree — a clickable control beneath an
+        opacity:0 wrapper still surfaces, while the wrapper's transparent prose
+        is suppressed (not readable)."""
+        tool = bind(WebBrowser(), caprole, session_id="b_hidden_wrap")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_HIDDEN_WRAPPER_CONTROL)
+            snap = await tool.call(action="snapshot")
+            # Drop the header line (it echoes the data: URL == raw HTML source).
+            body = snap.split("\n", 1)[1] if "\n" in snap else snap
+            assert _ref_for(body, "Continue") is not None, body
+            # The transparent prose must NOT leak into the reading view.
+            assert "invisible legalese" not in body, body
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_visibility_visible_child_overrides_hidden_parent(self, caprole):
+        """A visibility:visible child under a visibility:hidden parent must not be
+        dropped — each node is judged on its own computed style, not pruned by an
+        ancestor's hidden state."""
+        tool = bind(WebBrowser(), caprole, session_id="b_vis_override")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_VISIBILITY_OVERRIDE)
+            snap = await tool.call(action="snapshot")
+            assert _ref_for(snap, "Reveal me") is not None, snap
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_open_shadow_dom_control_gets_ref_and_clicks(self, caprole):
+        """A control inside an OPEN shadow root surfaces in the snapshot (the walk
+        follows the flattened tree) and is clickable — Playwright's CSS engine
+        pierces open shadow DOM, and the blocker hit-test is shadow-aware so the
+        host is not falsely reported as covering the control."""
+        tool = bind(WebBrowser(), caprole, session_id="b_shadow")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_SHADOW_CONTROL)
+            snap = await tool.call(action="snapshot")
+            ref = _ref_for(snap, "Shadow Login")
+            assert ref is not None, snap
+            out = await tool.call(action="click", selector=ref)
+            assert "clicked" in out
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_slotted_light_control_surfaces_once(self, caprole):
+        """A light-DOM control projected through <slot> appears exactly once (the
+        flattened walk reaches it via the slot's assigned nodes, not twice)."""
+        tool = bind(WebBrowser(), caprole, session_id="b_slot")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_SHADOW_SLOT)
+            snap = await tool.call(action="snapshot")
+            # Drop the header line (it echoes the data: URL == raw HTML source).
+            body = snap.split("\n", 1)[1] if "\n" in snap else snap
+            assert body.count("Slotted Btn") == 1, body
+            ref = _ref_for(body, "Slotted Btn")
+            assert ref is not None, body
+            out = await tool.call(action="click", selector=ref)
+            assert "clicked" in out
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_iframe_control_gets_ref_and_resolves(self, caprole):
+        """A control inside a (same-origin srcdoc) iframe surfaces in the snapshot
+        under a [frame: …] section and is drivable by its [N] ref — snapshot walks
+        page.frames + records which frame owns the ref, so type/click resolve
+        against the child frame, not the (blind) main frame."""
+        tool = bind(WebBrowser(), caprole, session_id="b_iframe")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_IFRAME_LOGIN)
+            snap = await tool.call(action="snapshot")
+            # The iframe's controls are present, grouped under a frame section.
+            assert "[frame:" in snap, snap
+            fref = _ref_for(snap, "Frame Login")
+            assert fref is not None, snap
+            uref = _ref_for(snap, "frame-username")
+            assert uref is not None, snap
+            # Typing into the iframe input resolves against the owning frame.
+            await tool.call(action="type", selector=uref, text="alice")
+            # Clicking the iframe button resolves + hit-tests within that frame.
+            out = await tool.call(action="click", selector=fref)
+            assert "clicked" in out, out
+            await tool.call(action="close")
+
+        run(scenario())
+
+    def test_iframe_refs_disjoint_from_main_frame(self, caprole):
+        """Refs form ONE flat namespace across frames — an iframe control never
+        collides with a main-frame control's index (refSeed threading)."""
+        tool = bind(WebBrowser(), caprole, session_id="b_iframe_ns")
+
+        async def scenario():
+            await tool.call(action="navigate", url=_IFRAME_LOGIN)
+            snap = await tool.call(action="snapshot")
+            outer = _ref_for(snap, "Outer Button")
+            frame_btn = _ref_for(snap, "Frame Login")
+            assert outer is not None and frame_btn is not None, snap
+            assert outer != frame_btn, snap
             await tool.call(action="close")
 
         run(scenario())

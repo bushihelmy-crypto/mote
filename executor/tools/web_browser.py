@@ -31,18 +31,25 @@ from typing import Any, ClassVar, Optional
 from mote.common.const.llm import supports_vision
 from mote.common.exception import ToolNotConfiguredError
 from mote.common.logs import logger
+from mote.common.secrets.refs import SecretRefError, expand_secret_refs
 from mote.executor.base_tool import BaseTool
 from mote.executor.capability_types import (
     AskUser,
     DescribeImage,
+    GetBrowserCdpEndpoint,
+    GetBrowserClientCerts,
     GetBrowserHeadless,
     GetBrowserLocale,
+    GetBrowserProfile,
     GetBrowserProxy,
     GetBrowserStealth,
     GetCwd,
     GetDefaultModel,
+    GetSecret,
     GetToolSession,
+    LoadBrowserProfile,
     RecordBrowserState,
+    SaveBrowserProfile,
     SetToolSession,
     TakePendingBrowserRestore,
 )
@@ -68,6 +75,11 @@ _MSG_ASSIST_REQUIRES = (
     "Error: 'assist' requires a 'prompt' describing what the user "
     "should complete in the browser window (e.g. 'scan the login "
     "QR code', 'enter the SMS code')."
+)
+_MSG_HANDOFF_REQUIRES = (
+    "Error: 'handoff' requires a 'prompt' describing the interactive step for "
+    "the user to complete in the visible window (e.g. 'drag the slider to "
+    "solve the captcha', 'scan the login QR code with your phone')."
 )
 _MSG_EVAL_REQUIRES = "Error: 'eval' requires an expression."
 _MSG_READ_IMAGE_REQUIRES = (
@@ -96,7 +108,7 @@ _MSG_NAVIGATE_IS_VIDEO = (
 _MSG_UNKNOWN_ACTION = (
     "Error: unknown browser action '{action}'. Use snapshot | navigate | "
     "click | type | wait | detect_forms | fill_form | extract | assist | "
-    "read | read_image | screenshot | eval | back | tabs | new_tab | "
+    "handoff | read | read_image | screenshot | eval | back | tabs | new_tab | "
     "switch_tab | close_tab | close."
 )
 
@@ -149,6 +161,12 @@ class WebBrowser(BaseTool):
         "get_browser_stealth",
         "get_browser_locale",
         "get_browser_proxy",
+        "get_browser_profile",
+        "load_browser_profile",
+        "save_browser_profile",
+        "get_browser_client_certs",
+        "get_browser_cdp_endpoint",
+        "get_secret",
         "record_browser_state",
         "take_pending_browser_restore",
         "ask_user",
@@ -182,6 +200,32 @@ class WebBrowser(BaseTool):
     # direct connection). Defaults to an empty stub so a tool bound without a
     # Role (unit tests) connects directly.
     get_browser_proxy: GetBrowserProxy = staticmethod(lambda: "")
+    # Durable browser-login profile capabilities:
+    #   get_browser_profile — the configured profile name (empty => ephemeral,
+    #     the pre-profile behavior);
+    #   load_browser_profile — decrypt a saved storage_state for that name (or
+    #     None), used to seed a fresh session with a persisted login;
+    #   save_browser_profile — persist the session's storage_state back into the
+    #     encrypted profile after an action settles.
+    # Default stubs (no profile / no-op) so a tool bound without a Role (unit
+    # tests) stays fully ephemeral.
+    get_browser_profile: GetBrowserProfile = staticmethod(lambda: "")
+    load_browser_profile: LoadBrowserProfile = staticmethod(lambda _name: None)
+    save_browser_profile: SaveBrowserProfile = staticmethod(lambda _name, _state: None)
+    # Client TLS certs (mutual-TLS logins): Playwright ``client_certificates``
+    # entries; each ``passphrase`` may be a secret placeholder expanded at
+    # launch. CDP endpoint: attach to an already-running Chrome (empty = launch
+    # our own). Default stubs (no certs / no endpoint) so a tool bound without a
+    # Role (unit tests) launches a private browser with no mTLS.
+    get_browser_client_certs: GetBrowserClientCerts = staticmethod(lambda: [])
+    get_browser_cdp_endpoint: GetBrowserCdpEndpoint = staticmethod(lambda: "")
+    # Named-secret resolver (Role.get_secret): the ``type`` / ``fill_form``
+    # actions expand ``<secret:KEY>`` / ``<agent-vault:KEY>`` / ``<totp:KEY>``
+    # placeholders the model writes into a field to the real credential AT FILL
+    # TIME — so the plaintext never enters the model's context or the rollout.
+    # Defaults to a None stub so a tool bound without a Role (unit tests) simply
+    # finds no secret and a placeholder fails closed.
+    get_secret: GetSecret = staticmethod(lambda _key: None)
     # Capability accessors for session-resume browser-state restore:
     #   record_browser_state — persist (urls, active, storage_state) into the
     #     rollout after an action settles (so resume can re-open the tabs).
@@ -229,10 +273,20 @@ class WebBrowser(BaseTool):
         stealth = self.get_browser_stealth() if self.get_browser_stealth is not None else False
         browser_locale = self.get_browser_locale() if self.get_browser_locale is not None else "auto"
         proxy = self.get_browser_proxy() if self.get_browser_proxy is not None else ""
-        # On resume, the staged state carries the storage_state to seed the new
-        # context with the logged-in session before re-opening tabs.
+        cdp_endpoint = self.get_browser_cdp_endpoint() if self.get_browser_cdp_endpoint is not None else ""
+        # Client TLS certs: resolve any secret-placeholder passphrase from the
+        # vault (by key, never by value — same seam as ``type``/``fill_form``) so
+        # the plaintext lives only in the launch kwargs, never in config/history.
+        client_certs = self._resolve_client_certs()
+        # Seed the fresh context's logged-in session. A durable profile (login
+        # ladder rung L0) wins: its encrypted storage_state persists across runs,
+        # so it takes priority over the session-scoped resume state. Absent a
+        # profile, fall back to the state staged by resume (same-session only).
         pending = self.take_pending_browser_restore()
-        storage_state = pending.get("storage_state") if pending else None
+        profile = self.get_browser_profile()
+        storage_state = self.load_browser_profile(profile) if profile else None
+        if storage_state is None and pending:
+            storage_state = pending.get("storage_state")
         session = BrowserSession(
             session_key=self.session_id,
             cwd=cwd or None,
@@ -240,6 +294,8 @@ class WebBrowser(BaseTool):
             stealth=stealth,
             browser_locale=browser_locale,
             proxy=proxy,
+            client_certs=client_certs,
+            cdp_endpoint=cdp_endpoint,
         )
         await session.start(storage_state=storage_state)
         if pending:
@@ -271,86 +327,73 @@ class WebBrowser(BaseTool):
     ) -> Any:
         """Drive a persistent browser — navigate, click, fill forms, log in, read JS pages.
 
-        Drive a persistent web browser kept alive across calls (one per session).
-        The open tabs, navigated URLs, and logged-in session persist between
-        calls, so you build up browsing state step by step. Pick an action:
+        One browser per session; open tabs, URLs, and logged-in session persist
+        across calls. Actions:
 
-        - snapshot — return a unified indented tree of the page: prose text and
-          clickable elements (each tagged with an index like [5]) interleaved in
-          reading order, so you can both read the page in context and act on it
-          in one call; a leading * marks elements new since your last snapshot;
-          pass interactive_only=true to drop the prose and get a compact
-          controls-only list when tokens are tight.
-        - navigate — go to url. click — selector (an element index from the
-          latest snapshot like '5', or a CSS selector). type — selector + text;
-          set clear=false to append instead of replace. wait — block until a
-          selector appears or a JS expression is truthy (for dynamic/SPA content).
-        - detect_forms — list the page's forms and their fillable fields with
-          selectors. fill_form — fill many fields at once via a {selector: value}
-          mapping, with an optional submit selector. extract — pull structured
-          data via a {key: 'selector[@attr]'} schema, returning JSON.
-        - read — return the page's main content as a pure Markdown prose dump (no
-          clickable [N] refs); use it for long-form reading when you don't need
-          to act. Images and link URLs are dropped by default to keep it concise.
-          Only pass extract_links=true when you actually intend to navigate to a
-          URL on the page, or extract_images=true when you need an image's src.
-        - read_image — read ONE page image as text via a vision model (pass
-          selector plus an optional prompt steering what to extract, like
-          'transcribe the chart'). screenshot — capture the page as an image.
-          eval — run JavaScript and return its result as JSON.
-        - assist — pause and ask the user to supply something only they can:
-          their own private data (phone, email, account, address), a one-time
-          code, scan a login QR code, clear a graphical captcha; pass a prompt
-          describing what you need. Never invent a user's personal details — ask
-          via assist. Code-by-phone/email login is two assists: first ask for the
-          phone/email and type it to trigger the code, then ask for the code the
-          user received. assist only asks — act on the reply with type/fill_form.
-        - back — history back (prefer over re-navigating to a page you just left).
-          tabs — list open tabs. new_tab — open url in a new tab. switch_tab —
-          index. close_tab — index. close — shut the browser down.
+        - snapshot — unified indented tree of prose + clickable elements (each
+          tagged [5]) in reading order; a leading * marks elements new since the
+          last snapshot; interactive_only=true drops prose for a compact
+          controls-only list.
+        - navigate url. click selector (an index like '5' or a CSS selector).
+          type selector + text (clear=false appends). wait — block until a
+          selector appears or a JS expression is truthy (dynamic/SPA content).
+        - detect_forms — list forms + fillable fields. fill_form — {selector:
+          value} mapping, optional submit selector. extract — {key:
+          'selector[@attr]'} schema → JSON.
+        - read — main content as pure Markdown prose (no [N] refs); links/images
+          dropped by default (extract_links / extract_images to keep them).
+          read_image — read ONE image as text via a vision model (selector +
+          optional prompt). screenshot — capture as image. eval — run JS → JSON.
+        - assist — pause and ask the user for something only they can supply live
+          (one-time SMS/email code, login QR scan, captcha, private data). Never
+          invent personal details or bypass a check. Code-by-phone/email login is
+          two assists: type the phone/email to trigger the code, then ask for it.
+          assist only asks — act on the reply with type/fill_form.
+        - handoff — for an interactive step a screenshot can't cover (drag/slider
+          captcha, live QR scan): open a VISIBLE window seeded with the session,
+          ask the user (via prompt) to complete it directly. assist = user
+          supplies a VALUE you type; handoff = user physically INTERACTS.
+        - back (prefer over re-navigating). tabs — list. new_tab url. switch_tab
+          index. close_tab index. close — shut down.
 
-        Typical loop: snapshot to see the page (prose + element indices in
-        reading order), then click/type by index. Re-snapshot after navigation or
-        any DOM change — indices are only valid for the latest snapshot. When you
-        hit a step only a human can complete (one-time code, login QR scan,
-        graphical captcha), use assist — never try to bypass such a check.
+        Loop: snapshot, then click/type by index; re-snapshot after navigation or
+        any DOM change (indices are only valid for the latest snapshot).
+
+        Logging in is allowed. When credentials exist, a login menu lists the
+        exact value to type per field — type it verbatim and the tool fills the
+        real secret without it entering your context. Use ONLY the names shown,
+        and the login method those credentials support (e.g. phone-and-code if
+        only a phone is listed). Never invent a reference for an unlisted name (an
+        unlisted ``<agent-vault:KEY>`` fails to resolve and aborts the fill). For
+        a value you weren't given (password, one-time code), use ``assist``.
 
         Args:
             action: One of snapshot | navigate | click | type | read | read_image |
                 screenshot | eval | wait | detect_forms | fill_form | extract |
-                assist | back | tabs | new_tab | switch_tab | close_tab | close.
-            url: Target URL for ``navigate`` and ``new_tab``.
-            selector: Element to act on for ``click`` / ``type`` / ``wait`` /
-                ``read_image`` — either an element index from the latest
-                ``snapshot`` (``"5"`` or ``"[5]"``) or a raw CSS selector.
-            text: Text to fill for the ``type`` action.
-            expression: JavaScript expression for ``eval``, or the condition to
-                poll for ``wait``.
-            index: Tab index for ``switch_tab`` and ``close_tab``.
-            clear: For ``type`` — replace the field's value (True, default) or
-                append to it (False).
-            fields: For ``fill_form`` — a ``{selector_or_index: value}`` mapping
-                of fields to fill in one shot.
+                assist | handoff | back | tabs | new_tab | switch_tab | close_tab |
+                close.
+            url: Target URL for ``navigate`` / ``new_tab``.
+            selector: Element for ``click`` / ``type`` / ``wait`` / ``read_image``
+                — an index from the latest ``snapshot`` (``"5"``/``"[5]"``) or a
+                CSS selector.
+            text: Text to fill for ``type``. A login-menu value fills as the real
+                secret without entering your context.
+            expression: JS for ``eval``, or the condition to poll for ``wait``.
+            index: Tab index for ``switch_tab`` / ``close_tab``.
+            clear: For ``type`` — replace the value (True) or append (False).
+            fields: For ``fill_form`` — a ``{selector_or_index: value}`` mapping.
+                A login-menu value fills as the real secret.
             schema: For ``extract`` — a ``{key: "selector[@attr]"}`` mapping; each
-                key yields the matched element's text (or ``@attr`` value).
-            submit: For ``fill_form`` — an optional selector/index to click after
-                filling (submits the form).
-            prompt: For ``assist`` — the instruction shown to the user describing
-                what to complete in the browser window (e.g. "scan the login QR
-                code", "enter the SMS code"). For ``read_image`` — an optional
-                instruction steering what to extract from the image (e.g.
-                "transcribe the chart"); a general description is returned when
-                omitted.
-            extract_links: For ``read`` — keep hyperlink URLs (default False drops
-                them, rendering links as plain text). Set True when you need a
-                URL to navigate to.
-            extract_images: For ``read`` — keep image src URLs (default False
-                drops images entirely). Set True when you need to inspect an
-                image src.
-            interactive_only: For ``snapshot`` — drop the interleaved prose text
-                and emit only the clickable ``[N]`` element lines, for a compact
-                controls-only view when tokens are tight (default False returns
-                the full unified tree of prose + refs).
+                key yields the element's text (or ``@attr`` value).
+            submit: For ``fill_form`` — optional selector/index to click after
+                filling.
+            prompt: For ``assist`` — instruction shown to the user (e.g. "scan the
+                login QR code"). For ``read_image`` — optional instruction
+                steering extraction (e.g. "transcribe the chart").
+            extract_links: For ``read`` — keep hyperlink URLs (default False).
+            extract_images: For ``read`` — keep image src URLs (default False).
+            interactive_only: For ``snapshot`` — emit only clickable ``[N]`` lines
+                (default False returns the full prose + refs tree).
         """
         action = (action or "").strip().lower()
 
@@ -432,7 +475,7 @@ class WebBrowser(BaseTool):
         if action == "type":
             if not selector:
                 raise ToolError(_MSG_TYPE_REQUIRES_SELECTOR)
-            return await session.type_text(selector, text, clear=clear)
+            return await session.type_text(selector, self._resolve_secrets(text), clear=clear)
         if action == "wait":
             if not selector and not expression:
                 raise ToolError(_MSG_WAIT_REQUIRES)
@@ -442,7 +485,8 @@ class WebBrowser(BaseTool):
         if action == "fill_form":
             if not fields:
                 raise ToolError(_MSG_FILL_FORM_REQUIRES)
-            return await session.fill_form(fields, submit=submit)
+            resolved = {sel: self._resolve_secrets(val) for sel, val in fields.items()}
+            return await session.fill_form(resolved, submit=submit)
         if action == "extract":
             if not schema:
                 raise ToolError(_MSG_EXTRACT_REQUIRES)
@@ -455,6 +499,14 @@ class WebBrowser(BaseTool):
                 ask_user=self.ask_user,
                 headless=self.get_browser_headless(),
             )
+        if action == "handoff":
+            if not prompt:
+                raise ToolError(_MSG_HANDOFF_REQUIRES)
+            # Open a live visible window seeded with the current session, then
+            # ask the user to complete the interactive step directly in it.
+            status = await session.handoff_headed()
+            reply = await session.assist(prompt, ask_user=self.ask_user, headless=False)
+            return f"{status}\n{reply}"
         if action == "read":
             return await session.read(extract_links=extract_links, extract_images=extract_images)
         if action == "read_image":
@@ -495,8 +547,53 @@ class WebBrowser(BaseTool):
             return await session.close_tab(index)
         raise ToolError(_MSG_UNKNOWN_ACTION.format(action=action))
 
+    def _resolve_secrets(self, value: Any) -> Any:
+        """Expand any secret placeholder in a to-be-typed value at fill time.
+
+        A model authors a field value like ``<agent-vault:xhs_password>`` or
+        ``<totp:xhs_2fa>``; this substitutes the real credential from the vault
+        (by key, never by value) just before it is typed into the page, so the
+        plaintext lives only in this local return value — never in the model's
+        context, the recorded tool-call args, or the rollout. A non-string (a
+        checkbox bool, a number) or a value with no placeholder passes through
+        untouched. An unresolved reference fails closed as an actionable
+        ``ToolError`` rather than typing the literal placeholder text.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            return expand_secret_refs(value, get_secret=self.get_secret)
+        except SecretRefError as exc:
+            raise ToolError(str(exc)) from exc
+
+    def _resolve_client_certs(self) -> list:
+        """Return the role's client TLS certs with passphrases expanded.
+
+        Each cert dict comes from ``get_browser_client_certs`` (Playwright shape:
+        ``origin`` + ``certPath`` / ``keyPath`` / ``pfxPath`` / ``passphrase``).
+        A ``passphrase`` may be a secret placeholder — resolved from the vault
+        here, at launch time, via the same fail-closed seam as ``type`` — so the
+        plaintext never rides config or history. An unresolved reference raises
+        an actionable ``ToolError`` rather than launching with the literal.
+        """
+        certs = self.get_browser_client_certs() if self.get_browser_client_certs is not None else []
+        out: list = []
+        for cert in certs:
+            resolved = dict(cert)
+            if resolved.get("passphrase"):
+                resolved["passphrase"] = self._resolve_secrets(resolved["passphrase"])
+            out.append(resolved)
+        return out
+
     async def _record_state(self, session: BrowserSession) -> None:
-        """Snapshot the browsing state into the rollout (best-effort)."""
+        """Snapshot the browsing state for resume (best-effort).
+
+        When a durable profile is in use the logged-in ``storage_state`` is
+        persisted ENCRYPTED into the profile store, and the rollout gets only the
+        tab URLs (``storage_state=None``) — so session cookies never land in the
+        plaintext ``rollout.jsonl``. Without a profile, behavior is unchanged: the
+        state (cookies included) rides the rollout, gated by the recorder's flag.
+        """
         try:
             state = await session.capture_state()
         except Exception as exc:  # noqa: BLE001 — capture must not break the call
@@ -505,6 +602,12 @@ class WebBrowser(BaseTool):
         if state is None:
             return
         urls, active, storage_state = state
+        profile = self.get_browser_profile()
+        if profile:
+            # Durable login lives in the encrypted profile; keep it out of the
+            # rollout entirely (only tab URLs are needed to re-open on resume).
+            self.save_browser_profile(profile, storage_state)
+            storage_state = None
         recorder = getattr(self, "record_browser_state", None)
         if recorder is not None:
             recorder(urls, active=active, storage_state=storage_state, tool=self.name)

@@ -174,6 +174,41 @@ class TestBestEffortEntries:
         s = load_mcp_servers()[0]
         assert s.args == []
 
+    def test_oauth_block_parsed(self, mcp_file):
+        _write(
+            mcp_file,
+            {
+                "mcpServers": {
+                    "remote": {
+                        "url": "https://x/sse",
+                        "oauth": {"token_url": "https://example.com/oauth/token"},
+                    }
+                }
+            },
+        )
+        s = load_mcp_servers()[0]
+        assert s.oauth is not None
+        assert s.oauth.token_url == "https://example.com/oauth/token"
+
+    def test_oauth_absent_is_none(self, mcp_file):
+        _write(mcp_file, {"mcpServers": {"remote": {"url": "https://x/sse"}}})
+        assert load_mcp_servers()[0].oauth is None
+
+    def test_malformed_oauth_dropped_server_kept(self, mcp_file):
+        # An oauth block with no resolvable token_url fails validation; it is
+        # dropped (server loads unauthenticated), never raised.
+        _write(
+            mcp_file,
+            {"mcpServers": {"remote": {"url": "https://x/sse", "oauth": {"scopes": ["a"]}}}},
+        )
+        servers = load_mcp_servers()
+        assert len(servers) == 1
+        assert servers[0].oauth is None
+
+    def test_non_object_oauth_ignored(self, mcp_file):
+        _write(mcp_file, {"mcpServers": {"remote": {"url": "https://x/sse", "oauth": "nope"}}})
+        assert load_mcp_servers()[0].oauth is None
+
     def test_multiple_servers_preserve_order(self, mcp_file):
         _write(
             mcp_file,

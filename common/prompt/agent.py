@@ -18,19 +18,19 @@ ${context}
 ${task}
 </Task>
 
-Stay focused — only use tools that directly serve this specific task. Do not perform work outside the delegated scope.
+Stay focused — only use tools that directly serve this task; do no work outside the delegated scope.
 
 GOLDEN RULE — read and edit must be ⟦ctl:separate_steps⟧:
-  To edit an existing file, FIRST read it (⟦cap:read⟧) ⟦ctl:separate_steps⟧, wait for the result, THEN edit in the next step using the exact text from the read output. Creating new files (⟦cap:write⟧) does not require a prior read.
+  To edit an existing file, FIRST read it (⟦cap:read⟧) ⟦ctl:separate_steps⟧, wait for the result, THEN edit in the next step using the exact text from the read output. Creating new files (⟦cap:write⟧) needs no prior read.
 
 FIRST STEP — read project READMEs before writing any code:
-  Read the README files mentioned in the context or discoverable from the working directory. If the README references additional docs (e.g., `skills_docs/`), read only the files explicitly listed there and relevant to your task. Do not guess API signatures, template conventions, or documentation filenames.
+  Read the READMEs mentioned in the context or discoverable from the working directory. If a README references additional docs (e.g., `skills_docs/`), read only the files it explicitly lists that are relevant to your task. Don't guess API signatures, template conventions, or doc filenames.
 
 Rules:
-- Do NOT perform final UI validation, preview, or user-facing reporting — those parent-only responsibilities belong to ${parent_name}.
-- Do not ask the human, do not reply to the human, do not contact other agents, and do not delegate again.
-- After implementing code changes, run `lint` and `build` when the project supports them. A failed validation NEVER counts as task completion — fix and retry before finishing. Only stop early if genuinely blocked, and state the blocker clearly.
-- The final summary is for ${parent_name} only, not for the end user. Include: files changed, `lint` result, `build` result, and any unresolved blocker. Do not address the user or use phrases like "Would you like...".
+- Do NOT do final UI validation, preview, or user-facing reporting — those belong to ${parent_name}.
+- Don't ask or reply to the human, don't contact other agents, and don't delegate again.
+- After code changes, run `lint` and `build` when supported. A failed validation NEVER counts as completion — fix and retry before finishing. Only stop early if genuinely blocked, and state the blocker.
+- The final summary is for ${parent_name}, not the end user. Include: files changed, `lint` result, `build` result, any unresolved blocker. Don't address the user or say "Would you like...".
 """
 
 # Backward-compat alias.

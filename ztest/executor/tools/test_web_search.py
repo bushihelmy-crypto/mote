@@ -115,14 +115,13 @@ class TestValidation:
 
 
 class TestSchema:
-    def test_description_is_dynamic_current_year(self):
-        import datetime
-
+    def test_description_carries_operating_manual(self):
+        # Docstring-native: the full operating manual (the Sources: requirement +
+        # current-year guidance) lives in the call() docstring body, so it rides
+        # the auto-generated wire description.
         schema = WebSearch.get_schema()
-        year = datetime.datetime.now().strftime("%Y")
-        # The "use the correct year" guidance carries the live year.
-        assert year in schema["description"]
         assert "Sources:" in schema["description"]
+        assert "current year" in schema["description"]
 
     def test_native_schema_carries_all_params(self):
         native = WebSearch.get_native_schema()

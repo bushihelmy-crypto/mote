@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from mote.common.base import PROCEED, BudgetVerdict, LoopContext
 from mote.common.events import BudgetEvent
 from mote.common.prompt.output import BUDGET_EXHAUSTED
+from mote.common.schema import to_role_content_dicts
 from mote.roles.context_provider.base import BaseContextProvider
 from mote.roles.context_provider.request import ThinkRequest
 from mote.router.schema import RoutingRequest
@@ -66,13 +67,26 @@ class ContextProvider(BaseContextProvider):
     async def resolve_llm(self, messages=None):
         """Resolve the think LLM via the router (the conduit for flag + llmconfig).
 
-        - ``role_schema.enable_router`` True → intelligent routing from the
-          request messages (the router picks a model card per request).
+        - The router is routing-enabled (its per-agent-kind ``router`` config
+          selected a concrete ``strategy`` — not ``None``) AND there are
+          messages → intelligent routing (the router picks a model card per
+          request from the request signals).
         - Otherwise → the fixed configured ``config.models.default``.
+
+        Routing on/off lives solely in the ``router`` config block (per agent
+        kind), resolved once at router-build time into ``router.routing_enabled``.
         """
         role = self._role
-        if role.role_schema.enable_router and messages:
-            return await role.router.aroute(RoutingRequest(messages=messages))
+        if role.router.routing_enabled and messages:
+            # Key routing state (history / holds / seed floor) to this role's
+            # stable session id so per-agent state stays isolated — without it
+            # every agent shares the ``"default"`` key and their histories mix.
+            # RoutingRequest.messages is the {role, content} wire shape; the loop
+            # hands us Message objects. to_role_content_dicts drops tool_calls so
+            # the strategy's token estimate / text extraction read plain dicts
+            # without the counter choking on a nested list.
+            wire = to_role_content_dicts(messages)
+            return await role.router.aroute(RoutingRequest(messages=wire, session_key=role.session_id))
         return role.router.route(llm_config=role.config.models.default)
 
     @property
@@ -189,6 +203,7 @@ class ContextProvider(BaseContextProvider):
             working_dir=self._get_cwd(),
             original_working_dir=self._state.original_working_dir,
             project_root=self._state.project_root,
+            role_info=self._schema.role_info,
         )
 
     def _think_subsystems(self) -> ThinkSubsystems:

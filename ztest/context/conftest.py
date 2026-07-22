@@ -34,7 +34,10 @@ from mote.common.schema import AIMessage, Message, UserMessage
 # Production derives this from the live executor (each tool self-declares via its
 # ``reconstructable`` ClassVar); the tests inject this fixed set explicitly since
 # there is no longer a hardcoded default in the context layer.
-COMPACTABLE = frozenset({"Read", "Bash", "Grep", "Glob", "Write", "Edit"})
+# Includes Edit's aliases (``Write``/``write``/``Update``) because production's
+# ``reconstructable_names()`` lists every name a reconstructable tool routes under,
+# so a call recording the raw alias still lands in a reconstructable segment.
+COMPACTABLE = frozenset({"Read", "Bash", "Grep", "Glob", "Write", "write", "Edit", "Update"})
 
 
 class FakeLLM:

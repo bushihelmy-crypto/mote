@@ -35,13 +35,27 @@ permission sandbox — all built on a zero-back-dependency `common` foundation l
 - **Zero-intrusion observability & logging**: loguru + trace-id + decorator/mixin
   auto-instrumentation; Langfuse tracing is off by default and lazily loaded.
 
+## Install
+
+```bash
+pip install mote                   # from PyPI
+pip install -e ".[dev]"            # from a checkout, with dev tooling
+```
+
+The browser tool needs a Chromium runtime the first time you use it:
+
+```bash
+python -m playwright install chromium
+```
+
 ## Quick start
 
 Launch the interactive REPL:
 
 ```bash
-python -m mote.cli                 # default Assistant + default toolset
-python -m mote.cli --model <name> --tools Read,Write,Edit,Bash,Glob,Grep --cwd .
+mote                               # console entry point (default Assistant + toolset)
+python -m mote.cli                 # equivalent module form
+python -m mote.cli --model <name> --tools Read,Edit,Search,Bash --cwd .
 ```
 
 - Ctrl+C: mid-turn → interrupt the current turn; double-press at the prompt → exit.
@@ -98,7 +112,7 @@ Tests live under `mote/ztest/<subsystem>/` (not `tests/`).
 
 ## Further reading
 
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — detailed per-package architecture docs +
-  a bird's-eye map + the full data-flow of a single turn.
+- [`zdocs/ARCHITECTURE.md`](./zdocs/ARCHITECTURE.md) — detailed per-package
+  architecture docs + a bird's-eye map + the full data-flow of a single turn.
 - [`AGENTS.md`](./AGENTS.md) — conventions for writing code in this repo (layering,
   tool development, protocols, testing, change discipline).

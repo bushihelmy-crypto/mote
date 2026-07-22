@@ -243,6 +243,53 @@ async def test_post_tool_use_block_marks_failure():
     assert "bad output" in res.output
 
 
+class AliasSpyTool(BaseTool):
+    """A tool reachable by its canonical name ``Bash`` or the alias ``bash``."""
+
+    name = "Bash"
+    aliases = ["bash"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ran = False
+
+    def permission_target(self, args: dict) -> str:
+        return ""
+
+    async def call(self, **_kw) -> str:
+        self.ran = True
+        return "ran"
+
+
+async def test_hook_matcher_fires_when_tool_invoked_by_alias():
+    """A hook written against the canonical name fires even when the model
+    invokes the tool via a snake_case alias — run_command canonicalizes the
+    name before the PreToolUse event, so the matcher does not silently miss."""
+    tool = AliasSpyTool()
+    mgr = HookManager()
+    mgr.register("PreToolUse", lambda hi: {"decision": "block", "reason": "no bash"}, matcher="Bash")
+    ex = build(tool, hook_manager=mgr)
+    # Invoke by the ALIAS; the matcher is keyed on the canonical name.
+    res = await ex.run_command("bash", {})
+    assert res.success is False
+    assert tool.ran is False
+    assert "no bash" in res.output
+
+
+async def test_post_tool_use_event_reports_canonical_name_for_alias_call():
+    """PostToolUse carries the canonical tool name even when invoked by alias."""
+    tool = AliasSpyTool()
+    control = _ControlRecorder()
+    bus = _build_with(control)
+    ex = ToolExecutor("sess", tools=None, bus=bus)
+    tool.bind("sess")
+    ex.register_tool_instance(tool, [tool.name, *tool.aliases])
+    res = await ex.run_command("bash", {})
+    assert res.success is True and tool.ran
+    assert len(control.seen) == 1
+    assert control.seen[0].tool_name == "Bash"
+
+
 async def test_hook_deny_composes_with_permission_engine():
     # Permission engine would allow (allow rule), but the PreToolUse hook denies
     # -> deny wins.

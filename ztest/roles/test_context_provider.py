@@ -69,8 +69,9 @@ class TestLoopContext:
 
 class TestResolveLLM:
     def test_fixed_model_when_router_disabled(self, role):
-        role.role_schema.enable_router = False
-        # role_schema.enable_router drives routing; default schema has it False.
+        # router.routing_enabled is the single routing gate; the default config
+        # (strategy None) leaves it False, so the fixed models.default is used.
+        assert role.router.routing_enabled is False
         llm = asyncio.run(role.context_provider.resolve_llm())
         # Should resolve to a concrete provider (fixed config.llm path).
         assert llm is not None
@@ -79,19 +80,40 @@ class TestResolveLLM:
         # With routing on but no messages, the provider must use the fixed model
         # (it never invokes the async router without signals to route on).
         sentinel = object()
-        monkeypatch.setattr(role.role_schema, "enable_router", True)
+        role.router.routing_enabled = True
         monkeypatch.setattr(role.router, "route", lambda *, name=None, llm_config=None: sentinel)
         out = asyncio.run(role.context_provider.resolve_llm(messages=None))
         assert out is sentinel
 
     def test_routes_when_enabled_with_messages(self, role, monkeypatch):
         sentinel = object()
-        monkeypatch.setattr(role.role_schema, "enable_router", True)
+        # A routing role has ``routing_enabled`` True (set by _build_router for
+        # any concrete strategy); the default config leaves it False.
+        role.router.routing_enabled = True
+        captured = {}
 
         async def fake_aroute(request):
             assert request.messages  # signals were forwarded
+            captured["session_key"] = request.session_key
             return sentinel
 
         monkeypatch.setattr(role.router, "aroute", fake_aroute)
+        out = asyncio.run(role.context_provider.resolve_llm(messages=[{"role": "user", "content": "hi"}]))
+        assert out is sentinel
+        # L2: routing state must be keyed to this role's session, not "default".
+        assert captured["session_key"] == role.session_id
+        assert captured["session_key"] != "default"
+
+    def test_fixed_model_when_routing_disabled_on_router(self, role, monkeypatch):
+        # With messages present but the router's strategy None (routing_enabled
+        # False), the provider must NOT route — it runs the fixed models.default.
+        role.router.routing_enabled = False
+
+        async def fail_aroute(request):
+            raise AssertionError("must not route when routing_enabled is False")
+
+        monkeypatch.setattr(role.router, "aroute", fail_aroute)
+        sentinel = object()
+        monkeypatch.setattr(role.router, "route", lambda *, name=None, llm_config=None: sentinel)
         out = asyncio.run(role.context_provider.resolve_llm(messages=[{"role": "user", "content": "hi"}]))
         assert out is sentinel

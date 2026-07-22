@@ -10,8 +10,32 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mote.common.prompt.role import CMD_PROMPT, SYSTEM_PROMPT
+from mote.common.prompt.role import CMD_PROMPT, ROLE_INFO, SYSTEM_PROMPT
 from mote.common.schema import FileWatchConfig, HookConfig, LspConfig, PermissionConfig
+
+
+class BrowserClientCert(BaseModel):
+    """One client TLS certificate for mutual-TLS (mTLS) login on an origin.
+
+    Mirrors Playwright's ``new_context(client_certificates=[...])`` entry: an
+    ``origin`` the cert is presented to plus EITHER a PEM ``cert_path`` +
+    ``key_path`` pair OR a PKCS#12 ``pfx_path``. ``passphrase`` may be a secret
+    placeholder (``<agent-vault:KEY>`` / ``<secret:dotted.path>``) — the tool
+    expands it from the vault at launch, so the plaintext never rides config or
+    history. All paths are host filesystem paths readable by the process.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The exact origin the cert authenticates to, e.g. "https://portal.example.com".
+    origin: str
+    # PEM cert + private key (use these OR pfx_path, not both).
+    cert_path: str = ""
+    key_path: str = ""
+    # PKCS#12 bundle (alternative to the PEM pair).
+    pfx_path: str = ""
+    # Optional key/PKCS#12 passphrase. May be a secret placeholder.
+    passphrase: str = ""
 
 
 class RoleSchema(BaseModel):
@@ -28,6 +52,12 @@ class RoleSchema(BaseModel):
     # --- Prompt templates ---
     system_prompt: str = SYSTEM_PROMPT
     cmd_prompt: str = CMD_PROMPT
+    # The role's own charter — its task DOMAIN + domain conventions — rendered
+    # LAST in the system prompt's dynamic region (${role_info}). Extracted out of
+    # ``system_prompt`` so the shared prefix carries only principles every agent
+    # holds; override this alone to retask the engine to another domain without
+    # touching (or busting the cache of) the shared prefix. "" emits nothing.
+    role_info: str = ROLE_INFO
 
     # --- Command protocol ---
     # How the Role exchanges commands with the LLM:
@@ -70,22 +100,21 @@ class RoleSchema(BaseModel):
         "WebSearch",
         "GenerateMedia",
         "Skill",
+        "DeviceUse",
     ]
     tools: list[str] = [
         "Read",
-        "Write",
         "Edit",
-        "Glob",
-        "Grep",
+        "Search",
         "Bash",
         "AskUserQuestion",
-        "GenerateMedia",
         "SearchTools",
         # Deferred tools MUST also live here: ``deferred_tools`` is a
         # visibility-only subset of ``tools`` (a deferred tool is still bound and
         # dispatchable, its schema is merely withheld until searched). Omitting
         # them here would leave them UNBOUND — invisible to SearchTools, so the
         # model could never discover, reveal, or call them.
+        "GenerateMedia",
         "Terminal",
         "Jupyter",
         "Agent",
@@ -94,6 +123,7 @@ class RoleSchema(BaseModel):
         "WebBrowser",
         "WebSearch",
         "Skill",
+        "DeviceUse",
     ]
     mcps: list[str] = []
     agents: list[str] = []
@@ -146,6 +176,28 @@ class RoleSchema(BaseModel):
     # inside a code repo and the git binary is present, else the plain "blob"
     # store. Force "blob" or "git" to override the heuristic.
     snapshot_backend: Literal["auto", "blob", "git"] = "auto"
+    # When True (default), every file-mutating tool result is split into change
+    # *hunks* attributed to the agent (which turn / tool produced each) and
+    # appended to the session's durable hunk ledger — the truth source for
+    # per-hunk review (accept/reject/undo) and change attribution. Complements
+    # record_file_history (whole-file before-images): this is line-level
+    # attribution. Set False to disable (no hunk ledger; loses per-hunk review).
+    record_hunks: bool = True
+    # When True (default), a whole-working-tree checkpoint is captured at each
+    # user-turn boundary into the session's dedicated git object db, so the user
+    # can roll the entire tree back to any prior turn (the /rewind command). This
+    # engages ONLY inside a git-backed code workspace (mirroring snapshot_backend:
+    # a non-repo cwd makes the feature inert). Complements record_file_history —
+    # per-file before-images are fine-grained, this is a whole-tree undo. Set
+    # False to disable (no per-turn tree snapshots; loses /rewind).
+    record_checkpoints: bool = True
+    # When True (default), a one-line session title is generated from the first
+    # user prompt via a single cheap auxiliary-model call and appended to the
+    # rollout (MetaUpdateEvent.title), so the session listing shows a meaningful
+    # label instead of a bare id. Fire-and-forget + once-per-session (resume-safe:
+    # an already-titled session never re-generates). Set False to disable (the
+    # listing then falls back to the session id / first-prompt preview).
+    generate_title: bool = True
     # When True (default), the persistent terminal records its final environment
     # state (cwd + env diff vs the shell's launch baseline) into the rollout, so
     # a resumed session can re-seed a fresh shell to that state without re-running
@@ -196,17 +248,31 @@ class RoleSchema(BaseModel):
     # (rate limits / CAPTCHAs key off IP reputation); keep the proxy's region
     # consistent with ``browser_locale`` / timezone so the fingerprint agrees.
     browser_proxy: str = ""
+    # Durable browser-login profile name. When set, the persistent browser seeds
+    # its session from — and persists its login back into — an ENCRYPTED profile
+    # under ``~/.mote/browser_profiles/`` (reusing the vault key), so a logged-in
+    # session survives across runs with no re-login (and the session cookies stay
+    # OUT of the plaintext rollout). Empty (default) keeps the current ephemeral
+    # behavior: login lasts only for the session and, if ``record_browser_state``
+    # is on, is captured into the rollout for same-session resume only.
+    browser_profile: str = ""
+    # Client TLS certificates for mutual-TLS (mTLS) logins — sites that require
+    # the client to present a certificate (common in enterprise / government
+    # portals). Each entry pins a cert to an origin (see ``BrowserClientCert``);
+    # applied to the browser context at launch. Empty (default) = no mTLS.
+    browser_client_certs: list[BrowserClientCert] = Field(default_factory=list)
+    # Chrome DevTools Protocol endpoint (e.g. "http://127.0.0.1:9222"). When set,
+    # the persistent browser ATTACHES to an already-running Chrome/Chromium over
+    # CDP instead of launching its own — so the agent drives the human's real
+    # browser with its existing logins, passkeys, and extensions (the ultimate
+    # login-reuse rung). While attached, stealth / proxy / storage_state seeding
+    # and durable profiles are ignored (the real browser owns that config) and
+    # teardown only DISCONNECTS — it never closes the human's browser. Empty
+    # (default) = launch a private browser as before.
+    browser_cdp_endpoint: str = ""
 
     # --- Memory config ---
     enable_memory: bool = True
-
-    # --- Routing ---
-    # Per-role intelligent-routing switch. When True the ContextProvider routes
-    # each think request through the LLMRouter (picks a model card per request
-    # from the registered cards); when False this role uses the fixed
-    # ``config.models.default``. Owned here (not in global config) so each role
-    # decides its own routing independently.
-    enable_router: bool = False
 
     # --- Behavior flags ---
     observe_all_msg_from_buffer: bool = True

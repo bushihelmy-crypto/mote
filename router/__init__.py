@@ -14,11 +14,25 @@ from mote.router.complexity import (
 from mote.router.control import RouterControlHold, RouterControlHoldStore, RouterControlTarget
 from mote.router.flags import RoutingFlags, compute_flags
 from mote.router.llm.base_llm import BaseLLM
-from mote.router.ml import SquillaMLEngine, apply_postprocess, default_model_dir, load_runtime_config
+from mote.router.ml import (
+    SquillaMLEngine,
+    apply_postprocess,
+    default_model_dir,
+    load_runtime_config,
+    prewarm,
+    shared_engine,
+)
 from mote.router.ml.predictor import ROUTE_CLASSES
 from mote.router.router import LLM, LLMRouter
 from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
-from mote.router.squilla import RoutingHistoryStore, SquillaConfig, SquillaStrategy, detect_complaint, score_to_probs
+from mote.router.squilla import (
+    RoutingHistoryStore,
+    SeedFloorStore,
+    SquillaConfig,
+    SquillaStrategy,
+    detect_complaint,
+    score_to_probs,
+)
 from mote.router.strategy import ComplexityStrategy, LLMJudgeStrategy, RoutingStrategy, RuleBasedStrategy
 
 __all__ = [
@@ -36,10 +50,13 @@ __all__ = [
     "SquillaStrategy",
     "SquillaConfig",
     "RoutingHistoryStore",
+    "SeedFloorStore",
     "detect_complaint",
     "score_to_probs",
     # ML inference pipeline (LightGBM ⊕ MLP, graceful fallback)
     "SquillaMLEngine",
+    "shared_engine",
+    "prewarm",
     "apply_postprocess",
     "default_model_dir",
     "load_runtime_config",

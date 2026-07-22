@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from mote.common.const.message import INTERJECTION
 from mote.common.schema import CauseBy, Message, MessagePriority, UserMessage
 
 from .conftest import make_loop_context
@@ -137,3 +138,61 @@ async def test_observe_respects_max_priority(make_loop):
     assert await b.loop._observe(max_priority=MessagePriority.NOW) == 0
     # Pops once the bar is raised to NEXT.
     assert await b.loop._observe(max_priority=MessagePriority.NEXT) == 1
+
+
+# ---------------------------------------------------------------------------
+# Interjection framing — a user message drained mid-turn (interjection=True)
+# is wrapped so the model can tell it apart from the turn's original prompt.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_observe_frames_mid_turn_user_message(make_loop):
+    b = make_loop(watch=set(), name="Alice")
+    b.loop._ctx = b.ctx
+    steer = _msg("stop and do X", send_to={"Alice"})
+    b.buffer.push(steer)
+
+    assert await b.loop._observe(interjection=True) == 1
+    assert "The user sent a message while you were working:" in steer.content
+    assert "<user_query>\nstop and do X\n</user_query>" in steer.content
+    assert steer.metadata[INTERJECTION] is True
+
+
+@pytest.mark.asyncio
+async def test_observe_initial_does_not_frame(make_loop):
+    # The turn's first prompt (default interjection=False) is left verbatim.
+    b = make_loop(watch=set(), name="Alice")
+    b.loop._ctx = b.ctx
+    prompt = _msg("original prompt", send_to={"Alice"})
+    b.buffer.push(prompt)
+
+    assert await b.loop._observe() == 1
+    assert prompt.content == "original prompt"
+    assert INTERJECTION not in prompt.metadata
+
+
+@pytest.mark.asyncio
+async def test_observe_frame_is_idempotent(make_loop):
+    # An already-framed message (metadata flag set) is not double-wrapped.
+    b = make_loop(watch=set(), name="Alice")
+    b.loop._ctx = b.ctx
+    already = _msg("already", send_to={"Alice"})
+    already.metadata[INTERJECTION] = True
+    b.buffer.push(already)
+
+    assert await b.loop._observe(interjection=True) == 1
+    assert already.content == "already"
+
+
+@pytest.mark.asyncio
+async def test_observe_does_not_frame_non_user_message(make_loop):
+    # A bg-task notification / tool result flows through untouched.
+    b = make_loop(watch=set(), name="Alice")
+    b.loop._ctx = b.ctx
+    note = Message("bg task done", role="tool", send_to={"Alice"})
+    b.buffer.push(note)
+
+    assert await b.loop._observe(interjection=True) == 1
+    assert note.content == "bg task done"
+    assert INTERJECTION not in note.metadata

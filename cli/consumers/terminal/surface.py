@@ -13,7 +13,7 @@ three-tier image renderer.
 Two behaviours **converge** onto the terminal here that only the Textual host had
 before, because the reducer now drives them for both:
 
-* **Collapsed search/read groups** — a run of Read/Grep/Glob is buffered and
+* **Collapsed search/read groups** — a run of Read/Search is buffered and
   printed as a single ``● 搜索 N · 读取 M`` summary line on ``flush_group`` (a
   linear scrollback can't retro-fold already-printed rows, so it buffers until
   the run breaks and prints once).

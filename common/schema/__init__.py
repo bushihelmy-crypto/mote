@@ -22,6 +22,8 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "ToolMessage": ("messages", "ToolMessage"),
     "ResourceMessage": ("messages", "ResourceMessage"),
     "LLMCallContext": ("messages", "LLMCallContext"),
+    "to_role_content_dicts": ("messages", "to_role_content_dicts"),
+    "serialize_tool_call_args": ("messages", "serialize_tool_call_args"),
     # serialization
     "BaseSerialization": ("serialization", "BaseSerialization"),
     # env
@@ -64,12 +66,21 @@ _LAZY_MAPPING: dict[str, tuple[str, str]] = {
     "TOOL_MAX_RESULT_SIZE_CHARS": ("tool_config", "TOOL_MAX_RESULT_SIZE_CHARS"),
     "ToolResultLimitConfig": ("tool_config", "ToolResultLimitConfig"),
     "EffectLedgerConfig": ("tool_config", "EffectLedgerConfig"),
+    "LoopGuardConfig": ("tool_config", "LoopGuardConfig"),
+    "DurableConfig": ("tool_config", "DurableConfig"),
+    "TemporalConfig": ("tool_config", "TemporalConfig"),
+    "ActivityConfig": ("tool_config", "ActivityConfig"),
     "ToolSearchConfig": ("tool_config", "ToolSearchConfig"),
+    # device_config
+    "DeviceConfig": ("device_config", "DeviceConfig"),
+    # web_search_config
+    "WebSearchConfig": ("web_search_config", "WebSearchConfig"),
     # permission_config
     "PermissionConfig": ("permission_config", "PermissionConfig"),
     "SandboxConfig": ("permission_config", "SandboxConfig"),
     # sandbox_runtime_config
     "SandboxRuntimeConfig": ("sandbox_runtime_config", "SandboxRuntimeConfig"),
+    "CredentialConfig": ("sandbox_runtime_config", "CredentialConfig"),
     # permission_types
     "PermissionMode": ("permission_types", "PermissionMode"),
     "PermissionBehavior": ("permission_types", "PermissionBehavior"),

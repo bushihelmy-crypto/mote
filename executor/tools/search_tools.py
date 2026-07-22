@@ -86,29 +86,24 @@ class SearchTools(BaseTool):
     async def call(self, *, query: str = "", names: Optional[list[str]] = None) -> ToolResult:
         """Discover and enable deferred tools — by keyword and/or by exact name.
 
-        Discover and enable additional tools that are not loaded by default. Some
-        peripheral tools are hidden to keep the toolset focused; the reminder
-        lists their names + a one-line description under "Additional tools". Two
-        ways to reveal them, usable together (their results are UNIONed):
+        Some peripheral tools are hidden to keep the toolset focused; the reminder
+        lists their names + one-line descriptions under "Additional tools". Two
+        ways to reveal them, usable together (results are UNIONed):
 
-          - ``query``: space/comma-separated keywords describing the capability
-            you need (heuristic match by capability, not exact name — e.g.
-            "convert image", "database query"). Every hidden tool sharing any
-            keyword is revealed.
-          - ``names``: an explicit list of the exact tool names to reveal (skips
-            the heuristic). Use this when you already know the tool's name from
-            the "Additional tools" menu.
+          - ``query``: space/comma-separated capability keywords (heuristic match,
+            not exact name — e.g. "convert image", "database query"). Every hidden
+            tool sharing any keyword is revealed.
+          - ``names``: exact tool names to reveal (skips the heuristic), when you
+            already know the name from the menu.
 
-        Revealed tools become available (their full schema arrives, and they are
-        directly callable) on the next turn.
+        Revealed tools get their full schema and become callable on the next turn.
 
         Args:
             query: Capability keywords to match (fuzzy). Optional if ``names`` given.
-            names: Exact tool names to reveal (skips matching). Optional if ``query``
-                given.
+            names: Exact tool names to reveal. Optional if ``query`` given.
 
         Returns:
-            The tools revealed (name + description), now callable next turn.
+            The tools revealed (name + description), callable next turn.
         """
         index = self.list_deferred_tools()
         if not index:

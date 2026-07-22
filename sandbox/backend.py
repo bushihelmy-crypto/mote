@@ -64,6 +64,19 @@ class SandboxPolicy:
     # Extra writable bind mounts beyond ``writable_roots`` (e.g. a scratch dir
     # the orchestrator needs visible read-write inside the sandbox).
     extra_writable: list[str] = field(default_factory=list)
+    # Absolute paths to MASK from the sandbox: each is bind-mounted over with
+    # ``/dev/null`` so it reads as empty inside, no matter that the read-only
+    # root baseline (``--ro-bind / /``) would otherwise expose it. Used to hide
+    # secret material (the encrypted vault, ``vault.key``, the MITM CA private
+    # key) so the "secret never enters the sandbox" guarantee is real.
+    masked_paths: list[str] = field(default_factory=list)
+    # Absolute DIRECTORY paths to MASK from the sandbox: each is overlaid with an
+    # empty ``tmpfs`` so it reads as an empty directory inside, hiding whatever
+    # the read-only root baseline would otherwise expose. The directory sibling
+    # of ``masked_paths`` (which uses ``/dev/null`` for single files). Used to
+    # hide the durable browser-profile store (encrypted logins) — a whole
+    # directory of dynamically-named files that cannot be masked file-by-file.
+    masked_dirs: list[str] = field(default_factory=list)
 
 
 class SandboxBackend:

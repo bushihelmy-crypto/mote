@@ -32,8 +32,8 @@ async def test_pre_and_post_tool_use_hooks_fire(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "hooked.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "hi"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "hi"})], "done"],
     )
 
     seen: list[tuple[str, str]] = []
@@ -51,8 +51,8 @@ async def test_pre_and_post_tool_use_hooks_fire(make_role, tmp_path):
 
     await role.run(with_message="write hooked.txt")
 
-    assert ("pre", "Write") in seen
-    assert ("post", "Write") in seen
+    assert ("pre", "Edit") in seen
+    assert ("post", "Edit") in seen
     # The tool still ran (hooks observed, did not block).
     assert os.path.exists(target)
 
@@ -62,8 +62,8 @@ async def test_lifecycle_hooks_fire_in_order(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "lc.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "x"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "x"})], "done"],
     )
 
     events: list[str] = []
@@ -88,8 +88,8 @@ async def test_user_prompt_submit_injects_context(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "ctx.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "x"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "x"})], "done"],
     )
 
     async def add_context(hook_input):
@@ -113,8 +113,8 @@ async def test_post_tool_use_appends_additional_context(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "ap.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "x"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "x"})], "done"],
     )
 
     async def annotate(hook_input):
@@ -125,7 +125,7 @@ async def test_post_tool_use_appends_additional_context(make_role, tmp_path):
             }
         }
 
-    role.register_hook("PostToolUse", annotate, matcher="Write")
+    role.register_hook("PostToolUse", annotate, matcher="Edit")
 
     await role.run(with_message="go")
 
@@ -138,19 +138,19 @@ async def test_pre_tool_use_hook_rewrites_args(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "rw.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "ORIGINAL"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "ORIGINAL"})], "done"],
     )
 
     async def rewrite(hook_input):
         args = dict(hook_input.payload.get("tool_input") or {})
-        args["content"] = "REWRITTEN"
+        args["new_string"] = "REWRITTEN"
         return {
             "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"},
             "updatedInput": args,
         }
 
-    role.register_hook("PreToolUse", rewrite, matcher="Write")
+    role.register_hook("PreToolUse", rewrite, matcher="Edit")
 
     await role.run(with_message="write rw.txt")
 
@@ -164,14 +164,14 @@ async def test_pre_tool_use_block_denies_tool(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "blocked.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        turns=[[("Write", {"file_path": target, "content": "should not exist"})], "done"],
+        tools=["Edit"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "should not exist"})], "done"],
     )
 
     async def deny(hook_input):
         return {"decision": "block", "reason": "nope"}
 
-    role.register_hook("PreToolUse", deny, matcher="Write")
+    role.register_hook("PreToolUse", deny, matcher="Edit")
 
     await role.run(with_message="try to write")
 
@@ -188,9 +188,9 @@ async def test_permission_deny_blocks_tool(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "denied.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(deny=["Write"]),
-        turns=[[("Write", {"file_path": target, "content": "blocked by policy"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(deny=["Edit"]),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "blocked by policy"})], "done"],
     )
 
     await role.run(with_message="write denied.txt")
@@ -205,9 +205,9 @@ async def test_permission_allow_lets_tool_run(make_role, tmp_path):
     target = os.path.join(str(tmp_path), "allowed.txt")
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
-        permissions=PermissionConfig(allow=["Write"], mode="default"),
-        turns=[[("Write", {"file_path": target, "content": "ok"})], "done"],
+        tools=["Edit"],
+        permissions=PermissionConfig(allow=["Edit"], mode="default"),
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "ok"})], "done"],
     )
 
     await role.run(with_message="write allowed.txt")
@@ -307,9 +307,9 @@ async def test_snapshot_of_created_file_restores_by_deleting(make_role, tmp_path
     target = os.path.join(str(tmp_path), "created.txt")  # does not exist yet
     role = make_role(
         working_dir=str(tmp_path),
-        tools=["Write"],
+        tools=["Edit"],
         snapshot_backend="blob",
-        turns=[[("Write", {"file_path": target, "content": "brand new"})], "done"],
+        turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "brand new"})], "done"],
     )
 
     await role.run(with_message="create created.txt")

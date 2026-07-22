@@ -67,9 +67,9 @@ class PermissionConfig(BaseModel):
 
     Rules are written in the familiar ``Tool(pattern)`` form, e.g.::
 
-        allow = ["Read", "Grep", "Glob", "Bash(git*)"]
+        allow = ["Read", "Search", "Bash(git*)"]
         deny  = ["Bash(rm -rf*)"]
-        ask   = ["Bash(npm publish*)", "Write"]
+        ask   = ["Bash(npm publish*)", "Edit"]
 
     Matching semantics (see ``executor/permission/rule_matcher.py``):
       * a bare ``Tool`` matches every call to that tool;

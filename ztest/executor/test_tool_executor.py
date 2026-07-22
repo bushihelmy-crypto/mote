@@ -17,7 +17,8 @@ from mote.common.schema import ToolResultLimitConfig
 from mote.executor.base_tool import BaseTool
 from mote.executor.mcp_adapter import MCPToolAdapter
 from mote.executor.tasks.types import BgTaskResult
-from mote.executor.tool_executor import ToolExecutor, _validate_call_args
+from mote.executor.tool_executor import ToolExecutor
+from mote.executor.tool_pipeline import validate_call_args
 
 from .conftest import (
     AddTool,
@@ -132,7 +133,7 @@ class TestRunCommandArgValidation:
     async def test_validate_call_args_raises_tool_validation_error(self):
         # Unit-level: the helper raises a typed ToolValidationError.
         with pytest.raises(ToolValidationError) as exc:
-            _validate_call_args(EchoTool.call, "Echo", {})
+            validate_call_args(EchoTool.call, "Echo", {})
         assert "missing required argument: text" in str(exc.value)
 
 
@@ -214,6 +215,55 @@ class TestResultLimiting:
         result = await ex.run_command("BigMedia", {})
         assert len(result.output) == 60_000
         assert not result.output.startswith("<persisted-output>")
+
+
+class TestPersistLargeArgs:
+    """The arguments twin of result-output limiting.
+
+    ``persist_large_args`` runs a tool call's RECORDED args through the same
+    persist policy/session/store the result path uses, so a giant arg blob is
+    spilled to disk before the assistant message enters context. Shares the
+    ``{call_id}-args`` id namespace with the compaction spill reducer.
+    """
+
+    async def test_large_args_replaced_by_envelope(self, tmp_path):
+        from mote.common.workspace import WorkspaceStore
+
+        ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
+        big = {"new_string": "x" * 60_000}
+        out = ex.persist_large_args(big, "call-1")
+        assert isinstance(out, str)
+        assert out.startswith("<persisted-output>")
+        assert (tmp_path / ".agent_sessions" / "args-sess" / "tool_results" / "call-1-args.txt").exists()
+
+    async def test_small_args_returned_unchanged(self, tmp_path):
+        from mote.common.workspace import WorkspaceStore
+
+        ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
+        small = {"path": "a.py"}
+        # Same dict object back (identity), not a re-serialized string.
+        assert ex.persist_large_args(small, "call-1") is small
+
+    async def test_disabled_returns_args_unchanged(self):
+        ex = make_executor(limit_config=ToolResultLimitConfig(enable_tool_result_limit=False))
+        big = {"new_string": "x" * 60_000}
+        assert ex.persist_large_args(big, "call-1") is big
+
+    async def test_string_args_over_threshold_persisted(self, tmp_path):
+        from mote.common.workspace import WorkspaceStore
+
+        ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
+        out = ex.persist_large_args("y" * 60_000, "call-2")
+        assert out.startswith("<persisted-output>")
+
+    async def test_idempotent_already_persisted_args(self, tmp_path):
+        from mote.common.workspace import WorkspaceStore
+
+        ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
+        big = {"new_string": "x" * 60_000}
+        first = ex.persist_large_args(big, "call-1")
+        # Feeding the envelope back (as a spill pass would) is a no-op.
+        assert ex.persist_large_args(first, "call-1") == first
 
 
 class TestSchemas:
@@ -388,7 +438,7 @@ class TestPipelinesEnabledGate:
 
 
 class TestConstructorAndCleanup:
-    async def test_constructor_prebinds_from_registry(self, restore_global_registry):
+    async def test_first_use_binds_from_registry(self, restore_global_registry):
         # Register a test tool into the (snapshotted) global registry, then let
         # the constructor resolve it by name.
         from mote.executor.base_tool import BaseTool
@@ -406,6 +456,38 @@ class TestConstructorAndCleanup:
         assert result.output == "hello"
         # Alias also routes to the same instance.
         assert await ex.run_command("rt", {"v": "z"}) is not None
+
+    async def test_constructor_does_not_discover_or_instantiate_tools(self, restore_global_registry, monkeypatch):
+        created = 0
+
+        class LazyTool(BaseTool):
+            name = "Lazy"
+
+            def __init__(self):
+                nonlocal created
+                super().__init__()
+                created += 1
+
+            async def call(self) -> str:
+                return "ready"
+
+        restore_global_registry.register(LazyTool)
+        discover_calls = 0
+        original_discover = restore_global_registry.discover
+
+        def discover():
+            nonlocal discover_calls
+            discover_calls += 1
+            return original_discover()
+
+        monkeypatch.setattr(restore_global_registry, "discover", discover)
+        executor = ToolExecutor("sess", tools=["Lazy"])
+        assert discover_calls == 0
+        assert created == 0
+
+        assert (await executor.run_command("Lazy", {})).output == "ready"
+        assert discover_calls == 1
+        assert created == 1
 
     async def test_unknown_declared_tool_is_skipped(self, restore_global_registry):
         # A declared name with no registered class is silently skipped.
@@ -835,7 +917,8 @@ class TestReloadMcp:
 # EXTERNAL-effect idempotency ledger integration (run_command chokepoint)
 # ---------------------------------------------------------------------------
 
-from mote.common.schema import EffectLedgerConfig, ToolEffect  # noqa: E402
+from mote.common.ledger import KIND_TOOL  # noqa: E402
+from mote.common.schema import DurableConfig, EffectLedgerConfig, ToolEffect  # noqa: E402
 from mote.common.workspace import WorkspaceStore  # noqa: E402
 from mote.executor.effect_ledger import COMPLETED, FAILED, STARTED, EffectLedger  # noqa: E402
 from mote.executor.tool_result import ToolError  # noqa: E402
@@ -873,6 +956,21 @@ class _FailExternal(BaseTool):
 
     async def call(self) -> str:
         raise ToolError("boom")
+
+
+class _LocalTool(BaseTool):
+    """LOCAL-effect tool (fs write) that records whether its body ran."""
+
+    name = "Local"
+    effect = ToolEffect.LOCAL
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ran = 0
+
+    async def call(self, *, text: str = "ok") -> str:
+        self.ran += 1
+        return text
 
 
 class TestEffectLedgerIntegration:
@@ -968,3 +1066,147 @@ class TestEffectLedgerIntegration:
         assert result.success is False
         assert "<unknown-after-crash>" in result.output
         assert tool.ran == 0  # body was NOT re-run
+
+
+class TestLocalLedgering:
+    """A4: LOCAL-effect calls are journaled too (heal-reuse expensive re-runs),
+    but with replay-safe resume semantics distinct from EXTERNAL."""
+
+    async def test_local_call_records_started_then_completed(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_LocalTool(), session_id="s", workspace_store=store)
+        result = await ex.run_command("Local", {"text": "hi"}, result_id="c1")
+        assert result.output == "hi"
+        rec = ex.ledger.status("c1")  # type: ignore[union-attr]
+        assert rec is not None and rec.status == COMPLETED and rec.result == "hi"
+
+    async def test_local_record_carries_local_effect(self, tmp_path):
+        # The started/terminal records tag the call LOCAL so the resume reconciler
+        # can tell it apart from an EXTERNAL one whose in-flight outcome is unknown.
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_LocalTool(), session_id="s", workspace_store=store)
+        await ex.run_command("Local", {"text": "hi"}, result_id="c1")
+        rec = ex.journal.replay("c1")  # type: ignore[union-attr]
+        assert rec is not None and rec.effect == ToolEffect.LOCAL.value
+
+    async def test_completed_local_replays_without_rerun(self, tmp_path):
+        # A resume re-dispatching a completed LOCAL id reuses the stored result
+        # instead of re-paying the (potentially expensive) call.
+        store = WorkspaceStore(tmp_path)
+        seed = EffectLedger("s", store=store)
+        seed.mark_started("c1", "Local", effect=ToolEffect.LOCAL.value)
+        seed.mark_completed("c1", "Local", result="cached-local")
+
+        tool = _LocalTool()
+        ex = make_executor(tool, session_id="s", workspace_store=store)
+        result = await ex.run_command("Local", {"text": "fresh"}, result_id="c1")
+        assert result.output == "cached-local"
+        assert tool.ran == 0  # body was NOT re-run
+
+    async def test_started_local_is_rerun_not_refused(self, tmp_path):
+        # Unlike EXTERNAL, a LOCAL call left ``started`` by a crash is replay-safe
+        # (before-image protected) → re-run to a fresh result, never refused.
+        store = WorkspaceStore(tmp_path)
+        seed = EffectLedger("s", store=store)
+        seed.mark_started("c1", "Local", effect=ToolEffect.LOCAL.value)
+
+        tool = _LocalTool()
+        ex = make_executor(tool, session_id="s", workspace_store=store)
+        result = await ex.run_command("Local", {"text": "fresh"}, result_id="c1")
+        assert result.success is True and result.output == "fresh"
+        assert tool.ran == 1  # body WAS re-run
+        rec = ex.ledger.status("c1")  # type: ignore[union-attr]
+        assert rec is not None and rec.status == COMPLETED
+
+    async def test_local_does_not_trigger_precheckpoint(self, tmp_path):
+        # will_ledger (the loop's pre-body record_call+drain trigger) stays
+        # EXTERNAL-only: a LOCAL call needs no pre-body barrier (replay-safe), so
+        # it is journaled at settle time but never forces the checkpoint drain.
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_LocalTool(), session_id="s", workspace_store=store)
+        assert ex.will_ledger("Local", "c1") is False
+
+    async def test_external_still_triggers_precheckpoint(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        assert ex.will_ledger("Ext", "c1") is True
+
+    async def test_pure_is_never_prechecked_or_ledgered(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_PureTool(), session_id="s", workspace_store=store)
+        assert ex.will_ledger("Pure", "c1") is False
+        await ex.run_command("Pure", {}, result_id="c1")
+        assert ex.ledger.status("c1") is None  # type: ignore[union-attr]
+
+
+class TestSharedJournalWiring:
+    """The executor owns ONE run journal; the ledger is a view over it."""
+
+    async def test_ledger_shares_the_executor_journal(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        assert ex.journal is not None
+        # The EXTERNAL-effect ledger writes into the very same journal instance,
+        # so a think/timer/LOCAL step (A3+) shares one physical log with it.
+        assert ex.ledger is not None  # type: ignore[union-attr]
+        assert ex.ledger.journal is ex.journal  # type: ignore[union-attr]
+
+    async def test_external_call_shows_up_on_the_shared_journal(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        await ex.run_command("Ext", {"text": "hi"}, result_id="c1")
+        # The tool step is a ``kind="tool"`` record readable straight off the
+        # shared journal (not only through the ledger view).
+        rec = ex.journal.replay("c1")  # type: ignore[union-attr]
+        assert rec is not None and rec.kind == KIND_TOOL and rec.status == COMPLETED
+
+    async def test_durable_config_accessor(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        assert ex.durable_config.enabled is True and ex.durable_config.backend == "jsonl"
+
+    async def test_journal_built_when_only_durable_enabled(self, tmp_path):
+        # EXTERNAL ledger off but durable on (the default) → the journal still
+        # exists as the substrate for think/timer/LOCAL steps, but no EXTERNAL
+        # ledger view is built.
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(
+            _ExternalTool(),
+            session_id="s",
+            workspace_store=store,
+            ledger_config=EffectLedgerConfig(enabled=False),
+            durable_config=DurableConfig(enabled=True),
+        )
+        assert ex.ledger is None
+        assert ex.journal is not None
+
+    async def test_journal_none_when_both_disabled(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(
+            _ExternalTool(),
+            session_id="s",
+            workspace_store=store,
+            ledger_config=EffectLedgerConfig(enabled=False),
+            durable_config=DurableConfig(enabled=False),
+        )
+        assert ex.ledger is None and ex.journal is None
+
+    async def test_jsonl_backend_composes_over_executor_journal(self, tmp_path):
+        # The loop builds its Tier-1 backend over the executor's journal — a
+        # completed think step recorded through it is replayed, not re-run.
+        from mote.common.ledger import KIND_THINK
+        from mote.loop.durable import JsonlBackend
+
+        store = WorkspaceStore(tmp_path)
+        ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
+        backend = JsonlBackend(ex.journal)  # type: ignore[arg-type]
+        ran = []
+
+        async def execute() -> str:
+            ran.append(1)
+            return "thought"
+
+        first = await backend.run_step("think:1", KIND_THINK, "pure", execute, seq=1)
+        second = await backend.run_step("think:1", KIND_THINK, "pure", execute, seq=1)
+        assert first == "thought" and second == "thought"
+        assert ran == [1]  # second call replayed from the journal

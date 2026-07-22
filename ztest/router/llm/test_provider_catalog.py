@@ -268,6 +268,50 @@ def test_every_model_marker_is_a_valid_provider_name():
             assert resolve_provider_name(marker) == canonical, (canonical, marker)
 
 
+# --- providers mirrored from the pydantic-ai catalog ---------------------
+
+
+@pytest.mark.parametrize(
+    ("brand", "base_url", "env_key"),
+    [
+        ("google", "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
+        ("cohere", "https://api.cohere.ai/compatibility/v1", "CO_API_KEY"),
+        ("huggingface", "https://router.huggingface.co/v1", "HF_TOKEN"),
+        ("github", "https://models.github.ai/inference", "GITHUB_API_KEY"),
+        ("heroku", "https://us.inference.heroku.com/v1", "HEROKU_INFERENCE_KEY"),
+        ("nebius", "https://api.studio.nebius.com/v1", "NEBIUS_API_KEY"),
+        ("ollama", "http://localhost:11434/v1", "OLLAMA_API_KEY"),
+        ("ovhcloud", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", "OVHCLOUD_API_KEY"),
+        ("sambanova", "https://api.sambanova.ai/v1", "SAMBANOVA_API_KEY"),
+        ("vercel", "https://ai-gateway.vercel.sh/v1", "VERCEL_AI_GATEWAY_API_KEY"),
+        ("litellm", "http://localhost:4000", "LITELLM_API_KEY"),
+    ],
+)
+def test_pydantic_mirrored_presets(brand, base_url, env_key):
+    preset = get_provider_preset(brand)
+    assert preset.base_url == base_url
+    assert preset.api_type == LLMType.OPENAI
+    assert env_key in preset.env_keys
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical"),
+    [
+        ("gemini", "google"),
+        ("hf", "huggingface"),
+        ("github-models", "github"),
+        ("ovh", "ovhcloud"),
+        ("alibaba", "dashscope"),
+    ],
+)
+def test_mirrored_provider_aliases_resolve(name, canonical):
+    assert resolve_provider_name(name) == canonical
+
+
+def test_detect_provider_gemini_model_hint():
+    assert detect_provider({"model": "gemini-2.5-pro"}, environ={}) == "google"
+
+
 def test_alias_index_rejects_cross_brand_collision():
     from mote.common.config.config.llm_config import ProviderPreset, _build_alias_index
 

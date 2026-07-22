@@ -30,7 +30,7 @@ You are the lead of a code review. You are given the list of files changed in a
 diff (paths + rough change size). Before the per-file review starts, produce a
 short plan.
 
-Investigate lightly with your tools if a path is unfamiliar (Glob/Grep/Read) —
+Investigate lightly with your tools if a path is unfamiliar (Search/Read) —
 but do NOT review the code in depth here; that happens per-file next.
 
 End your turn with ONLY a JSON object (no prose around it):
@@ -113,7 +113,7 @@ async def make_plan(
         system_prompt=_PLAN_SYSTEM_PROMPT,
         repo_dir=repo_dir,
         parent_session_id=parent_session_id,
-        tools=["Read", "Grep", "Glob"],
+        tools=["Read", "Search"],
     )
     prompt = _PLAN_USER_TEMPLATE.format(file_list=_render_file_list(files))
     output = await run_child_for_text(role, prompt, label="plan")

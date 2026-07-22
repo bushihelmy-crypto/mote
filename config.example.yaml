@@ -49,7 +49,8 @@ models:
     # 已知品牌：openai / anthropic / deepseek / moonshot / mistral / yi /
     #   open_router / siliconflow / fireworks / open_llm / groq / xai / together /
     #   nvidia / cerebras / zai / minimax / dashscope / zhipuai / stepfun /
-    #   baichuan / perplexity / github-copilot
+    #   baichuan / perplexity / github-copilot / google / cohere / huggingface /
+    #   github / heroku / nebius / ollama / ovhcloud / sambanova / vercel / litellm
     # provider: "anthropic"
 
     # —— 网络代理（可选，仅此 LLM 客户端用）——
@@ -112,6 +113,27 @@ tools:
   # 直接愈合（不重跑），started 但结果未知的注入 <unknown-after-crash> 告警。
   effect_ledger:
     enabled: true                        # false 则完全不记台账（每次调用照常直接跑）
+  # 持久化执行后端（replay-safe 步骤的记忆化：LLM think 轮 / LOCAL 写工具 / 持久定时器）。
+  # 与 effect_ledger 正交：effect_ledger 管 EXTERNAL 副作用幂等（correctness，永不弱化），
+  # 这里管「已完成步骤的结果记忆化」，让 resume 跳过已完成步骤而非重付。
+  # backend 选择传输层：
+  #   jsonl（默认，零依赖）——RunJournal 记 started/completed/failed，resume 从台账重放已完成步。
+  #     不是确定性重放引擎，只承诺「跳过已完成步 + 愈合崩溃前沿」。
+  #   temporal（可选，默认关闭）——三个 seam 变 Temporal activity，结果由事件历史 memoize。
+  #     需装可选 extra `pip install mote[temporal]`；未装则自动降级回 jsonl（不崩溃）。
+  #     temporal.* 仅在 backend=temporal 时被读取，jsonl 下完全惰性。
+  durable:
+    enabled: true                        # false 则不做步骤记忆化（resume 时每步照常重跑）
+    backend: "jsonl"                     # jsonl（默认，零依赖）| temporal（可选分布式后端，默认关闭）
+    # 以下仅在 backend=temporal 时生效（连接 + 每 seam 的 activity 重试/超时策略）：
+    temporal:
+      server_address: "localhost:7233"   # Temporal 前端地址
+      namespace: "default"               # workflow 所在 namespace
+      task_queue: "mote"                 # workflow + activity 轮询的队列
+      # tool_activity / think_activity / timer_activity 各自的 ActivityConfig 略（用默认预算）：
+      #   start_to_close_timeout_seconds（单次 attempt 墙钟上限，null=用服务器默认，seam 层回退 600s）
+      #   max_retry_attempts（0=无界，交由超时约束）/ initial_retry_interval_seconds /
+      #   retry_backoff_coefficient / max_retry_interval_seconds / non_retryable_error_types
   # Tool Search 总开关（延迟工具发现）。角色的 role_schema.deferred_tools 声明哪些工具
   # 「搜索后才可见」，此开关全局决定该声明是否生效。false 时对所有角色强制清空延迟集：
   # 不隐藏任何工具、不绑定 SearchTools、不注入紧凑菜单、不走原生 tool-search——每个声明的
@@ -125,6 +147,28 @@ tools:
   # 所以延迟工具功能对旧模型是「有功能但无缓存收益」，对新模型才是「功能+缓存双赢」。
   tool_search:
     enabled: true                        # false 则彻底关闭延迟工具功能
+  # 工具调用循环护栏（loop guard）：PostToolUse 控制订阅者，与权限门、脱敏改写器同在
+  # 控制平面上。盯两种「原地打转」：①重复失败——同一工具+同一参数连续失败 N 次；
+  # ②无进展——某个 PURE（只读）工具连续 N 次返回完全相同的结果。命中后把一句 in-band
+  # 提示追加进该次工具结果（复用 additional_context），点名具体次数并引导模型换思路
+  # 或用 AskUserQuestion 转人工——只是软提示，决策仍交给模型。fail-open 且默认开启。
+  loop_guard:
+    enabled: true                        # false 则完全不挂载，与旧的无护栏行为逐字节一致
+    failure_threshold: 3                 # 同一 (工具,参数) 连续失败多少次触发「重复失败」提示
+    no_progress_threshold: 3             # 同一只读调用连续多少次返回相同结果触发「无进展」提示
+  # DeviceUse 工具的可插拔设备后端（当前仅实现 Android over adb）。模型通过
+  # observe/act 驱动一台设备（真机 / 模拟器 / adb connect TCP / 云手机）。
+  device:
+    backend: "auto"                      # auto（adb 可达则用 Android，否则空后端）| android（强制）| none（禁用）
+    adb_path: "adb"                      # adb 二进制路径；裸 "adb" 走 PATH，否则填绝对路径
+    serial: ""                           # 目标设备序列号（adb -s）；多设备时选一台，留空则用唯一设备
+    # 无真机降级：start 探测不到任何 adb 设备时，自动拉起本地 Android 模拟器（AVD）
+    # 而非直接报错。需主机装了 Android SDK 的 emulator 且已创建至少一个 AVD。
+    auto_start_emulator: true            # false 则保持「必须有物理/已启动设备」的严格行为
+    emulator_path: "emulator"            # emulator 二进制路径（Android SDK 的 emulator/ 目录）；裸名走 PATH
+    avd_name: ""                         # 要启动的 AVD 名；留空则取 `emulator -list-avds` 的第一个
+    emulator_args: []                    # 启动附加参数，如 ["-no-window"]（无头 CI）、["-no-snapshot"]
+    emulator_boot_timeout: 120.0         # 等待新模拟器开机完成（sys.boot_completed）的秒数上限
 
 # ----------------------------------------------------------------------------
 # context —— 上下文工程（压缩 / 代码地图 / 技能 / 后台流水线）
@@ -149,6 +193,25 @@ context:
   bggraph:
     # 启用后台节点图（pipeline）引擎，控制 pipeline 工具是否加载绑定。
     enabled: false
+  turn_context:
+    # 每轮临时（ephemeral）上下文源的开关注册表 —— 采用 opt-out（黑名单）语义。
+    # 常开源（git 状态 / token/fold 压力 / 代码地图 / 延迟工具菜单 / 时间戳 ...）
+    # 默认全部启用；把某个源的 name 列进 disabled 即可屏蔽它对应的提醒块。
+    # 可用 name：git / code_map / token_pressure / fold_pressure / timestamp /
+    #   changed_files / tool_catalog / deferred_tool_index / skill_listing ...
+    disabled: []
+    # 凭据索引 —— 唯一的 opt-in 例外：一个登录填充菜单。默认关闭；开启后仅在
+    # 「角色装备了 WebBrowser」且「最近一轮实际调用过 WebBrowser」时才渲染。
+    # 菜单里每项是一行 `name: 要键入的值`，模型照抄进登录框；两类条目在此汇合：
+    #   - 密钥占位符：name -> <agent-vault:KEY> / <secret:dotted.path>，模型键入
+    #     占位符本身，工具填充时才从本地保险库展开真实值（值永不进入对话）；
+    #   - 内联非密钥：直接的 name: value 明文（如用户名），模型照原样键入。
+    credential_index: false
+    # 密钥白名单：只暴露列出的这些密钥名（其余不进菜单）。留空=暴露全部已配置密钥。
+    credential_keys: []
+    # 内联非密钥键值：非敏感字段（如 username）的明文，按字面值展示供模型直接键入。
+    # 不写入保险库、不脱敏 —— 仅用于你愿意放进明文 config 的非敏感项。
+    credential_values: {}
 
 # ----------------------------------------------------------------------------
 # workspace —— 磁盘工作区的按时清理（TTL）
@@ -174,6 +237,37 @@ workspace:
     # tool_results/ 与 task_outputs/，保留 rollout.jsonl + blobs/（会话仍可回放）。
     # 0（或负数）= 永不清理产物。
     artifact_ttl_days: 7
+
+# ----------------------------------------------------------------------------
+# resilience —— 熔断器阈值。按资源（LLM 的 api_type::model::key_index，将来 MCP /
+# 出口主机）各自维护一个滑动窗口熔断器：某资源持续失败到阈值即“跳闸”，恢复循环随即
+# 故障转移到健康资源；冷却后放行单个半开探针试探恢复。默认保守，仅在“持续失败”时跳闸。
+# ----------------------------------------------------------------------------
+resilience:
+  enabled: true                 # 总开关；false 则熔断器全程 inert（永远放行、从不记录）
+  window_seconds: 60.0          # 失败率统计的滑动窗口回看秒数
+  min_samples: 5                # 窗口内至少这么多次结果后才检查失败率（早期单次失败不跳闸）
+  error_rate_threshold: 0.5     # 失败比例达到/超过该值即跳闸（0.0–1.0）
+  open_seconds: 20.0            # 跳闸后冷却秒数；也是被认领却未回报的探针的租约上限
+  half_open_max_probes: 1       # 半开状态下允许的并发恢复探针数
+
+# ----------------------------------------------------------------------------
+# router —— 智能路由（每步选型策略 + spawn 时的初始档位）。默认全关，零行为变化：
+# 不装配 ML 引擎、不做 spawn 路由，各 role 仍用固定的 models.default。
+# 策略按「agent 种类」分别配置：main_agent（根/面向用户）与 sub_agent（Agent 工具
+# 派生的子 agent）各自选型 —— 可只让子 agent 路由（便宜、任务级），主 agent 固定，反之亦然。
+# strategy 就是路由的唯一开关：null=不路由（跑固定 models.default），任一具体策略=路由。
+# （不再有单独的 per-role enable_router；是否路由完全由这里按 agent 种类决定。）
+# ----------------------------------------------------------------------------
+router:
+  main_agent:
+    strategy: null              # null（默认）= 不路由：不装策略，跑固定 models.default（零行为变化）；
+                                # rule = 确定性规则策略（不加载 ML）；
+                                # squilla = ML 后端策略（进程级共享 ~75MB 引擎，缺失则启发式回退）
+  sub_agent:
+    strategy: null              # 同上，作用于 Agent 工具派生的子 agent
+  spawn_routing: false          # true 时子 agent spawn 用首个 prompt 定一个「初始地板」（只托底不封顶，
+                                # 后续每步路由仍可升降）。需 sub_agent.strategy=squilla 才生效
 
 # ----------------------------------------------------------------------------
 # mcp —— MCP 主开关。服务器本身不在这里配置，而在各自的 mcp.json 声明

@@ -55,6 +55,22 @@ def test_get_builds_lazily_and_caches():
     assert role.calls == ["x"]
 
 
+def test_component_resolution_does_not_define_a_lifecycle_side_effect():
+    """Factories construct objects; explicit lifecycle methods perform work."""
+    calls: list[str] = []
+
+    class Managed:
+        def prepare(self):
+            calls.append("prepare")
+
+    g = _graph([ComponentSpec("managed", lambda ctx: Managed())])
+    component = g.get("managed")
+
+    assert calls == []
+    component.prepare()
+    assert calls == ["prepare"]
+
+
 def test_is_built_reflects_state():
     g = _graph([ComponentSpec("x", lambda ctx: object())])
     assert g.is_built("x") is False

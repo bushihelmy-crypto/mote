@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 """Tests that a Role wires the session log end-to-end.
 
-Covers: ``Role.session_log`` builds the rollout and writes a session_meta first
-line carrying the role's session_id; the event bus's ``RecorderSubscriber`` is
-wired so messages added through the ContextManager are persisted;
+Covers: the event bus's ``RecorderSubscriber`` is wired so messages added
+through the ContextManager are persisted;
 ``_emit_turn_end`` appends a turn_context event. The full ``run()`` path is
 exercised elsewhere; here we drive the seams directly to stay offline.
 """
@@ -14,6 +13,7 @@ import pytest
 
 from mote.common.schema import ResourceMessage, UserMessage
 from mote.roles import Role
+from mote.session.events import SessionMetaEvent
 
 
 @pytest.fixture
@@ -22,16 +22,8 @@ def role_in_tmp(tmp_path, monkeypatch):
 
     # Redirect all session logs to the temp dir.
     monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.roles.role.bind_session_logfile", lambda _session_id: None)
     return Role(name="Logger", context=Context())
-
-
-def test_session_log_writes_meta_first_line(role_in_tmp):
-    log = role_in_tmp.session_log
-    assert log.exists()
-    records = list(log.iter_raw())
-    assert records[0]["type"] == "session_meta"
-    assert records[0]["payload"]["session_id"] == role_in_tmp.session_id
-    assert records[0]["payload"]["role_class"].endswith("Role")
 
 
 @pytest.mark.asyncio
@@ -92,6 +84,50 @@ async def test_resume_session_rebuilds_history(tmp_path, monkeypatch):
     assert role_b.resume_session() is True
     assert role_b.state.recovered is True
     assert [m.content for m in role_b.context_manager.get()] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_resume_refuses_mismatched_role_class(tmp_path, monkeypatch):
+    """Resuming a session into a different Role class is refused fail-closed."""
+    from mote.common.exception import SessionResumeIdentityError
+    from mote.router.llm.context import Context
+
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.roles.role.bind_session_logfile", lambda _session_id: None)
+
+    # Session A is created (and thus records role_class) by the base Role.
+    role_a = Role(name="A", context=Context())
+    role_a._components._wire_spine()
+    role_a.session_log.create(
+        SessionMetaEvent(
+            session_id=role_a.session_id,
+            role_class=f"{type(role_a).__module__}.{type(role_a).__qualname__}",
+        )
+    )
+    sid = role_a.session_id
+    await role_a.context_manager.add(UserMessage(content="first"))
+
+    class OtherRole(Role):
+        pass
+
+    role_b = OtherRole(name="B", context=Context())
+    role_b.state.session_id = sid
+    with pytest.raises(SessionResumeIdentityError):
+        role_b.resume_session()
+
+
+def test_resume_allows_absent_recorded_role_class(tmp_path, monkeypatch):
+    """A log with no recorded role_class carries no identity to check → allowed."""
+    from mote.router.llm.context import Context
+
+    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
+    role = Role(name="Any", context=Context())
+    mgr = role._session_manager
+    # Absent / empty recorded identity never raises (backward compatible).
+    mgr._validate_identity({})
+    mgr._validate_identity({"role_class": None})
+    # A matching identity also passes.
+    mgr._validate_identity({"role_class": mgr._role_identity(role)})
 
 
 @pytest.mark.asyncio
