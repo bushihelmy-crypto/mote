@@ -57,7 +57,13 @@ def is_final(status: AgentStatus) -> bool:
 class AgentRuntime:
     """A live ``Role`` plus its scheduling state."""
 
-    def __init__(self, role: Any, mailbox: Optional[Mailbox] = None, *, agent_path: Optional[AgentPath] = None):
+    def __init__(
+        self,
+        role: Any,
+        mailbox: Optional[Mailbox] = None,
+        *,
+        agent_path: Optional[AgentPath] = None,
+    ):
         self.role = role
         self.mailbox = mailbox if mailbox is not None else Mailbox()
         self.agent_path = agent_path
@@ -68,6 +74,7 @@ class AgentRuntime:
         # driving, so this is the only place a consumer (e.g. the REPL) can read
         # back *why* a turn failed and surface it instead of a blank reply.
         self.last_error: Optional[BaseException] = None
+        self.last_run_result: Any = None
         self.wake_event = asyncio.Event()
         self._lock = asyncio.Lock()
         # The scheduler's driver task for this runtime (set by EventDrivenScheduler).
@@ -111,13 +118,15 @@ class AgentRuntime:
             self.active_turn = True
             self.status = AgentStatus.RUNNING
             self.last_error = None
+            self.last_run_result = None
             try:
                 if with_message is not None:
                     rsp = await self.role.run(with_message)
                 else:
                     rsp = await self.role.run()
+                self.last_run_result = rsp
                 self.status = AgentStatus.COMPLETED
-                return rsp
+                return self.last_run_result
             except asyncio.CancelledError:
                 self.status = AgentStatus.INTERRUPTED
                 raise

@@ -167,3 +167,39 @@ def test_notice_and_error_ride_agent_text():
     assert acp.to_acp_updates(ev.Notice(text="fyi"), st)[0]["content"]["text"] == "fyi"
     err = acp.to_acp_updates(ev.ErrorRaised(text="bad"), st)
     assert "bad" in err[0]["content"]["text"]
+
+
+def test_output_snapshot_and_invalidation_use_typed_extensions():
+    st = _state()
+    snapshot = acp.to_acp_updates(
+        ev.OutputSnapshot(
+            run_id="run-1",
+            revision=1,
+            schema_fingerprint="sha",
+            value={"count": 7},
+        ),
+        st,
+    )[0]
+    invalidated = acp.to_acp_updates(
+        ev.OutputSnapshotInvalidated(run_id="run-1", revision=1, reason="stream_changed"),
+        st,
+    )[0]
+
+    assert snapshot["sessionUpdate"] == "mote_output_snapshot"
+    assert snapshot["value"] == {"count": 7}
+    assert invalidated["sessionUpdate"] == "mote_output_snapshot_invalidated"
+
+
+def test_committed_output_is_typed_terminal_extension():
+    output = acp.to_acp_updates(
+        ev.OutputCommitted(
+            run_id="run-1",
+            contract_id="test.report@1",
+            schema_fingerprint="sha",
+            value={"count": 7},
+        ),
+        _state(),
+    )[0]
+
+    assert output["sessionUpdate"] == "mote_output_committed"
+    assert output["runId"] == "run-1"

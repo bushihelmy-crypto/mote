@@ -218,11 +218,9 @@ class TestTurnContextBus:
         # The fold-pressure feed is wired unconditionally alongside token-pressure
         # (self-suppresses until the reconstructable-result count nears the fold
         # trigger).
-        # The deferred-tool index is wired because the default role defers tools
-        # (RoleSchema.deferred_tools) — on the Anthropic-native server-side path the
-        # compact menu is still the model's only browsable view of the deferred
-        # corpus (discovery goes through mote's own SearchTools, not a provider
-        # builtin), so it rides the ephemeral reminder tail.
+        # The default model does not advertise server-side native tool search, so
+        # deferred tools use the split projection: callable shapes stay on the
+        # native wire while their compact descriptions ride the reminder tail.
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
         # The credential index is OPT-IN and gated on the ambient user config
@@ -242,7 +240,7 @@ class TestTurnContextBus:
             "skill_listing",
             "changed_files",
             "code_map",
-            "deferred_tool_index",
+            "split_tool_menu",
         }
 
     def test_lsp_source_present_when_configured(self):
@@ -556,18 +554,13 @@ class TestToolSearchWiring:
         # No index source is added to the turn-context roster.
         assert r.turn_context_source("deferred_tool_index") is None
 
-    def test_index_present_on_anthropic_native(self, context):
-        # The default role is native tool-use over the Anthropic transport. The
-        # server-side ``defer_loading`` path withholds the full deferred defs from
-        # context, but mote drives discovery through its OWN SearchTools (not a
-        # provider builtin), so the API surfaces NO browsable list — the compact
-        # DeferredToolIndex menu is STILL wired (the model's only view of what it
-        # can search for). It rides the ephemeral reminder tail → cache-stable.
+    def test_split_menu_present_without_native_tool_search(self, context):
+        # Native transport alone is insufficient: the selected model must also
+        # advertise server-side tool search. The default test model does not, so
+        # it gets the split menu and byte-stable stub descriptions instead.
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
-        assert r.turn_context_source("deferred_tool_index") is not None
-        # SPLIT is not used on the server-side path (the wire keeps full schema +
-        # defer_loading, not the stub); only the compact index rides the tail.
-        assert r.turn_context_source("split_tool_menu") is None
+        assert r.turn_context_source("deferred_tool_index") is None
+        assert r.turn_context_source("split_tool_menu") is not None
 
     def test_deferred_tool_present_with_defer_loading_on_anthropic_native(self, context):
         # Anthropic native: the deferred tool's schema STAYS on the native wire
@@ -595,7 +588,10 @@ class TestToolSearchWiring:
         # XML has no server-side defer_loading, so the client-side menu (and
         # withhold/reveal) stays — proving the gating is anthropic-native only.
         schema = RoleSchema(
-            name="X", tools=["Read", "WebBrowser"], deferred_tools=["WebBrowser"], command_protocol="xml"
+            name="X",
+            tools=["Read", "WebBrowser"],
+            deferred_tools=["WebBrowser"],
+            command_protocol="xml",
         )
         r = Role(name="X", role_schema=schema, context=context)
         assert r.turn_context_source("deferred_tool_index") is not None
@@ -609,7 +605,10 @@ class TestToolSearchWiring:
         from mote.common.config.config.llm_config import LLMType
 
         schema = RoleSchema(
-            name="X", tools=["Read", "WebBrowser"], deferred_tools=list(deferred), command_protocol="native"
+            name="X",
+            tools=["Read", "WebBrowser"],
+            deferred_tools=list(deferred),
+            command_protocol="native",
         )
         r = Role(name="X", role_schema=schema, context=context)
         d = r.config.models.default
@@ -695,7 +694,10 @@ class TestToolSearchWiring:
         # Even on the XML client-side path (which normally shows the menu), the
         # switch-off empty set means no index source is wired.
         schema = RoleSchema(
-            name="X", tools=["Read", "WebBrowser"], deferred_tools=["WebBrowser"], command_protocol="xml"
+            name="X",
+            tools=["Read", "WebBrowser"],
+            deferred_tools=["WebBrowser"],
+            command_protocol="xml",
         )
         r = Role(name="X", role_schema=schema, context=context)
         r.config.tools.tool_search.enabled = False
@@ -755,13 +757,20 @@ class TestTurnContextRegistry:
     def _xml_role(context):
         # XML path keeps the deferred-tool menu as a normally-on source to filter.
         schema = RoleSchema(
-            name="X", tools=["Read", "WebBrowser"], deferred_tools=["WebBrowser"], command_protocol="xml"
+            name="X",
+            tools=["Read", "WebBrowser"],
+            deferred_tools=["WebBrowser"],
+            command_protocol="xml",
         )
         return Role(name="X", role_schema=schema, context=context)
 
     @staticmethod
     def _wb_role(context, *, tools=("Read", "WebBrowser")):
-        return Role(name="X", role_schema=RoleSchema(name="X", tools=list(tools)), context=context)
+        return Role(
+            name="X",
+            role_schema=RoleSchema(name="X", tools=list(tools)),
+            context=context,
+        )
 
     @staticmethod
     def _enable_secrets(role, tmp_path, monkeypatch):
@@ -1045,7 +1054,8 @@ class TestFileWatchHotReload:
 
         async def scenario():
             await role.hook_manager.fire(
-                "FileChanged", {"path": "/proj/skills/demo/SKILL.md", "change_type": "modified"}
+                "FileChanged",
+                {"path": "/proj/skills/demo/SKILL.md", "change_type": "modified"},
             )
             # A non-SKILL.md path must not trigger a skill reload (matcher gate).
             await role.hook_manager.fire("FileChanged", {"path": "/proj/main.py", "change_type": "modified"})
@@ -1063,7 +1073,10 @@ class TestFileWatchHotReload:
         """
         from mote.common.schema import FileWatchConfig
 
-        monkeypatch.setattr("mote.roles.runtime_modules.watching.find_git_root", lambda cwd: "/proj/repo")
+        monkeypatch.setattr(
+            "mote.roles.runtime_modules.watching.find_git_root",
+            lambda cwd: "/proj/repo",
+        )
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         svc = role.file_watch_service
         assert os.path.abspath("/proj/repo") in svc.watcher._roots
@@ -1093,7 +1106,10 @@ class TestFileWatchHotReload:
         monkeypatch.setattr("mote.roles.runtime_maintenance.load_config", lambda *a, **k: sentinel)
 
         async def scenario():
-            await role.hook_manager.fire("FileChanged", {"path": "/proj/mote/config.yaml", "change_type": "modified"})
+            await role.hook_manager.fire(
+                "FileChanged",
+                {"path": "/proj/mote/config.yaml", "change_type": "modified"},
+            )
 
         asyncio.run(scenario())
         assert role.config is sentinel
@@ -1198,7 +1214,14 @@ class _ForkProbeRole(Role):
             "state": self.state,
             "message": with_message,
         }
-        self.state.last_end_output = "  child summary  "
+        from mote.common.schema.output import CommittedOutput, RunResult, TranscriptRef
+
+        committed = CommittedOutput("candidate", "mote.text@1", "sha", "  child summary  ")
+        return RunResult(
+            output="  child summary  ",
+            output_record=committed,
+            transcript=TranscriptRef(session_id=self.session_id),
+        )
 
 
 class _ForkHandle:
@@ -1210,8 +1233,7 @@ class _ForkHandle:
 
     async def run_to_completion(self, message):
         try:
-            await self._role.run(with_message=message)
-            return (getattr(self._role.state, "last_end_output", "") or "").strip()
+            return await self._role.run(with_message=message)
         finally:
             cleanup = getattr(self._role, "cleanup", None)
             if cleanup is not None:
@@ -1330,6 +1352,10 @@ class TestCapabilities:
             "list_tool_names",
             "list_graph_tool_names",
             "list_graph_excluded_tool_names",
+            "commit_graph_output",
+            "resume_graph_output",
+            "has_graph_output_restore",
+            "graph_run_lease",
             "list_deferred_tools",
             "reveal_tools",
             "describe_deferred_tools",
@@ -1352,7 +1378,14 @@ class TestCapabilities:
 class TestBrowserProxy:
     @staticmethod
     def _clear_proxy_env(monkeypatch):
-        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        for var in (
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ):
             monkeypatch.delenv(var, raising=False)
 
     def test_falls_back_to_global_config_proxy(self, monkeypatch):
@@ -1618,7 +1651,7 @@ class TestEndSession:
     def test_deactivates_and_returns_empty(self):
         # end_session no longer generates a summary — it just deactivates so the
         # run loop terminates. The terminal reply is captured into
-        # last_end_output by the run loop's post-loop finalization, not here.
+        # Successful child output is returned through RunResult, not RoleState.
         r = Role(name="X")
         r._set_active(True)
         out = asyncio.run(r.end_session())
@@ -1785,7 +1818,13 @@ class TestFullResolutionSmoke:
         graph = role._components._graph
         for name in list(graph._specs):
             graph.get(name)
-        for name in ("hook_manager", "lsp_service", "diagnostics_buffer", "sandbox_runtime", "file_watch_service"):
+        for name in (
+            "hook_manager",
+            "lsp_service",
+            "diagnostics_buffer",
+            "sandbox_runtime",
+            "file_watch_service",
+        ):
             assert graph.peek(name) is not None, f"opt-in layer {name!r} was not built"
 
 

@@ -41,7 +41,7 @@ class _DeactExecutor(FakeExecutor):
 
 
 class _SeqTerminalChannel(FakeChannel):
-    """Channel whose ``is_terminal`` walks a scripted sequence.
+    """Channel whose semantic final-candidate signal walks a sequence.
 
     Models a native run that acts a few rounds and then finishes: each entry of
     ``terminal_seq`` answers one ``is_terminal`` check; once exhausted it reports
@@ -54,15 +54,52 @@ class _SeqTerminalChannel(FakeChannel):
         self._seq = list(terminal_seq)
         self.is_terminal_calls = 0
 
-    async def is_terminal(self, think_engine) -> bool:
+    async def model_turn(self, think_engine):
+        from mote.common.schema import FinalCandidateAction, ModelTurn
+
         self.is_terminal_calls += 1
-        return self._seq.pop(0) if self._seq else True
+        terminal = self._seq.pop(0) if self._seq else True
+        content = think_engine.result.content or ""
+        if terminal:
+            return ModelTurn(
+                content=content,
+                actions=[FinalCandidateAction(raw=content, representation="test")],
+            )
+        return await super().model_turn(think_engine)
 
 
 async def test_run_returns_none_without_news(make_loop):
     b = make_loop()  # buffer empty
     rsp = await b.loop.run()
     assert rsp is None
+
+
+async def test_resume_accepted_output_commits_without_news_or_model_call(make_loop):
+    from mote.roles.output_contract import text_output_contract
+    from mote.roles.output_engine import OutputEngine
+
+    contract = text_output_contract()
+    engine = OutputEngine(
+        contract,
+        restored_state={
+            "status": "commit_started",
+            "candidate_id": "candidate-1",
+            "contract_id": "mote.text@1",
+            "schema_fingerprint": contract.decoder.schema.fingerprint,
+            "value": "recovered",
+            "correction_attempts": 0,
+        },
+    )
+    think = FakeThinkEngine(content="must not run")
+    b = make_loop(think_engine=think, output_engine=engine)
+
+    result = await b.loop.run()
+
+    assert result is not None
+    assert result.committed_output is not None
+    assert result.committed_output.value == "recovered"
+    assert result.presentation.content == "recovered"
+    assert think.start_calls == []
     # Never thought, never activated past its initial value.
     assert b.think_engine.start_calls == []
 
@@ -78,8 +115,8 @@ async def test_run_activates_even_if_starting_inactive(make_loop):
     rsp = await b.loop.run()
 
     assert b.active[0] is True
-    assert rsp.content == "final answer"
-    assert rsp.cause_by == CauseBy.RUN_COMMAND.value
+    assert rsp.presentation.content == "final answer"
+    assert rsp.presentation.cause_by == CauseBy.RUN_COMMAND.value
     # _finish records an empty-command turn and joins.
     assert channel.recorded_turns == [("final answer", [])]
     assert b.think_engine.join_calls == 1
@@ -98,6 +135,87 @@ async def test_run_terminal_skips_act(make_loop):
     assert executor.calls == []
 
 
+async def test_rejected_output_records_feedback_then_accepts_next_candidate(make_loop):
+    from mote.common.schema import OutputEvaluation, ValidationIssue
+
+    class RejectOnce:
+        run_id = "reject-once-run"
+
+        def __init__(self):
+            self.calls = 0
+
+        @property
+        def has_restored_terminal_output(self):
+            return False
+
+        async def evaluate(self, candidate):
+            self.calls += 1
+            if self.calls == 1:
+                return OutputEvaluation(
+                    accepted=False,
+                    correction_allowed=True,
+                    issues=(ValidationIssue(("count",), "int_parsing", "Expected an integer"),),
+                )
+            return OutputEvaluation(accepted=True, value=candidate.raw)
+
+        async def commit(self):
+            from mote.common.schema.output import CommittedOutput
+
+            return CommittedOutput("fake", "test.output@1", "sha", None)
+
+    engine = RejectOnce()
+    channel = FakeChannel(terminal=True)
+    b = make_loop(
+        think_engine=FakeThinkEngine(content="candidate"),
+        channel=channel,
+        output_engine=engine,
+    )
+    _news(b)
+
+    rsp = await b.loop.run()
+
+    assert rsp.presentation.content == "candidate"
+    assert engine.calls == 2
+    assert len(channel.output_feedback) == 1
+    assert channel.output_feedback[0].issues[0].path == ("count",)
+
+
+async def test_output_correction_budget_bounds_model_turns(make_loop):
+    from pydantic import BaseModel
+
+    from mote.common.exception import OutputCorrectionExhaustedError
+    from mote.common.schema import OutputContractId
+    from mote.roles.output_contract import OutputContract, OutputRetryPolicy, TypeAdapterOutputDecoder
+    from mote.roles.output_engine import OutputEngine
+
+    class Report(BaseModel):
+        count: int
+
+    engine = OutputEngine(
+        OutputContract(
+            OutputContractId("test", "report", "1"),
+            TypeAdapterOutputDecoder(Report),
+            OutputRetryPolicy(max_corrections=2),
+        )
+    )
+    channel = FakeChannel(terminal=True)
+    b = make_loop(
+        think_engine=FakeThinkEngine(content="still invalid"),
+        channel=channel,
+        output_engine=engine,
+    )
+    _news(b)
+
+    with pytest.raises(OutputCorrectionExhaustedError) as caught:
+        await b.loop.run()
+
+    assert len(b.think_engine.start_calls) == 3
+    assert engine.correction_attempts == 2
+    assert len(channel.output_feedback) == 2
+    assert caught.value.code.value == "OUTPUT_CORRECTION_EXHAUSTED"
+    assert caught.value.retryable is False
+
+
 async def test_run_single_act_then_stop(make_loop):
     # A terminate=True result flips active off after one act; the next think then
     # returns False and, with no pending background work, the loop breaks.
@@ -109,7 +227,7 @@ async def test_run_single_act_then_stop(make_loop):
     rsp = await b.loop.run()
 
     assert [c["name"] for c in executor.calls] == ["Read"]
-    assert "data" in rsp.content
+    assert "data" in rsp.presentation.content
 
 
 async def test_run_deactivate_breaks_loop(make_loop):
@@ -126,7 +244,7 @@ async def test_run_deactivate_breaks_loop(make_loop):
     assert b.active[0] is False
     # Only one act ran (End), then the loop broke on the inactive think.
     assert len([c for c in executor.calls if c["name"] == "End"]) == 1
-    assert rsp.cause_by == CauseBy.RUN_COMMAND.value
+    assert rsp.presentation.cause_by == CauseBy.RUN_COMMAND.value
 
 
 async def test_run_waits_on_pending_background_tasks(make_loop):
@@ -171,8 +289,8 @@ async def test_run_acts_several_rounds_then_finishes(make_loop):
     assert len(channel.recorded_turns) == 3
     assert channel.recorded_turns[-1] == ("final text", [])
     # The finish path surfaces the assistant's plain text as the response.
-    assert rsp.content == "final text"
-    assert rsp.cause_by == CauseBy.RUN_COMMAND.value
+    assert rsp.presentation.content == "final text"
+    assert rsp.presentation.cause_by == CauseBy.RUN_COMMAND.value
 
 
 async def test_run_terminal_checked_before_act_each_round(make_loop):
@@ -207,8 +325,8 @@ async def test_run_budget_stop_halts_before_think(make_loop):
     assert b.provider.prepare_calls == 0  # never assembled a think request
     assert b.think_engine.start_calls == []  # never touched the LLM
     assert executor.calls == []  # never acted
-    assert rsp.content == "budget-halt"
-    assert rsp.cause_by == CauseBy.RUN_COMMAND.value
+    assert rsp.presentation.content == "budget-halt"
+    assert rsp.presentation.cause_by == CauseBy.RUN_COMMAND.value
 
 
 async def test_run_budget_proceed_allows_normal_act(make_loop):
@@ -226,4 +344,4 @@ async def test_run_budget_proceed_allows_normal_act(make_loop):
     # think that finds nothing to do and breaks.
     assert b.provider.enforce_budget_calls >= 1
     assert [c["name"] for c in executor.calls] == ["Read"]
-    assert "data" in rsp.content
+    assert "data" in rsp.presentation.content

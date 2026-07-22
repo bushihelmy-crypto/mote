@@ -499,6 +499,23 @@ class EdgeSpec(BaseModel):
     when: Optional[Predicate] = None
 
 
+class GraphOutputContractSpec(BaseModel):
+    """Stable typed terminal contract for a model-authored graph."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    namespace: str = "mote"
+    name: str = "graph-json"
+    version: str = "1"
+    schema_: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+    @model_validator(mode="after")
+    def _identity_required(self) -> "GraphOutputContractSpec":
+        if not self.namespace.strip() or not self.name.strip() or not self.version.strip():
+            raise ValueError("output contract namespace, name and version are required")
+        return self
+
+
 class GraphSpec(BaseModel):
     """The whole orchestration the model submits to ``run_graph``.
 
@@ -519,6 +536,10 @@ class GraphSpec(BaseModel):
     nodes: list[NodeSpec] = Field(min_length=1)
     edges: list[EdgeSpec] = Field(default_factory=list)
     output: Any = Field(description="Binding tree (dict/list/scalar with $ref/$input leaves).")
+    output_contract: GraphOutputContractSpec = Field(
+        default_factory=GraphOutputContractSpec,
+        description="Typed terminal contract; defaults to any JSON value.",
+    )
     recursion_limit: Optional[int] = Field(
         default=None,
         gt=0,

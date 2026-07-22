@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from mote.common.schema.output import CommittedOutput, RunResult, TranscriptRef
 from mote.common.schema.queue import MessageQueue
 from mote.environment.agent_path import AgentPath
 from mote.environment.handle import ChildAgentHandle
@@ -15,7 +16,13 @@ from mote.environment.runtime import AgentRuntime, AgentStatus
 class FakeRole:
     def __init__(self, session_id, *, summary="done"):
         self._session_id = session_id
-        self.state = types.SimpleNamespace(msg_buffer=MessageQueue(), last_end_output=summary)
+        self.state = types.SimpleNamespace(msg_buffer=MessageQueue())
+        committed = CommittedOutput("candidate", "mote.text@1", "sha", summary)
+        self.run_result = RunResult(
+            output=summary,
+            output_record=committed,
+            transcript=TranscriptRef(session_id=session_id),
+        )
         self.cleaned = False
         self.turns = []
 
@@ -25,7 +32,7 @@ class FakeRole:
 
     async def run(self, with_message=None):
         self.turns.append(with_message)
-        return "ok"
+        return self.run_result
 
     async def cleanup(self):
         self.cleaned = True
@@ -70,7 +77,7 @@ def _handle(summary="done", *, residency_slot=None, timeout_seconds=None):
 async def test_run_to_completion_returns_summary_and_releases():
     h, role, control = _handle(summary="  the summary  ")
     out = await h.run_to_completion("go")
-    assert out == "the summary"
+    assert out.output == "  the summary  "
     assert role.turns == ["go"]
     assert control.released == ["child-1"]
     assert role.cleaned is True
@@ -120,7 +127,7 @@ def test_accessors_expose_identity():
     h, role, control = _handle(summary="hi")
     assert h.session_id == "child-1"
     assert h.agent_path == AgentPath.from_string("/root/child")
-    assert h.result == "hi"
+    assert h.result is None
     assert h.runtime is not None
 
 
@@ -172,7 +179,7 @@ async def test_timeout_returns_partial_summary_and_releases():
 
     role.run = slow
     out = await h.run_to_completion("go")
-    assert out == "partial so far"  # soft: partial summary, no raise
+    assert out is None
     assert slot.rolled_back == 1  # recycled despite the timeout
     assert control.released == ["child-1"]
     assert role.cleaned is True
@@ -183,7 +190,7 @@ async def test_no_timeout_runs_to_completion_unbounded():
     """Without a timeout the turn runs to natural completion (no wait_for)."""
     h, role, control = _handle(summary="full result", timeout_seconds=None)
     out = await h.run_to_completion("go")
-    assert out == "full result"
+    assert out.output == "full result"
     assert role.turns == ["go"]
 
 
@@ -192,6 +199,6 @@ async def test_fast_turn_under_timeout_completes_normally():
     """A turn well under budget completes normally and returns its full summary."""
     h, role, control = _handle(summary="quick result", timeout_seconds=5.0)
     out = await h.run_to_completion("go")
-    assert out == "quick result"
+    assert out.output == "quick result"
     assert role.turns == ["go"]
     assert control.released == ["child-1"]

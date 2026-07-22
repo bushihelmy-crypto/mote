@@ -37,6 +37,14 @@ from mote.common.events.types import (
     HistoryEditedEvent,
     LLMResponseEvent,
     MessageAppendedEvent,
+    OutputAcceptedEvent,
+    OutputCandidateReceivedEvent,
+    OutputCommitStartedEvent,
+    OutputCommittedEvent,
+    OutputMigratedEvent,
+    OutputPublicationQueuedEvent,
+    OutputPublishedEvent,
+    OutputValidationRejectedEvent,
     PostToolUseEvent,
     TurnEndEvent,
     UserPromptSubmitEvent,
@@ -45,15 +53,16 @@ from mote.common.interface.event_subscriber import DURABLE, DeliveryPolicy, Obse
 from mote.common.logs import log_class, logger
 from mote.common.text.hashing import content_hash
 from mote.session.checkpoint import CheckpointStore, list_checkpoints
-from mote.session.events import (
-    CheckpointEvent,
-    CompactedEvent,
-    LLMCallEvent,
-    MessageEvent,
-    MetaUpdateEvent,
-    TurnContextEvent,
-    parse_event,
-)
+from mote.session.events import CheckpointEvent, CompactedEvent, LLMCallEvent, MessageEvent, MetaUpdateEvent
+from mote.session.events import OutputAcceptedEvent as PersistedOutputAcceptedEvent
+from mote.session.events import OutputCandidateReceivedEvent as PersistedOutputCandidateReceivedEvent
+from mote.session.events import OutputCommitStartedEvent as PersistedOutputCommitStartedEvent
+from mote.session.events import OutputCommittedEvent as PersistedOutputCommittedEvent
+from mote.session.events import OutputMigratedEvent as PersistedOutputMigratedEvent
+from mote.session.events import OutputPublicationQueuedEvent as PersistedOutputPublicationQueuedEvent
+from mote.session.events import OutputPublishedEvent as PersistedOutputPublishedEvent
+from mote.session.events import OutputValidationRejectedEvent as PersistedOutputValidationRejectedEvent
+from mote.session.events import TurnContextEvent, parse_event
 from mote.session.hunk_ledger import AGENT, HunkLedger
 from mote.session.log import SessionLog
 from mote.session.snapshot import GIT_DIRNAME
@@ -107,6 +116,102 @@ class RecorderSubscriber(ObservationSubscriber):
             # for free. No summary — this is not a compaction, and the view
             # projector ignores HistoryEditedEvent so no boundary marker shows.
             self._log.append(CompactedEvent(messages=list(event.messages), summary=""))
+        elif isinstance(event, OutputCandidateReceivedEvent):
+            self._log.append(
+                PersistedOutputCandidateReceivedEvent(
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    schema_fingerprint=event.schema_fingerprint,
+                    representation=event.representation,
+                    raw=event.raw,
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                )
+            )
+        elif isinstance(event, OutputValidationRejectedEvent):
+            self._log.append(
+                PersistedOutputValidationRejectedEvent(
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    issues=list(event.issues),
+                    correction_attempt=event.correction_attempt,
+                    corrections_remaining=event.corrections_remaining,
+                    correction_allowed=event.correction_allowed,
+                    validator_provenance=list(event.validator_provenance),
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                )
+            )
+        elif isinstance(event, OutputAcceptedEvent):
+            self._log.append(
+                PersistedOutputAcceptedEvent(
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    schema_fingerprint=event.schema_fingerprint,
+                    value=event.value,
+                    correction_attempts=event.correction_attempts,
+                    validator_provenance=list(event.validator_provenance),
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                )
+            )
+        elif isinstance(event, OutputCommitStartedEvent):
+            self._log.append(
+                PersistedOutputCommitStartedEvent(
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                    fencing_token=event.fencing_token,
+                )
+            )
+        elif isinstance(event, OutputMigratedEvent):
+            self._log.append(
+                PersistedOutputMigratedEvent(
+                    candidate_id=event.candidate_id,
+                    source_contract_id=event.source_contract_id,
+                    target_contract_id=event.target_contract_id,
+                    target_schema_fingerprint=event.target_schema_fingerprint,
+                    value=event.value,
+                    steps=list(event.steps),
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                )
+            )
+        elif isinstance(event, OutputCommittedEvent):
+            self._log.append(
+                PersistedOutputCommittedEvent(
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    schema_fingerprint=event.schema_fingerprint,
+                    value=event.value,
+                    correction_attempts=event.correction_attempts,
+                    validator_provenance=list(event.validator_provenance),
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                    fencing_token=event.fencing_token,
+                )
+            )
+        elif isinstance(event, OutputPublishedEvent):
+            self._log.append(
+                PersistedOutputPublishedEvent(
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    publication_id=event.publication_id,
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                )
+            )
+        elif isinstance(event, OutputPublicationQueuedEvent):
+            self._log.append(
+                PersistedOutputPublicationQueuedEvent(
+                    publication_id=event.publication_id,
+                    candidate_id=event.candidate_id,
+                    contract_id=event.contract_id,
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                )
+            )
         elif isinstance(event, TurnEndEvent):
             self._log.append(
                 TurnContextEvent(
@@ -410,4 +515,9 @@ class HunkSubscriber(ObservationSubscriber):
         )
 
 
-__all__ = ["RecorderSubscriber", "TitleSubscriber", "CheckpointSubscriber", "HunkSubscriber"]
+__all__ = [
+    "RecorderSubscriber",
+    "TitleSubscriber",
+    "CheckpointSubscriber",
+    "HunkSubscriber",
+]

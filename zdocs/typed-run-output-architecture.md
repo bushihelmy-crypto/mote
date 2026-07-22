@@ -1,12 +1,231 @@
 # Typed Run Output Architecture
 
-> Status: design plan
+> Status: implemented
 >
 > Horizon: long-term framework architecture (10 years)
 >
 > Scope: make a run's final result a typed, validated, durable, provider-independent
 > first-class concept. This is not a plan for another tool-result wrapper or retry
 > helper.
+
+## Implementation status
+
+- 2026-07-22: Phase 1 started. Added provider-independent `ModelTurn`,
+  `TextAction`, `ToolCallAction` and `FinalCandidateAction`; native responses now
+  lower no-tool-call text into a semantic final candidate. `ReActLoop` delegates
+  completion to an injected policy and no longer reads native `tool_calls` as a
+  completion condition. XML remains on its existing End control path until the
+  output binding phase.
+- 2026-07-22: Added the first `ActionDispatcher`. Native and XML channels now
+  normalize ordinary calls into `ToolCallAction`, and the loop projects only
+  those semantic actions to `ToolExecutor`; it no longer invokes
+  protocol-specific `iter_commands` on its production path. Final candidates
+  sharing a turn with tool calls fail closed.
+- 2026-07-22: Added immutable contract IDs and schema documents, a leaf-layer
+  `OutputDecoder`/`OutputEngine` seam, deterministic TypeAdapter schema
+  fingerprints, typed validation issues, and a run-scoped output engine. The
+  default text contract now follows candidate → decode → accept before the loop
+  completes. Durable commit and correction feedback remain deliberately
+  separate subsequent phases.
+- 2026-07-22: Rejected candidates now produce provider-neutral
+  `CorrectionFeedback` with typed field paths and error codes. The channel
+  projects that feedback into history and the loop requests a fresh model turn;
+  rejection is no longer treated as an operational exception. This path is
+  covered by a reject-once/accept-next integration test.
+- 2026-07-22: Added an independent `OutputRetryPolicy`. Only a rejected output
+  consumes its bounded correction budget; acceptance and provider/tool failures
+  do not. Exhaustion terminates with the stable, non-retryable
+  `OUTPUT_CORRECTION_EXHAUSTED` error instead of entering a generic retry path.
+- 2026-07-22: Added durable output lifecycle facts for candidate receipt,
+  validation rejection, acceptance, commit start, commit completion and
+  publication. `OutputEngine.commit()` flushes the accepted fact and final
+  transcript before recording `committed`, then flushes that linearization fact
+  before the loop may return success. Role publication is recorded separately.
+  Replay reconstructs output state independently from message history, so a
+  compaction checkpoint cannot erase accepted/committed/published output facts.
+- 2026-07-22: XML `<end>` now lowers to `FinalCandidateAction` and never enters
+  `ToolExecutor`; both native and XML completion therefore share the same
+  validate/commit success definition. XML command parsing now parses without a
+  channel-owned tool whitelist and leaves legality enforcement to the semantic
+  `ActionDispatcher`.
+- 2026-07-22: `Role.run()` now returns `RunResult[T]` on success, containing the
+  decoded output, its `CommittedOutput` record and a `TranscriptRef`. `Message`
+  remains an internal transcript/presentation object rather than the public run
+  result. Runs with no committed terminal output return no successful result.
+- 2026-07-22: Removed the temporary `AIMessage.metadata` bridge between the loop
+  and Role. The internal `LoopResult` carries presentation and committed output
+  as separate typed fields, and a committed output cannot be overridden by a
+  Stop-hook auto-continue. `Role[OutputT]` now accepts a deployment-time
+  `OutputContract[OutputT]`; prompted JSON text is decoded through the same
+  TypeAdapter contract, and an end-to-end structured run returns the decoded
+  Pydantic value through `RunResult.output` while persisting its JSON encoding.
+- 2026-07-22: Added explicit output bindings. Text remains ordinary terminal
+  text; native structured contracts receive a provider-shaped private submit
+  function whose call is immediately normalized to `FinalCandidateAction` and
+  can never reach `ToolExecutor`; XML structured contracts use prompted JSON
+  guidance injected through an ephemeral turn-context source below the system
+  prompt cache boundary. Plain native text is no longer completion for a
+  structured contract. Rejected native submissions are persisted as a paired
+  assistant tool call + tool result carrying correction feedback, preventing a
+  dangling provider tool call on the next request or after resume.
+- 2026-07-22: Added the validator pipeline contract and decisions
+  `Accept / Corrected / Reject / RetryLater`. Validators execute in structural,
+  semantic, then policy order. Reject is a normal model-correction outcome;
+  RetryLater is a typed retryable infrastructure failure and consumes no output
+  correction budget; a validator exception becomes the non-retryable typed
+  `OUTPUT_VALIDATOR_FAILED` error. Contract assembly validates stable validator
+  names/versions, stages, determinism and the PURE/READ_EXTERNAL effect bound.
+- 2026-07-22: Resume now stages unfinished output state independently from
+  `RoleState` serialization and consumes it exactly once when constructing the
+  next loop. Correction attempts survive replay. Accepted, commit-started and
+  committed outputs finish without another model or validator call; published
+  outputs never leak into a new run. Contract ID or schema-fingerprint drift
+  fails closed with `OUTPUT_RESUME_CONTRACT_MISMATCH`.
+- 2026-07-22: Added the durable publication outbox boundary. A stable
+  `publication_id` is recorded and flushed as `output_publication_queued`
+  before outward delivery; `output_published` is a separate acknowledgment.
+  Replay restores queued-but-unacknowledged publications without repeating
+  model work, tools, validation or commit. Mailboxes deduplicate pending
+  retries by publication ID; other presenters receive the same ID and own
+  durable consumer-side deduplication.
+- 2026-07-22: Replaced `OutputEngine`'s independently mutable accepted/committed
+  booleans with one explicit `OutputLifecycleState`. Illegal transitions such
+  as evaluating another candidate after acceptance now fail closed. Validator
+  provenance (name, version, stage, effect, determinism and decision) is stored
+  on accepted and committed facts, included in `CommittedOutput`, and restored
+  by replay without rerunning validators.
+- 2026-07-22: Removed `RoleState.last_end_output` from the active agent runtime.
+  `AgentRuntime` retains the latest `RunResult`, `ChildAgentHandle` returns that
+  typed result directly, and ephemeral spawn callers explicitly present
+  `report.output`. A timed-out child returns no successful result rather than a
+  partial uncommitted string. The Agent tool renders text directly and encodes
+  structured child output as canonical compact JSON at its tool boundary.
+- 2026-07-22: Added stable `run_id` identity to committed outputs, public
+  `RunResult`, every durable output lifecycle event and publication IDs. Replay
+  now maintains an `output_states` fold keyed by run ID in addition to its
+  latest-state view. This is the prerequisite for nested RunGraph outputs:
+  graph and parent-agent commits can coexist in one rollout without sharing a
+  candidate namespace or publication idempotency key.
+- 2026-07-22: Added `RunKind` (`agent` / `graph`) to committed records and every
+  lifecycle event. Python `BgGraph` now accepts an explicit output contract and
+  injected output-engine factory; its declared terminal fields are decoded,
+  validated and durably committed under the graph's own stable run ID before
+  the success notification or return value is exposed. Contract rejection
+  fails the graph instead of returning an uncommitted result.
+- 2026-07-22: Model-authored `GraphSpec` now declares a stable contract identity
+  and JSON Schema (with `{}` as the explicit any-JSON default). A canonical
+  `JsonSchemaOutputDecoder` normalizes structural issues and shares the common
+  `OutputDecoder` seam. `run_graph` resolves its terminal binding, delegates
+  validation and durable commit through the injected `commit_graph_output`
+  capability under the graph run ID, and exposes only the resulting committed
+  value through `ToolResult.data`; rejection returns no partial data. Contract
+  inference from observed runtime values remains deliberately forbidden.
+- 2026-07-22: Model-authored graphs now inherit the durable top-level tool-call
+  ID as their graph run ID through an executor-scoped context. Replay folds
+  interleaved agent and graph lifecycles independently by run ID and stages
+  graph restores separately from agent restores. If a graph reached accepted,
+  commit-started or committed before a crash, `RunGraph` restores and commits
+  that value before compiling or executing any node. The effect ledger permits
+  an EXTERNAL started call to re-enter only when the tool explicitly proves it
+  has such a recoverable durable output; unknown external calls remain blocked.
+- 2026-07-22: Representation negotiation now has one provider-independent
+  decision function and an immutable capability snapshot carrying the concrete
+  protocol, provider and model identity. Channels declare implemented
+  representations instead of selecting them ad hoc. Selection is ordered as
+  text, native schema, semantic submit tool, then prompted JSON; every skipped
+  stronger representation is recorded as a stable downgrade reason. Native
+  schema remains truthfully disabled until an actual request/response adapter
+  implements it. `ThinkRequest` carries the selected decision, and native tool
+  schema projection obeys it rather than independently guessing.
+- 2026-07-22: Negotiation is finalized only after intelligent routing resolves
+  the concrete LLM. Native channels are re-profiled from the selected endpoint's
+  wire API and model, then the same per-turn channel instance owns tool-schema
+  projection, response lowering, transcript recording and correction feedback.
+  A routed Anthropic/OpenAI transition therefore cannot generate one provider's
+  envelope and record the turn under another provider's capability assumptions.
+- 2026-07-22: Added the first real native-schema adapter for capable OpenAI Chat
+  models. One request may retain ordinary tools while carrying strict
+  `response_format.json_schema`; intermediate tool calls remain semantic tool
+  actions and the final constrained JSON content lowers directly to a
+  `FinalCandidateAction`. The adapter creates a provider-only strict wire copy
+  (all object properties required, `additionalProperties:false`) without
+  changing the contract schema or fingerprint. Schemas the strict transport
+  cannot faithfully represent, such as open-ended object maps, are rejected at
+  negotiation time and explicitly fall back to the semantic submit tool.
+- 2026-07-22: Added the typed streaming narrow waist. Only native-schema calls
+  bind a run-scoped JSON accumulator; a parseable in-flight value emits an
+  `output_snapshot` carrying run ID, monotonic revision, schema fingerprint and
+  value. Later incompatible bytes or a failed stream emit an explicit
+  invalidation. Snapshots are observation-only, never recorded in rollout,
+  replayed, validated, accepted or committed. View projection maps provisional,
+  invalidated and durable `output_committed` facts separately to AG-UI custom
+  events and ACP typed extension updates, so clients cannot confuse preview
+  state with the sole terminal commit truth.
+- 2026-07-23: Added explicit schema and validator evolution registries. Output
+  migrations are deployment-scoped immutable edges keyed by source/target
+  contract IDs and exact schema fingerprints; only one acyclic path is accepted,
+  while missing, duplicate or ambiguous paths fail closed. An accepted legacy
+  value migrates into the current decoder, records a durable `output_migrated`
+  fact with stable step name/version provenance, then creates a new current-
+  contract commit instead of rewriting the old fact. Validator identity changes
+  likewise require a unique declared version path; stage, effect, determinism
+  and decision provenance are preserved, so READ_EXTERNAL validators are never
+  silently rerun during resume.
+- 2026-07-23: Started the distributed commit-fencing foundation. A session-
+  scoped durable lease store now serializes ownership changes with a cross-
+  process file lock, assigns a monotonic fencing token to every ownership epoch,
+  supports renewal and release, and rejects expired or superseded workers with
+  stable typed errors. `OutputEngine` checks ownership before `commit_started`
+  and holds the same fence guard across the final `output_committed` durability
+  barrier, closing the check-then-write takeover race. Runtime acquisition and
+  heartbeat assembly are layered on in the subsequent implementation step.
+- 2026-07-23: Agent runs now acquire their stable run ID and lease before loop
+  construction, inject the live fencing epoch into `OutputEngine`, renew it on
+  an asynchronous heartbeat, and release it on every success or failure exit.
+  Resumed accepted outputs reuse their recorded run ID, so two workers racing
+  the same resume cannot both enter the commit path. RunGraph-wide ownership is
+  layered on in the subsequent implementation step.
+- 2026-07-23: RunGraph ownership now spans the complete recover-or-execute
+  critical section. The top-level tool-call ID is leased before replay lookup,
+  remains heartbeated through every graph node, and fences the terminal graph
+  commit before release on success, failure or cancellation. The capability is
+  an async context boundary rather than separate acquire/release calls, making
+  lease cleanup structural. Concurrent workers resuming the same graph run ID
+  now admit one live owner; a stale graph worker cannot execute a second node
+  sequence or publish a terminal value after takeover.
+- 2026-07-23: Lease coordination is now a deployment-injected leaf Protocol.
+  Role, RunGraph and OutputEngine no longer depend on the file implementation;
+  the default `flock` coordinator can be replaced by a shared-filesystem,
+  database, etcd or consensus-backed implementation without changing run
+  semantics. A real subprocess fault test leaves an ownership epoch behind
+  without release, waits for expiry, takes it over from a replacement worker,
+  and proves the old fencing token is rejected. Deployment-only coordinator
+  objects remain outside `RoleSchema` and serialized `RoleState`.
+- 2026-07-23: Added typed, observation-only lease lifecycle telemetry for
+  acquired, renewed, lost and released epochs. These events carry run/owner IDs,
+  fencing token and expiry for tracing and alerting, but deliberately bypass the
+  rollout recorder: the coordinator remains the sole ownership truth and
+  heartbeat noise cannot inflate replay history.
+- 2026-07-23: Fencing is now auditable after the fact. Both durable commit-start
+  and committed facts carry the fencing token that authorized them;
+  `CommittedOutput` exposes it and replay preserves it across compaction and
+  publication recovery. Token zero explicitly identifies an unfenced standalone
+  engine, while HA-assembled agent and graph runs record their
+  positive ownership epoch.
+- 2026-07-23: Heartbeat failure is now fail-closed state, not an orphaned
+  background-task exception. A superseded epoch remains the non-retryable
+  `OUTPUT_COMMIT_FENCED` outcome; coordinator outage becomes the distinct
+  retryable `RUN_LEASE_COORDINATOR_UNAVAILABLE` outcome. Once either is
+  observed, the lease handle refuses every later commit guard and emits typed
+  lease-lost telemetry.
+- 2026-07-23: Lease timing is an immutable deployment policy rather than runtime
+  magic numbers. TTL and renewal interval are injected together and fail fast
+  unless `0 < renew_interval < ttl`; the policy remains outside model-facing
+  role configuration and serializable run state.
+- 2026-07-23: The default file coordinator now normalizes lock, parse and durable
+  write failures into the same retryable coordinator-unavailable contract.
+  Storage corruption and filesystem outages therefore fail closed without
+  leaking backend-specific exceptions into Role or RunGraph semantics.
 
 ## 1. Decision
 
@@ -1006,4 +1225,3 @@ The architecture is complete when:
 - output correction, provider recovery, tool retry and validation-infrastructure
   retry have independent durable budgets;
 - temporary compatibility adapters and obsolete result-parsing paths are removed.
-

@@ -28,6 +28,7 @@ from mote.cli.view import (
     ToolCallStarted,
     ViewProjector,
 )
+from mote.common.events.types import OutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
 from mote.common.i18n import keys as K
 from mote.common.i18n import t
 
@@ -834,3 +835,41 @@ def test_add_consumer_registers_with_its_capabilities():
     consumer = RecordingConsumer(Capabilities(streaming=True))
     bp.add_consumer(consumer)
     assert bp.consumers == [consumer]
+
+
+def test_output_snapshot_lifecycle_projects_without_becoming_a_message():
+    projector = ViewProjector()
+
+    snapshot = projector.project(
+        OutputSnapshotEvent(
+            run_id="run-1",
+            revision=1,
+            schema_fingerprint="sha",
+            value={"count": 7},
+        )
+    )[0]
+    invalidated = projector.project(
+        OutputSnapshotInvalidatedEvent(run_id="run-1", revision=1, reason="stream_changed")
+    )[0]
+
+    assert snapshot.kind == "output_snapshot"
+    assert snapshot.value == {"count": 7}
+    assert invalidated.kind == "output_snapshot_invalidated"
+    assert invalidated.revision == 1
+
+
+def test_committed_output_projects_as_typed_terminal_event():
+    output = ViewProjector().project(
+        OutputCommittedEvent(
+            candidate_id="candidate",
+            contract_id="test.report@1",
+            schema_fingerprint="sha",
+            value={"count": 7},
+            run_id="run-1",
+            run_kind="agent",
+        )
+    )[0]
+
+    assert output.kind == "output_committed"
+    assert output.run_id == "run-1"
+    assert output.value == {"count": 7}

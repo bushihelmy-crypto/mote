@@ -18,6 +18,7 @@ from mote.common.events import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRE
 from mote.common.events.bus import EventBus
 from mote.common.events.context import set_bus
 from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.executor.execution_context import bind_tool_call_id
 from mote.executor.tool_result import ToolError, ToolResult
 from mote.executor.tools.run_graph import RunGraph
 
@@ -84,9 +85,18 @@ class TestPipeline:
                     "expr": "sum([v for v in vals])",
                     "args": {"vals": {"$ref": "doubled"}},
                 },
-                {"id": "final", "kind": "tool", "tool": "add", "args": {"a": {"$ref": "total"}, "b": 100}},
+                {
+                    "id": "final",
+                    "kind": "tool",
+                    "tool": "add",
+                    "args": {"a": {"$ref": "total"}, "b": 100},
+                },
             ],
-            "output": {"doubled": {"$ref": "doubled"}, "total": {"$ref": "total"}, "final": {"$ref": "final"}},
+            "output": {
+                "doubled": {"$ref": "doubled"},
+                "total": {"$ref": "total"},
+                "final": {"$ref": "final"},
+            },
         }
         result = _call(role, graph, inputs={"nums": [1, 2, 3]})
         assert result.success
@@ -150,7 +160,15 @@ class TestMapConcurrency:
         role = _role()
         graph = {
             "inputs": {},
-            "nodes": [{"id": "c", "kind": "compute", "expr": "1", "args": {}, "concurrency": 2}],
+            "nodes": [
+                {
+                    "id": "c",
+                    "kind": "compute",
+                    "expr": "1",
+                    "args": {},
+                    "concurrency": 2,
+                }
+            ],
             "output": {"$ref": "c"},
         }
         # Spec validation rejects concurrency on a non-map node (raises ToolError).
@@ -402,12 +420,21 @@ class TestBranching:
         return {
             "inputs": {"v": {"type": "integer", "description": "a value"}},
             "nodes": [
-                {"id": "c", "kind": "tool", "tool": "classify", "args": {"x": {"$input": "v"}}},
+                {
+                    "id": "c",
+                    "kind": "tool",
+                    "tool": "classify",
+                    "args": {"x": {"$input": "v"}},
+                },
                 {"id": "big", "kind": "tool", "tool": "shout", "args": {"s": "yes"}},
                 {"id": "small", "kind": "tool", "tool": "shout", "args": {"s": "no"}},
             ],
             "edges": [
-                {"from": "c", "to": "big", "when": {"left": {"$ref": "c"}, "op": "eq", "right": "big"}},
+                {
+                    "from": "c",
+                    "to": "big",
+                    "when": {"left": {"$ref": "c"}, "op": "eq", "right": "big"},
+                },
                 {"from": "c", "to": "small"},  # unguarded == else
             ],
             "output": {"big": {"$ref": "big"}, "small": {"$ref": "small"}},
@@ -432,12 +459,30 @@ class TestAndJoin:
     def test_two_deps_join_into_one_node(self, workspace):
         role = _role(double=_double, add=_add)
         graph = {
-            "inputs": {"p": {"type": "integer", "description": "p"}, "q": {"type": "integer", "description": "q"}},
+            "inputs": {
+                "p": {"type": "integer", "description": "p"},
+                "q": {"type": "integer", "description": "q"},
+            },
             "nodes": [
-                {"id": "dp", "kind": "tool", "tool": "double", "args": {"x": {"$input": "p"}}},
-                {"id": "dq", "kind": "tool", "tool": "double", "args": {"x": {"$input": "q"}}},
+                {
+                    "id": "dp",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "p"}},
+                },
+                {
+                    "id": "dq",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "q"}},
+                },
                 # depends on both dp and dq -> engine AND-joins them.
-                {"id": "sum", "kind": "tool", "tool": "add", "args": {"a": {"$ref": "dp"}, "b": {"$ref": "dq"}}},
+                {
+                    "id": "sum",
+                    "kind": "tool",
+                    "tool": "add",
+                    "args": {"a": {"$ref": "dp"}, "b": {"$ref": "dq"}},
+                },
             ],
             "output": {"$ref": "sum"},
         }
@@ -483,7 +528,12 @@ class TestOptionalInputs:
                 "opt": {"type": "string", "description": "optional", "required": False},
             },
             "nodes": [
-                {"id": "e", "kind": "tool", "tool": "echo", "args": {"opt": {"$input": "opt"}}},
+                {
+                    "id": "e",
+                    "kind": "tool",
+                    "tool": "echo",
+                    "args": {"opt": {"$input": "opt"}},
+                },
             ],
             "output": {"$ref": "e"},
         }
@@ -496,7 +546,12 @@ class TestOptionalInputs:
         graph = {
             "inputs": {"opt": {"type": "string", "description": "optional", "required": False}},
             "nodes": [
-                {"id": "e", "kind": "tool", "tool": "echo", "args": {"opt": {"$input": "opt"}}},
+                {
+                    "id": "e",
+                    "kind": "tool",
+                    "tool": "echo",
+                    "args": {"opt": {"$input": "opt"}},
+                },
             ],
             "output": {"$ref": "e"},
         }
@@ -510,7 +565,12 @@ class TestOptionalInputs:
         graph = {
             "inputs": {"must": {"type": "string", "description": "required"}},
             "nodes": [
-                {"id": "e", "kind": "tool", "tool": "echo", "args": {"opt": {"$input": "must"}}},
+                {
+                    "id": "e",
+                    "kind": "tool",
+                    "tool": "echo",
+                    "args": {"opt": {"$input": "must"}},
+                },
             ],
             "output": {"$ref": "e"},
         }
@@ -575,7 +635,13 @@ class TestChannels:
             "inputs": {},
             "channels": {"n": {"type": "integer", "initial": 41, "reduce": "last"}},
             "nodes": [
-                {"id": "bump", "kind": "tool", "tool": "incr", "args": {"x": {"$ref": "n"}}, "writes": "n"},
+                {
+                    "id": "bump",
+                    "kind": "tool",
+                    "tool": "incr",
+                    "args": {"x": {"$ref": "n"}},
+                    "writes": "n",
+                },
             ],
             "edges": [{"from": "__start__", "to": "bump"}],
             "output": {"$ref": "n"},
@@ -592,8 +658,20 @@ class TestChannels:
             "inputs": {"xs": {"type": "list", "description": "xs"}},
             "channels": {"acc": {"type": "list", "initial": [], "reduce": "extend"}},
             "nodes": [
-                {"id": "a", "kind": "compute", "expr": "[1, 2]", "args": {}, "writes": "acc"},
-                {"id": "b", "kind": "compute", "expr": "[3]", "args": {}, "writes": "acc"},
+                {
+                    "id": "a",
+                    "kind": "compute",
+                    "expr": "[1, 2]",
+                    "args": {},
+                    "writes": "acc",
+                },
+                {
+                    "id": "b",
+                    "kind": "compute",
+                    "expr": "[3]",
+                    "args": {},
+                    "writes": "acc",
+                },
             ],
             # Force a→b ordering so both writes land deterministically.
             "edges": [{"from": "a", "to": "b"}],
@@ -609,8 +687,20 @@ class TestChannels:
             "inputs": {},
             "channels": {"total": {"type": "integer", "initial": 0, "reduce": "add"}},
             "nodes": [
-                {"id": "a", "kind": "compute", "expr": "10", "args": {}, "writes": "total"},
-                {"id": "b", "kind": "compute", "expr": "5", "args": {}, "writes": "total"},
+                {
+                    "id": "a",
+                    "kind": "compute",
+                    "expr": "10",
+                    "args": {},
+                    "writes": "total",
+                },
+                {
+                    "id": "b",
+                    "kind": "compute",
+                    "expr": "5",
+                    "args": {},
+                    "writes": "total",
+                },
             ],
             "edges": [{"from": "a", "to": "b"}],
             "output": {"$ref": "total"},
@@ -650,8 +740,18 @@ class TestChannels:
             "inputs": {},
             "channels": {"c": {"type": "integer", "initial": 7, "reduce": "last"}},
             "nodes": [
-                {"id": "a", "kind": "compute", "expr": "c + 1", "args": {"c": {"$ref": "c"}}},
-                {"id": "b", "kind": "compute", "expr": "c + 2", "args": {"c": {"$ref": "c"}}},
+                {
+                    "id": "a",
+                    "kind": "compute",
+                    "expr": "c + 1",
+                    "args": {"c": {"$ref": "c"}},
+                },
+                {
+                    "id": "b",
+                    "kind": "compute",
+                    "expr": "c + 2",
+                    "args": {"c": {"$ref": "c"}},
+                },
             ],
             "output": {"a": {"$ref": "a"}, "b": {"$ref": "b"}},
         }
@@ -672,11 +772,21 @@ class TestLooping:
             "inputs": {},
             "channels": {"i": {"type": "integer", "initial": 0, "reduce": "last"}},
             "nodes": [
-                {"id": "step", "kind": "tool", "tool": "incr", "args": {"x": {"$ref": "i"}}, "writes": "i"},
+                {
+                    "id": "step",
+                    "kind": "tool",
+                    "tool": "incr",
+                    "args": {"x": {"$ref": "i"}},
+                    "writes": "i",
+                },
             ],
             "edges": [
                 {"from": "__start__", "to": "step"},
-                {"from": "step", "to": "step", "when": {"left": {"$ref": "i"}, "op": "lt", "right": 3}},
+                {
+                    "from": "step",
+                    "to": "step",
+                    "when": {"left": {"$ref": "i"}, "op": "lt", "right": 3},
+                },
                 {"from": "step", "to": "__end__"},
             ],
             "output": {"$ref": "i"},
@@ -694,11 +804,21 @@ class TestLooping:
             "inputs": {},
             "channels": {"i": {"type": "integer", "initial": 0, "reduce": "last"}},
             "nodes": [
-                {"id": "step", "kind": "tool", "tool": "incr", "args": {"x": {"$ref": "i"}}, "writes": "i"},
+                {
+                    "id": "step",
+                    "kind": "tool",
+                    "tool": "incr",
+                    "args": {"x": {"$ref": "i"}},
+                    "writes": "i",
+                },
             ],
             "edges": [
                 {"from": "__start__", "to": "step"},
-                {"from": "step", "to": "step", "when": {"left": {"$ref": "i"}, "op": "ge", "right": 0}},
+                {
+                    "from": "step",
+                    "to": "step",
+                    "when": {"left": {"$ref": "i"}, "op": "ge", "right": 0},
+                },
                 {"from": "step", "to": "__end__"},
             ],
             "recursion_limit": 5,
@@ -716,7 +836,15 @@ class TestChannelGuards:
         role = _role()
         graph = {
             "inputs": {},
-            "nodes": [{"id": "a", "kind": "compute", "expr": "1", "args": {}, "writes": "nope"}],
+            "nodes": [
+                {
+                    "id": "a",
+                    "kind": "compute",
+                    "expr": "1",
+                    "args": {},
+                    "writes": "nope",
+                }
+            ],
             "output": {"$ref": "a"},
         }
         with pytest.raises(ToolError, match="invalid graph spec"):
@@ -748,7 +876,14 @@ class TestChannelGuards:
         role = _role()
         graph = {
             "inputs": {},
-            "nodes": [{"id": "a", "kind": "compute", "expr": "x", "args": {"x": {"$ref": "ghost"}}}],
+            "nodes": [
+                {
+                    "id": "a",
+                    "kind": "compute",
+                    "expr": "x",
+                    "args": {"x": {"$ref": "ghost"}},
+                }
+            ],
             "output": {"$ref": "a"},
         }
         with pytest.raises(ToolError, match="could not compile graph"):
@@ -1269,7 +1404,15 @@ class TestOnItemError:
         role = _role(dbl=_double)
         graph = {
             "inputs": {},
-            "nodes": [{"id": "x", "kind": "tool", "tool": "dbl", "args": {"x": 1}, "on_item_error": "skip"}],
+            "nodes": [
+                {
+                    "id": "x",
+                    "kind": "tool",
+                    "tool": "dbl",
+                    "args": {"x": 1},
+                    "on_item_error": "skip",
+                }
+            ],
             "output": {"$ref": "x"},
         }
         with pytest.raises(ToolError, match="must not set 'on_item_error'"):
@@ -1279,7 +1422,15 @@ class TestOnItemError:
         role = _role()
         graph = {
             "inputs": {},
-            "nodes": [{"id": "c", "kind": "compute", "expr": "1", "args": {}, "on_item_error": "skip"}],
+            "nodes": [
+                {
+                    "id": "c",
+                    "kind": "compute",
+                    "expr": "1",
+                    "args": {},
+                    "on_item_error": "skip",
+                }
+            ],
             "output": {"$ref": "c"},
         }
         with pytest.raises(ToolError, match="must not set 'on_item_error'"):
@@ -1335,8 +1486,18 @@ class TestActivityLineage:
         graph = {
             "inputs": {"p": {"type": "integer", "description": "p"}},
             "nodes": [
-                {"id": "dp", "kind": "tool", "tool": "double", "args": {"x": {"$input": "p"}}},
-                {"id": "sum", "kind": "tool", "tool": "add", "args": {"a": {"$ref": "dp"}, "b": 1}},
+                {
+                    "id": "dp",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "p"}},
+                },
+                {
+                    "id": "sum",
+                    "kind": "tool",
+                    "tool": "add",
+                    "args": {"a": {"$ref": "dp"}, "b": 1},
+                },
             ],
             "output": {"$ref": "sum"},
         }
@@ -1362,8 +1523,18 @@ class TestActivityLineage:
         graph = {
             "inputs": {"p": {"type": "integer", "description": "p"}},
             "nodes": [
-                {"id": "dp", "kind": "tool", "tool": "double", "args": {"x": {"$input": "p"}}},
-                {"id": "sum", "kind": "tool", "tool": "add", "args": {"a": {"$ref": "dp"}, "b": 1}},
+                {
+                    "id": "dp",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "p"}},
+                },
+                {
+                    "id": "sum",
+                    "kind": "tool",
+                    "tool": "add",
+                    "args": {"a": {"$ref": "dp"}, "b": 1},
+                },
             ],
             "output": {"$ref": "sum"},
         }
@@ -1385,8 +1556,18 @@ class TestActivityLineage:
         graph = {
             "inputs": {"p": {"type": "integer", "description": "p"}},
             "nodes": [
-                {"id": "dp", "kind": "tool", "tool": "double", "args": {"x": {"$input": "p"}}},
-                {"id": "sum", "kind": "tool", "tool": "add", "args": {"a": {"$ref": "dp"}, "b": 1}},
+                {
+                    "id": "dp",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "p"}},
+                },
+                {
+                    "id": "sum",
+                    "kind": "tool",
+                    "tool": "add",
+                    "args": {"a": {"$ref": "dp"}, "b": 1},
+                },
             ],
             "output": {"$ref": "sum"},
         }
@@ -1420,8 +1601,18 @@ class TestActivityLineage:
         graph = {
             "inputs": {},
             "nodes": [
-                {"id": "first", "kind": "tool", "tool": "rec", "args": {"tag": "first"}},
-                {"id": "second", "kind": "tool", "tool": "rec", "args": {"tag": "second"}},
+                {
+                    "id": "first",
+                    "kind": "tool",
+                    "tool": "rec",
+                    "args": {"tag": "first"},
+                },
+                {
+                    "id": "second",
+                    "kind": "tool",
+                    "tool": "rec",
+                    "args": {"tag": "second"},
+                },
             ],
             "output": {"$ref": "second"},
         }
@@ -1494,7 +1685,14 @@ class TestActivityLineage:
         role = _role(double=_double)
         graph = {
             "inputs": {"p": {"type": "integer", "description": "p"}},
-            "nodes": [{"id": "dp", "kind": "tool", "tool": "double", "args": {"x": {"$input": "p"}}}],
+            "nodes": [
+                {
+                    "id": "dp",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "p"}},
+                }
+            ],
             "output": {"$ref": "dp"},
         }
         _result, obs = _call_capturing(role, graph, inputs={"p": 2})
@@ -1507,7 +1705,14 @@ class TestActivityLineage:
         role = _role(double=_double)
         graph = {
             "inputs": {"p": {"type": "integer", "description": "p"}},
-            "nodes": [{"id": "dp", "kind": "tool", "tool": "double", "args": {"x": {"$input": "p"}}}],
+            "nodes": [
+                {
+                    "id": "dp",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "p"}},
+                }
+            ],
             "output": {"$ref": "dp"},
         }
         result = _call(role, graph, inputs={"p": 5})  # plain path, no bus
@@ -1542,7 +1747,10 @@ async def _fake_bash(kw):
         if kw.get("check"):
             return ToolResult(output=f"Command failed with exit code 1.\nbad {n}", success=False)
         # Non-zero exit WITHOUT check: success=True, error text rides in output/data.
-        return ToolResult(output=f"error: bad {n} [exit code: 1]", data=f"error: bad {n} [exit code: 1]")
+        return ToolResult(
+            output=f"error: bad {n} [exit code: 1]",
+            data=f"error: bad {n} [exit code: 1]",
+        )
     return ToolResult(output=str(n * 2), data=n * 2)
 
 
@@ -1687,7 +1895,12 @@ class TestFmtBinding:
         graph = {
             "inputs": {"x": {"type": "integer", "description": "seed"}},
             "nodes": [
-                {"id": "d", "kind": "tool", "tool": "double", "args": {"x": {"$input": "x"}}},
+                {
+                    "id": "d",
+                    "kind": "tool",
+                    "tool": "double",
+                    "args": {"x": {"$input": "x"}},
+                },
                 {
                     "id": "cmd",
                     "kind": "tool",
@@ -1708,7 +1921,12 @@ class TestFmtBinding:
         graph = {
             "inputs": {},
             "nodes": [
-                {"id": "cmd", "kind": "tool", "tool": "sh", "args": {"command": {"$fmt": "x", "$ref": "n"}}},
+                {
+                    "id": "cmd",
+                    "kind": "tool",
+                    "tool": "sh",
+                    "args": {"command": {"$fmt": "x", "$ref": "n"}},
+                },
             ],
             "output": {"$ref": "cmd"},
         }
@@ -1721,7 +1939,12 @@ class TestFmtBinding:
         graph = {
             "inputs": {},
             "nodes": [
-                {"id": "cmd", "kind": "tool", "tool": "sh", "args": {"command": {"$fmt": "run {here}"}}},
+                {
+                    "id": "cmd",
+                    "kind": "tool",
+                    "tool": "sh",
+                    "args": {"command": {"$fmt": "run {here}"}},
+                },
             ],
             "output": {"$ref": "cmd"},
         }
@@ -1733,9 +1956,84 @@ class TestFmtBinding:
         graph = {
             "inputs": {},
             "nodes": [
-                {"id": "cmd", "kind": "tool", "tool": "sh", "args": {"command": {"$fmt": "  "}}},
+                {
+                    "id": "cmd",
+                    "kind": "tool",
+                    "tool": "sh",
+                    "args": {"command": {"$fmt": "  "}},
+                },
             ],
             "output": {"$ref": "cmd"},
         }
         with pytest.raises(ToolError, match="invalid graph spec"):
             _call(role, graph)
+
+
+def test_explicit_output_contract_rejects_uncommitted_value():
+    result = _call(
+        _role(),
+        {
+            "nodes": [{"id": "value", "kind": "compute", "expr": "'not-an-int'"}],
+            "output": {"$ref": "value"},
+            "output_contract": {
+                "namespace": "test",
+                "name": "integer",
+                "version": "1",
+                "schema": {"type": "integer"},
+            },
+        },
+    )
+
+    assert result.success is False
+    assert "output contract" in result.output
+    assert result.data is None
+
+
+def test_explicit_output_contract_exposes_only_committed_value():
+    result = _call(
+        _role(),
+        {
+            "nodes": [{"id": "value", "kind": "compute", "expr": "41 + 1"}],
+            "output": {"answer": {"$ref": "value"}},
+            "output_contract": {
+                "namespace": "test",
+                "name": "answer",
+                "version": "1",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "integer"}},
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    )
+
+    assert result.success is True
+    assert result.data == {"answer": 42}
+
+
+def test_replayed_committed_graph_short_circuits_before_node_execution():
+    from mote.common.schema import CommittedOutput, RunKind
+
+    role = _role()
+    role.graph_resume_result = CommittedOutput(
+        candidate_id="candidate",
+        contract_id="mote.graph-json@1",
+        schema_fingerprint="schema",
+        value=42,
+        run_id="tool-call-1",
+        run_kind=RunKind.GRAPH,
+    )
+    tool = bind(RunGraph(), role)
+    graph = {
+        "nodes": [{"id": "must_not_run", "kind": "compute", "expr": "1 / 0"}],
+        "output": {"$ref": "must_not_run"},
+    }
+
+    with bind_tool_call_id("tool-call-1"):
+        result = run(tool.call(graph=graph))
+
+    assert result.success is True
+    assert result.data == 42
+    assert role.graph_resume_calls[0][1] == "tool-call-1"

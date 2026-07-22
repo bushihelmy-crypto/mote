@@ -13,6 +13,7 @@ protocol delivers every argument as a string and cannot carry the nested spec).
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, ClassVar
 
@@ -20,7 +21,17 @@ from mote.common.events import ActivityCompletedEvent, ActivityStartedEvent, Tas
 from mote.common.events.scope import ScopeRef, current_scope, push_scope
 from mote.common.exception.graph import GraphError
 from mote.executor.base_tool import BaseTool
-from mote.executor.capability_types import DispatchTool, ListGraphExcludedToolNames, ListGraphToolNames, ListToolNames
+from mote.executor.capability_types import (
+    CommitGraphOutput,
+    DispatchTool,
+    GraphRunLease,
+    HasGraphOutputRestore,
+    ListGraphExcludedToolNames,
+    ListGraphToolNames,
+    ListToolNames,
+    ResumeGraphOutput,
+)
+from mote.executor.execution_context import current_tool_call_id
 from mote.executor.tasks.bggraph.from_spec import ItemFailure, build_graph, collect_item_failures, resolve_output
 from mote.executor.tasks.bggraph.report import reset_progress_writer, set_progress_writer
 from mote.executor.tasks.bggraph.spec import GraphSpec
@@ -64,7 +75,16 @@ class RunGraph(BaseTool):
         "流水线",
         "循环",
     ]
-    requires = ("dispatch_tool", "list_tool_names", "list_graph_tool_names", "list_graph_excluded_tool_names")
+    requires = (
+        "dispatch_tool",
+        "list_tool_names",
+        "list_graph_tool_names",
+        "list_graph_excluded_tool_names",
+        "commit_graph_output",
+        "resume_graph_output",
+        "has_graph_output_restore",
+        "graph_run_lease",
+    )
     # This tool is itself a graph orchestrator — so it can never be nested.
     is_graph_tool = True
 
@@ -73,6 +93,13 @@ class RunGraph(BaseTool):
     list_tool_names: ListToolNames
     list_graph_tool_names: ListGraphToolNames
     list_graph_excluded_tool_names: ListGraphExcludedToolNames
+    commit_graph_output: CommitGraphOutput
+    resume_graph_output: ResumeGraphOutput
+    has_graph_output_restore: HasGraphOutputRestore
+    graph_run_lease: GraphRunLease
+
+    def can_resume_started_call(self, call_id: str) -> bool:
+        return self.has_graph_output_restore(call_id)
 
     async def call(self, *, graph: GraphSpec, inputs: dict[str, Any] | None = None) -> ToolResult:
         """Run a deterministic multi-tool workflow as one foreground graph.
@@ -141,13 +168,21 @@ class RunGraph(BaseTool):
                 continue
             if node.tool in graph_tools:
                 raise ToolError(
-                    _MSG_NESTED_GRAPH.format(node_id=node.id, tool=node.tool, tools=", ".join(sorted(graph_tools)))
+                    _MSG_NESTED_GRAPH.format(
+                        node_id=node.id,
+                        tool=node.tool,
+                        tools=", ".join(sorted(graph_tools)),
+                    )
                 )
             # Reject tools that block on an external wake event (Sleep): a
             # foreground graph never delivers one, so the node would hang the run.
             if node.tool in excluded_tools:
                 raise ToolError(
-                    _MSG_EXCLUDED_TOOL.format(node_id=node.id, tool=node.tool, tools=", ".join(sorted(excluded_tools)))
+                    _MSG_EXCLUDED_TOOL.format(
+                        node_id=node.id,
+                        tool=node.tool,
+                        tools=", ".join(sorted(excluded_tools)),
+                    )
                 )
 
         # Node tool references are validated against the live tool set at compile
@@ -168,45 +203,45 @@ class RunGraph(BaseTool):
         # attempts / failure text into it as it runs, and the ActivityCompleted
         # outcome tree is read straight off it (self-sufficient — a replay renders
         # the outcome from the terminal event alone, never the live ping stream).
-        run_state = GraphRunState.for_graph(compiled)
-        topology = self._build_topology(spec)
-
         # Push a ``graph`` scope so every node (and the tool calls the nodes
         # dispatch) inherits this activity's lineage, and the progress pings the
         # engine emits carry it too. A stable per-call id keys the live widget.
-        graph_ref = ScopeRef("graph", uuid.uuid4().hex, "run_graph")
+        graph_ref = ScopeRef("graph", current_tool_call_id() or uuid.uuid4().hex, "run_graph")
+        async with self.graph_run_lease(graph_ref.id):
+            return await self._execute_owned_graph(compiled=compiled, spec=spec, graph_ref=graph_ref, inputs=inputs)
 
-        # Collect per-item map/fold failures (skipped or fatal) so the loss — and
-        # the exact args to retry — is surfaced to the model in the tool result:
-        # a hard failure otherwise reaches the agent only as the terse "Nodes
-        # failed"; the per-item args let it retry the exact call.
+    async def _execute_owned_graph(self, *, compiled, spec, graph_ref, inputs):
+        restored = await self.resume_graph_output(contract_spec=spec.output_contract, run_id=graph_ref.id)
+        if restored is not None:
+            return ToolResult(output=self._format(restored.value), data=restored.value)
+
+        run_state = GraphRunState.for_graph(compiled)
+        topology = self._build_topology(spec)
         with collect_item_failures() as failures:
             with push_scope(graph_ref) as scope:
                 self._emit_started(scope, topology)
-                # Foreground ``arun`` installs no progress writer, so the engine's
-                # ``report_progress`` calls would go nowhere — wire one whose only
-                # sink is the observation bus (task_id="run_graph" so the telemetry
-                # mirror fires), carrying the ambient scope so each ping routes into
-                # this activity's subtree as a per-node update.
                 token = set_progress_writer(self._make_progress_writer())
                 try:
                     state = await compiled.arun(run_state=run_state, **(inputs or {}))
                 except GraphError as exc:
-                    # A node failed / router errored / recursion bound hit. The
-                    # engine has recorded per-node outcomes in ``run_state`` and
-                    # pushed notifications; freeze the activity to its failure
-                    # outcome tree, then surface a structured failure so the model
-                    # can inspect and replan (partial state is discarded).
                     self._emit_completed(scope, run_state, "failed", str(exc))
                     return ToolResult(output=str(exc) + self._failure_note(failures), success=False)
                 finally:
                     reset_progress_writer(token)
 
                 result = resolve_output(spec, state)
+                try:
+                    committed = await self.commit_graph_output(
+                        output=result,
+                        contract_spec=spec.output_contract,
+                        run_id=graph_ref.id,
+                    )
+                except GraphError as exc:
+                    self._emit_completed(scope, run_state, "failed", str(exc))
+                    return ToolResult(output=str(exc), success=False)
+                result = committed.value
                 self._emit_completed(scope, run_state, "success", "")
 
-        # Failure notes ride the output TEXT only — ``data`` stays the clean
-        # resolved output so downstream ``$ref``/programmatic reads are unaffected.
         return ToolResult(output=self._format(result) + self._failure_note(failures), data=result)
 
     # -- activity lineage (the run_graph → node → tool spine) --
@@ -244,7 +279,12 @@ class RunGraph(BaseTool):
     def _emit_started(self, scope: tuple, topology: dict) -> None:
         try:
             observe_event_sync(
-                ActivityStartedEvent(scope=scope, activity_kind="graph", label="run_graph", topology=topology)
+                ActivityStartedEvent(
+                    scope=scope,
+                    activity_kind="graph",
+                    label="run_graph",
+                    topology=topology,
+                )
             )
         except Exception:  # noqa: BLE001 — telemetry must never break the run
             pass
@@ -334,8 +374,6 @@ class RunGraph(BaseTool):
 
     @staticmethod
     def _format(result: Any) -> str:
-        import json
-
         try:
             return "Graph completed. Output:\n" + json.dumps(result, ensure_ascii=False, indent=2, default=str)
         except (TypeError, ValueError):
@@ -352,8 +390,6 @@ class RunGraph(BaseTool):
         """
         if not failures:
             return ""
-        import json
-
         by_node: dict[str, list[ItemFailure]] = {}
         for f in failures:
             by_node.setdefault(f.node, []).append(f)

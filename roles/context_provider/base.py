@@ -48,6 +48,10 @@ class BaseContextProvider(ABC):
         """
 
     @abstractmethod
+    def finalize_for_llm(self, request: ThinkRequest, llm: "LLMClient") -> ThinkRequest:
+        """Rebind wire capabilities and tool schemas to the routed LLM."""
+
+    @abstractmethod
     async def enforce_budget(self) -> BudgetVerdict:
         """Rule on this agent's spend against its configured budget cap.
 

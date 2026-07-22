@@ -14,7 +14,6 @@ class TestDefaults:
         assert isinstance(st.msg_buffer, MessageQueue)
         assert st.latest_observed_msg is None
         assert st.recovered is False
-        assert st.last_end_output == ""
         assert st.addresses == set()
         assert st.watch == set()
         assert st.env is None
@@ -48,7 +47,6 @@ class TestSerialization:
         dumped = st.model_dump()
         assert "msg_buffer" not in dumped
         assert "env" not in dumped
-        assert "last_end_output" not in dumped  # exclude=True
 
     def test_serialized_fields_present(self):
         st = RoleState()

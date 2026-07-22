@@ -17,6 +17,7 @@ focused on the ``AgentEvent → ViewEvent`` fold itself.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any, Optional
 
 from mote.common.i18n import keys as K
@@ -38,8 +39,6 @@ def _count_numbered_lines(text: str) -> int:
 
 def _diff_counts(old: str, new: str) -> tuple[int, int]:
     """``(added, removed)`` line counts between two file versions (Edit chrome)."""
-    from difflib import SequenceMatcher
-
     added = removed = 0
     matcher = SequenceMatcher(None, old.splitlines(), new.splitlines())
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():

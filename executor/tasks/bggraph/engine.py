@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any, Optional
 from pydantic import TypeAdapter, ValidationError
 
 from mote.common.events.scope import ScopeRef, push_scope
-from mote.common.exception import RecoveryAction, RecoveryRunner
+from mote.common.exception import GraphError, RecoveryAction, RecoveryRunner
 from mote.common.exception.graph import GraphNodeRetryExhaustedError, GraphNodeTimeoutError
+from mote.common.schema import FinalCandidateAction, RunKind
 from mote.executor.tasks.bggraph.channels import apply_updates
 from mote.executor.tasks.bggraph.marker import mark_pipeline_executor
 from mote.executor.tasks.bggraph.notify import (
@@ -228,7 +229,12 @@ async def _run_one_node_body(
         attempt = attempts - 1
         exhausted = GraphNodeRetryExhaustedError(node_name, attempts, e.__cause__ or e)
         if run_state is not None:
-            run_state.mark_failed(node_name, exhausted, retries_attempted=attempt, retries_limit=_AUTO_RETRIES)
+            run_state.mark_failed(
+                node_name,
+                exhausted,
+                retries_attempted=attempt,
+                retries_limit=_AUTO_RETRIES,
+            )
         raise exhausted from e
     except Exception as e:  # noqa: BLE001 — node failures are reported, not swallowed
         attempt = attempts - 1  # retries consumed before giving up
@@ -328,6 +334,32 @@ def _collect_finish_result(graph: "BgGraph", state: GraphState) -> Any:
     if not output_fields:
         return dump
     return {name: dump[name] for name in output_fields if name in dump}
+
+
+async def _commit_finish_result(graph: "BgGraph", result: Any, run_state: GraphRunState) -> Any:
+    """Validate and durably commit a declared typed graph terminal output."""
+    if graph.output_engine_factory is None:
+        return result
+    engine = graph.output_engine_factory(
+        graph.output_contract,
+        run_id=run_state.run_id,
+        run_kind=RunKind.GRAPH,
+    )
+    evaluation = await engine.evaluate(FinalCandidateAction(raw=result, representation="run_graph"))
+    if not evaluation.accepted:
+        raise GraphError(
+            "Graph terminal output did not satisfy its output contract",
+            issues=[
+                {
+                    "path": list(issue.path),
+                    "code": issue.code,
+                    "message": issue.message,
+                }
+                for issue in evaluation.issues
+            ],
+        )
+    committed = await engine.commit()
+    return committed.value
 
 
 def _detect_stall(graph: "BgGraph", completed: set, trigger_count: dict) -> tuple[str, ...]:
@@ -544,6 +576,7 @@ async def _run_driver(
         )
 
     result = _collect_finish_result(graph, state)
+    result = await _commit_finish_result(graph, result, run_state)
     push_terminal_notification(
         graph,
         state,

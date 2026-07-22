@@ -3,16 +3,37 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Optional, Set
+from typing import TYPE_CHECKING, Any, Generic, Optional, Set, TypeVar, cast
 from uuid import uuid4
 
 from mote.common.base import BaseRole
 from mote.common.const import MESSAGE_ROUTE_TO_SELF
-from mote.common.events import SessionStartEvent, TurnEndEvent, UserPromptSubmitEvent, set_bus, span
-from mote.common.exception import RoleContextNotSetError
+from mote.common.disk import get_disk_writer, mtime_ns
+from mote.common.events import (
+    OutputPublicationQueuedEvent,
+    OutputPublishedEvent,
+    SessionStartEvent,
+    TurnEndEvent,
+    UserPromptSubmitEvent,
+    set_bus,
+    span,
+)
+from mote.common.exception import GraphError, RoleContextNotSetError
+from mote.common.interface import RunLeaseCoordinator
 from mote.common.logs import bind_session_logfile, bind_trace, log_class, logger, unbind_session_logfile
-from mote.common.schema import AIMessage, CauseBy, Message
+from mote.common.schema import (
+    AIMessage,
+    CauseBy,
+    FinalCandidateAction,
+    Message,
+    OutputContractId,
+    RunKind,
+    RunLeasePolicy,
+    RunResult,
+    TranscriptRef,
+)
 from mote.common.utils.common import any_to_str, role_raise_decorator
 from mote.context import ContextManager
 from mote.context.skills.skill_manager import SkillManager
@@ -20,12 +41,18 @@ from mote.executor.tasks import BackgroundTaskPool
 from mote.executor.tool_executor import ToolExecutor
 from mote.parser import CommandChannel
 from mote.roles.context_provider import ContextProvider
+from mote.roles.output_contract import JsonSchemaOutputDecoder, OutputContract, text_output_contract
+from mote.roles.output_engine import OutputEngine
 from mote.roles.role_components import RoleComponents
 from mote.roles.role_schema import RoleSchema
 from mote.roles.role_state import RoleState
 from mote.router.router import LLMRouter
 from mote.session import list_sessions as _list
+from mote.session.attribution import HunkAttribution
 from mote.session.events import SessionMetaEvent
+from mote.session.hunk_ops import HunkOps
+
+OutputT = TypeVar("OutputT")
 
 if TYPE_CHECKING:
     from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem, DeviceConfig
@@ -43,8 +70,6 @@ if TYPE_CHECKING:
         SessionLog,
         TerminalStateRecorder,
     )
-    from mote.session.attribution import HunkAttribution
-    from mote.session.hunk_ops import HunkOps
 
 
 @log_class(
@@ -67,7 +92,7 @@ if TYPE_CHECKING:
         "set_addresses",
     },
 )
-class Role(BaseRole):
+class Role(BaseRole, Generic[OutputT]):
     """Unified Role/Agent — pure orchestration via composition.
 
     Composes:
@@ -87,6 +112,9 @@ class Role(BaseRole):
         name: Optional[str] = None,
         role_schema: Optional[RoleSchema] = None,
         state: Optional[RoleState] = None,
+        output_contract: Optional[OutputContract[OutputT]] = None,
+        run_lease_coordinator: RunLeaseCoordinator | None = None,
+        run_lease_policy: RunLeasePolicy = RunLeasePolicy(),
         **schema_kwargs,
     ):
         # Static config
@@ -106,6 +134,9 @@ class Role(BaseRole):
         # External dependencies (injected)
         self._context = context
         self._config = config
+        self.output_contract = output_contract or cast(OutputContract[OutputT], text_output_contract())
+        self._run_lease_coordinator = run_lease_coordinator
+        self._run_lease_policy = run_lease_policy
 
         # Lazy assembly + ownership of all subsystems (router, executor, context
         # manager, event bus, session log, hook/LSP/file-watch services, the
@@ -273,8 +304,6 @@ class Role(BaseRole):
         """
         ops = getattr(self, "_hunk_ops", None)
         if ops is None:
-            from mote.common.disk import mtime_ns
-            from mote.session.hunk_ops import HunkOps
 
             def _refresh_read_state(path: str) -> None:
                 m = mtime_ns(path)
@@ -301,8 +330,6 @@ class Role(BaseRole):
         """
         attr = getattr(self, "_hunk_attribution", None)
         if attr is None:
-            from mote.session.attribution import HunkAttribution
-
             attr = HunkAttribution(self.hunk_ledger, self.file_snapshot_recorder.blobs)
             self._hunk_attribution = attr
         return attr
@@ -621,6 +648,10 @@ class Role(BaseRole):
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,
             "list_graph_excluded_tool_names": self.list_graph_excluded_tool_names,
+            "commit_graph_output": self.commit_graph_output,
+            "resume_graph_output": self.resume_graph_output,
+            "has_graph_output_restore": self._state_ctl.has_pending_graph_output_restore,
+            "graph_run_lease": self.graph_run_lease,
             "list_deferred_tools": self.list_deferred_tools,
             "reveal_tools": self.reveal_tools,
             "describe_deferred_tools": self.describe_deferred_tools,
@@ -724,7 +755,14 @@ class Role(BaseRole):
         configured = self.config.tools.proxy or ""
         if configured:
             return configured
-        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        for var in (
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ):
             value = os.environ.get(var, "")
             if value:
                 return value
@@ -879,6 +917,74 @@ class Role(BaseRole):
         (node-replay), and the ledger guards the graph as a whole.
         """
         return await self.executor.run_command(name, kwargs or {})
+
+    async def commit_graph_output(self, *, output: Any, contract_spec: Any, run_id: str) -> Any:
+        """Validate and commit one model-authored RunGraph terminal value."""
+        contract = OutputContract(
+            OutputContractId(
+                contract_spec.namespace,
+                contract_spec.name,
+                contract_spec.version,
+            ),
+            JsonSchemaOutputDecoder(contract_spec.schema_),
+        )
+        lease = self._components.current_graph_lease(run_id)
+        engine = OutputEngine(
+            contract,
+            run_id=run_id,
+            run_kind=RunKind.GRAPH,
+            commit_fence=lease,
+            fencing_token=lease.fencing_token,
+        )
+        evaluation = await engine.evaluate(FinalCandidateAction(raw=output, representation="run_graph"))
+        if not evaluation.accepted:
+            raise GraphError(
+                "Graph terminal output did not satisfy its output contract",
+                issues=[
+                    {
+                        "path": list(issue.path),
+                        "code": issue.code,
+                        "message": issue.message,
+                    }
+                    for issue in evaluation.issues
+                ],
+            )
+        return await engine.commit()
+
+    async def resume_graph_output(self, *, contract_spec: Any, run_id: str) -> Any:
+        """Finish a replayed accepted graph output without rerunning its graph."""
+        restored = self._state_ctl.take_pending_graph_output_restore(run_id)
+        if restored is None:
+            return None
+        contract = OutputContract(
+            OutputContractId(
+                contract_spec.namespace,
+                contract_spec.name,
+                contract_spec.version,
+            ),
+            JsonSchemaOutputDecoder(contract_spec.schema_),
+        )
+        lease = self._components.current_graph_lease(run_id)
+        engine = OutputEngine(
+            contract,
+            restored_state=restored,
+            run_id=run_id,
+            run_kind=RunKind.GRAPH,
+            commit_fence=lease,
+            fencing_token=lease.fencing_token,
+        )
+        if not engine.has_restored_terminal_output:
+            return None
+        return await engine.commit()
+
+    @asynccontextmanager
+    async def graph_run_lease(self, run_id: str):
+        """Own a graph from recovery lookup through its terminal commit."""
+        await self._components.begin_graph_lease(run_id)
+        try:
+            yield
+        finally:
+            await self._components.end_graph_lease(run_id)
 
     def list_tool_names(self) -> list[str]:
         """Live tool names (primary + aliases), for ``run_graph`` to validate the
@@ -1088,8 +1194,8 @@ class Role(BaseRole):
         await self._components.kickoff_workspace_cleanup()
 
     @role_raise_decorator
-    async def run(self, with_message=None) -> Message | None:
-        """Observe, and think and act based on the results of the observation"""
+    async def run(self, with_message=None) -> RunResult[OutputT] | None:
+        """Run one request and return its typed, durably committed output."""
         # Bind the session_id as the trace_id so every log line emitted during
         # this run (across the loop, think engine, executor, etc.) is correlated.
         # Bind the event bus to the async context so deep call sites (the LLM
@@ -1133,42 +1239,74 @@ class Role(BaseRole):
                 # policy can never loop forever; with the default 0 (and no such
                 # subscriber wired) the loop runs exactly once.
                 auto_continue_budget = self.role_schema.max_auto_continue
-                rsp = None
+                loop_result = None
                 while True:
-                    loop = self._components.make_loop()
+                    await self._components.begin_output_lease()
                     try:
-                        rsp = await loop.run()
+                        loop = self._components.make_loop()
+                        try:
+                            loop_result = await loop.run()
+                        finally:
+                            # Always propagate for recovery (role_raise_decorator reads it).
+                            self.state.latest_observed_msg = loop.latest_observed_msg
+                            # TurnEnd event: the recorder marks the turn boundary in the
+                            # durable log (working_dir may have moved via `cd`, so capture
+                            # the live value at turn end) and the HookSubscriber fires the
+                            # Stop hook. Guarded on the slot so a failure before the bus was
+                            # built never triggers lazy construction in teardown.
+                            turn_outcome = await self._emit_turn_end()
                     finally:
-                        # Always propagate for recovery (role_raise_decorator reads it).
-                        self.state.latest_observed_msg = loop.latest_observed_msg
-                        # TurnEnd event: the recorder marks the turn boundary in the
-                        # durable log (working_dir may have moved via `cd`, so capture
-                        # the live value at turn end) and the HookSubscriber fires the
-                        # Stop hook. Guarded on the slot so a failure before the bus was
-                        # built never triggers lazy construction in teardown.
-                        turn_outcome = await self._emit_turn_end()
+                        await self._components.end_output_lease()
+                    if loop_result is not None and loop_result.committed_output is not None:
+                        break
                     if not self._should_auto_continue(turn_outcome, auto_continue_budget):
                         break
                     auto_continue_budget -= 1
-                if rsp is None:
+                if loop_result is None:
                     return None
+                rsp = loop_result.presentation
 
                 # Post-loop finalization (was Role.react): clear the active signal
                 # and tag the response with this Role's display name.
                 self._state_ctl.deactivate()
                 if isinstance(rsp, AIMessage):
                     rsp.with_agent(self.role_schema.display_name)
-                # Unify termination on "the end returns the rsp": the react loop's
-                # terminal reply IS the run's result. ``last_end_output`` is the
-                # single channel the ephemeral spawn read-back
-                # (``ChildAgentHandle.result``) reads, so feed it the terminal
-                # reply here — a child's output (e.g. a reviewer's final JSON)
-                # then never falls through the gap between the returned rsp and
-                # the read channel.
-                if not self.state.last_end_output:
-                    self.state.last_end_output = getattr(rsp, "content", "") or ""
+                committed = loop_result.committed_output
+                if committed is not None:
+                    publication_id = f"output:{self.session_id}:{committed.run_id}"
+                    await self.event_bus.emit(
+                        OutputPublicationQueuedEvent(
+                            publication_id=publication_id,
+                            candidate_id=committed.candidate_id,
+                            contract_id=committed.contract_id,
+                            run_id=committed.run_id,
+                            run_kind=committed.run_kind.value,
+                        )
+                    )
+                    await get_disk_writer().drain()
+                    rsp.metadata["output_publication_id"] = publication_id
+                    self.publish_message(rsp)
+                    await self.event_bus.emit(
+                        OutputPublishedEvent(
+                            candidate_id=committed.candidate_id,
+                            contract_id=committed.contract_id,
+                            publication_id=publication_id,
+                            run_id=committed.run_id,
+                            run_kind=committed.run_kind.value,
+                        )
+                    )
+                    await get_disk_writer().drain()
+                    return RunResult(
+                        output=committed.value,
+                        output_record=committed,
+                        transcript=TranscriptRef(
+                            session_id=self.session_id,
+                            terminal_message_id=str(rsp.id),
+                        ),
+                        run_id=committed.run_id,
+                    )
                 self.publish_message(rsp)
-                return rsp
+                return None
 
     @staticmethod
     def list_sessions(base_dir: str | None = None, *, cwd: str | None = None) -> list:

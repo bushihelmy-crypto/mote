@@ -94,6 +94,23 @@ class RoleSessionManager:
         # use — without re-running any navigation/click actions.
         if result.browser_state:
             state_ctl.set_pending_browser_restore(result.browser_state)
+        output_states = getattr(result, "output_states", {}) or {}
+        agent_states = [state for state in output_states.values() if state.get("run_kind", "agent") == "agent"]
+        output_state = agent_states[-1] if agent_states else result.output_state
+        if output_state and output_state.get("run_kind", "agent") != "agent":
+            output_state = None
+        if output_state and output_state.get("status") not in {
+            "published",
+            "correction_exhausted",
+        }:
+            state_ctl.set_pending_output_restore(output_state)
+        state_ctl.set_pending_graph_output_restores(
+            {
+                run_id: state
+                for run_id, state in output_states.items()
+                if state.get("run_kind") == "graph" and state.get("status") not in {"published", "correction_exhausted"}
+            }
+        )
         return True
 
     @staticmethod

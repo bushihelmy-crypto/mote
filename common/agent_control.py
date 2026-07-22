@@ -163,7 +163,7 @@ async def spawn_and_run(
     *,
     ctx: Any = None,
     on_spawn: Optional[Callable[[Any], Awaitable[None]]] = None,
-) -> Optional[str]:
+) -> Optional[Any]:
     """Spawn a child through the resolved plane, run it to completion, release it.
 
     The one helper every ephemeral spawn site funnels through. Resolves the
@@ -185,8 +185,8 @@ async def spawn_and_run(
     ``base_env.add_role``), so a missing plane is a wiring bug; raise rather
     than silently spawn an unmanaged child outside cap / lineage / cost.
 
-    Returns the child's terminal summary (possibly an empty string). Returns
-    ``None`` only when the spawn was refused by the cap
+    Returns the child's typed run result. Returns ``None`` when the spawn was
+    refused by the cap or the child timed out before committing an output
     (:class:`AgentLimitReached`); other run failures propagate to the caller,
     which decides how to degrade.
     """

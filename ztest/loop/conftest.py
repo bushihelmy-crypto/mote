@@ -60,7 +60,18 @@ class FakeThinkEngine:
         # Results adopted via the durable reinstate path (skip-the-LLM resume).
         self.reinstated: list = []
 
-    async def start(self, req, system_prompt, tool_specs=None, *, llm):
+    async def start(
+        self,
+        req,
+        system_prompt,
+        tool_specs=None,
+        *,
+        llm,
+        output_binding=None,
+        output_schema=None,
+        output_run_id="",
+        schema_fingerprint="",
+    ):
         self.start_calls.append(
             {
                 "req": req,
@@ -97,6 +108,7 @@ class FakeChannel:
         self.recorded_calls: list[tuple[str, list[dict]]] = []
         self.recorded_results: list[list[dict]] = []
         self.iter_calls: list[set] = []
+        self.output_feedback = []
 
     async def iter_commands(self, think_engine, valid_names):
         self.iter_calls.append(set(valid_names))
@@ -114,8 +126,30 @@ class FakeChannel:
     async def record_results(self, memory, executed) -> None:
         self.recorded_results.append([dict(e) for e in executed])
 
-    async def is_terminal(self, think_engine) -> bool:
-        return self.terminal
+    async def record_output_feedback(self, memory, feedback) -> None:
+        self.output_feedback.append(feedback)
+
+    async def record_output_candidate(self, memory, content, candidate, *, accepted, feedback=None) -> None:
+        self.recorded_turns.append((content, []))
+        if feedback is not None:
+            self.output_feedback.append(feedback)
+
+    async def model_turn(self, think_engine):
+        from mote.common.schema import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
+
+        content = think_engine.result.content or ""
+        actions = [TextAction(content=content)] if content else []
+        actions.extend(
+            ToolCallAction(
+                action_id=command.get("id") or "",
+                name=command["command_name"],
+                arguments=command.get("args") or {},
+            )
+            for command in self.commands
+        )
+        if self.terminal:
+            actions.append(FinalCandidateAction(raw=content, representation="test"))
+        return ModelTurn(content=content, actions=actions)
 
     def react_result(self, outputs: str) -> str:
         # Mirror the base default (plain outputs); the loop's content is then
@@ -210,11 +244,27 @@ class FakeContextProvider:
     """
 
     def __init__(
-        self, ctx: LoopContext, *, think_request: Optional[ThinkRequest] = None, llm: Optional[FakeLLM] = None
+        self,
+        ctx: LoopContext,
+        *,
+        think_request: Optional[ThinkRequest] = None,
+        llm: Optional[FakeLLM] = None,
     ):
         self._ctx = ctx
+        from mote.common.output_binding import negotiate_output_binding
+        from mote.common.schema import OutputRepresentationCapabilities
+
         self._think_request = think_request or ThinkRequest(
-            req=[UserMessage("hi")], system_prompt="sys", tool_specs=["spec"]
+            req=[UserMessage("hi")],
+            system_prompt="sys",
+            tool_specs=["spec"],
+            output_binding=negotiate_output_binding(
+                is_text=True,
+                capabilities=OutputRepresentationCapabilities(supports_text=True, protocol="fake"),
+            ),
+            command_channel=None,
+            output_schema={},
+            schema_fingerprint="fake-schema",
         )
         self.llm = llm or FakeLLM()
         self.prepare_calls = 0
@@ -234,6 +284,11 @@ class FakeContextProvider:
     async def resolve_llm(self, messages=None):
         self.resolve_calls.append(messages)
         return self.llm
+
+    def finalize_for_llm(self, request, llm):
+        if request.command_channel is None:
+            request.command_channel = getattr(self, "channel", None)
+        return request
 
     async def enforce_budget(self) -> BudgetVerdict:
         self.enforce_budget_calls += 1
@@ -264,6 +319,31 @@ class FakeBgPool:
             self.pending -= 1
 
 
+class FakeOutputEngine:
+    run_id = "fake-output-run"
+
+    def __init__(self, *, accepted: bool = True):
+        self.accepted = accepted
+        self.candidates = []
+        self.commit_calls = 0
+
+    @property
+    def has_restored_terminal_output(self):
+        return False
+
+    async def evaluate(self, candidate):
+        from mote.common.schema import OutputEvaluation
+
+        self.candidates.append(candidate)
+        return OutputEvaluation(accepted=self.accepted, value=candidate.raw if self.accepted else None)
+
+    async def commit(self):
+        from mote.common.schema.output import CommittedOutput
+
+        self.commit_calls += 1
+        return CommittedOutput("fake", "mote.text@1", "sha", None)
+
+
 # ---------------------------------------------------------------------------
 # Builders / fixtures
 # ---------------------------------------------------------------------------
@@ -276,7 +356,16 @@ def make_loop_context(**overrides) -> LoopContext:
     params: dict[str, Any] = dict(
         name="Alice",
         display_name="Alice(Tester)",
-        tools=["Read", "AskUserQuestion"],
+        tools=[
+            "Read",
+            "Search",
+            "Glob",
+            "Grep",
+            "Bash",
+            "RunGraph",
+            "End",
+            "AskUserQuestion",
+        ],
         msg_buffer=MessageQueue(),
         watch=set(),
         enable_memory=True,
@@ -327,6 +416,7 @@ def make_loop():
         turn_context_bus=None,
         get_cwd: Optional[Callable[[], str]] = None,
         durable_runner=None,
+        output_engine=None,
         **ctx_overrides,
     ) -> LoopBundle:
         ctx = ctx or make_loop_context(**ctx_overrides)
@@ -335,6 +425,8 @@ def make_loop():
         executor = executor or FakeExecutor()
         memory = memory or FakeMemory()
         provider = provider or FakeContextProvider(ctx)
+        provider.channel = channel
+        output_engine = output_engine or FakeOutputEngine()
 
         active_holder = [active]
         bg_holder = [bg_pool]
@@ -365,6 +457,7 @@ def make_loop():
             turn_context_bus=turn_context_bus,
             get_cwd=get_cwd,
             durable_runner=durable_runner,
+            output_engine=output_engine,
         )
         return LoopBundle(
             loop=loop,

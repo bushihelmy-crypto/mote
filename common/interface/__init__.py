@@ -23,6 +23,8 @@ This is a LEAF package: it imports only ``typing`` and (under TYPE_CHECKING) the
 from mote.common.interface.background_pool import BackgroundPool
 from mote.common.interface.browser_state import BrowserStateStore
 from mote.common.interface.child_role import ChildRoleBuilder, build_child_role, register_child_role_builder
+from mote.common.interface.commit_fence import CommitFence
+from mote.common.interface.completion_policy import CompletionPolicy
 from mote.common.interface.context_reducer import ContextReducer
 from mote.common.interface.event_subscriber import (
     DEFAULT_PRIORITY,
@@ -48,8 +50,11 @@ from mote.common.interface.llm_client import LLMClient
 from mote.common.interface.message_activity import MessageActivity
 from mote.common.interface.message_sink import MessageSink
 from mote.common.interface.message_store import MessageStore
+from mote.common.interface.output import OutputDecoder, OutputEngine, OutputValidator
+from mote.common.interface.output_migration import OutputMigration
 from mote.common.interface.request_assembler import RequestAssembler
 from mote.common.interface.resource_loader import ResourceProvider
+from mote.common.interface.run_lease import LeaseEpoch, RunLeaseCoordinator
 from mote.common.interface.terminal_state import TerminalStateStore
 from mote.common.interface.turn_context import (
     DEFAULT_TURN_CONTEXT_PRIORITY,
@@ -58,8 +63,16 @@ from mote.common.interface.turn_context import (
 )
 
 __all__ = [
+    "CompletionPolicy",
+    "CommitFence",
+    "OutputDecoder",
+    "OutputEngine",
+    "OutputValidator",
+    "OutputMigration",
     "MessageStore",
     "RequestAssembler",
+    "LeaseEpoch",
+    "RunLeaseCoordinator",
     "LLMClient",
     "BackgroundPool",
     "MessageActivity",

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Callable, Optional
 
 import pytest
@@ -121,6 +122,8 @@ class CapRole:
         self.device_config: Any = DeviceConfig()
         # Named-secret vault stand-in for autonomous login-fill (get_secret).
         self.secrets: dict[str, str] = {}
+        self.graph_resume_result = None
+        self.graph_resume_calls: list[tuple[Any, str]] = []
         # Scriptable human/session behaviour.
         self.ask_reply = ask_reply
         self.ask_questions: list[str] = []  # records every prompt sent to ask_user
@@ -355,6 +358,37 @@ class CapRole:
         # default.
         return list(getattr(self, "excluded_tools", ()) or ())
 
+    async def commit_graph_output(self, *, output, contract_spec, run_id):
+        from mote.common.schema import CommittedOutput, OutputDecodeError, RunKind
+        from mote.roles.output_contract import JsonSchemaOutputDecoder
+
+        decoder = JsonSchemaOutputDecoder(contract_spec.schema_)
+        try:
+            value = decoder.decode(output)
+        except OutputDecodeError:
+            from mote.common.exception import GraphError
+
+            raise GraphError("Graph terminal output did not satisfy its output contract")
+        return CommittedOutput(
+            candidate_id="graph-candidate",
+            contract_id=(f"{contract_spec.namespace}.{contract_spec.name}" f"@{contract_spec.version}"),
+            schema_fingerprint=decoder.schema.fingerprint,
+            value=value,
+            run_id=run_id,
+            run_kind=RunKind.GRAPH,
+        )
+
+    async def resume_graph_output(self, *, contract_spec, run_id):
+        self.graph_resume_calls.append((contract_spec, run_id))
+        return self.graph_resume_result
+
+    def has_graph_output_restore(self, run_id: str) -> bool:
+        return self.graph_resume_result is not None
+
+    @asynccontextmanager
+    async def graph_run_lease(self, run_id: str):
+        yield
+
     # --- tool-search (SearchTools discovers + reveals deferred tools) ---
     def list_deferred_tools(self) -> dict[str, str]:
         return dict(self.deferred_index)
@@ -431,6 +465,10 @@ class CapRole:
             "list_tool_names": self.list_tool_names,
             "list_graph_tool_names": self.list_graph_tool_names,
             "list_graph_excluded_tool_names": self.list_graph_excluded_tool_names,
+            "commit_graph_output": self.commit_graph_output,
+            "resume_graph_output": self.resume_graph_output,
+            "has_graph_output_restore": self.has_graph_output_restore,
+            "graph_run_lease": self.graph_run_lease,
             "list_deferred_tools": self.list_deferred_tools,
             "reveal_tools": self.reveal_tools,
             "describe_deferred_tools": self.describe_deferred_tools,

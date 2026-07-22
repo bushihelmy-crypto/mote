@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import inspect
+import json
 from string import Template
 from typing import ClassVar
+
+from pydantic import TypeAdapter
 
 from mote.common.agent_control import Lifecycle, SpawnContext, SpawnSpec, spawn_and_run
 from mote.common.logs import logger
@@ -132,7 +135,11 @@ class Agent(BaseTool):
         report = await spawn_and_run(spec, build_message, on_spawn=_seed)
         if report is None:
             return _MSG_SPAWN_FAILED.format(agent_type=agent_type)
-        return report or _MSG_NO_SUMMARY
+        output = report.output
+        if isinstance(output, str):
+            return output or _MSG_NO_SUMMARY
+        encoded = TypeAdapter(type(output)).dump_python(output, mode="json")
+        return json.dumps(encoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     @classmethod
     def custom_schema(cls) -> dict | None:
@@ -156,9 +163,18 @@ class Agent(BaseTool):
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_type": {"type": "string", "description": "Name of the registered agent type to spawn."},
-                    "prompt": {"type": "string", "description": "The concrete instruction for the agent to execute."},
-                    "context": {"type": "string", "description": "Background info the agent needs. Optional."},
+                    "agent_type": {
+                        "type": "string",
+                        "description": "Name of the registered agent type to spawn.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "The concrete instruction for the agent to execute.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Background info the agent needs. Optional.",
+                    },
                 },
                 "required": ["agent_type", "prompt"],
             },

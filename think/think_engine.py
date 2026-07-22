@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Optional
 
 from mote.common.base import BaseThinkEngine
 from mote.common.const import TOOL_CALLS
+from mote.common.events.output_stream import OutputSnapshotAccumulator, bind_output_snapshot_accumulator
 from mote.common.logs import log_class
 from mote.common.schema import ThinkResult
 from mote.common.utils.report import ThoughtReporter
@@ -38,7 +39,18 @@ class ThinkEngine(BaseThinkEngine):
         self.result: ThinkResult = ThinkResult()
         self._task: Optional[asyncio.Task] = None
 
-    async def start(self, req, system_prompt, tool_specs=None, *, llm: "LLMClient"):
+    async def start(
+        self,
+        req,
+        system_prompt,
+        tool_specs=None,
+        *,
+        llm: "LLMClient",
+        output_binding=None,
+        output_schema=None,
+        output_run_id="",
+        schema_fingerprint="",
+    ):
         """Launch the background think task.
 
         Receives already-built prompts plus the ``llm`` the loop resolved (via
@@ -47,9 +59,20 @@ class ThinkEngine(BaseThinkEngine):
         (aask_tool); otherwise the XML text channel (aask) is used.
         """
         self.llm = llm
-        self._task = asyncio.create_task(self._run(req, system_prompt, tool_specs))
+        self._task = asyncio.create_task(
+            self._run(req, system_prompt, tool_specs, output_binding, output_schema, output_run_id, schema_fingerprint)
+        )
 
-    async def _run(self, req, system_prompt, tool_specs=None):
+    async def _run(
+        self,
+        req,
+        system_prompt,
+        tool_specs=None,
+        output_binding=None,
+        output_schema=None,
+        output_run_id="",
+        schema_fingerprint="",
+    ):
         """Background: LLM call + dedup. Produces a fresh ThinkResult."""
         # start() always assigns self.llm before creating this task, so it is
         # non-None here; capture it into a local to narrow away the Optional.
@@ -59,12 +82,23 @@ class ThinkEngine(BaseThinkEngine):
         tool_calls: Optional[list[dict]] = None
         async with ThoughtReporter(enable_llm_stream=True) as reporter:
             await reporter.async_report({"type": "react"})
-            if tool_specs:
-                rsp = await llm.aask_tool(req, system_msgs=[system_prompt], tools=tool_specs)
-                content = rsp.content or ""
-                tool_calls = [{"id": c.id, "command_name": c.name, "args": c.arguments} for c in rsp.tool_calls]
-            else:
-                content = await llm.aask(req, system_msgs=[system_prompt])
+            is_native_schema = getattr(getattr(output_binding, "kind", None), "value", "") == "native_schema"
+            accumulator = (
+                OutputSnapshotAccumulator(
+                    run_id=output_run_id,
+                    schema_fingerprint=schema_fingerprint,
+                )
+                if is_native_schema
+                else None
+            )
+            with bind_output_snapshot_accumulator(accumulator):
+                if tool_specs is not None:
+                    kwargs = {"output_schema": output_schema} if is_native_schema else {}
+                    rsp = await llm.aask_tool(req, system_msgs=[system_prompt], tools=tool_specs, **kwargs)
+                    content = rsp.content or ""
+                    tool_calls = [{"id": c.id, "command_name": c.name, "args": c.arguments} for c in rsp.tool_calls]
+                else:
+                    content = await llm.aask(req, system_msgs=[system_prompt])
         # Duplicate detection differs by protocol. XML compares raw response text;
         # native compares a structured-call signature (the text may be empty or
         # repeat while the calls differ), and on a hard repeat overrides the calls

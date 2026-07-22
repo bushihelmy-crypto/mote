@@ -10,9 +10,13 @@ from __future__ import annotations
 from typing import Annotated
 
 import pytest
+from pydantic import BaseModel
 
+from mote.common.schema import OutputContractId
 from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Output, Stage
 from mote.executor.tasks.bggraph.channels import derive_output_fields
+from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
+from mote.roles.output_engine import OutputEngine
 
 
 def _sync_node(fn, *, field=None):
@@ -87,3 +91,30 @@ async def test_no_output_declaration_falls_back_to_full_state():
 
     # No field marked → whole final state returned (langgraph .invoke() parity).
     assert result == {"a": 1, "b": 2}
+
+
+class _GraphOutput(BaseModel):
+    report: str
+    extra: dict
+
+
+@pytest.mark.asyncio
+async def test_typed_graph_terminal_is_validated_and_committed():
+    contract = OutputContract(
+        OutputContractId("test", "graph-output", "1"),
+        TypeAdapterOutputDecoder(_GraphOutput),
+    )
+    g = BgGraph(
+        "typed",
+        state_schema=_OutState,
+        output_contract=contract,
+        output_engine_factory=OutputEngine,
+    )
+    g.add_node("work", _sync_node(lambda _s: {"report": "R", "extra": {"n": 1}}))
+    g.add_edge(START, "work")
+    g.add_edge("work", END)
+
+    submitted = await g.compile()(src="IN")
+    result = await submitted.poll_factory()
+
+    assert result == _GraphOutput(report="R", extra={"n": 1})

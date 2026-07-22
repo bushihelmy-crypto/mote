@@ -204,6 +204,10 @@ class BaseTool(ABC):
     def cleanup_session(self, session_id: str) -> None:
         """Clean up per-session resources when a Role exits. Default no-op."""
 
+    def can_resume_started_call(self, call_id: str) -> bool:
+        """Whether this tool can safely reconcile a ledgered started call."""
+        return False
+
     @classmethod
     def resolve_effect(cls) -> ToolEffect:
         """This tool's resolved side-effect class (never ``None``).

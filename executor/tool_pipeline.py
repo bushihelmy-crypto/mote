@@ -25,6 +25,7 @@ from mote.common.exception import (
 from mote.common.schema import PermissionFacts, ToolEffect
 from mote.common.text import plural
 from mote.executor.effect_ledger import COMPLETED, EffectLedger
+from mote.executor.execution_context import bind_tool_call_id
 from mote.executor.tasks.types import BgTaskResult
 from mote.executor.tool_result import ToolResult
 from mote.executor.tool_settlement import ToolSettlement
@@ -152,15 +153,16 @@ class LedgerStage:
         if prior is not None:
             if prior.status == COMPLETED:
                 return ToolResult(output=prior.result or "", success=prior.success)
-            if prior.effect == ToolEffect.EXTERNAL.value:
+            if prior.effect == ToolEffect.EXTERNAL.value and not execution.tool.can_resume_started_call(call_id):
                 return failed_result(
                     ToolPermissionDeniedError(_UNKNOWN_AFTER_CRASH.format(name=execution.name, call_id=call_id))
                 )
-        ledger.mark_started(
-            call_id,
-            execution.name,
-            effect=execution.tool.resolve_effect().value,
-        )
+        if prior is None:
+            ledger.mark_started(
+                call_id,
+                execution.name,
+                effect=execution.tool.resolve_effect().value,
+            )
         return None
 
 
@@ -172,7 +174,8 @@ class InvokeStage:
     async def run(self, execution: ToolExecution) -> ToolResult:
         async def call():
             validate_call_args(execution.tool.call, execution.name, execution.args)
-            return await execution.tool.call(**execution.args)
+            with bind_tool_call_id(execution.result_id):
+                return await execution.tool.call(**execution.args)
 
         try:
             raw = await self._recovery_runner.run(call)

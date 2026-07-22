@@ -8,6 +8,7 @@ from mote.common.const.llm import supports_native_tool_search
 from mote.common.const.message import TOOL_CALLS
 from mote.common.const.paths import mote_project_dirs, user_mote_dir
 from mote.common.resource import ResourceRegistry
+from mote.common.schema import OutputBindingKind
 from mote.common.utils.git_state import find_git_root
 from mote.context import ContextManager, ContextVisibility
 from mote.context.code_map.indexer import RepoIndexer
@@ -33,6 +34,7 @@ from mote.context.turn_context import (
 )
 from mote.parser import infer_native_tool_provider
 from mote.roles.component_graph import ComponentSpec
+from mote.roles.output_context_source import OutputContractContextSource
 from mote.roles.runtime_modules.action import effective_deferred_tools
 from mote.router.router import COMPRESSION_TASK
 
@@ -46,7 +48,10 @@ def context_component_specs() -> list[ComponentSpec]:
         ComponentSpec("context_visibility", _build_context_visibility),
         ComponentSpec("repo_index", _build_repo_index, available=_repo_index_available),
         ComponentSpec("turn_context_sources", _build_turn_context_sources),
-        ComponentSpec("turn_context_bus", lambda ctx: TurnContextBus(ctx.dep("turn_context_sources"))),
+        ComponentSpec(
+            "turn_context_bus",
+            lambda ctx: TurnContextBus(ctx.dep("turn_context_sources")),
+        ),
     ]
 
 
@@ -138,9 +143,10 @@ def _uses_native_tool_search(role) -> bool:
         return False
     default = role.config.models.default
     provider = infer_native_tool_provider(default)
-    return provider in ("anthropic", "openai_responses") and supports_native_tool_search(
-        getattr(default, "model", None)
-    )
+    return provider in (
+        "anthropic",
+        "openai_responses",
+    ) and supports_native_tool_search(getattr(default, "model", None))
 
 
 def _credential_labels(store, keys: list[str], inline: dict[str, str]) -> dict[str, str]:
@@ -209,6 +215,9 @@ def _build_turn_context_sources(ctx) -> list:
             surface_callers=role.config.context.code_map.surface_callers,
         ),
     ]
+    binding = ctx.dep("command_channel").output_binding(is_text=role.output_contract.is_text)
+    if binding.kind is OutputBindingKind.PROMPTED_JSON:
+        sources.insert(0, OutputContractContextSource(role.output_contract))
     diagnostics = ctx.dep("diagnostics_buffer")
     if diagnostics is not None:
         sources.append(diagnostics)

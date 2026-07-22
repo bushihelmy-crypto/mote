@@ -49,7 +49,6 @@ class RoleState(SerializationMixin):
     # Execution tracking
     latest_observed_msg: Optional[Message] = None
     recovered: bool = False
-    last_end_output: str = Field(default="", exclude=True)
     # The most recent think round's output (content + tool_calls). Published here
     # by the loop the moment the think task drains, so a tool running later in the
     # same turn (e.g. ``end_session`` reading the assistant's final text) reads it
@@ -149,6 +148,10 @@ class RoleState(SerializationMixin):
     # the browser restore is independent (a different runtime, a different restore
     # mechanism) and must not clobber the others.
     _pending_browser_restore: Optional[dict] = PrivateAttr(default=None)
+    # Unfinished typed-output lifecycle folded from rollout.jsonl. Consumed once
+    # by the next loop factory; published outputs are never staged here.
+    _pending_output_restore: Optional[dict] = PrivateAttr(default=None)
+    _pending_graph_output_restores: dict[str, dict] = PrivateAttr(default_factory=dict)
 
 
 class RoleStateController:
@@ -324,6 +327,35 @@ class RoleStateController:
         if value is not None:
             self._state._pending_browser_restore = None
         return value
+
+    def set_pending_output_restore(self, value: Optional[dict]) -> None:
+        """Stage (or clear) one unfinished durable output lifecycle."""
+        self._state._pending_output_restore = value
+
+    def take_pending_output_restore(self) -> Optional[dict]:
+        """Consume the unfinished durable output lifecycle exactly once."""
+        value = self._state._pending_output_restore
+        self._state._pending_output_restore = None
+        return value
+
+    def get_pending_output_restore(self) -> Optional[dict]:
+        """Inspect the staged lifecycle without consuming it."""
+        return self._state._pending_output_restore
+
+    def set_pending_graph_output_restores(self, values: dict[str, dict]) -> None:
+        self._state._pending_graph_output_restores = dict(values)
+
+    def take_pending_graph_output_restore(self, run_id: str) -> Optional[dict]:
+        return self._state._pending_graph_output_restores.pop(run_id, None)
+
+    def has_pending_graph_output_restore(self, run_id: str) -> bool:
+        state = self._state._pending_graph_output_restores.get(run_id)
+        return state is not None and state.get("status") in {
+            "accepted",
+            "commit_started",
+            "committed",
+            "publication_queued",
+        }
 
     def is_active(self) -> bool:
         """Read the react-loop active signal."""

@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Coroutine, Optional, Sequence
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
@@ -136,6 +137,7 @@ class GraphRunState:
     """Per-node execution records for one graph task, durable across resumes."""
 
     records: dict[str, NodeRecord] = field(default_factory=dict)
+    run_id: str = field(default_factory=lambda: uuid4().hex)
 
     @classmethod
     def for_graph(cls, graph: Any) -> "GraphRunState":
@@ -187,7 +189,13 @@ class GraphRunState:
         rec.started_at = time.time()
         rec.ended_at = None
 
-    def mark_success(self, name: str, *, route_key: Optional[str] = None, writes: Optional[list[str]] = None) -> None:
+    def mark_success(
+        self,
+        name: str,
+        *,
+        route_key: Optional[str] = None,
+        writes: Optional[list[str]] = None,
+    ) -> None:
         rec = self.get(name)
         rec.status = BgStatus.SUCCESS
         rec.ended_at = time.time()

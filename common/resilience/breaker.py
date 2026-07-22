@@ -32,6 +32,7 @@ slot forever and wedge the breaker OPEN. So a claim older than ``open_seconds``
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from enum import Enum
 from typing import Callable, Deque, Optional, Tuple
@@ -83,8 +84,6 @@ class CircuitBreaker:
         # lets tests advance time deterministically). Bound late so the default
         # import stays cheap.
         if clock is None:
-            import time
-
             clock = time.monotonic
         self._clock = clock
         self._on_transition = on_transition

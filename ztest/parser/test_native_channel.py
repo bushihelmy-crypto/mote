@@ -16,7 +16,7 @@ import pytest
 
 from mote.common.base import CommandChannel
 from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS, TOOL_REFERENCES, TOOL_RESULT_RESOURCE_PATH
-from mote.parser.native_channel import NativeToolChannel
+from mote.parser.native_channel import FINAL_OUTPUT_TOOL_NAME, NativeToolChannel
 
 from .conftest import FakeExecutor, FakeMemory, FakeThinkEngine, collect, executed_command
 
@@ -35,6 +35,61 @@ class TestContract:
 
     def test_provider_is_stored(self):
         assert NativeToolChannel(provider="anthropic")._provider == "anthropic"
+
+    def test_structured_output_negotiation_reports_native_schema_downgrade(self):
+        from mote.common.schema import OutputBindingKind
+
+        decision = NativeToolChannel().output_binding_decision(is_text=False)
+
+        assert decision.binding.kind is OutputBindingKind.NATIVE_TOOL
+        assert decision.downgrade_reasons == ("native_schema_not_supported",)
+        assert decision.capabilities.protocol == "native"
+        assert decision.capabilities.provider == "openai"
+
+    def test_for_llm_profiles_the_actual_routed_transport(self):
+        from types import SimpleNamespace
+
+        from mote.common.config.config.llm_config import LLMConfig
+
+        llm = SimpleNamespace(
+            config=LLMConfig(
+                model="claude-sonnet-4",
+                api_type="anthropic",
+                base_url="https://api.anthropic.com",
+            ),
+            model="claude-sonnet-4",
+        )
+
+        routed = NativeToolChannel(provider="openai", model="gpt-4o").for_llm(llm)
+        capabilities = routed.output_capabilities()
+
+        assert capabilities.provider == "anthropic"
+        assert capabilities.model == "claude-sonnet-4"
+
+    def test_schema_incompatible_with_provider_downgrades_to_semantic_tool(self):
+        from types import SimpleNamespace
+
+        def reject_schema(_schema):
+            raise ValueError("unsupported schema")
+
+        llm = SimpleNamespace(
+            config=SimpleNamespace(model="gpt-4o", api_type="openai"),
+            model="gpt-4o",
+            supports_native_schema_output=lambda: True,
+            native_schema_request=reject_schema,
+        )
+
+        routed = NativeToolChannel(output_is_text=False).for_llm(
+            llm,
+            output_schema={
+                "type": "object",
+                "additionalProperties": {"type": "integer"},
+            },
+        )
+        decision = routed.output_binding_decision(is_text=False)
+
+        assert decision.binding.kind.value == "native_tool"
+        assert decision.downgrade_reasons == ("native_schema_not_supported",)
 
     def test_prompt_vars_command_guide_is_empty(self):
         # Native tools reach the model via the API ``tools=`` param and a turn
@@ -90,6 +145,86 @@ class TestToolSpecs:
         NativeToolChannel().tool_specs(executor)
         assert executor.provider_calls == ["openai"]
 
+    def test_structured_contract_adds_provider_native_final_output_tool(self):
+        from pydantic import BaseModel
+
+        from mote.common.schema import OutputContractId
+        from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
+
+        class Report(BaseModel):
+            count: int
+
+        contract = OutputContract(
+            OutputContractId("test", "report", "1"),
+            TypeAdapterOutputDecoder(Report),
+        )
+        specs = NativeToolChannel(provider="openai").tool_specs(FakeExecutor(specs=[]), contract)
+
+        final = specs[-1]["function"]
+        assert final["name"] == FINAL_OUTPUT_TOOL_NAME
+        output_schema = final["parameters"]["properties"]["output"]
+        assert output_schema["properties"]["count"]["type"] == "integer"
+
+
+class TestModelTurn:
+    @pytest.mark.asyncio
+    async def test_native_schema_content_lowers_to_final_candidate(self):
+        channel = NativeToolChannel(output_is_text=False, supports_native_schema=True)
+
+        turn = await channel.model_turn(FakeThinkEngine(content='{"count": 7}', tool_calls=[]))
+
+        assert turn.final_candidates[0].raw == '{"count": 7}'
+        assert turn.final_candidates[0].representation == "native_schema"
+
+    @pytest.mark.asyncio
+    async def test_final_output_wire_tool_becomes_candidate(self):
+        engine = FakeThinkEngine(
+            tool_calls=[
+                native_call(
+                    "candidate-1",
+                    FINAL_OUTPUT_TOOL_NAME,
+                    {"output": {"count": 7}},
+                )
+            ]
+        )
+
+        turn = await NativeToolChannel(output_is_text=False).model_turn(engine)
+
+        assert len(turn.final_candidates) == 1
+        assert turn.final_candidates[0].candidate_id == "candidate-1"
+        assert turn.final_candidates[0].raw == {"count": 7}
+        assert all(action.kind != "tool_call" for action in turn.actions)
+
+    @pytest.mark.asyncio
+    async def test_plain_text_is_not_completion_for_structured_contract(self):
+        engine = FakeThinkEngine(content='{"count": 7}', tool_calls=[])
+
+        turn = await NativeToolChannel(output_is_text=False).model_turn(engine)
+
+        assert turn.final_candidates == []
+        assert turn.actions[0].kind == "text"
+
+    @pytest.mark.asyncio
+    async def test_rejected_output_tool_records_paired_correction_result(self):
+        from mote.common.schema import CorrectionFeedback, FinalCandidateAction, ValidationIssue
+
+        memory = FakeMemory()
+        candidate = FinalCandidateAction(
+            candidate_id="candidate-1",
+            raw={"count": "bad"},
+            representation="native_output_tool",
+        )
+        feedback = CorrectionFeedback(
+            summary="Correct the output.",
+            issues=(ValidationIssue(("count",), "int_parsing", "Expected integer"),),
+        )
+
+        await NativeToolChannel().record_output_candidate(memory, "", candidate, accepted=False, feedback=feedback)
+
+        assert memory.messages[0].metadata[TOOL_CALLS][0]["name"] == FINAL_OUTPUT_TOOL_NAME
+        assert memory.messages[1].metadata[TOOL_CALL_ID] == "candidate-1"
+        assert "count [int_parsing]" in memory.messages[1].content
+
 
 class TestIterCommands:
     @pytest.mark.asyncio
@@ -128,7 +263,15 @@ class TestIterCommands:
         # cmd has only command_name -> id None, args {}.
         engine = FakeThinkEngine(tool_calls=[{"command_name": "Glob"}])
         cmds = await collect(NativeToolChannel(), engine, set())
-        assert cmds == [{"id": None, "command_name": "Glob", "args": {}, "status": "running", "error_msg": ""}]
+        assert cmds == [
+            {
+                "id": None,
+                "command_name": "Glob",
+                "args": {},
+                "status": "running",
+                "error_msg": "",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_null_args_normalized_to_empty_dict(self):
@@ -476,47 +619,51 @@ class TestTurnSignature:
         assert "你好" in NativeToolChannel().turn_signature(engine)
 
 
-class TestIsTerminal:
+class TestModelTurn:
     @pytest.mark.asyncio
     async def test_terminal_when_empty_calls(self):
         # Native "done": the model replied with no tool calls.
-        assert await NativeToolChannel().is_terminal(FakeThinkEngine(tool_calls=[])) is True
+        turn = await NativeToolChannel().model_turn(FakeThinkEngine(content="done", tool_calls=[]))
+        assert turn.final_candidates[0].raw == "done"
 
     @pytest.mark.asyncio
     async def test_not_terminal_with_calls(self):
         engine = FakeThinkEngine(tool_calls=[native_call("1", "Read")])
-        assert await NativeToolChannel().is_terminal(engine) is False
+        turn = await NativeToolChannel().model_turn(engine)
+        assert not turn.final_candidates
+        assert turn.actions[0].kind == "tool_call"
 
     @pytest.mark.asyncio
     async def test_none_calls_not_terminal(self):
         # tool_calls is None (XML-style) -> not the native terminal condition.
-        assert await NativeToolChannel().is_terminal(FakeThinkEngine(tool_calls=None)) is False
+        turn = await NativeToolChannel().model_turn(FakeThinkEngine(content="xml", tool_calls=None))
+        assert not turn.final_candidates
 
     @pytest.mark.asyncio
     async def test_joins_before_reading_pending_result(self):
         # When the think task is still running, is_terminal must join first so it
         # reads *this* round's result rather than a stale one.
         engine = FakeThinkEngine(tool_calls=[], done=False)
-        assert await NativeToolChannel().is_terminal(engine) is True
+        assert (await NativeToolChannel().model_turn(engine)).final_candidates
         assert engine.join_calls == 1
 
     @pytest.mark.asyncio
     async def test_done_engine_is_not_joined(self):
         # Already-finished round: no wasted join, just read the result.
         engine = FakeThinkEngine(tool_calls=[], done=True)
-        assert await NativeToolChannel().is_terminal(engine) is True
+        assert (await NativeToolChannel().model_turn(engine)).final_candidates
         assert engine.join_calls == 0
 
     @pytest.mark.asyncio
     async def test_pending_with_calls_joins_then_not_terminal(self):
         # Still running + has calls -> join first, then report non-terminal.
         engine = FakeThinkEngine(tool_calls=[native_call("1", "Read")], done=False)
-        assert await NativeToolChannel().is_terminal(engine) is False
+        assert not (await NativeToolChannel().model_turn(engine)).final_candidates
         assert engine.join_calls == 1
 
     @pytest.mark.asyncio
     async def test_pending_none_calls_joins_then_not_terminal(self):
         # None tool_calls (XML-style) while pending -> join, still not terminal.
         engine = FakeThinkEngine(tool_calls=None, done=False)
-        assert await NativeToolChannel().is_terminal(engine) is False
+        assert not (await NativeToolChannel().model_turn(engine)).final_candidates
         assert engine.join_calls == 1

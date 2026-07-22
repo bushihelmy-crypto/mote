@@ -32,7 +32,10 @@ def _ask_user_question_args(problem: str) -> dict:
                 "header": "Guidance?",
                 "options": [
                     {"label": "Continue", "description": "Proceed as planned."},
-                    {"label": "Adjust", "description": "Provide different instructions."},
+                    {
+                        "label": "Adjust",
+                        "description": "Provide different instructions.",
+                    },
                 ],
             }
         ]
@@ -73,7 +76,12 @@ def _duplicate_prompt(language: str = "") -> str:
 
 
 async def check_duplicates(
-    req: list[dict], command_rsp: str, rsp_hist: list[str], llm, check_window: int = 10, language: str = ""
+    req: list[dict],
+    command_rsp: str,
+    rsp_hist: list[str],
+    llm,
+    check_window: int = 10,
+    language: str = "",
 ) -> str:
     past_rsp = rsp_hist[-check_window:]
     if command_rsp in past_rsp and '"command_name": "End"' not in command_rsp:
@@ -96,7 +104,12 @@ async def check_duplicates(
             # Pass the bare problem summary as the question — not a multi-line
             # guidance wrapper, which would be echoed back as a bloated result
             # key.
-            command = [{"command_name": "AskUserQuestion", "args": _ask_user_question_args(problem)}]
+            command = [
+                {
+                    "command_name": "AskUserQuestion",
+                    "args": _ask_user_question_args(problem),
+                }
+            ]
             ask_user_command = "```json\n" + json.dumps(command, indent=4, ensure_ascii=False) + "\n```"
             return ask_user_command
     return command_rsp
@@ -109,7 +122,13 @@ def call_signature(command_calls: Optional[list[dict]]) -> str:
     (``command_name``) and the recorded TOOL_CALLS metadata (``name``).
     """
     return json.dumps(
-        [{"name": c.get("command_name") or c.get("name"), "args": c.get("args") or {}} for c in (command_calls or [])],
+        [
+            {
+                "name": c.get("command_name") or c.get("name"),
+                "args": c.get("args") or {},
+            }
+            for c in (command_calls or [])
+        ],
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -149,16 +168,22 @@ async def check_duplicate_calls(
     if past.count(signature) >= 3:
         context = req + [UserMessage(content=_duplicate_prompt(language))]
         problem = await llm.aask(context)
-        return [{"id": None, "command_name": "AskUserQuestion", "args": _ask_user_question_args(problem)}]
+        return [
+            {
+                "id": None,
+                "command_name": "AskUserQuestion",
+                "args": _ask_user_question_args(problem),
+            }
+        ]
     return None
 
 
-async def parse_commands2(command_rsp, valid_names: set[str]) -> Tuple[list[dict], str]:
+async def parse_commands2(command_rsp, valid_names: Optional[set[str]]) -> Tuple[list[dict], str]:
     """Parse commands from XML-like tagged response, filtering by valid names.
 
     Args:
         command_rsp: Response string with XML-like command tags
-        valid_names: Set of valid command names for tag filtering.
+        valid_names: Command names to retain, or None to parse all names.
 
     Returns:
         (parsed commands, error message). If valid, error message is "".
@@ -181,7 +206,7 @@ def get_time_info():
     return f"Current local time is {formatted_time}."
 
 
-async def loads_xml(data, valid_names: set[str]) -> Tuple[list[dict], str]:
+async def loads_xml(data, valid_names: Optional[set[str]]) -> Tuple[list[dict], str]:
     lexer = PythonObjectParser(ignore_text=True, valid_names=valid_names)
     try:
         await lexer.loads_xml(xml=data)
@@ -218,7 +243,7 @@ def _missing_closers(lexer: PythonObjectParser) -> str:
 
 
 async def _repair_unclosed_xml(
-    data: str, failed_lexer: PythonObjectParser, valid_names: set[str]
+    data: str, failed_lexer: PythonObjectParser, valid_names: Optional[set[str]]
 ) -> Optional[list[dict]]:
     """Best-effort recover a truncated command block by closing its open tags.
 

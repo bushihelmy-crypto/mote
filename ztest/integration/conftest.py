@@ -159,6 +159,7 @@ def build_role(
     name: str = "Tester",
     tools: Optional[list[str]] = None,
     llm_model: str = "gpt-4o",
+    output_contract=None,
     **schema_kwargs,
 ):
     """Construct a real ``Role`` wired to a :class:`ScriptedLLM`.
@@ -180,7 +181,7 @@ def build_role(
     schema_kwargs.setdefault("permissions", PermissionConfig(mode="bypass"))
 
     schema = RoleSchema(name=name, tools=tools, **schema_kwargs)
-    role = Role(role_schema=schema, context=context)
+    role = Role(role_schema=schema, context=context, output_contract=output_contract)
     role.state.working_dir = working_dir
     role.state.original_working_dir = working_dir
     role.state.project_root = working_dir

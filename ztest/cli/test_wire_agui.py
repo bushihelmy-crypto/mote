@@ -162,6 +162,42 @@ def test_unknown_event_maps_to_nothing(state):
     assert agui.to_agui_events(Weird(), state) == []
 
 
+def test_output_snapshot_and_invalidation_use_custom_events(state):
+    snapshot = agui.to_agui_events(
+        ev.OutputSnapshot(
+            run_id="run-1",
+            revision=1,
+            schema_fingerprint="sha",
+            value={"count": 7},
+        ),
+        state,
+    )[0]
+    invalidated = agui.to_agui_events(
+        ev.OutputSnapshotInvalidated(run_id="run-1", revision=1, reason="stream_changed"),
+        state,
+    )[0]
+
+    assert snapshot["type"] == "CUSTOM"
+    assert snapshot["name"] == "outputSnapshot"
+    assert snapshot["value"]["value"] == {"count": 7}
+    assert invalidated["name"] == "outputSnapshotInvalidated"
+
+
+def test_committed_output_is_distinct_from_snapshot(state):
+    output = agui.to_agui_events(
+        ev.OutputCommitted(
+            run_id="run-1",
+            contract_id="test.report@1",
+            schema_fingerprint="sha",
+            value={"count": 7},
+        ),
+        state,
+    )[0]
+
+    assert output["name"] == "outputCommitted"
+    assert output["value"]["runId"] == "run-1"
+
+
 # ── SSE encoding: single line, valid JSON, trailing blank line ──────────────
 def test_encode_sse_single_line_json():
     frame = agui.encode_sse({"type": "RUN_STARTED", "threadId": "s1", "runId": "r1"})

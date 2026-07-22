@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Optional
@@ -232,8 +233,6 @@ def _user_manager_reachable() -> bool:
     binary or a hard failure to invoke it counts as unreachable. Best-effort.
     """
     try:
-        import subprocess
-
         proc = subprocess.run(
             ["systemctl", "--user", "is-system-running"],
             capture_output=True,

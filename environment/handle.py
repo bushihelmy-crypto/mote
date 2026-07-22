@@ -76,16 +76,15 @@ class ChildAgentHandle:
         return self._agent_path
 
     @property
-    def result(self) -> str:
-        """The child's terminal summary (``state.last_end_output``)."""
-        state = getattr(self._runtime.role, "state", None)
-        return (getattr(state, "last_end_output", "") or "").strip()
+    def result(self) -> Any:
+        """The child's typed result from its most recent completed run."""
+        return self._runtime.last_run_result
 
     # ------------------------------------------------------------------
     # Drive shapes
     # ------------------------------------------------------------------
-    async def run_to_completion(self, message: Any) -> str:
-        """Run the child inline for one turn, read its summary, release it.
+    async def run_to_completion(self, message: Any) -> Any:
+        """Run the child inline for one turn, return its typed result, release it.
 
         The EPHEMERAL shape. The slot is always released (even on error) via the
         ``finally`` close.
@@ -99,15 +98,16 @@ class ChildAgentHandle:
         try:
             if self._timeout_seconds is not None:
                 try:
-                    await asyncio.wait_for(self._runtime.run_one_turn(message), self._timeout_seconds)
+                    result = await asyncio.wait_for(self._runtime.run_one_turn(message), self._timeout_seconds)
                 except asyncio.TimeoutError:
                     logger.warning(
                         f"ChildAgentHandle: {self._agent_id} exceeded its "
                         f"{self._timeout_seconds}s time budget; returning partial summary."
                     )
+                    return None
             else:
-                await self._runtime.run_one_turn(message)
-            return self.result
+                result = await self._runtime.run_one_turn(message)
+            return result
         finally:
             await self.aclose()
 

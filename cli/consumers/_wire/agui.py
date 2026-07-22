@@ -207,6 +207,44 @@ def _on_reasoning_delta(e: ev.ReasoningDelta, st: AguiWireState) -> List[Dict[st
     return [_custom("reasoning", {"delta": e.text})]
 
 
+def _on_output_snapshot(e: ev.OutputSnapshot, st: AguiWireState) -> List[Dict[str, Any]]:
+    return [
+        _custom(
+            "outputSnapshot",
+            {
+                "runId": e.run_id,
+                "revision": e.revision,
+                "schemaFingerprint": e.schema_fingerprint,
+                "value": e.value,
+            },
+        )
+    ]
+
+
+def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AguiWireState) -> List[Dict[str, Any]]:
+    return [
+        _custom(
+            "outputSnapshotInvalidated",
+            {"runId": e.run_id, "revision": e.revision, "reason": e.reason},
+        )
+    ]
+
+
+def _on_output_committed(e: ev.OutputCommitted, st: AguiWireState) -> List[Dict[str, Any]]:
+    return [
+        _custom(
+            "outputCommitted",
+            {
+                "runId": e.run_id,
+                "runKind": e.run_kind,
+                "contractId": e.contract_id,
+                "schemaFingerprint": e.schema_fingerprint,
+                "value": e.value,
+            },
+        )
+    ]
+
+
 def _on_tool_started(e: ev.ToolCallStarted, st: AguiWireState) -> List[Dict[str, Any]]:
     tool_call_id = e.tool_use_id or f"{st.run_id}-tool-{id(e)}"
     out: List[Dict[str, Any]] = [{"type": TOOL_CALL_START, "toolCallId": tool_call_id, "toolCallName": e.tool_name}]
@@ -320,6 +358,9 @@ _DISPATCH = {
     ev.MESSAGE_BLOCK_DELTA: _on_message_delta,
     ev.MESSAGE_BLOCK_COMPLETED: _on_message_completed,
     ev.REASONING_DELTA: _on_reasoning_delta,
+    ev.OUTPUT_SNAPSHOT: _on_output_snapshot,
+    ev.OUTPUT_SNAPSHOT_INVALIDATED: _on_output_snapshot_invalidated,
+    ev.OUTPUT_COMMITTED: _on_output_committed,
     ev.TOOL_CALL_STARTED: _on_tool_started,
     ev.TOOL_CALL_COMPLETED: _on_tool_completed,
     ev.TASK_PROGRESS: _on_task_progress,

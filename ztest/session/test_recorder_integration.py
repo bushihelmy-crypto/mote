@@ -106,6 +106,61 @@ async def test_real_recorder_appends_to_log(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_recorder_persists_typed_output_lifecycle(tmp_path):
+    from mote.common.events import (
+        OutputAcceptedEvent,
+        OutputCandidateReceivedEvent,
+        OutputCommitStartedEvent,
+        OutputCommittedEvent,
+        OutputPublicationQueuedEvent,
+        OutputPublishedEvent,
+        OutputValidationRejectedEvent,
+    )
+    from mote.session.events import (
+        OUTPUT_ACCEPTED,
+        OUTPUT_CANDIDATE_RECEIVED,
+        OUTPUT_COMMIT_STARTED,
+        OUTPUT_COMMITTED,
+        OUTPUT_PUBLICATION_QUEUED,
+        OUTPUT_PUBLISHED,
+        OUTPUT_VALIDATION_REJECTED,
+    )
+
+    log = SessionLog("sess_output", base_dir=str(tmp_path))
+    recorder = RecorderSubscriber(log)
+    bus = _bus_with(recorder)
+
+    await bus.observe(
+        OutputCandidateReceivedEvent(candidate_id="c1", contract_id="test.report@1", raw={"count": "bad"})
+    )
+    await bus.observe(
+        OutputValidationRejectedEvent(
+            candidate_id="c1",
+            contract_id="test.report@1",
+            correction_attempt=1,
+            corrections_remaining=0,
+        )
+    )
+    await bus.observe(OutputAcceptedEvent(candidate_id="c2", contract_id="test.report@1", value={"count": 1}))
+    await bus.observe(OutputCommitStartedEvent(candidate_id="c2", contract_id="test.report@1"))
+    await bus.observe(OutputCommittedEvent(candidate_id="c2", contract_id="test.report@1", value={"count": 1}))
+    await bus.observe(
+        OutputPublicationQueuedEvent(publication_id="pub-1", candidate_id="c2", contract_id="test.report@1")
+    )
+    await bus.observe(OutputPublishedEvent(candidate_id="c2", contract_id="test.report@1"))
+
+    assert [record["type"] for record in log.iter_raw()] == [
+        OUTPUT_CANDIDATE_RECEIVED,
+        OUTPUT_VALIDATION_REJECTED,
+        OUTPUT_ACCEPTED,
+        OUTPUT_COMMIT_STARTED,
+        OUTPUT_COMMITTED,
+        OUTPUT_PUBLICATION_QUEUED,
+        OUTPUT_PUBLISHED,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_drain_persists_tool_call_before_crash(tmp_path):
     # The pre-execution durability checkpoint (react loop, EXTERNAL-effect path):
     # the assistant tool-call message is appended, then get_disk_writer().drain()
@@ -120,7 +175,12 @@ async def test_checkpoint_drain_persists_tool_call_before_crash(tmp_path):
     cm = ContextManager(bus=_bus_with(recorder))
 
     # record_call's effect: assistant message carrying the tool_calls, no results.
-    await cm.add(AIMessage(content="calling", tool_calls=[{"id": "t1", "name": "Bash", "args": {"cmd": "curl x"}}]))
+    await cm.add(
+        AIMessage(
+            content="calling",
+            tool_calls=[{"id": "t1", "name": "Bash", "args": {"cmd": "curl x"}}],
+        )
+    )
     # The loop's checkpoint barrier — the durable flush before the side effect.
     await get_disk_writer().drain()
 
@@ -258,7 +318,11 @@ class TestToolMessageToolReferences:
         from mote.common.const import TOOL_REFERENCES
         from mote.common.schema import Message, ToolMessage
 
-        msg = ToolMessage(content="revealed", tool_call_id="c1", tool_references=["ConvertImage", "QueryDatabase"])
+        msg = ToolMessage(
+            content="revealed",
+            tool_call_id="c1",
+            tool_references=["ConvertImage", "QueryDatabase"],
+        )
         restored = Message.load(msg.dump())
         assert restored is not None
         # Subclass identity is lost on replay; metadata is the truth.

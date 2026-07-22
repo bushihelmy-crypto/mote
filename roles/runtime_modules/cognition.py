@@ -9,6 +9,7 @@ from mote.loop import BaseLoop, ReActLoop
 from mote.loop.durable import DurableRunner, make_durable_backend
 from mote.roles.component_graph import BuildContext, ComponentSpec
 from mote.roles.context_provider import ContextProvider
+from mote.roles.output_engine import OutputEngine
 from mote.router.ml.engine import shared_engine
 from mote.router.router import LLMRouter
 from mote.router.squilla import SquillaStrategy
@@ -49,6 +50,7 @@ ThinkBuilder = Callable[[BuildContext], BaseThinkEngine]
 def _build_react_loop(ctx: BuildContext, think_engine: BaseThinkEngine) -> ReActLoop:
     role = ctx.role
     executor = ctx.dep("executor")
+    lease = role._components.current_output_lease()
     durable_runner = None
     if executor.durable_config.enabled and executor.journal is not None:
         durable_runner = DurableRunner(make_durable_backend(executor.durable_config, executor.journal))
@@ -66,6 +68,13 @@ def _build_react_loop(ctx: BuildContext, think_engine: BaseThinkEngine) -> ReAct
         get_cwd=role.get_cwd,
         advance_turn=role._advance_turn,
         durable_runner=durable_runner,
+        output_engine=OutputEngine(
+            role.output_contract,
+            restored_state=role._state_ctl.take_pending_output_restore(),
+            run_id=lease.run_id,
+            commit_fence=lease,
+            fencing_token=lease.fencing_token,
+        ),
     )
 
 

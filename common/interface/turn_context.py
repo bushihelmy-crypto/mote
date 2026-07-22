@@ -38,6 +38,7 @@ class TurnContextPriority(IntEnum):
 
     TOOL_CATALOG = 5  # the available-commands catalogue — leads the reminder
     DEFERRED_TOOL_INDEX = 6  # compact menu of hidden tools searchable via SearchTools
+    OUTPUT_CONTRACT = 7  # per-run typed terminal-output schema and submission rule
     CREDENTIAL_INDEX = 8  # named login secrets the model can reference (opt-in, WebBrowser only)
     GIT = 10  # working-tree branch / status / recent commits
     TEAM = 12  # multi-agent lineage — parent / siblings / children + session ids

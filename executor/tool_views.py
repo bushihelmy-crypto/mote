@@ -5,10 +5,11 @@ from __future__ import annotations
 from mote.common.ledger import RunJournal
 from mote.common.schema import DurableConfig, EffectLedgerConfig, ToolResultLimitConfig
 from mote.executor.effect_ledger import EffectLedger
+from mote.executor.tool_catalog import ToolCatalog
 
 
 class ToolExecutorViews:
-    _catalog: object
+    _catalog: ToolCatalog
     _limit_config: ToolResultLimitConfig
     _ledger_config: EffectLedgerConfig
     _durable_config: DurableConfig

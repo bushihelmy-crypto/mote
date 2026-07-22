@@ -31,6 +31,7 @@ accessors expose a built slot without triggering a build (teardown paths).
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Optional
+from uuid import uuid4
 
 from mote.common.const import MOTE_REPORTER_DEFAULT_URL
 from mote.common.events import EventBus, LogSubscriber
@@ -56,8 +57,10 @@ from mote.roles.runtime_modules import (
     watching_component_specs,
 )
 from mote.roles.session_manager import ResourceReconcileSubscriber, RoleSessionManager
+from mote.session import RunLeaseHandle, RunLeaseStore, SessionLog
 
 if TYPE_CHECKING:
+    from mote.executor.permission.sandbox.resource_guard import ResourceGuard
     from mote.roles.role import Role
 
 
@@ -75,6 +78,9 @@ class ComponentsState:
         self.pending_task_completion_wake: "Optional[Callable]" = None
         self.hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
         self.resource_guard: Optional[ResourceGuard] = None
+        self.output_lease: RunLeaseHandle | None = None
+        self.graph_leases: dict[str, RunLeaseHandle] = {}
+        self.worker_id = uuid4().hex
 
 
 class RoleComponents(RoleComponentAccessors):
@@ -99,6 +105,61 @@ class RoleComponents(RoleComponentAccessors):
         # lifecycle step (``_wire_collaborators`` from ``Role._ensure_ready``) so
         # no getter mutates a *sibling* component as a hidden read side-effect.
         self._collaborators_wired = False
+
+    async def begin_output_lease(self) -> RunLeaseHandle:
+        """Acquire one ownership epoch before constructing the run loop."""
+        if self._state.output_lease is not None:
+            raise RuntimeError("an output lease is already active")
+        restored = self._role._state_ctl.get_pending_output_restore()
+        run_id = str((restored or {}).get("run_id") or uuid4().hex)
+        path = SessionLog(self._role.session_id).path.parent / "run_leases.json"
+        coordinator = self._role._run_lease_coordinator or RunLeaseStore(path)
+        handle = RunLeaseHandle(
+            coordinator,
+            run_id=run_id,
+            owner_id=self._state.worker_id,
+            policy=self._role._run_lease_policy,
+        )
+        await handle.start()
+        self._state.output_lease = handle
+        return handle
+
+    async def end_output_lease(self) -> None:
+        handle, self._state.output_lease = self._state.output_lease, None
+        if handle is not None:
+            await handle.close()
+
+    def current_output_lease(self) -> RunLeaseHandle:
+        handle = self._state.output_lease
+        if handle is None:
+            raise RuntimeError("no output lease is active")
+        return handle
+
+    async def begin_graph_lease(self, run_id: str) -> RunLeaseHandle:
+        if run_id in self._state.graph_leases:
+            raise RuntimeError(f"graph lease is already active: {run_id}")
+        path = SessionLog(self._role.session_id).path.parent / "run_leases.json"
+        coordinator = self._role._run_lease_coordinator or RunLeaseStore(path)
+        handle = RunLeaseHandle(
+            coordinator,
+            run_id=run_id,
+            owner_id=self._state.worker_id,
+            policy=self._role._run_lease_policy,
+        )
+        await handle.start()
+        self._state.graph_leases[run_id] = handle
+        return handle
+
+    async def end_graph_lease(self, run_id: str) -> None:
+        handle = self._state.graph_leases.pop(run_id, None)
+        if handle is not None:
+            await handle.close()
+
+    def current_graph_lease(self, run_id: str) -> RunLeaseHandle:
+        try:
+            return self._state.graph_leases[run_id]
+        except KeyError:
+            raise RuntimeError(f"no graph lease is active: {run_id}") from None
 
     # =========================================================================
     # Declarative component registry

@@ -15,15 +15,20 @@ so the loop is self-contained.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from mote.common.base import BaseLoop, LoopContext
+from mote.common.base import BaseLoop, LoopContext, LoopResult
 from mote.common.base.command_channel import join_command_outputs
 from mote.common.const.message import INTERJECTION, MESSAGE_ROUTE_TO_ALL
 from mote.common.disk import get_disk_writer
 from mote.common.events import span
+from mote.common.exception import OutputCorrectionExhaustedError
 from mote.common.logs import log_class
 from mote.common.schema import AIMessage, CauseBy, Message, MessagePriority, UserMessage
+from mote.common.schema.completion import CompletionKind
+from mote.loop.action_dispatcher import ActionDispatcher
+from mote.loop.completion import TextCompletionPolicy
 
 if TYPE_CHECKING:
     from mote.common.base import BaseThinkEngine
@@ -85,9 +90,13 @@ class ReActLoop(BaseLoop):
         get_cwd: Optional[Callable[[], str]] = None,
         advance_turn: Optional[Callable[[], int]] = None,
         durable_runner: Optional["DurableRunner"] = None,
+        completion_policy=None,
+        action_dispatcher=None,
+        output_engine=None,
     ):
         self._think_engine = think_engine
         self._channel = command_channel
+        self._turn_channel = command_channel
         self._executor = executor
         self._memory = memory
         self._context_provider = context_provider
@@ -119,6 +128,11 @@ class ReActLoop(BaseLoop):
         # captured during a turn are attributed to it; ``None`` => no-op (the
         # counter simply never moves, harmless when hunk tracking is unused).
         self._advance_turn = advance_turn
+        self._completion_policy = completion_policy or TextCompletionPolicy()
+        self._action_dispatcher = action_dispatcher or ActionDispatcher()
+        if output_engine is None:
+            raise TypeError("output_engine is required")
+        self._output_engine = output_engine
 
         # The static observe + loop-control bundle. Filled at run() start from
         # context_provider.loop_context() — the loop never receives it directly.
@@ -330,17 +344,30 @@ class ReActLoop(BaseLoop):
             # Trigger the router only now that an LLM is actually needed, picking the
             # model from this request's messages when intelligent routing is enabled.
             llm = await self._context_provider.resolve_llm(tr.req)
+            tr = self._context_provider.finalize_for_llm(tr, llm)
+            self._turn_channel = tr.command_channel
             # Allocate + record this round's journal id BEFORE the model is asked,
             # so a completed result can be memoized against it below.
             if self._durable_runner is not None:
                 self._durable_step_id = self._durable_runner.begin_think()
-            await self._think_engine.start(tr.req, tr.system_prompt, tool_specs=tr.tool_specs, llm=llm)
+            await self._think_engine.start(
+                tr.req,
+                tr.system_prompt,
+                tool_specs=tr.tool_specs,
+                llm=llm,
+                output_binding=tr.output_binding.binding,
+                output_schema=tr.output_schema,
+                output_run_id=self._output_engine.run_id,
+                schema_fingerprint=tr.schema_fingerprint,
+            )
         return True
 
-    async def _step_act(self) -> Message:
+    async def _step_act(self, turn=None) -> Message:
         async with span("act"):
             valid_names = set(self.ctx.tools)
-            commands = [cmd async for cmd in self._channel.iter_commands(self._think_engine, valid_names)]
+            if turn is None:
+                turn = await self._turn_channel.model_turn(self._think_engine)
+            commands = self._action_dispatcher.tool_commands(turn, valid_names)
 
             # The think task has now drained (iter_commands joined it), so the
             # result is final. Publish it to shared state *before* running any
@@ -381,7 +408,7 @@ class ReActLoop(BaseLoop):
             # writer to flush what the recorder subscriber already queued.
             checkpoint = any(self._executor.will_ledger(e["name"], e["id"]) for e in executed)
             if checkpoint:
-                await self._channel.record_call(self._memory, content, executed)
+                await self._turn_channel.record_call(self._memory, content, executed)
                 await get_disk_writer().drain()
 
             # Execute in order. On the first failure, stop running further commands
@@ -466,7 +493,7 @@ class ReActLoop(BaseLoop):
                         if not entry.get("settled"):
                             entry["output"] = "[INTERRUPTED] Command did not complete (the turn was interrupted)."
                             entry["success"] = False
-                    await self._channel.record_results(self._memory, executed)
+                    await self._turn_channel.record_results(self._memory, executed)
                 raise
 
             outputs = join_command_outputs(executed)
@@ -476,9 +503,9 @@ class ReActLoop(BaseLoop):
             # If a checkpoint already recorded the assistant message, only the
             # results remain; otherwise record the whole round in one shot.
             if checkpoint:
-                await self._channel.record_results(self._memory, executed)
+                await self._turn_channel.record_results(self._memory, executed)
             else:
-                await self._channel.record_turn(self._memory, content, executed)
+                await self._turn_channel.record_turn(self._memory, content, executed)
 
             # The assistant message is now in history; reap the think record so
             # a later resume neither reinstates it nor double-records it.
@@ -490,12 +517,12 @@ class ReActLoop(BaseLoop):
             # orchestrator to mark the task finished, native returns the plain
             # outputs. The channel owns that phrasing (see react_result).
             return AIMessage(
-                content=self._channel.react_result(outputs),
+                content=self._turn_channel.react_result(outputs),
                 sent_from=self.ctx.name,
                 cause_by=CauseBy.RUN_COMMAND,
             )
 
-    async def _finish(self) -> Message:
+    async def _finish(self, candidate) -> Message:
         """Finalize a native turn that ended without tool calls.
 
         The model signalled completion by replying with plain text and no
@@ -508,7 +535,7 @@ class ReActLoop(BaseLoop):
         # Memoize the final result before recording, then reap once the
         # assistant message is durable — same order as _step_act.
         self._durable_complete_think()
-        await self._channel.record_turn(self._memory, content, [])
+        await self._turn_channel.record_output_candidate(self._memory, content, candidate, accepted=True)
         self._durable_reap_think()
         await self._think_engine.join()
         return AIMessage(
@@ -517,10 +544,58 @@ class ReActLoop(BaseLoop):
             cause_by=CauseBy.RUN_COMMAND,
         )
 
-    async def run(self) -> Message | None:
+    async def _reject_output(self, evaluation, candidate) -> None:
+        """Record a rejected candidate and structured correction for the next think."""
+        content = self._think_engine.result.content or ""
+        self._report_think_result(self._think_engine.result)
+        self._durable_complete_think()
+        feedback = evaluation.feedback() if evaluation.correction_allowed else None
+        await self._turn_channel.record_output_candidate(
+            self._memory,
+            content,
+            candidate,
+            accepted=False,
+            feedback=feedback,
+        )
+        self._durable_reap_think()
+        await self._think_engine.join()
+
+    async def run(self) -> LoopResult | None:
         # Pull the static observe + loop-control bundle once per run(). The loop
         # holds only the provider; it never receives LoopContext directly.
         self._ctx = self._context_provider.loop_context()
+
+        # An accepted output is already a durable validation fact. After a
+        # crash, finish its commit/publication path without asking the model or
+        # running validators again. The original terminal assistant message is
+        # normally present; the canonical fallback covers the narrow crash
+        # window between acceptance and transcript append.
+        if self._output_engine.has_restored_terminal_output:
+            messages = self._memory.get()
+            rsp = next(
+                (message for message in reversed(messages) if isinstance(message, AIMessage)),
+                None,
+            )
+            if rsp is None:
+                encoded = self._output_engine.contract.decoder.encode(self._output_engine.accepted_value)
+                content = (
+                    encoded
+                    if isinstance(encoded, str)
+                    else json.dumps(
+                        encoded,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+                rsp = AIMessage(
+                    content=content,
+                    sent_from=self.ctx.name,
+                    cause_by=CauseBy.RUN_COMMAND,
+                )
+                await self._memory.add(rsp)
+            committed = await self._output_engine.commit()
+            return LoopResult(presentation=rsp, committed_output=committed)
 
         # Initial gate: if no messages observed, nothing to do.
         if not await self._observe():
@@ -529,6 +604,7 @@ class ReActLoop(BaseLoop):
         self._set_active(True)
 
         rsp = AIMessage(content=_NO_ACTIONS_YET, cause_by=CauseBy.ACTION)
+        committed_output = None
         while True:
             if await self._observe(max_priority=MessagePriority.NEXT, interjection=True):
                 self._set_active(True)
@@ -539,7 +615,11 @@ class ReActLoop(BaseLoop):
             # rests entirely on the natural exits below (no-todo / terminal).
             verdict = await self._context_provider.enforce_budget()
             if verdict.stop:
-                rsp = AIMessage(content=verdict.message, sent_from=self.ctx.name, cause_by=CauseBy.RUN_COMMAND)
+                rsp = AIMessage(
+                    content=verdict.message,
+                    sent_from=self.ctx.name,
+                    cause_by=CauseBy.RUN_COMMAND,
+                )
                 break
             # Advance the turn (prompt) index for this think round, so any change
             # hunks captured while acting are attributed to a stable turn number.
@@ -585,17 +665,28 @@ class ReActLoop(BaseLoop):
                         self._set_active(True)
                         continue
                     break
-                # Protocol-aware termination. XML ends when the model emits an `End`
-                # command (which deactivates the Role, so the next think returns
-                # False above); native ends when the model stops calling tools and
-                # returns a plain text reply. On a terminal native turn there are no
-                # commands to run, so skip act — instead capture the final text as
-                # the response and stop.
-                if await self._channel.is_terminal(self._think_engine):
-                    rsp = await self._finish()
+                turn = await self._turn_channel.model_turn(self._think_engine)
+                completion = await self._completion_policy.evaluate(turn)
+                if completion.kind is CompletionKind.FAIL:
+                    raise RuntimeError(completion.reason or "completion policy rejected model turn")
+                if completion.kind is CompletionKind.VALIDATE_CANDIDATE:
+                    candidate = turn.final_candidates[completion.candidate_index or 0]
+                    evaluation = await self._output_engine.evaluate(candidate)
+                    candidate = candidate.model_copy(update={"candidate_id": evaluation.candidate_id})
+                    if not evaluation.accepted:
+                        await self._reject_output(evaluation, candidate)
+                        if not evaluation.correction_allowed:
+                            raise OutputCorrectionExhaustedError(
+                                max_corrections=evaluation.max_corrections,
+                                candidate_id=evaluation.candidate_id,
+                                issues=evaluation.issues,
+                            )
+                        continue
+                    rsp = await self._finish(candidate)
+                    committed_output = await self._output_engine.commit()
                     break
                 # act
-                rsp = await self._step_act()
+                rsp = await self._step_act(turn)
             except asyncio.CancelledError:
                 self._durable_reap_think()
                 raise
@@ -603,4 +694,4 @@ class ReActLoop(BaseLoop):
                 self._durable_fail_think()
                 raise
 
-        return rsp
+        return LoopResult(presentation=rsp, committed_output=committed_output)

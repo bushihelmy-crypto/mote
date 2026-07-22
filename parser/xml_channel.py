@@ -1,14 +1,26 @@
 """XmlCommandChannel — text protocol with XML command blocks."""
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
 from mote.common.base.command_channel import CommandChannel, _collect_media, _media_message, join_command_outputs
 from mote.common.logs import logger
 from mote.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
 from mote.common.prompt.refs import Sym
-from mote.common.schema import AIMessage, CauseBy, UserMessage
+from mote.common.schema import (
+    AIMessage,
+    CauseBy,
+    FinalCandidateAction,
+    ModelTurn,
+    OutputRepresentationCapabilities,
+    TextAction,
+    ToolCallAction,
+    UserMessage,
+)
 from mote.common.utils.role_utils import parse_commands2
+
+_END_MARKER = re.compile(r"<end(?:\s[^>]*)?>.*?</end\s*>", re.IGNORECASE | re.DOTALL)
 
 if TYPE_CHECKING:
     from mote.common.base import BaseThinkEngine
@@ -40,8 +52,45 @@ class XmlCommandChannel(CommandChannel):
             "tool_usage_guide": XML_TOOL_USAGE_GUIDE,
         }
 
-    def tool_specs(self, executor) -> Optional[list[dict]]:
+    def output_capabilities(self) -> OutputRepresentationCapabilities:
+        return OutputRepresentationCapabilities(
+            supports_text=True,
+            supports_prompted_json=True,
+            protocol="xml",
+        )
+
+    def tool_specs(self, executor, output_contract=None) -> Optional[list[dict]]:
         return None
+
+    async def model_turn(self, think_engine: "BaseThinkEngine") -> ModelTurn:
+        """Parse XML commands once and normalize them into semantic actions."""
+        if not think_engine.done:
+            await think_engine.join()
+        content = think_engine.result.content or ""
+        actions = [TextAction(content=content)] if content else []
+        if not content:
+            return ModelTurn(content=content, actions=actions)
+        try:
+            command_list, error_msg = await parse_commands2(content, None)
+        except Exception as exc:  # noqa: BLE001 — parsing is best-effort
+            logger.error(f"Error parsing commands: {exc}")
+            return ModelTurn(content=content, actions=actions)
+        has_end_marker = bool(_END_MARKER.search(content))
+        if error_msg and not has_end_marker:
+            logger.error(f"Parse commands error: {error_msg}")
+            return ModelTurn(content=content, actions=actions)
+        ordinary_commands = [cmd for cmd in command_list or [] if str(cmd["command_name"]).lower() != "end"]
+        actions.extend(
+            ToolCallAction(name=cmd["command_name"], arguments=cmd.get("args") or {}) for cmd in ordinary_commands
+        )
+        if has_end_marker or len(ordinary_commands) != len(command_list or []):
+            actions.append(
+                FinalCandidateAction(
+                    raw=_END_MARKER.sub("", content).strip(),
+                    representation="xml_end",
+                )
+            )
+        return ModelTurn(content=content, actions=actions)
 
     async def iter_commands(self, think_engine: "BaseThinkEngine", valid_names: set[str]) -> AsyncGenerator[dict, None]:
         if not think_engine.done:

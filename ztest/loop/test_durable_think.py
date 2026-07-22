@@ -98,12 +98,14 @@ async def test_act_completes_then_reaps_record(make_loop, tmp_path):
 
 
 async def test_finish_completes_then_reaps_record(make_loop, tmp_path):
+    from mote.common.schema import FinalCandidateAction
+
     runner = _runner(tmp_path)
     b = make_loop(think_engine=_engine("final answer"), durable_runner=runner)
     b.loop._ctx = b.ctx
     b.loop._durable_step_id = runner.begin_think()
 
-    await b.loop._finish()
+    await b.loop._finish(FinalCandidateAction(raw="final answer", representation="native_text"))
 
     assert runner.journal.replay("think:1") is None
     assert b.loop._durable_step_id is None
@@ -187,7 +189,12 @@ async def test_checkpoint_path_reaps_after_results(make_loop, tmp_path):
     runner = _runner(tmp_path)
     channel = FakeChannel(commands=[_cmd("Bash", id="t1", args={"cmd": "echo hi"})])
     executor = FakeExecutor(results={"Bash": FakeResult(output="hi")}, ledgered={"Bash"})
-    b = make_loop(think_engine=_engine("thought"), channel=channel, executor=executor, durable_runner=runner)
+    b = make_loop(
+        think_engine=_engine("thought"),
+        channel=channel,
+        executor=executor,
+        durable_runner=runner,
+    )
     b.loop._ctx = b.ctx
     b.loop._durable_step_id = runner.begin_think()
 
@@ -244,7 +251,10 @@ async def test_run_non_checkpoint_interrupt_reaps_think(make_loop, tmp_path):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     executor = _RaisingExecutor(raise_on="Read", exc=asyncio.CancelledError())  # nothing ledgered
     b = make_loop(
-        think_engine=_engine("plan", tool_calls=None), channel=channel, executor=executor, durable_runner=runner
+        think_engine=_engine("plan", tool_calls=None),
+        channel=channel,
+        executor=executor,
+        durable_runner=runner,
     )
     _news(b)
 
@@ -264,7 +274,12 @@ async def test_run_checkpoint_interrupt_reaps_think(make_loop, tmp_path):
     runner = _runner(tmp_path)
     channel = FakeChannel(commands=[_cmd("Bash", id="t1")])
     executor = _RaisingExecutor(raise_on="Bash", exc=asyncio.CancelledError(), ledgered={"Bash"})
-    b = make_loop(think_engine=_engine("plan"), channel=channel, executor=executor, durable_runner=runner)
+    b = make_loop(
+        think_engine=_engine("plan"),
+        channel=channel,
+        executor=executor,
+        durable_runner=runner,
+    )
     _news(b)
 
     with pytest.raises(asyncio.CancelledError):
@@ -306,7 +321,12 @@ async def test_run_failure_still_fails_think(make_loop, tmp_path):
     runner = _runner(tmp_path)
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     executor = _RaisingExecutor(raise_on="Read", exc=RuntimeError("boom"))
-    b = make_loop(think_engine=_engine("plan"), channel=channel, executor=executor, durable_runner=runner)
+    b = make_loop(
+        think_engine=_engine("plan"),
+        channel=channel,
+        executor=executor,
+        durable_runner=runner,
+    )
     _news(b)
 
     with pytest.raises(RuntimeError):

@@ -36,8 +36,10 @@ No new dependency, no knowledge of the proxy, the config, or the event bus.
 from __future__ import annotations
 
 import datetime
+import ipaddress
 import os
 import ssl
+import tempfile
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -258,8 +260,6 @@ class MitmCa:
 def _san_for(host: str) -> x509.GeneralName:
     """A SAN entry for *host* — an ``IPAddress`` for IP literals, else a ``DNSName``."""
     try:
-        import ipaddress
-
         return x509.IPAddress(ipaddress.ip_address(host))
     except ValueError:
         return x509.DNSName(host)
@@ -271,8 +271,6 @@ def _load_cert_chain_from_bytes(ctx: ssl.SSLContext, cert_pem: bytes, key_pem: b
     ``SSLContext.load_cert_chain`` only accepts filesystem paths, so the leaf PEM
     is written to a short-lived temp file (0600, unlinked immediately after load).
     """
-    import tempfile
-
     fd, path = tempfile.mkstemp(suffix=".pem")
     try:
         os.write(fd, cert_pem + b"\n" + key_pem)

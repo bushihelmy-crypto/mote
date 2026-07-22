@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 from mote.context import ContextManager, ContextVisibility
 from mote.context.skills.skill_manager import SkillManager
 from mote.loop import BaseLoop
+from mote.roles.component_graph import ComponentGraph
 from mote.roles.context_provider import ContextProvider
 from mote.router.router import LLMRouter
 from mote.think.prompt_builder import ThinkSubsystems
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 class RoleComponentAccessors:
     """Stable Role-facing API; implementations are graph key projections."""
 
-    _graph: object
+    _graph: ComponentGraph
 
     def _get(self, name: str):
         return self._graph.get(name)

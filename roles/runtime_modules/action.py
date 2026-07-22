@@ -58,7 +58,11 @@ def _build_bg_pool(ctx) -> BackgroundTaskPool:
         wake=ctx.state.pending_task_completion_wake,
         session_id=role.state.session_id,
     )
-    output_store.set_on_cap(pool.cancel_for_cap)
+
+    def _cancel_for_cap(task_id: str) -> None:
+        pool.cancel_for_cap(task_id)
+
+    output_store.set_on_cap(_cancel_for_cap)
 
     def _on_terminal(meta) -> None:
         status_value = meta.status.value if isinstance(meta.status, BgStatus) else str(meta.status)
@@ -94,6 +98,7 @@ def _build_command_channel(ctx):
         provider=infer_native_tool_provider(ctx.role.config.models.default),
         model=getattr(ctx.role.config.models.default, "model", None),
         args_limiter=build_args_limiter(ctx.dep("executor")),
+        output_is_text=ctx.role.output_contract.is_text,
     )
 
 

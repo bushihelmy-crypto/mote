@@ -66,6 +66,7 @@ class ModelProfile:
     # translated into the provider's native thinking shape (Anthropic
     # ``thinking={...}`` / OpenAI ``reasoning_effort`` / Responses ``reasoning``).
     supports_thinking: bool = False
+    supports_native_structured_output: bool = False
     # Optional per-model rewrite of each tool's JSON Schema before it is wrapped
     # in the provider envelope (for a model that rejects a schema construct other
     # models accept). ``None`` == identity (the common case). The exception layer
@@ -107,9 +108,13 @@ def merge_profile(base: ModelProfile, override: Optional[ModelProfile]) -> Model
 _VISION = ModelProfile(supports_vision=True)
 _PDF = ModelProfile(supports_pdf_input=True)
 # gpt-5 / o3 / o4 are vision + native web search + reasoning-capable.
-_OPENAI_REASONING = ModelProfile(supports_vision=True, supports_web_search=True, supports_thinking=True)
+_OPENAI_REASONING = ModelProfile(
+    supports_vision=True, supports_web_search=True, supports_thinking=True, supports_native_structured_output=True
+)
 # gpt-4o / gpt-4.1 are vision + native web search (no reasoning effort).
-_OPENAI_VISION_WEB = ModelProfile(supports_vision=True, supports_web_search=True)
+_OPENAI_VISION_WEB = ModelProfile(
+    supports_vision=True, supports_web_search=True, supports_native_structured_output=True
+)
 # Claude 4 family (opus-4 / sonnet-4 / haiku-4): native tool search + native web
 # search + extended thinking. Vision + PDF arrive via the "opus"/"sonnet"/"claude"
 # markers each real id also matches.

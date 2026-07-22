@@ -192,3 +192,25 @@ def test_aask_tool_uses_stream_path():
     assert rsp.tool_calls[0].arguments == {"pattern": "*.py"}
     # The fake recorded a streaming create call.
     assert llm.aclient.chat.completions.last_kwargs.get("stream") is True
+
+
+def test_aask_tool_native_schema_keeps_tools_and_adds_response_format():
+    llm = _make_llm()
+    llm.aclient = _FakeClient([_chunk([_choice(_delta(content='{"count":7}'), finish_reason="stop")])])
+    tools = [{"type": "function", "function": {"name": "Read", "parameters": {}}}]
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"],
+    }
+
+    rsp = run(llm.aask_tool("finish", tools=tools, output_schema=schema))
+
+    kwargs = llm.aclient.chat.completions.last_kwargs
+    assert rsp.content == '{"count":7}'
+    assert kwargs["tools"] is tools
+    assert kwargs["response_format"]["type"] == "json_schema"
+    wire_schema = kwargs["response_format"]["json_schema"]["schema"]
+    assert wire_schema["properties"] == schema["properties"]
+    assert wire_schema["required"] == ["count"]
+    assert wire_schema["additionalProperties"] is False

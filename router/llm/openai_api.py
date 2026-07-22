@@ -29,6 +29,7 @@ from mote.router.llm._retry import wait_retry_after
 from mote.router.llm.base_llm import LLM_RETRY_ATTEMPTS, BaseLLM
 from mote.router.llm.credentials import CredentialRotationMixin
 from mote.router.llm.llm_provider_registry import register_provider
+from mote.router.llm.schema_output import openai_strict_schema
 from mote.router.ratelimit.capture import install_rate_limit_hook
 
 # Model-name substrings whose models reject standard chat params → the set of
@@ -78,6 +79,24 @@ def _unsupported_request_params(model: Optional[str]) -> frozenset:
 )
 class OpenAILLM(CredentialRotationMixin, BaseLLM):
     """Check https://platform.openai.com/examples for examples"""
+
+    def supports_native_schema_output(self) -> bool:
+        return profile_for(self.model).supports_native_structured_output
+
+    def native_schema_request(self, schema: dict) -> dict | None:
+        if not self.supports_native_schema_output():
+            return None
+        wire_schema = openai_strict_schema(schema)
+        return {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "mote_output",
+                    "strict": True,
+                    "schema": wire_schema,
+                },
+            }
+        }
 
     # Narrow the base class's Optional[AsyncOpenAI]: this provider always builds
     # a client in _init_client(), so it is never None on the request paths.

@@ -23,9 +23,11 @@ event-bus concern: it depends only on ``events`` primitives. Keeping it here let
 from __future__ import annotations
 
 from mote.common.events.context import observe_event_sync
+from mote.common.events.output_stream import feed_output_stream
 from mote.common.events.types import LLMStreamDeltaEvent
 
 
 def log_llm_stream(msg):
     """Emit one streamed LLM token/chunk onto the active event bus (if any)."""
     observe_event_sync(LLMStreamDeltaEvent(token=msg))
+    feed_output_stream(msg)

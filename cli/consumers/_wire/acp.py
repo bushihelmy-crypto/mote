@@ -205,6 +205,42 @@ def agent_text(text: str, message_id: Optional[str] = None) -> Dict[str, Any]:
     return _chunk(AGENT_MESSAGE_CHUNK, text_block(text), message_id)
 
 
+def _on_output_snapshot(e: ev.OutputSnapshot, st: AcpWireState) -> List[Dict[str, Any]]:
+    return [
+        {
+            "sessionUpdate": "mote_output_snapshot",
+            "runId": e.run_id,
+            "revision": e.revision,
+            "schemaFingerprint": e.schema_fingerprint,
+            "value": e.value,
+        }
+    ]
+
+
+def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AcpWireState) -> List[Dict[str, Any]]:
+    return [
+        {
+            "sessionUpdate": "mote_output_snapshot_invalidated",
+            "runId": e.run_id,
+            "revision": e.revision,
+            "reason": e.reason,
+        }
+    ]
+
+
+def _on_output_committed(e: ev.OutputCommitted, st: AcpWireState) -> List[Dict[str, Any]]:
+    return [
+        {
+            "sessionUpdate": "mote_output_committed",
+            "runId": e.run_id,
+            "runKind": e.run_kind,
+            "contractId": e.contract_id,
+            "schemaFingerprint": e.schema_fingerprint,
+            "value": e.value,
+        }
+    ]
+
+
 # ── permission mapping (session/request_permission) ─────────────────────────
 # ACP PermissionOptionKind (snake_case) ↔ mote ApprovalDecision.outcome. The
 # port builds the option list from these; the client's chosen optionId maps back
@@ -411,6 +447,9 @@ _DISPATCH = {
     ev.NOTICE: _on_notice,
     ev.ERROR_RAISED: _on_error,
     ev.MEDIA_BLOCK: _on_media,
+    ev.OUTPUT_SNAPSHOT: _on_output_snapshot,
+    ev.OUTPUT_SNAPSHOT_INVALIDATED: _on_output_snapshot_invalidated,
+    ev.OUTPUT_COMMITTED: _on_output_committed,
 }
 
 

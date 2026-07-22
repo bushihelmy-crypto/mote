@@ -8,8 +8,19 @@ from mote.common.base.command_channel import CommandChannel, _collect_media, _me
 from mote.common.config.config.llm_config import LLMType
 from mote.common.const.llm import supports_native_tool_search
 from mote.common.logs import logger
+from mote.common.output_binding import FINAL_OUTPUT_TOOL_NAME
 from mote.common.prompt.refs import Sym
-from mote.common.schema import AIMessage, ToolMessage
+from mote.common.schema import (
+    AIMessage,
+    FinalCandidateAction,
+    ModelTurn,
+    OutputBindingKind,
+    OutputRepresentationCapabilities,
+    TextAction,
+    ToolCallAction,
+    ToolMessage,
+)
+from mote.executor.tool_spec_adapter import to_native_tool_specs
 from mote.parser.xml_channel import XmlCommandChannel
 from mote.router.llm.llm_provider_registry import resolve_api_type
 
@@ -32,6 +43,8 @@ class NativeToolChannel(CommandChannel):
         provider: str = "openai",
         model: str | None = None,
         args_limiter: ArgsLimiter | None = None,
+        output_is_text: bool = True,
+        supports_native_schema: bool = False,
     ) -> None:
         self._provider = provider
         # The resolved model name — threaded into get_native_tool_specs so the
@@ -45,6 +58,8 @@ class NativeToolChannel(CommandChannel):
         # arg never lives in history uncompressed nor lands in a cached prefix.
         # None (tests / no executor) → args recorded verbatim.
         self._args_limiter = args_limiter
+        self._output_is_text = output_is_text
+        self._supports_native_schema = supports_native_schema
 
     @property
     def _server_side_tool_search(self) -> bool:
@@ -62,6 +77,24 @@ class NativeToolChannel(CommandChannel):
         return supports_native_tool_search(self._model) and self._provider in (
             "anthropic",
             "openai_responses",
+        )
+
+    def for_llm(self, llm, *, output_schema=None) -> "NativeToolChannel":
+        config = getattr(llm, "config", None)
+        if config is None:
+            return self
+        supports_native_schema = bool(getattr(llm, "supports_native_schema_output", lambda: False)())
+        if supports_native_schema and output_schema is not None:
+            try:
+                supports_native_schema = llm.native_schema_request(output_schema) is not None
+            except ValueError:
+                supports_native_schema = False
+        return NativeToolChannel(
+            provider=infer_native_tool_provider(config),
+            model=getattr(llm, "model", None) or getattr(config, "model", None),
+            args_limiter=self._args_limiter,
+            output_is_text=self._output_is_text,
+            supports_native_schema=supports_native_schema,
         )
 
     def vocabulary(self) -> dict:
@@ -94,8 +127,39 @@ class NativeToolChannel(CommandChannel):
         # (tool_specs below), so the system prompt must NOT re-describe them.
         return False
 
-    def tool_specs(self, executor) -> Optional[list[dict]]:
-        return executor.get_native_tool_specs(provider=self._provider, model=self._model)
+    def output_capabilities(self) -> OutputRepresentationCapabilities:
+        return OutputRepresentationCapabilities(
+            supports_text=True,
+            supports_native_schema=self._supports_native_schema,
+            supports_semantic_tool=True,
+            supports_prompted_json=True,
+            protocol="native",
+            provider=self._provider,
+            model=self._model or "",
+        )
+
+    def tool_specs(self, executor, output_contract=None) -> Optional[list[dict]]:
+        specs = list(executor.get_native_tool_specs(provider=self._provider, model=self._model) or [])
+        if output_contract is None:
+            return specs
+        decision = self.output_binding_decision(is_text=output_contract.is_text)
+        if decision.binding.kind is not OutputBindingKind.NATIVE_TOOL:
+            return specs
+        final_schema = {
+            FINAL_OUTPUT_TOOL_NAME: {
+                "name": FINAL_OUTPUT_TOOL_NAME,
+                "description": (
+                    "Submit the final answer. Call this exactly once and do not " "combine it with any other tool call."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"output": output_contract.decoder.schema.canonical},
+                    "required": ["output"],
+                    "additionalProperties": False,
+                },
+            }
+        }
+        return specs + to_native_tool_specs(final_schema, provider=self._provider, model=self._model)
 
     async def iter_commands(self, think_engine: "BaseThinkEngine", valid_names: set[str]) -> AsyncGenerator[dict, None]:
         if not think_engine.done:
@@ -122,7 +186,11 @@ class NativeToolChannel(CommandChannel):
         # (record_call before execution) and the single-shot record_turn path
         # funnel through here, so args are limited on exactly one seam.
         tool_calls = [
-            {"id": e["id"], "name": e["name"], "args": self._limit_args(e["name"], e.get("args") or {}, e["id"])}
+            {
+                "id": e["id"],
+                "name": e["name"],
+                "args": self._limit_args(e["name"], e.get("args") or {}, e["id"]),
+            }
             for e in executed
             if e.get("id")
         ]
@@ -167,20 +235,95 @@ class NativeToolChannel(CommandChannel):
         if media is not None:
             await memory.add(media)
 
+    async def record_output_candidate(
+        self,
+        memory: "MessageStore",
+        content: str,
+        candidate,
+        *,
+        accepted: bool,
+        feedback=None,
+    ) -> None:
+        if candidate.representation != "native_output_tool":
+            await super().record_output_candidate(
+                memory,
+                content,
+                candidate,
+                accepted=accepted,
+                feedback=feedback,
+            )
+            return
+        await memory.add(
+            AIMessage(
+                content=content,
+                tool_calls=[
+                    {
+                        "id": candidate.candidate_id,
+                        "name": FINAL_OUTPUT_TOOL_NAME,
+                        "args": {"output": candidate.raw},
+                    }
+                ],
+            )
+        )
+        await memory.add(
+            ToolMessage(
+                content=(
+                    self.render_output_feedback(feedback)
+                    if feedback is not None
+                    else ("Output accepted." if accepted else "Output rejected; correction budget exhausted.")
+                ),
+                tool_call_id=candidate.candidate_id,
+            )
+        )
+
     def turn_signature(self, think_engine: "BaseThinkEngine") -> str:
         calls = [
             {"name": c["command_name"], "args": c.get("args") or {}} for c in (think_engine.result.tool_calls or [])
         ]
         return json.dumps(calls, sort_keys=True, ensure_ascii=False)
 
-    async def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
-        # Join before reading so we observe *this* round's result. The loop calls
-        # is_terminal right after launching the think task; without the join we
-        # would read the previous round's completed result and lag one round
-        # (issuing a wasted extra think and double-recording the final turn).
+    async def model_turn(self, think_engine: "BaseThinkEngine") -> ModelTurn:
+        """Translate native text/tool calls into semantic actions."""
         if not think_engine.done:
             await think_engine.join()
-        return think_engine.result.tool_calls == []
+        result = think_engine.result
+        actions = []
+        for call in result.tool_calls or []:
+            arguments = call.get("args") or {}
+            if call["command_name"] == FINAL_OUTPUT_TOOL_NAME:
+                actions.append(
+                    FinalCandidateAction(
+                        candidate_id=call.get("id") or "",
+                        raw=arguments.get("output"),
+                        representation="native_output_tool",
+                    )
+                )
+            else:
+                actions.append(
+                    ToolCallAction(
+                        action_id=call.get("id") or "",
+                        name=call["command_name"],
+                        arguments=arguments,
+                    )
+                )
+        content = result.content or ""
+        if result.tool_calls == []:
+            binding = self.output_binding(is_text=self._output_is_text)
+            if binding.kind in {
+                OutputBindingKind.TEXT,
+                OutputBindingKind.NATIVE_SCHEMA,
+            }:
+                actions.append(
+                    FinalCandidateAction(
+                        raw=content,
+                        representation=("native_text" if binding.kind is OutputBindingKind.TEXT else "native_schema"),
+                    )
+                )
+            elif content:
+                actions.insert(0, TextAction(content=content))
+        elif content:
+            actions.insert(0, TextAction(content=content))
+        return ModelTurn(content=content, actions=actions)
 
 
 def infer_native_tool_provider(llm_config) -> str:
@@ -223,6 +366,7 @@ def make_command_channel(
     provider: str = "openai",
     model: str | None = None,
     args_limiter: ArgsLimiter | None = None,
+    output_is_text: bool = True,
 ) -> CommandChannel:
     """Build the channel for a RoleSchema.command_protocol value.
 
@@ -237,5 +381,10 @@ def make_command_channel(
     args list to limit), so it ignores it.
     """
     if protocol == "native":
-        return NativeToolChannel(provider=provider, model=model, args_limiter=args_limiter)
+        return NativeToolChannel(
+            provider=provider,
+            model=model,
+            args_limiter=args_limiter,
+            output_is_text=output_is_text,
+        )
     return XmlCommandChannel()

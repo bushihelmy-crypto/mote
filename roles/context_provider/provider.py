@@ -180,12 +180,24 @@ class ContextProvider(BaseContextProvider):
 
         req = await self._context_manager.prepare_request(user_prompt)
 
-        tool_specs = self._channel.tool_specs(self._executor)
+        output_binding = self._channel.output_binding_decision(is_text=self._role.output_contract.is_text)
+        tool_specs = self._channel.tool_specs(self._executor, self._role.output_contract)
         return ThinkRequest(
             req=req,
             system_prompt=system_prompt,
             tool_specs=tool_specs,
+            output_binding=output_binding,
+            command_channel=self._channel,
+            output_schema=self._role.output_contract.decoder.schema.canonical,
+            schema_fingerprint=self._role.output_contract.decoder.schema.fingerprint,
         )
+
+    def finalize_for_llm(self, request: ThinkRequest, llm) -> ThinkRequest:
+        channel = self._channel.for_llm(llm, output_schema=request.output_schema)
+        request.output_binding = channel.output_binding_decision(is_text=self._role.output_contract.is_text)
+        request.tool_specs = channel.tool_specs(self._executor, self._role.output_contract)
+        request.command_channel = channel
+        return request
 
     async def _collect(self) -> ThinkContext:
         """Delegate context collection to PromptBuilder."""

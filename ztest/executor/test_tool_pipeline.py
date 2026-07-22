@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.executor.tool_pipeline import ToolExecutionPipeline
+from mote.executor.tool_pipeline import InvokeStage, LedgerStage, ToolExecution, ToolExecutionPipeline
 from mote.executor.tool_result import ToolResult
 
 
@@ -73,3 +73,57 @@ async def test_ledger_short_circuit_cannot_invoke_or_settle_as_ran():
     result = await _pipeline(events, ledger=replay).run("Echo", {}, "call-1")
     assert result is replay
     assert events == ["resolve", "authorize", "ledger", "reject"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_binds_and_restores_ambient_tool_call_id():
+    from mote.common.exception import RecoveryRunner
+    from mote.executor.execution_context import current_tool_call_id
+
+    seen = []
+
+    class Tool:
+        async def call(self):
+            seen.append(current_tool_call_id())
+            return "ok"
+
+    stage = InvokeStage(RecoveryRunner({}), None)
+    result = await stage.run(ToolExecution(name="Probe", args={}, result_id="stable-call", tool=Tool()))
+
+    assert result.output == "ok"
+    assert seen == ["stable-call"]
+    assert current_tool_call_id() is None
+
+
+def test_started_external_call_reenters_only_for_explicit_reconciliation():
+    from types import SimpleNamespace
+
+    from mote.common.schema import ToolEffect
+
+    class Ledger:
+        def __init__(self):
+            self.started = 0
+
+        def status(self, _call_id):
+            return SimpleNamespace(status="started", effect="external")
+
+        def mark_started(self, *_args, **_kwargs):
+            self.started += 1
+
+    class Tool:
+        @classmethod
+        def resolve_effect(cls):
+            return ToolEffect.EXTERNAL
+
+        def can_resume_started_call(self, call_id):
+            return call_id == "recoverable"
+
+    ledger = Ledger()
+    stage = LedgerStage(ledger)
+
+    recoverable = ToolExecution(name="RunGraph", args={}, result_id="recoverable", tool=Tool())
+    blocked = ToolExecution(name="External", args={}, result_id="unknown", tool=Tool())
+
+    assert stage.run(recoverable) is None
+    assert stage.run(blocked).success is False
+    assert ledger.started == 0

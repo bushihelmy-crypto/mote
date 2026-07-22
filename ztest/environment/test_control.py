@@ -298,7 +298,15 @@ class SpawnRole:
     def __init__(self, *, summary="result"):
         SpawnRole._counter += 1
         self._session_id = f"spawned-{SpawnRole._counter}"
-        self.state = types.SimpleNamespace(msg_buffer=MessageQueue(), last_end_output=summary)
+        self.state = types.SimpleNamespace(msg_buffer=MessageQueue())
+        from mote.common.schema.output import CommittedOutput, RunResult, TranscriptRef
+
+        committed = CommittedOutput("candidate", "mote.text@1", "sha", summary)
+        self.run_result = RunResult(
+            output=summary,
+            output_record=committed,
+            transcript=TranscriptRef(session_id=self._session_id),
+        )
         self.cleaned = False
 
     @property
@@ -306,7 +314,7 @@ class SpawnRole:
         return self._session_id
 
     async def run(self, with_message=None):
-        return "ok"
+        return self.run_result
 
     async def cleanup(self):
         self.cleaned = True
@@ -589,7 +597,7 @@ async def test_spawn_agent_depth_limit(tmp_path):
 async def test_spawn_agent_run_to_completion_releases(control):
     handle = await control.spawn_agent(_spec())
     out = await handle.run_to_completion(UserMessage("go"))
-    assert out == "result"
+    assert out.output == "result"
     # released from registry after the inline run
     assert control.registry.agent_metadata_for_id(handle.session_id) is None
 
@@ -670,7 +678,11 @@ async def test_child_usage_only_in_own_bucket_but_subtree_includes_it(control):
 
     child_role = _cost_role()
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="worker",
+            parent_id=parent_rt.session_id,
+        )
     )
     # Child records 1000 tokens against a known model; parent records nothing.
     from mote.router.cost import TokenUsage
@@ -720,13 +732,18 @@ async def test_subtree_estimated_flag_rolls_up(control):
     control.add_agent(parent_rt, root=True)
     child_role = _cost_role()
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="worker",
+            parent_id=parent_rt.session_id,
+        )
     )
     from mote.router.cost import TokenUsage
 
     # Unknown model -> has_unknown_model_cost on the child, rolled up to root.
     control.cost_node_for(handle.session_id).tracker.add(
-        TokenUsage(input_tokens=10, output_tokens=10, total_tokens=20), "totally-made-up-model-xyz"
+        TokenUsage(input_tokens=10, output_tokens=10, total_tokens=20),
+        "totally-made-up-model-xyz",
     )
     assert control.cost_root.subtree_has_estimated() is True
     assert control.cost_root.tracker.has_unknown_model_cost is False
@@ -743,7 +760,11 @@ async def test_spawn_denied_when_fleet_token_budget_reached(tmp_path):
     # A first child is admitted (fleet spend still zero).
     child_role = _cost_role()
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="worker",
+            parent_id=parent_rt.session_id,
+        )
     )
     from mote.router.cost import TokenUsage
 
@@ -754,7 +775,11 @@ async def test_spawn_denied_when_fleet_token_budget_reached(tmp_path):
     # The next spawn is refused — the tree is over its token budget.
     with pytest.raises(AgentLimitReached):
         await control.spawn_agent(
-            SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+            SpawnSpec(
+                role_factory=lambda ctx: _cost_role(),
+                nickname="worker2",
+                parent_id=parent_rt.session_id,
+            )
         )
 
 
@@ -766,18 +791,27 @@ async def test_spawn_denied_when_fleet_cost_budget_reached(tmp_path):
     control.add_agent(parent_rt, root=True)
     child_role = _cost_role()
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="worker",
+            parent_id=parent_rt.session_id,
+        )
     )
     from mote.router.cost import TokenUsage
 
     # A big known-model spend pushes fleet USD cost past the tiny cap.
     control.cost_node_for(handle.session_id).tracker.add(
-        TokenUsage(input_tokens=100_000, output_tokens=100_000, total_tokens=200_000), "gpt-4o"
+        TokenUsage(input_tokens=100_000, output_tokens=100_000, total_tokens=200_000),
+        "gpt-4o",
     )
     assert control.cost_root.subtree_cost() >= 0.001
     with pytest.raises(AgentLimitReached):
         await control.spawn_agent(
-            SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+            SpawnSpec(
+                role_factory=lambda ctx: _cost_role(),
+                nickname="worker2",
+                parent_id=parent_rt.session_id,
+            )
         )
 
 
@@ -790,16 +824,25 @@ async def test_usage_gate_inert_without_caps(tmp_path):
     control.add_agent(parent_rt, root=True)
     child_role = _cost_role()
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="worker",
+            parent_id=parent_rt.session_id,
+        )
     )
     from mote.router.cost import TokenUsage
 
     control.cost_node_for(handle.session_id).tracker.add(
-        TokenUsage(input_tokens=10**6, output_tokens=10**6, total_tokens=2 * 10**6), "gpt-4o"
+        TokenUsage(input_tokens=10**6, output_tokens=10**6, total_tokens=2 * 10**6),
+        "gpt-4o",
     )
     # Still admits — no cap configured.
     handle2 = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: _cost_role(),
+            nickname="worker2",
+            parent_id=parent_rt.session_id,
+        )
     )
     assert handle2 is not None
 
@@ -814,7 +857,11 @@ async def test_usage_gate_denies_spawn_over_token_budget(tmp_path):
     control.add_agent(parent_rt, root=True)
     child_role = _cost_role()
     handle = await control.spawn_agent(
-        SpawnSpec(role_factory=lambda ctx: child_role, nickname="worker", parent_id=parent_rt.session_id)
+        SpawnSpec(
+            role_factory=lambda ctx: child_role,
+            nickname="worker",
+            parent_id=parent_rt.session_id,
+        )
     )
     from mote.router.cost import TokenUsage
 
@@ -823,7 +870,11 @@ async def test_usage_gate_denies_spawn_over_token_budget(tmp_path):
     )
     with pytest.raises(AgentLimitReached):
         await control.spawn_agent(
-            SpawnSpec(role_factory=lambda ctx: _cost_role(), nickname="worker2", parent_id=parent_rt.session_id)
+            SpawnSpec(
+                role_factory=lambda ctx: _cost_role(),
+                nickname="worker2",
+                parent_id=parent_rt.session_id,
+            )
         )
 
 

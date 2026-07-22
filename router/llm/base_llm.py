@@ -344,6 +344,7 @@ class BaseLLM(ABC):
         tool_choice: Optional[Union[str, dict]] = None,
         timeout=USE_CONFIG_TIMEOUT,
         stream: bool = True,
+        output_schema: Optional[dict] = None,
     ) -> "LLMResponse":
         """Native tool-use counterpart to aask: returns text + structured tool calls.
 
@@ -371,6 +372,11 @@ class BaseLLM(ABC):
         # A tool-only completion has empty text content, which is valid here —
         # disable the empty-response guard so it is not mistaken for a failure.
         extra["raise_if_empty"] = False
+        if output_schema is not None:
+            native_schema = self.native_schema_request(output_schema)
+            if native_schema is None:
+                raise ValueError("resolved LLM does not support native schema output")
+            extra.update(native_schema)
 
         async def _send(llm: "BaseLLM", messages: list[dict]) -> "LLMResponse":
             if stream:
@@ -387,6 +393,12 @@ class BaseLLM(ABC):
             return LLMResponse(content=content, tool_calls=tool_calls)
 
         return await self._run_with_recovery(_send, message)
+
+    def supports_native_schema_output(self) -> bool:
+        return False
+
+    def native_schema_request(self, schema: dict) -> dict | None:
+        return None
 
     async def aweb_search(
         self,

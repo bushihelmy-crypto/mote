@@ -65,6 +65,139 @@ def test_resume_session_missing_log_returns_false(tmp_path, monkeypatch):
     assert role.state.recovered is False
 
 
+def test_resume_stages_only_unfinished_output_state(role_in_tmp, monkeypatch):
+    from types import SimpleNamespace
+
+    unfinished = {
+        "status": "awaiting_correction",
+        "contract_id": "mote.text@1",
+        "schema_fingerprint": role_in_tmp.output_contract.decoder.schema.fingerprint,
+        "correction_attempts": 1,
+    }
+    monkeypatch.setattr(
+        "mote.roles.session_manager.replay",
+        lambda _log: SimpleNamespace(
+            meta={},
+            messages=[],
+            terminal_state=None,
+            kernel_state=None,
+            browser_state=None,
+            output_state=unfinished,
+        ),
+    )
+    monkeypatch.setattr("mote.roles.session_manager.SessionLog.exists", lambda _self: True)
+
+    assert role_in_tmp.resume_session() is True
+    assert role_in_tmp._state_ctl.take_pending_output_restore() == unfinished
+    assert role_in_tmp._state_ctl.take_pending_output_restore() is None
+
+
+def test_resume_never_stages_graph_output_as_agent_output(role_in_tmp, monkeypatch):
+    from types import SimpleNamespace
+
+    graph_state = {
+        "status": "committed",
+        "run_id": "graph-1",
+        "run_kind": "graph",
+        "contract_id": "test.graph@1",
+        "schema_fingerprint": "graph-schema",
+    }
+    monkeypatch.setattr(
+        "mote.roles.session_manager.replay",
+        lambda _log: SimpleNamespace(
+            meta={},
+            messages=[],
+            terminal_state=None,
+            kernel_state=None,
+            browser_state=None,
+            output_state=graph_state,
+            output_states={"graph-1": graph_state},
+        ),
+    )
+    monkeypatch.setattr("mote.roles.session_manager.SessionLog.exists", lambda _self: True)
+
+    assert role_in_tmp.resume_session() is True
+    assert role_in_tmp._state_ctl.take_pending_output_restore() is None
+
+
+@pytest.mark.asyncio
+async def test_committed_graph_output_resumes_by_stable_run_id(role_in_tmp):
+    from mote.executor.tasks.bggraph.spec import GraphOutputContractSpec
+    from mote.roles.output_contract import JsonSchemaOutputDecoder
+
+    schema = {"type": "integer"}
+    fingerprint = JsonSchemaOutputDecoder(schema).schema.fingerprint
+    role_in_tmp._state_ctl.set_pending_graph_output_restores(
+        {
+            "tool-call-1": {
+                "status": "committed",
+                "candidate_id": "candidate-1",
+                "contract_id": "test.integer@1",
+                "schema_fingerprint": fingerprint,
+                "value": 42,
+                "correction_attempts": 0,
+                "run_id": "tool-call-1",
+                "run_kind": "graph",
+            }
+        }
+    )
+
+    async with role_in_tmp.graph_run_lease("tool-call-1"):
+        committed = await role_in_tmp.resume_graph_output(
+            contract_spec=GraphOutputContractSpec(namespace="test", name="integer", version="1", schema=schema),
+            run_id="tool-call-1",
+        )
+
+    assert committed is not None
+    assert committed.value == 42
+    assert committed.run_id == "tool-call-1"
+    async with role_in_tmp.graph_run_lease("tool-call-1"):
+        assert (
+            await role_in_tmp.resume_graph_output(
+                contract_spec=GraphOutputContractSpec(namespace="test", name="integer", version="1", schema=schema),
+                run_id="tool-call-1",
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_graph_resume_has_one_live_owner(role_in_tmp):
+    from mote.common.exception import RunLeaseUnavailableError
+    from mote.router.llm.context import Context
+
+    contender = Role(name="Contender", context=Context())
+    contender.state.session_id = role_in_tmp.session_id
+
+    async with role_in_tmp.graph_run_lease("graph-run-1"):
+        with pytest.raises(RunLeaseUnavailableError):
+            async with contender.graph_run_lease("graph-run-1"):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_role_accepts_replaceable_lease_coordinator(tmp_path):
+    from mote.common.exception import OutputCommitFencedError
+    from mote.router.llm.context import Context
+    from mote.session.run_lease import RunLeaseStore
+
+    coordinator = RunLeaseStore(tmp_path / "external-coordinator.json")
+    role = Role(
+        name="ExternalCoordinator",
+        context=Context(),
+        run_lease_coordinator=coordinator,
+    )
+
+    async with role.graph_run_lease("graph-run-1"):
+        current = coordinator.get("graph-run-1")
+        assert current is not None
+        assert current.owner_id
+
+    with pytest.raises(OutputCommitFencedError) as caught:
+        coordinator.assert_current("graph-run-1", current.fencing_token)
+    assert caught.value.code.value == "OUTPUT_COMMIT_FENCED"
+
+
 @pytest.mark.asyncio
 async def test_resume_session_rebuilds_history(tmp_path, monkeypatch):
     from mote.router.llm.context import Context

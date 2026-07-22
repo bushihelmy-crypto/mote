@@ -104,6 +104,28 @@ class TestXMLChannel:
 
 class TestNativeChannel:
     @pytest.mark.asyncio
+    async def test_native_schema_is_forwarded_without_removing_ordinary_tools(self):
+        from mote.common.schema import OutputBinding, OutputBindingKind
+
+        llm = FakeLLM(tool_response=make_tool_response(content='{"count": 7}'))
+        engine = make_engine()
+        specs = [{"name": "Read"}]
+        schema = {"type": "object"}
+
+        await engine.start(
+            req="REQ",
+            system_prompt="SYS",
+            tool_specs=specs,
+            llm=llm,
+            output_binding=OutputBinding(OutputBindingKind.NATIVE_SCHEMA),
+            output_schema=schema,
+        )
+        await engine.join()
+
+        assert llm.aask_tool_calls[0]["tools"] is specs
+        assert llm.aask_tool_calls[0]["kwargs"]["output_schema"] is schema
+
+    @pytest.mark.asyncio
     async def test_maps_tool_call_fields(self):
         resp = make_tool_response(("call-1", "Read", {"path": "a.py"}), content="reading")
         llm = FakeLLM(tool_response=resp)

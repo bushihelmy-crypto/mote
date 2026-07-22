@@ -148,7 +148,7 @@ class RoleCapabilities:
         report = await spawn_and_run(spec, UserMessage(content=arguments), ctx=role._context)
         if report is None:
             return _MSG_SKILL_FORK_FAILED
-        return report.strip()
+        return str(report.output).strip()
 
     # ------------------------------------------------------------------
     # Session-log-backed capture (before-image snapshots + persistent state)
@@ -473,10 +473,8 @@ class RoleCapabilities:
     async def end_session(self) -> str:
         """End the current session.
 
-        Deactivates the Role so the run loop terminates. The terminal reply is
-        captured into ``state.last_end_output`` by the run loop's post-loop
-        finalization (see Role.run), which is the single channel an ephemeral
-        spawn's read-back reads — so returning "" here is fine.
+        Deactivates the Role so the run loop terminates. Successful output flows
+        through ``RunResult``; this tool return is only an execution acknowledgment.
         """
         self._role.deactivate()
         return ""

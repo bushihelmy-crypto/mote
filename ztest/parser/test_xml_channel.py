@@ -29,6 +29,22 @@ class TestContract:
     def test_is_command_channel(self):
         assert isinstance(XmlCommandChannel(), CommandChannel)
 
+    def test_structured_output_uses_prompted_json_binding(self):
+        from mote.common.schema import OutputBindingKind
+
+        binding = XmlCommandChannel().output_binding(is_text=False)
+
+        assert binding.kind is OutputBindingKind.PROMPTED_JSON
+
+    def test_structured_output_binding_explains_both_downgrades(self):
+        decision = XmlCommandChannel().output_binding_decision(is_text=False)
+
+        assert decision.downgrade_reasons == (
+            "native_schema_not_supported",
+            "semantic_tool_not_supported",
+        )
+        assert decision.capabilities.protocol == "xml"
+
     def test_prompt_vars_command_guide_is_xml_guide_with_end_marker(self):
         guide = XmlCommandChannel().prompt_vars()["command_guide"]
         assert guide == XML_COMMAND_GUIDE
@@ -215,10 +231,38 @@ class TestRecordTurnMedia:
 
 class TestTerminalDefault:
     @pytest.mark.asyncio
-    async def test_is_terminal_default_false(self):
-        # XML signals "done" via an End command (handled by the loop), so the
-        # channel itself never reports a terminal turn.
-        assert await XmlCommandChannel().is_terminal(FakeThinkEngine(content="x")) is False
+    async def test_xml_text_is_not_a_final_candidate(self):
+        # Plain XML response text is not completion without the protocol marker.
+        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content="x"))
+        assert not turn.final_candidates
+        assert turn.actions[0].kind == "text"
+
+    @pytest.mark.asyncio
+    async def test_end_marker_becomes_semantic_final_candidate(self):
+        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content="final answer\n<end></end>"))
+
+        assert len(turn.final_candidates) == 1
+        assert turn.final_candidates[0].raw == "final answer"
+        assert turn.final_candidates[0].representation == "xml_end"
+        assert all(action.kind != "tool_call" for action in turn.actions)
+
+    @pytest.mark.asyncio
+    async def test_xml_command_is_normalized_without_channel_tool_filtering(self):
+        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content=xml_command("Read", path="a.py")))
+
+        calls = [action for action in turn.actions if action.kind == "tool_call"]
+        assert len(calls) == 1
+        assert calls[0].name == "Read"
+        assert calls[0].arguments == {"path": "a.py"}
+
+    @pytest.mark.asyncio
+    async def test_end_marker_with_tool_call_is_preserved_for_policy_rejection(self):
+        turn = await XmlCommandChannel().model_turn(
+            FakeThinkEngine(content=xml_command("Read", path="a.py") + "\n<end></end>")
+        )
+
+        assert len(turn.final_candidates) == 1
+        assert any(action.kind == "tool_call" for action in turn.actions)
 
     def test_turn_signature_is_response_text(self):
         engine = FakeThinkEngine(content="the response")

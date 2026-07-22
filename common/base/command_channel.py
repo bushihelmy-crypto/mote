@@ -5,9 +5,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
 from mote.common.const import IMAGES, PDFS
+from mote.common.output_binding import negotiate_output_binding
 from mote.common.prompt.refs import lower as _lower_symbols
 from mote.common.prompt.refs import normalize_vocabulary
-from mote.common.schema import CauseBy, UserMessage
+from mote.common.schema import CauseBy, ModelTurn, OutputRepresentationCapabilities, TextAction, UserMessage
 
 if TYPE_CHECKING:
     from mote.common.base.think_engine import BaseThinkEngine
@@ -94,7 +95,22 @@ class CommandChannel(ABC):
         return True
 
     @abstractmethod
-    def tool_specs(self, executor) -> Optional[list[dict]]:
+    def output_capabilities(self) -> OutputRepresentationCapabilities:
+        """Declare the output representations implemented by this channel."""
+
+    def output_binding_decision(self, *, is_text: bool):
+        return negotiate_output_binding(is_text=is_text, capabilities=self.output_capabilities())
+
+    def output_binding(self, *, is_text: bool):
+        """Return the selected binding; prefer the decision when provenance matters."""
+        return self.output_binding_decision(is_text=is_text).binding
+
+    def for_llm(self, llm, *, output_schema=None):
+        """Return a wire-equivalent channel profiled for the resolved LLM."""
+        return self
+
+    @abstractmethod
+    def tool_specs(self, executor, output_contract=None) -> Optional[list[dict]]:
         """Native tool specs to pass to the LLM, or None for the text channel."""
 
     @abstractmethod
@@ -178,22 +194,43 @@ class CommandChannel(ABC):
         """
         return outputs
 
-    async def is_terminal(self, think_engine: "BaseThinkEngine") -> bool:
-        """Whether the react loop should stop after this think round.
+    async def model_turn(self, think_engine: "BaseThinkEngine") -> ModelTurn:
+        """Normalize the completed response into provider-independent actions."""
+        if not think_engine.done:
+            await think_engine.join()
+        content = think_engine.result.content or ""
+        return ModelTurn(content=content, actions=[TextAction(content=content)] if content else [])
 
-        Async because a channel may need to await the think task to finish
-        before it can read its result (see NativeToolChannel) -- the loop checks
-        this right after launching the think, so the result must be joined first
-        to avoid reading the *previous* round's output.
+    async def record_output_feedback(self, memory: "MessageStore", feedback) -> None:
+        """Project provider-independent correction feedback into conversation history."""
+        await memory.add(
+            UserMessage(
+                content=self.render_output_feedback(feedback),
+                cause_by=CauseBy.RUN_COMMAND,
+            )
+        )
 
-        Each protocol signals "done" differently:
-          - XML: the model emits an ``End`` command, which deactivates the Role;
-            the loop already stops when the next ``_think`` returns False, so the
-            channel itself never reports a terminal turn (default False).
-          - native: the model finishes by replying with plain text and no
-            tool_calls -- see NativeToolChannel.
-        """
-        return False
+    async def record_output_candidate(
+        self,
+        memory: "MessageStore",
+        content: str,
+        candidate,
+        *,
+        accepted: bool,
+        feedback=None,
+    ) -> None:
+        """Record one semantic final submission in this channel's wire shape."""
+        await self.record_turn(memory, content, [])
+        if feedback is not None:
+            await self.record_output_feedback(memory, feedback)
+
+    @staticmethod
+    def render_output_feedback(feedback) -> str:
+        lines = [feedback.summary]
+        for issue in feedback.issues:
+            path = ".".join(str(part) for part in issue.path) or "<root>"
+            lines.append(f"- {path} [{issue.code}]: {issue.message}")
+        return "\n".join(lines)
 
 
 #: Notice surfaced as the round's "outputs" when no valid command ran this turn.

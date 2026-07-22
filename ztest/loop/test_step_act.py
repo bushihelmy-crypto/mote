@@ -31,7 +31,12 @@ def _cmd(name, *, id=None, args=None) -> dict:
 
 async def test_act_executes_in_order_and_passes_result_id(make_loop):
     channel = FakeChannel(commands=[_cmd("Read", id="t1", args={"path": "a"}), _cmd("Glob", id="t2")])
-    executor = FakeExecutor(results={"Read": FakeResult(output="readout"), "Glob": FakeResult(output="globout")})
+    executor = FakeExecutor(
+        results={
+            "Read": FakeResult(output="readout"),
+            "Glob": FakeResult(output="globout"),
+        }
+    )
     b = make_loop(channel=channel, executor=executor)
     b.loop._ctx = b.ctx
 
@@ -137,14 +142,15 @@ async def test_act_passes_think_content_to_record_turn(make_loop):
     assert content == "assistant reasoning"
 
 
-async def test_act_iter_commands_gets_valid_names(make_loop):
-    channel = FakeChannel(commands=[_cmd("Read", id="t1")])
+async def test_act_dispatcher_filters_actions_with_context_tools(make_loop):
+    channel = FakeChannel(commands=[_cmd("Read", id="t1"), _cmd("Unknown", id="t2")])
     b = make_loop(channel=channel, tools=["Read", "Glob", "AskUserQuestion"])
     b.loop._ctx = b.ctx
 
     await b.loop._step_act()
 
-    assert channel.iter_calls[0] == {"Read", "Glob", "AskUserQuestion"}
+    assert [call["name"] for call in b.executor.calls] == ["Read"]
+    assert channel.iter_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +244,13 @@ async def test_act_checkpoint_interrupt_closes_pairing_then_reraises(make_loop, 
     # without tool_results (the very thing that 400s the next request). The loop
     # must synthesize a result for every UNSETTLED call, record all results to
     # close the pairing, then re-raise so the normal interrupt unwind proceeds.
-    channel = FakeChannel(commands=[_cmd("RunGraph", id="t1"), _cmd("RunGraph", id="t2"), _cmd("RunGraph", id="t3")])
+    channel = FakeChannel(
+        commands=[
+            _cmd("RunGraph", id="t1"),
+            _cmd("RunGraph", id="t2"),
+            _cmd("RunGraph", id="t3"),
+        ]
+    )
     executor = FakeExecutor(default=FakeResult(output="done"), ledgered={"RunGraph"})
     # First call settles normally; the SECOND raises CancelledError mid-body.
     calls_seen = {"n": 0}

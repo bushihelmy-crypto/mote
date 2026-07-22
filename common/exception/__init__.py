@@ -70,6 +70,16 @@ from mote.common.exception.llm import (
     LLMUnusableResponseError,
 )
 from mote.common.exception.oauth import JWTDecodeError, OAuthConfigError, OAuthError, OAuthHTTPError, OAuthRefreshError
+from mote.common.exception.output import (
+    OutputCommitFencedError,
+    OutputCommitStateError,
+    OutputCorrectionExhaustedError,
+    OutputResumeContractMismatchError,
+    OutputValidatorError,
+    OutputValidatorUnavailableError,
+    RunLeaseCoordinatorUnavailableError,
+    RunLeaseUnavailableError,
+)
 from mote.common.exception.recovery import Call, RecoveryRunner, RecoveryStrategy
 from mote.common.exception.report import ErrorReport, render_error_block
 from mote.common.exception.resource import BudgetExceededError, NoMoneyException, ResourceError
@@ -165,6 +175,15 @@ __all__ = [
     "AgentError",
     "RoleContextNotSetError",
     "SessionResumeIdentityError",
+    # typed run output tier
+    "OutputCorrectionExhaustedError",
+    "OutputResumeContractMismatchError",
+    "OutputCommitFencedError",
+    "RunLeaseUnavailableError",
+    "RunLeaseCoordinatorUnavailableError",
+    "OutputCommitStateError",
+    "OutputValidatorError",
+    "OutputValidatorUnavailableError",
     # agent control-plane tier
     "AgentControlError",
     "AgentLimitReached",

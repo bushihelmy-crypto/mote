@@ -82,6 +82,14 @@ LLM_CALL = "llm_call"
 TERMINAL_STATE = "terminal_state"
 KERNEL_STATE = "kernel_state"
 BROWSER_STATE = "browser_state"
+OUTPUT_CANDIDATE_RECEIVED = "output_candidate_received"
+OUTPUT_VALIDATION_REJECTED = "output_validation_rejected"
+OUTPUT_ACCEPTED = "output_accepted"
+OUTPUT_COMMIT_STARTED = "output_commit_started"
+OUTPUT_MIGRATED = "output_migrated"
+OUTPUT_COMMITTED = "output_committed"
+OUTPUT_PUBLISHED = "output_published"
+OUTPUT_PUBLICATION_QUEUED = "output_publication_queued"
 
 
 @dataclass
@@ -175,6 +183,166 @@ class TurnContextEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "TurnContextEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputCandidateReceivedEvent:
+    candidate_id: str
+    contract_id: str
+    schema_fingerprint: str = ""
+    representation: str = ""
+    raw: Any = None
+    run_id: str = ""
+    run_kind: str = "agent"
+
+    type = OUTPUT_CANDIDATE_RECEIVED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputCandidateReceivedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputValidationRejectedEvent:
+    candidate_id: str
+    contract_id: str
+    issues: List[Dict[str, Any]] = field(default_factory=list)
+    correction_attempt: int = 0
+    corrections_remaining: int = 0
+    correction_allowed: bool = False
+    validator_provenance: List[Dict[str, Any]] = field(default_factory=list)
+    run_id: str = ""
+    run_kind: str = "agent"
+
+    type = OUTPUT_VALIDATION_REJECTED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputValidationRejectedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputAcceptedEvent:
+    candidate_id: str
+    contract_id: str
+    schema_fingerprint: str = ""
+    value: Any = None
+    correction_attempts: int = 0
+    validator_provenance: List[Dict[str, Any]] = field(default_factory=list)
+    run_id: str = ""
+    run_kind: str = "agent"
+
+    type = OUTPUT_ACCEPTED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputAcceptedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputCommitStartedEvent:
+    candidate_id: str
+    contract_id: str
+    run_id: str = ""
+    run_kind: str = "agent"
+    fencing_token: int = 0
+
+    type = OUTPUT_COMMIT_STARTED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputCommitStartedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputMigratedEvent:
+    candidate_id: str
+    source_contract_id: str
+    target_contract_id: str
+    target_schema_fingerprint: str
+    value: Any = None
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    run_id: str = ""
+    run_kind: str = "agent"
+
+    type = OUTPUT_MIGRATED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputMigratedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputCommittedEvent:
+    candidate_id: str
+    contract_id: str
+    schema_fingerprint: str = ""
+    value: Any = None
+    correction_attempts: int = 0
+    validator_provenance: List[Dict[str, Any]] = field(default_factory=list)
+    run_id: str = ""
+    run_kind: str = "agent"
+    fencing_token: int = 0
+
+    type = OUTPUT_COMMITTED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputCommittedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputPublicationQueuedEvent:
+    publication_id: str
+    candidate_id: str
+    contract_id: str
+    run_id: str = ""
+    run_kind: str = "agent"
+
+    type = OUTPUT_PUBLICATION_QUEUED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputPublicationQueuedEvent":
+        return cls(**_dataclass_kwargs(cls, payload))
+
+
+@dataclass
+class OutputPublishedEvent:
+    candidate_id: str
+    contract_id: str
+    publication_id: str = ""
+    run_id: str = ""
+    run_kind: str = "agent"
+
+    type = OUTPUT_PUBLISHED
+
+    def payload(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "OutputPublishedEvent":
         return cls(**_dataclass_kwargs(cls, payload))
 
 
@@ -436,6 +604,14 @@ SessionEvent = Union[
     TerminalStateEvent,
     KernelStateEvent,
     BrowserStateEvent,
+    OutputCandidateReceivedEvent,
+    OutputValidationRejectedEvent,
+    OutputAcceptedEvent,
+    OutputCommitStartedEvent,
+    OutputMigratedEvent,
+    OutputCommittedEvent,
+    OutputPublicationQueuedEvent,
+    OutputPublishedEvent,
 ]
 
 #: Discriminator -> event class, for typed reconstruction from a raw record.
@@ -451,6 +627,14 @@ _EVENT_TYPES = {
     TERMINAL_STATE: TerminalStateEvent,
     KERNEL_STATE: KernelStateEvent,
     BROWSER_STATE: BrowserStateEvent,
+    OUTPUT_CANDIDATE_RECEIVED: OutputCandidateReceivedEvent,
+    OUTPUT_VALIDATION_REJECTED: OutputValidationRejectedEvent,
+    OUTPUT_ACCEPTED: OutputAcceptedEvent,
+    OUTPUT_COMMIT_STARTED: OutputCommitStartedEvent,
+    OUTPUT_MIGRATED: OutputMigratedEvent,
+    OUTPUT_COMMITTED: OutputCommittedEvent,
+    OUTPUT_PUBLICATION_QUEUED: OutputPublicationQueuedEvent,
+    OUTPUT_PUBLISHED: OutputPublishedEvent,
 }
 
 
@@ -516,6 +700,14 @@ __all__ = [
     "TERMINAL_STATE",
     "KERNEL_STATE",
     "BROWSER_STATE",
+    "OUTPUT_CANDIDATE_RECEIVED",
+    "OUTPUT_VALIDATION_REJECTED",
+    "OUTPUT_ACCEPTED",
+    "OUTPUT_COMMIT_STARTED",
+    "OUTPUT_MIGRATED",
+    "OUTPUT_COMMITTED",
+    "OUTPUT_PUBLICATION_QUEUED",
+    "OUTPUT_PUBLISHED",
     "SessionMetaEvent",
     "MessageEvent",
     "CompactedEvent",
@@ -527,6 +719,14 @@ __all__ = [
     "TerminalStateEvent",
     "KernelStateEvent",
     "BrowserStateEvent",
+    "OutputCandidateReceivedEvent",
+    "OutputValidationRejectedEvent",
+    "OutputAcceptedEvent",
+    "OutputCommitStartedEvent",
+    "OutputMigratedEvent",
+    "OutputCommittedEvent",
+    "OutputPublicationQueuedEvent",
+    "OutputPublishedEvent",
     "SessionEvent",
     "to_line",
     "parse_line",

@@ -25,6 +25,7 @@ core function works on both channels.
 from __future__ import annotations
 
 from typing import ClassVar, Optional
+from urllib.parse import quote_plus
 
 from mote.common.exception import ToolNotConfiguredError, ToolValidationError
 from mote.executor.base_tool import BaseTool
@@ -41,8 +42,6 @@ def _unavailable_msg(query: str) -> str:
     point the user at the exact config path AND give the model an immediate
     fallback (navigate a search engine via WebBrowser).
     """
-    from urllib.parse import quote_plus
-
     return (
         "Server-side web search is unavailable: the model routed for the "
         "'web_search' task does not support provider-native web search. Configure "

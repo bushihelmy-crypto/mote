@@ -41,7 +41,18 @@ class BaseThinkEngine(ABC):
     result: ThinkResult
 
     @abstractmethod
-    async def start(self, req, system_prompt, tool_specs=None, *, llm: "LLMClient") -> None:
+    async def start(
+        self,
+        req,
+        system_prompt,
+        tool_specs=None,
+        *,
+        llm: "LLMClient",
+        output_binding=None,
+        output_schema=None,
+        output_run_id="",
+        schema_fingerprint="",
+    ) -> None:
         """Launch one think round.
 
         When ``tool_specs`` is provided the native tool-use channel is used;

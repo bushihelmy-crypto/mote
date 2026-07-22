@@ -43,7 +43,7 @@ from mote.router.control import RouterControlHoldStore
 from mote.router.ml.engine import SquillaMLEngine
 from mote.router.ml.flags import RoutingFlags as MLRoutingFlags
 from mote.router.ml.inference.postprocess import apply_postprocess as ml_apply_postprocess
-from mote.router.ml.inference.types import InferenceRequest
+from mote.router.ml.inference.types import FinalDecision, InferenceRequest
 from mote.router.ml.predictor import _CLASS_TO_IDX, ROUTE_CLASSES, _apply_flag_overrides, _get_prompt_hint
 from mote.router.schema import ModelCard, RoutingDecision, RoutingRequest
 from mote.router.strategy import RoutingStrategy
@@ -270,9 +270,9 @@ class _PredictResult:
     """
 
     route_class: str  # post-caller-flag route class ("floored")
-    decision: object  # FinalDecision (thinking_mode / prompt_policy / margin / ...)
+    decision: FinalDecision
     probs: dict
-    merged_flags: object  # MLRoutingFlags
+    merged_flags: MLRoutingFlags
     reasons: list
     ml: bool  # True when the ML engine produced the decision (else heuristic)
 

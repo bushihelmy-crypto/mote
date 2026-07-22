@@ -5,11 +5,15 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from mote.common.config.loader import load_config
 from mote.common.config.sources import discover_source_files
 from mote.common.logs import logger
-from mote.common.workspace import run_cleanup_if_due
+from mote.common.workspace import WorkspaceStore, run_cleanup_if_due
+from mote.context.code_map.indexer import RepoIndexer
+from mote.context.skills.skill_manager import SkillManager
+from mote.executor.tool_executor import ToolExecutor
 
 
 class RuntimeMaintenance:
@@ -25,7 +29,7 @@ class RuntimeMaintenance:
         self._peek = peek
 
     async def reindex_code_map_on_change(self, hook_input) -> None:
-        indexer = self._peek("repo_index")
+        indexer = cast(RepoIndexer | None, self._peek("repo_index"))
         if indexer is None:
             return
         payload = getattr(hook_input, "payload", None)
@@ -38,7 +42,7 @@ class RuntimeMaintenance:
             logger.warning(f"RuntimeMaintenance: code-map reindex failed: {exc}")
 
     async def kickoff_repo_scan(self) -> None:
-        indexer = self._get("repo_index")
+        indexer = cast(RepoIndexer, self._get("repo_index"))
         if indexer is None:
             return
         try:
@@ -50,7 +54,7 @@ class RuntimeMaintenance:
         config = self._role.config.workspace.cleanup
         if not config.enabled:
             return
-        store = self._get("workspace_store")
+        store = cast(WorkspaceStore, self._get("workspace_store"))
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None,
@@ -73,7 +77,7 @@ class RuntimeMaintenance:
             return []
 
     async def reload_skills_on_change(self, hook_input) -> None:
-        manager = self._peek("skill_manager")
+        manager = cast(SkillManager | None, self._peek("skill_manager"))
         if manager is not None and manager.reload():
             logger.debug("RuntimeMaintenance: skills hot-reloaded")
 
@@ -85,7 +89,7 @@ class RuntimeMaintenance:
             logger.warning(f"RuntimeMaintenance: config hot-reload failed: {exc}")
 
     async def reload_mcp_on_change(self, hook_input) -> None:
-        executor = self._peek("executor")
+        executor = cast(ToolExecutor | None, self._peek("executor"))
         if executor is None:
             return
         try:

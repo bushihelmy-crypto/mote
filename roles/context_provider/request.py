@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from mote.common.schema import OutputBindingDecision
+
 
 @dataclass
 class ThinkRequest:
@@ -18,3 +20,7 @@ class ThinkRequest:
     req: list
     system_prompt: str
     tool_specs: Any
+    output_binding: OutputBindingDecision
+    command_channel: Any
+    output_schema: dict
+    schema_fingerprint: str

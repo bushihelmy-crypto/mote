@@ -32,7 +32,7 @@ exactly the capability-isolation seam we keep on purpose — so it stays runtime
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Optional, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, TypeAlias, TypedDict
 
 if TYPE_CHECKING:
     from mote.common.schema import AskUserQuestionAnswers, AskUserQuestionItem, DeviceConfig
@@ -180,6 +180,9 @@ DispatchTool: TypeAlias = Callable[[str, Optional[dict]], "Awaitable[ToolResult]
 ListToolNames: TypeAlias = Callable[[], list[str]]
 ListGraphToolNames: TypeAlias = Callable[[], list[str]]
 ListGraphExcludedToolNames: TypeAlias = Callable[[], list[str]]
+CommitGraphOutput: TypeAlias = Callable[..., Awaitable[Any]]
+ResumeGraphOutput: TypeAlias = Callable[..., Awaitable[Any]]
+HasGraphOutputRestore: TypeAlias = Callable[[str], bool]
 
 # ---------------------------------------------------------------------------
 # Tool search (deferred-tool discovery — SearchTools meta-tool)
@@ -212,6 +215,7 @@ WebSearch: TypeAlias = Callable[..., "Awaitable[list[WebSearchHit]]"]
 # ---------------------------------------------------------------------------
 
 DescribeImage: TypeAlias = Callable[..., "Awaitable[str]"]
+GraphRunLease: TypeAlias = Callable[[str], AsyncContextManager[None]]
 
 
 class CapabilityMap(TypedDict):
@@ -272,6 +276,10 @@ class CapabilityMap(TypedDict):
     list_tool_names: ListToolNames
     list_graph_tool_names: ListGraphToolNames
     list_graph_excluded_tool_names: ListGraphExcludedToolNames
+    commit_graph_output: CommitGraphOutput
+    resume_graph_output: ResumeGraphOutput
+    has_graph_output_restore: HasGraphOutputRestore
+    graph_run_lease: GraphRunLease
     list_deferred_tools: ListDeferredTools
     reveal_tools: RevealTools
     describe_deferred_tools: DescribeDeferredTools

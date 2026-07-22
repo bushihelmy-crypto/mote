@@ -124,6 +124,11 @@ class Mailbox:
     # ------------------------------------------------------------------
     def enqueue(self, message: Message, *, mode: DeliveryMode = DeliveryMode.TRIGGER_TURN) -> None:
         """Enqueue a raw message with the given delivery mode."""
+        publication_id = message.metadata.get("output_publication_id")
+        if publication_id and any(
+            item.message.metadata.get("output_publication_id") == publication_id for item in self._items
+        ):
+            return
         self._items.append(_MailboxItem(message, mode is DeliveryMode.TRIGGER_TURN))
         self._data_event.set()
 

@@ -85,6 +85,8 @@ class BgGraph:
         state_schema: type[GraphState] = GraphState,
         max_restarts: int = 3,
         recursion_limit: int = 100,
+        output_contract: Any = None,
+        output_engine_factory: Optional[Callable[..., Any]] = None,
     ):
         """Build an empty graph.
 
@@ -106,6 +108,10 @@ class BgGraph:
         self.state_schema = state_schema
         self.max_restarts = max_restarts
         self.recursion_limit = recursion_limit
+        if (output_contract is None) != (output_engine_factory is None):
+            raise ValueError("output_contract and output_engine_factory must be provided together")
+        self.output_contract = output_contract
+        self.output_engine_factory = output_engine_factory
         self._nodes: dict[str, _NodeDef] = {}
         self._edges: list[_Edge] = []
         self._waiting_edges: list[_WaitingEdge] = []

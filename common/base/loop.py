@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mote.common.schema import Message
 
 if TYPE_CHECKING:
-    from mote.common.schema import MessageQueue
+    from mote.common.schema import CommittedOutput, MessageQueue
 
 
 @dataclass
@@ -62,6 +62,14 @@ class BudgetVerdict:
 PROCEED = BudgetVerdict()
 
 
+@dataclass(frozen=True)
+class LoopResult:
+    """Internal loop outcome with separate presentation and committed output."""
+
+    presentation: Message
+    committed_output: "CommittedOutput[Any] | None" = None
+
+
 class BaseLoop(ABC):
     """A replaceable agent-loop strategy.
 
@@ -76,7 +84,7 @@ class BaseLoop(ABC):
     latest_observed_msg: "Message | None" = None
 
     @abstractmethod
-    async def run(self) -> Message | None:
+    async def run(self) -> LoopResult | None:
         """Drive the components until this strategy's terminal condition.
 
         Returns None when no messages were observed (nothing to do).

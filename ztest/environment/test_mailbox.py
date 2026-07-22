@@ -77,6 +77,21 @@ def test_dump_load_roundtrip():
     assert restored.has_trigger_turn() is False  # drained already
 
 
+def test_mailbox_deduplicates_pending_output_publication():
+    from mote.common.schema import UserMessage
+
+    mailbox = Mailbox()
+    first = UserMessage(content="result")
+    first.metadata["output_publication_id"] = "pub-1"
+    retry = UserMessage(content="result retry")
+    retry.metadata["output_publication_id"] = "pub-1"
+
+    mailbox.enqueue(first)
+    mailbox.enqueue(retry)
+
+    assert mailbox.drain_for_turn() == [first]
+
+
 @pytest.mark.asyncio
 async def test_wait_for_data():
     mailbox = Mailbox()

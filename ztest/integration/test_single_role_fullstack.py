@@ -13,8 +13,13 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.asyncio
+
+
+class Report(BaseModel):
+    count: int
 
 
 async def test_write_then_read_then_finish(make_role, tmp_path):
@@ -24,7 +29,16 @@ async def test_write_then_read_then_finish(make_role, tmp_path):
         working_dir=str(tmp_path),
         tools=["Read", "Edit"],
         turns=[
-            [("Edit", {"file_path": target, "old_string": "", "new_string": "hello world"})],
+            [
+                (
+                    "Edit",
+                    {
+                        "file_path": target,
+                        "old_string": "",
+                        "new_string": "hello world",
+                    },
+                )
+            ],
             [("Read", {"file_path": target})],
             "All done.",  # terminal: no tool_calls
         ],
@@ -39,7 +53,9 @@ async def test_write_then_read_then_finish(make_role, tmp_path):
 
     # The loop terminated on the plain-text turn and surfaced it as the reply.
     assert rsp is not None
-    assert "All done." in rsp.content
+    assert "All done." in rsp.output
+    assert rsp.output_record.candidate_id
+    assert rsp.transcript.session_id == role.session_id
 
     # Exactly one think round per scripted turn fired: Write, Read, terminal.
     # (is_terminal now joins the think task before reading its result, so the
@@ -47,6 +63,28 @@ async def test_write_then_read_then_finish(make_role, tmp_path):
     assert len(role.scripted_llm.tool_calls_seen) == 3
     # The executor's native tool specs were handed to the LLM each round.
     assert role.scripted_llm.tools_seen[0]  # non-empty native specs
+
+
+async def test_role_returns_typed_structured_run_result(make_role, tmp_path):
+    from mote.common.schema import OutputContractId
+    from mote.parser.native_channel import FINAL_OUTPUT_TOOL_NAME
+    from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
+
+    role = make_role(
+        working_dir=str(tmp_path),
+        turns=[[(FINAL_OUTPUT_TOOL_NAME, {"output": {"count": 7}})]],
+        output_contract=OutputContract(
+            OutputContractId("test", "report", "1"),
+            TypeAdapterOutputDecoder(Report),
+        ),
+    )
+
+    result = await role.run(with_message="return the report")
+
+    assert result is not None
+    assert result.output == Report(count=7)
+    assert result.output_record.value == Report(count=7)
+    assert result.output_record.contract_id == "test.report@1"
 
 
 async def test_history_records_assistant_and_tool_results(make_role, tmp_path):
@@ -83,7 +121,12 @@ async def test_edit_existing_file_end_to_end(make_role, tmp_path):
         tools=["Read", "Edit"],
         turns=[
             [("Read", {"file_path": target})],
-            [("Edit", {"file_path": target, "old_string": "x = 1", "new_string": "x = 2"})],
+            [
+                (
+                    "Edit",
+                    {"file_path": target, "old_string": "x = 1", "new_string": "x = 2"},
+                )
+            ],
             "edited",
         ],
     )
@@ -167,7 +210,14 @@ async def test_failure_mid_turn_skips_rest_then_replans(make_role, tmp_path):
             # Read fails -> the same-turn Write is SKIPPED, not executed.
             [
                 ("Read", {"file_path": missing}),
-                ("Edit", {"file_path": out, "old_string": "", "new_string": "skipped-content"}),
+                (
+                    "Edit",
+                    {
+                        "file_path": out,
+                        "old_string": "",
+                        "new_string": "skipped-content",
+                    },
+                ),
             ],
             # Replan: the Write now runs and lands "final" (not the skipped text).
             [("Edit", {"file_path": out, "old_string": "", "new_string": "final"})],
@@ -198,7 +248,16 @@ async def test_glob_then_grep_search_end_to_end(make_role, tmp_path):
         tools=["Search"],
         turns=[
             [("Search", {"files": "*.py"})],
-            [("Search", {"content": "hello", "path": str(tmp_path), "output_mode": "content"})],
+            [
+                (
+                    "Search",
+                    {
+                        "content": "hello",
+                        "path": str(tmp_path),
+                        "output_mode": "content",
+                    },
+                )
+            ],
             "done",
         ],
     )
@@ -227,4 +286,4 @@ async def test_empty_terminal_text_finishes_cleanly(make_role, tmp_path):
 
     assert os.path.exists(target)
     assert rsp is not None
-    assert rsp.content == ""
+    assert rsp.output == ""

@@ -13,6 +13,7 @@ provider name ``"openai"``.
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -539,8 +540,6 @@ class ImageCreator(MediaProvider):
                 img_bytes = await resp.read()
             form.add_field("image", img_bytes, filename="ref.png", content_type="image/png")
         else:
-            import os
-
             with open(ref_image, "rb") as f:
                 img_bytes = f.read()
             form.add_field("image", img_bytes, filename=os.path.basename(ref_image), content_type="image/png")

@@ -35,6 +35,7 @@ from mote.session.log import SessionLog
 from mote.session.recall import body_for_tool_call
 from mote.session.reconcile import ReconcileResult, reconcile_tool_calls
 from mote.session.replay import ReplayResult, replay
+from mote.session.run_lease import RunLeaseHandle, RunLeaseStore
 from mote.session.snapshot import BlobStore, FileSnapshotRecorder
 from mote.session.subscribers import CheckpointSubscriber, HunkSubscriber, RecorderSubscriber, TitleSubscriber
 from mote.session.terminal_state import TerminalStateRecorder
@@ -81,4 +82,6 @@ __all__ = [
     "HunkAttribution",
     "HunkView",
     "SessionSummary",
+    "RunLeaseHandle",
+    "RunLeaseStore",
 ]

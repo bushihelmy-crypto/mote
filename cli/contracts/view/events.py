@@ -53,6 +53,9 @@ SYSTEM_REMINDER = "system_reminder"
 CONVERSATION_COMPACTED = "conversation_compacted"
 ACTIVITY_STARTED = "activity_started"
 ACTIVITY_COMPLETED = "activity_completed"
+OUTPUT_SNAPSHOT = "output_snapshot"
+OUTPUT_SNAPSHOT_INVALIDATED = "output_snapshot_invalidated"
+OUTPUT_COMMITTED = "output_committed"
 
 # ``ToolCallCompleted.result_kind`` values — the neutral signal telling a consumer
 # *which* renderer a tool result wants. The projector decides this once; consumers
@@ -126,6 +129,30 @@ class ReasoningDelta(ViewEvent):
 
     kind: ClassVar[str] = REASONING_DELTA
     text: str = ""
+
+
+class OutputSnapshot(ViewEvent):
+    kind: ClassVar[str] = OUTPUT_SNAPSHOT
+    run_id: str = ""
+    revision: int = 0
+    schema_fingerprint: str = ""
+    value: object = None
+
+
+class OutputSnapshotInvalidated(ViewEvent):
+    kind: ClassVar[str] = OUTPUT_SNAPSHOT_INVALIDATED
+    run_id: str = ""
+    revision: int = 0
+    reason: str = ""
+
+
+class OutputCommitted(ViewEvent):
+    kind: ClassVar[str] = OUTPUT_COMMITTED
+    run_id: str = ""
+    run_kind: str = "agent"
+    contract_id: str = ""
+    schema_fingerprint: str = ""
+    value: object = None
 
 
 class ToolCallStarted(ViewEvent):
@@ -445,6 +472,9 @@ __all__ = [
     "MessageBlockDelta",
     "MessageBlockCompleted",
     "ReasoningDelta",
+    "OutputSnapshot",
+    "OutputSnapshotInvalidated",
+    "OutputCommitted",
     "ToolCallStarted",
     "ToolCallCompleted",
     "MediaBlock",
@@ -468,6 +498,9 @@ __all__ = [
     "MESSAGE_BLOCK_DELTA",
     "MESSAGE_BLOCK_COMPLETED",
     "REASONING_DELTA",
+    "OUTPUT_SNAPSHOT",
+    "OUTPUT_SNAPSHOT_INVALIDATED",
+    "OUTPUT_COMMITTED",
     "TOOL_CALL_STARTED",
     "TOOL_CALL_COMPLETED",
     "MEDIA_BLOCK",

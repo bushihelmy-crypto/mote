@@ -36,6 +36,9 @@ from mote.cli.contracts.view.events import (
     MessageBlockDelta,
     MessageBlockStarted,
     Notice,
+    OutputCommitted,
+    OutputSnapshot,
+    OutputSnapshotInvalidated,
     RetryStatus,
     SystemReminder,
     TaskProgress,
@@ -55,6 +58,9 @@ from mote.common.events.types import (
     LLM_STREAM_DELTA,
     LLM_STREAM_END,
     MESSAGE_APPENDED,
+    OUTPUT_COMMITTED,
+    OUTPUT_SNAPSHOT,
+    OUTPUT_SNAPSHOT_INVALIDATED,
     POST_TOOL_USE,
     PRE_TOOL_USE,
     TASK_PROGRESS,
@@ -323,6 +329,36 @@ class ViewProjector:
             # The block completion rides on MESSAGE_APPENDED; nothing to emit here
             # (we keep ``_streaming`` set so the append knows it was streamed).
             return []
+
+        if name == OUTPUT_SNAPSHOT:
+            return [
+                OutputSnapshot(
+                    run_id=event.run_id,
+                    revision=event.revision,
+                    schema_fingerprint=event.schema_fingerprint,
+                    value=event.value,
+                )
+            ]
+
+        if name == OUTPUT_SNAPSHOT_INVALIDATED:
+            return [
+                OutputSnapshotInvalidated(
+                    run_id=event.run_id,
+                    revision=event.revision,
+                    reason=event.reason,
+                )
+            ]
+
+        if name == OUTPUT_COMMITTED:
+            return [
+                OutputCommitted(
+                    run_id=event.run_id,
+                    run_kind=event.run_kind,
+                    contract_id=event.contract_id,
+                    schema_fingerprint=event.schema_fingerprint,
+                    value=event.value,
+                )
+            ]
 
         if name == MESSAGE_APPENDED:
             return self._project_message(event)

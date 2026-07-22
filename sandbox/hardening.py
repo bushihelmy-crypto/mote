@@ -26,6 +26,9 @@ docstring / plan): it is deferred to a later phase.
 """
 from __future__ import annotations
 
+import ctypes
+import resource
+
 # Environment variables that let a parent inject code into a freshly-exec'd
 # child via the dynamic loader. Stripped in both the prelude and the env.
 _DANGEROUS_LD_VARS = (
@@ -71,15 +74,11 @@ def apply_in_child() -> None:
     ⚠️ Not async-signal-safe; only use when the ``sh`` prelude is unavailable.
     """
     try:
-        import resource
-
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except Exception:  # noqa: BLE001 — best-effort; never block the spawn
         pass
 
     try:
-        import ctypes
-
         # PR_SET_DUMPABLE = 4; prctl(PR_SET_DUMPABLE, 0) marks us non-dumpable.
         libc = ctypes.CDLL(None, use_errno=True)
         libc.prctl(4, 0, 0, 0, 0)
