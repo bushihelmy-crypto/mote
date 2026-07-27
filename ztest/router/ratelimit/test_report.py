@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mote.router.ratelimit import RateLimitSnapshot, RateLimitTracker, format_rate_limits, format_snapshot
+from mote.runtime.models.ratelimit import RateLimitSnapshot, RateLimitTracker, format_rate_limits, format_snapshot
 
 
 class TestFormatSnapshot:

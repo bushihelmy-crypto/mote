@@ -20,8 +20,8 @@ import os
 
 import pytest
 
-from mote.common.schema import PermissionConfig
-from mote.environment.mote.mote_env import MoteEnv
+from mote.contracts.settings.permissions import PermissionConfig
+from mote.orchestration.environment.mote.mote_env import MoteEnv
 
 pytestmark = pytest.mark.asyncio
 
@@ -125,7 +125,7 @@ async def test_allow_rule_overrides_plan(make_role, tmp_path):
 
 def _patch_human_input(monkeypatch, reply: str) -> None:
     """Make ``MoteEnv.ask_user`` resolve to a fixed human reply."""
-    import mote.environment.mote.mote_env as mote_env
+    import mote.orchestration.environment.mote.mote_env as mote_env
 
     async def _fake(question):  # signature matches get_human_input(question)
         return reply

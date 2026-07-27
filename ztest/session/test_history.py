@@ -10,14 +10,81 @@ from __future__ import annotations
 
 import os
 
-from mote.session.history import SnapshotEntry, diff_snapshot, file_history, restore
-from mote.session.log import SessionLog
-from mote.session.snapshot import FileSnapshotRecorder
+from mote.contracts.fileops import CreateMutation, DeleteMutation, MutationSet, ReplaceMutation
+from mote.runtime.fileops import FileOperations
+from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
+from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
+from mote.runtime.fileops.transactions import ScopedMutationArtifacts
+from mote.runtime.session.codec import iter_file_operations_events
+from mote.runtime.session.events import SessionMetaEvent
+from mote.runtime.session.history import SnapshotEntry, diff_snapshot, file_history, restore
+from mote.runtime.session.log import SessionLog
+
+
+class _TransactionRecorder:
+    def __init__(self, log, root):
+        self.root = root
+        self.committed_sets = []
+        self.operations = FileOperations(
+            session_id=log.session_id,
+            journal_path=log.path,
+            get_project_root=lambda: str(root),
+            flush_pending=log.writer.flush_inline,
+            lock_root=root / "locks",
+            event_sink=log.commit_offline,
+            event_source=lambda: iter_file_operations_events(log.iter_events()),
+        )
+
+    def snapshot(self, path, *, tool=""):
+        try:
+            snapshot, raw = self.operations.capture(path)
+        except FileNotFoundError:
+            snapshot = None
+            raw = b""
+            maximum_bytes = len(encode_metadata_manifest(PreservedMetadata.for_create()))
+        else:
+            maximum_bytes = len(raw)
+        scope = self.operations.artifacts.write_scope(
+            owner="test-history-snapshot",
+            maximum_bytes=maximum_bytes,
+            ttl_seconds=ARTIFACT_WRITE_TTL_SECONDS,
+        )
+        with scope:
+            if snapshot is None:
+                mutation = self.operations.mutation_factory.creation(
+                    path,
+                    raw,
+                    scope=scope,
+                )
+            else:
+                mutation = self.operations.mutation_factory.replacement(
+                    snapshot,
+                    raw,
+                    scope=scope,
+                )
+            self.operations.mutations.commit(
+                self.operations.mutation_factory.mutation_set(
+                    source=tool,
+                    mutations=(mutation,),
+                ),
+                ScopedMutationArtifacts(scope),
+            )
+
+    def restore(self, log, path, *, index=-1):
+        before = {record.mutation_set.transaction_id for record in self.operations.journal.records()}
+        result = restore(log, path, index=index)
+        self.committed_sets.extend(
+            record.mutation_set
+            for record in self.operations.journal.records()
+            if record.mutation_set.transaction_id not in before
+        )
+        return result
 
 
 def _recorder(tmp_path):
     log = SessionLog("hist_sess", base_dir=str(tmp_path))
-    return FileSnapshotRecorder(log), log
+    log.commit_offline(SessionMetaEvent(session_id="hist_sess"))
+    return _TransactionRecorder(log, tmp_path), log
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +199,12 @@ def test_restore_writes_before_image_back(tmp_path):
     rec.snapshot(str(target), tool="Edit")
     target.write_text("mutated")
 
-    assert restore(log, str(target)) is True
+    assert rec.restore(log, str(target)) is True
     assert target.read_text() == "original"
+    assert len(rec.committed_sets) == 1
+    assert isinstance(rec.committed_sets[0], MutationSet)
+    assert len(rec.committed_sets[0].mutations) == 1
+    assert isinstance(rec.committed_sets[0].mutations[0], ReplaceMutation)
 
 
 def test_restore_create_before_image_removes_file(tmp_path):
@@ -142,8 +213,10 @@ def test_restore_create_before_image_removes_file(tmp_path):
     rec.snapshot(str(target), tool="Write")  # before-image = absent
     target.write_text("created by tool")
 
-    assert restore(log, str(target)) is True
+    assert rec.restore(log, str(target)) is True
     assert not target.exists()
+    assert len(rec.committed_sets) == 1
+    assert isinstance(rec.committed_sets[0].mutations[0], DeleteMutation)
 
 
 def test_restore_selects_index(tmp_path):
@@ -155,8 +228,9 @@ def test_restore_selects_index(tmp_path):
     rec.snapshot(str(target), tool="Edit")  # index 1 -> before-image "v1"
     target.write_text("v2")
 
-    assert restore(log, str(target), index=0) is True
+    assert rec.restore(log, str(target), index=0) is True
     assert target.read_text() == "v0"
+    assert len(rec.committed_sets) == 1
 
 
 def test_restore_missing_blob_returns_false(tmp_path):
@@ -170,13 +244,32 @@ def test_restore_missing_blob_returns_false(tmp_path):
         if p.is_file():
             os.remove(p)
 
-    assert restore(log, str(target)) is False
+    assert rec.restore(log, str(target)) is False
+    assert rec.committed_sets == []
 
 
 def test_restore_unknown_path_raises(tmp_path):
-    _, log = _recorder(tmp_path)
+    rec, log = _recorder(tmp_path)
     try:
-        restore(log, str(tmp_path / "nope"))
+        rec.restore(log, str(tmp_path / "nope"))
         assert False, "expected KeyError"
     except KeyError:
         pass
+
+
+def test_restore_missing_live_file_uses_formal_create_mutation(tmp_path):
+    rec, log = _recorder(tmp_path)
+    target = tmp_path / "f.txt"
+    target.write_text("original")
+    rec.snapshot(str(target), tool="Edit")
+    target.unlink()
+
+    assert rec.restore(log, str(target)) is True
+
+    assert target.read_text() == "original"
+    assert len(rec.committed_sets) == 1
+    mutation = rec.committed_sets[0].mutations[0]
+    assert isinstance(mutation, CreateMutation)
+    assert mutation.expected_version.name_identity
+    assert mutation.project_identity
+    assert mutation.metadata.size > 0

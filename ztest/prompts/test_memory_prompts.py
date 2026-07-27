@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from string import Template
 
-from mote.common.prompt import memory as M
+from mote.kernel.prompt import memory as M
 
 
 class TestInstructions:

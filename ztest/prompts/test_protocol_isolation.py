@@ -5,7 +5,7 @@
 This is the structural guard that makes the recurring ``<end></end>`` leak class
 *impossible to reintroduce silently* rather than merely fixed once. Shared prompt
 prose names protocol mechanics only through ``⟦...⟧`` symbols
-(``common.prompt.refs``); each CommandChannel lowers them to its own surface at
+(``kernel.prompt.refs``); each CommandChannel lowers them to its own surface at
 the end of assembly. These tests assert, across the registered prompt × protocol
 matrix:
 
@@ -26,10 +26,10 @@ from string import Template
 
 import pytest
 
-from mote.common import prompt as R
-from mote.common.prompt.refs import Sym, UnknownSymbolError, find_symbols
-from mote.parser.native_channel import NativeToolChannel
-from mote.parser.xml_channel import XmlCommandChannel
+from mote.kernel import prompt as R
+from mote.kernel.parser.native_channel import NativeToolChannel
+from mote.kernel.parser.xml_channel import XmlCommandChannel
+from mote.kernel.prompt.refs import Sym, UnknownSymbolError, find_symbols
 
 # The shared prose templates that flow to BOTH protocols. Each is reduced to a
 # concrete string (placeholders filled with dummies) so only protocol symbols,

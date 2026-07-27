@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.text import html_to_markdown
+from mote.contracts.text import html_to_markdown
 
 # The conversion depends on the optional ``markdownify`` library.
 pytest.importorskip("markdownify")

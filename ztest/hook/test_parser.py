@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import json
 
-from mote.common.hook.parser import parse_callback_result, parse_command_output
-from mote.common.hook.types import HookOutcome
+from mote.runtime.hook.parser import parse_callback_result, parse_command_output
+from mote.runtime.hook.types import HookOutcome
 
 
 def test_exit_2_blocks_with_stderr_reason():

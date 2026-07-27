@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Zero-debt guardrail: no hard-coded CJK in the CLI display layer.
 
-The human display layer (``cli/view`` + ``cli/consumers``) must route every
-human string through :func:`mote.common.i18n.t`, so a locale switch reaches all
+The human display layer (``product/cli/view`` + ``product/cli/consumers``) must route every
+human string through :func:`mote.product.i18n.t`, so a locale switch reaches all
 of it. This test walks the AST of every module there and fails on a CJK
 character inside a *real* string literal — a value that gets assigned, passed,
 or f-string-rendered. Docstrings and bare string-expression statements (used as
@@ -21,7 +21,7 @@ from typing import Iterator, List, Tuple
 
 import pytest
 
-from mote.common.const.paths import MOTE_PACKAGE_DIR
+from mote.runtime.paths import MOTE_PACKAGE_DIR
 
 # CJK Unified Ideographs + Extension-A + fullwidth/half-width forms: enough to
 # catch any hard-coded Chinese sentence or its fullwidth punctuation (（），。).
@@ -34,7 +34,7 @@ _CJK = (
 )
 _CJK_SET = frozenset(chr(c) for c in _CJK)
 
-_SCAN_DIRS = ("cli/view", "cli/consumers")
+_SCAN_DIRS = ("product/cli/view", "product/cli/consumers")
 
 
 def _has_cjk(text: str) -> bool:
@@ -43,10 +43,10 @@ def _has_cjk(text: str) -> bool:
 
 def _display_modules() -> List[Path]:
     root = MOTE_PACKAGE_DIR
-    # MOTE_PACKAGE_DIR is the package dir itself; the CLI lives under <root>/cli.
+    # MOTE_PACKAGE_DIR is the package dir itself; CLI is Product-owned.
     # Fall back to walking up from this test file if the layout differs so the
     # guardrail is robust to checkout naming.
-    if not (root / "cli").exists():
+    if not (root / "product/cli").exists():
         root = Path(__file__).resolve().parents[2]
     files: List[Path] = []
     for rel in _SCAN_DIRS:

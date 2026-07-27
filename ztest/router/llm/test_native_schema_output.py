@@ -1,4 +1,4 @@
-from mote.router.llm.openai_api import OpenAILLM
+from mote.product.integrations.models.openai_chat import OpenAILLM
 
 
 def test_openai_profile_builds_strict_json_schema_request():

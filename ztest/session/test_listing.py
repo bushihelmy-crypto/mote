@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.session.listing`` — lite session discovery.
+"""Tests for ``mote.runtime.session.listing`` — lite session discovery.
 
 Covers: empty/missing base; sessions sorted newest-first by mtime; meta + first
 message preview from the head; latest meta_update (title/last_prompt) from the
@@ -8,19 +8,32 @@ tail; cwd filtering on working_dir/project_root; dirs without a rollout skipped.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
-from mote.common.schema import AIMessage, UserMessage
-from mote.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
-from mote.session.listing import list_sessions
-from mote.session.log import SessionLog
+from mote.contracts.schema import AIMessage, UserMessage
+from mote.runtime.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
+from mote.runtime.session.listing import list_sessions
+from mote.runtime.session.log import SessionLog
+
+
+def _append(log: SessionLog, event) -> None:
+    asyncio.run(log.append(event))
 
 
 def _make(tmp_path, sid, *, working_dir="/w", project_root="/p", model="gpt-4", first=None):
     log = SessionLog(sid, base_dir=str(tmp_path))
-    log.create(SessionMetaEvent(session_id=sid, working_dir=working_dir, project_root=project_root, model=model))
+    _append(
+        log,
+        SessionMetaEvent(
+            session_id=sid,
+            working_dir=working_dir,
+            project_root=project_root,
+            model=model,
+        ),
+    )
     if first is not None:
-        log.append(MessageEvent(message=UserMessage(content=first)))
+        _append(log, MessageEvent(message=UserMessage(content=first)))
     return log
 
 
@@ -54,9 +67,9 @@ def test_sorted_newest_first(tmp_path):
 
 def test_tail_meta_update_title_and_last_prompt(tmp_path):
     log = _make(tmp_path, "s1", first="hello")
-    log.append(MetaUpdateEvent(title="My Session", last_prompt="fix the bug"))
+    _append(log, MetaUpdateEvent(title="My Session", last_prompt="fix the bug"))
     # A later update of the title should win (last-write-wins).
-    log.append(MetaUpdateEvent(title="Renamed"))
+    _append(log, MetaUpdateEvent(title="Renamed"))
     info = list_sessions(base_dir=str(tmp_path))[0]
     assert info.title == "Renamed"
     assert info.last_prompt == "fix the bug"
@@ -68,8 +81,11 @@ def test_head_title_read_past_line_window(tmp_path):
     # line window. The head byte-window must still catch it.
     log = _make(tmp_path, "s1", first="please fix the parser")
     for i in range(40):  # bury the title far past the old 16-line head window
-        log.append(MessageEvent(message=AIMessage(content=f"step {i}")))
-    log.append(MetaUpdateEvent(title="Fix The Parser", last_prompt="please fix the parser"))
+        _append(log, MessageEvent(message=AIMessage(content=f"step {i}")))
+    _append(
+        log,
+        MetaUpdateEvent(title="Fix The Parser", last_prompt="please fix the parser"),
+    )
     info = list_sessions(base_dir=str(tmp_path))[0]
     assert info.title == "Fix The Parser"
     assert info.last_prompt == "please fix the parser"
@@ -78,8 +94,8 @@ def test_head_title_read_past_line_window(tmp_path):
 def test_tail_rename_overrides_head_title(tmp_path):
     # A head title exists, but a later end-of-session rename in the tail wins.
     log = _make(tmp_path, "s1", first="hi")
-    log.append(MetaUpdateEvent(title="Original", last_prompt="hi"))
-    log.append(MetaUpdateEvent(title="Renamed"))
+    _append(log, MetaUpdateEvent(title="Original", last_prompt="hi"))
+    _append(log, MetaUpdateEvent(title="Renamed"))
     info = list_sessions(base_dir=str(tmp_path))[0]
     assert info.title == "Renamed"
     # last_prompt has no tail override → falls back to the head value.
@@ -107,7 +123,7 @@ def test_dir_without_rollout_skipped(tmp_path):
 
 
 def test_role_classmethod_delegates(tmp_path):
-    from mote.roles import Role
+    from mote.runtime.agent import Role
 
     _make(tmp_path, "s1", first="hi")
     infos = Role.list_sessions(str(tmp_path))

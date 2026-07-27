@@ -11,8 +11,8 @@ from typing import Iterator
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 _MANIFESTS = (
-    *sorted((_PACKAGE_ROOT / "roles/runtime_modules").glob("*.py")),
-    _PACKAGE_ROOT / "roles/role_components.py",
+    *sorted((_PACKAGE_ROOT / "runtime/agent/runtime_modules").glob("*.py")),
+    _PACKAGE_ROOT / "runtime/agent/role_components.py",
 )
 _ACTIVATION_CALLS = {
     "connect",

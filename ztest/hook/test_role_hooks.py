@@ -10,14 +10,19 @@ compat).
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
-from mote.common.hook.types import HookOutcome
-from mote.roles import Role
-from mote.roles.role_schema import RoleSchema
+from mote.contracts.events.types import PromptRejectedEvent, UserPromptSubmitEvent
+from mote.contracts.output import RunRejected, RunRejectionKind
+from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.runtime.agent import AgentWiring, Role
+from mote.runtime.agent.role_schema import RoleSchema
+from mote.runtime.events.telemetry import TelemetryBinding
+from mote.runtime.hook.types import HookOutcome
 
 
-class _StubLoop:
-    """Minimal BaseLoop stand-in: returns None, exposes latest_observed_msg."""
+class _StubFlowEngine:
+    """Minimal flow-engine stand-in returning no result."""
 
     latest_observed_msg = None
 
@@ -25,17 +30,63 @@ class _StubLoop:
         return None
 
 
-@pytest.fixture
-def role_in_tmp(tmp_path, monkeypatch):
-    from mote.router.llm.context import Context
+class _OfflineLLM:
+    """Minimal provider used by Role's lazy compression dependency."""
 
-    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
-    role = Role(name="Hooked", context=Context())
+    def __init__(self, model: str):
+        self.model = model
+        self.cost_manager = None
+        self.rate_limit_tracker = None
+        self.context_reducer = None
+
+
+class _EventCapture:
+    def __init__(self):
+        self.events: list = []
+
+    async def handle(self, event):
+        self.events.append(event)
+
+
+@pytest_asyncio.fixture
+async def role_in_tmp(tmp_path, monkeypatch):
+    from mote.runtime.models.clients.context import Context
+
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    # This suite exercises hook wiring, not the advisory whole-repo cold index.
+    monkeypatch.setattr("mote.runtime.context.code_map.indexer.RepoIndexer.scan_all", lambda self: None)
+
+    async def no_git_snapshot(_cwd):
+        return None
+
+    monkeypatch.setattr(
+        "mote.runtime.context.turn_context.sources.git.collect_git_state",
+        no_git_snapshot,
+    )
+    context = Context(provider_factory=lambda config: _OfflineLLM(config.model))
+    original_vault_path = context.config.secrets.vault_path
+    original_config_path = context.config.secrets.secrets_config_path
+    context.config.secrets.vault_path = str(tmp_path / "vault.json")
+    context.config.secrets.secrets_config_path = str(tmp_path / "secrets_config.json")
+    monkeypatch.setattr(
+        "mote.runtime.agent.runtime_modules.integrations._primary_config_path",
+        lambda _cwd: None,
+    )
+    role = Role(
+        role_schema=RoleSchema(name="Hooked", generate_title=False),
+        wiring=AgentWiring.for_context(context),
+    )
     # Replace the loop with a no-op stub so run() exercises only the hook seams.
-    # run() builds its loop via the graph's ``loop_factory``; seed that slot with
-    # a factory yielding the stub (the DI seam), so make_loop() returns it.
-    role._components._graph.seed("loop_factory", lambda: _StubLoop())
-    return role
+    # run() builds its flow engine via the component graph; seed that slot with
+    # a factory yielding the stub so the test stays independent of the engine.
+    role._components._graph.seed("flow_engine_factory", lambda: _StubFlowEngine())
+    try:
+        yield role
+    finally:
+        await role.cleanup()
+        await context.aclose()
+        context.config.secrets.vault_path = original_vault_path
+        context.config.secrets.secrets_config_path = original_config_path
 
 
 @pytest.mark.asyncio
@@ -74,6 +125,91 @@ async def test_user_prompt_submit_injects_context(role_in_tmp):
 
 
 @pytest.mark.asyncio
+async def test_prompt_rejection_never_enters_history_or_starts_flow(role_in_tmp):
+    raw_secret = "deny-boundary-secret"
+    capture = _EventCapture()
+    handle = await role_in_tmp.telemetry.subscribe(
+        TelemetryBinding(
+            TelemetrySubscriptionSpec(
+                identity=TelemetryIdentity("mote.test.role_hook_prompt_rejection"),
+                capacity=16,
+                overflow=TelemetryOverflow.DROP_NEWEST,
+            ),
+            capture,
+        )
+    )
+    role_in_tmp.register_hook(
+        "UserPromptSubmit",
+        lambda _hi: {
+            "decision": "block",
+            "systemMessage": f"policy denied {raw_secret}",
+        },
+    )
+
+    def forbidden_flow():
+        pytest.fail("PromptPolicy rejection must not construct a flow engine")
+
+    role_in_tmp._components._graph.seed("flow_engine_factory", forbidden_flow)
+    history_before = role_in_tmp.context_manager.get()
+
+    result = await role_in_tmp.run(with_message=(f'use <secret name="denied_token">{raw_secret}</secret> now'))
+    await role_in_tmp.telemetry.drain()
+
+    assert isinstance(result, RunRejected)
+    assert result.kind is RunRejectionKind.PROMPT_ADMISSION
+    assert raw_secret not in repr(result)
+    assert role_in_tmp.context_manager.get() == history_before
+    rejected = [e for e in capture.events if isinstance(e, PromptRejectedEvent)]
+    assert len(rejected) == 1
+    assert not any(isinstance(e, UserPromptSubmitEvent) for e in capture.events)
+    assert raw_secret not in repr(rejected[0])
+    assert raw_secret not in role_in_tmp._components.session_log.path.read_text(encoding="utf-8")
+    await handle.aclose()
+
+
+@pytest.mark.asyncio
+async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_in_tmp, monkeypatch):
+    raw_secret = "vault-failure-secret"
+    capture = _EventCapture()
+    handle = await role_in_tmp.telemetry.subscribe(
+        TelemetryBinding(
+            TelemetrySubscriptionSpec(
+                identity=TelemetryIdentity("mote.test.role_hook_secret_failure"),
+                capacity=16,
+                overflow=TelemetryOverflow.DROP_NEWEST,
+            ),
+            capture,
+        )
+    )
+    store = role_in_tmp.prompt_policy._secret_store
+    assert store is not None
+
+    def fail_capture(_value):
+        raise OSError("vault unavailable")
+
+    def forbidden_flow():
+        pytest.fail("secret-policy failure must not construct a flow engine")
+
+    monkeypatch.setattr(store, "add_session_secret", fail_capture)
+    role_in_tmp._components._graph.seed("flow_engine_factory", forbidden_flow)
+    history_before = role_in_tmp.context_manager.get()
+
+    result = await role_in_tmp.run(with_message=f"use <secret>{raw_secret}</secret> now")
+    await role_in_tmp.telemetry.drain()
+
+    assert isinstance(result, RunRejected)
+    assert result.terminate is True
+    assert raw_secret not in repr(result)
+    assert role_in_tmp.context_manager.get() == history_before
+    rejected = [e for e in capture.events if isinstance(e, PromptRejectedEvent)]
+    assert len(rejected) == 1
+    assert rejected[0].prompt.startswith("[prompt withheld")
+    assert raw_secret not in repr(capture.events)
+    assert raw_secret not in role_in_tmp._components.session_log.path.read_text(encoding="utf-8")
+    await handle.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stop_fired_in_finally(role_in_tmp):
     fired: list[str] = []
     role_in_tmp.register_hook("Stop", lambda hi: fired.append(hi.hook_event_name))
@@ -83,11 +219,14 @@ async def test_stop_fired_in_finally(role_in_tmp):
 
 @pytest.mark.asyncio
 async def test_hook_config_engages_manager(tmp_path, monkeypatch):
-    from mote.common.schema import HookConfig
-    from mote.router.llm.context import Context
+    from mote.contracts.settings.hooks import HookConfig
+    from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
-    role = Role(role_schema=RoleSchema(name="Cfg", hooks=HookConfig()), context=Context())
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    role = Role(
+        role_schema=RoleSchema(name="Cfg", hooks=HookConfig()),
+        wiring=AgentWiring.for_context(Context()),
+    )
     # A declared HookConfig (even empty events) engages the manager.
     assert role.hook_manager is not None
 
@@ -98,21 +237,30 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
     declares no per-Role ``HookConfig`` and registers no callbacks."""
     import json
 
-    import mote.common.const.paths as paths
-    from mote.router.llm.context import Context
+    import mote.runtime.paths as paths
+    from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     (home / "hooks.json").write_text(
         json.dumps(
-            {"hooks": {"PreToolUse": [{"matcher": "Bash", "handlers": [{"type": "command", "command": "exit 2"}]}]}}
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "handlers": [{"type": "command", "command": "exit 2"}],
+                        }
+                    ]
+                }
+            }
         ),
         encoding="utf-8",
     )
     monkeypatch.setattr(paths, "CONFIG_ROOT", home)
 
-    role = Role(role_schema=RoleSchema(name="Global"), context=Context())
+    role = Role(role_schema=RoleSchema(name="Global"), wiring=AgentWiring.for_context(Context()))
     # hooks=None + no callbacks, yet the global file engages the layer.
     assert role.role_schema.hooks is None
     assert role.hook_manager is not None

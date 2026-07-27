@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import os
 
-from mote.common.events import PostCompactEvent, SessionStartEvent
-from mote.common.interface import EphemeralContextSource, ObservationSubscriber
-from mote.context.turn_context import CodeMapContextSource
+from mote.contracts.ports import EphemeralContextSource
+from mote.runtime.context.turn_context import CodeMapContextSource
+from mote.runtime.events import PostCompactEvent, SessionStartEvent
 
 
 def run(coro):
@@ -31,10 +31,11 @@ def _write(base, relpath: str, source: str) -> str:
     return full
 
 
-def test_is_ephemeral_and_observation_source():
+def test_is_ephemeral_and_direct_rebuild_source():
     src = CodeMapContextSource(get_touched_files=lambda: [])
     assert isinstance(src, EphemeralContextSource)
-    assert isinstance(src, ObservationSubscriber)
+    assert callable(getattr(src, "on_model_context_rebuilt", None))
+    assert not getattr(src, "telemetry_observer", False)
 
 
 def test_no_touched_files_returns_none():
@@ -122,7 +123,7 @@ def test_postcompact_resets_frontier(tmp_path):
     assert run(src.render()) is not None
     assert run(src.render()) is None  # change-gated quiet
 
-    run(src.handle(PostCompactEvent()))  # compaction condensed the map away
+    run(src.on_model_context_rebuilt(PostCompactEvent()))
     assert run(src.render()) is not None  # full map re-emitted
 
 
@@ -130,7 +131,7 @@ def test_other_events_ignored(tmp_path):
     p = _write(tmp_path, "m.py", "def foo():\n    pass\n")
     src = CodeMapContextSource(get_touched_files=lambda: [p])
     assert run(src.render()) is not None
-    run(src.handle(SessionStartEvent(working_dir=str(tmp_path))))
+    run(src.on_model_context_rebuilt(SessionStartEvent(working_dir=str(tmp_path))))
     assert run(src.render()) is None  # unrelated event did not reset frontier
 
 
@@ -505,22 +506,20 @@ def test_postcompact_reshows_defines_for_in_context_file(tmp_path):
     assert first is not None
     assert "foo" not in first  # in-context -> defines suppressed
 
-    run(src.handle(PostCompactEvent()))  # bodies condensed away
+    run(src.on_model_context_rebuilt(PostCompactEvent()))
     out = run(src.render())
     assert out is not None
     assert "foo" in out  # frontier cleared -> defines re-appear
 
 
-def test_stale_read_shows_defines(tmp_path):
-    # Read entry exists but the file changed since -> not in context -> defines.
+def test_invalidated_observation_shows_defines(tmp_path):
+    # File Operations removed the changed file's observation -> not in context.
     helper = _write(tmp_path, "helper.py", "def util():\n    pass\n")
     consumer = _write(tmp_path, "consumer.py", "import helper\n")
-    stale_mtime = os.stat(helper).st_mtime_ns
     _write(tmp_path, "helper.py", "def util():\n    pass\n\ndef more():\n    pass\n")
-    _bump_mtime(helper)
     src = CodeMapContextSource(
         get_touched_files=lambda: [helper, consumer],
-        get_read_state=lambda: {helper: stale_mtime},  # recorded at old version
+        get_read_state=lambda: {},
     )
     out = run(src.render())
     assert out is not None
@@ -720,7 +719,7 @@ def test_precise_callers_cached_per_version(tmp_path):
 
     # Re-render at the SAME version: the row is change-gated quiet, and even if it
     # weren't, the (path, symbol, content_hash) cache means no new references call.
-    run(src.handle(PostCompactEvent()))  # force re-emit (frontier reset)
+    run(src.on_model_context_rebuilt(PostCompactEvent()))
     run(src.render(cwd=str(tmp_path)))
     assert len(lsp.ref_calls) == calls_after_first  # served from cache
 
@@ -737,7 +736,7 @@ def test_ref_symbol_query_capped(tmp_path):
     _write(tmp_path, "api.py", body2)
     _bump_mtime(api)
     run(src.render())
-    from mote.context.code_map import CodeMap
+    from mote.runtime.context.code_map import CodeMap
 
     assert len(lsp.ref_calls) <= CodeMap._MAX_REF_SYMBOLS
 
@@ -889,7 +888,7 @@ def test_surface_callers_capped(tmp_path):
     lsp = _FakeRefLspQuery([])
     src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
     run(src.render())
-    from mote.context.code_map import CodeMap
+    from mote.runtime.context.code_map import CodeMap
 
     assert len(lsp.ref_calls) <= CodeMap._MAX_REF_SYMBOLS
 
@@ -905,7 +904,7 @@ def test_surface_callers_cached_per_version(tmp_path):
     first = len(lsp.ref_calls)
     assert first >= 1
 
-    run(src.handle(PostCompactEvent()))  # force re-emit (frontier reset)
+    run(src.on_model_context_rebuilt(PostCompactEvent()))
     run(src.render(cwd=str(tmp_path)))
     assert len(lsp.ref_calls) == first  # served from cache, no new query
 
@@ -938,7 +937,7 @@ def test_surfaced_caller_change_resurfaces_row(tmp_path):
 
 
 def _sym(name: str, qualified_name: str | None = None):
-    from mote.context.code_map import Symbol
+    from mote.runtime.context.code_map import Symbol
 
     return Symbol(
         name=name,
@@ -983,7 +982,7 @@ def test_unread_purpose_from_index(tmp_path):
 def test_unread_used_by_from_index_capped_and_tier_gated(tmp_path):
     # Opt A: an unread target's whole-repo "used by:" renders (nested) at tier 0,
     # capped at _UNREAD_USEDBY_CAP, and drops entirely under a tight budget.
-    from mote.context.turn_context.sources.code_map import _UNREAD_USEDBY_CAP
+    from mote.runtime.context.turn_context.sources.code_map import _UNREAD_USEDBY_CAP
 
     _write(tmp_path, "pkg/__init__.py", "")
     other = _write(tmp_path, "pkg/other.py", "def thing():\n    pass\n")

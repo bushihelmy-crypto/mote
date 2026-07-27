@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.common.text.markers`."""
+"""Behavioral tests for :mod:`mote.contracts.text.markers`."""
 from __future__ import annotations
 
-from mote.common.text import (
+from mote.contracts.text import (
     PERSISTED_OUTPUT_CLOSE,
     PERSISTED_OUTPUT_OPEN,
     SYSTEM_REMINDER_CLOSE,

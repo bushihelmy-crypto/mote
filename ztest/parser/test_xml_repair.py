@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.utils.role_utils import loads_xml, parse_commands2
+from mote.kernel.parser.xml_recovery import loads_xml, parse_commands
+
+parse_commands2 = parse_commands
 
 BODY = "def f():\n    return vector<int>()\n\nif a < b:\n    g()"
 

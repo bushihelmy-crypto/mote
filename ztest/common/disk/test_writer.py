@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from mote.common.disk.writer import DiskWriter
+from mote.runtime.disk.writer import DiskWriter
 
 
 def _boom():
@@ -114,6 +114,39 @@ def test_writer_rebinds_to_a_new_loop():
     asyncio.run(first())
     asyncio.run(second())
     assert out == [1, 2]
+
+
+def test_drain_recovers_backlog_from_cancelled_worker():
+    async def go():
+        w = DiskWriter()
+        out: list[str] = []
+        w.enqueue("k", lambda: out.append("queued"))
+        assert w._worker is not None
+        w._worker.cancel()
+        await asyncio.sleep(0)
+
+        # A dead worker is an availability failure, not an infinite barrier.
+        await asyncio.wait_for(w.drain(), timeout=1)
+        return out
+
+    assert asyncio.run(go()) == ["queued"]
+
+
+def test_enqueue_restarts_cancelled_worker_on_same_loop():
+    async def go():
+        w = DiskWriter()
+        out: list[str] = []
+        w.enqueue("k", lambda: out.append("before"))
+        assert w._worker is not None
+        w._worker.cancel()
+        await asyncio.sleep(0)
+
+        w.enqueue("k", lambda: out.append("after"))
+        await asyncio.wait_for(w.drain(), timeout=1)
+        await w.aclose()
+        return out
+
+    assert asyncio.run(go()) == ["before", "after"]
 
 
 # ---------------------------------------------------------------------------

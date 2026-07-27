@@ -17,10 +17,10 @@ import json
 
 import pytest
 
-from mote.common.config.config.mcp_config import MCPTransportType
-from mote.common.const import paths
-from mote.executor.mcp import config_source
-from mote.executor.mcp.config_source import MCP_CONFIG_FILE_NAME, load_mcp_servers, mcp_config_paths
+from mote.contracts.config.mcp import MCPTransportType
+from mote.runtime import paths
+from mote.runtime.tools.mcp import config_source
+from mote.runtime.tools.mcp.config_source import MCP_CONFIG_FILE_NAME, load_mcp_servers, mcp_config_paths
 
 
 @pytest.fixture

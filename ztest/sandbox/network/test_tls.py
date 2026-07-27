@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from mote.sandbox.network import tls as tls_mod
-from mote.sandbox.network.tls import MitmCa
+from mote.runtime.sandbox.network import tls as tls_mod
+from mote.runtime.sandbox.network.tls import MitmCa
 
 
 def test_ca_generated_on_first_use(tmp_path):

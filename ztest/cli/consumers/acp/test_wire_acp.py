@@ -12,8 +12,8 @@ diff round-trip, and the permission option vocabulary.
 
 from __future__ import annotations
 
-from mote.cli.consumers._wire import acp
-from mote.cli.contracts.view import events as ev
+from mote.product.cli.consumers._wire import acp
+from mote.product.cli.contracts.view import events as ev
 
 
 def _state() -> acp.AcpWireState:

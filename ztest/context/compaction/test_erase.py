@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.const import RETENTION, RETENTION_ERASABLE, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
-from mote.common.schema import AIMessage, ContextManagerConfig
-from mote.context.compaction.reducers.erase import EraseReducer
-from mote.context.compaction.reducers.fold import FoldReducer
-from mote.context.compaction.request import ReductionRequest
-from mote.context.compaction.transcript import SegmentKind, Transcript
+from mote.contracts.constants.messages import RETENTION, RETENTION_ERASABLE, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
+from mote.contracts.schema import AIMessage, ContextManagerConfig
+from mote.runtime.context.compaction.reducers.erase import EraseReducer
+from mote.runtime.context.compaction.reducers.fold import FoldReducer
+from mote.runtime.context.compaction.request import ReductionRequest
+from mote.runtime.context.compaction.transcript import SegmentKind, Transcript
 
 from ..conftest import COMPACTABLE, make_pairs, tool_call_msg, tool_result_msg
 

@@ -12,9 +12,12 @@ would be stringized (``'int'`` instead of ``int``) under PEP 563.
 """
 import pytest
 
-from mote.executor.agent_registry import AgentRegistry
-from mote.executor.mcp_adapter import MCPToolAdapter
-from mote.executor.tool_convert import function_docstring_to_schema
+from mote.runtime.tools.agent_registry import AgentRegistry
+from mote.runtime.tools.mcp.adapter import MCPToolAdapter, McpXmlSchemaError
+from mote.runtime.tools.mcp.toolsets import NativeMcpToolset, XmlMcpToolset
+from mote.runtime.tools.mcp.types import DiscoveredMcpTool
+from mote.runtime.tools.tool_convert import function_docstring_to_schema
+from mote.runtime.tools.tool_executor import ToolExecutor
 
 # ---------------------------------------------------------------------------
 # tool_convert
@@ -62,10 +65,8 @@ class TestFunctionDocstringToSchema:
 
 @pytest.fixture
 def fresh_agent_registry() -> AgentRegistry:
-    """An isolated AgentRegistry bypassing the Singleton cache."""
-    reg = AgentRegistry.__new__(AgentRegistry)
-    reg._registry = {}
-    return reg
+    """Return an isolated Agent registry."""
+    return AgentRegistry()
 
 
 class TestAgentRegistry:
@@ -77,7 +78,7 @@ class TestAgentRegistry:
             fresh_agent_registry.register(NotARole)
 
     def test_register_role_subclass(self, fresh_agent_registry):
-        from mote.roles.role import Role
+        from mote.runtime.agent.role import Role
 
         class MyAgent(Role):
             agent_name = "MyAgent"
@@ -88,7 +89,7 @@ class TestAgentRegistry:
         assert fresh_agent_registry.get("ma") is MyAgent
 
     def test_default_agent_name_from_classname(self, fresh_agent_registry):
-        from mote.roles.role import Role
+        from mote.runtime.agent.role import Role
 
         class Defaulted(Role):
             pass
@@ -98,7 +99,7 @@ class TestAgentRegistry:
         assert fresh_agent_registry.get("Defaulted") is Defaulted
 
     def test_conflict_rejected(self, fresh_agent_registry):
-        from mote.roles.role import Role
+        from mote.runtime.agent.role import Role
 
         class AgentA(Role):
             agent_name = "Shared"
@@ -111,7 +112,7 @@ class TestAgentRegistry:
             fresh_agent_registry.register(AgentB)
 
     def test_idempotent_reregister(self, fresh_agent_registry):
-        from mote.roles.role import Role
+        from mote.runtime.agent.role import Role
 
         class AgentC(Role):
             agent_name = "C"
@@ -122,7 +123,7 @@ class TestAgentRegistry:
         assert fresh_agent_registry.get("c") is AgentC
 
     def test_all_agents_deduplicates(self, fresh_agent_registry):
-        from mote.roles.role import Role
+        from mote.runtime.agent.role import Role
 
         class AgentD(Role):
             agent_name = "D"
@@ -160,28 +161,120 @@ def mcp_schema():
 
 class TestMCPToolAdapter:
     def test_name_and_tool_schema(self, mcp_schema):
-        adapter = MCPToolAdapter(mcp=None, tool_name="server:search", schema=mcp_schema)
+        adapter = MCPToolAdapter.from_discovery(_FakeMCP(), _discovered(mcp_schema))
         assert adapter.name == "server:search"
-        assert adapter.tool_schema() == mcp_schema
+        definition = adapter.native_definition()
+        assert definition.name == "server:search"
+        assert definition.category == "mcp"
 
     @pytest.mark.asyncio
     async def test_call_delegates_to_mcp(self, mcp_schema):
         mcp = _FakeMCP()
-        adapter = MCPToolAdapter(mcp=mcp, tool_name="server:search", schema=mcp_schema)
+        adapter = MCPToolAdapter.from_discovery(mcp, _discovered(mcp_schema))
         result = await adapter.call(q="mote")
         assert mcp.calls == [("server:search", {"q": "mote"})]
         assert "server:search" in result
 
     def test_native_schema_passes_through_parameters(self, mcp_schema):
-        adapter = MCPToolAdapter(mcp=None, tool_name="server:search", schema=mcp_schema)
-        native = adapter.native_schema()
+        adapter = MCPToolAdapter.from_discovery(_FakeMCP(), _discovered(mcp_schema))
+        native = adapter.native_definition().render(adapter)
         assert native["name"] == "server:search"
         assert native["description"] == "search the web"
         # MCP already publishes JSON Schema -> used directly as input_schema.
         assert native["input_schema"] == mcp_schema["parameters"]
 
     def test_native_schema_defaults_when_no_parameters(self):
-        adapter = MCPToolAdapter(mcp=None, tool_name="bare", schema={"name": "bare"})
-        native = adapter.native_schema()
+        adapter = MCPToolAdapter.from_discovery(_FakeMCP(), DiscoveredMcpTool("bare", "", {}))
+        native = adapter.native_definition().render(adapter)
         assert native["input_schema"] == {"type": "object", "properties": {}}
         assert native["description"] == ""
+
+    def test_xml_definition_is_a_separate_explicit_adapter(self, mcp_schema):
+        adapter = MCPToolAdapter.from_discovery(_FakeMCP(), _discovered(mcp_schema))
+        xml = adapter.xml_definition()
+        native = adapter.native_definition()
+        assert type(xml) is not type(native)
+        assert xml.render(adapter)["parameters"] == mcp_schema["parameters"]
+
+    @pytest.mark.asyncio
+    async def test_xml_mcp_decodes_scalar_strings_before_call(self):
+        schema = {
+            "name": "server:scale",
+            "description": "scale a value",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer"},
+                    "enabled": {"type": "boolean"},
+                },
+            },
+        }
+        mcp = _FakeMCP()
+        adapter = MCPToolAdapter.from_discovery(mcp, _discovered(schema))
+        executor = ToolExecutor("xml", command_protocol="xml")
+        executor.register_xml_tool(adapter.xml_definition(), adapter)
+        result = await executor.run_command("server:scale", {"count": "3", "enabled": "true"})
+        assert result.success is True
+        assert mcp.calls == [("server:scale", {"count": 3, "enabled": True})]
+
+    def test_xml_mcp_rejects_nested_arguments_during_definition(self):
+        adapter = MCPToolAdapter.from_discovery(
+            _FakeMCP(),
+            DiscoveredMcpTool(
+                name="server:nested",
+                description="",
+                input_schema={
+                    "type": "object",
+                    "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+                },
+            ),
+        )
+        with pytest.raises(McpXmlSchemaError, match="items.*array"):
+            adapter.xml_definition()
+
+
+def _discovered(schema):
+    return DiscoveredMcpTool(
+        name=schema["name"],
+        description=schema.get("description", ""),
+        input_schema=schema.get("parameters") or {},
+    )
+
+
+class _DiscoveryMCP(_FakeMCP):
+    def __init__(self, tools):
+        super().__init__()
+        self._tools = tuple(tools)
+
+    def discovered_tools(self):
+        return self._tools
+
+
+class TestMcpToolsets:
+    def test_same_discovery_requires_explicit_protocol_toolset(self, mcp_schema):
+        source = _DiscoveryMCP((_discovered(mcp_schema),))
+        xml = XmlMcpToolset(source)
+        native = NativeMcpToolset(source)
+
+        xml_definition = xml.definitions()[0]
+        native_definition = native.definitions()[0]
+        assert xml_definition.protocol.value == "xml"
+        assert native_definition.protocol.value == "native"
+        assert type(xml_definition) is not type(native_definition)
+
+    def test_xml_projection_rejects_nested_schema_without_blocking_native(self):
+        source = _DiscoveryMCP(
+            (
+                DiscoveredMcpTool(
+                    name="server:nested",
+                    description="nested input",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"payload": {"type": "object", "properties": {}}},
+                    },
+                ),
+            )
+        )
+        assert NativeMcpToolset(source).tool_names() == ("server:nested",)
+        with pytest.raises(McpXmlSchemaError, match="payload.*object"):
+            XmlMcpToolset(source)

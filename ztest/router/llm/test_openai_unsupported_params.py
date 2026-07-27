@@ -12,8 +12,8 @@ builders are exercised.
 """
 from __future__ import annotations
 
-from mote.common.config.config.llm_config import LLMConfig
-from mote.router.llm.openai_api import OpenAILLM, _unsupported_request_params
+from mote.contracts.config.llm import LLMConfig
+from mote.product.integrations.models.openai_chat import OpenAILLM, _unsupported_request_params
 
 
 def _make_llm(model: str, **overrides):

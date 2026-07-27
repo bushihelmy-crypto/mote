@@ -17,10 +17,10 @@ import io
 
 import pytest
 
-from mote.cli.io.terminal_io import TerminalPort
-from mote.cli.io.terminal_menu import _menu_lines, _option_lines
-from mote.cli.view.approval import approval_options
-from mote.common.i18n import use_locale
+from mote.product.cli.io.terminal_io import TerminalPort
+from mote.product.cli.io.terminal_menu import _menu_lines, _option_lines
+from mote.product.cli.view.approval import approval_options
+from mote.product.i18n import use_locale
 
 
 @pytest.fixture(autouse=True)
@@ -265,7 +265,7 @@ def _q(question, header, options, multiSelect=False):
 
 
 def _questions(*qs):
-    from mote.common.schema import AskUserQuestionInput
+    from mote.contracts.interaction import AskUserQuestionInput
 
     # Mirror AskUserQuestion._coerce: the port receives the plain list of items.
     return AskUserQuestionInput.model_validate({"questions": list(qs)}).questions

@@ -8,7 +8,7 @@ to ``HARD`` urgency only.
 """
 from __future__ import annotations
 
-from mote.context.compaction.request import ReductionReason, ReductionRequest, Urgency
+from mote.runtime.context.compaction.request import ReductionReason, ReductionRequest, Urgency
 
 
 def test_defaults_are_soft_threshold():

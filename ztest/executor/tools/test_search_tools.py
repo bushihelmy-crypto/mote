@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the ``SearchTools`` meta-tool (mote.executor.tools.search_tools).
+"""Tests for the ``SearchTools`` meta-tool (mote.product.toolsets.builtin.search_tools).
 
 ``SearchTools`` is the discovery entry point for *deferred* (hidden) tools: the
 model calls it with keywords, the matching deferred tools are revealed (recorded
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.exception import ToolValidationError
-from mote.executor.tools.search_tools import SearchTools
+from mote.product.toolsets.builtin.search_tools import SearchTools
+from mote.runtime.errors import ToolValidationError
 
 from .conftest import CapRole, bind, run
 
@@ -60,6 +60,13 @@ class TestSearch:
         # data carries the discovered names under ``tool_references`` (the seam
         # feeding ToolMessage.tool_references → the Anthropic tool_reference wire).
         assert result.data == {"tool_references": ["ConvertImage"]}
+
+    def test_reveal_result_states_the_stateful_handoff_precondition(self):
+        role = _role(INDEX)
+        result = _call(role, "image convert")
+
+        assert "action=handoff requires an existing runtime" in result.output
+        assert "normal non-handoff call first" in result.output
 
     def test_description_keyword_match(self):
         role = _role(INDEX)

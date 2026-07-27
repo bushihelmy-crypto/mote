@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from mote.cli.consumers._wire import agui
-from mote.cli.contracts.view import events as ev
+from mote.product.cli.consumers._wire import agui
+from mote.product.cli.contracts.view import events as ev
 
 
 @pytest.fixture

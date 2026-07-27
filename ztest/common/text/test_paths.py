@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.common.text.paths`."""
+"""Behavioral tests for :mod:`mote.contracts.text.paths`."""
 from __future__ import annotations
 
 import os
 
-from mote.common.text import display_path, path_to_uri, uri_to_path
+from mote.contracts.text import display_path, path_to_uri, uri_to_path
 
 
 class TestUriRoundTrip:

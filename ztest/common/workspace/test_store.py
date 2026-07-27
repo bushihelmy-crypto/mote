@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.common.workspace.WorkspaceStore`.
+"""Unit tests for :class:`mote.runtime.workspace.WorkspaceStore`.
 
 The store is the single owner of the on-disk layout: every path a writer needs
 is derived here, co-located under one session directory.
 """
 from __future__ import annotations
 
-from mote.common.workspace import ArtifactKind, WorkspaceStore
+from mote.runtime.workspace import ArtifactKind, WorkspaceStore
 
 
 class TestWorkspaceStoreLayout:

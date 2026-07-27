@@ -14,17 +14,19 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 # Layers sharing a rank are peer subsystems at the same architectural depth.
 LAYER_RANK = {
-    "common": 0,
-    "context": 1,
-    "executor": 1,
-    "router": 1,
+    "contracts": 0,
+    # Transitional package: its gateway/retry/cost/auth implementation is
+    # Runtime-owned. Product routing and provider integrations are being moved
+    # out before this top-level package is deleted.
     "session": 1,
-    "parser": 2,
-    "think": 2,
-    "loop": 2,
-    "roles": 3,
-    "environment": 4,
-    "cli": 5,
+    # The new single-agent kernel owns Flow (the loop successor), Think and
+    # Parser.  Keeping these under one checked root prevents lower legacy
+    # packages from reaching into kernel internals while the remaining layers
+    # are migrated around it.
+    "kernel": 2,
+    "runtime": 3,
+    "orchestration": 4,
+    "product": 5,
 }
 
 # Existing violations frozen at exact import sites. Delete an entry as soon as
@@ -92,3 +94,39 @@ def test_runtime_imports_follow_layer_direction() -> None:
     stale = MIGRATION_BASELINE - seen_baseline
     assert not stale, "Remove resolved entries from MIGRATION_BASELINE:\n" + "\n".join(sorted(map(str, stale)))
     assert not violations, "Upward runtime imports are forbidden:\n" + "\n".join(violations)
+
+
+def test_legacy_common_package_is_deleted() -> None:
+    assert not (PACKAGE_ROOT / "common").exists(), "common is forbidden; assign code to one of the five layers"
+
+
+def test_disk_writer_has_no_process_global_access_api() -> None:
+    """Persistence queues must be owned by a Context or composition root."""
+    forbidden = {"get_disk_writer", "set_disk_writer", "drain_blocking"}
+    violations: list[str] = []
+    for layer in ("runtime", "orchestration", "product"):
+        for path in (PACKAGE_ROOT / layer).rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in forbidden:
+                    relative = path.relative_to(PACKAGE_ROOT).as_posix()
+                    violations.append(f"{relative}:{node.lineno}: defines {node.name}")
+                if isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        if alias.name in forbidden:
+                            relative = path.relative_to(PACKAGE_ROOT).as_posix()
+                            violations.append(f"{relative}:{node.lineno}: imports {alias.name}")
+    assert not violations, "DiskWriter process globals are forbidden:\n" + "\n".join(violations)
+
+
+def test_runtime_has_no_process_global_provider_registry() -> None:
+    forbidden = {"LLM_REGISTRY", "register_provider", "create_llm_instance"}
+    violations: list[str] = []
+    for layer in ("runtime", "orchestration", "product"):
+        for path in (PACKAGE_ROOT / layer).rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            relative = path.relative_to(PACKAGE_ROOT).as_posix()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id in forbidden:
+                    violations.append(f"{relative}:{node.lineno}: references {node.id}")
+    assert not violations, "Process-global provider registration is forbidden:\n" + "\n".join(violations)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for the bggraph frontier scheduler (:mod:`mote.executor.bggraph.engine`).
+"""Unit tests for the bggraph frontier scheduler (:mod:`mote.runtime.tools.bggraph.engine`).
 
 Covers linear chains, parallel fan-out, waiting-edge AND-joins (fast + slow
 source), conditional routing, cycles bounded by ``recursion_limit``, independent
@@ -15,9 +15,9 @@ import asyncio
 
 import pytest
 
-from mote.executor.tasks.bggraph import END, START, BgGraph, GraphBatchFailureError, GraphRecursionError
-from mote.executor.tasks.bggraph.types import GraphPause, PauseReason
-from mote.executor.tasks.types import BgTaskResult
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphBatchFailureError, GraphRecursionError
+from mote.orchestration.tasks.bggraph.types import GraphPause, PauseReason
+from mote.orchestration.tasks.types import BgTaskResult
 
 from .conftest import S, boom_node, flaky_node, gated_node, non_retryable_flaky_node, sync_node
 
@@ -176,7 +176,7 @@ class TestCycle:
         must wait for the slow source again, so every invocation sees fast and
         slow advanced in lockstep.
         """
-        from mote.executor.tasks.bggraph import Stage
+        from mote.orchestration.tasks.bggraph import Stage
 
         # One token must be released per slow-source invocation (one per lap).
         tokens: asyncio.Queue = asyncio.Queue()
@@ -260,7 +260,7 @@ class TestFailure:
 @pytest.fixture
 def fast_retry(monkeypatch):
     """Zero the framework backoff base so retry tests don't sleep for real."""
-    import mote.executor.tasks.bggraph.engine as eng
+    import mote.orchestration.tasks.bggraph.engine as eng
 
     monkeypatch.setattr(eng, "_RETRY_WAIT", 0.0)
     return eng
@@ -320,7 +320,7 @@ class TestRetryBackoff:
     """Engine-owned exponential backoff with full jitter, capped at the ceiling."""
 
     async def test_exponential_ceiling_grows(self, monkeypatch):
-        import mote.executor.tasks.bggraph.engine as eng
+        import mote.orchestration.tasks.bggraph.engine as eng
 
         # Pin the base and jitter to its upper bound to assert the exponential ceiling.
         monkeypatch.setattr(eng, "_RETRY_WAIT", 1.0)
@@ -330,7 +330,7 @@ class TestRetryBackoff:
         assert eng._retry_delay(3) == 4.0  # 1 * 2**2
 
     async def test_capped_at_max(self, monkeypatch):
-        import mote.executor.tasks.bggraph.engine as eng
+        import mote.orchestration.tasks.bggraph.engine as eng
 
         monkeypatch.setattr(eng, "_RETRY_WAIT", 5.0)
         monkeypatch.setattr(eng.random, "uniform", lambda lo, hi: hi)
@@ -338,7 +338,7 @@ class TestRetryBackoff:
         assert eng._retry_delay(20) == eng._MAX_BACKOFF_WAIT
 
     async def test_jitter_within_bounds(self, monkeypatch):
-        import mote.executor.tasks.bggraph.engine as eng
+        import mote.orchestration.tasks.bggraph.engine as eng
 
         monkeypatch.setattr(eng, "_RETRY_WAIT", 2.0)
         # With real jitter every sample stays within [0, capped_ceiling].
@@ -350,7 +350,7 @@ class TestRetryBackoff:
 
     async def test_backoff_delays_recorded_during_run(self, monkeypatch):
         # Capture the actual sleeps a node incurs across its retries.
-        import mote.executor.tasks.bggraph.engine as eng
+        import mote.orchestration.tasks.bggraph.engine as eng
 
         slept: list = []
 

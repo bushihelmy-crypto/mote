@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("tree_sitter_language_pack")
 
-from mote.context.code_map.languages import provider_for  # noqa: E402
+from mote.runtime.context.code_map.languages import provider_for  # noqa: E402
 
 
 def _extract(source: str, abspath: str = "/repo/src/main.js"):

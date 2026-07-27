@@ -12,7 +12,7 @@ count/token gate as tool-result bodies). See ``test_fold.py`` for that path.
 
 from __future__ import annotations
 
-from mote.roles.runtime_modules import build_args_limiter
+from mote.runtime.agent.runtime_modules import build_args_limiter
 
 # A large whole-file-write body. It must fall through to the lossless persist
 # now (the marker-fold moved to compaction), so its contents are irrelevant.

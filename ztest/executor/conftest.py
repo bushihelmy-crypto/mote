@@ -1,19 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures and helpers for the ``mote.executor`` test suite.
+"""Shared fixtures and helpers for the ``mote.runtime.tools`` test suite.
 
 Everything stays fully offline and deterministic — no LLM, no network, no MCP
 servers. The building blocks are:
 
-- A set of plain :class:`~mote.executor.base_tool.BaseTool` subclasses
+- A set of plain :class:`~mote.runtime.tools.base_tool.BaseTool` subclasses
   (``EchoTool`` / ``AddTool`` / ``FailTool`` / ``BoomTool`` / ``BgTool`` /
   ``MediaTool`` / ``CapTool``). They are NOT decorated with ``@register_tool``,
   so importing this module never pollutes the global tool registry.
-- ``fresh_registry`` — an isolated :class:`ToolRegistry` built via ``__new__``
-  (bypassing the ``Singleton`` metaclass) so ``register``/``get``/conflict
-  tests never touch the process-wide singleton.
-- ``restore_global_registry`` — snapshot/restore the real global registry +
-  its ``_discovered`` flag for the few tests that must register into it.
+- ``fresh_registry`` - an ordinary isolated :class:`ToolRegistry`.
+- ``restore_global_registry`` - snapshot/restore the default Product catalog.
 - ``FakeRole`` — exposes a ``tool_capabilities()`` allowlist so ``bind()`` can
   inject narrow capabilities exactly like the real Role.
 - ``make_executor`` — build a :class:`ToolExecutor` with no registry lookup and
@@ -21,17 +18,21 @@ servers. The building blocks are:
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
-from mote.common.schema import DurableConfig, EffectLedgerConfig, ToolResultLimitConfig
-from mote.executor.base_tool import BaseTool
-from mote.executor.tasks.types import BgTaskResult
-from mote.executor.tool_executor import ToolExecutor
-from mote.executor.tool_registry import ToolRegistry
-from mote.executor.tool_registry import registry as global_registry
-from mote.executor.tool_result import ToolError, ToolMedia, ToolResult
+from mote.contracts.schema import DurableConfig, EffectLedgerConfig, ToolResultLimitConfig
+from mote.kernel.tools.toolset import NativeToolset
+from mote.orchestration.tasks.types import BgTaskResult
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.tool_executor import ToolExecutor
+from mote.runtime.tools.tool_registry import ToolRegistry
+from mote.runtime.tools.tool_registry import registry as global_registry
+from mote.runtime.tools.tool_result import ToolError, ToolMedia, ToolResult
+from mote.ztest.artifact_fakes import artifact_media
 
 # ---------------------------------------------------------------------------
 # Plain (unregistered) tools
@@ -101,7 +102,7 @@ class MediaTool(BaseTool):
     name = "Media"
 
     async def call(self, *, payload: str = "img") -> ToolResult:
-        return ToolResult(output="Read image (1KB)", media=[ToolMedia(kind="image", b64=payload)])
+        return ToolResult(output="Read image (1KB)", media=[artifact_media("image", payload)])
 
 
 class StructuredResultTool(BaseTool):
@@ -146,27 +147,21 @@ class FakeRole:
 
 @pytest.fixture
 def fresh_registry() -> ToolRegistry:
-    """An isolated ToolRegistry that bypasses the Singleton cache.
-
-    ``ToolRegistry()`` would return the process-wide singleton; ``__new__``
-    builds a brand-new instance whose ``_registry`` dict we initialise by hand.
-    """
-    reg = ToolRegistry.__new__(ToolRegistry)
-    reg._registry = {}
-    return reg
+    """Return an isolated registry with no hidden process state."""
+    return ToolRegistry()
 
 
 @pytest.fixture
 def restore_global_registry():
     """Snapshot the real global registry and restore it after the test."""
-    global_registry.discover()
+    from mote.product.toolsets import discover_builtin_tools
+
+    discover_builtin_tools()
     saved = dict(global_registry._registry)
-    saved_discovered = ToolRegistry._discovered
     try:
         yield global_registry
     finally:
         global_registry._registry = saved
-        ToolRegistry._discovered = saved_discovered
 
 
 # ---------------------------------------------------------------------------
@@ -190,17 +185,22 @@ def make_executor(
     names (primary + aliases), mirroring what the constructor does for static
     tools — but without touching the global registry.
     """
+    definitions = []
+    declared = []
+    for tool in tools:
+        definition = native_definition(type(tool))
+        definitions.append(replace(definition, capability_factory=lambda tool=tool: tool))
+        declared.append(tool.name)
     ex = ToolExecutor(
         session_id,
-        tools=None,
+        tools=declared,
+        role=role,
         limit_config=limit_config,
         ledger_config=ledger_config,
         durable_config=durable_config,
         recovery_strategies=recovery_strategies,
         workspace_store=workspace_store,
+        toolsets=(NativeToolset("test.native", definitions),),
+        command_protocol="native",
     )
-    for tool in tools:
-        tool.bind(session_id, role=role)
-        names = [tool.name, *getattr(tool, "aliases", [])]
-        ex.register_tool_instance(tool, names)
     return ex

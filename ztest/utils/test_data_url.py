@@ -9,7 +9,7 @@ import base64
 
 import pytest
 
-from mote.common.utils.common import build_data_url, parse_data_url, resolve_image_media_type
+from mote.runtime.models.media import build_data_url, parse_data_url, resolve_image_media_type
 
 # Minimal byte payloads carrying the magic numbers sniff_image_media_type reads.
 _PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()

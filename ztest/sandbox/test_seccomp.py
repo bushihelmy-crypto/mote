@@ -17,8 +17,8 @@ import shutil
 
 import pytest
 
-from mote.sandbox import seccomp
-from mote.sandbox.runtime import SandboxRuntime
+from mote.runtime.sandbox import seccomp
+from mote.runtime.sandbox.runtime import SandboxRuntime
 
 _HAS_SECCOMP = seccomp.seccomp_available()
 _HAS_BWRAP = shutil.which("bwrap") is not None and os.name == "posix"

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.roles.role_state.RoleState (serializable runtime snapshot)."""
+"""Tests for mote.runtime.agent.role_state.RoleState (serializable runtime snapshot)."""
 from __future__ import annotations
 
-from mote.common.schema import LLMCallContext, Message, MessageQueue
-from mote.roles.role_state import RoleState, RoleStateController
+from mote.contracts.schema import LLMCallContext, Message, MessageQueue
+from mote.runtime.agent.role_state import RoleState, RoleStateController
 
 
 class TestDefaults:
@@ -37,8 +37,7 @@ class TestDefaults:
 
     def test_private_flags_default(self):
         st = RoleState()
-        assert st._active is False
-        assert st._file_read_state == {}
+        assert st.run_state.active is False
 
 
 class TestSerialization:
@@ -122,12 +121,3 @@ class TestTurnIndex:
         assert ctl.advance_turn() == 1
         assert ctl.advance_turn() == 2
         assert ctl.current_turn_index() == 2
-
-
-class TestRuntimeMutation:
-    def test_file_read_state_is_mutable_runtime_only(self):
-        st = RoleState()
-        st._file_read_state["/tmp/x"] = 123
-        assert st._file_read_state["/tmp/x"] == 123
-        # Runtime-only: never serialized.
-        assert "_file_read_state" not in st.model_dump()

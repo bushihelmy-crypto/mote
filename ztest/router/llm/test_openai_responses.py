@@ -22,8 +22,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.common.config.config.llm_config import LLMConfig
-from mote.router.llm.openai_responses_api import OpenAIResponsesLLM
+from mote.contracts.config.llm import LLMConfig
+from mote.product.integrations.models.openai_responses import OpenAIResponsesLLM
 
 
 def _make_llm(**overrides):
@@ -100,6 +100,50 @@ class TestConvertMessages:
         )
         assert items[0]["content"][0]["text"] == "look here"
 
+    def test_multimodal_content_preserves_image_and_pdf(self):
+        llm = _make_llm()
+        _, items = llm._convert_messages(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "inspect"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,abc"},
+                        },
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "pdf-data",
+                            },
+                        },
+                    ],
+                }
+            ]
+        )
+
+        assert items == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "inspect"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,abc",
+                    },
+                    {
+                        "type": "input_file",
+                        "file_data": "data:application/pdf;base64,pdf-data",
+                        "filename": "document.pdf",
+                    },
+                ],
+            }
+        ]
+
 
 class TestReasoningEffort:
     def test_effort_becomes_reasoning_block(self):
@@ -117,6 +161,24 @@ class TestReasoningEffort:
         llm.model = "gpt-4.1"  # vision+web but no thinking
         kwargs = llm._cons_kwargs([{"role": "user", "content": "hi"}])
         assert "reasoning" not in kwargs
+
+
+def test_native_schema_uses_responses_text_format() -> None:
+    llm = _make_llm()
+
+    request = llm.native_schema_request(
+        {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+        }
+    )
+
+    assert request is not None
+    assert request["text"]["format"]["type"] == "json_schema"
+    assert request["text"]["format"]["name"] == "mote_output"
+    assert request["text"]["format"]["strict"] is True
+    assert request["text"]["format"]["schema"]["additionalProperties"] is False
 
 
 class TestToolSearchPair:

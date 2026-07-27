@@ -14,8 +14,8 @@ import stat
 
 import pytest
 
-from mote.common.config.config.secrets_config import SecretsConfig
-from mote.common.secrets.cipher import AesGcmCipher, KeyFileProvider, build_cipher
+from mote.contracts.config.secrets import SecretsConfig
+from mote.runtime.secrets.cipher import AesGcmCipher, KeyFileProvider, build_cipher
 
 
 class TestAesGcmCipher:

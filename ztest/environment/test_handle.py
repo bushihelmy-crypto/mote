@@ -6,11 +6,11 @@ import types
 
 import pytest
 
-from mote.common.schema.output import CommittedOutput, RunResult, TranscriptRef
-from mote.common.schema.queue import MessageQueue
-from mote.environment.agent_path import AgentPath
-from mote.environment.handle import ChildAgentHandle
-from mote.environment.runtime import AgentRuntime, AgentStatus
+from mote.contracts.output import CommittedOutput, RunResult, TranscriptRef
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.agent_path import AgentPath
+from mote.orchestration.environment.handle import ChildAgentHandle
+from mote.orchestration.environment.runtime import AgentRuntime, AgentStatus
 
 
 class FakeRole:

@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Role LSP wiring: the opt-in lazy_service gate + event-bus subscription + cleanup."""
+"""Role LSP wiring: opt-in gate, telemetry registration, and cleanup."""
 from __future__ import annotations
 
 import asyncio
 import sys
 
-from mote.common.schema import LspConfig, LspServerConfig
-from mote.roles.role import Role
-from mote.roles.role_schema import RoleSchema
-from mote.router.llm.context import Context
+from mote.contracts.settings.lsp import LspConfig, LspServerConfig
+from mote.runtime.agent.role import Role
+from mote.runtime.agent.role_schema import RoleSchema
+from mote.runtime.agent.wiring import AgentWiring
+from mote.runtime.models.clients.context import Context
 
 
 def _lsp_config(enabled=True, servers=True):
@@ -50,15 +51,19 @@ def test_slot_starts_none():
     assert r._components._graph.peek("lsp_service") is None
 
 
-def test_lsp_service_subscribed_to_event_bus_when_configured():
+def test_lsp_service_registered_with_telemetry_when_configured():
     schema = RoleSchema(name="X", lsp=_lsp_config())
-    r = Role(role_schema=schema, context=Context())
-    bus = r.event_bus
-    r._components._wire_spine()  # wiring is a lifecycle step, not a getter effect
-    assert r.lsp_service in bus.subscribers
-    # Output side: the service got the bus to emit on + the buffer is subscribed.
-    assert r.lsp_service.bus is bus
-    assert r.diagnostics_buffer in bus.subscribers
+    r = Role(role_schema=schema, wiring=AgentWiring.for_context(Context()))
+
+    async def scenario():
+        await r._components._wire_telemetry()
+        handlers = [worker.binding.handler for worker in r.telemetry._workers.values()]
+        assert r.lsp_service in handlers
+        assert r.lsp_service._telemetry is r.telemetry
+        assert r.diagnostics_buffer in handlers
+        await r.telemetry.aclose()
+
+    asyncio.run(scenario())
 
 
 def test_diagnostics_buffer_none_when_unconfigured():
@@ -77,23 +82,19 @@ def test_diagnostics_buffer_built_and_cached_when_configured():
 
 def test_turn_context_lsp_source_is_the_buffer():
     schema = RoleSchema(name="X", lsp=_lsp_config())
-    r = Role(role_schema=schema, context=Context())
-    # The buffer is dual-role: the very object subscribed to the bus (input) is
+    r = Role(role_schema=schema, wiring=AgentWiring.for_context(Context()))
+    # The buffer is dual-role: the telemetry handler (input) is
     # the turn-context source (output) — no separate wrapper. Same cached
     # instance on both edges, else the staged blocks would never be rendered.
     lsp_source = next(s for s in r.turn_context_bus._sources if s.name == "lsp")
     assert lsp_source is r.diagnostics_buffer
-    r._components._wire_spine()
-    assert r.diagnostics_buffer in r.event_bus.subscribers
+    assert r.diagnostics_buffer in r._components._build_telemetry_subscribers()
 
 
-def test_no_lsp_subscriber_when_unconfigured():
-    r = Role(name="X", context=Context())
-    bus = r.event_bus
-    r._components._wire_spine()
+def test_no_lsp_handler_when_unconfigured():
+    r = Role(name="X", wiring=AgentWiring.for_context(Context()))
     assert r.lsp_service is None
-    # No subscriber doubles as an LspService (it would have drain_diagnostics).
-    assert not any(hasattr(s, "drain_diagnostics") for s in bus.subscribers)
+    assert not any(hasattr(handler, "drain_diagnostics") for handler in r._components._build_telemetry_subscribers())
 
 
 def test_cleanup_shuts_down_lsp_service():
@@ -102,13 +103,13 @@ def test_cleanup_shuts_down_lsp_service():
     svc = r.lsp_service
 
     called = {"n": 0}
-    orig = svc.shutdown
+    orig = svc.aclose
 
     async def _spy():
         called["n"] += 1
         await orig()
 
-    svc.shutdown = _spy
+    svc.aclose = _spy
     asyncio.run(r.cleanup())
     assert called["n"] == 1
 

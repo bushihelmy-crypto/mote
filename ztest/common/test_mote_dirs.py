@@ -11,8 +11,8 @@ parent directory outside the repo never leak in.
 The git root is faked by monkeypatching ``find_git_root`` on the path module's
 call-time import target, so nothing depends on the test tree's real VCS layout.
 """
-import mote.common.const.paths as paths
-from mote.common.const.paths import (
+import mote.runtime.paths as paths
+from mote.runtime.paths import (
     CONFIG_ROOT,
     MOTE_DIR_NAME,
     mote_project_dirs,

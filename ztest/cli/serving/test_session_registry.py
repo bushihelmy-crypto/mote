@@ -16,27 +16,16 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.cli.serving import session_registry as sr
-from mote.cli.serving.session_registry import SessionRegistry
-
-
-class FakeBus:
-    def __init__(self) -> None:
-        self.subscribed: List[Any] = []
-
-    def subscribe(self, c: Any) -> None:
-        self.subscribed.append(c)
-
-    def unsubscribe(self, c: Any) -> None:
-        if c in self.subscribed:
-            self.subscribed.remove(c)
+from mote.product.cli.serving import session_registry as sr
+from mote.product.cli.serving.session_registry import SessionRegistry
+from mote.ztest.telemetry import InlineTelemetry
 
 
 class FakeRole:
     def __init__(self, session_id: str, name: str = "Assistant") -> None:
         self.session_id = session_id
         self.state = SimpleNamespace(env=None)
-        self.event_bus = FakeBus()
+        self.telemetry = InlineTelemetry()
         self.role_schema = SimpleNamespace(name=name)
         self.cleaned = False
 
@@ -155,6 +144,27 @@ async def test_evict_stops_control_and_cleans_role(patched_backend):
 
 
 @pytest.mark.asyncio
+async def test_evict_releases_engine_ownership(patched_backend):
+    released: List[FakeRole] = []
+
+    class FakeEngine:
+        async def release(self, role: FakeRole) -> None:
+            released.append(role)
+            await role.cleanup()
+
+        async def aclose(self) -> None:
+            pass
+
+    reg = SessionRegistry(make_factory(patched_backend.built), engine=FakeEngine())
+    session = await reg.get_or_create("s1")
+
+    await reg.evict("s1")
+
+    assert released == [session.role]
+    assert session.role.cleaned is True
+
+
+@pytest.mark.asyncio
 async def test_evict_unknown_id_is_noop(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
     assert await reg.evict("ghost") is False
@@ -168,3 +178,29 @@ async def test_aclose_evicts_all(patched_backend):
     await reg.aclose()
     assert s1.control.stopped and s2.control.stopped
     assert reg.session_ids == []
+
+
+@pytest.mark.asyncio
+async def test_failed_evict_remains_resident_for_retry(patched_backend):
+    class RetryRole(FakeRole):
+        def __init__(self, session_id: str) -> None:
+            super().__init__(session_id)
+            self.attempts = 0
+
+        async def cleanup(self) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("transient cleanup")
+            await super().cleanup()
+
+    role = RetryRole("s1")
+    reg = SessionRegistry(lambda **_kwargs: role)
+    session = await reg.get_or_create("s1")
+
+    with pytest.raises(RuntimeError, match="transient cleanup"):
+        await reg.evict("s1")
+    assert reg.get("s1") is session
+
+    assert await reg.evict("s1") is True
+    assert reg.get("s1") is None
+    assert role.cleaned is True

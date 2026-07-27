@@ -17,9 +17,9 @@ import json
 
 import pytest
 
-from mote.cli.consumers.structured.consumer import StructuredConsumer
-from mote.cli.consumers.terminal.consumer import _HAS_RICH, PlainTerminalConsumer
-from mote.cli.contracts.view import (
+from mote.product.cli.consumers.structured.consumer import StructuredConsumer
+from mote.product.cli.consumers.terminal.consumer import _HAS_RICH, PlainTerminalConsumer
+from mote.product.cli.contracts.view import (
     ConversationCompacted,
     ErrorRaised,
     MessageBlockCompleted,
@@ -30,9 +30,9 @@ from mote.cli.contracts.view import (
     ToolCallCompleted,
     ToolCallStarted,
 )
-from mote.cli.io.human_channel import PortHumanChannel
-from mote.common.i18n import keys as K
-from mote.common.i18n import t
+from mote.product.cli.io.human_channel import PortHumanChannel
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
 
 # --------------------------------------------------------------------------
 # StructuredConsumer — one JSON line per ViewEvent
@@ -132,7 +132,7 @@ def test_plain_renders_notice_and_error():
 
 def test_plain_renders_system_reminder():
     # The injected turn-context summary prints with the ⚑ note glyph.
-    from mote.cli.consumers.render.palette import NOTE
+    from mote.product.cli.consumers.render.palette import NOTE
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -144,7 +144,7 @@ def test_plain_renders_system_reminder():
 
 def test_plain_renders_conversation_compacted():
     # A compaction boundary prints the ✻ marker + the retained-message count.
-    from mote.cli.consumers.render.palette import COMPACT
+    from mote.product.cli.consumers.render.palette import COMPACT
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -176,7 +176,7 @@ def test_plain_fold_note_shows_hidden_line_count():
 
 def test_plain_fold_note_shows_scissors_for_hard_truncation():
     # full_ref present → the ✂ hard-truncation marker + the disk reference.
-    from mote.cli.consumers.render.palette import SCISSORS
+    from mote.product.cli.consumers.render.palette import SCISSORS
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -233,8 +233,8 @@ def _rich_console(width: int = 120):
 
 def _terminal_pair(console):
     """Build the ``(driver, surface)`` pair the rich terminal host ships as."""
-    from mote.cli.consumers.terminal.surface import TerminalSurface
-    from mote.cli.consumers.transcript import SurfaceDriver
+    from mote.product.cli.consumers.terminal.surface import TerminalSurface
+    from mote.product.cli.consumers.transcript import SurfaceDriver
 
     surface = TerminalSurface(console=console)
     return SurfaceDriver(surface), surface
@@ -309,8 +309,8 @@ def test_terminal_groups_read_search_into_one_summary_line():
 def test_terminal_thinking_opens_and_clears_transient():
     # Reasoning tokens surface only as the transient ``✻ 思考中`` indicator; a
     # visible reply delta ends the thinking state (the reducer sequences it).
-    from mote.cli.consumers.render.palette import COMPACT
-    from mote.cli.contracts.view import ReasoningDelta
+    from mote.product.cli.consumers.render.palette import COMPACT
+    from mote.product.cli.contracts.view import ReasoningDelta
 
     console = _rich_console()
     driver, surface = _terminal_pair(console)
@@ -333,7 +333,7 @@ def test_terminal_thinking_opens_and_clears_transient():
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_renders_conversation_compacted():
-    from mote.cli.consumers.render.palette import COMPACT
+    from mote.product.cli.consumers.render.palette import COMPACT
 
     console = _rich_console()
     driver, _ = _terminal_pair(console)
@@ -355,7 +355,7 @@ def test_terminal_fold_note_hidden_lines():
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_terminal_fold_note_hard_truncation_shows_scissors():
-    from mote.cli.consumers.render.palette import SCISSORS
+    from mote.product.cli.consumers.render.palette import SCISSORS
 
     console = _rich_console()
     driver, _ = _terminal_pair(console)
@@ -388,7 +388,7 @@ class _FakeProtocol:
 def test_media_block_uses_native_protocol_when_present(tmp_path):
     # A detected protocol wins: the raw escape sequence is written straight to the
     # console file (bypassing rich), and the half-block path is never reached.
-    from mote.cli.contracts.view import MediaBlock
+    from mote.product.cli.contracts.view import MediaBlock
 
     pytest.importorskip("PIL")
     from PIL import Image
@@ -411,7 +411,7 @@ def test_media_block_uses_native_protocol_when_present(tmp_path):
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_media_block_falls_back_to_half_block_without_protocol(tmp_path):
     # No native protocol → the half-block renderer paints truecolor cells.
-    from mote.cli.contracts.view import MediaBlock
+    from mote.product.cli.contracts.view import MediaBlock
 
     pytest.importorskip("PIL")
     from PIL import Image
@@ -432,7 +432,7 @@ def test_media_block_falls_back_to_half_block_without_protocol(tmp_path):
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_media_block_missing_file_prints_reference_only(tmp_path):
     # A non-existent image can't render either way → only the caption line prints.
-    from mote.cli.contracts.view import MediaBlock
+    from mote.product.cli.contracts.view import MediaBlock
 
     console = _rich_console()
     driver, surface = _terminal_pair(console)
@@ -452,7 +452,7 @@ def test_media_block_missing_file_prints_reference_only(tmp_path):
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_file_diff_block_renders_caption_and_diff():
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     console = _rich_console()
     driver, _ = _terminal_pair(console)
@@ -467,7 +467,7 @@ def test_file_diff_block_renders_caption_and_diff():
 
 @pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 def test_file_diff_block_caption_verb_reflects_create_delete():
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     console = _rich_console()
     driver, _ = _terminal_pair(console)
@@ -479,7 +479,7 @@ def test_file_diff_block_caption_verb_reflects_create_delete():
 
 
 def test_plain_file_diff_block_prints_verb_and_path():
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     buf = io.StringIO()
     c = PlainTerminalConsumer(out=buf)
@@ -511,7 +511,7 @@ class FakeApprovalPort(FakePort):
         self.decided = []
 
     async def decide_approval(self, ctx, request):
-        from mote.cli.contracts.view.events import ApprovalDecision
+        from mote.product.cli.contracts.view.events import ApprovalDecision
 
         self.decided.append((ctx, request))
         return ApprovalDecision(approval_id="", outcome=self._outcome)
@@ -530,7 +530,7 @@ async def test_human_channel_ask_delegates_to_port():
 async def test_human_channel_request_approval_routes_to_selector():
     # ``request_approval`` hands the semantic request straight to the port's
     # decide_approval (no text round-trip) and maps the outcome to an ApprovalChoice.
-    from mote.common.schema.permission_types import ApprovalRequest
+    from mote.contracts.permissions import ApprovalRequest
 
     request = ApprovalRequest(tool_name="Bash", target="rm -rf build/")
     for outcome, expected in [
@@ -553,7 +553,7 @@ async def test_human_channel_request_approval_no_selector_denies():
     # A port with no decide_approval selector fails closed (deny).
     port = FakePort()
     env = PortHumanChannel(port)
-    from mote.common.schema.permission_types import ApprovalRequest
+    from mote.contracts.permissions import ApprovalRequest
 
     choice = await env.request_approval(ApprovalRequest(tool_name="Write"))
     assert choice == "deny"
@@ -585,7 +585,7 @@ class FakeQuestionsPort(FakePort):
         self.questions_calls = []
 
     async def ask_questions(self, ctx, questions):
-        from mote.common.schema import AskUserQuestionAnswers
+        from mote.contracts.interaction import AskUserQuestionAnswers
 
         self.questions_calls.append((ctx, questions))
         return self._answers if self._answers is not None else AskUserQuestionAnswers()
@@ -601,14 +601,14 @@ def _q(question, header, options, multiSelect=False):
 
 
 def _questions(*qs):
-    from mote.common.schema import AskUserQuestionInput
+    from mote.contracts.interaction import AskUserQuestionInput
 
     # Mirror AskUserQuestion._coerce: the channel receives the plain list of items.
     return AskUserQuestionInput.model_validate({"questions": list(qs)}).questions
 
 
 def _answers(*answers):
-    from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+    from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
 
     return AskUserQuestionAnswers(
         answers=[AskUserQuestionAnswer(question=q, selected=list(sel), free_text=free) for q, sel, free in answers]
@@ -619,7 +619,7 @@ def _answers(*answers):
 async def test_human_channel_askuserquestion_routes_to_ask_questions():
     # A structured AskUserQuestion round-trip flows through ``ask_questions``
     # unchanged: no text rendering, the typed input goes down, answers come up.
-    from mote.common.schema import AskUserQuestionAnswers
+    from mote.contracts.interaction import AskUserQuestionAnswers
 
     port = FakeQuestionsPort(answers=_answers(("Pick a color", ["Blue"], "")))
     env = PortHumanChannel(port, ctx="C")
@@ -645,7 +645,7 @@ async def test_human_channel_askuserquestion_multiline_free_text_verbatim():
 async def test_human_channel_askuserquestion_degrades_without_ask_questions():
     # A port that predates ``ask_questions`` degrades per-question through the
     # plain ``ask``, still building STRUCTURED answers (no block-split / pairing).
-    from mote.common.schema import AskUserQuestionAnswers
+    from mote.contracts.interaction import AskUserQuestionAnswers
 
     class DegradePort(FakePort):
         def __init__(self, replies):
@@ -676,7 +676,7 @@ async def test_human_channel_askuserquestion_degrades_without_ask_questions():
 @pytest.mark.asyncio
 async def test_human_channel_degrade_falls_back_to_2arg_ask():
     # A port whose ``ask`` only accepts (ctx, question) still degrades cleanly.
-    from mote.common.schema import AskUserQuestionAnswers
+    from mote.contracts.interaction import AskUserQuestionAnswers
 
     port = FakePort(answer="Red")  # 2-arg ask, no options kwarg
     env = PortHumanChannel(port, ctx="C")

@@ -3,34 +3,28 @@
 """Tests for the MediaProvider registry (generate_media/registry.py).
 
 The registry is the pluggable-vendor seam for media generation, aligned with the
-LLM provider registry: a ``@register_media_provider(kind, name)`` decorator
-populates a singleton keyed by ``(kind, name)``, and
-``create_media_provider(kind)`` resolves the active provider from
-``multimodal.{kind}_generation.provider`` (default ``"openai"``). All offline.
+LLM provider registry: decorators declare provider identity while each
+Application owns and resolves an isolated registry. All offline.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.common.exception import ToolNotConfiguredError
-from mote.executor.tools.generate_media import creators  # noqa: F401  (fires @register_media_provider)
-from mote.executor.tools.generate_media.registry import (
-    MEDIA_REGISTRY,
-    MediaProvider,
-    create_media_provider,
-    register_media_provider,
-)
+from mote.product.toolsets.builtin.generate_media.bootstrap import builtin_media_provider_registry
+from mote.product.toolsets.builtin.generate_media.registry import MediaProvider, MediaProviderRegistry, media_provider
+from mote.runtime.errors import ToolNotConfiguredError
 
 pytestmark = pytest.mark.asyncio
 
 
 class TestBuiltIn:
     async def test_four_kinds_registered_under_openai(self):
+        registry = builtin_media_provider_registry()
         for kind in ("image", "audio", "music", "video"):
-            assert (kind, "openai") in MEDIA_REGISTRY.providers
+            assert (kind, "openai") in registry.providers
 
     async def test_registered_class_stamps_kind_and_provider(self):
-        cls = MEDIA_REGISTRY.providers[("image", "openai")]
+        cls = builtin_media_provider_registry().providers[("image", "openai")]
         assert cls.kind == "image"
         assert cls.provider == "openai"
         assert issubclass(cls, MediaProvider)
@@ -52,44 +46,48 @@ class TestFactory:
     def _fakekind(self):
         made: dict = {}
 
-        @register_media_provider("testkind", "openai")
+        @media_provider("testkind", "openai")
         class _Default(MediaProvider):
-            async def generate(self, items):
+            async def start_once(self, item, *, idempotency_key, timeout_seconds):
+                return "default-id"
+
+            async def poll_once(self, operation_id, state, *, timeout_seconds):
                 return made
 
-        @register_media_provider("testkind", "vendor2")
+        @media_provider("testkind", "vendor2")
         class _Vendor2(MediaProvider):
-            async def generate(self, items):
+            async def start_once(self, item, *, idempotency_key, timeout_seconds):
+                return "vendor-id"
+
+            async def poll_once(self, operation_id, state, *, timeout_seconds):
                 return made
 
-        yield _Default, _Vendor2
-        MEDIA_REGISTRY.providers.pop(("testkind", "openai"), None)
-        MEDIA_REGISTRY.providers.pop(("testkind", "vendor2"), None)
+        registry = MediaProviderRegistry()
+        registry.register("testkind", "openai", _Default)
+        registry.register("testkind", "vendor2", _Vendor2)
+        return registry, _Default, _Vendor2
 
-    async def test_resolves_from_config_provider(self, monkeypatch, _fakekind):
-        from mote.executor.tools.generate_media import registry as reg
-
-        _default, vendor2 = _fakekind
-        monkeypatch.setattr(reg, "load_config", lambda *a, **k: _cfg("testkind", provider="vendor2"))
-        provider = create_media_provider("testkind", output_dir="/tmp/x")
+    async def test_resolves_from_config_provider(self, _fakekind):
+        registry, _default, vendor2 = _fakekind
+        provider = registry.create(
+            "testkind",
+            _cfg("testkind", provider="vendor2").multimodal.testkind_generation,
+        )
         assert isinstance(provider, vendor2)
-        assert provider._output_dir_arg == "/tmp/x"
 
-    async def test_missing_provider_field_defaults_to_openai(self, monkeypatch, _fakekind):
-        from mote.executor.tools.generate_media import registry as reg
-
-        default, _vendor2 = _fakekind
+    async def test_missing_provider_field_defaults_to_openai(self, _fakekind):
+        registry, default, _vendor2 = _fakekind
         # A config lacking a ``provider`` attr → factory falls back to "openai".
-        monkeypatch.setattr(reg, "load_config", lambda *a, **k: _cfg("testkind"))
-        provider = create_media_provider("testkind")
+        provider = registry.create("testkind", _cfg("testkind").multimodal.testkind_generation)
         assert isinstance(provider, default)
 
-    async def test_unknown_provider_raises_naming_config_path(self, monkeypatch, _fakekind):
-        from mote.executor.tools.generate_media import registry as reg
-
-        monkeypatch.setattr(reg, "load_config", lambda *a, **k: _cfg("testkind", provider="nope"))
+    async def test_unknown_provider_raises_naming_config_path(self, _fakekind):
+        registry, _default, _vendor2 = _fakekind
         with pytest.raises(ToolNotConfiguredError) as excinfo:
-            create_media_provider("testkind")
+            registry.create(
+                "testkind",
+                _cfg("testkind", provider="nope").multimodal.testkind_generation,
+            )
         msg = str(excinfo.value)
         assert "'nope'" in msg
         assert "multimodal.testkind_generation.provider" in msg
@@ -97,25 +95,19 @@ class TestFactory:
 
 
 class TestPluggability:
-    async def test_register_and_resolve_a_vendor_provider(self, monkeypatch):
-        from mote.executor.tools.generate_media import registry as reg
-
-        @register_media_provider("image", "_fakevendor")
+    async def test_register_and_resolve_a_vendor_provider(self):
+        @media_provider("image", "_fakevendor")
         class _FakeVendor(MediaProvider):
-            async def generate(self, items):
+            async def start_once(self, item, *, idempotency_key, timeout_seconds):
+                return "fake-id"
+
+            async def poll_once(self, operation_id, state, *, timeout_seconds):
                 return {"summary": "fake", "results": []}
 
-        try:
-            assert _FakeVendor.kind == "image"
-            assert _FakeVendor.provider == "_fakevendor"
-            cfg = type(
-                "Cfg",
-                (),
-                {"multimodal": type("MM", (), {"image_generation": type("G", (), {"provider": "_fakevendor"})()})()},
-            )()
-            monkeypatch.setattr(reg, "load_config", lambda *a, **k: cfg)
-            provider = create_media_provider("image")
-            assert isinstance(provider, _FakeVendor)
-            assert await provider.generate([]) == {"summary": "fake", "results": []}
-        finally:
-            MEDIA_REGISTRY.providers.pop(("image", "_fakevendor"), None)
+        registry = builtin_media_provider_registry()
+        registry.register("image", "_fakevendor", _FakeVendor)
+        assert _FakeVendor.kind == "image"
+        assert _FakeVendor.provider == "_fakevendor"
+        provider = registry.create("image", type("G", (), {"provider": "_fakevendor"})())
+        assert isinstance(provider, _FakeVendor)
+        assert await provider.start_once({}, idempotency_key="key", timeout_seconds=1) == "fake-id"

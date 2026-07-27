@@ -14,8 +14,8 @@ import os
 
 import pytest
 
-from mote.common.schema.messages import UserMessage
-from mote.environment.mote.mote_env import MoteEnv
+from mote.contracts.schema.messages import UserMessage
+from mote.orchestration.environment.mote.mote_env import MoteEnv
 
 pytestmark = pytest.mark.asyncio
 

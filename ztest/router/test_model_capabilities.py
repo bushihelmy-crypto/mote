@@ -1,13 +1,18 @@
 """Tests for the shared model-capability predicates in common.const.llm.
 
 ``supports_vision`` / ``supports_pdf_input`` are the single authority behind
-``BaseLLM.support_image_input``, ``ModelCard.supports_vision``, and the PDF gate
+provider adapters and the semantic route catalog
 in ``_user_msg_with_media`` — previously each site re-ran the substring match.
 """
 
 import pytest
 
-from mote.common.const.llm import supports_native_tool_search, supports_pdf_input, supports_vision, supports_web_search
+from mote.contracts.models.capabilities import (
+    supports_native_tool_search,
+    supports_pdf_input,
+    supports_vision,
+    supports_web_search,
+)
 
 
 class TestSupportsVision:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.roles.role_schema.RoleSchema (deploy-time static config)."""
+"""Tests for mote.runtime.agent.role_schema.RoleSchema (deploy-time static config)."""
 from __future__ import annotations
 
-from mote.roles.role_schema import RoleSchema
+from mote.runtime.agent.role_schema import RoleSchema
 
 
 class TestDefaults:

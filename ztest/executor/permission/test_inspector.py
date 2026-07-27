@@ -1,157 +1,130 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""Tests for ToolCallInspector — the clean PreToolUse allow/deny gate seam.
-
-The base captures the whole ``ControlSubscriber`` contract (routing, GATE stage,
-fail-closed, outcome translation, ``on_failure``) so a capability/allowlist gate
-author writes only :meth:`inspect`. These tests exercise the seam directly and
-through a live :class:`EventBus` (proving it lands in the ``PreToolUse`` bucket,
-folds deny-wins, and judges the *hook-rewritten* args).
-"""
+"""ToolCallPolicy's typed deny-only extension slot."""
 from __future__ import annotations
 
 import asyncio
 
-from mote.common.events import EventBus, PreToolUseEvent
-from mote.common.interface.event_subscriber import FAIL_CLOSED, ControlStage
-from mote.executor.permission import Inspection, ToolCallInspector
+import pytest
 
+from mote.contracts.permissions import PermissionFacts
+from mote.contracts.policy.tool import ToolCallInspection, ToolCallIntent
+from mote.contracts.ports.tool_policy import ToolCallPolicyExtensionSpec
+from mote.runtime.tools.permission import ToolCallInspector
+from mote.runtime.tools.policy import DefaultToolCallPolicy
 
-def run(coro):
-    return asyncio.run(coro)
+pytestmark = pytest.mark.asyncio
 
 
 class _Allowlist(ToolCallInspector):
-    """A minimal capability gate: only names in ``allowed`` may run."""
-
-    name = "allowlist"
-
     def __init__(self, allowed: set[str]) -> None:
         self._allowed = allowed
+        self.seen: list[tuple[ToolCallIntent, PermissionFacts]] = []
 
-    async def inspect(self, tool_name, tool_input, facts) -> Inspection:
-        if tool_name in self._allowed:
-            return Inspection.allowed()
-        return Inspection.denied(f"{tool_name} is not on the allowlist")
-
-
-class _FactsSpy(ToolCallInspector):
-    """Records the (tool_input, facts) it was handed so the seam is observable."""
-
-    def __init__(self) -> None:
-        self.seen: list = []
-
-    async def inspect(self, tool_name, tool_input, facts) -> Inspection:
-        self.seen.append((dict(tool_input), facts))
-        return Inspection.allowed()
+    async def inspect(
+        self,
+        intent: ToolCallIntent,
+        facts: PermissionFacts,
+    ) -> ToolCallInspection:
+        self.seen.append((intent, facts))
+        if intent.tool_name in self._allowed:
+            return ToolCallInspection.allow()
+        return ToolCallInspection.deny(f"{intent.tool_name} is not on the allowlist")
 
 
 class _Boom(ToolCallInspector):
-    async def inspect(self, tool_name, tool_input, facts) -> Inspection:
+    async def inspect(
+        self,
+        intent: ToolCallIntent,
+        facts: PermissionFacts,
+    ) -> ToolCallInspection:
         raise RuntimeError("gate exploded")
 
 
-class TestVerdict:
-    def test_allowed_is_permissive(self):
-        v = Inspection.allowed()
-        assert v.allow is True and v.reason == ""
-
-    def test_denied_carries_reason(self):
-        v = Inspection.denied("nope")
-        assert v.allow is False and v.reason == "nope"
-
-    def test_default_is_allow(self):
-        assert Inspection().allow is True
+class _Slow(ToolCallInspector):
+    async def inspect(
+        self,
+        intent: ToolCallIntent,
+        facts: PermissionFacts,
+    ) -> ToolCallInspection:
+        await asyncio.sleep(1)
+        return ToolCallInspection.allow()
 
 
-class TestProtocolShape:
-    def test_routes_only_pre_tool_use(self):
-        assert _Allowlist(set()).handles == ("pre_tool_use",)
-
-    def test_runs_at_gate_stage(self):
-        # After the hook rewriter (REWRITE), so it judges the final args.
-        assert _Allowlist(set()).stage == ControlStage.GATE
-
-    def test_fails_closed_by_default(self):
-        assert _Allowlist(set()).fail_mode == FAIL_CLOSED
-
-    def test_exposes_on_failure_typed_deny(self):
-        out = _Allowlist(set()).on_failure("timeout")
-        assert out.behavior == "deny" and out.system_message == "timeout"
+def _facts(args: dict) -> PermissionFacts:
+    return PermissionFacts(targets=[args.get("path", "")])
 
 
-class TestHandleControl:
-    def test_allow_folds_inert_allow(self):
-        gate = _Allowlist({"Read"})
-        out = run(gate.handle_control(PreToolUseEvent(tool_name="Read", tool_input={})))
-        assert out.behavior == "allow"
-        assert out.is_blocking is False
+async def test_allowlist_receives_typed_intent_and_facts():
+    extension = _Allowlist({"Read"})
+    policy = DefaultToolCallPolicy(extensions=(ToolCallPolicyExtensionSpec("allowlist", lambda: extension),))
 
-    def test_deny_folds_recoverable_block(self):
-        gate = _Allowlist({"Read"})
-        out = run(gate.handle_control(PreToolUseEvent(tool_name="Bash", tool_input={})))
-        assert out.behavior == "deny"
-        assert out.system_message == "Bash is not on the allowlist"
-        # Recoverable: the model can pick another action — not a loop-ending stop.
-        assert out.stop is False
+    decision = await policy.authorize(
+        ToolCallIntent("Read", {"path": "/workspace/a"}),
+        _facts,
+    )
 
-    def test_ignores_non_tool_events(self):
-        assert run(_Allowlist(set()).handle_control(object())) is None
+    assert decision.allowed
+    assert extension.seen[0][0].arguments == {"path": "/workspace/a"}
+    assert extension.seen[0][1].targets == ["/workspace/a"]
 
-    def test_resolves_facts_from_current_args(self):
-        spy = _FactsSpy()
-        event = PreToolUseEvent(
-            tool_name="Read",
-            tool_input={"path": "/x"},
-            resolve_facts=lambda args: {"target": args["path"]},
+
+async def test_extension_can_deny_but_cannot_force_core_allow():
+    extension = _Allowlist({"Read"})
+    policy = DefaultToolCallPolicy(extensions=(ToolCallPolicyExtensionSpec("allowlist", lambda: extension),))
+
+    decision = await policy.authorize(
+        ToolCallIntent("Bash", {"path": "/workspace/a"}),
+        _facts,
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "Bash is not on the allowlist"
+    assert decision.trace[-1].step == "extension:allowlist"
+
+
+@pytest.mark.parametrize(
+    ("extension", "timeout", "detail"),
+    [
+        (_Boom(), 5.0, "RuntimeError"),
+        (_Slow(), 0.001, "timeout"),
+    ],
+)
+async def test_extension_failure_is_fail_closed(extension, timeout, detail):
+    policy = DefaultToolCallPolicy(
+        extensions=(
+            ToolCallPolicyExtensionSpec(
+                "security-gate",
+                lambda: extension,
+                timeout,
+            ),
         )
-        run(spy.handle_control(event))
-        assert spy.seen == [({"path": "/x"}, {"target": "/x"})]
+    )
 
-    def test_facts_none_without_resolver(self):
-        spy = _FactsSpy()
-        run(spy.handle_control(PreToolUseEvent(tool_name="Read", tool_input={})))
-        assert spy.seen == [({}, None)]
+    decision = await policy.authorize(ToolCallIntent("Read"), _facts)
+
+    assert not decision.allowed
+    assert decision.trace[-1].disposition == "failed_closed"
+    assert decision.trace[-1].detail == detail
 
 
-class TestOnTheBus:
-    def test_subscribe_and_deny_folds_through_emit(self):
-        bus = EventBus()
-        bus.subscribe(_Allowlist({"Read"}))
-        out = run(bus.emit(PreToolUseEvent(tool_name="Bash", tool_input={})))
-        assert out is not None and out.behavior == "deny"
+async def test_manifest_is_sealed_and_rejects_ambiguous_identity():
+    extension = _Allowlist({"Read"})
+    specs = [ToolCallPolicyExtensionSpec("allowlist", lambda: extension)]
+    policy = DefaultToolCallPolicy(extensions=tuple(specs))
+    specs.clear()
+    assert len(policy.manifest) == 1
 
-    def test_subscribe_and_allow_folds_through_emit(self):
-        bus = EventBus()
-        bus.subscribe(_Allowlist({"Read"}))
-        out = run(bus.emit(PreToolUseEvent(tool_name="Read", tool_input={})))
-        assert out.behavior == "allow"
+    with pytest.raises(ValueError, match="duplicate"):
+        DefaultToolCallPolicy(
+            extensions=(
+                ToolCallPolicyExtensionSpec("same", lambda: extension),
+                ToolCallPolicyExtensionSpec("same", lambda: extension),
+            )
+        )
 
-    def test_fail_closed_crash_denies(self):
-        # A gate that raises must DENY (fail-closed), via the bus-synthesized
-        # on_failure — the call is never waved through on a broken gate.
-        bus = EventBus()
-        bus.subscribe(_Boom())
-        out = run(bus.emit(PreToolUseEvent(tool_name="Read", tool_input={})))
-        assert out is not None and out.behavior == "deny"
 
-    def test_gate_sees_hook_rewritten_args(self):
-        # A REWRITE-stage subscriber mutates the args; the GATE inspector, running
-        # after it, must observe the rewritten args (the bus threads them forward).
-        from mote.common.events.outcomes import ToolCallOutcome
-        from mote.common.interface.event_subscriber import ControlSubscriber
+async def test_incomplete_extension_cannot_be_instantiated():
+    class Incomplete(ToolCallInspector):
+        pass
 
-        class _Rewriter(ControlSubscriber):
-            handles = ("pre_tool_use",)
-            stage = ControlStage.REWRITE
-            name = "rewriter"
-
-            async def handle_control(self, event):
-                return ToolCallOutcome(behavior="allow", updated_args={"path": "/rewritten"})
-
-        spy = _FactsSpy()
-        bus = EventBus()
-        bus.subscribe(_Rewriter())
-        bus.subscribe(spy)
-        run(bus.emit(PreToolUseEvent(tool_name="Read", tool_input={"path": "/orig"})))
-        assert spy.seen == [({"path": "/rewritten"}, None)]
+    with pytest.raises(TypeError):
+        Incomplete()

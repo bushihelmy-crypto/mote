@@ -15,10 +15,10 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional
 
-from mote.common.agent_control import set_control
-from mote.common.events import PostCompactEvent
-from mote.common.interface import EphemeralContextSource, ObservationSubscriber
-from mote.context.turn_context import TeamContextSource
+from mote.contracts.ports import EphemeralContextSource
+from mote.runtime.agent.control import set_control
+from mote.runtime.context.turn_context import TeamContextSource
+from mote.runtime.events import PostCompactEvent
 
 
 def run(coro):
@@ -118,9 +118,10 @@ class TestProtocol:
     def test_is_ephemeral_context_source(self):
         assert isinstance(_source(_family()), EphemeralContextSource)
 
-    def test_is_also_event_subscriber(self):
-        # Dual-role: resets the frontier on PostCompactEvent AND renders the delta.
-        assert isinstance(_source(_family()), ObservationSubscriber)
+    def test_uses_direct_rebuild_projection(self):
+        source = _source(_family())
+        assert callable(getattr(source, "on_model_context_rebuilt", None))
+        assert not getattr(source, "telemetry_observer", False)
 
     def test_save_to_context_true(self):
         # Persisted + incremental — the roster delta rides history.
@@ -246,7 +247,7 @@ class TestPostCompactReset:
         run(src.render())
         assert run(src.render()) is None  # steady
 
-        run(src.handle(PostCompactEvent(summary="x")))
+        run(src.on_model_context_rebuilt(PostCompactEvent(summary="x")))
         assert src._sent_ids == set()
 
         out = run(src.render())
@@ -256,7 +257,7 @@ class TestPostCompactReset:
     def test_handle_ignores_unrelated_events(self):
         src = _source(_family())
         run(src.render())
-        run(src.handle(object()))
+        run(src.on_model_context_rebuilt(object()))
         assert src._sent_ids == {"p1", "s1", "c1"}
 
 

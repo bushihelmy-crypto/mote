@@ -6,9 +6,9 @@ import uuid
 
 import pytest
 
-from mote.environment.agent_path import AgentPath
-from mote.environment.exceptions import AgentLimitReached
-from mote.environment.registry import (
+from mote.orchestration.environment.agent_path import AgentPath
+from mote.orchestration.environment.exceptions import AgentLimitReached
+from mote.orchestration.environment.registry import (
     AgentMetadata,
     AgentRegistry,
     exceeds_agent_spawn_depth_limit,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.context.budget`` — the window-aware threshold math.
+"""Tests for ``mote.runtime.context.budget`` — the window-aware threshold math.
 
 Covers token counting, the window/buffer/threshold helpers (incl. the
 window-scaled buffer tiers) and ``evaluate`` (the warning / error / autocompact /
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.const.context import (
+from mote.contracts.constants.context import (
     AUTOCOMPACT_BUFFER_TOKENS,
     ERROR_THRESHOLD_BUFFER_TOKENS,
     MANUAL_COMPACT_BUFFER_TOKENS,
@@ -23,9 +23,9 @@ from mote.common.const.context import (
     MODEL_CONTEXT_WINDOW_DEFAULT,
     WARNING_THRESHOLD_BUFFER_TOKENS,
 )
-from mote.common.schema import TokenState, UserMessage
-from mote.common.utils.token_counter import TOKEN_MAX
-from mote.context import budget
+from mote.contracts.models.tokenization import TOKEN_MAX
+from mote.contracts.schema import TokenState, UserMessage
+from mote.runtime.context import budget
 
 UNKNOWN_MODEL = "definitely-not-a-real-model"
 
@@ -48,8 +48,8 @@ def test_count_tokens_accepts_plain_dicts():
 
 def test_count_tokens_drops_tool_calls_envelope():
     """A native assistant turn's ``tool_calls`` list must not crash the counter."""
-    from mote.common.const import TOOL_CALLS
-    from mote.common.schema import AIMessage
+    from mote.contracts.constants.messages import TOOL_CALLS
+    from mote.contracts.schema import AIMessage
 
     m = AIMessage(content="calling")
     m.add_metadata(TOOL_CALLS, [{"id": "1", "name": "Read", "args": {"path": "x"}}])

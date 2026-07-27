@@ -17,8 +17,8 @@ import shutil
 
 import pytest
 
-from mote.sandbox.backend import SandboxPolicy
-from mote.sandbox.runtime import SandboxRuntime
+from mote.runtime.sandbox.backend import SandboxPolicy
+from mote.runtime.sandbox.runtime import SandboxRuntime
 
 _HAS_BWRAP = shutil.which("bwrap") is not None and os.name == "posix"
 
@@ -179,7 +179,7 @@ class TestNetnsEgressPolicy:
         return rt
 
     def test_policy_sets_netns_flags(self, tmp_path):
-        from mote.sandbox.network.enforce import TUN_DEVICE
+        from mote.runtime.sandbox.network.enforce import TUN_DEVICE
 
         rt = self._runtime()
         policy = rt._policy_for(str(tmp_path))
@@ -201,20 +201,20 @@ class TestNetnsEgressPolicy:
         rt = self._runtime()
         # NullBackend can't build a real netns argv but the launcher path still
         # assembles a token; force a usable backend to assemble the bwrap argv.
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         rt._backend = BwrapBackend()
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
-        assert "mote.sandbox.network.orchestrator" in cmd
+        assert "mote.runtime.sandbox.network.orchestrator" in cmd
 
     def test_wrap_exec_emits_launcher(self, tmp_path):
         rt = self._runtime()
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         rt._backend = BwrapBackend()
         argv, _ = _run(rt.wrap_exec(["/bin/bash", "-i"], cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert "-m" in argv
-        assert "mote.sandbox.network.orchestrator" in argv
+        assert "mote.runtime.sandbox.network.orchestrator" in argv
 
     def test_wrap_exec_extra_writable_in_netns_bwrap_argv(self, tmp_path):
         # extra_writable must survive into the bwrap argv encoded inside the
@@ -226,7 +226,7 @@ class TestNetnsEgressPolicy:
         sock = tmp_path / "sock"
         sock.mkdir()
         rt = self._runtime()
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         # Mark started so wrap_exec's start() doesn't reset our backend (the fake
         # proxy is already wired by _runtime()).
@@ -289,7 +289,7 @@ class TestTrustAnchorEnv:
         assert "SSL_CERT_FILE" not in env
 
     def test_mitm_ca_sets_bundle_across_all_vars(self, tmp_path):
-        from mote.sandbox.network.tls import MitmCa
+        from mote.runtime.sandbox.network.tls import MitmCa
 
         rt = self._proxy_runtime()
         rt._mitm_ca = MitmCa(ca_dir=tmp_path)
@@ -301,7 +301,7 @@ class TestTrustAnchorEnv:
         assert "SSL_CERT_DIR" not in env
 
     def test_open_network_never_applies_trust_env(self, tmp_path):
-        from mote.sandbox.network.tls import MitmCa
+        from mote.runtime.sandbox.network.tls import MitmCa
 
         rt = SandboxRuntime(backend="none", harden_process=False, network="open")
         rt._mitm_ca = MitmCa(ca_dir=tmp_path)
@@ -316,7 +316,7 @@ class TestMaskedPathsBwrap:
     """
 
     def test_masked_path_emits_ro_bind_devnull(self, tmp_path):
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         secret = tmp_path / "vault.key"
         secret.write_text("s3cr3t")
@@ -326,7 +326,7 @@ class TestMaskedPathsBwrap:
         assert f"--ro-bind /dev/null {os.path.realpath(secret)}" in joined
 
     def test_missing_masked_path_skipped(self, tmp_path):
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         missing = tmp_path / "does-not-exist"
         policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_paths=[str(missing)])
@@ -340,7 +340,7 @@ class TestMaskedDirsBwrap:
     """
 
     def test_masked_dir_emits_tmpfs(self, tmp_path):
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         profiles = tmp_path / "browser_profiles"
         profiles.mkdir()
@@ -351,7 +351,7 @@ class TestMaskedDirsBwrap:
         assert f"--tmpfs {os.path.realpath(profiles)}" in joined
 
     def test_missing_masked_dir_skipped(self, tmp_path):
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         missing = tmp_path / "no-such-dir"
         policy = SandboxPolicy(writable_roots=[str(tmp_path)], masked_dirs=[str(missing)])
@@ -361,7 +361,7 @@ class TestMaskedDirsBwrap:
     def test_file_not_treated_as_masked_dir(self, tmp_path):
         # masked_dirs only overlays directories (--tmpfs needs a dir target); a
         # plain file path is skipped (it belongs in masked_paths instead).
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         f = tmp_path / "a-file"
         f.write_text("x")
@@ -380,7 +380,7 @@ class TestCgroupLimitsWrapping:
     """
 
     def _patch_available(self, monkeypatch, *, available=True, cpu=False):
-        import mote.sandbox.runtime as rtmod
+        import mote.runtime.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: available)
         monkeypatch.setattr(rtmod, "cpu_controller_delegated", lambda: cpu)
@@ -431,7 +431,7 @@ class TestCgroupLimitsWrapping:
         # The dynamic contract: a limits_provider is read on every wrap, so a
         # session-time cap change is honoured on the next command without
         # rebuilding the runtime (mirrors the policy_provider seam).
-        from mote.sandbox.resources import ResourceLimits
+        from mote.runtime.sandbox.resources import ResourceLimits
 
         self._patch_available(monkeypatch)
         live = ResourceLimits(memory_max="64M")
@@ -452,7 +452,7 @@ class TestCgroupLimitsWrapping:
     def test_provider_overrides_static_kwargs(self, monkeypatch, tmp_path):
         # When both a provider and static kwargs are present the provider wins
         # (the static caps are only the no-provider fallback baseline).
-        from mote.sandbox.resources import ResourceLimits
+        from mote.runtime.sandbox.resources import ResourceLimits
 
         self._patch_available(monkeypatch)
         rt = SandboxRuntime(
@@ -516,7 +516,7 @@ class TestCgroupLimitsWrapping:
             async def shutdown(self):  # pragma: no cover - trivial
                 pass
 
-        from mote.sandbox.bwrap import BwrapBackend
+        from mote.runtime.sandbox.bwrap import BwrapBackend
 
         rt = SandboxRuntime(backend="none", harden_process=False, network="proxy", memory_max="64M")
         rt._netns_egress = True
@@ -524,7 +524,7 @@ class TestCgroupLimitsWrapping:
         rt._backend = BwrapBackend()
         cmd, _ = _run(rt.wrap_command("echo hi", cwd=str(tmp_path), env={"PATH": "/bin"}))
         assert cmd.startswith("systemd-run --user --scope")
-        assert "mote.sandbox.network.orchestrator" in cmd
+        assert "mote.runtime.sandbox.network.orchestrator" in cmd
 
 
 class TestRlimitFallbackWrapping:
@@ -536,7 +536,7 @@ class TestRlimitFallbackWrapping:
     """
 
     def _patch_unavailable(self, monkeypatch):
-        import mote.sandbox.runtime as rtmod
+        import mote.runtime.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: False)
 
@@ -571,7 +571,7 @@ class TestRlimitFallbackWrapping:
     def test_no_ulimit_when_cgroup_available(self, monkeypatch, tmp_path):
         # The cgroup scope is mutually exclusive with the rlimit fallback: when
         # the scope is active the tree is already capped, so no ulimit is added.
-        import mote.sandbox.runtime as rtmod
+        import mote.runtime.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: True)
         monkeypatch.setattr(rtmod, "cpu_controller_delegated", lambda: False)
@@ -600,7 +600,7 @@ class TestRlimitFallbackWrapping:
     def test_fallback_reads_live_limits(self, monkeypatch, tmp_path):
         # Dynamic: a limits_provider is read per wrap, so a session cap change is
         # honoured on the next command (mirrors the cgroup path's contract).
-        from mote.sandbox.resources import ResourceLimits
+        from mote.runtime.sandbox.resources import ResourceLimits
 
         self._patch_unavailable(monkeypatch)
         live = ResourceLimits(pids_max=8)

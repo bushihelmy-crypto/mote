@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the AskUserQuestion answer schema (``mote.common.schema.askuser``).
+"""Tests for the AskUserQuestion answer schema (``mote.contracts.interaction``).
 
 The answer models are the backbone of the structured channel that replaced the
 lossy text round-trip: ``selected`` (chosen labels) and ``free_text`` (the
@@ -11,7 +11,7 @@ selection/free-text separation the old round-trip collapsed.
 
 from __future__ import annotations
 
-from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
+from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
 
 
 class TestAskUserQuestionAnswer:

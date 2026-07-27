@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import MessageQueue
-from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Stage
-from mote.executor.tasks.bggraph.types import GraphRunState, NodeRecord
-from mote.executor.tasks.pool import BackgroundTaskPool
-from mote.executor.tasks.types import BgStatus
+from mote.contracts.schema import MessageQueue
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphState, Stage
+from mote.orchestration.tasks.bggraph.types import GraphRunState, NodeRecord
+from mote.orchestration.tasks.pool import BackgroundTaskPool
+from mote.orchestration.tasks.types import BgStatus
 
 pytestmark = pytest.mark.asyncio
 
@@ -187,7 +187,7 @@ class TestRunStateRecording:
         # Fix b, resume from it; the same run_state is reused so b's prior
         # attempts are preserved and the new run adds to them.
         g._nodes["b"].fn = sync_node(lambda s: s.a + 100, field="b")
-        from mote.executor.tools.resume_tasks import ResumeTasks
+        from mote.product.toolsets.builtin.resume_tasks import ResumeTasks
 
         tool = ResumeTasks()
         tool.get_bg_pool = lambda: pool

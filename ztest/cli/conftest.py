@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures/helpers for the mote.cli test suite.
+"""Shared fixtures/helpers for the mote.product.cli test suite.
 
 The projector folds the *core* ``AgentEvent`` spine; tests don't need the real
 event classes — they only need objects that expose the attributes the projector
@@ -17,20 +17,19 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.cli.contracts.base import BaseConsumer
-from mote.cli.contracts.view import Capabilities
-from mote.common.events.types import (
+from mote.contracts.events.types import (
     BUDGET,
-    COMPACTION_CHECKPOINT,
-    LLM_ERROR,
-    LLM_RETRY,
+    CONTEXT_COMPACTED,
     LLM_STREAM_DELTA,
     LLM_STREAM_END,
     MESSAGE_APPENDED,
-    POST_TOOL_USE,
-    PRE_TOOL_USE,
+    MODEL_ATTEMPT_FINISHED,
     TASK_PROGRESS,
+    TOOL_CALL_FINISHED,
+    TOOL_INVOCATION_STARTED,
 )
+from mote.product.cli.contracts.base import BaseConsumer
+from mote.product.cli.contracts.view import Capabilities
 
 
 class AgentEvt:
@@ -64,8 +63,17 @@ def ev_system_reminder(inner: str) -> AgentEvt:
     return AgentEvt(MESSAGE_APPENDED, message=SimpleNamespace(role="user", content=content))
 
 
-def ev_pre_tool(tool_name: str, tool_input: Optional[dict] = None, tool_use_id: str = "tu-1") -> AgentEvt:
-    return AgentEvt(PRE_TOOL_USE, tool_name=tool_name, tool_input=tool_input or {}, tool_use_id=tool_use_id)
+def ev_tool_started(
+    tool_name: str,
+    tool_input: Optional[dict] = None,
+    tool_use_id: str = "tu-1",
+) -> AgentEvt:
+    return AgentEvt(
+        TOOL_INVOCATION_STARTED,
+        tool_name=tool_name,
+        tool_input=tool_input or {},
+        tool_use_id=tool_use_id,
+    )
 
 
 def ev_post_tool(
@@ -78,10 +86,10 @@ def ev_post_tool(
     file_changes: Optional[list] = None,
     error: Any = None,
 ) -> AgentEvt:
-    """Build a POST_TOOL_USE event mirroring the core contract's constant stamp.
+    """Build a TOOL_CALL_FINISHED fixture for projector tests.
 
-    The core always stamps ``success`` / ``media`` / ``file_changes`` on
-    ``PostToolUseEvent``, so this fixture does too: ``success`` defaults to True,
+    The core stamps ``outcome`` / ``media`` / ``file_changes`` on the event;
+    ``success`` is only this helper's readable input and defaults to True.
     ``media`` / ``file_changes`` to empty lists. The projector reads these
     structured facts directly (no text sniffing).
 
@@ -91,12 +99,12 @@ def ev_post_tool(
     whose code/type/retryable/recovery the projector reads onto the completion.
     """
     return AgentEvt(
-        POST_TOOL_USE,
+        TOOL_CALL_FINISHED,
         tool_name=tool_name,
         tool_response=tool_response,
         tool_use_id=tool_use_id,
         tool_input=tool_input or {},
-        success=success,
+        outcome="succeeded" if success else "failed",
         media=media or [],
         file_changes=file_changes or [],
         error=error,
@@ -112,34 +120,24 @@ def ev_budget(spend: float = 0.0, limit: float = 0.0, fraction: float = 0.0, sto
     return AgentEvt(BUDGET, spend=spend, limit=limit, fraction=fraction, stopped=stopped)
 
 
-def ev_compaction(summary: str = "", messages: Optional[list] = None) -> AgentEvt:
-    """A COMPACTION_CHECKPOINT: the engine rebuilt history + its recap ``summary``.
+def ev_compaction(
+    summary: str = "",
+    model_context_messages: Optional[list] = None,
+) -> AgentEvt:
+    """A CONTEXT_COMPACTED event carrying the active model projection."""
 
-    Mirrors mote's ``CompactionCheckpointEvent`` (``messages`` = the rebuilt
-    history, ``summary`` = the model-generated recap) so the projector's
-    compaction-boundary fold is exercised.
-    """
-    return AgentEvt(COMPACTION_CHECKPOINT, messages=messages or [], summary=summary)
+    return AgentEvt(
+        CONTEXT_COMPACTED,
+        model_context_messages=model_context_messages or [],
+        summary=summary,
+    )
 
 
 def ev_error(error: str = "", error_type: str = "") -> AgentEvt:
-    return AgentEvt(LLM_ERROR, error=error, error_type=error_type)
-
-
-def ev_retry(
-    attempt: int = 1,
-    max_attempts: int = 6,
-    delay_ms: float = 2000.0,
-    error: str = "",
-    error_type: str = "",
-) -> AgentEvt:
     return AgentEvt(
-        LLM_RETRY,
-        attempt=attempt,
-        max_attempts=max_attempts,
-        delay_ms=delay_ms,
-        error=error,
-        error_type=error_type,
+        MODEL_ATTEMPT_FINISHED,
+        state="failed",
+        failure_reason=error or error_type,
     )
 
 

@@ -16,8 +16,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from mote.cli.consumers.agui.consumer import AGUI_CAPS, AguiConsumer
-from mote.cli.contracts.view import events as ev
+from mote.product.cli.consumers.agui.consumer import AGUI_CAPS, AguiConsumer
+from mote.product.cli.contracts.view import events as ev
 
 
 class RecordingSink:
@@ -123,7 +123,7 @@ async def test_unknown_kind_emits_nothing():
 # --------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_emit_lifecycle_writes_through_sink():
-    from mote.cli.consumers._wire import agui
+    from mote.product.cli.consumers._wire import agui
 
     consumer, sink = make_consumer()
     await consumer.emit_lifecycle(agui.run_started(consumer.wire_state))

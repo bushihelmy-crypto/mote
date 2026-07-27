@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.interface import EphemeralContextSource
-from mote.executor.tasks import BackgroundTaskContextSource, BgStatus, TaskMeta
+from mote.contracts.ports import EphemeralContextSource
+from mote.orchestration.tasks import BackgroundTaskContextSource, BgStatus, TaskMeta
 
 
 def run(coro):

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-import mote.common.secrets.store as store_mod
+import mote.runtime.secrets.store as store_mod
 
 
 @pytest.fixture(autouse=True)

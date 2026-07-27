@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-from mote.context.code_map import CodeMap, Symbol
-from mote.context.code_map.providers.resolvers.python import PythonModuleResolver
+from mote.runtime.context.code_map import CodeMap, Symbol
+from mote.runtime.context.code_map.providers.resolvers.python import PythonModuleResolver
 
 
 def _write(base, relpath: str, source: str) -> str:

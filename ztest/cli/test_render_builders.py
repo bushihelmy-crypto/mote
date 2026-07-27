@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.cli.consumers.render.builders import (
+from mote.product.cli.consumers.render.builders import (
     _HAS_RICH,
     FoldMode,
     compaction_summary_text,
@@ -33,9 +33,9 @@ from mote.cli.consumers.render.builders import (
     tool_group_summary_text,
     tool_started_text,
 )
-from mote.cli.consumers.render.palette import Palette
-from mote.common.i18n import keys as K
-from mote.common.i18n import t as i18n_t
+from mote.product.cli.consumers.render.palette import Palette
+from mote.product.i18n import keys as K
+from mote.product.i18n import t as i18n_t
 
 pytestmark = pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 
@@ -145,6 +145,45 @@ def test_file_change_identical_old_new_is_empty():
 def test_render_image_missing_file_returns_none():
     """A path that can't be opened degrades to ``None`` (caller shows text)."""
     assert render_image("/no/such/image.png") is None
+
+
+def test_half_block_image_caches_rendered_width():
+    """Repeated Textual repaints at the same width reuse rendered segments."""
+    pytest.importorskip("PIL")
+
+    from mote.product.cli.consumers.render.builders.image_adapter import HalfBlockImage
+
+    class Pixels:
+        def __getitem__(self, xy):
+            x, y = xy
+            return (x, y, 0)
+
+    class ResizedImage:
+        def __init__(self, size):
+            self.size = size
+
+        def load(self):
+            return Pixels()
+
+    class SourceImage:
+        size = (4, 4)
+
+        def __init__(self):
+            self.resize_calls = 0
+
+        def resize(self, size, resample):
+            self.resize_calls += 1
+            return ResizedImage(size)
+
+    source = SourceImage()
+    renderable = HalfBlockImage(source, max_cols=8, max_rows=8)
+
+    list(renderable.__rich_console__(None, SimpleNamespace(max_width=4)))
+    list(renderable.__rich_console__(None, SimpleNamespace(max_width=4)))
+    assert source.resize_calls == 1
+
+    list(renderable.__rich_console__(None, SimpleNamespace(max_width=2)))
+    assert source.resize_calls == 2
 
 
 # --- linkify: bare URLs → clickable link spans -----------------------------

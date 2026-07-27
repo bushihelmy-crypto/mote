@@ -8,11 +8,11 @@ plain SSE server gets none; STDIO (local process) never carries HTTP auth.
 """
 from __future__ import annotations
 
-from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-from mote.common.config.config.oauth_config import OAuthProviderConfig
-from mote.executor.mcp import oauth as oauth_bridge
-from mote.executor.mcp.oauth import _OAuthManagerAuth
-from mote.executor.mcp.universal import UniversalMCP
+from mote.contracts.config.mcp import MCPServerConfig, MCPTransportType
+from mote.contracts.config.oauth import OAuthProviderConfig
+from mote.runtime.tools.mcp import oauth as oauth_bridge
+from mote.runtime.tools.mcp.oauth import _OAuthManagerAuth
+from mote.runtime.tools.mcp.universal import UniversalMCP
 
 
 class _FakeManager:

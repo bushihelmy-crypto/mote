@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.cli.io.human_channel import PortHumanChannel
+from mote.product.cli.io.human_channel import PortHumanChannel
 
 
 class _SlowPort:

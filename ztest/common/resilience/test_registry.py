@@ -3,13 +3,7 @@
 """Tests for :class:`ResourceHealthRegistry` — lazy per-key breaker sharing."""
 from __future__ import annotations
 
-from mote.common.resilience import (
-    BreakerConfig,
-    BreakerState,
-    ResourceHealthRegistry,
-    get_health_registry,
-    reset_health_registry,
-)
+from mote.runtime.resilience import BreakerConfig, BreakerState, ResourceHealthRegistry
 
 
 class TestRegistry:
@@ -61,13 +55,6 @@ class TestRegistry:
         assert seen == ["new"]
 
 
-class TestSingleton:
-    def test_singleton_shared(self):
-        reset_health_registry()
-        assert get_health_registry() is get_health_registry()
-
-    def test_reset_clears(self):
-        reset_health_registry()
-        first = get_health_registry()
-        reset_health_registry()
-        assert get_health_registry() is not first
+class TestIsolation:
+    def test_registry_instances_are_isolated(self):
+        assert ResourceHealthRegistry() is not ResourceHealthRegistry()

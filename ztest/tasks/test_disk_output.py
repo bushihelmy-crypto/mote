@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from mote.executor.tasks import DiskTaskOutput, TaskOutputStore
+from mote.orchestration.tasks import DiskTaskOutput, TaskOutputStore
 
 
 class TestDiskTaskOutputAsync:
@@ -84,7 +84,7 @@ class TestDiskTaskOutputAsync:
 
     @pytest.mark.asyncio
     async def test_cap_truncates_and_fires_callback(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("mote.executor.tasks.disk_output.MAX_TASK_OUTPUT_BYTES", 5)
+        monkeypatch.setattr("mote.orchestration.tasks.disk_output.MAX_TASK_OUTPUT_BYTES", 5)
         capped_ids = []
         out = DiskTaskOutput("c1", tmp_path, on_cap=capped_ids.append)
         out.append("0123456789")  # 10 bytes > 5 cap
@@ -172,7 +172,7 @@ class TestTaskOutputStore:
 
     @pytest.mark.asyncio
     async def test_set_on_cap_propagates(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("mote.executor.tasks.disk_output.MAX_TASK_OUTPUT_BYTES", 3)
+        monkeypatch.setattr("mote.orchestration.tasks.disk_output.MAX_TASK_OUTPUT_BYTES", 3)
         capped = []
         store = TaskOutputStore(tmp_path)
         store.set_on_cap(capped.append)

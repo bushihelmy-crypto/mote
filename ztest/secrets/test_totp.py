@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from mote.common.secrets.totp import totp_now
+from mote.runtime.secrets.totp import totp_now
 
 # base32("12345678901234567890") — the RFC 6238 Appendix B SHA-1 seed.
 _SEED = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"

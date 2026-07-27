@@ -24,7 +24,7 @@
                                                   结构上无法发散
 ```
 
-`common/events/` 是**零依赖叶子包**：只 import common 兄弟（`common.logs` + `common.schema` 的 `PermissionBehavior`）+ 订阅者 Protocol，**从不 import roles / context / executor / hook / 任何 tool**——它们反过来把自己注册成订阅者。（v2 起 typed outcome 自成一档，events 不再 import `common.hook`。）
+`runtime/events/` 是 Runtime 的事件基础设施：事件数据契约位于 `contracts/events/`，具体总线、日志订阅和作用域由 Runtime 实现，高层模块通过订阅接口接入。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -37,7 +37,7 @@
         │ emit / observe / emit_sync
         ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  common/events  ★叶子层·只 import common 兄弟·谁都能 import 不成环★    │
+│ contracts/events（数据契约） <- runtime/events（总线与订阅实现）      │
 │   EventBus   types(20+事件)   context(contextvar)   outcomes(6 typed)  │
 └───────▲─────────────────────────────────────────────────────────────┘
         │ 实现订阅者 Protocol（鸭子类型，无需继承）
@@ -215,7 +215,8 @@ async def observe_event(event):   # 深层「只观察」入口——结构上�
 
 ```python
 def log_llm_stream(msg):          # provider 在 async for chunk 循环里同步调
-    from mote.common.events import LLMStreamDeltaEvent, observe_event_sync
+    from mote.contracts.events import LLMStreamDeltaEvent
+    from mote.runtime.events import observe_event_sync
     observe_event_sync(LLMStreamDeltaEvent(token=msg))   # 不 await，扔了就走
 ```
 ```python
@@ -242,7 +243,7 @@ class RecorderSubscriber:
             self._log.append(CompactedEvent(...))
         elif isinstance(event, TurnEndEvent):
             self._log.append(TurnContextEvent(...))
-            from mote.common.disk import get_disk_writer
+            from mote.runtime.disk import get_disk_writer
             await get_disk_writer().drain()  # ★每轮结束确认落盘（崩溃最多丢进行中一轮）
 ```
 
@@ -411,5 +412,4 @@ MIRROR（渲染/日志）慢了挂了直接丢弃+计数，绝不拖垮 turn；D
 | 观察面 priority 改为 ObserverPriority 命名枚举 | 取代旧的裸魔数：LIVE/STREAM/REPORT/PERSIST/TRACE/LOG/BOOKKEEPING 七档语义命名（曾出现 LogSubscriber 与 FileWatchService 双 90 静默撞车，正是此改动催化剂）。加新观察者挑一档带语义的 tier 而非猜一个不撞的整数 |
 | 全局 contextvar 态 | 忘 set_bus 则 observe 静默 no-op，测试易踩；反面是 standalone/测试自动安全 |
 | turn 边界粒度持久性 | 崩溃丢进行中一轮，换来不必每条消息 fsync（每轮 drain 一次） |
-
 

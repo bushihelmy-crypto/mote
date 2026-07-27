@@ -17,26 +17,14 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.cli.contracts.view import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
-from mote.cli.driver import SessionDriver, _format_turn_error
-from mote.common.i18n import keys as K
-from mote.common.i18n import t
+from mote.product.cli.contracts.view import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
+from mote.product.cli.driver import SessionDriver, _format_turn_error
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
 
 # --------------------------------------------------------------------------
 # Fakes
 # --------------------------------------------------------------------------
-
-
-class FakeBus:
-    def __init__(self) -> None:
-        self.subscribed: List[Any] = []
-
-    def subscribe(self, c: Any) -> None:
-        self.subscribed.append(c)
-
-    def unsubscribe(self, c: Any) -> None:
-        if c in self.subscribed:
-            self.subscribed.remove(c)
 
 
 class FakeContextManager:
@@ -68,7 +56,7 @@ class FakeRole:
         self.role_schema = SimpleNamespace(
             name=name, tools=tools or [], mcps=mcps or [], deferred_tools=deferred_tools or []
         )
-        self.event_bus = FakeBus()
+        self.telemetry = None
         self.context_manager = FakeContextManager()
 
 
@@ -129,6 +117,9 @@ class FakeProjector:
     def deliver_sync(self, ev: Any) -> None:
         self.delivered_sync.append(ev)
 
+    async def aclose(self) -> None:
+        return None
+
 
 class FakePort:
     def __init__(self) -> None:
@@ -149,7 +140,15 @@ def make_driver(*, agent_id: str = "sess-0001", runtimes: Optional[dict] = None,
     control = FakeControl(runtimes if runtimes is not None else {agent_id: FakeRuntime(role)})
     port = FakePort()
     projector = FakeProjector()
-    drv = SessionDriver(control, agent_id, role, port=port, projector=projector, role_factory=role_factory)
+    drv = SessionDriver(
+        control,
+        agent_id,
+        role,
+        port=port,
+        projector=projector,
+        role_factory=role_factory,
+        agent_catalog=object(),
+    )
     return drv, control, port, projector
 
 
@@ -290,9 +289,9 @@ class RunOncePort:
 
 @pytest.mark.asyncio
 async def test_scheduler_started_and_stopped_across_run(monkeypatch):
-    import mote.cli.driver as driver_mod
+    import mote.product.cli.driver as driver_mod
 
-    monkeypatch.setattr(driver_mod.backend, "role_event_bus", lambda role: None)
+    monkeypatch.setattr(driver_mod.backend, "role_telemetry", lambda role: None)
     monkeypatch.setattr(driver_mod.backend, "bind_human_channel", lambda role, ch: None)
     monkeypatch.setattr(driver_mod.backend, "role_tool_count", lambda role: 0)
     monkeypatch.setattr(driver_mod.backend, "role_cleanup", lambda role: None)
@@ -419,9 +418,9 @@ def test_spawn_agent_type_unknown_returns_none_message():
 
 
 def test_list_agent_types_delegates_to_backend(monkeypatch):
-    import mote.cli.driver as driver_mod
+    import mote.product.cli.driver as driver_mod
 
-    monkeypatch.setattr(driver_mod.backend, "list_agent_types", lambda: [("Coder", "writes code")])
+    monkeypatch.setattr(driver_mod.backend, "list_agent_types", lambda _catalog: [("Coder", "writes code")])
     drv, _c, _p, _proj = make_driver()
     assert drv.list_agent_types() == [("Coder", "writes code")]
 
@@ -453,8 +452,8 @@ async def test_run_turn_sends_input_and_awaits_quiescence():
 @pytest.mark.asyncio
 async def test_run_turn_attaches_images_as_metadata_and_media_blocks():
     """Prompt-dragged images ride along as ``metadata[IMAGES]`` + a MediaBlock each."""
-    from mote.cli.contracts.view import MediaBlock
-    from mote.common.const import IMAGES
+    from mote.contracts.constants.messages import IMAGES
+    from mote.product.cli.contracts.view import MediaBlock
 
     drv, control, _p, projector = make_driver()
     images = [
@@ -474,8 +473,8 @@ async def test_run_turn_attaches_images_as_metadata_and_media_blocks():
 @pytest.mark.asyncio
 async def test_run_turn_without_images_sets_no_image_metadata():
     """A plain text turn attaches no image metadata and emits no MediaBlock."""
-    from mote.cli.contracts.view import MediaBlock
-    from mote.common.const import IMAGES
+    from mote.contracts.constants.messages import IMAGES
+    from mote.product.cli.contracts.view import MediaBlock
 
     drv, control, _p, projector = make_driver()
     await drv._run_turn("just text")

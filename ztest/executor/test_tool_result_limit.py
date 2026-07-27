@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.tool_result_limit``.
+"""Unit tests for ``mote.runtime.tools.tool_result_limit``.
 
 Pure functions (no executor wiring): byte formatting, threshold clamping,
 preview newline-boundary truncation, and the ``enforce_tool_result_limit``
@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, PREVIEW_SIZE_BYTES
-from mote.common.workspace import WorkspaceStore
-from mote.executor.tool_result_limit import (
+from mote.contracts.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, PREVIEW_SIZE_BYTES
+from mote.runtime.tools.tool_result_limit import (
     enforce_tool_result_limit,
     format_file_size,
     generate_preview,
     persistence_threshold,
 )
+from mote.runtime.workspace import WorkspaceStore
 
 
 class TestFormatFileSize:

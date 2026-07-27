@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.session.reconcile`` — heal dangling tool calls on resume.
+"""Tests for ``mote.runtime.session.reconcile`` — heal dangling tool calls on resume.
 
 A crash between an assistant ``tool_calls`` message being flushed and its results
 being recorded leaves a dangling call (requested, no paired result). The next
@@ -23,9 +23,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from mote.common.const import TOOL_CALL_ID
-from mote.common.schema import AIMessage, ToolMessage, UserMessage
-from mote.session.reconcile import reconcile_tool_calls
+from mote.contracts.constants.messages import TOOL_CALL_ID
+from mote.contracts.schema import AIMessage, ToolMessage, UserMessage
+from mote.runtime.session.reconcile import reconcile_tool_calls
 
 
 @dataclass
@@ -266,7 +266,7 @@ class _FakeRole:
 
 
 def test_manager_reconciles_and_reaps_when_ledger_present():
-    from mote.roles.session_manager import RoleSessionManager
+    from mote.runtime.agent.session_manager import RoleSessionManager
 
     # Two calls: t1 is dangling (healed but result NOT in the rollout -> kept),
     # t2 is already paired in the rollout (its stale record IS reaped). Proves
@@ -292,7 +292,7 @@ def test_manager_reconciles_and_reaps_when_ledger_present():
 
 
 def test_manager_is_noop_when_ledger_disabled():
-    from mote.roles.session_manager import RoleSessionManager
+    from mote.runtime.agent.session_manager import RoleSessionManager
 
     mgr = RoleSessionManager(_FakeRole(None))  # type: ignore[arg-type]
     msgs = [_assistant("t1")]
@@ -304,7 +304,7 @@ def test_manager_is_noop_when_ledger_disabled():
 
 
 def test_manager_no_reap_when_nothing_resolved():
-    from mote.roles.session_manager import RoleSessionManager
+    from mote.runtime.agent.session_manager import RoleSessionManager
 
     # PURE dangling call: no ledger record -> safe replay note, nothing to reap.
     ledger = _FakeLedger({})
@@ -326,8 +326,8 @@ def test_real_ledger_heals_dangling_but_keeps_record(tmp_path):
     # Prove reconcile composes with the REAL EffectLedger (not the fake): a
     # completed record on disk heals a dangling call, but the record is KEPT
     # (result not yet in the rollout) so a later resume can re-heal it.
-    from mote.common.workspace import WorkspaceStore
-    from mote.executor.effect_ledger import EffectLedger
+    from mote.runtime.tools.effect_ledger import EffectLedger
+    from mote.runtime.workspace import WorkspaceStore
 
     store = WorkspaceStore(root=str(tmp_path))
     ledger = EffectLedger("sess_real", store=store)
@@ -347,8 +347,8 @@ def test_real_ledger_heals_dangling_but_keeps_record(tmp_path):
 def test_real_ledger_reaps_paired_stale_record(tmp_path):
     # The reap path with the real ledger: a call already paired in the rollout
     # has a stale record -> reconcile marks it resolved and reap() clears it.
-    from mote.common.workspace import WorkspaceStore
-    from mote.executor.effect_ledger import EffectLedger
+    from mote.runtime.tools.effect_ledger import EffectLedger
+    from mote.runtime.workspace import WorkspaceStore
 
     store = WorkspaceStore(root=str(tmp_path))
     ledger = EffectLedger("sess_paired", store=store)
@@ -364,8 +364,8 @@ def test_real_ledger_reaps_paired_stale_record(tmp_path):
 
 
 def test_real_ledger_started_no_key_flags_unknown(tmp_path):
-    from mote.common.workspace import WorkspaceStore
-    from mote.executor.effect_ledger import EffectLedger
+    from mote.runtime.tools.effect_ledger import EffectLedger
+    from mote.runtime.workspace import WorkspaceStore
 
     store = WorkspaceStore(root=str(tmp_path))
     ledger = EffectLedger("sess_started", store=store)
@@ -382,8 +382,8 @@ def test_real_ledger_started_no_key_flags_unknown(tmp_path):
 def test_real_ledger_started_local_is_safe_replay(tmp_path):
     # The real ledger persists ``effect`` — a started LOCAL record survives a
     # rebuild and reconcile reads it back as replay-safe (not unknown).
-    from mote.common.workspace import WorkspaceStore
-    from mote.executor.effect_ledger import EffectLedger
+    from mote.runtime.tools.effect_ledger import EffectLedger
+    from mote.runtime.workspace import WorkspaceStore
 
     store = WorkspaceStore(root=str(tmp_path))
     ledger = EffectLedger("sess_local", store=store)

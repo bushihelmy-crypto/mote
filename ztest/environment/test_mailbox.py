@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from mote.environment.agent_path import AgentPath
-from mote.environment.mailbox import (
+from mote.orchestration.environment.agent_path import AgentPath
+from mote.orchestration.environment.mailbox import (
     MAILBOX_AUTHOR_PATH,
     MAILBOX_RECIPIENT_PATH,
     DeliveryMode,
@@ -58,7 +58,7 @@ def test_mailbox_tracks_pending_trigger_turn():
 
 
 def test_enqueue_raw_message_modes():
-    from mote.common.schema import UserMessage
+    from mote.contracts.schema import UserMessage
 
     mailbox = Mailbox()
     mailbox.enqueue(UserMessage("queued"), mode=DeliveryMode.QUEUE_ONLY)
@@ -78,7 +78,7 @@ def test_dump_load_roundtrip():
 
 
 def test_mailbox_deduplicates_pending_output_publication():
-    from mote.common.schema import UserMessage
+    from mote.contracts.schema import UserMessage
 
     mailbox = Mailbox()
     first = UserMessage(content="result")

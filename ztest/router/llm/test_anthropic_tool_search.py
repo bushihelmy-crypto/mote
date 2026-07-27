@@ -18,8 +18,8 @@ import asyncio
 
 import pytest
 
-from mote.common.config.config.llm_config import LLMConfig
-from mote.router.llm.anthropic_api import AnthropicLLM
+from mote.contracts.config.llm import LLMConfig
+from mote.product.integrations.models.anthropic import AnthropicLLM
 
 
 def _make_llm(**overrides):

@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import os
 
-from mote.common.schema import SandboxConfig, SandboxRuntimeConfig
-from mote.executor.permission.sandbox.adapter import build_policy, build_runtime
-from mote.executor.permission.sandbox.guard import SandboxGuard
+from mote.contracts.settings.permissions import SandboxConfig
+from mote.contracts.settings.sandbox import SandboxRuntimeConfig
+from mote.runtime.tools.permission.sandbox.adapter import build_policy, build_runtime
+from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
 
 def _guard(cwd: str) -> SandboxGuard:
@@ -54,7 +55,7 @@ class TestSecretMaskedDirs:
     """
 
     def test_profiles_dir_masked_when_present(self, tmp_path, monkeypatch):
-        from mote.common.const import paths
+        from mote.runtime import paths
 
         monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
         (tmp_path / "browser_profiles").mkdir()
@@ -63,7 +64,7 @@ class TestSecretMaskedDirs:
         assert os.path.realpath(str(tmp_path / "browser_profiles")) in masked
 
     def test_profiles_dir_absent_not_masked(self, tmp_path, monkeypatch):
-        from mote.common.const import paths
+        from mote.runtime import paths
 
         monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
         # No browser_profiles dir created -> nothing to mask (bwrap errors on a
@@ -120,7 +121,7 @@ class TestBuildRuntime:
         assert limits.cpu_quota == "200%"
 
     def test_resource_guard_adjustment_visible_next_call(self, tmp_path):
-        from mote.executor.permission.sandbox.resource_guard import ResourceGuard
+        from mote.runtime.tools.permission.sandbox.resource_guard import ResourceGuard
 
         cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", memory_max="4G")
         rguard = ResourceGuard(cfg)

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.router.flags (the ergonomic, keyword-driven flag wrapper)."""
+"""Tests for the Product Squilla keyword-driven flag wrapper."""
 from __future__ import annotations
 
-from mote.router.flags import (
+from mote.product.routing.squilla.flags import (
     HEAVY_CONTEXT_TOKENS,
     LONG_CONTEXT_CHAR_THRESHOLD,
     RoutingFlags,

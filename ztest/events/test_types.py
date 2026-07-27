@@ -3,15 +3,17 @@
 """Tests for the three observation events added to unify the parallel paths:
 
 ``RecoveryEvent`` / ``TaskProgressEvent`` / ``ResourceReportEvent`` — their
-discriminators, default fields, and re-export from ``mote.common.events``.
+discriminators, default fields, and re-export from ``mote.runtime.events``.
 """
 from __future__ import annotations
 
-import mote.common.events as ev
-from mote.common.events.types import (
+import mote.runtime.events as ev
+from mote.contracts.events.types import (
+    PROMPT_REJECTED,
     RECOVERY,
     RESOURCE_REPORT,
     TASK_PROGRESS,
+    PromptRejectedEvent,
     RecoveryEvent,
     ResourceReportEvent,
     TaskProgressEvent,
@@ -20,10 +22,15 @@ from mote.common.events.types import (
 
 def test_recovery_event_classvars_and_fields():
     assert RecoveryEvent.name == RECOVERY == "recovery"
-    # Events carry no control/observation marker; the plane lives on the
-    # subscriber. There must be no ``is_control`` attribute to drift out of sync.
+    # Events are facts; control belongs to domain Policies.
     assert not hasattr(RecoveryEvent, "is_control")
-    e = RecoveryEvent(phase="recovered", action="retry", attempt=2, error_type="ValueError", error="boom")
+    e = RecoveryEvent(
+        phase="recovered",
+        action="retry",
+        attempt=2,
+        error_type="ValueError",
+        error="boom",
+    )
     assert (e.phase, e.action, e.attempt, e.error_type, e.error) == (
         "recovered",
         "retry",
@@ -64,3 +71,16 @@ def test_reexported_from_events_package():
         assert n in ev.__all__
     for n in ("RecoveryEvent", "TaskProgressEvent", "ResourceReportEvent"):
         assert n in ev.__all__
+
+
+def test_prompt_rejected_is_a_distinct_safe_observation_fact():
+    event = PromptRejectedEvent(
+        prompt="safe prompt",
+        reason="denied",
+        terminate=True,
+    )
+
+    assert event.name == PROMPT_REJECTED == "prompt_rejected"
+    assert ev.PromptRejectedEvent is PromptRejectedEvent
+    assert "PROMPT_REJECTED" in ev.__all__
+    assert "PromptRejectedEvent" in ev.__all__

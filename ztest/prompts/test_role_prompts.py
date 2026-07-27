@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from string import Template
 
-from mote.common import prompt as R
+from mote.kernel import prompt as R
 
 
 class TestSystemPromptBoundary:
@@ -84,10 +84,6 @@ class TestAgentPrompts:
 
 
 class TestMiscConstants:
-    def test_summarize_duplicate_has_language_field(self):
-        out = R.SUMMARIZE_PROBLEM_WHEN_DUPLICATE.format(language="Chinese")
-        assert "Chinese" in out
-
     def test_json_repair_prompt_fields(self):
         out = R.JSON_REPAIR_PROMPT.format(json_data="{}", json_decode_error="boom")
         assert "boom" in out

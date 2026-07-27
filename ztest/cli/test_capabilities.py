@@ -11,7 +11,7 @@ two downgrades one ``ViewEvent`` stream must survive to feed heterogeneous hosts
 
 from __future__ import annotations
 
-from mote.cli.view import (
+from mote.product.cli.view import (
     STRUCTURED_CAPS,
     TERMINAL_CAPS,
     Capabilities,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.executor.tools.skill_tool.Skill (the bridge tool).
+"""Tests for mote.product.toolsets.builtin.skill_tool.Skill (the bridge tool).
 
 The Skill tool resolves the live SkillPool (capability ``get_skill_pool``),
 renders an inline skill's body as the tool result, delegates ``context: fork``
@@ -14,9 +14,9 @@ import asyncio
 
 import pytest
 
-from mote.context.skills.skill_pool import SkillPool
-from mote.executor.tool_result import ToolError
-from mote.executor.tools.skill_tool import Skill
+from mote.product.toolsets.builtin.skill_tool import Skill
+from mote.runtime.context.skills.skill_pool import SkillPool
+from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import write_skill
 

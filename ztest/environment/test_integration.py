@@ -13,11 +13,11 @@ import types
 
 import pytest
 
-from mote.common.schema.messages import UserMessage
-from mote.common.schema.queue import MessageQueue
-from mote.environment.mote.mote_env import MoteEnv
-from mote.environment.runtime import AgentRuntime
-from mote.environment.store import ResidencyStore
+from mote.contracts.schema.messages import UserMessage
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.mote.mote_env import MoteEnv
+from mote.orchestration.environment.runtime import AgentRuntime
+from mote.orchestration.environment.store import ResidencyStore
 
 
 class ReplyingRole:

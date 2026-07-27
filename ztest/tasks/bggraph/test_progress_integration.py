@@ -5,7 +5,7 @@
 These wire the *real* delivery chain — the frontier scheduler
 (``_run_driver`` / ``_run_one_node``) reports via ``report_progress`` and a real
 ``make_progress_writer`` (configured with ``msg_buffer`` + ``wake``) renders
-every push-worthy event straight into a ``MessageQueue``. No event bus, no
+every push-worthy event straight into a ``MessageQueue``. No telemetry fan-out, no
 subscriber, no stubs in between.
 
 The contract under test (motivated by a production incident where the model
@@ -28,11 +28,11 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.schema import MessagePriority, MessageQueue
-from mote.executor.tasks.bggraph import END, START, BgGraph, BgStatus
-from mote.executor.tasks.bggraph.engine import _run_driver, _run_one_node
-from mote.executor.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
-from mote.executor.tasks.bggraph.types import GraphRunState
+from mote.contracts.schema import MessagePriority, MessageQueue
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, BgStatus
+from mote.orchestration.tasks.bggraph.engine import _run_driver, _run_one_node
+from mote.orchestration.tasks.bggraph.report import make_progress_writer, reset_progress_writer, set_progress_writer
+from mote.orchestration.tasks.bggraph.types import GraphRunState
 
 from .conftest import S, gated_node, sync_node
 

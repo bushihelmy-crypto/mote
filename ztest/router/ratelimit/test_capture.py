@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.router.ratelimit import RateLimitTracker
-from mote.router.ratelimit.capture import install_rate_limit_hook
+from mote.runtime.models.ratelimit import RateLimitTracker
+from mote.runtime.models.ratelimit.capture import install_rate_limit_hook
 
 
 class _FakeHttpx:

@@ -4,7 +4,7 @@ Lives in ``common/net`` (leaf layer) so both the sandbox egress proxy and the
 ``SandboxRuntimeConfig`` config-time subset check import the *same* matcher.
 """
 
-from mote.common.net.host_match import matches_pattern, normalize_host
+from mote.contracts.net import matches_pattern, normalize_host
 
 
 class TestNormalizeHost:
@@ -63,7 +63,7 @@ class TestSharedWithPolicy:
     """The matcher moved out of sandbox.network.policy; it must re-export it."""
 
     def test_policy_reexports_matcher(self):
-        from mote.sandbox.network import policy
+        from mote.runtime.sandbox.network import policy
 
         assert policy.matches_pattern is matches_pattern
         assert policy.normalize_host is normalize_host

@@ -54,8 +54,8 @@ Launch the interactive REPL:
 
 ```bash
 mote                               # console entry point (default Assistant + toolset)
-python -m mote.cli                 # equivalent module form
-python -m mote.cli --model <name> --tools Read,Edit,Search,Bash --cwd .
+python -m mote.product.cli                 # equivalent module form
+python -m mote.product.cli --model <name> --tools Read,Edit,Search,Bash --cwd .
 ```
 
 - Ctrl+C: mid-turn → interrupt the current turn; double-press at the prompt → exit.
@@ -98,7 +98,7 @@ DEFAULT → SYSTEM(/etc) → USER(~/.mote) → PROJECT(mote/config.yaml)
 ```
 
 Dicts deep-merge, lists union-dedupe, scalars are won by the higher tier.
-Diagnostics: `python -m mote.common.config.diagnostics --strict`.
+Diagnostics: `python -m mote.runtime.config.diagnostics --strict`.
 
 See [`.env.example`](./.env.example) for the available environment variables.
 

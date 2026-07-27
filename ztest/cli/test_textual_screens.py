@@ -19,8 +19,12 @@ pytest.importorskip("textual")
 
 from textual.app import App
 
-from mote.cli.consumers.textual.screens import QuestionScreen
-from mote.cli.consumers.textual.style import textual_css_vars
+from mote.contracts.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus
+from mote.contracts.permissions import ApprovalRequest
+from mote.contracts.runtimes import RuntimeRef
+from mote.contracts.surfaces import SurfaceDescriptor, SurfacePresentationMode
+from mote.product.cli.consumers.textual.screens import ApprovalScreen, HandoffScreen, QuestionScreen
+from mote.product.cli.consumers.textual.style import textual_css_vars
 
 
 class _ScreenHarness(App):
@@ -121,3 +125,79 @@ async def test_multi_select_confirms_via_submit():
         await pilot.click("#submit")
         await pilot.pause()
     assert app.result == (["Cheese", "Olives"], "")
+
+
+@pytest.mark.asyncio
+async def test_approval_preview_with_percent_encoded_url_is_plain_text():
+    request = ApprovalRequest(
+        tool_name="Bash",
+        target="https://search.jd.com/Search?keyword=%E6%89%8B%E6%9C%BA&sort=sort_totalsales15_desc&page=1",
+    )
+    app = _ScreenHarness(ApprovalScreen(request))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert app.result.outcome == "reject"
+
+
+@pytest.mark.asyncio
+async def test_handoff_message_waits_for_explicit_complete():
+    request = HandoffRequest(runtime_ref=RuntimeRef(runtime_id="r-1", kind="canvas"))
+    handle = DriverHandoffHandle(
+        handle_id="h-1",
+        surface=SurfaceDescriptor(kind="canvas", ref="surface-1", presentation=SurfacePresentationMode.WINDOW),
+    )
+    app = _ScreenHarness(HandoffScreen(request, handle))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#handoff-message")
+        for ch in "legend moved":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.result == "__unset__"
+        await pilot.click("#complete")
+        await pilot.pause()
+
+    assert app.result.status is HandoffStatus.COMPLETED
+    assert app.result.human_message == "legend moved"
+
+
+@pytest.mark.asyncio
+async def test_handoff_cancel_returns_typed_message():
+    request = HandoffRequest(runtime_ref=RuntimeRef(runtime_id="r-2", kind="terminal"))
+    handle = DriverHandoffHandle(handle_id="h-2", surface=SurfaceDescriptor(kind="terminal", ref="surface-2"))
+    app = _ScreenHarness(HandoffScreen(request, handle))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#handoff-message")
+        for ch in "cancelled by me":
+            await pilot.press(ch)
+        await pilot.click("#cancel")
+        await pilot.pause()
+
+    assert app.result.status is HandoffStatus.CANCELLED
+    assert app.result.human_message == "cancelled by me"
+
+
+@pytest.mark.asyncio
+async def test_canvas_handoff_uses_compact_window_control_modal():
+    request = HandoffRequest(runtime_ref=RuntimeRef(runtime_id="r-4", kind="canvas"))
+    handle = DriverHandoffHandle(
+        handle_id="h-4",
+        surface=SurfaceDescriptor(kind="canvas", ref="surface-4", presentation=SurfacePresentationMode.WINDOW),
+    )
+    app = _ScreenHarness(HandoffScreen(request, handle, window_control=True))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert len(app.query("#canvas-surface-viewport")) == 0
+        await pilot.click("#complete")
+        await pilot.pause()
+
+    assert app.result.status is HandoffStatus.COMPLETED

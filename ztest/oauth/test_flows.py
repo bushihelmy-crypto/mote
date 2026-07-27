@@ -11,10 +11,10 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-import mote.router.oauth.client as client_mod
-from mote.common.config.config.oauth_config import GrantType, OAuthProviderConfig
-from mote.router.oauth.errors import OAuthConfigError, OAuthRefreshError
-from mote.router.oauth.flows import LoginCallbacks, run_auth_code_flow, run_device_code_flow
+import mote.runtime.models.auth.oauth.client as client_mod
+from mote.contracts.config.oauth import GrantType, OAuthProviderConfig
+from mote.runtime.models.auth.oauth.errors import OAuthConfigError, OAuthRefreshError
+from mote.runtime.models.auth.oauth.flows import LoginCallbacks, run_auth_code_flow, run_device_code_flow
 
 
 class FakeResponse:

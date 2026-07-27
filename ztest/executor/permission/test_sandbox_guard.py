@@ -1,17 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.permission.sandbox.guard.SandboxGuard``.
+"""Unit tests for ``mote.runtime.tools.permission.sandbox.guard.SandboxGuard``.
 
 Covers the three modes (full / read-only / workspace-write), cwd + configured
-writable-root containment, empty-path passthrough, symlink-resolved containment,
+writable-root containment, fail-closed empty paths, symlink-resolved containment,
 and interactively-granted session roots.
 """
 from __future__ import annotations
 
 import os
 
-from mote.common.schema import SandboxConfig
-from mote.executor.permission.sandbox.guard import SandboxGuard
+from mote.contracts.settings.permissions import SandboxConfig
+from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
 
 class TestFullMode:
@@ -28,10 +28,11 @@ class TestReadOnlyMode:
         assert not verdict.allowed
         assert "read-only" in verdict.reason
 
-    def test_read_only_empty_path_allowed(self):
-        # No concrete path to gate — passthrough even in read-only.
+    def test_read_only_empty_path_denied(self):
         guard = SandboxGuard(SandboxConfig(mode="read-only"))
-        assert guard.check_write("").allowed
+        verdict = guard.check_write("")
+        assert not verdict.allowed
+        assert "no concrete permission target" in verdict.reason
 
 
 class TestWorkspaceWrite:
@@ -71,9 +72,11 @@ class TestWorkspaceWrite:
         guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: str(ws))
         assert not guard.check_write(str(sibling / "f.txt")).allowed
 
-    def test_empty_path_allowed(self, tmp_path):
+    def test_empty_path_denied(self, tmp_path):
         guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: str(tmp_path))
-        assert guard.check_write("").allowed
+        verdict = guard.check_write("")
+        assert not verdict.allowed
+        assert "no concrete permission target" in verdict.reason
 
 
 class TestSessionRoots:

@@ -12,11 +12,12 @@ nothing touches the network or token storage.
 from __future__ import annotations
 
 import httpx
+import pytest
 
-from mote.common.config.config.mcp_config import MCPServerConfig, MCPTransportType
-from mote.common.config.config.oauth_config import OAuthProviderConfig
-from mote.executor.mcp import oauth as oauth_bridge
-from mote.executor.mcp.oauth import _OAuthManagerAuth, build_mcp_auth
+from mote.contracts.config.mcp import MCPServerConfig, MCPTransportType
+from mote.contracts.config.oauth import OAuthProviderConfig
+from mote.runtime.tools.mcp import oauth as oauth_bridge
+from mote.runtime.tools.mcp.oauth import _OAuthManagerAuth, build_mcp_auth
 
 
 class _FakeManager:
@@ -101,21 +102,18 @@ def test_auth_reconsults_manager_each_request(monkeypatch):
     assert second.headers["Authorization"] == "Bearer tok-2"
 
 
-def test_async_flow_sets_authorization_header(monkeypatch):
+@pytest.mark.asyncio
+async def test_async_flow_sets_authorization_header(monkeypatch):
     # The async flow offloads the (blocking) token fetch to a thread but must
     # still inject the same bearer header.
-    import asyncio
-
     monkeypatch.setattr(oauth_bridge, "OAuthManager", _FakeManager)
     cfg = MCPServerConfig(
         name="remote", type=MCPTransportType.SSE, enabled=True, url="https://x/sse", oauth=_oauth_cfg()
     )
     auth = build_mcp_auth(cfg)
 
-    async def _run() -> str:
-        request = httpx.Request("GET", "https://x/sse")
-        flow = auth.async_auth_flow(request)
-        authed = await flow.__anext__()
-        return authed.headers["Authorization"]
-
-    assert asyncio.run(_run()) == "Bearer tok-1"
+    request = httpx.Request("GET", "https://x/sse")
+    flow = auth.async_auth_flow(request)
+    authed = await flow.__anext__()
+    await flow.aclose()
+    assert authed.headers["Authorization"] == "Bearer tok-1"

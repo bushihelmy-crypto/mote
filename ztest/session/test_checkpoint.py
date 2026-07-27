@@ -20,14 +20,23 @@ import shutil
 
 import pytest
 
-from mote.common.events import UserPromptSubmitEvent
-from mote.common.events.types import TurnEndEvent
-from mote.session.checkpoint import CheckpointStore, list_checkpoints
-from mote.session.events import CHECKPOINT, CheckpointEvent
-from mote.session.log import SessionLog
-from mote.session.subscribers import CheckpointSubscriber
+from mote.contracts.events.types import TurnEndEvent
+from mote.contracts.fileops import RewindFailedError
+from mote.runtime.events import UserPromptSubmitEvent
+from mote.runtime.fileops import FileOperations, WorktreeCheckpointStore
+from mote.runtime.session.checkpoint import list_checkpoints
+from mote.runtime.session.codec import iter_file_operations_events
+from mote.runtime.session.events import CHECKPOINT, CheckpointEvent, SessionMetaEvent
+from mote.runtime.session.log import SessionLog
+from mote.runtime.session.subscribers import CheckpointSubscriber
 
 git_required = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")
+
+
+def _log(tmp_path, session_id: str) -> SessionLog:
+    log = SessionLog(session_id, base_dir=str(tmp_path))
+    log.commit_offline(SessionMetaEvent(session_id=session_id))
+    return log
 
 
 def _store(tmp_path):
@@ -35,7 +44,25 @@ def _store(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     git_dir = tmp_path / "session" / "git"
-    return CheckpointStore(git_dir, work), work
+    return WorktreeCheckpointStore(git_dir, work), work
+
+
+def _subscriber(log, get_working_dir, *, enabled=True):
+    operations = FileOperations(
+        session_id=log.session_id,
+        journal_path=log.path,
+        get_project_root=get_working_dir,
+        flush_pending=log.writer.flush_inline,
+        lock_root=log.path.parent.parent / "locks",
+        event_sink=log.commit_offline,
+        event_source=lambda: iter_file_operations_events(log.iter_events()),
+    )
+    return CheckpointSubscriber(
+        log,
+        get_working_dir,
+        operations.capture_worktree_checkpoint,
+        enabled=enabled,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +88,7 @@ def test_edit_then_restore_reverts_content(tmp_path):
     commit = store.capture()
 
     f.write_text("v2 mutated\n")
-    assert store.restore(commit) is True
+    store.restore(commit)
     assert f.read_text() == "v1\n"
 
 
@@ -74,7 +101,7 @@ def test_restore_removes_agent_created_untracked_file(tmp_path):
 
     created = work / "scratch.log"
     created.write_text("agent output\n")
-    assert store.restore(commit) is True
+    store.restore(commit)
     assert not created.exists()
     assert (work / "a.txt").read_text() == "v1\n"
 
@@ -87,7 +114,7 @@ def test_restore_recreates_deleted_file(tmp_path):
     commit = store.capture()
 
     f.unlink()
-    assert store.restore(commit) is True
+    store.restore(commit)
     assert f.exists() and f.read_text() == "keep me\n"
 
 
@@ -104,7 +131,7 @@ def test_gitignored_artifact_survives_restore(tmp_path):
     artifact = build / "out.o"
     artifact.write_text("binary\n")
 
-    assert store.restore(commit) is True
+    store.restore(commit)
     # The gitignored artifact survives (clean without -x respects .gitignore).
     assert artifact.exists()
 
@@ -118,20 +145,20 @@ def test_capture_chains_on_parent(tmp_path):
     c2 = store.capture(parent=c1)
     assert c1 != c2
     # Restoring the first checkpoint still recovers the original content.
-    assert store.restore(c1) is True
+    store.restore(c1)
     assert (work / "a.txt").read_text() == "one\n"
 
 
-def test_capture_no_work_dir_is_none(tmp_path):
-    """Capture over a missing work-tree is a graceful no-op (feature inert)."""
-    store = CheckpointStore(tmp_path / "git", tmp_path / "does-not-exist")
-    assert store.capture() is None
+def test_capture_no_work_dir_fails_explicitly(tmp_path):
+    store = WorktreeCheckpointStore(tmp_path / "git", tmp_path / "does-not-exist")
+    with pytest.raises(RewindFailedError):
+        store.capture()
 
 
-def test_restore_without_repo_is_false(tmp_path):
+def test_restore_without_repo_fails_explicitly(tmp_path):
     store, _ = _store(tmp_path)
-    # No capture yet -> no repo on disk -> restore degrades gracefully.
-    assert store.restore("0" * 40) is False
+    with pytest.raises(RewindFailedError):
+        store.restore("0" * 40)
 
 
 # ---------------------------------------------------------------------------
@@ -140,15 +167,15 @@ def test_restore_without_repo_is_false(tmp_path):
 
 
 def test_list_checkpoints_empty(tmp_path):
-    log = SessionLog("cp_empty", base_dir=str(tmp_path))
+    log = _log(tmp_path, "cp_empty")
     assert list_checkpoints(log) == []
 
 
 def test_list_checkpoints_in_order_with_index(tmp_path):
-    log = SessionLog("cp_order", base_dir=str(tmp_path))
-    log.append(CheckpointEvent(commit="a" * 40, prompt_index=0, prompt_preview="first"))
-    log.append(CheckpointEvent(commit="b" * 40, prompt_index=1, prompt_preview="second"))
-    log.append(CheckpointEvent(commit="c" * 40, prompt_index=2, prompt_preview="third"))
+    log = _log(tmp_path, "cp_order")
+    log.commit_offline(CheckpointEvent(commit="a" * 40, prompt_index=0, prompt_preview="first"))
+    log.commit_offline(CheckpointEvent(commit="b" * 40, prompt_index=1, prompt_preview="second"))
+    log.commit_offline(CheckpointEvent(commit="c" * 40, prompt_index=2, prompt_preview="third"))
 
     entries = list_checkpoints(log)
     assert [e.index for e in entries] == [0, 1, 2]
@@ -167,8 +194,8 @@ async def test_subscriber_captures_one_checkpoint_per_prompt(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("v1\n")
-    log = SessionLog("cp_sub", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: str(work))
+    log = _log(tmp_path, "cp_sub")
+    sub = _subscriber(log, lambda: str(work))
 
     await sub.handle(UserPromptSubmitEvent(prompt="do the thing"))
     (work / "a.txt").write_text("v2\n")
@@ -179,8 +206,8 @@ async def test_subscriber_captures_one_checkpoint_per_prompt(tmp_path):
     assert [e.prompt_index for e in entries] == [0, 1]
     assert entries[0].prompt_preview == "do the thing"
     # Restoring the first checkpoint recovers the pre-turn content.
-    store = CheckpointStore(log.path.parent / "git", work)
-    assert store.restore(entries[0].commit) is True
+    store = WorktreeCheckpointStore(log.path.parent / "git", work)
+    store.restore(entries[0].commit)
     assert (work / "a.txt").read_text() == "v1\n"
 
 
@@ -190,14 +217,14 @@ async def test_subscriber_prompt_index_monotonic_across_resume(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("x\n")
-    log = SessionLog("cp_resume", base_dir=str(tmp_path))
+    log = _log(tmp_path, "cp_resume")
 
-    sub1 = CheckpointSubscriber(log, lambda: str(work))
+    sub1 = _subscriber(log, lambda: str(work))
     await sub1.handle(UserPromptSubmitEvent(prompt="p0"))
     await sub1.handle(UserPromptSubmitEvent(prompt="p1"))
 
     # Fresh subscriber over the same log (a resumed process) continues the count.
-    sub2 = CheckpointSubscriber(log, lambda: str(work))
+    sub2 = _subscriber(log, lambda: str(work))
     await sub2.handle(UserPromptSubmitEvent(prompt="p2"))
 
     entries = list_checkpoints(log)
@@ -206,8 +233,8 @@ async def test_subscriber_prompt_index_monotonic_across_resume(tmp_path):
 
 @pytest.mark.asyncio
 async def test_subscriber_no_working_dir_is_noop(tmp_path):
-    log = SessionLog("cp_nowd", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: "")
+    log = _log(tmp_path, "cp_nowd")
+    sub = _subscriber(log, lambda: "")
     await sub.handle(UserPromptSubmitEvent(prompt="ignored"))
     assert list_checkpoints(log) == []
 
@@ -216,8 +243,8 @@ async def test_subscriber_no_working_dir_is_noop(tmp_path):
 async def test_subscriber_disabled_is_noop(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
-    log = SessionLog("cp_off", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: str(work), enabled=False)
+    log = _log(tmp_path, "cp_off")
+    sub = _subscriber(log, lambda: str(work), enabled=False)
     await sub.handle(UserPromptSubmitEvent(prompt="ignored"))
     assert list_checkpoints(log) == []
 
@@ -226,8 +253,8 @@ async def test_subscriber_disabled_is_noop(tmp_path):
 async def test_subscriber_ignores_non_prompt_events(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
-    log = SessionLog("cp_other", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: str(work))
+    log = _log(tmp_path, "cp_other")
+    sub = _subscriber(log, lambda: str(work))
     # A non-UserPromptSubmit / non-TurnEnd event must not capture anything.
     await sub.handle(object())
     assert list_checkpoints(log) == []
@@ -273,8 +300,8 @@ async def test_turn_end_records_after_commit_folded_onto_entry(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("before\n")
-    log = SessionLog("cp_after", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: str(work))
+    log = _log(tmp_path, "cp_after")
+    sub = _subscriber(log, lambda: str(work))
 
     await sub.handle(UserPromptSubmitEvent(prompt="edit it"))
     (work / "a.txt").write_text("agent-left\n")  # what the agent produced
@@ -292,8 +319,8 @@ async def test_turn_end_without_prior_prompt_is_noop(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("x\n")
-    log = SessionLog("cp_after_noop", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: str(work))
+    log = _log(tmp_path, "cp_after_noop")
+    sub = _subscriber(log, lambda: str(work))
     # A TurnEndEvent with no in-flight prompt captures nothing.
     await sub.handle(TurnEndEvent())
     assert list_checkpoints(log) == []
@@ -306,8 +333,8 @@ async def test_after_commit_captures_external_change_vs_live_tree(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("before\n")
-    log = SessionLog("cp_ext", base_dir=str(tmp_path))
-    sub = CheckpointSubscriber(log, lambda: str(work))
+    log = _log(tmp_path, "cp_ext")
+    sub = _subscriber(log, lambda: str(work))
 
     await sub.handle(UserPromptSubmitEvent(prompt="edit it"))
     (work / "a.txt").write_text("agent-left\n")
@@ -316,7 +343,7 @@ async def test_after_commit_captures_external_change_vs_live_tree(tmp_path):
     entry = list_checkpoints(log)[0]
     # An external process changes a file after the agent finished.
     (work / "a.txt").write_text("someone-else-edited\n")
-    store = CheckpointStore(log.path.parent / "git", work)
+    store = WorktreeCheckpointStore(log.path.parent / "git", work)
     live = store.capture(parent=entry.after_commit)
     external = store.diff_tree(entry.after_commit, live)
     assert external == ["a.txt"]

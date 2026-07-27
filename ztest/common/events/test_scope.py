@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from mote.common.events.scope import ScopeRef, current_scope, push_scope
+from mote.runtime.events.scope import ScopeRef, current_scope, push_scope
 
 
 def test_default_is_empty():

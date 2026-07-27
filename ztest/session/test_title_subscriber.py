@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.session.subscribers.TitleSubscriber`.
+"""Unit tests for :class:`mote.runtime.session.subscribers.TitleSubscriber`.
 
 The subscriber fires a single cheap auxiliary-model call on the first live
 :class:`UserPromptSubmitEvent` and appends a :class:`MetaUpdateEvent` carrying
@@ -17,22 +17,25 @@ from typing import Optional
 
 import pytest
 
-from mote.common.events import UserPromptSubmitEvent
-from mote.common.events.types import TurnEndEvent
-from mote.session.events import MetaUpdateEvent, parse_event
-from mote.session.log import SessionLog
-from mote.session.subscribers import TitleSubscriber
+from mote.contracts.events.types import TurnEndEvent
+from mote.runtime.events import UserPromptSubmitEvent
+from mote.runtime.session.codec import decode_session_event
+from mote.runtime.session.events import MetaUpdateEvent, SessionMetaEvent
+from mote.runtime.session.log import SessionLog
+from mote.runtime.session.subscribers import TitleSubscriber
 
 
 def _log(tmp_path) -> SessionLog:
-    return SessionLog("sess-1", base_dir=str(tmp_path))
+    log = SessionLog("sess-1", base_dir=str(tmp_path))
+    asyncio.run(log.append(SessionMetaEvent(session_id="sess-1")))
+    return log
 
 
 def _titles(log: SessionLog) -> list[str]:
     """Every non-empty title appended to the log, in order."""
     out: list[str] = []
-    for record in log.iter_raw():
-        event = parse_event(record)
+    for envelope in log.iter_events():
+        event = decode_session_event(envelope)
         if isinstance(event, MetaUpdateEvent) and event.title:
             out.append(event.title)
     return out
@@ -81,7 +84,7 @@ def test_only_fires_once_on_second_prompt(tmp_path):
 
 def test_resume_with_existing_title_never_regenerates(tmp_path):
     log = _log(tmp_path)
-    log.append(MetaUpdateEvent(title="Existing Title"))
+    asyncio.run(log.append(MetaUpdateEvent(title="Existing Title")))
     calls: list[str] = []
     # A fresh subscriber over the same (already-titled) log seeds _done at build.
     sub = TitleSubscriber(log, _make_gen("New Title", calls=calls))
@@ -142,6 +145,30 @@ def test_last_prompt_preview_recorded(tmp_path):
     log = _log(tmp_path)
     sub = TitleSubscriber(log, _make_gen("Title"))
     asyncio.run(_dispatch(sub, UserPromptSubmitEvent(prompt="a detailed request here")))
-    metas = [parse_event(r) for r in log.iter_raw()]
+    metas = [decode_session_event(envelope) for envelope in log.iter_events()]
     meta = next(m for m in metas if isinstance(m, MetaUpdateEvent) and m.title)
     assert meta.last_prompt == "a detailed request here"
+
+
+def test_close_cancels_and_joins_inflight_generation(tmp_path):
+    log = _log(tmp_path)
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _blocked(prompt: str) -> Optional[str]:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    sub = TitleSubscriber(log, _blocked)
+
+    async def _run():
+        await sub.handle(UserPromptSubmitEvent(prompt="slow title"))
+        await started.wait()
+        await sub.aclose()
+        assert sub._task is None
+        assert cancelled.is_set()
+
+    asyncio.run(_run())

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the human-interaction tools (``mote.executor.tools.human``).
+"""Tests for the human-interaction tools (``mote.product.toolsets.builtin.human``).
 
 Covers AskUser + ReplyToUser (thin delegations to the ask_user /
 reply_to_user Role capabilities) and AskUserQuestion (which runs
@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import AskUserQuestionAnswer, AskUserQuestionAnswers
-from mote.executor.tool_result import ToolError, ToolResult
-from mote.executor.tools.human import AskUser, AskUserQuestion, ReplyToUser
+from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
+from mote.product.toolsets.builtin.human import AskUser, AskUserQuestion, ReplyToUser
+from mote.runtime.tools.tool_result import ToolError, ToolResult
 
 from .conftest import CapRole, bind, run
 
@@ -183,8 +183,8 @@ class TestHumanToolsSelfApprove:
     def test_engine_does_not_prompt_in_default_mode(self):
         # End-to-end through the engine: a default-mode AskUserQuestion resolves
         # to allow WITHOUT ever calling the approval channel.
-        from mote.executor.permission.engine import PermissionEngine
-        from mote.executor.permission.rule_store import RuleStore
+        from mote.runtime.tools.permission.engine import PermissionEngine
+        from mote.runtime.tools.permission.rule_store import RuleStore
 
         prompted: list = []
 
@@ -207,9 +207,9 @@ class TestHumanToolsSelfApprove:
     def test_deny_rule_still_wins(self):
         # A user-configured bypass-immune deny rule still overrides self-approval,
         # so explicit gating remains possible.
-        from mote.common.schema.permission_types import PermissionRule
-        from mote.executor.permission.engine import PermissionEngine
-        from mote.executor.permission.rule_store import RuleStore
+        from mote.contracts.permissions import PermissionRule
+        from mote.runtime.tools.permission.engine import PermissionEngine
+        from mote.runtime.tools.permission.rule_store import RuleStore
 
         store = RuleStore()
         store.add_session_rule(

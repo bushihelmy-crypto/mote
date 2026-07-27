@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 
-from mote.sandbox.network.credentials import CredentialBroker, CredentialRule
+from mote.runtime.sandbox.network.credentials import CredentialBroker, CredentialRule
 
 
 def _lookup(mapping):

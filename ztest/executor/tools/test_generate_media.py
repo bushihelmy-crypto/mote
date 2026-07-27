@@ -12,11 +12,8 @@ from typing import Any
 
 import pytest
 
-from mote.common.exception import ToolNotConfiguredError
-from mote.executor.tools.generate_media import generate_media_tool as gm
-from mote.executor.tools.generate_media.generate_media_tool import GenerateMedia, _compact
-
-pytestmark = pytest.mark.asyncio
+from mote.product.toolsets.builtin.generate_media.generate_media_tool import GenerateMedia, _compact
+from mote.runtime.errors import ToolNotConfiguredError
 
 
 class _FakeMultimodalCfg:
@@ -43,12 +40,40 @@ class _FakeMultimodal:
         self.video_generation = _FakeMultimodalCfg(flags.get("videos", False))
 
 
-def _patch_config(monkeypatch, **flags: bool):
-    """Route the tool's config-check to a fake multimodal config."""
-    from mote.common.config import loader
+_multimodal = _FakeMultimodal()
+_providers: dict[str, "_FakeProvider"] = {}
 
-    fake = type("Cfg", (), {"multimodal": _FakeMultimodal(**flags)})()
-    monkeypatch.setattr(loader, "load_config", lambda *a, **k: fake)
+
+def _tool() -> GenerateMedia:
+    to_plural = {
+        "image": "images",
+        "audio": "audios",
+        "music": "music",
+        "video": "videos",
+    }
+
+    async def invoke_service(*, route_id, capability, operation_key, payload, semantics):
+        kind = capability.rsplit(".", 1)[-1]
+        fake = _providers[to_plural[kind]]
+        outcome = await fake.generate([payload["item"]])
+        results = outcome.get("results") or []
+        if results:
+            return results[0]
+        return {
+            "status": "success",
+            "filename": payload["item"].get("filename"),
+            "url": "",
+        }
+
+    tool = GenerateMedia(_multimodal)
+    tool.invoke_service = invoke_service
+    return tool
+
+
+def _patch_config(_monkeypatch, **flags: bool):
+    """Replace the explicitly injected multimodal config."""
+    global _multimodal
+    _multimodal = _FakeMultimodal(**flags)
 
 
 class _FakeProvider:
@@ -73,28 +98,24 @@ def _patch_creators(monkeypatch, **providers: _FakeProvider):
     tests key by plural (matching the tool's list params) for readability, so the
     fake factory bridges singular→plural.
     """
-    to_plural = {"image": "images", "audio": "audios", "music": "music", "video": "videos"}
-
-    def _factory(kind, output_dir=None):
-        fake = providers[to_plural[kind]]
-        fake.output_dir = output_dir
-        return fake
-
-    monkeypatch.setattr(gm, "create_media_provider", _factory)
+    global _providers
+    _providers = dict(providers)
 
     # Mark each patched kind's service as configured so the up-front config
     # check (``_check_configured``) lets these fan-out tests through.
     _patch_config(monkeypatch, **{kind: True for kind in providers})
 
 
+@pytest.mark.asyncio
 class TestFanOut:
     async def test_metadata(self):
         assert GenerateMedia.name == "GenerateMedia"
         assert "generate_media" in GenerateMedia.aliases
         assert GenerateMedia.is_graph_tool is False
+        assert _tool().can_resume_started_call("call-id") is True
 
     async def test_empty_request(self):
-        res = await GenerateMedia().call()
+        res = await _tool().call()
         assert "No media requested" in res["message"]
 
     async def test_two_kinds_compacted(self, monkeypatch):
@@ -102,19 +123,25 @@ class TestFanOut:
             monkeypatch,
             images=_FakeProvider(
                 "images",
-                {"summary": "1/1 images", "results": [{"status": "success", "filename": "cat.png", "url": "u1"}]},
+                {
+                    "summary": "1/1 images",
+                    "results": [{"status": "success", "filename": "cat.png", "url": "u1"}],
+                },
             ),
             audios=_FakeProvider(
                 "audios",
-                {"summary": "1/1 audios", "results": [{"status": "success", "filename": "hi.mp3", "url": "u2"}]},
+                {
+                    "summary": "1/1 audios",
+                    "results": [{"status": "success", "filename": "hi.mp3", "url": "u2"}],
+                },
             ),
         )
-        res = await GenerateMedia().call(
+        res = await _tool().call(
             images=[{"description": "a cat", "filename": "cat.png"}],
             audios=[{"text": "hello", "filename": "hi.mp3"}],
         )
         assert set(res.keys()) == {"images", "audios"}
-        assert res["images"]["summary"] == "1/1 images"
+        assert res["images"]["summary"] == "1/1 images generated."
         assert res["images"]["assets"] == [{"filename": "cat.png", "url": "u1"}]
         assert res["audios"]["assets"] == [{"filename": "hi.mp3", "url": "u2"}]
 
@@ -126,7 +153,7 @@ class TestFanOut:
             music=_FakeProvider("music"),
             videos=_FakeProvider("videos"),
         )
-        res = await GenerateMedia().call(
+        res = await _tool().call(
             images=[{"description": "x", "filename": "x.png"}],
             audios=[{"text": "y", "filename": "y.mp3"}],
             music=[{"prompt": "z", "filename": "z.mp3"}],
@@ -140,11 +167,14 @@ class TestFanOut:
             monkeypatch,
             images=_FakeProvider(
                 "images",
-                {"summary": "1/1 images", "results": [{"status": "success", "filename": "x.png", "url": "u"}]},
+                {
+                    "summary": "1/1 images",
+                    "results": [{"status": "success", "filename": "x.png", "url": "u"}],
+                },
             ),
             videos=_FakeProvider("videos", raise_batch=True),
         )
-        res = await GenerateMedia().call(
+        res = await _tool().call(
             images=[{"description": "x", "filename": "x.png"}],
             videos=[{"prompt": "w", "filename": "w.mp4"}],
         )
@@ -158,7 +188,7 @@ class TestFanOut:
             videos=_FakeProvider("videos", raise_batch=True),
         )
         with pytest.raises(RuntimeError, match="All media generation failed"):
-            await GenerateMedia().call(
+            await _tool().call(
                 images=[{"description": "x", "filename": "x.png"}],
                 videos=[{"prompt": "w", "filename": "w.mp4"}],
             )
@@ -169,7 +199,12 @@ class TestCompact:
         result = {
             "summary": "2/3 images generated.",
             "results": [
-                {"status": "success", "filename": "a.png", "url": "ua", "local_path": "/tmp/a.png"},
+                {
+                    "status": "success",
+                    "filename": "a.png",
+                    "url": "ua",
+                    "local_path": "/tmp/a.png",
+                },
                 {"status": "success", "filename": "b.png", "urls": ["ub"]},
                 {"status": "failed", "filename": "c.png", "error": "boom"},
             ],
@@ -184,18 +219,22 @@ class TestCompact:
         assert compact["failed"] == [{"filename": "c.png", "error": "boom"}]
 
     def test_no_failed_key_when_all_ok(self):
-        result = {"summary": "1/1", "results": [{"status": "success", "filename": "a.png", "url": "u"}]}
+        result = {
+            "summary": "1/1",
+            "results": [{"status": "success", "filename": "a.png", "url": "u"}],
+        }
         compact = _compact(result)
         assert "failed" not in compact
         assert compact["assets"] == [{"filename": "a.png", "url": "u"}]
 
 
+@pytest.mark.asyncio
 class TestNotConfigured:
     async def test_unconfigured_kind_raises(self, monkeypatch):
         # image service unset → up-front check refuses before any creator runs.
         _patch_config(monkeypatch, images=False)
         with pytest.raises(ToolNotConfiguredError) as excinfo:
-            await GenerateMedia().call(images=[{"description": "a cat", "filename": "cat.png"}])
+            await _tool().call(images=[{"description": "a cat", "filename": "cat.png"}])
         msg = str(excinfo.value)
         assert "not configured" in msg.lower()
         assert "multimodal.image_generation" in msg
@@ -207,16 +246,19 @@ class TestNotConfigured:
             monkeypatch,
             images=_FakeProvider(
                 "images",
-                {"summary": "1/1 images", "results": [{"status": "success", "filename": "x.png", "url": "u"}]},
+                {
+                    "summary": "1/1 images",
+                    "results": [{"status": "success", "filename": "x.png", "url": "u"}],
+                },
             ),
         )
-        res = await GenerateMedia().call(images=[{"description": "x", "filename": "x.png"}])
+        res = await _tool().call(images=[{"description": "x", "filename": "x.png"}])
         assert res["images"]["assets"] == [{"filename": "x.png", "url": "u"}]
 
     async def test_reports_every_unconfigured_kind(self, monkeypatch):
         _patch_config(monkeypatch, images=False, videos=False)
         with pytest.raises(ToolNotConfiguredError) as excinfo:
-            await GenerateMedia().call(
+            await _tool().call(
                 images=[{"description": "x", "filename": "x.png"}],
                 videos=[{"prompt": "w", "filename": "w.mp4"}],
             )
@@ -227,33 +269,29 @@ class TestNotConfigured:
     async def test_empty_request_skips_config_check(self, monkeypatch):
         # No kind requested → returns the guidance message without touching config.
         _patch_config(monkeypatch)  # nothing configured
-        res = await GenerateMedia().call()
+        res = await _tool().call()
         assert "No media requested" in res["message"]
 
     async def test_endpoint_set_but_no_model_raises(self, monkeypatch):
         # base_url + api_key present but the generation model is unset → the
         # service can't pick a model, so refuse the same way as a missing endpoint.
-        from mote.common.config import loader
-
         cfg = _FakeMultimodalCfg(True)
         cfg.model = ""  # image kind's single model field cleared
-        fake = type("Cfg", (), {"multimodal": type("MM", (), {"image_generation": cfg})()})()
-        monkeypatch.setattr(loader, "load_config", lambda *a, **k: fake)
+        global _multimodal
+        _multimodal = type("MM", (), {"image_generation": cfg})()
         with pytest.raises(ToolNotConfiguredError) as excinfo:
-            await GenerateMedia().call(images=[{"description": "x", "filename": "x.png"}])
+            await _tool().call(images=[{"description": "x", "filename": "x.png"}])
         msg = str(excinfo.value)
         assert "no model configured" in msg.lower()
         assert "multimodal.image_generation.model" in msg
 
     async def test_video_missing_one_model_field_raises(self, monkeypatch):
         # Video carries TWO model fields; leaving either unset refuses and names it.
-        from mote.common.config import loader
-
         cfg = _FakeMultimodalCfg(True)
         cfg.reference_guided_video_model = ""  # only one of the two cleared
-        fake = type("Cfg", (), {"multimodal": type("MM", (), {"video_generation": cfg})()})()
-        monkeypatch.setattr(loader, "load_config", lambda *a, **k: fake)
+        global _multimodal
+        _multimodal = type("MM", (), {"video_generation": cfg})()
         with pytest.raises(ToolNotConfiguredError) as excinfo:
-            await GenerateMedia().call(videos=[{"prompt": "w", "filename": "w.mp4"}])
+            await _tool().call(videos=[{"prompt": "w", "filename": "w.mp4"}])
         msg = str(excinfo.value)
         assert "multimodal.video_generation.reference_guided_video_model" in msg

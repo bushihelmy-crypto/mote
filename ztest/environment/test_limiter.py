@@ -4,8 +4,8 @@
 
 import pytest
 
-from mote.environment.exceptions import AgentLimitReached
-from mote.environment.limiter import AgentExecutionLimiter
+from mote.orchestration.environment.exceptions import AgentLimitReached
+from mote.orchestration.environment.limiter import AgentExecutionLimiter
 
 
 def test_execution_guards_count_active_turns():

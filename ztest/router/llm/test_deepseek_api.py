@@ -18,10 +18,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from mote.common.config.config.llm_config import LLMConfig, LLMType
-from mote.router.llm.deepseek_api import DeepSeekLLM
-from mote.router.llm.dsml import contains_dsml, parse_dsml_tool_calls
-from mote.router.llm.llm_provider_registry import LLM_REGISTRY, create_llm_instance, resolve_api_type
+from mote.contracts.config.llm import LLMConfig, LLMType
+from mote.product.integrations.bootstrap import builtin_provider_registry
+from mote.product.integrations.models.deepseek import DeepSeekLLM
+from mote.runtime.models.clients.dsml import contains_dsml, parse_dsml_tool_calls
+from mote.runtime.models.clients.registry import resolve_api_type
 
 # Fullwidth vertical line (U+FF5C), doubled — the real DSML separator.
 _BAR = "\uff5c\uff5c"
@@ -199,7 +200,7 @@ def test_empty_calls_and_no_dsml_returns_empty():
 
 # -- provider routing --------------------------------------------------------
 def test_deepseek_registered():
-    assert LLM_REGISTRY.get_provider(LLMType.DEEPSEEK) is DeepSeekLLM
+    assert builtin_provider_registry().get_provider(LLMType.DEEPSEEK) is DeepSeekLLM
 
 
 def test_resolve_api_type_by_model_name():
@@ -216,7 +217,7 @@ def test_resolve_api_type_explicit():
 
 def test_create_llm_instance_for_deepseek():
     config = LLMConfig(api_type=LLMType.OPENAI, model="deepseek-v4-pro", api_key="x")
-    llm = create_llm_instance(config)
+    llm = builtin_provider_registry().create(config)
     assert isinstance(llm, DeepSeekLLM)
 
 

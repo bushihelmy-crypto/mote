@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
+import time
 
 import pytest
 
-from mote.context.code_map.indexer import RepoIndexer
+from mote.runtime.context.code_map.indexer import RepoIndexer
 
 
 def _write(tmp_path, rel: str, source: str) -> str:
@@ -48,6 +51,7 @@ def test_scan_all_indexes_every_py(tmp_path):
 
 def test_scan_all_skips_prune_dirs(tmp_path):
     _write(tmp_path, "keep.py", "x = 1\n")
+    _write(tmp_path, ".cache/download/skip.py", "cached = True\n")
     _write(tmp_path, ".venv/skip.py", "y = 2\n")
     _write(tmp_path, "__pycache__/cached.py", "z = 3\n")
     idx = _indexer(tmp_path)
@@ -55,7 +59,7 @@ def test_scan_all_skips_prune_dirs(tmp_path):
         idx.scan_all()
         indexed = set(idx._map._store.all_indexed_paths())
         assert os.path.join(str(tmp_path), "keep.py") in indexed
-        assert not any(".venv" in p or "__pycache__" in p for p in indexed)
+        assert not any(skipped in path for path in indexed for skipped in (".cache", ".venv", "__pycache__"))
     finally:
         idx.close()
 
@@ -138,6 +142,66 @@ def test_scan_all_warm_store_skips_unchanged(tmp_path):
         idx.close()
 
 
+@pytest.mark.asyncio
+async def test_scan_all_async_does_not_block_event_loop(tmp_path, monkeypatch):
+    idx = _indexer(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    monkeypatch.setattr(idx, "_current_hashes", lambda: {"slow.py": "hash"})
+    monkeypatch.setattr(idx, "_scan_plan_worker", lambda current: (["slow.py"], set()))
+
+    def slow_reparse(path):
+        started.set()
+        release.wait(timeout=1.0)
+
+    monkeypatch.setattr(idx, "_reparse_worker", slow_reparse)
+    timer = threading.Timer(0.5, release.set)
+    timer.start()
+    before = time.monotonic()
+    scan = asyncio.create_task(idx.scan_all_async())
+    try:
+        while not started.is_set():
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
+        assert time.monotonic() - before < 0.2
+    finally:
+        release.set()
+        await scan
+        timer.cancel()
+        idx.close()
+
+
+@pytest.mark.asyncio
+async def test_async_index_operations_stay_on_one_worker_thread(tmp_path, monkeypatch):
+    idx = _indexer(tmp_path)
+    worker_threads: list[int] = []
+
+    def record_hashes():
+        worker_threads.append(threading.get_ident())
+        return {"a.py": "hash"}
+
+    def record_plan(current):
+        worker_threads.append(threading.get_ident())
+        idx._prepare_worker_map()
+        return (["a.py"], set())
+
+    def record_reparse(path):
+        worker_threads.append(threading.get_ident())
+
+    monkeypatch.setattr(idx, "_current_hashes", record_hashes)
+    monkeypatch.setattr(idx, "_scan_plan_worker", record_plan)
+    monkeypatch.setattr(idx, "_reparse_worker", record_reparse)
+    try:
+        await idx.scan_all_async()
+        assert idx._map is None
+        assert idx._worker_map is not None
+    finally:
+        idx.close()
+
+    assert len(set(worker_threads)) == 1
+
+
 def test_symbols_in_returns_whole_repo_symbols(tmp_path):
     other = _write(tmp_path, "pkg/other.py", "def thing():\n    pass\n\nclass Widget:\n    pass\n")
     _write(tmp_path, "pkg/__init__.py", "")
@@ -169,7 +233,11 @@ def test_symbols_in_best_effort_on_store_error(tmp_path):
 
 
 def test_module_summary_of_returns_docstring_first_line(tmp_path):
-    mod = _write(tmp_path, "purposeful.py", '"""What this module is for."""\ndef f():\n    pass\n')
+    mod = _write(
+        tmp_path,
+        "purposeful.py",
+        '"""What this module is for."""\ndef f():\n    pass\n',
+    )
     idx = _indexer(tmp_path)
     try:
         idx.scan_all()
@@ -317,7 +385,7 @@ def test_scan_all_prunes_new_build_dirs(tmp_path):
 def test_walk_degrades_to_python_only_without_tree_sitter(tmp_path, monkeypatch):
     # With tree-sitter unavailable the registry is Python-only, so the walk filter
     # is exactly {".py"} — a .ts/.go file is ignored (identical to the old walk).
-    import mote.context.code_map.indexer as indexer_mod
+    import mote.runtime.context.code_map.indexer as indexer_mod
 
     monkeypatch.setattr(indexer_mod, "registered_extensions", lambda: {".py"})
     _write(tmp_path, "keep.py", "x = 1\n")

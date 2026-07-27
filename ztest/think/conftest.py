@@ -4,9 +4,9 @@
 
 The fixtures keep ``ThinkEngine._run`` fully offline and deterministic:
 
-- :class:`FakeLLM` is a duck-typed :class:`~mote.common.interface.LLMClient`.
+- :class:`FakeLLM` is a duck-typed :class:`~mote.contracts.ports.LLMClient`.
   ``aask`` returns the next queued reply (or a constant); ``aask_tool`` returns a
-  pre-built :class:`~mote.router.llm.llm_response.LLMResponse`. Both record
+  pre-built :class:`~mote.contracts.models.LLMResponse`. Both record
   their calls so tests can assert which channel fired.
 - :class:`FakeMemory` is a tiny in-memory :class:`MessageStore`; tests seed it
   with history so the dedup checks have something to compare against.
@@ -20,9 +20,58 @@ from typing import Optional
 
 import pytest
 
-from mote.common.const import TOOL_CALLS
-from mote.common.schema import Message, UserMessage
-from mote.router.llm.llm_response import LLMResponse, LLMToolCall
+from mote.contracts.constants.messages import TOOL_CALLS
+from mote.contracts.models import (
+    CanonicalModelResponse,
+    EndpointDescriptor,
+    GenerateOutput,
+    LLMResponse,
+    LLMToolCall,
+    ResponseMode,
+)
+from mote.contracts.ports import ModelRoute
+from mote.contracts.schema import Message, UserMessage
+
+
+class _FakeGateway:
+    def __init__(self, llm: "FakeLLM") -> None:
+        self._llm = llm
+
+    async def execute(self, invocation, **_kwargs):
+        payload = invocation.input
+        messages = [{"role": message.role, "content": message.content} for message in payload.messages]
+        msg = messages[0]["content"] if len(messages) == 1 else messages
+        system_msgs = [payload.system_prompt] if payload.system_prompt else None
+        if invocation.requirements.response_mode in {
+            ResponseMode.NATIVE_TOOLS,
+            ResponseMode.NATIVE_SCHEMA,
+        }:
+            tools = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }
+                for tool in payload.tools
+            ]
+            response = await self._llm.aask_tool(
+                msg,
+                system_msgs=system_msgs,
+                tools=tools,
+                output_schema=payload.output_schema,
+            )
+            output = GenerateOutput(
+                content=response.content or "",
+                tool_calls=tuple(
+                    {"id": call.id, "name": call.name, "arguments": call.arguments} for call in response.tool_calls
+                ),
+            )
+        else:
+            output = GenerateOutput(content=await self._llm.aask(msg, system_msgs=system_msgs))
+        return CanonicalModelResponse(output=output).model_copy(update={"model_call_id": invocation.model_call_id})
+
+    async def resume(self, invocation, **kwargs):
+        return await self.execute(invocation, **kwargs)
 
 
 class FakeLLM:
@@ -44,6 +93,19 @@ class FakeLLM:
         self.aask_calls: list[dict] = []
         self.aask_tool_calls: list[dict] = []
         self.format_msg_calls: list = []
+        self.route = ModelRoute(
+            gateway=_FakeGateway(self),
+            route_id="fake",
+            profile=EndpointDescriptor(
+                endpoint_id="fake",
+                transport="fake",
+                provider="fake",
+                model=model,
+                base_url_identity="https://fake.invalid",
+                credential_pool_id="fake",
+                lifecycle_revision="test",
+            ),
+        )
 
     async def aask(self, msg, system_msgs=None, **kwargs) -> str:
         self.aask_calls.append({"msg": msg, "system_msgs": system_msgs, "kwargs": kwargs})
@@ -110,7 +172,7 @@ class FakeReporter:
 def patch_reporter(monkeypatch):
     """Replace ThoughtReporter so _run never opens a stream / posts a callback."""
     FakeReporter.instances.clear()
-    monkeypatch.setattr("mote.think.think_engine.ThoughtReporter", FakeReporter)
+    monkeypatch.setattr("mote.kernel.think.think_engine._NullThoughtReporter", FakeReporter)
     return FakeReporter
 
 
@@ -126,7 +188,7 @@ def history_with_calls(*signatures) -> list[Message]:
     """Build memory messages each carrying TOOL_CALLS metadata.
 
     Each ``signature`` is a list of ``{"name":..., "args":...}`` dicts (the
-    recorded-call shape ``call_signature`` reads).
+    recorded-call metadata shape).
     """
     msgs: list[Message] = []
     for sig in signatures:

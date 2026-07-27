@@ -66,9 +66,9 @@ async def test_write_then_read_then_finish(make_role, tmp_path):
 
 
 async def test_role_returns_typed_structured_run_result(make_role, tmp_path):
-    from mote.common.schema import OutputContractId
-    from mote.parser.native_channel import FINAL_OUTPUT_TOOL_NAME
-    from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
+    from mote.contracts.output import OutputContractId
+    from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder
+    from mote.kernel.parser.native_channel import FINAL_OUTPUT_TOOL_NAME
 
     role = make_role(
         working_dir=str(tmp_path),

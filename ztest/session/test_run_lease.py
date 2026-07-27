@@ -4,9 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from mote.common.exception import OutputCommitFencedError, RunLeaseUnavailableError
-from mote.common.schema import RunLeasePolicy
-from mote.session.run_lease import RunLeaseHandle, RunLeaseStore
+from mote.contracts.leases import RunLeasePolicy
+from mote.runtime.errors import OutputCommitFencedError, RunLeaseUnavailableError
+from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
 
 
 class Clock:
@@ -43,7 +43,7 @@ class FailingRenewCoordinator:
 
 
 def test_takeover_increments_token_and_fences_stale_owner(tmp_path):
-    from mote.common.interface import RunLeaseCoordinator
+    from mote.contracts.ports import RunLeaseCoordinator
 
     clock = Clock()
     store = RunLeaseStore(tmp_path / "leases.json", clock=clock)
@@ -111,7 +111,7 @@ async def test_handle_heartbeats_and_releases_its_epoch(tmp_path, monkeypatch):
     async def capture(event):
         events.append(event)
 
-    monkeypatch.setattr("mote.session.run_lease.observe_event", capture)
+    monkeypatch.setattr("mote.runtime.session.run_lease.observe_event", capture)
 
     store = RunLeaseStore(tmp_path / "leases.json")
     handle = RunLeaseHandle(
@@ -158,14 +158,14 @@ def test_process_crash_expires_then_takeover_fences_old_epoch(tmp_path):
 async def test_heartbeat_backend_failure_blocks_later_commit(tmp_path, monkeypatch):
     import asyncio
 
-    from mote.common.exception import RunLeaseCoordinatorUnavailableError
+    from mote.runtime.errors import RunLeaseCoordinatorUnavailableError
 
     events = []
 
     async def capture(event):
         events.append(event)
 
-    monkeypatch.setattr("mote.session.run_lease.observe_event", capture)
+    monkeypatch.setattr("mote.runtime.session.run_lease.observe_event", capture)
     coordinator = FailingRenewCoordinator(RunLeaseStore(tmp_path / "leases.json"))
     handle = RunLeaseHandle(
         coordinator,
@@ -191,7 +191,7 @@ def test_lease_policy_rejects_unsafe_heartbeat_window():
 
 
 def test_corrupt_coordinator_state_fails_with_typed_retryable_error(tmp_path):
-    from mote.common.exception import RunLeaseCoordinatorUnavailableError
+    from mote.runtime.errors import RunLeaseCoordinatorUnavailableError
 
     path = tmp_path / "leases.json"
     path.write_text("not-json", encoding="utf-8")

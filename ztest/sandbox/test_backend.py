@@ -12,10 +12,10 @@ import os
 
 import pytest
 
-from mote.sandbox.backend import NullBackend, SandboxPolicy
-from mote.sandbox.bwrap import BwrapBackend
-from mote.sandbox.detect import detect_backend
-from mote.sandbox.violations import SandboxViolation, parse_violations
+from mote.runtime.sandbox.backend import NullBackend, SandboxPolicy
+from mote.runtime.sandbox.bwrap import BwrapBackend
+from mote.runtime.sandbox.detect import detect_backend
+from mote.runtime.sandbox.violations import SandboxViolation, parse_violations
 
 
 class TestDetectBackend:

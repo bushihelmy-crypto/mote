@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.tool_result`` (ToolResult + re-exports).
+"""Unit tests for ``mote.runtime.tools.tool_result`` (ToolResult + re-exports).
 
 Pins the structural-failure contract: a plain return value is ALWAYS success;
 failure is signalled by ``raise ToolError`` or ``ToolResult(success=False)`` —
@@ -8,10 +8,13 @@ never by sniffing the output text (so a successful output may start "Error:").
 """
 from __future__ import annotations
 
-from mote.common.const.tools import ERROR_PREFIX
-from mote.common.exception import ToolError as ExceptionToolError
-from mote.executor.tool_result import ERROR_PREFIX as RESULT_ERROR_PREFIX
-from mote.executor.tool_result import FileChange, ToolError, ToolMedia, ToolResult
+import pytest
+
+from mote.contracts.tools.constants import ERROR_PREFIX
+from mote.runtime.errors import ToolError as ExceptionToolError
+from mote.runtime.tools.tool_result import ERROR_PREFIX as RESULT_ERROR_PREFIX
+from mote.runtime.tools.tool_result import FileChange, ToolError, ToolMedia, ToolResult
+from mote.ztest.artifact_fakes import artifact_media, artifact_ref
 
 
 class TestToolResultDefaults:
@@ -20,18 +23,15 @@ class TestToolResultDefaults:
         assert r.output == "hello"
         assert r.success is True
         assert r.data is None
-        assert r.images == []
-        assert r.pdfs == []
+        assert r.media == []
         assert r.file_changes == []
 
     def test_media_independent_per_instance(self):
         a = ToolResult(output="a")
         b = ToolResult(output="b")
-        a.media.append(ToolMedia(kind="image", b64="x"))
+        a.media.append(artifact_media("image", "x"))
         # default_factory => no shared mutable default between instances.
         assert b.media == []
-        assert b.images == []
-        assert b.pdfs == []
 
     def test_explicit_failure(self):
         r = ToolResult(output="nope", success=False, data={"k": 1})
@@ -99,55 +99,61 @@ class TestMedia:
     def test_no_media_is_empty(self):
         r = ToolResult(output="x")
         assert r.media == []
-        assert r.images == []
-        assert r.pdfs == []
 
-    def test_image_carries_kind_ref_b64(self):
+    def test_image_carries_kind_ref_and_artifact(self):
         # The producer stamps ref at the source — no path recovered from data.
         r = ToolResult(
             output="Read image ...",
-            media=[ToolMedia(kind="image", b64="<b64>", ref="/tmp/pic.png")],
+            media=[artifact_media("image", "image-bytes", ref="/tmp/pic.png")],
         )
         assert len(r.media) == 1
         assert r.media[0].kind == "image"
         assert r.media[0].ref == "/tmp/pic.png"
-        assert r.media[0].b64 == "<b64>"
-        # .images projects the base64 payloads grouped by kind.
-        assert r.images == ["<b64>"]
-        assert r.pdfs == []
+        assert r.media[0].artifact.size == len(b"image-bytes")
 
-    def test_pdf_carries_kind_ref_b64(self):
+    def test_pdf_carries_kind_ref_and_artifact(self):
         r = ToolResult(
             output="Read PDF ...",
-            media=[ToolMedia(kind="pdf", b64="<b64>", ref="/tmp/doc.pdf", mime="application/pdf")],
+            media=[artifact_media("pdf", "pdf-bytes", ref="/tmp/doc.pdf")],
         )
         assert len(r.media) == 1
         assert r.media[0].kind == "pdf"
         assert r.media[0].ref == "/tmp/doc.pdf"
         assert r.media[0].mime == "application/pdf"
-        assert r.pdfs == ["<b64>"]
-        assert r.images == []
+        assert r.media[0].artifact.size == len(b"pdf-bytes")
 
-    def test_bytes_only_media_has_empty_ref(self):
-        # A screenshot carries base64 but no on-disk path.
-        r = ToolResult(output="[screenshot]", media=[ToolMedia(kind="image", b64="<b64>", ref="")])
+    def test_artifact_only_media_has_empty_ref(self):
+        r = ToolResult(output="[screenshot]", media=[artifact_media("image", "shot", ref="")])
         assert len(r.media) == 1
         assert r.media[0].kind == "image"
         assert r.media[0].ref == ""
-        assert r.images == ["<b64>"]
 
-    def test_images_pdfs_project_by_kind(self):
+    def test_media_preserves_order_and_kind(self):
         r = ToolResult(
             output="x",
             media=[
-                ToolMedia(kind="image", b64="<a>"),
-                ToolMedia(kind="image", b64="<b>"),
-                ToolMedia(kind="pdf", b64="<c>"),
+                artifact_media("image", "a"),
+                artifact_media("image", "b"),
+                artifact_media("pdf", "c"),
             ],
         )
         assert [m.kind for m in r.media] == ["image", "image", "pdf"]
-        assert r.images == ["<a>", "<b>"]
-        assert r.pdfs == ["<c>"]
+
+    def test_media_carries_typed_artifact_reference(self):
+        artifact = artifact_ref(
+            b"<svg/>",
+            kind="canvas",
+            representation="svg",
+            mime_type="image/svg+xml",
+        )
+
+        media = ToolMedia(kind="image", artifact=artifact)
+
+        assert media.artifact is artifact
+
+    def test_media_requires_artifact_byte_source(self):
+        with pytest.raises(TypeError, match="artifact"):
+            ToolMedia(kind="image")  # type: ignore[call-arg]
 
 
 class TestReExports:

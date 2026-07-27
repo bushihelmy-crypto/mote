@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.roles.component_graph import (
+from mote.runtime.agent.component_graph import (
     ComponentCycleError,
     ComponentGraph,
     ComponentGraphError,

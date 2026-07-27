@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.roles.lsp.registry`` — dedup + volume-limited diagnostics."""
+"""Tests for ``mote.runtime.agent.lsp.registry`` — dedup + volume-limited diagnostics."""
 from __future__ import annotations
 
-from mote.roles.lsp.registry import Diagnostic, DiagnosticRegistry, parse_diagnostic, severity_label
+from mote.runtime.agent.lsp.registry import Diagnostic, DiagnosticRegistry, parse_diagnostic, severity_label
 
 
 def _d(line=0, msg="boom", sev=1):

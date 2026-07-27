@@ -5,27 +5,27 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.events import (
+from mote.runtime.events import (
     AgentLifecycleEvent,
-    EventBus,
     LLMStreamDeltaEvent,
     LogSubscriber,
-    PreToolUseEvent,
     RecoveryEvent,
     ResourceReportEvent,
     SessionStartEvent,
     TaskProgressEvent,
+    ToolInvocationStartedEvent,
+    bind_telemetry,
     observe_event,
     observe_event_sync,
-    set_bus,
 )
-from mote.common.events.log_subscriber import _clip
+from mote.runtime.events.log_subscriber import _clip
+from mote.ztest.telemetry import InlineTelemetry
 
 
 def _capture(monkeypatch):
     """Patch the subscriber's logger; return (info_lines, debug_lines, warns)."""
     info, debug, warns = [], [], []
-    import mote.common.events.log_subscriber as mod
+    import mote.runtime.events.log_subscriber as mod
 
     monkeypatch.setattr(mod.logger, "info", lambda m: info.append(m))
     monkeypatch.setattr(mod.logger, "debug", lambda m: debug.append(m))
@@ -46,9 +46,9 @@ async def test_session_start_logged_at_info(monkeypatch):
 @pytest.mark.asyncio
 async def test_tool_event_logged_at_debug(monkeypatch):
     info, debug, _ = _capture(monkeypatch)
-    await LogSubscriber().handle(PreToolUseEvent(tool_name="Read", tool_input={"x": 1}))
+    await LogSubscriber().handle(ToolInvocationStartedEvent(tool_name="Read", tool_input={"x": 1}))
     assert info == []
-    assert len(debug) == 1 and "pre_tool_use" in debug[0] and "Read" in debug[0]
+    assert len(debug) == 1 and "tool_invocation_started" in debug[0] and "Read" in debug[0]
 
 
 @pytest.mark.asyncio
@@ -73,19 +73,17 @@ async def test_stream_deltas_are_not_logged(monkeypatch):
     # Deltas are delivered via emit_sync -> handle_sync, which LogSubscriber does
     # not implement, so per-token chunks never reach the logger.
     info, debug, _ = _capture(monkeypatch)
-    bus = EventBus()
-    bus.subscribe(LogSubscriber())
-    with set_bus(bus):
+    telemetry = InlineTelemetry(LogSubscriber())
+    with bind_telemetry(telemetry):
         observe_event_sync(LLMStreamDeltaEvent(token="tok"))
     assert info == [] and debug == []
 
 
 @pytest.mark.asyncio
-async def test_subscribed_on_bus_logs_via_emit(monkeypatch):
+async def test_registered_handler_logs_via_emit(monkeypatch):
     info, debug, _ = _capture(monkeypatch)
-    bus = EventBus()
-    bus.subscribe(LogSubscriber())
-    with set_bus(bus):
+    telemetry = InlineTelemetry(LogSubscriber())
+    with bind_telemetry(telemetry):
         await observe_event(SessionStartEvent(session_id="zzzz", source="resume"))
     assert any("session_start" in line for line in info)
 
@@ -107,7 +105,13 @@ def test_clip_collapses_whitespace():
 async def test_recovery_event_logged_at_info(monkeypatch, phase):
     info, debug, _ = _capture(monkeypatch)
     await LogSubscriber().handle(
-        RecoveryEvent(phase=phase, action="rotate_credential", attempt=1, error_type="LLMError", error="429")
+        RecoveryEvent(
+            phase=phase,
+            action="rotate_credential",
+            attempt=1,
+            error_type="LLMError",
+            error="429",
+        )
     )
     assert debug == []
     assert len(info) == 1 and "recovery" in info[0] and phase in info[0] and "rotate_credential" in info[0]
@@ -145,7 +149,7 @@ async def test_async_handle_ignores_task_progress(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Agent lifecycle: emitted by the runtime-level bus (control / residency)
+# Agent lifecycle: emitted by control / residency telemetry
 # ---------------------------------------------------------------------------
 
 
@@ -176,8 +180,7 @@ async def test_async_handle_ignores_agent_lifecycle(monkeypatch):
 
 def test_agent_lifecycle_via_emit_sync(monkeypatch):
     info, _, _ = _capture(monkeypatch)
-    bus = EventBus()
-    bus.subscribe(LogSubscriber())
-    with set_bus(bus):
+    telemetry = InlineTelemetry(LogSubscriber())
+    with bind_telemetry(telemetry):
         observe_event_sync(AgentLifecycleEvent(session_id="feedface", phase="added", detail="Foo"))
     assert any("agent_lifecycle" in line and "added" in line for line in info)

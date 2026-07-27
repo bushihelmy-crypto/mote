@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.parser.native_channel.NativeToolChannel`.
+"""Unit tests for :class:`mote.kernel.parser.native_channel.NativeToolChannel`.
 
 Covers the protocol hooks (prompt_vars / tool_specs / iter_commands /
 record_turn / turn_signature / is_terminal) plus the contract that this channel
@@ -10,13 +10,25 @@ is a :class:`CommandChannel`. The think round is faked via
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 
 import pytest
 
-from mote.common.base import CommandChannel
-from mote.common.const import IMAGES, PDFS, TOOL_CALL_ID, TOOL_CALLS, TOOL_REFERENCES, TOOL_RESULT_RESOURCE_PATH
-from mote.parser.native_channel import FINAL_OUTPUT_TOOL_NAME, NativeToolChannel
+from mote.contracts.artifacts import ArtifactRef, ResolvedArtifact
+from mote.contracts.constants.messages import (
+    IMAGES,
+    PDFS,
+    TOOL_CALL_ID,
+    TOOL_CALLS,
+    TOOL_REFERENCES,
+    TOOL_RESULT_RESOURCE_PATH,
+)
+from mote.kernel.parser.channel import CommandChannel
+from mote.kernel.parser.native_channel import FINAL_OUTPUT_TOOL_NAME, NativeToolChannel
+from mote.runtime.tools.tool_result import ToolMedia
+from mote.ztest.artifact_fakes import ArtifactTestResolver, artifact_media
 
 from .conftest import FakeExecutor, FakeMemory, FakeThinkEngine, collect, executed_command
 
@@ -26,61 +38,52 @@ def native_call(id="1", command_name="Read", args=None) -> dict:
     return {"id": id, "command_name": command_name, "args": args or {}}
 
 
+def endpoint(*, model="test-model", native_schema=False, tool_search=False):
+    from mote.contracts.models import EndpointCapabilities, EndpointDescriptor
+
+    return EndpointDescriptor(
+        endpoint_id="test",
+        transport="test",
+        provider="test",
+        model=model,
+        base_url_identity="https://test.invalid",
+        credential_pool_id="test",
+        lifecycle_revision="test",
+        capabilities=EndpointCapabilities(
+            supports_native_schema=native_schema,
+            supports_native_tool_search=tool_search,
+        ),
+    )
+
+
 class TestContract:
     def test_is_command_channel(self):
         assert isinstance(NativeToolChannel(), CommandChannel)
 
-    def test_default_provider_is_openai(self):
-        assert NativeToolChannel()._provider == "openai"
-
-    def test_provider_is_stored(self):
-        assert NativeToolChannel(provider="anthropic")._provider == "anthropic"
-
     def test_structured_output_negotiation_reports_native_schema_downgrade(self):
-        from mote.common.schema import OutputBindingKind
+        from mote.contracts.output import OutputBindingKind
 
         decision = NativeToolChannel().output_binding_decision(is_text=False)
 
         assert decision.binding.kind is OutputBindingKind.NATIVE_TOOL
         assert decision.downgrade_reasons == ("native_schema_not_supported",)
         assert decision.capabilities.protocol == "native"
-        assert decision.capabilities.provider == "openai"
+        assert decision.capabilities.provider == "canonical"
 
-    def test_for_llm_profiles_the_actual_routed_transport(self):
-        from types import SimpleNamespace
-
-        from mote.common.config.config.llm_config import LLMConfig
-
-        llm = SimpleNamespace(
-            config=LLMConfig(
-                model="claude-sonnet-4",
-                api_type="anthropic",
-                base_url="https://api.anthropic.com",
-            ),
-            model="claude-sonnet-4",
+    def test_for_model_profiles_semantic_endpoint_capabilities(self):
+        routed = NativeToolChannel(model="gpt-4o").for_model(
+            endpoint(model="claude-sonnet-4", native_schema=True),
+            output_schema={"type": "object"},
         )
-
-        routed = NativeToolChannel(provider="openai", model="gpt-4o").for_llm(llm)
         capabilities = routed.output_capabilities()
 
-        assert capabilities.provider == "anthropic"
+        assert capabilities.provider == "canonical"
         assert capabilities.model == "claude-sonnet-4"
+        assert capabilities.supports_native_schema is True
 
-    def test_schema_incompatible_with_provider_downgrades_to_semantic_tool(self):
-        from types import SimpleNamespace
-
-        def reject_schema(_schema):
-            raise ValueError("unsupported schema")
-
-        llm = SimpleNamespace(
-            config=SimpleNamespace(model="gpt-4o", api_type="openai"),
-            model="gpt-4o",
-            supports_native_schema_output=lambda: True,
-            native_schema_request=reject_schema,
-        )
-
-        routed = NativeToolChannel(output_is_text=False).for_llm(
-            llm,
+    def test_endpoint_without_native_schema_downgrades_to_semantic_tool(self):
+        routed = NativeToolChannel(output_is_text=False).for_model(
+            endpoint(model="gpt-4o", native_schema=False),
             output_schema={
                 "type": "object",
                 "additionalProperties": {"type": "integer"},
@@ -100,7 +103,7 @@ class TestContract:
         assert guide == ""
 
     def test_prompt_vars_covers_required_keys(self):
-        from mote.common.base.command_channel import PROMPT_VAR_KEYS
+        from mote.kernel.parser.channel import PROMPT_VAR_KEYS
 
         assert set(NativeToolChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
 
@@ -118,14 +121,14 @@ class TestContract:
     def test_lower_renders_ctl_finish_without_end_marker(self):
         # The CTL_FINISH symbol must lower to a plain-English turn-end, never the
         # XML <end></end> marker, so symbolized prose can't leak it to native.
-        from mote.common.prompt.refs import CTL_FINISH
+        from mote.kernel.prompt.refs import CTL_FINISH
 
         out = NativeToolChannel().lower(f"Only {CTL_FINISH} when done.")
         assert "<end>" not in out
         assert "tool" in out.lower()
 
     def test_lower_renders_capability_symbols_as_plain_text(self):
-        from mote.common.prompt.refs import CAP_READ
+        from mote.kernel.prompt.refs import CAP_READ
 
         out = NativeToolChannel().lower(f"Use {CAP_READ} first.")
         assert "Editor.read" not in out
@@ -133,23 +136,36 @@ class TestContract:
 
 
 class TestToolSpecs:
-    def test_delegates_to_executor_with_provider(self):
+    def test_delegates_to_canonical_executor_view(self):
         executor = FakeExecutor(specs=[{"name": "Read"}])
-        channel = NativeToolChannel(provider="anthropic")
+        channel = NativeToolChannel()
         specs = channel.tool_specs(executor)
         assert specs == [{"name": "Read"}]
-        assert executor.provider_calls == ["anthropic"]
 
-    def test_passes_default_provider(self):
+    def test_does_not_select_a_provider_envelope(self):
         executor = FakeExecutor()
         NativeToolChannel().tool_specs(executor)
-        assert executor.provider_calls == ["openai"]
+        assert executor.provider_calls == []
+
+    def test_incapable_endpoint_withholds_unrevealed_deferred_tools(self):
+        executor = FakeExecutor(specs=[{"name": "Canvas", "defer_loading": True}])
+
+        specs = NativeToolChannel(supports_native_tool_search=False).tool_specs(executor)
+
+        assert specs == []
+
+    def test_capable_endpoint_preserves_deferred_tools(self):
+        executor = FakeExecutor(specs=[{"name": "Canvas", "defer_loading": True}])
+
+        specs = NativeToolChannel(supports_native_tool_search=True).tool_specs(executor)
+
+        assert specs == [{"name": "Canvas", "defer_loading": True}]
 
     def test_structured_contract_adds_provider_native_final_output_tool(self):
         from pydantic import BaseModel
 
-        from mote.common.schema import OutputContractId
-        from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
+        from mote.contracts.output import OutputContractId
+        from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder
 
         class Report(BaseModel):
             count: int
@@ -158,11 +174,11 @@ class TestToolSpecs:
             OutputContractId("test", "report", "1"),
             TypeAdapterOutputDecoder(Report),
         )
-        specs = NativeToolChannel(provider="openai").tool_specs(FakeExecutor(specs=[]), contract)
+        specs = NativeToolChannel().tool_specs(FakeExecutor(specs=[]), contract)
 
-        final = specs[-1]["function"]
+        final = specs[-1]
         assert final["name"] == FINAL_OUTPUT_TOOL_NAME
-        output_schema = final["parameters"]["properties"]["output"]
+        output_schema = final["input_schema"]["properties"]["output"]
         assert output_schema["properties"]["count"]["type"] == "integer"
 
 
@@ -206,7 +222,8 @@ class TestModelTurn:
 
     @pytest.mark.asyncio
     async def test_rejected_output_tool_records_paired_correction_result(self):
-        from mote.common.schema import CorrectionFeedback, FinalCandidateAction, ValidationIssue
+        from mote.contracts.model_actions import FinalCandidateAction
+        from mote.contracts.output import CorrectionFeedback, ValidationIssue
 
         memory = FakeMemory()
         candidate = FinalCandidateAction(
@@ -468,34 +485,58 @@ class TestRecordTurnMedia:
     @pytest.mark.asyncio
     async def test_appends_media_message_with_images(self):
         memory = FakeMemory()
-        executed = [executed_command(id="a", output="placeholder", images=["IMGDATA"])]
-        await NativeToolChannel().record_turn(memory, "t", executed)
+        executed = [
+            executed_command(
+                id="a",
+                output="placeholder",
+                media=[artifact_media("image", "IMGDATA")],
+            )
+        ]
+        await NativeToolChannel(artifact_resolver=ArtifactTestResolver()).record_turn(memory, "t", executed)
         # assistant + tool-result + media message.
         assert len(memory.messages) == 3
         media = memory.messages[-1]
-        assert media.metadata[IMAGES] == ["IMGDATA"]
+        assert media.metadata[IMAGES] == [base64.b64encode(b"IMGDATA").decode("ascii")]
         assert PDFS not in media.metadata
 
     @pytest.mark.asyncio
     async def test_appends_media_message_with_pdfs(self):
         memory = FakeMemory()
-        executed = [executed_command(id="a", output="placeholder", pdfs=["PDFDATA"])]
-        await NativeToolChannel().record_turn(memory, "t", executed)
+        executed = [
+            executed_command(
+                id="a",
+                output="placeholder",
+                media=[artifact_media("pdf", "PDFDATA")],
+            )
+        ]
+        await NativeToolChannel(artifact_resolver=ArtifactTestResolver()).record_turn(memory, "t", executed)
         media = memory.messages[-1]
-        assert media.metadata[PDFS] == ["PDFDATA"]
+        assert media.metadata[PDFS] == [base64.b64encode(b"PDFDATA").decode("ascii")]
         assert IMAGES not in media.metadata
 
     @pytest.mark.asyncio
     async def test_collects_media_across_commands(self):
         memory = FakeMemory()
         executed = [
-            executed_command(id="a", images=["i1"], pdfs=["p1"]),
-            executed_command(id="b", images=["i2"]),
+            executed_command(
+                id="a",
+                media=[
+                    artifact_media("image", "i1"),
+                    artifact_media("pdf", "p1"),
+                ],
+            ),
+            executed_command(
+                id="b",
+                media=[artifact_media("image", "i2")],
+            ),
         ]
-        await NativeToolChannel().record_turn(memory, "t", executed)
+        await NativeToolChannel(artifact_resolver=ArtifactTestResolver()).record_turn(memory, "t", executed)
         media = memory.messages[-1]
-        assert media.metadata[IMAGES] == ["i1", "i2"]
-        assert media.metadata[PDFS] == ["p1"]
+        assert media.metadata[IMAGES] == [
+            base64.b64encode(b"i1").decode("ascii"),
+            base64.b64encode(b"i2").decode("ascii"),
+        ]
+        assert media.metadata[PDFS] == [base64.b64encode(b"p1").decode("ascii")]
 
     @pytest.mark.asyncio
     async def test_no_media_means_no_extra_message(self):
@@ -509,11 +550,73 @@ class TestRecordTurnMedia:
         # Media collection is independent of pairing; an id-less command's media
         # is still gathered (the placeholder text was lost but bytes survive).
         memory = FakeMemory()
-        executed = [executed_command(id=None, images=["only"])]
-        await NativeToolChannel().record_turn(memory, "t", executed)
+        executed = [
+            executed_command(
+                id=None,
+                media=[artifact_media("image", "only")],
+            )
+        ]
+        await NativeToolChannel(artifact_resolver=ArtifactTestResolver()).record_turn(memory, "t", executed)
         # assistant (no tool-result since no id) + media.
         assert len(memory.messages) == 2
-        assert memory.messages[-1].metadata[IMAGES] == ["only"]
+        assert memory.messages[-1].metadata[IMAGES] == [base64.b64encode(b"only").decode("ascii")]
+
+    @pytest.mark.asyncio
+    async def test_durable_media_is_resolved_only_at_model_message_boundary(self):
+        content = b"<svg id='durable'/>"
+        digest = hashlib.sha256(content).hexdigest()
+        artifact = ArtifactRef(
+            artifact_id="canvas-durable",
+            revision=1,
+            representation="svg",
+            kind="canvas",
+            mime_type="image/svg+xml",
+            content_ref=f"sha256:{digest}",
+            digest=digest,
+            size=len(content),
+        )
+
+        class Resolver:
+            def __init__(self):
+                self.calls = []
+
+            async def resolve(self, ref, policy):
+                self.calls.append((ref, policy))
+                return ResolvedArtifact(ref=ref, content=content)
+
+        resolver = Resolver()
+        memory = FakeMemory()
+        entry = executed_command(id="a", output="Canvas exported")
+        entry["media"] = [ToolMedia(kind="image", artifact=artifact)]
+
+        await NativeToolChannel(artifact_resolver=resolver).record_turn(
+            memory,
+            "t",
+            [entry],
+        )
+
+        assert resolver.calls[0][0] is artifact
+        assert memory.messages[-1].metadata[IMAGES] == [base64.b64encode(content).decode("ascii")]
+
+    @pytest.mark.asyncio
+    async def test_durable_media_without_resolver_fails_closed(self):
+        content = b"<svg/>"
+        digest = hashlib.sha256(content).hexdigest()
+        artifact = ArtifactRef(
+            artifact_id="canvas-unwired",
+            revision=1,
+            representation="svg",
+            kind="canvas",
+            mime_type="image/svg+xml",
+            content_ref=f"sha256:{digest}",
+            digest=digest,
+            size=len(content),
+        )
+        entry = executed_command(id="a", output="Canvas exported")
+        entry["media"] = [ToolMedia(kind="image", artifact=artifact)]
+
+        with pytest.raises(RuntimeError, match="ArtifactResolver is required"):
+            await NativeToolChannel().record_turn(FakeMemory(), "t", [entry])
 
 
 class TestToolReferencesGating:
@@ -542,14 +645,14 @@ class TestToolReferencesGating:
     @pytest.mark.asyncio
     async def test_capable_anthropic_stamps_references(self):
         memory = FakeMemory()
-        channel = NativeToolChannel(provider="anthropic", model="opus-4")
+        channel = NativeToolChannel(supports_native_tool_search=True, model="opus-4")
         await channel.record_results(memory, [self._search_result(["ConvertImage"])])
         assert memory.messages[0].metadata[TOOL_REFERENCES] == ["ConvertImage"]
 
     @pytest.mark.asyncio
     async def test_capable_openai_responses_stamps_references(self):
         memory = FakeMemory()
-        channel = NativeToolChannel(provider="openai_responses", model="gpt-5.4")
+        channel = NativeToolChannel(supports_native_tool_search=True, model="gpt-5.4")
         await channel.record_results(memory, [self._search_result(["ConvertImage"])])
         assert memory.messages[0].metadata[TOOL_REFERENCES] == ["ConvertImage"]
 
@@ -557,7 +660,7 @@ class TestToolReferencesGating:
     async def test_old_anthropic_suppresses_references(self):
         # Old Claude runs SPLIT — cannot expand tool_reference blocks, so no stamp.
         memory = FakeMemory()
-        channel = NativeToolChannel(provider="anthropic", model="claude-3-5-sonnet")
+        channel = NativeToolChannel(supports_native_tool_search=False, model="claude-3-5-sonnet")
         await channel.record_results(memory, [self._search_result(["ConvertImage"])])
         assert TOOL_REFERENCES not in memory.messages[0].metadata
 
@@ -566,7 +669,7 @@ class TestToolReferencesGating:
         # The Chat Completions "openai" envelope has no server-side path even on a
         # capable model, so the stamp is suppressed (SPLIT).
         memory = FakeMemory()
-        channel = NativeToolChannel(provider="openai", model="gpt-5.4")
+        channel = NativeToolChannel(supports_native_tool_search=False, model="gpt-5.4")
         await channel.record_results(memory, [self._search_result(["ConvertImage"])])
         assert TOOL_REFERENCES not in memory.messages[0].metadata
 
@@ -574,7 +677,7 @@ class TestToolReferencesGating:
     async def test_no_model_suppresses_references(self):
         # Capability unknown → defensive SPLIT, no stamp.
         memory = FakeMemory()
-        channel = NativeToolChannel(provider="anthropic")
+        channel = NativeToolChannel()
         await channel.record_results(memory, [self._search_result(["ConvertImage"])])
         assert TOOL_REFERENCES not in memory.messages[0].metadata
 
@@ -582,7 +685,7 @@ class TestToolReferencesGating:
     async def test_non_search_data_ignored_on_capable(self):
         # Only the tool_references key is read; any other data shape → no stamp.
         memory = FakeMemory()
-        channel = NativeToolChannel(provider="anthropic", model="opus-4")
+        channel = NativeToolChannel(supports_native_tool_search=True, model="opus-4")
         entry = executed_command(id="a", name="Read", output="content")
         entry["data"] = {"something_else": 1}
         await channel.record_results(memory, [entry])

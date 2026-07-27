@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.tool_spec_adapter``.
+"""Unit tests for ``mote.kernel.tools.spec_adapter``.
 
 Builds JSON Schema from a ``call()`` signature + docstring and wraps it into the
 provider envelope. Note ``from __future__ import annotations`` stringizes
@@ -9,16 +9,22 @@ these tests exercise.
 """
 from __future__ import annotations
 
+import inspect
+import pathlib
 from typing import Optional, Union
 
 from pydantic import BaseModel
 
-from mote.executor.tool_spec_adapter import _json_type, _unwrap_optional, build_json_schema, to_native_tool_specs
+from mote.kernel.tools.spec_adapter import _json_type, _unwrap_optional, build_json_schema, to_native_tool_specs
 
 
 class Item(BaseModel):
     label: str
     qty: int = 1
+
+
+class BatchItem(BaseModel):
+    item: Item
 
 
 class TestUnwrapOptional:
@@ -52,13 +58,9 @@ class TestJsonType:
         assert _json_type(dict[str, int]) == {"type": "object"}
 
     def test_unknown_falls_back_to_string(self):
-        import pathlib
-
         assert _json_type(pathlib.Path) == {"type": "string"}
 
     def test_empty_annotation_is_string(self):
-        import inspect
-
         assert _json_type(inspect.Parameter.empty) == {"type": "string"}
 
     def test_pydantic_model_expands(self):
@@ -114,8 +116,17 @@ class TestBuildJsonSchema:
         schema = build_json_schema(call)
         items = schema["properties"]["items"]
         assert items["type"] == "array"
-        # Nested model schema present under items (via $ref/$defs or inline).
-        assert "items" in items
+        assert items["items"]["type"] == "object"
+
+    def test_nested_model_definitions_are_hoisted_to_root(self):
+        def call(self, *, items: list[BatchItem]):  # noqa: ANN001
+            ...
+
+        schema = build_json_schema(call)
+        item_schema = schema["properties"]["items"]["items"]
+        assert item_schema["properties"]["item"]["$ref"] == "#/$defs/Item"
+        assert schema["$defs"]["Item"]["required"] == ["label"]
+        assert "$defs" not in item_schema
 
 
 class TestToNativeToolSpecs:
@@ -178,7 +189,7 @@ class TestJsonSchemaTransformer:
         assert specs[0]["input_schema"] == {"type": "object", "properties": {"x": {"type": "string"}}}
 
     def test_transformer_applied_before_envelope(self, monkeypatch):
-        from mote.common import model_profile
+        from mote.contracts.models import profile as model_profile
 
         def _strip_additional(schema: dict) -> dict:
             out = {k: v for k, v in schema.items()}
@@ -198,7 +209,7 @@ class TestJsonSchemaTransformer:
         assert specs[0]["input_schema"]["properties"] == {"x": {"type": "string"}}
 
     def test_transformer_applied_for_openai_envelope(self, monkeypatch):
-        from mote.common import model_profile
+        from mote.contracts.models import profile as model_profile
 
         fragment = model_profile.ModelProfile(json_schema_transformer=lambda s: {**s, "marked": True})
         monkeypatch.setattr(

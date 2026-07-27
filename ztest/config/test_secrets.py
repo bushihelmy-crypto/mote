@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.config.secrets`` — api_key_helper resolution."""
+"""Tests for ``mote.runtime.config.secrets`` — api_key_helper resolution."""
 from __future__ import annotations
 
 import sys
 
 import pytest
 
-from mote.common.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
-from mote.common.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
+from mote.runtime.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
+from mote.runtime.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
 
 
 @pytest.fixture(autouse=True)

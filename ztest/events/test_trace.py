@@ -2,28 +2,26 @@
 # -*- coding: utf-8 -*-
 """Tests for the framework-native ``span`` trace primitive.
 
-``span`` emits a SpanStart/SpanEnd pair on the active bus carrying explicit
+``span`` emits a SpanStart/SpanEnd pair on active telemetry carrying explicit
 ``span_id`` / ``parent_span_id`` / ``trace_id``, sets the current-span contextvar
 for the duration of the body, and marks an error status when the body raises
-(re-raising). With no bus bound it stays a near-no-op (mints a uuid, runs the
+(re-raising). With no telemetry bound it stays a near-no-op (mints a uuid, runs the
 body, emits nothing).
 """
 from __future__ import annotations
 
 import asyncio
 
-from mote.common.events import EventBus, SpanEndEvent, SpanStartEvent, current_span_id, set_bus, span
-from mote.common.interface.event_subscriber import ObservationSubscriber
-from mote.common.logs import bind_trace
+from mote.runtime.events import SpanEndEvent, SpanStartEvent, bind_telemetry, current_span_id, span
+from mote.runtime.logging import bind_trace
+from mote.ztest.telemetry import InlineTelemetry
 
 
 def run(coro):
     return asyncio.run(coro)
 
 
-class _Capture(ObservationSubscriber):
-    priority = 50
-
+class _Capture:
     def __init__(self):
         self.events: list = []
 
@@ -32,18 +30,16 @@ class _Capture(ObservationSubscriber):
         return None
 
 
-def _bus():
-    bus = EventBus()
+def _telemetry():
     cap = _Capture()
-    bus.subscribe(cap)
-    return bus, cap
+    return InlineTelemetry(cap), cap
 
 
 def test_span_emits_start_then_end_with_matching_id():
-    bus, cap = _bus()
+    telemetry, cap = _telemetry()
 
     async def go():
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             async with span("think") as sid:
                 assert current_span_id() == sid
 
@@ -59,10 +55,10 @@ def test_span_emits_start_then_end_with_matching_id():
 
 
 def test_nested_span_carries_parent_span_id():
-    bus, cap = _bus()
+    telemetry, cap = _telemetry()
 
     async def go():
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             async with span("outer") as outer_id:
                 async with span("inner") as inner_id:
                     return outer_id, inner_id
@@ -77,10 +73,10 @@ def test_nested_span_carries_parent_span_id():
 
 
 def test_trace_id_taken_from_bind_trace():
-    bus, cap = _bus()
+    telemetry, cap = _telemetry()
 
     async def go():
-        with bind_trace("sess-123"), set_bus(bus):
+        with bind_trace("sess-123"), bind_telemetry(telemetry):
             async with span("root"):
                 pass
 
@@ -93,10 +89,10 @@ def test_trace_id_taken_from_bind_trace():
 
 
 def test_exception_marks_error_and_reraises():
-    bus, cap = _bus()
+    telemetry, cap = _telemetry()
 
     async def go():
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             async with span("boom"):
                 raise ValueError("kaboom")
 
@@ -113,10 +109,10 @@ def test_exception_marks_error_and_reraises():
 
 
 def test_current_span_id_restored_on_exit():
-    bus, _ = _bus()
+    telemetry, _ = _telemetry()
 
     async def go():
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             assert current_span_id() is None
             async with span("s"):
                 assert current_span_id() is not None
@@ -125,7 +121,7 @@ def test_current_span_id_restored_on_exit():
     run(go())
 
 
-def test_no_bus_emits_nothing_but_body_runs():
+def test_no_telemetry_emits_nothing_but_body_runs():
     ran = {"v": False}
 
     async def go():

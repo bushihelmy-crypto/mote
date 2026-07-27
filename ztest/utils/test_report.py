@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the ResourceReporter -> bus -> ReporterSubscriber unification.
+"""Tests for ResourceReporter telemetry and ReporterSubscriber delivery.
 
 The reporter no longer POSTs directly; it emits a :class:`ResourceReportEvent`,
 and the :class:`ReporterSubscriber` (when wired) reconstructs the legacy
@@ -10,7 +10,7 @@ and the :class:`ReporterSubscriber` (when wired) reconstructs the legacy
   ``"path"`` absolutization, role/extra carry-through);
 * sync (``handle_sync``) and async (``handle``) paths POST the same payload;
 * an empty callback url never POSTs, and POST errors are swallowed;
-* ``async_report`` under a bound bus emits the event (with the role) and the
+* ``async_report`` under bound telemetry emits the event (with the role) and the
   async CM exit emits the END_MARKER.
 """
 from __future__ import annotations
@@ -22,10 +22,19 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-import mote.common.utils.report as report_mod
-from mote.common.events import EventBus, ResourceReportEvent, set_bus
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.common.utils.report import (
+import mote.runtime.reporting as report_mod
+from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.runtime.events import (
+    LLMStreamCommittedEvent,
+    LLMStreamDeltaEvent,
+    LLMStreamDiscardedEvent,
+    ResourceReportEvent,
+    TelemetryBinding,
+    TelemetryManifest,
+    TelemetryRuntime,
+    bind_telemetry,
+)
+from mote.runtime.reporting import (
     CURRENT_ROLE,
     END_MARKER_NAME,
     BlockType,
@@ -35,9 +44,7 @@ from mote.common.utils.report import (
 )
 
 
-class _Recorder(ObservationSubscriber, SyncObserver):
-    priority = 50
-
+class _Recorder:
     def __init__(self):
         self.events = []
 
@@ -53,6 +60,25 @@ class _Recorder(ObservationSubscriber, SyncObserver):
 
 class _Val(BaseModel):
     a: int = 1
+
+
+def _make_telemetry(recorder: _Recorder) -> TelemetryRuntime:
+    telemetry = TelemetryRuntime(
+        TelemetryManifest(
+            (
+                TelemetryBinding(
+                    TelemetrySubscriptionSpec(
+                        identity=TelemetryIdentity("mote.test.resource_report"),
+                        capacity=16,
+                        overflow=TelemetryOverflow.DROP_NEWEST,
+                    ),
+                    recorder,
+                ),
+            )
+        )
+    )
+    telemetry.start()
+    return telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +111,11 @@ def test_payload_matches_legacy_for_basemodel(monkeypatch):
 def test_payload_absolutizes_path(monkeypatch):
     reporter = ThoughtReporter()
     event = ResourceReportEvent(
-        block=reporter.block.value, name_="path", value="rel/file.txt", uuid=str(reporter.uuid), role="r"
+        block=reporter.block.value,
+        name_="path",
+        value="rel/file.txt",
+        uuid=str(reporter.uuid),
+        role="r",
     )
     data = _build_report_payload(event)
     assert data["value"] == os.path.abspath("rel/file.txt")
@@ -94,7 +124,12 @@ def test_payload_absolutizes_path(monkeypatch):
 
 def test_payload_normalizes_pathlib_and_carries_extra():
     event = ResourceReportEvent(
-        block="Docs", name_="content", value=Path("/tmp/x"), extra={"k": "v"}, uuid="u", role="r"
+        block="Docs",
+        name_="content",
+        value=Path("/tmp/x"),
+        extra={"k": "v"},
+        uuid="u",
+        role="r",
     )
     data = _build_report_payload(event)
     assert data["value"] == "/tmp/x"
@@ -165,52 +200,104 @@ def test_non_resource_event_ignored(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ResourceReporter emits onto the bus (producer side)
+# ResourceReporter emits onto telemetry (producer side)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_async_report_emits_event_with_role():
-    bus = EventBus()
     rec = _Recorder()
-    bus.subscribe(rec)
+    telemetry = _make_telemetry(rec)
     reporter = ThoughtReporter()
     token = CURRENT_ROLE.set(SimpleNamespace(name="alice"))
     try:
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             await reporter.async_report({"x": 1}, "object")
+        await telemetry.drain()
     finally:
         CURRENT_ROLE.reset(token)
+        await telemetry.aclose()
     assert len(rec.events) == 1
     e = rec.events[0]
     assert e.block == BlockType.THOUGHT.value and e.name_ == "object" and e.role == "alice"
     assert e.value == {"x": 1}
 
 
-def test_sync_report_emits_event():
-    bus = EventBus()
+@pytest.mark.asyncio
+async def test_sync_report_emits_event():
     rec = _Recorder()
-    bus.subscribe(rec)
+    telemetry = _make_telemetry(rec)
     reporter = ThoughtReporter()
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         reporter.report({"y": 2}, "object")
+    await telemetry.drain()
     assert len(rec.events) == 1 and rec.events[0].name_ == "object"
+    await telemetry.aclose()
 
 
 @pytest.mark.asyncio
 async def test_async_cm_exit_emits_end_marker():
-    bus = EventBus()
     rec = _Recorder()
-    bus.subscribe(rec)
-    with set_bus(bus):
+    telemetry = _make_telemetry(rec)
+    with bind_telemetry(telemetry):
         async with ThoughtReporter():
             pass
+    await telemetry.drain()
     # The CM exit reports the END_MARKER as a final event.
     assert any(e.name_ == END_MARKER_NAME for e in rec.events)
+    await telemetry.aclose()
 
 
-def test_report_no_op_without_bus():
-    # Standalone (no bus bound): emitting is a no-op, no POST, no error.
+@pytest.mark.asyncio
+async def test_streaming_context_uses_bounded_dynamic_subscription():
+    rec = _Recorder()
+    telemetry = _make_telemetry(rec)
+    reporter = ThoughtReporter(enable_llm_stream=True)
+    with bind_telemetry(telemetry):
+        async with reporter:
+            telemetry.emit_sync(LLMStreamDeltaEvent(token="chunk"))
+            await telemetry.drain()
+            await reporter.wait_llm_stream_report()
+    await telemetry.drain()
+    assert any(e.name_ == "content" and e.value == "chunk" for e in rec.events)
+    assert len(telemetry.snapshots()) == 1
+    await telemetry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_streaming_reporter_releases_only_committed_provisional_attempt():
+    rec = _Recorder()
+    telemetry = _make_telemetry(rec)
+    reporter = ThoughtReporter(enable_llm_stream=True)
+    with bind_telemetry(telemetry):
+        async with reporter:
+            telemetry.emit_sync(
+                LLMStreamDeltaEvent(
+                    token="bad",
+                    attempt_id="call:1",
+                    provisional=True,
+                )
+            )
+            telemetry.emit_sync(LLMStreamDiscardedEvent(attempt_id="call:1", chunk_count=1))
+            telemetry.emit_sync(
+                LLMStreamDeltaEvent(
+                    token="good",
+                    attempt_id="call:2",
+                    provisional=True,
+                )
+            )
+            telemetry.emit_sync(LLMStreamCommittedEvent(attempt_id="call:2", chunk_count=1))
+            await telemetry.drain()
+            await reporter.wait_llm_stream_report()
+    await telemetry.drain()
+
+    contents = [event.value for event in rec.events if event.name_ == "content"]
+    assert contents == ["good"]
+    await telemetry.aclose()
+
+
+def test_report_no_op_without_telemetry():
+    # Standalone: emitting is a no-op, no POST, no error.
     ThoughtReporter().report({"z": 3}, "object")
 
 

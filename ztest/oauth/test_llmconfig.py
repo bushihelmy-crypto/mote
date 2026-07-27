@@ -6,9 +6,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mote.common.config.config.llm_config import LLMConfig
-from mote.common.config.config.oauth_config import OAuthProviderConfig
-from mote.common.exception import MissingAPIKeyError
+from mote.contracts.config.llm import LLMConfig
+from mote.contracts.config.oauth import OAuthProviderConfig
+from mote.runtime.errors import MissingAPIKeyError
 
 
 def _oauth() -> OAuthProviderConfig:
@@ -53,7 +53,7 @@ def test_nested_oauth_parses_from_dict():
 
 
 def test_provider_preset_resolves_base_url_api_type_and_env_key(monkeypatch):
-    from mote.common.config.config.llm_config import LLMType
+    from mote.contracts.config.llm import LLMType
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-real")
     cfg = LLMConfig(provider="deepseek")
@@ -70,7 +70,7 @@ def test_provider_preset_user_values_win(monkeypatch):
 
 
 def test_provider_anthropic_selects_native_wire():
-    from mote.common.config.config.llm_config import LLMType
+    from mote.contracts.config.llm import LLMType
 
     cfg = LLMConfig(provider="anthropic", api_key="sk-ant")
     assert cfg.api_type == LLMType.ANTHROPIC
@@ -85,7 +85,7 @@ def test_provider_without_env_key_falls_back_to_default(monkeypatch):
 
 
 def test_no_provider_back_compat_unchanged():
-    from mote.common.config.config.llm_config import LLMType
+    from mote.contracts.config.llm import LLMType
 
     cfg = LLMConfig(api_key="sk-x")
     assert cfg.provider is None

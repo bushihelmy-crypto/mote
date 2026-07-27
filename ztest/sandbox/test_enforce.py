@@ -9,7 +9,7 @@ in ``test_orchestrator.py`` behind a toolchain ``skipif``.
 """
 from __future__ import annotations
 
-from mote.sandbox.network import enforce
+from mote.runtime.sandbox.network import enforce
 
 
 class TestEnforcementAvailable:

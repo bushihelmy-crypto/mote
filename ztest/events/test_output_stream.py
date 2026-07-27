@@ -1,11 +1,11 @@
-from mote.common.events import EventBus, set_bus
-from mote.common.events.output_stream import OutputSnapshotAccumulator, bind_output_snapshot_accumulator
-from mote.common.events.stream import log_llm_stream
-from mote.common.events.types import OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
+from mote.contracts.events.types import OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
+from mote.kernel.output_stream import OutputSnapshotAccumulator, bind_output_snapshot_accumulator
+from mote.runtime.events import bind_telemetry
+from mote.runtime.events.stream import log_llm_stream
+from mote.ztest.telemetry import InlineTelemetry
 
 
-class Capture(ObservationSubscriber, SyncObserver):
+class Capture:
     def __init__(self):
         self.events = []
 
@@ -18,12 +18,11 @@ class Capture(ObservationSubscriber, SyncObserver):
 
 
 def test_native_schema_stream_emits_provisional_snapshot():
-    bus = EventBus()
     capture = Capture()
-    bus.subscribe(capture)
+    telemetry = InlineTelemetry(capture)
     accumulator = OutputSnapshotAccumulator(run_id="run-1", schema_fingerprint="sha")
 
-    with set_bus(bus), bind_output_snapshot_accumulator(accumulator):
+    with bind_telemetry(telemetry), bind_output_snapshot_accumulator(accumulator):
         log_llm_stream('{"count":')
         log_llm_stream("7}")
 
@@ -37,12 +36,11 @@ def test_native_schema_stream_emits_provisional_snapshot():
 
 
 def test_later_stream_data_invalidates_previous_snapshot():
-    bus = EventBus()
     capture = Capture()
-    bus.subscribe(capture)
+    telemetry = InlineTelemetry(capture)
     accumulator = OutputSnapshotAccumulator(run_id="run-1", schema_fingerprint="sha")
 
-    with set_bus(bus), bind_output_snapshot_accumulator(accumulator):
+    with bind_telemetry(telemetry), bind_output_snapshot_accumulator(accumulator):
         log_llm_stream("7")
         log_llm_stream("x")
 
@@ -55,11 +53,10 @@ def test_later_stream_data_invalidates_previous_snapshot():
 
 
 def test_normal_stream_does_not_emit_output_snapshots():
-    bus = EventBus()
     capture = Capture()
-    bus.subscribe(capture)
+    telemetry = InlineTelemetry(capture)
 
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         log_llm_stream('{"count":7}')
 
     assert capture.events == []

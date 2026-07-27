@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.executor.dependency._video import (
+from mote.runtime.tools.dependency._video import (
     VIDEO_EXTENSIONS,
     VideoError,
     _auto_fps,

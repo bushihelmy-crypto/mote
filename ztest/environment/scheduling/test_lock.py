@@ -5,7 +5,7 @@
 import json
 import os
 
-from mote.environment.scheduling.lock import SchedulerLock
+from mote.orchestration.environment.scheduling.lock import SchedulerLock
 
 
 def test_acquire_creates_lock_file(tmp_path):

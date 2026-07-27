@@ -6,16 +6,9 @@ import types
 
 import pytest
 
-from mote.common.agent_control import (
-    Lifecycle,
-    SpawnContext,
-    SpawnSpec,
-    current_control,
-    resolve_control,
-    set_control,
-    spawn_and_run,
-)
-from mote.common.exception import AgentLimitReached
+from mote.contracts.spawn import Lifecycle, SpawnContext, SpawnSpec
+from mote.runtime.agent.control import current_control, resolve_control, set_control, spawn_and_run
+from mote.runtime.errors import AgentLimitReached
 
 
 # ---------------------------------------------------------------------------

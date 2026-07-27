@@ -5,18 +5,18 @@
 No real device / adb: a :class:`FakeDeviceBackend` (fixed PNG + uiautomator XML)
 is injected by monkeypatching ``select_device_backend`` so the whole observe/act
 contract is exercised deterministically. Asserts: action dispatch, tap-by-ref
-coordinate resolution, stale-ref error, screenshot→ToolMedia, handoff→ask_user,
-effect == EXTERNAL, and the three observe modes.
+coordinate resolution, stale-ref error, screenshot→ToolMedia, effect == EXTERNAL,
+and the three observe modes.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import ToolEffect
-from mote.executor.dependency._device.backend import DeviceError
-from mote.executor.tool_result import ToolError, ToolResult
-from mote.executor.tools import device_use as device_use_mod
-from mote.executor.tools.device_use import DeviceUse
+from mote.contracts.tools.effects import ToolEffect
+from mote.product.toolsets.builtin import device_use as device_use_mod
+from mote.product.toolsets.builtin.device_use import DeviceUse
+from mote.runtime.tools.dependency._device.backend import DeviceError
+from mote.runtime.tools.tool_result import ToolError, ToolResult
 from mote.ztest.executor.dependency.device_fakes import FAKE_PNG, FakeDeviceBackend, RaisingDeviceBackend
 from mote.ztest.executor.tools.conftest import CapRole, bind, run
 
@@ -34,7 +34,9 @@ def tool(fake_backend):
     """A DeviceUse bound to a CapRole + the injected fake backend."""
     role = CapRole()
     t = bind(DeviceUse(), role=role)
-    t._role = role  # keep a handle for assertions
+    # White-box test handle: bypass the production stateful-field guard
+    # deliberately; tool code never receives or writes this attribute.
+    object.__setattr__(t, "_role", role)
     return t
 
 
@@ -55,11 +57,11 @@ def test_stateful_and_high_risk():
 
 def test_requires_capabilities():
     assert set(DeviceUse.requires) == {
-        "get_tool_session",
-        "set_tool_session",
+        "get_artifact_publisher",
+        "get_runtime_host",
         "get_device_config",
         "get_default_model",
-        "ask_user",
+        "handoff_runtime",
     }
 
 
@@ -75,6 +77,8 @@ def test_observe_fused_returns_outline_and_screenshot(tool):
     assert len(result.media) == 1
     assert result.media[0].kind == "image"
     assert result.media[0].mime == "image/png"
+    assert result.media[0].artifact is not None
+    assert run(tool._role.artifact_store.read(result.media[0].artifact)) == FAKE_PNG
     # outline text present (Search button + edit field carry refs)
     assert "@e1" in result.output
     assert "@e2" in result.output
@@ -97,7 +101,7 @@ def test_observe_visual_has_screenshot_no_outline(tool):
 
 def test_observe_visual_refused_without_vision_model(fake_backend, monkeypatch):
     role = CapRole(default_model="text-only-model")
-    monkeypatch.setattr("mote.executor.tools.device_use.supports_vision", lambda _m: False)
+    monkeypatch.setattr("mote.product.toolsets.builtin.device_use.supports_vision", lambda _m: False)
     t = bind(DeviceUse(), role=role)
     with pytest.raises(Exception) as ei:  # ToolNotConfiguredError
         run(t.call(action="observe", mode="visual"))
@@ -106,7 +110,7 @@ def test_observe_visual_refused_without_vision_model(fake_backend, monkeypatch):
 
 def test_observe_fused_drops_screenshot_without_vision(fake_backend, monkeypatch):
     role = CapRole(default_model="text-only-model")
-    monkeypatch.setattr("mote.executor.tools.device_use.supports_vision", lambda _m: False)
+    monkeypatch.setattr("mote.product.toolsets.builtin.device_use.supports_vision", lambda _m: False)
     t = bind(DeviceUse(), role=role)
     result = run(t.call(action="observe", mode="fused"))
     # fused degrades gracefully: no image, but the outline still returns
@@ -223,7 +227,7 @@ def test_list_apps(tool, fake_backend):
 
 
 # ---------------------------------------------------------------------------
-# wait / handoff / close
+# wait / close
 # ---------------------------------------------------------------------------
 
 
@@ -236,19 +240,6 @@ def test_wait_returns_without_session(monkeypatch):
     t = bind(DeviceUse(), role=CapRole())
     out = run(t.call(action="wait", seconds=0.0))
     assert "waited" in out
-
-
-def test_handoff_delegates_to_ask_user(tool):
-    role = tool._role
-    role.ask_reply = "done"
-    out = run(tool.call(action="handoff", prompt="please log in"))
-    assert out == "done"
-    assert role.ask_questions == ["please log in"]
-
-
-def test_handoff_requires_prompt(tool):
-    with pytest.raises(ToolError):
-        run(tool.call(action="handoff"))
 
 
 def test_close_shuts_down_session(tool, fake_backend):
@@ -271,9 +262,9 @@ def test_close_without_session(tool):
 def test_session_reused_across_calls(tool, fake_backend):
     run(tool.call(action="observe"))
     run(tool.call(action="observe"))
-    # started exactly once — the session persisted on RoleState between calls
+    # started exactly once — the session persisted in RuntimeHost between calls
     assert fake_backend.started is True
-    assert tool._role.tool_sessions["DeviceUse"] is not None
+    assert tool.get_runtime_host().descriptor("device:default").revision == 2
 
 
 def test_unknown_action_errors(tool):

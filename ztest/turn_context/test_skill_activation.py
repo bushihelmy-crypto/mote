@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.interface import EphemeralContextSource
-from mote.context.skills.skill_definition import SkillDefinition
-from mote.context.turn_context import SkillActivationContextSource
+from mote.contracts.ports import EphemeralContextSource
+from mote.runtime.context.skills.skill_definition import SkillDefinition
+from mote.runtime.context.turn_context import SkillActivationContextSource
 
 
 def run(coro):

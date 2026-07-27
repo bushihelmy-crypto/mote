@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-from mote.sandbox.network import enforce, orchestrator
+from mote.runtime.sandbox.network import enforce, orchestrator
 
 
 class TestEncodeConfig:
@@ -63,7 +63,7 @@ class TestLauncherInvocation:
         argv = orchestrator.launcher_argv("TOKEN")
         assert argv[0] == sys.executable
         assert argv[1] == "-m"
-        assert argv[2] == "mote.sandbox.network.orchestrator"
+        assert argv[2] == "mote.runtime.sandbox.network.orchestrator"
         assert argv[-1] == "TOKEN"
 
     def test_command_is_shell_quoted_argv(self):
@@ -71,7 +71,7 @@ class TestLauncherInvocation:
         # Equivalent to the argv, joined + quoted for create_subprocess_shell.
         assert cmd.split()[-1] == "TOKEN"
         assert "-m" in cmd
-        assert "mote.sandbox.network.orchestrator" in cmd
+        assert "mote.runtime.sandbox.network.orchestrator" in cmd
 
 
 class TestBuildInnerArgv:
@@ -131,9 +131,9 @@ class TestSoleEgressEndToEnd:
         import shlex
 
         import mote
-        from mote.sandbox.runtime import SandboxRuntime
+        from mote.runtime.sandbox.runtime import SandboxRuntime
 
-        # The launcher runs ``python -m mote.sandbox.network.orchestrator``;
+        # The launcher runs ``python -m mote.runtime.sandbox.network.orchestrator``;
         # it needs the repo root on PYTHONPATH (in a deployed install mote is
         # already importable, but the test runs from source).
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(mote.__file__)))

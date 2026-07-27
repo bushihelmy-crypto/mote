@@ -1,6 +1,6 @@
 """build_task_result_pointer: success / large / pause pointer shapes + escaping."""
-from mote.common.resource import build_task_result_pointer
-from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG
+from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG
+from mote.runtime.resources import build_task_result_pointer
 
 
 def test_small_result_inlines_result():

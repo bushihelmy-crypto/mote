@@ -5,7 +5,7 @@
 import pytest
 from pydantic import BaseModel
 
-from mote.environment.agent_path import AgentPath
+from mote.orchestration.environment.agent_path import AgentPath
 
 
 def test_root_has_expected_name():

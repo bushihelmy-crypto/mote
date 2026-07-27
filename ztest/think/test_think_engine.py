@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.think.think_engine.ThinkEngine`.
+"""Unit tests for :class:`mote.kernel.think.think_engine.ThinkEngine`.
 
 Covers the two completion channels (XML text via ``aask`` vs native tool-use via
-``aask_tool``), the dedup post-processing for each channel, the async task
-lifecycle (``start`` / ``done`` / ``join``), and the ``BaseThinkEngine`` contract.
+``aask_tool``), the async task lifecycle (``start`` / ``done`` / ``join``), and
+the ``BaseThinkEngine`` contract.
 """
 from __future__ import annotations
 
@@ -12,9 +12,10 @@ import asyncio
 
 import pytest
 
-from mote.common.const import TOOL_CALLS
-from mote.common.schema import ThinkResult, UserMessage
-from mote.think.think_engine import ThinkEngine
+from mote.contracts.constants.messages import TOOL_CALLS
+from mote.contracts.schema import UserMessage
+from mote.contracts.think import ThinkResult
+from mote.kernel.think.think_engine import ThinkEngine
 
 from .conftest import FakeLLM, FakeMemory, FakeReporter, history_with_calls, make_tool_response
 
@@ -28,7 +29,7 @@ class TestConstruction:
         mem = FakeMemory()
         cfg = {"x": 1}
         engine = ThinkEngine(memory=mem, config=cfg)
-        assert engine.llm is None
+        assert engine.model_route is None
         assert engine.memory is mem
         assert engine.config is cfg
         assert isinstance(engine.result, ThinkResult)
@@ -40,7 +41,7 @@ class TestConstruction:
         assert make_engine().done is True
 
     def test_is_basethinkengine(self):
-        from mote.common.base import BaseThinkEngine
+        from mote.kernel.think.base import BaseThinkEngine
 
         assert isinstance(make_engine(), BaseThinkEngine)
 
@@ -50,7 +51,9 @@ class TestXMLChannel:
     async def test_runs_and_produces_text_result(self):
         llm = FakeLLM(reply="my thought")
         engine = make_engine()
-        await engine.start(req=[{"role": "user", "content": "hi"}], system_prompt="sys", llm=llm)
+        await engine.start(
+            req=[{"role": "user", "content": "hi"}], system_prompt="sys", model_route=llm.route, model_call_id="call"
+        )
         await engine.join()
         assert engine.result.content == "my thought"
         # XML channel -> no structured tool calls.
@@ -61,7 +64,7 @@ class TestXMLChannel:
     async def test_uses_aask_not_aask_tool(self):
         llm = FakeLLM(reply="t")
         engine = make_engine()
-        await engine.start(req="REQ", system_prompt="SYS", llm=llm)
+        await engine.start(req="REQ", system_prompt="SYS", model_route=llm.route, model_call_id="call")
         await engine.join()
         assert len(llm.aask_calls) == 1
         assert llm.aask_calls[0]["msg"] == "REQ"
@@ -69,11 +72,11 @@ class TestXMLChannel:
         assert llm.aask_tool_calls == []
 
     @pytest.mark.asyncio
-    async def test_start_assigns_llm(self):
+    async def test_start_assigns_model_route(self):
         llm = FakeLLM()
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", llm=llm)
-        assert engine.llm is llm
+        await engine.start(req="r", system_prompt="s", model_route=llm.route, model_call_id="call")
+        assert engine.model_route is llm.route
         await engine.join()
 
     @pytest.mark.asyncio
@@ -82,30 +85,15 @@ class TestXMLChannel:
         mem = FakeMemory([UserMessage(content="something else")])
         llm = FakeLLM(reply="fresh thought")
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", llm=llm)
+        await engine.start(req="r", system_prompt="s", model_route=llm.route, model_call_id="call")
         await engine.join()
         assert engine.result.content == "fresh thought"
-
-    @pytest.mark.asyncio
-    async def test_hard_repeat_triggers_ask_user(self):
-        # Same response present 3x in recent history -> ask-human override.
-        dup = "I will look at the file again"
-        mem = FakeMemory([UserMessage(content=dup) for _ in range(3)])
-        llm = FakeLLM(reply=dup)
-        engine = make_engine(memory=mem)
-        await engine.start(req=[{"role": "user", "content": "go"}], system_prompt="s", llm=llm)
-        await engine.join()
-        # Overrides with a synthesized AskUserQuestion call (the registered tool),
-        # not the unregistered ask_user (which the loop would filter out).
-        assert "AskUserQuestion" in engine.result.content
-        # The dedup path asks the LLM a second time to summarize the problem.
-        assert len(llm.aask_calls) == 2
 
 
 class TestNativeChannel:
     @pytest.mark.asyncio
     async def test_native_schema_is_forwarded_without_removing_ordinary_tools(self):
-        from mote.common.schema import OutputBinding, OutputBindingKind
+        from mote.contracts.output import OutputBinding, OutputBindingKind
 
         llm = FakeLLM(tool_response=make_tool_response(content='{"count": 7}'))
         engine = make_engine()
@@ -116,21 +104,24 @@ class TestNativeChannel:
             req="REQ",
             system_prompt="SYS",
             tool_specs=specs,
-            llm=llm,
+            model_route=llm.route,
+            model_call_id="call",
             output_binding=OutputBinding(OutputBindingKind.NATIVE_SCHEMA),
             output_schema=schema,
         )
         await engine.join()
 
-        assert llm.aask_tool_calls[0]["tools"] is specs
-        assert llm.aask_tool_calls[0]["kwargs"]["output_schema"] is schema
+        assert [tool["name"] for tool in llm.aask_tool_calls[0]["tools"]] == ["Read"]
+        assert llm.aask_tool_calls[0]["kwargs"]["output_schema"] == schema
 
     @pytest.mark.asyncio
     async def test_maps_tool_call_fields(self):
         resp = make_tool_response(("call-1", "Read", {"path": "a.py"}), content="reading")
         llm = FakeLLM(tool_response=resp)
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Read"}], llm=llm)
+        await engine.start(
+            req="r", system_prompt="s", tool_specs=[{"name": "Read"}], model_route=llm.route, model_call_id="call"
+        )
         await engine.join()
         assert engine.result.content == "reading"
         assert engine.result.is_native is True
@@ -141,10 +132,12 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Glob", {})))
         engine = make_engine()
         specs = [{"name": "Glob"}]
-        await engine.start(req="REQ", system_prompt="SYS", tool_specs=specs, llm=llm)
+        await engine.start(
+            req="REQ", system_prompt="SYS", tool_specs=specs, model_route=llm.route, model_call_id="call"
+        )
         await engine.join()
         assert len(llm.aask_tool_calls) == 1
-        assert llm.aask_tool_calls[0]["tools"] is specs
+        assert [tool["name"] for tool in llm.aask_tool_calls[0]["tools"]] == ["Glob"]
         assert llm.aask_tool_calls[0]["system_msgs"] == ["SYS"]
         assert llm.aask_calls == []
 
@@ -154,7 +147,9 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Bash", {"cmd": "ls"})))
         llm._tool_response.content = None
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Bash"}], llm=llm)
+        await engine.start(
+            req="r", system_prompt="s", tool_specs=[{"name": "Bash"}], model_route=llm.route, model_call_id="call"
+        )
         await engine.join()
         assert engine.result.content == ""
         assert engine.result.is_native is True
@@ -164,7 +159,9 @@ class TestNativeChannel:
         # Native channel with zero calls -> tool_calls == [] (still is_native).
         llm = FakeLLM(tool_response=make_tool_response(content="just text"))
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "X"}], llm=llm)
+        await engine.start(
+            req="r", system_prompt="s", tool_specs=[{"name": "X"}], model_route=llm.route, model_call_id="call"
+        )
         await engine.join()
         assert engine.result.tool_calls == []
         assert engine.result.is_native is True
@@ -175,26 +172,11 @@ class TestNativeChannel:
         mem = FakeMemory(history_with_calls([{"name": "Read", "args": {"path": "z"}}]))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Read", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Read"}], llm=llm)
-        await engine.join()
-        assert engine.result.tool_calls == [{"id": "1", "command_name": "Read", "args": {"path": "a"}}]
-
-    @pytest.mark.asyncio
-    async def test_hard_repeat_overrides_with_ask_user(self):
-        # Same call signature 3x in history -> override with a synthesized
-        # AskUserQuestion call (the registered tool, not unregistered ask_user).
-        sig = [{"name": "Editor", "args": {"path": "a"}}]
-        mem = FakeMemory(history_with_calls(sig, sig, sig))
-        llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
-        engine = make_engine(memory=mem)
         await engine.start(
-            req=[{"role": "user", "content": "go"}], system_prompt="s", tool_specs=[{"name": "Editor"}], llm=llm
+            req="r", system_prompt="s", tool_specs=[{"name": "Read"}], model_route=llm.route, model_call_id="call"
         )
         await engine.join()
-        assert len(engine.result.tool_calls) == 1
-        override = engine.result.tool_calls[0]
-        assert override["command_name"] == "AskUserQuestion"
-        assert "questions" in override["args"]
+        assert engine.result.tool_calls == [{"id": "1", "command_name": "Read", "args": {"path": "a"}}]
 
     @pytest.mark.asyncio
     async def test_sig_hist_ignores_messages_without_tool_calls(self):
@@ -203,21 +185,12 @@ class TestNativeChannel:
         mem = FakeMemory([UserMessage(content="noise")] * 5 + history_with_calls(sig, sig))
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
         engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "Editor"}], llm=llm)
+        await engine.start(
+            req="r", system_prompt="s", tool_specs=[{"name": "Editor"}], model_route=llm.route, model_call_id="call"
+        )
         await engine.join()
         # Only 2 matching signatures (< 3) -> no override.
         assert engine.result.tool_calls[0]["command_name"] == "Editor"
-
-    @pytest.mark.asyncio
-    async def test_end_call_repeat_not_overridden(self):
-        # "End" repeats are legitimate and skipped by the dedup guard.
-        sig = [{"name": "End", "args": {}}]
-        mem = FakeMemory(history_with_calls(sig, sig, sig))
-        llm = FakeLLM(tool_response=make_tool_response(("1", "End", {})))
-        engine = make_engine(memory=mem)
-        await engine.start(req="r", system_prompt="s", tool_specs=[{"name": "End"}], llm=llm)
-        await engine.join()
-        assert engine.result.tool_calls[0]["command_name"] == "End"
 
 
 class TestTaskLifecycle:
@@ -226,7 +199,7 @@ class TestTaskLifecycle:
         # start schedules the task but yields control before it runs.
         llm = FakeLLM()
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", llm=llm)
+        await engine.start(req="r", system_prompt="s", model_route=llm.route, model_call_id="call")
         assert engine.done is False
         await engine.join()
         assert engine.done is True
@@ -234,7 +207,8 @@ class TestTaskLifecycle:
     @pytest.mark.asyncio
     async def test_join_clears_task(self):
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", llm=FakeLLM())
+        llm = FakeLLM()
+        await engine.start(req="r", system_prompt="s", model_route=llm.route, model_call_id="call")
         await engine.join()
         assert engine._task is None
 
@@ -248,10 +222,12 @@ class TestTaskLifecycle:
     @pytest.mark.asyncio
     async def test_result_replaced_each_round(self):
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", llm=FakeLLM(reply="one"))
+        first_llm = FakeLLM(reply="one")
+        await engine.start(req="r", system_prompt="s", model_route=first_llm.route, model_call_id="call-1")
         await engine.join()
         first = engine.result
-        await engine.start(req="r", system_prompt="s", llm=FakeLLM(reply="two"))
+        second_llm = FakeLLM(reply="two")
+        await engine.start(req="r", system_prompt="s", model_route=second_llm.route, model_call_id="call-2")
         await engine.join()
         assert engine.result is not first
         assert engine.result.content == "two"
@@ -261,7 +237,8 @@ class TestReporter:
     @pytest.mark.asyncio
     async def test_emits_react_report(self):
         engine = make_engine()
-        await engine.start(req="r", system_prompt="s", llm=FakeLLM())
+        llm = FakeLLM()
+        await engine.start(req="r", system_prompt="s", model_route=llm.route, model_call_id="call")
         await engine.join()
         assert FakeReporter.instances, "ThoughtReporter should be entered"
         reporter = FakeReporter.instances[0]

@@ -1,6 +1,6 @@
 # CLI / 展示框架架构设计
 
-> 本文是 `mote.cli` 的**目标架构**：一个面向未来十年的、充分解耦、可扩展、可维护的**多消费者**展示框架。它**不重造** Mote 已有的事件脊柱（`common/events/`），而是在其之上补齐缺失的「投影层」与「消费层」。
+> 本文是 `mote.product.cli` 的**目标架构**：一个面向未来十年的、充分解耦、可扩展、可维护的**多消费者**展示框架。它**不重造** Mote 已有的事件脊柱（`common/events/`），而是在其之上补齐缺失的「投影层」与「消费层」。
 >
 > **一句话纲领**：核心只发射「发生了什么」（`AgentEvent`，**单一真相源**）；两个投影器把它折叠成「人该看什么」（`ViewEvent`）与「机器该收什么」（`ServerNotification`）；任意数量的消费者各自决定「怎么投递」。**人与机器是同一真相源的对称下游，谁都没有特权路径。**
 >
@@ -493,7 +493,7 @@ codex 有两个反向请求 `item/commandExecution/requestApproval`、`item/file
 | `AppServerProjector`（§6.3 映射实现） | ★模式确定（ViewProjector 孪生） |
 | `cli/proto/schema.py`：对齐 codex 提交的 schema（`codex-rs/app-server-protocol/schema/json/...`）| ☆唯一需逐字段核对的硬工作 |
 | auto-approve 剖面 + `AskUserQuestion→turn_failed` 兜底 | ★策略确定 |
-| 入口 `python -m mote.cli app-server`（stdio，无 TUI） | ★确定 |
+| 入口 `python -m mote.product.cli app-server`（stdio，无 TUI） | ★确定 |
 | **不需要**：改 `AgentControl` / `AgentEvent` / `ViewEvent` / 任何 §1~§5 抽象 | — |
 
 ---

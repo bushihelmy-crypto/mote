@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the mote.router.ml package (model-free pieces + graceful fallback).
+"""Tests for the mote.product.routing.squilla.ml package (model-free pieces + graceful fallback).
 
 The heavy trained bundle (LightGBM / ONNX / sklearn) is NOT vendored, so these
 tests exercise only the deterministic, import-safe layers: trajectory
@@ -13,9 +13,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mote.router.ml.config import MODEL_BUNDLE_NAME, default_model_dir, load_runtime_config
-from mote.router.ml.engine import SquillaMLEngine
-from mote.router.ml.features import (
+from mote.product.routing.squilla.ml.config import MODEL_BUNDLE_NAME, default_model_dir, load_runtime_config
+from mote.product.routing.squilla.ml.engine import SquillaMLEngine
+from mote.product.routing.squilla.ml.features import (
     CONTEXT_DIMS,
     HANDCRAFTED_DIMS,
     HIST_DIMS,
@@ -24,10 +24,10 @@ from mote.router.ml.features import (
     extract_handcrafted,
     extract_hist_features,
 )
-from mote.router.ml.flags import RoutingFlags, compute_flags
-from mote.router.ml.inference.postprocess import apply_postprocess
-from mote.router.ml.inference.types import InferenceRequest
-from mote.router.ml.predictor import (
+from mote.product.routing.squilla.ml.flags import RoutingFlags, compute_flags
+from mote.product.routing.squilla.ml.inference.postprocess import apply_postprocess
+from mote.product.routing.squilla.ml.inference.types import InferenceRequest
+from mote.product.routing.squilla.ml.predictor import (
     ROUTE_CLASSES,
     _apply_flag_overrides,
     _apply_margin_upgrade,
@@ -35,7 +35,7 @@ from mote.router.ml.predictor import (
     _prompt_hint_locale,
     _select_model,
 )
-from mote.router.ml.trajectory import Trajectory, TurnDecision, classify
+from mote.product.routing.squilla.ml.trajectory import Trajectory, TurnDecision, classify
 
 
 @pytest.fixture(scope="module")

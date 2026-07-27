@@ -15,9 +15,9 @@ import asyncio
 
 import pytest
 
-from mote.common.const.tasks import MAX_RESULT_LEN
-from mote.common.schema import MessagePriority
-from mote.executor.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskType
+from mote.contracts.schema import MessagePriority
+from mote.orchestration.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskType
+from mote.orchestration.tasks.constants import MAX_RESULT_LEN
 
 from .conftest import boom, echo, forever, gated, started_gated, wait_started
 
@@ -27,6 +27,18 @@ async def _drain(pool):
     for tid in pool.pending_ids:
         pool.cancel(tid)
     await pool.wait_all()
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_and_joins_all_owned_tasks(pool) -> None:
+    pool.submit(lambda: forever(), "one", timeout=None)
+    pool.submit(lambda: forever(), "two", timeout=None)
+    await asyncio.sleep(0)
+
+    await pool.aclose()
+    await pool.aclose()
+
+    assert pool.has_pending() is False
 
 
 class TestSubmitAndIds:
@@ -96,8 +108,8 @@ class TestCompletionPaths:
         # result becomes a ``<persisted-output>`` preview naming that path —
         # distinct from the streaming stdout log at ``task_outputs/`` (both
         # co-located under the session directory).
-        from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, MessageQueue
-        from mote.executor.tasks import TaskOutputStore
+        from mote.contracts.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, PERSISTED_OUTPUT_OPEN_TAG, MessageQueue
+        from mote.orchestration.tasks import TaskOutputStore
 
         store = TaskOutputStore(base_dir=tmp_path)
         pool = BackgroundTaskPool(MessageQueue(), output_store=store, session_id="s1")
@@ -213,7 +225,7 @@ class TestProgressTaskTermination:
     """
 
     def _progress_pool(self, msg_buffer, tmp_path):
-        from mote.executor.tasks.disk_output import TaskOutputStore
+        from mote.orchestration.tasks.disk_output import TaskOutputStore
 
         return BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(tmp_path))
 
@@ -383,7 +395,7 @@ class TestWaiters:
     async def test_wait_any_new_message(self, pool, msg_buffer):
         waiter = asyncio.create_task(pool.wait_any(timeout=1))
         await asyncio.sleep(0)
-        from mote.common.schema import UserMessage
+        from mote.contracts.schema import UserMessage
 
         msg_buffer.push(UserMessage(content="ping"))
         assert await asyncio.wait_for(waiter, timeout=1) == "new_message"
@@ -488,20 +500,24 @@ class TestTaskTypeDefault:
         await _drain(pool)
 
 
-class TestProgressBusVisibility:
+class TestProgressTelemetryVisibility:
     """Pin down the contextvar visibility: a progress event reported inside a
-    submitted task is mirrored onto the bus bound when the task was created."""
+    submitted task is mirrored onto telemetry bound when the task was created."""
 
     @pytest.mark.asyncio
-    async def test_report_progress_reaches_bus_subscriber(self, msg_buffer, tmp_path):
-        from mote.common.events import EventBus, TaskProgressEvent, set_bus
-        from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-        from mote.executor.tasks import TaskOutputStore
-        from mote.executor.tasks.bggraph.report import report_progress
+    async def test_report_progress_reaches_telemetry_handler(self, msg_buffer, tmp_path):
+        from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+        from mote.orchestration.tasks import TaskOutputStore
+        from mote.orchestration.tasks.bggraph.report import report_progress
+        from mote.runtime.events import (
+            TaskProgressEvent,
+            TelemetryBinding,
+            TelemetryManifest,
+            TelemetryRuntime,
+            bind_telemetry,
+        )
 
-        class _Recorder(ObservationSubscriber, SyncObserver):
-            priority = 50
-
+        class _Recorder:
             def __init__(self):
                 self.events = []
 
@@ -512,9 +528,22 @@ class TestProgressBusVisibility:
             async def handle(self, event):
                 return None
 
-        bus = EventBus()
         rec = _Recorder()
-        bus.subscribe(rec)
+        telemetry = TelemetryRuntime(
+            TelemetryManifest(
+                (
+                    TelemetryBinding(
+                        TelemetrySubscriptionSpec(
+                            identity=TelemetryIdentity("mote.test.task_progress"),
+                            capacity=16,
+                            overflow=TelemetryOverflow.DROP_NEWEST,
+                        ),
+                        rec,
+                    ),
+                )
+            )
+        )
+        telemetry.start()
 
         pool = BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(base_dir=tmp_path))
 
@@ -522,13 +551,14 @@ class TestProgressBusVisibility:
             report_progress("split", "running", "hello")
             return "ok"
 
-        # ``submit`` -> ``create_task`` snapshots the active-bus contextvar, so
-        # the progress emit inside the task lands on this bus.
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             tid = pool.submit(lambda: reporter(), "rep", progress=True)
             await pool.wait_all()
+        await telemetry.drain()
 
         assert tid == "bg_1"
         assert len(rec.events) == 1
         e = rec.events[0]
         assert (e.task_id, e.stage, e.status, e.detail) == ("bg_1", "split", "running", "hello")
+        await pool.aclose()
+        await telemetry.aclose()

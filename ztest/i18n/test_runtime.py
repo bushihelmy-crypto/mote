@@ -3,12 +3,12 @@
 """Runtime seam: plural rules, negotiation/fallback, detect, ``t()`` + scoping."""
 from __future__ import annotations
 
-from mote.common.i18n import keys as K
-from mote.common.i18n import t, use_locale
-from mote.common.i18n.detect import resolve_locale_code
-from mote.common.i18n.locale import negotiate
-from mote.common.i18n.plurals import OTHER, plural_category
-from mote.common.i18n.runtime import BASE_LOCALE, DEFAULT_LOCALE, _lookup, current_locale
+from mote.product.i18n import keys as K
+from mote.product.i18n import t, use_locale
+from mote.product.i18n.detect import resolve_locale_code
+from mote.product.i18n.locale import negotiate
+from mote.product.i18n.plurals import OTHER, plural_category
+from mote.product.i18n.runtime import BASE_LOCALE, DEFAULT_LOCALE, _lookup, current_locale
 
 
 def test_plural_categories() -> None:
@@ -66,7 +66,7 @@ def test_t_missing_key_returns_marker() -> None:
 def test_lookup_falls_back_to_base_locale() -> None:
     # A key present only in en (BASE_LOCALE) still resolves for a zh lookup path
     # via the fallback chain (loc.code → loc.language → BASE_LOCALE).
-    from mote.common.i18n.runtime import register_catalog
+    from mote.product.i18n.runtime import register_catalog
 
     register_catalog("en", {"test.only_en": "base-only"})
     zh_loc = negotiate("zh")

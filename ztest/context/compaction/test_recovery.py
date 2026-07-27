@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.const import TOOL_CALL_ID, TOOL_CALLS
-from mote.context.compaction.recovery import RecoveryContextReducer, _message_to_wire, _wire_to_message
-from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.contracts.constants.messages import TOOL_CALL_ID, TOOL_CALLS
+from mote.runtime.context.compaction.recovery import RecoveryContextReducer, _message_to_wire, _wire_to_message
+from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.runtime.context.compaction.transcript import Transcript
+from mote.ztest.model_fakes import model_route
 
 
 def _run(coro):
@@ -116,6 +118,18 @@ def test_cache_intent_survives_round_trip():
     assert out["_cache_intent"] == "ephemeral"
 
 
+def test_tool_references_survive_tool_result_round_trip():
+    d = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "content": "discovered",
+        "_tool_references": ["Read", "Write"],
+    }
+    m = _wire_to_message(d)
+    out = _message_to_wire(m)
+    assert out["_tool_references"] == ["Read", "Write"]
+
+
 # ---------------------------------------------------------------------------
 # reduce()
 # ---------------------------------------------------------------------------
@@ -127,7 +141,7 @@ def test_reduce_empty_returns_none():
 
 
 def test_reduce_runs_hard_reactive_request():
-    from mote.context.compaction.request import ReductionReason, Urgency
+    from mote.runtime.context.compaction.request import ReductionReason, Urgency
 
     rec = RecordingReducer(ReducerCost.FREE)
     reducer = RecoveryContextReducer([rec], model="gpt-4")
@@ -147,8 +161,6 @@ def test_reduce_returns_none_when_nothing_changed():
 
 
 def test_reduce_emits_wire_dicts_when_changed():
-    from mote.context.compaction.transcript import Transcript
-
     smaller = Transcript.from_messages([_wire_to_message({"role": "user", "content": "x"})])
     rec = RecordingReducer(ReducerCost.DESTRUCTIVE, new_transcript=smaller)
     reducer = RecoveryContextReducer([rec], model="gpt-4")
@@ -165,11 +177,11 @@ def test_reduce_emits_wire_dicts_when_changed():
 # fold → summarize → drop escalation (the real reducers)
 # ---------------------------------------------------------------------------
 
-from mote.common.const.context import HEAD_DROPPED_MESSAGE  # noqa: E402
-from mote.common.schema import ContextManagerConfig  # noqa: E402
-from mote.context.compaction.reducers.drop import HeadDropReducer  # noqa: E402
-from mote.context.compaction.reducers.fold import FoldReducer  # noqa: E402
-from mote.context.compaction.reducers.summarize import SummarizeReducer  # noqa: E402
+from mote.contracts.constants.context import HEAD_DROPPED_MESSAGE  # noqa: E402
+from mote.contracts.schema import ContextManagerConfig  # noqa: E402
+from mote.runtime.context.compaction.reducers.drop import HeadDropReducer  # noqa: E402
+from mote.runtime.context.compaction.reducers.fold import FoldReducer  # noqa: E402
+from mote.runtime.context.compaction.reducers.summarize import SummarizeReducer  # noqa: E402
 
 from ..conftest import FakeLLM, text_msg  # noqa: E402
 
@@ -205,7 +217,7 @@ def test_reduce_escalates_to_summarize():
     # summary that fits, so the destructive drop never fires.
     cfg = ContextManagerConfig(keep_tail_messages=1, keep_tail_tokens=1)
     fold = FoldReducer(cfg, model="gpt-4")
-    summarize = SummarizeReducer(FakeLLM(summary="CONDENSED"), cfg, model="gpt-4")
+    summarize = SummarizeReducer(model_route(FakeLLM(summary="CONDENSED")), cfg, model="gpt-4")
     drop = HeadDropReducer(cfg, model="gpt-4")
     reducer = RecoveryContextReducer([fold, summarize, drop], model="gpt-4")
 
@@ -222,7 +234,7 @@ def test_reduce_falls_back_to_drop_when_summarize_noops():
     # the destructive floor is preserved when summarize can't free enough.
     cfg = ContextManagerConfig(enable_autocompact=False, keep_tail_messages=1, keep_tail_tokens=1)
     fold = FoldReducer(cfg, model="gpt-4")
-    summarize = SummarizeReducer(FakeLLM(summary="CONDENSED"), cfg, model="gpt-4")
+    summarize = SummarizeReducer(model_route(FakeLLM(summary="CONDENSED")), cfg, model="gpt-4")
     drop = HeadDropReducer(cfg, model="gpt-4")
     reducer = RecoveryContextReducer([fold, summarize, drop], model="gpt-4")
 

@@ -1,15 +1,16 @@
 import pytest
 from pydantic import BaseModel
 
-from mote.common.schema import FinalCandidateAction, OutputContractId
-from mote.roles.output_contract import (
+from mote.contracts.model_actions import FinalCandidateAction
+from mote.contracts.output import OutputContractId
+from mote.kernel.output import (
     JsonSchemaOutputDecoder,
     OutputContract,
     OutputRetryPolicy,
     TypeAdapterOutputDecoder,
     text_output_contract,
 )
-from mote.roles.output_engine import OutputEngine
+from mote.runtime.agent.output_engine import OutputEngine
 
 
 class Report(BaseModel):
@@ -31,7 +32,7 @@ def test_json_schema_decoder_has_canonical_stable_fingerprint():
 
 
 def test_json_schema_decoder_normalizes_nested_structural_issues():
-    from mote.common.schema import OutputDecodeError
+    from mote.contracts.output import OutputDecodeError
 
     decoder = JsonSchemaOutputDecoder(
         {
@@ -92,7 +93,7 @@ async def test_text_candidate_is_decoded_and_accepted():
 
 @pytest.mark.asyncio
 async def test_commit_before_acceptance_is_a_typed_non_retryable_error():
-    from mote.common.exception import OutputCommitStateError
+    from mote.runtime.errors import OutputCommitStateError
 
     engine = OutputEngine(text_output_contract())
 
@@ -105,8 +106,8 @@ async def test_commit_before_acceptance_is_a_typed_non_retryable_error():
 
 @pytest.mark.asyncio
 async def test_stale_worker_cannot_commit_after_lease_takeover(tmp_path):
-    from mote.common.exception import OutputCommitFencedError
-    from mote.session.run_lease import RunLeaseStore
+    from mote.runtime.errors import OutputCommitFencedError
+    from mote.runtime.session.run_lease import RunLeaseStore
 
     now = [100.0]
     store = RunLeaseStore(tmp_path / "leases.json", clock=lambda: now[0])
@@ -222,7 +223,7 @@ def test_restore_preserves_correction_budget():
 
 
 def test_restore_refuses_contract_or_schema_drift():
-    from mote.common.exception import OutputResumeContractMismatchError
+    from mote.runtime.errors import OutputResumeContractMismatchError
 
     contract = OutputContract(OutputContractId("test", "report", "1"), TypeAdapterOutputDecoder(Report))
 
@@ -259,8 +260,8 @@ def test_restore_decodes_accepted_value_without_revalidation():
 
 
 def test_restore_refuses_validator_version_drift():
-    from mote.common.exception import OutputResumeContractMismatchError
-    from mote.common.schema import Accept, ValidationStage
+    from mote.contracts.output import Accept, ValidationStage
+    from mote.runtime.errors import OutputResumeContractMismatchError
 
     contract = OutputContract(
         OutputContractId("test", "report", "1"),
@@ -295,7 +296,7 @@ class _Validator:
     version = "1"
 
     def __init__(self, name, stage, decision):
-        from mote.common.schema import Determinism, ValidatorEffect
+        from mote.contracts.output import Determinism, ValidatorEffect
 
         self.name = name
         self.stage = stage
@@ -309,7 +310,7 @@ class _Validator:
 
 @pytest.mark.asyncio
 async def test_validator_pipeline_orders_stages_and_applies_correction():
-    from mote.common.schema import Accept, Corrected, ValidationStage
+    from mote.contracts.output import Accept, Corrected, ValidationStage
 
     calls = []
 
@@ -351,7 +352,7 @@ async def test_validator_pipeline_orders_stages_and_applies_correction():
 
 @pytest.mark.asyncio
 async def test_validator_reject_is_model_correction_not_exception():
-    from mote.common.schema import Reject, ValidationIssue, ValidationStage
+    from mote.contracts.output import Reject, ValidationIssue, ValidationStage
 
     contract = OutputContract(
         OutputContractId("test", "report", "1"),
@@ -373,8 +374,8 @@ async def test_validator_reject_is_model_correction_not_exception():
 
 @pytest.mark.asyncio
 async def test_validator_retry_later_is_typed_operational_error():
-    from mote.common.exception import OutputValidatorUnavailableError
-    from mote.common.schema import RetryLater, ValidationStage
+    from mote.contracts.output import RetryLater, ValidationStage
+    from mote.runtime.errors import OutputValidatorUnavailableError
 
     contract = OutputContract(
         OutputContractId("test", "report", "1"),

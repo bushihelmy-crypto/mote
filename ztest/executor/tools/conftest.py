@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Shared fixtures for the real-tool test suite (``mote.executor.tools``).
+"""Shared fixtures for the real-tool test suite (``mote.product.toolsets.builtin``).
 
 Everything stays fully offline and deterministic — no LLM, no network, no MCP.
 The real tools only ever touch:
@@ -25,12 +25,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import pytest
 
-from mote.executor.base_tool import BaseTool
+from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint
+from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore, ReliableArtifactPublisher
+from mote.runtime.fileops import FileOperations
+from mote.runtime.interactive import RuntimeHost
+from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.session.log import SessionLog
+from mote.runtime.tools.base_tool import BaseTool
 
 # ---------------------------------------------------------------------------
 # Fake Role publishing a capability allowlist
@@ -58,13 +66,28 @@ class CapRole:
         default_model: Optional[str] = "claude-sonnet-4",
     ) -> None:
         self._cwd = cwd or os.getcwd()
+        self._fileops_dir = tempfile.TemporaryDirectory(prefix="mote-tool-test-")
+        session_log = SessionLog("tool-test", base_dir=self._fileops_dir.name)
+        self.file_operations = FileOperations(
+            session_id="tool-test",
+            journal_path=session_log.path,
+            get_project_root=self.get_cwd,
+            flush_pending=session_log.writer.flush_inline,
+            lock_root=Path(self._fileops_dir.name) / "locks",
+        )
+        self.artifact_store = DurableArtifactStore(
+            Path(self._fileops_dir.name) / "artifacts.sqlite3",
+            ArtifactRepositoryBlobStore(self.file_operations.artifacts),
+        )
+        self.artifact_publisher = ReliableArtifactPublisher(
+            self.artifact_store,
+            self.artifact_store,
+        )
         # Name of the default (main think-loop) model. Media tools (Read/WebBrowser)
         # consult this via get_default_model() to check supports_vision/supports_pdf_input
         # up-front. Defaults to a vision+PDF-capable Claude so media tests read fine;
         # a test can pass a non-vision name (or None) to exercise the refusal path.
         self.default_model = default_model
-        # Shared file-read state: full_path -> mtime_ns (the real Role's readFileState).
-        self.read_state: dict[str, int] = {}
         # Files glimpsed via a Search match (P2) — recorded, un-read; feeds
         # the code map's navigation view. Insertion order preserved.
         self.glimpsed: list[str] = []
@@ -72,39 +95,15 @@ class CapRole:
         # A bool applies to every path; a callable(path)->bool lets a test script
         # per-file answers (e.g. mark one file's prior read as folded away).
         self.resource_visible = resource_visible
-        # Per-Role live sessions for stateful tools (terminal/kernel), keyed by
-        # tool name. Mirrors RoleState._tool_sessions — owned by this fake Role,
-        # so each test's tools are isolated (no process-global leakage).
-        self.tool_sessions: dict[str, Any] = {}
-        # Before-image snapshot calls: (full_path, tool) recorded for assertions.
-        self.snapshots: list[tuple[str, str]] = []
-        # External-change attribution: known baselines (path -> content) recorded
-        # by record_file_baseline; paths passed to attribute_external_change.
-        self.baselines: dict[str, str] = {}
-        self.external_attributions: list[str] = []
-        # Persistent-terminal state captures: (cwd, env, unset, tool) recorded.
-        self.terminal_states: list[tuple] = []
-        # Persistent-kernel state captures: (cwd, env, unset, tool) recorded.
-        self.kernel_states: list[tuple] = []
-        # Persistent-browser state captures: (urls, active, storage_state, tool).
-        self.browser_states: list[tuple] = []
-        # Pending terminal-restore state ({cwd, env, unset}) staged by a resume;
-        # consumed once via take_pending_terminal_restore().
-        self._pending_restore: Optional[dict] = None
-        # Pending kernel-restore state ({cwd, env, unset}) staged by a resume;
-        # consumed once via take_pending_kernel_restore().
-        self._pending_kernel_restore: Optional[dict] = None
-        # Pending browser-restore state ({urls, active, storage_state}) staged by
-        # a resume; consumed once via take_pending_browser_restore().
-        self._pending_browser_restore: Optional[dict] = None
-        # Whether the browser launches headless (WebBrowser get_browser_headless).
-        self.browser_headless: bool = True
+        self.runtime_checkpoints: list[tuple[RuntimeCheckpoint, str]] = []
+        self.runtime_host = RuntimeHost(checkpoint_sink=self)
         # Whether the browser applies opt-in stealth (WebBrowser get_browser_stealth).
         self.browser_stealth: bool = False
         # Which locale bundle the stealth fingerprint uses (WebBrowser get_browser_locale).
         self.browser_locale: str = "auto"
         # Optional proxy URL for the browser (WebBrowser get_browser_proxy).
         self.browser_proxy: str = ""
+        self.browser_cdp_endpoint: str = ""
         # Durable-login profile name (WebBrowser get_browser_profile). Empty =>
         # ephemeral (no persistence). ``browser_profiles`` is the in-memory
         # encrypted-store stand-in keyed by profile name -> storage_state dict.
@@ -113,11 +112,9 @@ class CapRole:
         # Client TLS certs (WebBrowser get_browser_client_certs) — Playwright
         # ``client_certificates`` shape; a passphrase may be a secret placeholder.
         self.browser_client_certs: list[dict] = []
-        # CDP endpoint (WebBrowser get_browser_cdp_endpoint). Empty => launch.
-        self.browser_cdp_endpoint: str = ""
         # DeviceUse backend config (get_device_config). Defaults to a fresh
         # DeviceConfig ("auto"); a test can reassign to force a backend.
-        from mote.common.schema import DeviceConfig
+        from mote.contracts.settings.device import DeviceConfig
 
         self.device_config: Any = DeviceConfig()
         # Named-secret vault stand-in for autonomous login-fill (get_secret).
@@ -164,12 +161,6 @@ class CapRole:
         # Resources SearchTools/Skill register on reveal (id -> (kind, content)),
         # captured so a test can assert the persisted descriptions.
         self.registered_resources: dict[str, tuple[str, str]] = {}
-        # Server-side web search (WebSearch tool). ``web_search_hits`` is the
-        # scripted result list; when it is None the capability raises
-        # NotImplementedError (models the "server-side search unavailable" path).
-        # ``web_search_calls`` records each (query, kwargs) for assertions.
-        self.web_search_hits: Any = None
-        self.web_search_calls: list[tuple] = []
         # Vision fallback (WebBrowser read_image). ``describe_image_text`` is the
         # scripted description; when it is None the capability raises
         # NotImplementedError (models the "no vision-capable model" path).
@@ -187,12 +178,26 @@ class CapRole:
     def get_default_model(self) -> Optional[str]:
         return self.default_model
 
-    # --- shared file-read state (Read records, Write/Edit enforce) ---
-    def record_file_read(self, path: str, mtime_ns: int) -> None:
-        self.read_state[path] = mtime_ns
+    def capture_file_snapshot(self, path: str, **kwargs):
+        return self.file_operations.capture(path, **kwargs)
 
-    def get_file_read_mtime(self, path: str) -> Optional[int]:
-        return self.read_state.get(path)
+    def observe_file_snapshot(self, snapshot) -> None:
+        self.file_operations.observe(snapshot)
+
+    def get_file_snapshot(self, path: str):
+        return self.file_operations.observed(path)
+
+    def read_file_view(self, path: str, request):
+        return self.file_operations.read_view(path, request)
+
+    def search_files(self, **kwargs):
+        return self.file_operations.search(**kwargs)
+
+    async def plan_file_edit(self, request):
+        return self.file_operations.plan_file_edit(request)
+
+    async def commit_edit_plan(self, plan_id: str, **kwargs):
+        return self.file_operations.commit_edit_plan(plan_id, **kwargs)
 
     # --- glimpse state (Search records matched files for the code map) ---
     def record_file_glimpsed(self, path: str) -> None:
@@ -206,52 +211,30 @@ class CapRole:
             return bool(vis(path))
         return bool(vis)
 
-    # --- file-history snapshot (Write/Edit capture before-images) ---
-    def record_file_snapshot(self, full_path: str, *, tool: str = "") -> None:
-        self.snapshots.append((full_path, tool))
+    async def persist(self, checkpoint: RuntimeCheckpoint, *, reason: str) -> None:
+        self.runtime_checkpoints.append((checkpoint, reason))
 
-    # --- external-change attribution (Write/Edit ledger out-of-band edits) ---
-    def record_file_baseline(self, full_path: str) -> None:
-        # Store the just-written content as mote's known baseline (path -> content).
-        try:
-            self.baselines[full_path] = open(full_path, encoding="utf-8").read()
-        except OSError:
-            pass
+    def latest_runtime_state(self, kind: str, codec: str) -> dict:
+        checkpoint = next(
+            checkpoint for checkpoint, _reason in reversed(self.runtime_checkpoints) if checkpoint.kind == kind
+        )
+        return decode_inline_json(checkpoint, codec=codec)
 
-    def attribute_external_change(self, full_path: str) -> None:
-        # Record the guard's attribution call so a test can assert it fired
-        # before the write was refused (attribution-then-guard).
-        self.external_attributions.append(full_path)
-
-    # --- persistent-terminal state (Terminal captures cwd+env for resume) ---
-    def record_terminal_state(self, cwd, env, unset, *, tool: str = "") -> None:
-        self.terminal_states.append((cwd, env, unset, tool))
-
-    def take_pending_terminal_restore(self) -> Optional[dict]:
-        value = self._pending_restore
-        self._pending_restore = None
-        return value
-
-    # --- persistent-kernel state (Python captures cwd+env for resume) ---
-    def record_kernel_state(self, cwd, env, unset, *, tool: str = "") -> None:
-        self.kernel_states.append((cwd, env, unset, tool))
-
-    def take_pending_kernel_restore(self) -> Optional[dict]:
-        value = self._pending_kernel_restore
-        self._pending_kernel_restore = None
-        return value
-
-    # --- persistent-browser state (WebBrowser captures tabs+session for resume) ---
-    def record_browser_state(self, urls, *, active=0, storage_state=None, tool: str = "") -> None:
-        self.browser_states.append((urls, active, storage_state, tool))
-
-    def take_pending_browser_restore(self) -> Optional[dict]:
-        value = self._pending_browser_restore
-        self._pending_browser_restore = None
-        return value
-
-    def get_browser_headless(self) -> bool:
-        return self.browser_headless
+    def stage_runtime_checkpoint(self, kind: str, codec: str, payload: dict) -> None:
+        encoded = encode_inline_json(payload, codec=codec, fidelity=CheckpointFidelity.LOGICAL)
+        self.runtime_host.stage_checkpoint(
+            RuntimeCheckpoint(
+                runtime_id=f"tool-test-{kind}",
+                kind=kind,
+                epoch=0,
+                revision=0,
+                codec=encoded.codec,
+                schema_version=encoded.schema_version,
+                payload_ref=encoded.payload_ref,
+                digest=encoded.digest,
+                fidelity=encoded.fidelity or CheckpointFidelity.LOGICAL,
+            )
+        )
 
     def get_browser_stealth(self) -> bool:
         return self.browser_stealth
@@ -261,6 +244,9 @@ class CapRole:
 
     def get_browser_proxy(self) -> str:
         return self.browser_proxy
+
+    def get_browser_cdp_endpoint(self) -> str:
+        return self.browser_cdp_endpoint
 
     # --- durable-login profile (WebBrowser seeds from / persists to it) ---
     def get_browser_profile(self) -> str:
@@ -275,22 +261,15 @@ class CapRole:
     def get_browser_client_certs(self) -> list[dict]:
         return [dict(c) for c in self.browser_client_certs]
 
-    def get_browser_cdp_endpoint(self) -> str:
-        return self.browser_cdp_endpoint
-
     # --- named-secret resolution (autonomous login-fill) ---
     def get_secret(self, key: str) -> Optional[str]:
         return self.secrets.get(key) or None
 
-    # --- stateful-tool sessions (Terminal/Python live state on RoleState) ---
-    def get_tool_session(self, key: str) -> Any:
-        return self.tool_sessions.get(key)
+    def get_runtime_host(self) -> RuntimeHost:
+        return self.runtime_host
 
-    def set_tool_session(self, key: str, value: Any) -> None:
-        if value is None:
-            self.tool_sessions.pop(key, None)
-        else:
-            self.tool_sessions[key] = value
+    def get_artifact_publisher(self) -> ReliableArtifactPublisher:
+        return self.artifact_publisher
 
     # --- human / session ---
     async def ask_user(self, question: str) -> str:
@@ -303,7 +282,7 @@ class CapRole:
         ``ask_answers`` may be a callable(items) -> AskUserQuestionAnswers or a
         pre-built AskUserQuestionAnswers; absent it returns empty answers.
         """
-        from mote.common.schema import AskUserQuestionAnswers
+        from mote.contracts.interaction import AskUserQuestionAnswers
 
         self.ask_question_items.append(questions)
         answers = self.ask_answers
@@ -337,7 +316,7 @@ class CapRole:
 
     # --- run_graph orchestration (fake executor chokepoint) ---
     async def dispatch_tool(self, name: str, kwargs: Optional[dict] = None) -> Any:
-        from mote.executor.tool_result import ToolResult
+        from mote.runtime.tools.tool_result import ToolResult
 
         fn = self.fake_tools.get(name)
         if fn is None:
@@ -359,14 +338,14 @@ class CapRole:
         return list(getattr(self, "excluded_tools", ()) or ())
 
     async def commit_graph_output(self, *, output, contract_spec, run_id):
-        from mote.common.schema import CommittedOutput, OutputDecodeError, RunKind
-        from mote.roles.output_contract import JsonSchemaOutputDecoder
+        from mote.contracts.output import CommittedOutput, OutputDecodeError, RunKind
+        from mote.kernel.output import JsonSchemaOutputDecoder
 
         decoder = JsonSchemaOutputDecoder(contract_spec.schema_)
         try:
             value = decoder.decode(output)
         except OutputDecodeError:
-            from mote.common.exception import GraphError
+            from mote.runtime.errors import GraphError
 
             raise GraphError("Graph terminal output did not satisfy its output contract")
         return CommittedOutput(
@@ -409,13 +388,6 @@ class CapRole:
     def register_resource(self, *, id: str, kind: str, content: str) -> None:
         self.registered_resources[id] = (kind, content)
 
-    # --- server-side web search (WebSearch tool's secondary call) ---
-    async def web_search(self, query: str, **kwargs) -> Any:
-        self.web_search_calls.append((query, kwargs))
-        if self.web_search_hits is None:
-            raise NotImplementedError("no server-side web search")
-        return self.web_search_hits
-
     # --- vision fallback (WebBrowser read_image's secondary call) ---
     async def describe_image(self, image_b64: str, **kwargs) -> str:
         self.describe_image_calls.append((image_b64, kwargs))
@@ -423,37 +395,35 @@ class CapRole:
             raise NotImplementedError("no vision-capable model")
         return self.describe_image_text
 
+    async def handoff_runtime(self, runtime: str, *, message: str = ""):
+        raise AssertionError(f"unexpected handoff of {runtime!r} in tool test: {message!r}")
+
     # --- the allowlist bind() consults ---
     def tool_capabilities(self) -> dict[str, Any]:
         return {
             "get_cwd": self.get_cwd,
             "set_cwd": self.set_cwd,
             "get_default_model": self.get_default_model,
-            "record_file_read": self.record_file_read,
-            "get_file_read_mtime": self.get_file_read_mtime,
+            "capture_file_snapshot": self.capture_file_snapshot,
+            "observe_file_snapshot": self.observe_file_snapshot,
+            "read_file_view": self.read_file_view,
+            "search_files": self.search_files,
+            "plan_file_edit": self.plan_file_edit,
+            "commit_edit_plan": self.commit_edit_plan,
             "record_file_glimpsed": self.record_file_glimpsed,
             "is_resource_visible": self.is_resource_visible,
-            "record_file_snapshot": self.record_file_snapshot,
-            "record_file_baseline": self.record_file_baseline,
-            "attribute_external_change": self.attribute_external_change,
-            "record_terminal_state": self.record_terminal_state,
-            "take_pending_terminal_restore": self.take_pending_terminal_restore,
-            "record_kernel_state": self.record_kernel_state,
-            "take_pending_kernel_restore": self.take_pending_kernel_restore,
-            "record_browser_state": self.record_browser_state,
-            "take_pending_browser_restore": self.take_pending_browser_restore,
-            "get_browser_headless": self.get_browser_headless,
             "get_browser_stealth": self.get_browser_stealth,
             "get_browser_locale": self.get_browser_locale,
             "get_browser_proxy": self.get_browser_proxy,
+            "get_browser_cdp_endpoint": self.get_browser_cdp_endpoint,
             "get_browser_profile": self.get_browser_profile,
             "load_browser_profile": self.load_browser_profile,
             "save_browser_profile": self.save_browser_profile,
             "get_browser_client_certs": self.get_browser_client_certs,
-            "get_browser_cdp_endpoint": self.get_browser_cdp_endpoint,
             "get_secret": self.get_secret,
-            "get_tool_session": self.get_tool_session,
-            "set_tool_session": self.set_tool_session,
+            "get_runtime_host": self.get_runtime_host,
+            "handoff_runtime": self.handoff_runtime,
+            "get_artifact_publisher": self.get_artifact_publisher,
             "ask_user": self.ask_user,
             "ask_user_question": self.ask_user_question,
             "reply_to_user": self.reply_to_user,
@@ -473,7 +443,6 @@ class CapRole:
             "reveal_tools": self.reveal_tools,
             "describe_deferred_tools": self.describe_deferred_tools,
             "register_resource": self.register_resource,
-            "web_search": self.web_search,
             "describe_image": self.describe_image,
         }
 
@@ -582,9 +551,6 @@ def write_file(path, content: str, *, newline: str = "") -> str:
 
 
 def mark_read(role: CapRole, full_path: str) -> None:
-    """Record *full_path* in the role's file-read state at its current mtime.
-
-    Mirrors what a successful Read does, so a Write/Edit guard sees the file as
-    "read this session and unchanged since".
-    """
-    role.record_file_read(full_path, os.stat(full_path).st_mtime_ns)
+    """Record the exact sealed version of *full_path* as observed."""
+    snapshot, _ = role.capture_file_snapshot(full_path, encoding="utf-8")
+    role.observe_file_snapshot(snapshot)

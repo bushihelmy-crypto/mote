@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for bggraph notification rendering (:mod:`mote.executor.bggraph.notify`).
+"""Tests for bggraph notification rendering (:mod:`mote.runtime.tools.bggraph.notify`).
 
 Each ``push_*`` helper routes through ``report_progress``; the tests install a
 collecting progress writer (via :func:`set_progress_writer`) and assert on the
@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.executor.tasks.bggraph import END, START, BgGraph, BgStatus, GraphBatchFailureError
-from mote.executor.tasks.bggraph.notify import (
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, BgStatus, GraphBatchFailureError
+from mote.orchestration.tasks.bggraph.notify import (
     _render_completed_nodes,
     _render_status_nodes,
     _resolve_param_source,
@@ -21,8 +21,8 @@ from mote.executor.tasks.bggraph.notify import (
     push_started_notification,
     push_terminal_notification,
 )
-from mote.executor.tasks.bggraph.report import report_progress, reset_progress_writer, set_progress_writer
-from mote.executor.tasks.bggraph.types import GraphRunState
+from mote.orchestration.tasks.bggraph.report import report_progress, reset_progress_writer, set_progress_writer
+from mote.orchestration.tasks.bggraph.types import GraphRunState
 
 from .conftest import S, sync_node
 

@@ -9,10 +9,11 @@ shell tools). ``tool_result_limit.persist_result`` is redirected to ``tmp_path``
 """
 from __future__ import annotations
 
-from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
-from mote.executor import tool_result_limit
-from mote.executor.compress.tool_output import _command_for_compression, compress_tool_result
-from mote.executor.tool_result import ToolMedia, ToolResult
+from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+from mote.runtime.tools import tool_result_limit
+from mote.runtime.tools.compress.tool_output import _command_for_compression, compress_tool_result
+from mote.runtime.tools.tool_result import ToolResult
+from mote.ztest.artifact_fakes import artifact_media
 
 # A compressible pytest blob (routes + shrinks), well above the min floor.
 _PYTEST = (
@@ -29,7 +30,12 @@ _PYTEST = (
 )
 
 
-def _compress(result: ToolResult, name: str, args: dict, config: ToolResultLimitConfig | None = None) -> ToolResult:
+def _compress(
+    result: ToolResult,
+    name: str,
+    args: dict,
+    config: ToolResultLimitConfig | None = None,
+) -> ToolResult:
     """Invoke the module-level entry with a default config + session id."""
     return compress_tool_result(result, name, args, session_id="sess", config=config or ToolResultLimitConfig())
 
@@ -104,7 +110,11 @@ class TestJupyterRouting:
 
 class TestSkipPaths:
     def test_media_result_skipped(self):
-        result = ToolResult(output=_PYTEST, success=True, media=[ToolMedia(kind="image", b64="base64data")])
+        result = ToolResult(
+            output=_PYTEST,
+            success=True,
+            media=[artifact_media("image", "base64data")],
+        )
         out = _compress(result, "Bash", {"command": "pytest"})
         assert out.output == _PYTEST
 

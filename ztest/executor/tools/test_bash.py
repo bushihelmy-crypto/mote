@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Bash tool (``mote.executor.tools.bash``).
+"""Tests for the Bash tool (``mote.product.toolsets.builtin.bash``).
 
 Drives the REAL subprocess path (aexecute) in the per-test workspace. Covers
 stdout capture, stderr capture, exit-code annotation, the stable-cwd model
@@ -13,8 +13,8 @@ import os
 
 import pytest
 
-from mote.executor.tool_result import ToolError
-from mote.executor.tools.bash import Bash
+from mote.product.toolsets.builtin.bash import Bash
+from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, run
 

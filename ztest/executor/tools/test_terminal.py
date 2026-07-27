@@ -10,24 +10,24 @@ A live terminal keeps a reader task on the event loop it was started on. In
 production a Role runs in one persistent loop; here we must drive a whole
 multi-call scenario inside ONE ``asyncio.run`` (the conftest ``run`` opens a new
 loop per call, which would orphan the reader). The live session is owned by the
-per-test ``CapRole`` (stored on its ``tool_sessions``, mirroring
-``RoleState._tool_sessions``), so there is no process-global singleton to leak
-across tests; each test still tears its terminal down to free the subprocess.
+per-test ``CapRole`` through its ``RuntimeHost``, so there is no process-global
+singleton to leak across tests; each test still tears its terminal down to free
+the subprocess.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.executor.dependency._terminal import HeadTailBuffer
-from mote.executor.tool_result import ToolError
-from mote.executor.tools.terminal import Terminal
+from mote.product.toolsets.builtin.terminal import Terminal
+from mote.runtime.tools.dependency._terminal import HeadTailBuffer, TerminalRuntimeDriver
+from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, run
 
 
 def _has_terminal(role: CapRole) -> bool:
-    """Whether a live terminal session is stored on the (fake) Role."""
-    return role.get_tool_session("Terminal") is not None
+    """Whether the fake Role owns a live managed terminal runtime."""
+    return any(item.ref.readable == "terminal:default" for item in role.runtime_host.list())
 
 
 @pytest.fixture
@@ -42,6 +42,19 @@ def caprole(workspace):
 
 
 class TestShort:
+    def test_empty_poll_without_activity_does_not_advance_revision(self, caprole, workspace):
+        tool = bind(Terminal(), caprole, session_id="t_poll")
+
+        async def scenario():
+            await tool.call(input="true", yield_time_ms=2000)
+            before = caprole.runtime_host.descriptor("terminal:default").revision
+            await tool.call(input="", yield_time_ms=250)
+            after = caprole.runtime_host.descriptor("terminal:default").revision
+            assert after == before
+            await tool.cleanup_session("t_poll")
+
+        run(scenario())
+
     def test_short_command_output_at_prompt(self, caprole, workspace):
         tool = bind(Terminal(), caprole, session_id="t_short1")
         try:
@@ -50,7 +63,7 @@ class TestShort:
             # Finished -> back at prompt, no "still running" footer.
             assert "still running" not in out
         finally:
-            tool.cleanup_session("t_short1")
+            run(tool.cleanup_session("t_short1"))
 
     def test_exit_closes_terminal(self, caprole, workspace):
         tool = bind(Terminal(), caprole, session_id="t_short2")
@@ -61,7 +74,7 @@ class TestShort:
             assert "terminal exited" in out
             assert not _has_terminal(caprole)
         finally:
-            tool.cleanup_session("t_short2")
+            run(tool.cleanup_session("t_short2"))
 
     def test_false_returns_exit_code(self, caprole, workspace):
         tool = bind(Terminal(), caprole, session_id="t_short3")
@@ -69,7 +82,7 @@ class TestShort:
             out = run(tool.call(input="false", yield_time_ms=2000))
             assert "[exit code: 1]" in out
         finally:
-            tool.cleanup_session("t_short3")
+            run(tool.cleanup_session("t_short3"))
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +100,7 @@ class TestPersistence:
             await tool.call(input=f"cd {sub}", yield_time_ms=2000)
             out = await tool.call(input="pwd", yield_time_ms=2000)
             assert str(sub) in out
-            tool.cleanup_session("t_cwd")
+            await tool.cleanup_session("t_cwd")
 
         run(scenario())
 
@@ -98,7 +111,7 @@ class TestPersistence:
             await tool.call(input="export FOO=bar123", yield_time_ms=2000)
             out = await tool.call(input="echo $FOO", yield_time_ms=2000)
             assert "bar123" in out
-            tool.cleanup_session("t_env")
+            await tool.cleanup_session("t_env")
 
         run(scenario())
 
@@ -124,7 +137,7 @@ class TestInteractive:
             done = await tool.call(input="exit()", yield_time_ms=1500)
             # Back at the shell prompt (or shell exited) — no longer "running".
             assert "still running" not in done
-            tool.cleanup_session("t_py")
+            await tool.cleanup_session("t_py")
 
         run(scenario())
 
@@ -138,7 +151,7 @@ class TestInteractive:
             done = await tool.call(interrupt=True, yield_time_ms=1500)
             # Ctrl-C returns control to the shell prompt.
             assert "still running" not in done
-            tool.cleanup_session("t_int")
+            await tool.cleanup_session("t_int")
 
         run(scenario())
 
@@ -176,9 +189,9 @@ class TestCloseCleanup:
         async def scenario():
             await tool.call(input="sleep 30", yield_time_ms=500)
             assert _has_terminal(caprole)
-            tool.cleanup_session("t_clean")
+            await tool.cleanup_session("t_clean")
             assert not _has_terminal(caprole)
-            tool.cleanup_session("t_clean")  # idempotent — must not raise
+            await tool.cleanup_session("t_clean")  # idempotent — must not raise
 
         run(scenario())
 
@@ -216,7 +229,7 @@ class TestHeadTailBuffer:
             )
             assert "omitted" in out
         finally:
-            tool.cleanup_session("t_big")
+            run(tool.cleanup_session("t_big"))
 
 
 # ---------------------------------------------------------------------------
@@ -226,22 +239,20 @@ class TestHeadTailBuffer:
 
 class TestStateCaptureRestore:
     def test_capture_records_cwd_and_env_diff(self, caprole, workspace):
-        """After cd + export, a call records (cwd, env_diff) on the fake Role."""
+        """After cd + export, the Runtime checkpoint carries cwd + env diff."""
         sub = workspace / "sub"
         sub.mkdir()
         tool = bind(Terminal(), caprole, session_id="t_cap")
 
         async def scenario():
             await tool.call(input=f"cd {sub} && export CAP_FOO=cap_bar", yield_time_ms=2000)
-            tool.cleanup_session("t_cap")
+            await tool.cleanup_session("t_cap")
 
         run(scenario())
-        # Every at-prompt call records; the last capture reflects the final state.
-        assert caprole.terminal_states, "no terminal state captured"
-        cwd, env, unset, tool_name = caprole.terminal_states[-1]
-        assert cwd == str(sub)
+        state = caprole.latest_runtime_state("terminal", "terminal-state+json@1")
+        env = state["env"]
+        assert state["cwd"] == str(sub)
         assert env.get("CAP_FOO") == "cap_bar"
-        assert tool_name == "Terminal"
         # Noise keys must be filtered out of the diff.
         assert "PWD" not in env and "SHLVL" not in env and "_" not in env
 
@@ -252,32 +263,38 @@ class TestStateCaptureRestore:
         tool = bind(Terminal(), caprole, session_id="t_restore")
 
         async def scenario():
-            session = await tool._ensure_session()
-            await session.restore_state(str(sub), {"REZ_FOO": "rez_bar"}, [])
+            await tool._ensure_runtime()
+            async with caprole.runtime_host.access("terminal:default", mode="write", owner_id="test:restore") as access:
+                access.commit()
+                driver = access.driver
+                assert isinstance(driver, TerminalRuntimeDriver)
+                await driver.session.restore_state(str(sub), {"REZ_FOO": "rez_bar"}, [])
             pwd = await tool.call(input="pwd", yield_time_ms=2000)
             val = await tool.call(input="echo $REZ_FOO", yield_time_ms=2000)
             assert str(sub) in pwd
             assert "rez_bar" in val
-            tool.cleanup_session("t_restore")
+            await tool.cleanup_session("t_restore")
 
         run(scenario())
 
     def test_pending_restore_applied_on_ensure_session(self, caprole, workspace):
-        """_ensure_session consumes the pending restore and re-seeds the shell."""
+        """Runtime creation consumes the pending restore and re-seeds the shell."""
         sub = workspace / "pending"
         sub.mkdir()
-        caprole._pending_restore = {"cwd": str(sub), "env": {"PEND_FOO": "pend_bar"}, "unset": []}
+        caprole.stage_runtime_checkpoint(
+            "terminal",
+            "terminal-state+json@1",
+            {"cwd": str(sub), "env": {"PEND_FOO": "pend_bar"}, "unset": []},
+        )
         tool = bind(Terminal(), caprole, session_id="t_pending")
 
         async def scenario():
-            await tool._ensure_session()  # applies pending restore once
+            await tool._ensure_runtime()  # applies pending restore once
             pwd = await tool.call(input="pwd", yield_time_ms=2000)
             val = await tool.call(input="echo $PEND_FOO", yield_time_ms=2000)
             assert str(sub) in pwd
             assert "pend_bar" in val
-            # Pending state is consumed exactly once.
-            assert caprole.take_pending_terminal_restore() is None
-            tool.cleanup_session("t_pending")
+            await tool.cleanup_session("t_pending")
 
         run(scenario())
 
@@ -286,11 +303,15 @@ class TestStateCaptureRestore:
         tool = bind(Terminal(), caprole, session_id="t_quote")
 
         async def scenario():
-            session = await tool._ensure_session()
-            await session.restore_state("", {"INJ": "$(echo pwned)"}, [])
+            await tool._ensure_runtime()
+            async with caprole.runtime_host.access("terminal:default", mode="write", owner_id="test:quote") as access:
+                access.commit()
+                driver = access.driver
+                assert isinstance(driver, TerminalRuntimeDriver)
+                await driver.session.restore_state("", {"INJ": "$(echo pwned)"}, [])
             out = await tool.call(input='echo "$INJ"', yield_time_ms=2000)
             assert "$(echo pwned)" in out
             assert "pwned" not in out.replace("$(echo pwned)", "")
-            tool.cleanup_session("t_quote")
+            await tool.cleanup_session("t_quote")
 
         run(scenario())

@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 def _event_types(role):
     """Collect the rollout event ``type`` values for a role's session."""
-    from mote.session import SessionLog
+    from mote.runtime.session import SessionLog
 
     log = SessionLog(role.state.session_id)
     return [rec["type"] for rec in log.iter_raw()]
@@ -36,7 +36,7 @@ async def test_run_writes_rollout(make_role, tmp_path):
 
     await role.run(with_message="make a.txt")
 
-    from mote.session import SessionLog
+    from mote.runtime.session import SessionLog
 
     log = SessionLog(role.state.session_id)
     assert log.exists()
@@ -77,10 +77,13 @@ async def test_resume_rebuilds_history(make_role, context, tmp_path):
 
     # A brand-new Role pinned to the same session_id rebuilds the history from
     # the rollout, without re-running anything.
-    from mote.roles import Role
-    from mote.roles.role_schema import RoleSchema
+    from mote.runtime.agent import AgentWiring, Role
+    from mote.runtime.agent.role_schema import RoleSchema
 
-    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived = Role(
+        role_schema=RoleSchema(name="Tester", tools=["Edit"]),
+        wiring=AgentWiring.for_context(context),
+    )
     revived.state.session_id = sid
 
     assert revived.resume_session() is True
@@ -92,10 +95,10 @@ async def test_resume_rebuilds_history(make_role, context, tmp_path):
 
 
 async def test_resume_without_log_returns_false(context):
-    from mote.roles import Role
-    from mote.roles.role_schema import RoleSchema
+    from mote.runtime.agent import AgentWiring, Role
+    from mote.runtime.agent.role_schema import RoleSchema
 
-    role = Role(role_schema=RoleSchema(name="Ghost"), context=context)
+    role = Role(role_schema=RoleSchema(name="Ghost"), wiring=AgentWiring.for_context(context))
     assert role.resume_session() is False
 
 
@@ -116,7 +119,7 @@ async def test_fork_branches_independent_child(make_role, tmp_path):
     assert child.state.parent_session_id == parent_sid
     assert child.state.session_id != parent_sid
 
-    from mote.session import SessionLog
+    from mote.runtime.session import SessionLog
 
     assert SessionLog(child.state.session_id).exists()
 
@@ -164,7 +167,7 @@ async def test_resume_then_continue_running(make_role, context, tmp_path):
 
 async def test_fork_child_runs_independently(make_role, tmp_path):
     """A forked child can run new work without disturbing the parent's log."""
-    from mote.session import SessionLog
+    from mote.runtime.session import SessionLog
 
     p_file = os.path.join(str(tmp_path), "p.txt")
     role = make_role(
@@ -207,10 +210,10 @@ async def test_resume_reaps_think_already_in_history(make_role, context, tmp_pat
     assistant turn. We seed such a record into the run journal after a real run,
     then prove ``resume_session`` (via ``_reconcile_think_journal``) drops it.
     """
-    from mote.common.ledger import KIND_THINK
-    from mote.common.schema import ThinkResult
-    from mote.roles import Role
-    from mote.roles.role_schema import RoleSchema
+    from mote.contracts.think import ThinkResult
+    from mote.runtime.agent import AgentWiring, Role
+    from mote.runtime.agent.role_schema import RoleSchema
+    from mote.runtime.ledger import KIND_THINK
 
     role = make_role(
         working_dir=str(tmp_path),
@@ -232,7 +235,10 @@ async def test_resume_reaps_think_already_in_history(make_role, context, tmp_pat
     journal.record_completed("think:99", payload=ThinkResult(content=last_ai.content or "").model_dump_json())
     assert journal.replay("think:99") is not None
 
-    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived = Role(
+        role_schema=RoleSchema(name="Tester", tools=["Edit"]),
+        wiring=AgentWiring.for_context(context),
+    )
     revived.state.session_id = sid
     assert revived.resume_session() is True
 
@@ -248,10 +254,10 @@ async def test_resume_keeps_unmatched_completed_think(make_role, context, tmp_pa
     turn being recorded. The resume guard must LEAVE it so the loop can reinstate
     it (skip the LLM) on its first think.
     """
-    from mote.common.ledger import KIND_THINK
-    from mote.common.schema import ThinkResult
-    from mote.roles import Role
-    from mote.roles.role_schema import RoleSchema
+    from mote.contracts.think import ThinkResult
+    from mote.runtime.agent import AgentWiring, Role
+    from mote.runtime.agent.role_schema import RoleSchema
+    from mote.runtime.ledger import KIND_THINK
 
     role = make_role(
         working_dir=str(tmp_path),
@@ -271,7 +277,10 @@ async def test_resume_keeps_unmatched_completed_think(make_role, context, tmp_pa
         "think:99", payload=ThinkResult(content="a thought that never reached history").model_dump_json()
     )
 
-    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived = Role(
+        role_schema=RoleSchema(name="Tester", tools=["Edit"]),
+        wiring=AgentWiring.for_context(context),
+    )
     revived.state.session_id = sid
     assert revived.resume_session() is True
 
@@ -292,9 +301,9 @@ async def test_resume_continues_durable_timer_by_remaining_time(make_role, conte
     """
     import time as _time
 
-    from mote.common.ledger import KIND_TIMER
-    from mote.roles import Role
-    from mote.roles.role_schema import RoleSchema
+    from mote.runtime.agent import AgentWiring, Role
+    from mote.runtime.agent.role_schema import RoleSchema
+    from mote.runtime.ledger import KIND_TIMER
 
     role = make_role(
         working_dir=str(tmp_path),
@@ -313,12 +322,15 @@ async def test_resume_continues_durable_timer_by_remaining_time(make_role, conte
     deadline = _time.time() + 100.0
     journal.record_started("timer:1", KIND_TIMER, "pure", seq=1, payload=repr(deadline))
 
-    revived = Role(role_schema=RoleSchema(name="Tester", tools=["Edit"]), context=context)
+    revived = Role(
+        role_schema=RoleSchema(name="Tester", tools=["Edit"]),
+        wiring=AgentWiring.for_context(context),
+    )
     revived.state.session_id = sid
     assert revived.resume_session() is True
 
     # The resumed capability adopts the in-flight timer's remaining time.
-    from mote.loop.durable import resume_timer
+    from mote.runtime.durable import resume_timer
 
     rj = revived.executor.journal
     assert rj is not None
@@ -341,7 +353,7 @@ async def test_list_sessions_sees_run(make_role, tmp_path, redirect_sessions):
     )
     await role.run(with_message="go")
 
-    from mote.session import list_sessions
+    from mote.runtime.session import list_sessions
 
     infos = list_sessions(str(redirect_sessions))
     ids = [i.session_id for i in infos]

@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for the :mod:`mote.common.text.elision` value object."""
+"""Behavioral tests for the :mod:`mote.contracts.text.elision` value object."""
 from __future__ import annotations
 
 import dataclasses
 
 import pytest
 
-from mote.common.text import Elision, ElisionStrategy, ElisionUnit, cap_head, cap_head_tail
+from mote.contracts.text import Elision, ElisionStrategy, ElisionUnit, cap_head, cap_head_tail
 
 
 class TestCapHeadTail:

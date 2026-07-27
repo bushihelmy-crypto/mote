@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.config.loader`` — orchestration + config.yaml wiring.
+"""Tests for ``mote.runtime.config.loader`` — orchestration + config.yaml wiring.
 
 These exercise the real on-disk PROJECT layers (the repo's ``config/config2.yaml``
 + ``mote/config.yaml``), so they assume the repo ships a usable base config.
@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mote.common.config.loader import build_layer_stack, get_provenance, load_config, load_config_with_stack
-from mote.common.config.overrides import ConfigOverrides
-from mote.common.config.sources import ConfigSource, discover_source_files
+from mote.runtime.config.loader import build_layer_stack, get_provenance, load_config, load_config_with_stack
+from mote.runtime.config.overrides import ConfigOverrides
+from mote.runtime.config.sources import ConfigSource, discover_source_files
 
 
 def test_mote_config_yaml_is_the_top_project_layer():

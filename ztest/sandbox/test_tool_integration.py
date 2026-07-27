@@ -19,9 +19,9 @@ import sys
 
 import pytest
 
-from mote.executor.dependency._kernel import KernelSession
-from mote.executor.dependency._terminal import TerminalSession
-from mote.executor.tools.bash import Bash
+from mote.product.toolsets.builtin.bash import Bash
+from mote.runtime.tools.dependency._kernel import KernelSession
+from mote.runtime.tools.dependency._terminal import TerminalSession
 from mote.ztest.executor.tools.conftest import CapRole, bind, run
 
 

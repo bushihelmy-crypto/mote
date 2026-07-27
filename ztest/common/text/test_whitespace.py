@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.common.text.whitespace`."""
+"""Behavioral tests for :mod:`mote.contracts.text.whitespace`."""
 from __future__ import annotations
 
-from mote.common.text import collapse_whitespace
+from mote.contracts.text import collapse_whitespace
 
 
 class TestCollapseWhitespace:

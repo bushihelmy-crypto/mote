@@ -3,7 +3,7 @@
 """Tests for the pure-data hook types: HookInput wire shape + fold precedence."""
 from __future__ import annotations
 
-from mote.common.hook.types import EMPTY, HookInput, HookOutcome, fold
+from mote.runtime.hook.types import EMPTY, HookInput, HookOutcome, fold
 
 
 def test_to_json_dict_carries_envelope_and_payload():

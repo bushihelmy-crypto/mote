@@ -19,9 +19,9 @@ import json
 
 import pytest
 
-from mote.common.const import paths
-from mote.executor.permission import settings_source
-from mote.executor.permission.settings_source import SETTINGS_FILE_NAME, load_permission_rules, settings_paths
+from mote.runtime import paths
+from mote.runtime.tools.permission import settings_source
+from mote.runtime.tools.permission.settings_source import SETTINGS_FILE_NAME, load_permission_rules, settings_paths
 
 
 @pytest.fixture

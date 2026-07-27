@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.events import PostCompactEvent
-from mote.common.interface import EphemeralContextSource, ObservationSubscriber
-from mote.context.turn_context import SkillListingContextSource
+from mote.contracts.ports import EphemeralContextSource
+from mote.runtime.context.turn_context import SkillListingContextSource
+from mote.runtime.events import PostCompactEvent
 
 
 def run(coro):
@@ -55,11 +55,10 @@ class TestProtocol:
     def test_is_ephemeral_context_source(self):
         assert isinstance(_source(_FakeInjector([])), EphemeralContextSource)
 
-    def test_is_observation_subscriber(self):
-        # Dual-role: it must be an ObservationSubscriber so the roster wiring
-        # (RoleComponents._build_event_subscribers) subscribes it to the bus and
-        # it can reset its frontier on PostCompactEvent.
-        assert isinstance(_source(_FakeInjector([])), ObservationSubscriber)
+    def test_uses_direct_rebuild_projection(self):
+        source = _source(_FakeInjector([]))
+        assert callable(getattr(source, "on_model_context_rebuilt", None))
+        assert not getattr(source, "telemetry_observer", False)
 
     def test_save_to_context_true(self):
         # It is persisted to history once per turn (not request-only ephemeral).
@@ -156,7 +155,7 @@ class TestPostCompactReset:
         run(src.render())  # first turn: full index
         assert run(src.render()) is None  # steady: nothing new
 
-        run(src.handle(PostCompactEvent()))  # compaction condensed the index away
+        run(src.on_model_context_rebuilt(PostCompactEvent()))
         assert src._sent_names == set()
 
         out = run(src.render())  # next turn re-sends the WHOLE index
@@ -169,5 +168,5 @@ class TestPostCompactReset:
         inj = _FakeInjector([_FakeSkill("alpha")])
         src = _source(inj)
         run(src.render())
-        run(src.handle(object()))  # unrelated event → no reset
+        run(src.on_model_context_rebuilt(object()))
         assert src._sent_names == {"alpha"}

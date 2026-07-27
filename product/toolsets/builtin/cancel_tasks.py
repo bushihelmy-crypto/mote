@@ -1,0 +1,74 @@
+"""cancel_tasks — Cancel running background pipeline tasks.
+
+Cancels the entire DAG. All in-flight nodes receive asyncio cancellation.
+Already-completed node results are preserved in the state snapshot, so the
+task can be resumed later via resume_tasks.
+"""
+from __future__ import annotations
+
+from mote.orchestration.tasks.status import PAUSE_STATUSES
+from mote.orchestration.tasks.types import BgStatus
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.capability_types import GetBgPool
+from mote.runtime.tools.tool_registry import register_tool
+from mote.runtime.tools.tool_result import ToolError
+
+_MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
+_MSG_CANCEL_DONE = "Task {task_id} is already {status}, cannot cancel."
+_MSG_CANCEL_SUCCESS = (
+    "Task {task_id} ({command_name}) cancelled.\n"
+    "Reason: {reason}\n"
+    "Use resume_tasks(task_id='{task_id}', from_node='...') to resume."
+)
+
+
+@register_tool
+class CancelTasks(BaseTool):
+    name = "CancelTasks"
+    aliases = ["cancel_tasks"]
+    requires = ("get_bg_pool",)
+
+    # Injected from Role by bind(): Role.get_bg_pool.
+    get_bg_pool: GetBgPool
+
+    async def call(
+        self,
+        *,
+        task_id: str,
+        reason: str | None = None,
+    ) -> str:
+        """Cancel a running background pipeline — completed nodes are kept for resume.
+
+        Cancel a running background pipeline task. The entire DAG is cancelled;
+        already-completed node results are preserved and the task can be resumed
+        later.
+
+        Args:
+            task_id: The task ID to cancel (e.g. "bg_3").
+            reason: Optional reason for cancellation (shown in notifications).
+        """
+        pool = self.get_bg_pool()
+        meta = pool.get_task_info(task_id)
+        if meta is None:
+            raise ToolError(_MSG_UNKNOWN_TASK.format(task_id=task_id))
+
+        # Can only cancel tasks that are still active — running, queued, or
+        # paused awaiting a decision (LLM route / deadlock stall).
+        if meta.status not in (BgStatus.PENDING, BgStatus.RUNNING, *PAUSE_STATUSES):
+            return _MSG_CANCEL_DONE.format(task_id=task_id, status=meta.status)
+
+        success = pool.cancel(task_id)
+        if not success:
+            return _MSG_CANCEL_DONE.format(task_id=task_id, status="finished")
+
+        # Cancelling is a consume: the model acted on the task, so retire its
+        # re-projected result/marker and let the meta be reaped.
+        pool.mark_retrieved(task_id)
+
+        cancel_reason = reason or "user requested"
+
+        return _MSG_CANCEL_SUCCESS.format(
+            task_id=task_id,
+            command_name=meta.command_name,
+            reason=cancel_reason,
+        )

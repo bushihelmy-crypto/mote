@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.permission.rule_store``."""
+"""Unit tests for ``mote.runtime.tools.permission.rule_store``."""
 from __future__ import annotations
 
-from mote.common.schema import PermissionConfig
-from mote.common.schema.permission_types import PermissionRule
-from mote.executor.permission.rule_store import RuleStore
+from mote.contracts.permissions import PermissionRule
+from mote.contracts.settings.permissions import PermissionConfig
+from mote.runtime.tools.permission.rule_store import RuleStore
 
 
 def make_store() -> RuleStore:

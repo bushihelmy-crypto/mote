@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.executor.loop_guard.detector.ThrashDetector`.
+"""Unit tests for :class:`mote.runtime.tools.loop_guard.detector.ThrashDetector`.
 
 The detector is a pure per-Role state machine (zero I/O, zero framework imports),
 so it is exercised in complete isolation here — no bus, no event, no executor.
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.executor.loop_guard.detector import ThrashDetector, Verdict
+from mote.runtime.tools.loop_guard.detector import ThrashDetector, Verdict
 
 SIG_A = '[{"args": {"path": "a"}, "name": "Read"}]'
 SIG_B = '[{"args": {"path": "b"}, "name": "Read"}]'

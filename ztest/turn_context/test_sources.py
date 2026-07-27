@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.events import PostCompactEvent, SessionStartEvent, TurnEndEvent
-from mote.common.interface import EphemeralContextSource, ObservationSubscriber
-from mote.common.schema import FoldState
-from mote.context.turn_context import (
+from mote.contracts.ports import EphemeralContextSource
+from mote.contracts.schema import FoldState
+from mote.runtime.context.turn_context import (
     CompactionNoticeContextSource,
     FoldPressureContextSource,
     GitContextSource,
     TokenPressureContextSource,
 )
+from mote.runtime.events import PostCompactEvent, TurnEndEvent
 
 
 def run(coro):
@@ -31,13 +31,15 @@ class TestProtocolConformance:
         assert isinstance(FoldPressureContextSource(None), EphemeralContextSource)
         assert isinstance(CompactionNoticeContextSource(), EphemeralContextSource)
 
-    def test_compaction_notice_is_also_event_subscriber(self):
-        # Dual-role: it consumes the bus event AND renders the turn-context block.
-        assert isinstance(CompactionNoticeContextSource(), ObservationSubscriber)
+    def test_compaction_notice_uses_direct_rebuild_projection(self):
+        source = CompactionNoticeContextSource()
+        assert callable(getattr(source, "on_model_context_rebuilt", None))
+        assert not getattr(source, "telemetry_observer", False)
 
-    def test_git_source_is_also_event_subscriber(self):
-        # Dual-role: it freezes the snapshot off bus events AND renders it.
-        assert isinstance(GitContextSource(), ObservationSubscriber)
+    def test_git_source_uses_direct_rebuild_projection(self):
+        source = GitContextSource()
+        assert callable(getattr(source, "on_model_context_rebuilt", None))
+        assert not getattr(source, "telemetry_observer", False)
 
 
 # --------------------------------------------------------------------------
@@ -45,7 +47,7 @@ class TestProtocolConformance:
 # --------------------------------------------------------------------------
 def _stub_git(monkeypatch, *, state, section=" - Git branch: main"):
     """Stub collect_git_state -> *state* and render_git_section -> *section*."""
-    import mote.context.turn_context.sources.git as gitmod
+    import mote.runtime.context.turn_context.sources.git as gitmod
 
     async def fake_collect(cwd):
         return state
@@ -55,25 +57,20 @@ def _stub_git(monkeypatch, *, state, section=" - Git branch: main"):
         monkeypatch.setattr(gitmod, "render_git_section", lambda s: section)
 
 
-def _session_start(cwd="/x"):
-    return SessionStartEvent(working_dir=cwd)
-
-
 class TestGitContextSource:
     def test_priority_and_name(self):
         s = GitContextSource()
         assert s.name == "git" and s.priority == 10
 
-    def test_silent_until_armed(self, monkeypatch):
-        # No capture event yet -> nothing to render (not a per-turn live feed).
+    def test_first_render_captures_without_telemetry_race(self, monkeypatch):
         _stub_git(monkeypatch, state=object())
-        assert run(GitContextSource().render(cwd="/x")) is None
+        out = run(GitContextSource().render(cwd="/x"))
+        assert out is not None and out.startswith(" - Git branch: main")
 
-    def test_session_start_freezes_and_renders_once(self, monkeypatch):
+    def test_initial_capture_freezes_and_renders_once(self, monkeypatch):
         _stub_git(monkeypatch, state=object())
         src = GitContextSource()
-        run(src.handle(_session_start("/repo")))
-        out = run(src.render(cwd="/x"))
+        out = run(src.render(cwd="/repo"))
         assert out is not None and out.startswith(" - Git branch: main")
         # Snapshot footer makes the point-in-time contract explicit.
         assert "snapshot" in out.lower()
@@ -83,7 +80,7 @@ class TestGitContextSource:
     def test_post_compact_recaptures_via_cwd_provider(self, monkeypatch):
         _stub_git(monkeypatch, state=object())
         src = GitContextSource(get_cwd=lambda: "/live")
-        run(src.handle(PostCompactEvent(summary="x")))
+        run(src.on_model_context_rebuilt(PostCompactEvent(summary="x")))
         assert run(src.render(cwd="/x")) is not None
         assert run(src.render(cwd="/x")) is None  # disarmed
 
@@ -92,7 +89,6 @@ class TestGitContextSource:
         # but still disarm (no retry, no live tracking).
         _stub_git(monkeypatch, state=None)
         src = GitContextSource()
-        run(src.handle(_session_start("/x")))
         assert run(src.render(cwd="/x")) is None
         # Not retried on the next cycle either.
         assert run(src.render(cwd="/x")) is None
@@ -100,11 +96,10 @@ class TestGitContextSource:
     def test_empty_section_collapses_to_none(self, monkeypatch):
         _stub_git(monkeypatch, state=object(), section="")
         src = GitContextSource()
-        run(src.handle(_session_start("/x")))
         assert run(src.render(cwd="/x")) is None
 
     def test_recapture_between_renders_shows_latest(self, monkeypatch):
-        import mote.context.turn_context.sources.git as gitmod
+        import mote.runtime.context.turn_context.sources.git as gitmod
 
         sections = iter([" - Git branch: main", " - Git branch: feature"])
 
@@ -115,11 +110,10 @@ class TestGitContextSource:
         monkeypatch.setattr(gitmod, "render_git_section", lambda s: next(sections))
 
         src = GitContextSource(get_cwd=lambda: "/repo")
-        run(src.handle(_session_start("/repo")))
         first = run(src.render(cwd="/x"))
         assert first.startswith(" - Git branch: main")
         # A compaction re-freezes the snapshot -> next render shows the new one.
-        run(src.handle(PostCompactEvent(summary="x")))
+        run(src.on_model_context_rebuilt(PostCompactEvent(summary="x")))
         second = run(src.render(cwd="/x"))
         assert second.startswith(" - Git branch: feature")
 
@@ -127,19 +121,18 @@ class TestGitContextSource:
         # PostCompact with no get_cwd provider -> capture(None) -> nothing.
         _stub_git(monkeypatch, state=object())
         src = GitContextSource()  # no get_cwd
-        run(src.handle(PostCompactEvent(summary="x")))
+        run(src.on_model_context_rebuilt(PostCompactEvent(summary="x")))
         assert run(src.render(cwd="/x")) is None
 
     def test_capture_failure_is_swallowed(self, monkeypatch):
-        import mote.context.turn_context.sources.git as gitmod
+        import mote.runtime.context.turn_context.sources.git as gitmod
 
         async def boom(cwd):
             raise RuntimeError("git blew up")
 
         monkeypatch.setattr(gitmod, "collect_git_state", boom)
         src = GitContextSource()
-        run(src.handle(_session_start("/repo")))  # must not raise
-        assert run(src.render(cwd="/x")) is None
+        assert run(src.render(cwd="/repo")) is None
 
 
 # --------------------------------------------------------------------------
@@ -300,7 +293,7 @@ class TestCompactionNoticeContextSource:
 
     def test_renders_once_after_post_compact_then_disarms(self):
         s = CompactionNoticeContextSource()
-        run(s.handle(PostCompactEvent(trigger="auto", summary="prev work")))
+        run(s.on_model_context_rebuilt(PostCompactEvent(trigger="auto", summary="prev work")))
         out = run(s.render())
         assert out is not None
         assert "History compacted" in out
@@ -309,19 +302,24 @@ class TestCompactionNoticeContextSource:
 
     def test_multiple_compactions_collapse_to_one_notice(self):
         s = CompactionNoticeContextSource()
-        run(s.handle(PostCompactEvent()))
-        run(s.handle(PostCompactEvent()))
+        run(s.on_model_context_rebuilt(PostCompactEvent(summary="first")))
+        run(s.on_model_context_rebuilt(PostCompactEvent(summary="second")))
         assert run(s.render()) is not None
+        assert run(s.render()) is None
+
+    def test_tool_result_fold_without_summary_is_silent(self):
+        s = CompactionNoticeContextSource()
+        run(s.on_model_context_rebuilt(PostCompactEvent(trigger="auto", summary="")))
         assert run(s.render()) is None
 
     def test_ignores_unrelated_events(self):
         s = CompactionNoticeContextSource()
-        run(s.handle(TurnEndEvent()))
+        run(s.on_model_context_rebuilt(TurnEndEvent()))
         assert run(s.render()) is None
 
     def test_summary_not_echoed_in_notice(self):
         # The summary already lives in history; the notice only flags the event.
         s = CompactionNoticeContextSource()
-        run(s.handle(PostCompactEvent(summary="SECRET-SUMMARY-TEXT")))
+        run(s.on_model_context_rebuilt(PostCompactEvent(summary="SECRET-SUMMARY-TEXT")))
         out = run(s.render())
         assert "SECRET-SUMMARY-TEXT" not in out

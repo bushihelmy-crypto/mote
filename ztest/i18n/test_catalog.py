@@ -16,8 +16,8 @@ from typing import Dict, Set
 
 import pytest
 
-from mote.common.i18n import keys as K
-from mote.common.i18n.catalog import en, zh
+from mote.product.i18n import keys as K
+from mote.product.i18n.catalog import en, zh
 
 _CATALOGS: Dict[str, Dict[str, str]] = {"zh": zh.CATALOG, "en": en.CATALOG}
 

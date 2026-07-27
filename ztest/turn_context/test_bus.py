@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.context.turn_context.bus.TurnContextBus.
+"""Tests for mote.runtime.context.turn_context.bus.TurnContextBus.
 
 The bus is a stateless aggregator: it renders each EphemeralContextSource
 concurrently, drops empty/failed blocks, and merges the survivors into one
@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.context.turn_context import TurnContextBus
+import pytest
+
+from mote.contracts.events.types import HistoryEditedEvent, PostCompactEvent
+from mote.runtime.context.turn_context import TurnContextBus
 
 
 def run(coro):
@@ -34,6 +37,18 @@ class FakeSource:
         if self._raises:
             raise RuntimeError("boom")
         return self._block
+
+
+class FakeRebuildSource(FakeSource):
+    def __init__(self, name, *, raises=False):
+        super().__init__(name, 10, None)
+        self.rebuilds = []
+        self._rebuild_raises = raises
+
+    async def on_model_context_rebuilt(self, event):
+        if self._rebuild_raises:
+            raise RuntimeError("rebuild failed")
+        self.rebuilds.append(event)
 
 
 class TestTurnContextBus:
@@ -121,3 +136,26 @@ class TestBucketRouting:
         bus = TurnContextBus([src])
         run(bus.collect_to_context(cwd="/work"))
         assert src.seen_cwd == "/work"
+
+
+class TestModelContextRebuild:
+    def test_committed_rebuild_is_applied_without_telemetry_queue(self):
+        source = FakeRebuildSource("rebuild")
+        event = HistoryEditedEvent(clear_all=True, reason="clear")
+
+        run(TurnContextBus([source]).model_context_rebuilt(event))
+
+        assert source.rebuilds == [event]
+
+    def test_one_advisory_source_failure_does_not_skip_other_sources(self):
+        failed = FakeRebuildSource("failed", raises=True)
+        healthy = FakeRebuildSource("healthy")
+        event = PostCompactEvent(trigger="auto")
+
+        run(TurnContextBus([failed, healthy]).model_context_rebuilt(event))
+
+        assert healthy.rebuilds == [event]
+
+    def test_unrelated_event_is_rejected(self):
+        with pytest.raises(TypeError, match="does not rebuild"):
+            run(TurnContextBus([]).model_context_rebuilt(object()))

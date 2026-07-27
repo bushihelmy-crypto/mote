@@ -16,8 +16,14 @@ import pytest
 
 pytest.importorskip("textual")
 
-from mote.cli.contracts.view.events import ApprovalDecision
-from mote.cli.io.textual_io import TextualPort
+from mote.contracts.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.interaction import AskUserQuestionInput
+from mote.contracts.runtimes import RuntimeRef
+from mote.contracts.surfaces import SurfaceDescriptor, SurfacePresentationMode
+from mote.product.cli.consumers.textual.screens import HandoffScreen
+from mote.product.cli.contracts.view.events import ApprovalDecision
+from mote.product.cli.io.textual_io import TextualPort
+from mote.runtime.interactive.presentation import SurfacePresenterRegistry
 
 
 def _q(question, header, options, multiSelect=False):
@@ -30,8 +36,6 @@ def _q(question, header, options, multiSelect=False):
 
 
 def _questions(*qs):
-    from mote.common.schema import AskUserQuestionInput
-
     # Mirror AskUserQuestion._coerce: the port receives the plain list of items.
     return AskUserQuestionInput.model_validate({"questions": list(qs)}).questions
 
@@ -43,6 +47,7 @@ class _FakeApp:
         self.dismiss_with = dismiss_with
         self.pushed: list = []
         self.idle_calls = 0
+        self.refresh_calls = 0
         self.staged: list = []
 
     def push_screen(self, screen, callback) -> None:
@@ -52,8 +57,53 @@ class _FakeApp:
     def set_idle(self) -> None:
         self.idle_calls += 1
 
+    def refresh(self, **kwargs) -> None:
+        assert kwargs == {"repaint": True, "layout": True}
+        self.refresh_calls += 1
+
     def stage_prompt(self, text: str) -> None:
         self.staged.append(text)
+
+
+class _WindowPresentation:
+    def __init__(self) -> None:
+        self.synchronized = False
+        self.closed = False
+        self.released = False
+
+    async def attach(self, surface) -> None:
+        return None
+
+    async def focus(self) -> None:
+        return None
+
+    async def synchronize(self) -> None:
+        self.synchronized = True
+
+    async def release(self) -> None:
+        self.released = True
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _WindowPresenter:
+    presentation = SurfacePresentationMode.WINDOW
+    surface_kinds = frozenset({"canvas"})
+
+    def __init__(self) -> None:
+        self.presentation_session = _WindowPresentation()
+
+    async def present(self, surface):
+        return self.presentation_session
+
+
+class _WindowSurface:
+    descriptor = SurfaceDescriptor(
+        kind="canvas",
+        ref="canvas:test",
+        presentation=SurfacePresentationMode.WINDOW,
+    )
 
 
 @pytest.mark.asyncio
@@ -147,6 +197,54 @@ async def test_decide_approval_fallback_rejects():
     assert isinstance(result, ApprovalDecision)
     assert result.approval_id == "ap-9"
     assert result.outcome == "reject"
+
+
+@pytest.mark.asyncio
+async def test_open_handoff_returns_structured_message():
+    expected = HumanHandoffOutcome(status=HandoffStatus.COMPLETED, human_message="looks good")
+    app = _FakeApp(dismiss_with=expected)
+    port = TextualPort(app)
+    request = HandoffRequest(runtime_ref=RuntimeRef(runtime_id="r-1", kind="canvas"))
+    handle = DriverHandoffHandle(
+        handle_id="h-1",
+        surface=SurfaceDescriptor(kind="terminal", ref="surface-1"),
+    )
+
+    assert await port.open_handoff(request, handle) == expected
+    assert isinstance(app.pushed[0], HandoffScreen)
+
+
+@pytest.mark.asyncio
+async def test_window_handoff_synchronizes_and_retains_external_presentation():
+    expected = HumanHandoffOutcome(status=HandoffStatus.COMPLETED, human_message="done")
+    app = _FakeApp(dismiss_with=expected)
+    presenter = _WindowPresenter()
+    port = TextualPort(app, presenters=SurfacePresenterRegistry((presenter,)))
+    request = HandoffRequest(runtime_ref=RuntimeRef(runtime_id="canvas-1", kind="canvas"))
+    handle = DriverHandoffHandle(handle_id="h-window", surface=_WindowSurface.descriptor)
+
+    assert await port.open_handoff(request, handle, _WindowSurface()) == expected
+    assert presenter.presentation_session.synchronized is True
+    assert presenter.presentation_session.released is True
+    assert presenter.presentation_session.closed is False
+    assert isinstance(app.pushed[0], HandoffScreen)
+    assert app.refresh_calls == 2
+
+    await port.aclose()
+    assert presenter.presentation_session.closed is True
+
+
+@pytest.mark.asyncio
+async def test_open_handoff_without_app_is_unavailable():
+    port = TextualPort()
+    request = HandoffRequest(runtime_ref=RuntimeRef(runtime_id="r-2", kind="terminal"))
+    handle = DriverHandoffHandle(
+        handle_id="h-2",
+        surface=SurfaceDescriptor(kind="terminal", ref="surface-2"),
+    )
+
+    outcome = await port.open_handoff(request, handle)
+    assert outcome.status is HandoffStatus.UNAVAILABLE
 
 
 def test_signal_interrupt_invokes_hook():

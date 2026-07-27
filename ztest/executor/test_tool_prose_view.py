@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Generated prose view over every registered tool + the two-level invariant.
 
-Replaces the old hand-maintained ``common/prompt/tools.py`` description
+Replaces the old hand-maintained ``kernel/prompt/tools.py`` description
 warehouse: instead of a parallel file to keep in sync, the single source of
 truth is each tool's ``call()`` docstring, and this module *derives* the review
 view from it. It walks the live registry and asserts the docstring-native
@@ -26,13 +26,16 @@ import inspect
 
 import pytest
 
-from mote.common.utils.docstring import first_line
-from mote.executor.tool_registry import registry
+from mote.contracts.introspection.docstrings import first_line
+from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.tool_registry import registry
 
 
 def _all_tool_classes() -> list[type]:
     """Every registered tool class (deduped by primary name), discovery forced."""
-    registry.discover()
+    from mote.product.toolsets import discover_builtin_tools
+
+    discover_builtin_tools()
     return sorted(registry.all_tools().values(), key=lambda c: c.name)
 
 
@@ -44,8 +47,9 @@ def build_prose_view() -> str:
     """
     blocks: list[str] = []
     for cls in _all_tool_classes():
-        summary = cls.summary()
-        desc = cls.get_schema().get("description", "")
+        definition = native_definition(cls)
+        summary = definition.summary
+        desc = definition.description
         body = "\n".join(f"    {line}" for line in desc.splitlines())
         blocks.append(f"{cls.name} — {summary}\n{body}")
     return "\n\n".join(blocks)
@@ -64,28 +68,27 @@ class TestTwoLevelProseInvariant:
 
     @pytest.mark.parametrize("cls", _TOOL_CLASSES, ids=_IDS)
     def test_summary_is_non_empty(self, cls):
-        assert cls.summary().strip(), f"{cls.name} has no one-line summary"
+        assert native_definition(cls).summary.strip(), f"{cls.name} has no one-line summary"
 
     @pytest.mark.parametrize("cls", _TOOL_CLASSES, ids=_IDS)
     def test_summary_is_single_line(self, cls):
-        assert "\n" not in cls.summary(), f"{cls.name} summary spans multiple lines"
+        assert "\n" not in native_definition(cls).summary, f"{cls.name} summary spans multiple lines"
 
     @pytest.mark.parametrize("cls", _TOOL_CLASSES, ids=_IDS)
     def test_description_opens_with_summary(self, cls):
         # Menu blurb and full description share their opening sentence — the
         # first line of the wire description IS the summary.
-        desc = cls.get_schema().get("description", "")
+        definition = native_definition(cls)
+        desc = definition.description
         assert desc, f"{cls.name} has an empty wire description"
-        assert first_line(desc) == cls.summary(), f"{cls.name}: description first line diverges from summary()"
+        assert first_line(desc) == definition.summary, f"{cls.name}: description first line diverges from summary"
 
     @pytest.mark.parametrize("cls", _TOOL_CLASSES, ids=_IDS)
     def test_description_does_not_leak_args_block(self, cls):
         # Params are schema, not prose: the ``Args:`` section must be stripped
         # from the wire description. A custom_schema tool is exempt (it owns its
         # description wholesale and may format params however it likes).
-        if cls.custom_schema() is not None:
-            return
-        desc = cls.get_schema().get("description", "")
+        desc = native_definition(cls).description
         for line in desc.splitlines():
             header = line.strip().rstrip(":").lower()
             assert header != "args", f"{cls.name} leaks an Args: block into the description"
@@ -94,9 +97,9 @@ class TestTwoLevelProseInvariant:
     def test_summary_matches_docstring_first_line_when_auto(self, cls):
         # For an auto-schema tool (no custom_schema), summary() must be exactly
         # the call() docstring's first line — no drift.
-        if cls.custom_schema() is not None:
+        if getattr(cls, "model_description", None) is not None:
             return
-        assert cls.summary() == first_line(inspect.getdoc(cls.call))
+        assert native_definition(cls).summary == first_line(inspect.getdoc(cls.call))
 
 
 def test_build_prose_view_covers_every_tool():

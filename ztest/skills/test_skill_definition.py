@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.context.skills.skill_definition.SkillDefinition."""
+"""Tests for mote.runtime.context.skills.skill_definition.SkillDefinition."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from mote.context.skills.skill_definition import NAME_PATTERN, SkillDefinition
+from mote.runtime.context.skills.skill_definition import NAME_PATTERN, SkillDefinition
 
 
 class TestDefaults:

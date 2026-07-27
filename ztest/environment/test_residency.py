@@ -13,11 +13,11 @@ import types
 
 import pytest
 
-from mote.common.schema.queue import MessageQueue
-from mote.environment.exceptions import AgentLimitReached
-from mote.environment.residency import Residency, ResidencySlot
-from mote.environment.runtime import AgentRuntime, AgentStatus
-from mote.environment.store import ResidencyStore
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.exceptions import AgentLimitReached
+from mote.orchestration.environment.residency import Residency, ResidencySlot
+from mote.orchestration.environment.runtime import AgentRuntime, AgentStatus
+from mote.orchestration.environment.store import ResidencyStore
 
 
 class FakeRole:

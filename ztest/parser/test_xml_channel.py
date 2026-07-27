@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.parser.xml_channel.XmlCommandChannel`.
+"""Unit tests for :class:`mote.kernel.parser.xml_channel.XmlCommandChannel`.
 
 ``iter_commands`` runs the *real* XML lexer (``parse_commands2`` ->
 ``PythonObjectParser``), so the inputs here are genuine XML command blocks in
@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.base import CommandChannel
-from mote.common.const import IMAGES, PDFS
-from mote.common.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
-from mote.parser.xml_channel import XmlCommandChannel
+from mote.contracts.constants.messages import IMAGES, PDFS
+from mote.kernel.parser.channel import CommandChannel
+from mote.kernel.parser.xml_channel import XmlCommandChannel
+from mote.kernel.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
+from mote.runtime.tools.tool_result import ToolMedia
+from mote.ztest.artifact_fakes import ArtifactTestResolver, artifact_media
 
 from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
 
@@ -30,7 +32,7 @@ class TestContract:
         assert isinstance(XmlCommandChannel(), CommandChannel)
 
     def test_structured_output_uses_prompted_json_binding(self):
-        from mote.common.schema import OutputBindingKind
+        from mote.contracts.output import OutputBindingKind
 
         binding = XmlCommandChannel().output_binding(is_text=False)
 
@@ -51,7 +53,7 @@ class TestContract:
         assert "<end></end>" in guide
 
     def test_prompt_vars_covers_required_keys(self):
-        from mote.common.base.command_channel import PROMPT_VAR_KEYS
+        from mote.kernel.parser.channel import PROMPT_VAR_KEYS
 
         assert set(XmlCommandChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
 
@@ -72,25 +74,25 @@ class TestContract:
 
 class TestJoinCommandOutputs:
     def test_joins_executed_outputs_with_blank_lines(self):
-        from mote.common.base.command_channel import join_command_outputs
+        from mote.kernel.parser.channel import join_command_outputs
 
         executed = [{"output": "a"}, {"output": "b"}]
         assert join_command_outputs(executed) == "a\n\nb"
 
     def test_empty_yields_no_commands_notice(self):
-        from mote.common.base.command_channel import NO_VALID_COMMANDS, join_command_outputs
+        from mote.kernel.parser.channel import NO_VALID_COMMANDS, join_command_outputs
 
         assert join_command_outputs([]) == NO_VALID_COMMANDS
 
     def test_lower_renders_ctl_finish_as_end_marker(self):
         # Under XML, the CTL_FINISH symbol materializes the <end></end> mechanic.
-        from mote.common.prompt.refs import CTL_FINISH
+        from mote.kernel.prompt.refs import CTL_FINISH
 
         out = XmlCommandChannel().lower(f"Only {CTL_FINISH} when done.")
         assert "<end></end>" in out
 
     def test_lower_renders_capability_symbols_as_dotted_names(self):
-        from mote.common.prompt.refs import CAP_READ
+        from mote.kernel.prompt.refs import CAP_READ
 
         out = XmlCommandChannel().lower(f"Use {CAP_READ} first.")
         assert "Editor.read" in out
@@ -214,13 +216,21 @@ class TestRecordTurnMedia:
     @pytest.mark.asyncio
     async def test_appends_media_message(self):
         memory = FakeMemory()
-        executed = [executed_command(output="placeholder", images=["IMG"], pdfs=["PDF"])]
-        await XmlCommandChannel().record_turn(memory, "rsp", executed)
+        executed = [
+            executed_command(
+                output="placeholder",
+                media=[
+                    artifact_media("image", "IMG"),
+                    artifact_media("pdf", "PDF"),
+                ],
+            )
+        ]
+        await XmlCommandChannel(artifact_resolver=ArtifactTestResolver()).record_turn(memory, "rsp", executed)
         # assistant + merged-outputs + media.
         assert len(memory.messages) == 3
         media = memory.messages[-1]
-        assert media.metadata[IMAGES] == ["IMG"]
-        assert media.metadata[PDFS] == ["PDF"]
+        assert media.metadata[IMAGES] == ["SU1H"]
+        assert media.metadata[PDFS] == ["UERG"]
 
     @pytest.mark.asyncio
     async def test_no_media_no_extra_message(self):

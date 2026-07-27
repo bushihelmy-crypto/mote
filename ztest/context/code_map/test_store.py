@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from mote.context.code_map.extractor import CallEdge, CodeMapExtractor, FileExtract, ImportBinding, Symbol
-from mote.context.code_map.store import CodeMapStore
+from mote.runtime.context.code_map.extractor import CallEdge, CodeMapExtractor, FileExtract, ImportBinding, Symbol
+from mote.runtime.context.code_map.store import CodeMapStore
 
 
 def _extract(
@@ -385,7 +385,7 @@ def test_delete_file_clears_resolution_tables(tmp_path):
 
 
 def test_language_and_skip_class_scope_roundtrip():
-    from mote.context.code_map.scopes import Scope, ScopeGraph
+    from mote.runtime.context.code_map.scopes import Scope, ScopeGraph
 
     store = CodeMapStore()
     graph = ScopeGraph(
@@ -404,7 +404,7 @@ def test_language_and_skip_class_scope_roundtrip():
 
 
 def test_python_defaults_skip_class_scope_true():
-    from mote.context.code_map.scopes import Scope, ScopeGraph
+    from mote.runtime.context.code_map.scopes import Scope, ScopeGraph
 
     store = CodeMapStore()
     graph = ScopeGraph(scopes={0: Scope(id=0, kind="module", parent=None, start_line=1)}, defs=[], refs=[])

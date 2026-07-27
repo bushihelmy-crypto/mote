@@ -9,13 +9,13 @@ import asyncio
 
 import pytest
 
-from mote.common.schema import MessageQueue
-from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Stage
-from mote.executor.tasks.pool import BackgroundTaskPool
-from mote.executor.tasks.types import BgStatus, BgTaskResult, GraphMeta
-from mote.executor.tool_result import ToolError
-from mote.executor.tools.cancel_tasks import CancelTasks
-from mote.executor.tools.resume_tasks import ResumeTasks
+from mote.contracts.schema import MessageQueue
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphState, Stage
+from mote.orchestration.tasks.pool import BackgroundTaskPool
+from mote.orchestration.tasks.types import BgStatus, BgTaskResult, GraphMeta
+from mote.product.toolsets.builtin.cancel_tasks import CancelTasks
+from mote.product.toolsets.builtin.resume_tasks import ResumeTasks
+from mote.runtime.tools.tool_result import ToolError
 
 pytestmark = pytest.mark.asyncio
 

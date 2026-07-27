@@ -1,23 +1,34 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.session.events`` — event schema + line serde.
-
-Covers: each event serializes to a ``{type, ts, payload}`` line; message
-payloads round-trip back through ``Message.load``; compaction carries the full
-replacement history; parse_line is forgiving on blank/corrupt lines.
-"""
+"""Typed session event payloads round-trip through the v3 fact codec."""
 from __future__ import annotations
 
-import json
+from datetime import datetime, timezone
 
-from mote.common.schema import AIMessage, UserMessage
-from mote.session.events import (
-    COMPACTED,
+from mote.contracts.events import EventEnvelope, StreamId
+from mote.contracts.events.envelope import thaw_json
+from mote.contracts.runtimes import (
+    CheckpointFidelity,
+    RuntimeCheckpoint,
+    RuntimeCommitFact,
+    RuntimeProjectionAck,
+    RuntimeProjectionIntent,
+)
+from mote.contracts.schema import AIMessage, UserMessage
+from mote.contracts.tools import CommandProtocol, ToolsetIdentity
+from mote.runtime.session.codec import decode_session_event, encode_session_event, session_stream_id, stable_event_type
+from mote.runtime.session.events import (
+    CONTEXT_COMPACTED,
+    HISTORY_EDITED,
     MESSAGE,
+    RUNTIME_CHECKPOINT,
+    RUNTIME_COMMIT,
+    RUNTIME_PROJECTION_ACKNOWLEDGED,
     SCHEMA_VERSION,
     SESSION_META,
     TURN_CONTEXT,
-    CompactedEvent,
+    ContextCompactedFact,
+    HistoryEditedFact,
     MessageEvent,
     OutputAcceptedEvent,
     OutputCandidateReceivedEvent,
@@ -25,50 +36,111 @@ from mote.session.events import (
     OutputCommittedEvent,
     OutputPublishedEvent,
     OutputValidationRejectedEvent,
+    RoutingDecisionFact,
+    RuntimeCheckpointEvent,
+    RuntimeCommitEvent,
+    RuntimeProjectionAcknowledgedEvent,
     SessionMetaEvent,
     TurnContextEvent,
-    parse_line,
-    to_line,
 )
 
 
 def _roundtrip(event):
-    line = to_line(event)
-    record = parse_line(line)
-    assert record is not None
+    occurred_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    fact = encode_session_event(
+        event,
+        session_id="session-events",
+        occurred_at=occurred_at,
+    )
+    envelope = EventEnvelope(
+        event_id=fact.event_id,
+        event_type=fact.event_type,
+        schema_version=fact.schema_version,
+        stream_id=StreamId(session_stream_id("session-events")),
+        sequence=1,
+        occurred_at=fact.occurred_at,
+        recorded_at=occurred_at,
+        payload=fact.payload,
+        session_id=fact.session_id,
+    )
+    assert envelope.event_type == stable_event_type(event.type)
+    assert type(decode_session_event(envelope)) is type(event)
+    payload = thaw_json(envelope.payload)
+    assert isinstance(payload, dict)
+    record = {"type": event.type, "payload": payload, "envelope": envelope}
     assert record["type"] == event.type
-    assert "ts" in record
     return record
 
 
+def _decode(record):
+    return decode_session_event(record["envelope"])
+
+
 def test_session_meta_event_line():
-    ev = SessionMetaEvent(session_id="abc", working_dir="/w", project_root="/p", model="gpt-4")
+    identity = ToolsetIdentity("workspace", "2", CommandProtocol.NATIVE)
+    ev = SessionMetaEvent(
+        session_id="abc",
+        working_dir="/w",
+        project_root="/p",
+        model="gpt-4",
+        toolset_manifest=(identity,),
+    )
     record = _roundtrip(ev)
     assert record["type"] == SESSION_META
     assert record["payload"]["session_id"] == "abc"
     assert record["payload"]["schema_version"] == SCHEMA_VERSION
     assert record["payload"]["working_dir"] == "/w"
+    assert record["payload"]["toolset_manifest"] == [{"id": "workspace", "version": "2", "protocol": "native"}]
+    restored = SessionMetaEvent.from_payload(record["payload"])
+    assert restored.toolset_manifest == (identity,)
+
+
+def test_legacy_session_meta_has_no_toolset_manifest() -> None:
+    restored = SessionMetaEvent.from_payload({"session_id": "legacy"})
+
+    assert restored.toolset_manifest is None
 
 
 def test_message_event_roundtrips_through_message_load():
-    from mote.common.schema import Message
-
     msg = UserMessage(content="hello world")
     record = _roundtrip(MessageEvent(message=msg))
     assert record["type"] == MESSAGE
-    # The payload must reconstruct an equivalent Message.
-    restored = Message.load(json.dumps(record["payload"]))
-    assert restored is not None
-    assert restored.content == "hello world"
-    assert restored.id == msg.id
+    restored = _decode(record)
+    assert isinstance(restored, MessageEvent)
+    assert restored.message.content == "hello world"
+    assert restored.message.id == msg.id
 
 
-def test_compacted_event_carries_full_replacement_history():
+def test_context_compacted_fact_carries_projection_and_source_identity():
     msgs = [UserMessage(content="summary placeholder"), AIMessage(content="tail")]
-    record = _roundtrip(CompactedEvent(messages=msgs, summary="a summary"))
-    assert record["type"] == COMPACTED
+    record = _roundtrip(
+        ContextCompactedFact(
+            model_context_messages=msgs,
+            source_message_ids=["m1", "m2"],
+            summary="a summary",
+            strategy="summarize",
+        )
+    )
+    assert record["type"] == CONTEXT_COMPACTED
     assert record["payload"]["summary"] == "a summary"
-    assert len(record["payload"]["replacement_history"]) == 2
+    assert len(record["payload"]["model_context"]) == 2
+    assert record["payload"]["source_message_ids"] == ["m1", "m2"]
+
+
+def test_history_edited_fact_carries_removal_operation():
+    record = _roundtrip(
+        HistoryEditedFact(
+            removed_message_ids=["m1", "m2"],
+            reason="delete",
+        )
+    )
+
+    assert record["type"] == HISTORY_EDITED
+    assert record["payload"] == {
+        "clear_all": False,
+        "reason": "delete",
+        "removed_message_ids": ["m1", "m2"],
+    }
 
 
 def test_turn_context_event_line():
@@ -77,9 +149,110 @@ def test_turn_context_event_line():
     assert record["payload"]["turn_id"] == "t1"
 
 
-def test_output_lifecycle_events_roundtrip():
-    from mote.session.events import parse_event
+def test_routing_decision_fact_round_trips_complete_state():
+    event = RoutingDecisionFact(
+        decision={
+            "decision_id": "decision-1",
+            "selected_route_id": "interactive.strong",
+            "state_generation": 1,
+        },
+        state={
+            "schema_version": 1,
+            "generation": 1,
+            "recent_decisions": [],
+            "seed_floor": None,
+            "control_hold": None,
+        },
+    )
+    record = _roundtrip(event)
+    rebuilt = _decode(record)
+    assert rebuilt == event
+    assert record["payload"]["state"]["generation"] == 1
 
+
+def test_prompt_rejected_event_roundtrips_as_safe_audit_fact():
+    from mote.runtime.session.events import PROMPT_REJECTED, PromptRejectedEvent
+
+    event = PromptRejectedEvent(
+        prompt="use <agent-vault:token>",
+        reason="organization policy denied the prompt",
+        terminate=True,
+    )
+    record = _roundtrip(event)
+    rebuilt = _decode(record)
+
+    assert record["type"] == PROMPT_REJECTED
+    assert rebuilt == event
+
+
+def test_runtime_checkpoint_event_roundtrips():
+    checkpoint = RuntimeCheckpoint(
+        runtime_id="terminal-1",
+        kind="terminal",
+        epoch=2,
+        revision=7,
+        codec="terminal-state+json@1",
+        schema_version=1,
+        payload_ref="inline-json:e30=",
+        digest="sha256:test",
+        sensitivity="private",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+
+    record = _roundtrip(RuntimeCheckpointEvent(checkpoint=checkpoint, reason="write-commit"))
+    rebuilt = _decode(record)
+
+    assert record["type"] == RUNTIME_CHECKPOINT
+    assert isinstance(rebuilt, RuntimeCheckpointEvent)
+    assert rebuilt.checkpoint == checkpoint
+    assert rebuilt.reason == "write-commit"
+
+
+def test_runtime_commit_fact_and_projection_ack_roundtrip():
+    checkpoint = RuntimeCheckpoint(
+        runtime_id="canvas-1",
+        kind="canvas",
+        epoch=2,
+        revision=8,
+        codec="canvas+json@1",
+        schema_version=1,
+        payload_ref="inline-json:e30=",
+        fidelity=CheckpointFidelity.FULL,
+    )
+    intent = RuntimeProjectionIntent(
+        intent_id="artifact-export",
+        projector="canvas-artifact",
+        schema_version=1,
+        options=(("retention", "session"),),
+    )
+    event = RuntimeCommitEvent(
+        RuntimeCommitFact(
+            commit_id="canvas-1.2.8",
+            checkpoint=checkpoint,
+            projections=(intent,),
+            reason="write-commit",
+        )
+    )
+
+    record = _roundtrip(event)
+    rebuilt = _decode(record)
+
+    assert record["type"] == RUNTIME_COMMIT
+    assert rebuilt == event
+
+    ack_event = RuntimeProjectionAcknowledgedEvent(
+        RuntimeProjectionAck(
+            commit_id="canvas-1.2.8",
+            intent_id="artifact-export",
+        )
+    )
+    ack_record = _roundtrip(ack_event)
+
+    assert ack_record["type"] == RUNTIME_PROJECTION_ACKNOWLEDGED
+    assert _decode(ack_record) == ack_event
+
+
+def test_output_lifecycle_events_roundtrip():
     events = [
         OutputCandidateReceivedEvent(
             candidate_id="c1",
@@ -117,25 +290,20 @@ def test_output_lifecycle_events_roundtrip():
         OutputPublishedEvent(candidate_id="c2", contract_id="test.report@1"),
     ]
 
-    rebuilt = [parse_event(_roundtrip(event)) for event in events]
+    rebuilt = [_decode(_roundtrip(event)) for event in events]
 
     assert [type(event) for event in rebuilt] == [type(event) for event in events]
     assert rebuilt[-2].value == {"count": 1}
 
 
 def test_old_output_fixture_tolerates_missing_new_fields_and_future_extras():
-    from mote.session.events import OUTPUT_COMMITTED, parse_event
-
-    event = parse_event(
+    event = OutputCommittedEvent.from_payload(
         {
-            "type": OUTPUT_COMMITTED,
-            "payload": {
-                "candidate_id": "legacy-candidate",
-                "contract_id": "legacy.report@1",
-                "schema_fingerprint": "sha",
-                "value": {"count": 1},
-                "future_field": "ignored",
-            },
+            "candidate_id": "legacy-candidate",
+            "contract_id": "legacy.report@1",
+            "schema_fingerprint": "sha",
+            "value": {"count": 1},
+            "future_field": "ignored",
         }
     )
 
@@ -146,19 +314,8 @@ def test_old_output_fixture_tolerates_missing_new_fields_and_future_extras():
     assert event.value == {"count": 1}
 
 
-def test_parse_line_is_forgiving():
-    assert parse_line("") is None
-    assert parse_line("   ") is None
-    assert parse_line("not json") is None
-    assert parse_line(json.dumps({"no": "type"})) is None
-    assert parse_line(json.dumps({"type": "x", "payload": {}})) == {
-        "type": "x",
-        "payload": {},
-    }
-
-
 def test_terminal_state_event_roundtrips():
-    from mote.session.events import TERMINAL_STATE, TerminalStateEvent, parse_event
+    from mote.runtime.session.events import TERMINAL_STATE, TerminalStateEvent
 
     ev = TerminalStateEvent(
         cwd="/tmp/work",
@@ -172,7 +329,7 @@ def test_terminal_state_event_roundtrips():
     assert record["payload"]["env"] == {"FOO": "bar", "BAZ": "qux"}
     assert record["payload"]["unset"] == ["OLD"]
 
-    rebuilt = parse_event(record)
+    rebuilt = _decode(record)
     assert isinstance(rebuilt, TerminalStateEvent)
     assert rebuilt.cwd == "/tmp/work"
     assert rebuilt.env == {"FOO": "bar", "BAZ": "qux"}
@@ -181,7 +338,7 @@ def test_terminal_state_event_roundtrips():
 
 
 def test_kernel_state_event_roundtrips():
-    from mote.session.events import KERNEL_STATE, KernelStateEvent, parse_event
+    from mote.runtime.session.events import KERNEL_STATE, KernelStateEvent
 
     ev = KernelStateEvent(cwd="/tmp/work", env={"FOO": "bar", "BAZ": "qux"}, unset=["OLD"], tool="Jupyter")
     record = _roundtrip(ev)
@@ -190,7 +347,7 @@ def test_kernel_state_event_roundtrips():
     assert record["payload"]["env"] == {"FOO": "bar", "BAZ": "qux"}
     assert record["payload"]["unset"] == ["OLD"]
 
-    rebuilt = parse_event(record)
+    rebuilt = _decode(record)
     assert isinstance(rebuilt, KernelStateEvent)
     assert rebuilt.cwd == "/tmp/work"
     assert rebuilt.env == {"FOO": "bar", "BAZ": "qux"}

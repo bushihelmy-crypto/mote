@@ -14,11 +14,11 @@ import sys
 
 import pytest
 
-from mote.common.events import DiagnosticsEvent, EventBus, FileMutatedEvent
-from mote.common.interface.event_subscriber import ObservationSubscriber
-from mote.common.schema import LspConfig, LspServerConfig
-from mote.roles.lsp.buffer import DiagnosticsBuffer
-from mote.roles.lsp.service import LspService
+from mote.contracts.settings.lsp import LspConfig, LspServerConfig
+from mote.runtime.agent.lsp.buffer import DiagnosticsBuffer
+from mote.runtime.agent.lsp.service import LspService
+from mote.runtime.events import DiagnosticsEvent, FileMutatedEvent
+from mote.ztest.telemetry import InlineTelemetry
 
 aio = pytest.mark.asyncio
 
@@ -139,7 +139,7 @@ async def test_shutdown_idempotent(tmp_path):
 
 @aio
 async def test_handle_file_mutated_delegates_to_file_saved(tmp_path):
-    # As an ObservationSubscriber, a FileMutatedEvent routes through handle() to
+    # As a telemetry handler, FileMutatedEvent routes through handle() to
     # file_saved() — same diagnostics回流 as a direct file_saved call.
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
@@ -174,22 +174,20 @@ async def test_handle_ignores_empty_path(tmp_path):
         await svc.shutdown()
 
 
-# --- Output side: diagnostics ride the bus as a DiagnosticsEvent -------------
+# --- Output side: diagnostics ride telemetry as DiagnosticsEvent -------------
 
 
 @aio
 async def test_handle_emits_diagnostics_event_to_buffer(tmp_path):
-    # Wired end-to-end on a real bus: service produces DiagnosticsEvent on edit,
-    # the buffer subscriber accumulates it, draining yields the rendered block.
+    # Service produces DiagnosticsEvent; the buffer accumulates it.
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
-    bus = EventBus()
-    svc = LspService(_config(), str(tmp_path), bus=bus)
     buffer = DiagnosticsBuffer()
-    bus.subscribe(svc)
-    bus.subscribe(buffer)
+    telemetry = InlineTelemetry()
+    svc = LspService(_config(), str(tmp_path), telemetry=telemetry)
+    telemetry.handlers.extend((svc, buffer))
     try:
-        await bus.emit(FileMutatedEvent(path=str(f), tool="Write"))
+        await telemetry.emit(FileMutatedEvent(path=str(f), tool="Write"))
         block = buffer.drain_diagnostics()
         assert "<lsp_diagnostics>" in block
         assert "fake error token found" in block
@@ -204,20 +202,16 @@ async def test_handle_emits_diagnostics_event_to_buffer(tmp_path):
 async def test_emitted_event_carries_paths(tmp_path):
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
-    bus = EventBus()
-    svc = LspService(_config(), str(tmp_path), bus=bus)
-
     seen = []
 
-    class _Spy(ObservationSubscriber):
-        priority = 10
-
+    class _Spy:
         async def handle(self, event):
             if isinstance(event, DiagnosticsEvent):
                 seen.append(event)
             return None
 
-    bus.subscribe(_Spy())
+    telemetry = InlineTelemetry(_Spy())
+    svc = LspService(_config(), str(tmp_path), telemetry=telemetry)
     try:
         await svc.handle(FileMutatedEvent(path=str(f), tool="Write"))
         assert len(seen) == 1
@@ -228,12 +222,12 @@ async def test_emitted_event_carries_paths(tmp_path):
 
 
 @aio
-async def test_no_emit_without_bus(tmp_path):
-    # A bus-less service stays inert on the output side (diagnostics still drain
+async def test_no_emit_without_telemetry(tmp_path):
+    # An unbound service stays inert on the output side (diagnostics still drain
     # directly), so direct-call test paths are unaffected.
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
-    svc = LspService(_config(), str(tmp_path))  # bus=None
+    svc = LspService(_config(), str(tmp_path))
     try:
         await svc.handle(FileMutatedEvent(path=str(f), tool="Write"))
         # Nothing emitted; the registry still holds the changed set for a pull.
@@ -246,17 +240,16 @@ async def test_no_emit_without_bus(tmp_path):
 async def test_resolved_diagnostics_flow_through_bus(tmp_path):
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
-    bus = EventBus()
-    svc = LspService(_config(), str(tmp_path), bus=bus)
     buffer = DiagnosticsBuffer()
-    bus.subscribe(svc)
-    bus.subscribe(buffer)
+    telemetry = InlineTelemetry()
+    svc = LspService(_config(), str(tmp_path), telemetry=telemetry)
+    telemetry.handlers.extend((svc, buffer))
     try:
-        await bus.emit(FileMutatedEvent(path=str(f), tool="Write"))
+        await telemetry.emit(FileMutatedEvent(path=str(f), tool="Write"))
         assert "fake error token found" in buffer.drain_diagnostics()
         # Fix the file -> server clears -> "resolved" surfaces once via the bus.
         f.write_text("x = 1\n")
-        await bus.emit(FileMutatedEvent(path=str(f), tool="Write"))
+        await telemetry.emit(FileMutatedEvent(path=str(f), tool="Write"))
         block2 = buffer.drain_diagnostics()
         assert "resolved" in block2
         assert buffer.drain_diagnostics() == ""
@@ -285,14 +278,14 @@ def test_buffer_ignores_non_diagnostics_events():
     assert buffer.drain_diagnostics() == ""
 
 
-def test_buffer_is_dual_role_event_subscriber_and_context_source():
+def test_buffer_is_structural_handler_and_context_source():
     # The buffer plays both sides of the push->pull bridge in one object: it is
-    # the bus ObservationSubscriber AND the turn-context EphemeralContextSource
+    # a telemetry handler AND the turn-context EphemeralContextSource
     # (so the thin LspContextSource wrapper is no longer needed).
-    from mote.common.interface import EphemeralContextSource, ObservationSubscriber
+    from mote.contracts.ports import EphemeralContextSource
 
     buffer = DiagnosticsBuffer()
-    assert isinstance(buffer, ObservationSubscriber)
+    assert hasattr(buffer, "handle")
     assert isinstance(buffer, EphemeralContextSource)
     assert buffer.name == "lsp" and buffer.priority == 40
 

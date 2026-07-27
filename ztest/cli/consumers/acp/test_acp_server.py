@@ -25,32 +25,17 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from mote.cli.consumers.acp import server as srv
-from mote.cli.consumers.acp.server import AcpServer
-from mote.cli.serving import SessionRegistry
-from mote.common.events.types import MESSAGE_APPENDED
+from mote.contracts.events.types import MESSAGE_APPENDED
+from mote.product.cli.consumers.acp import server as srv
+from mote.product.cli.consumers.acp.server import AcpServer
+from mote.product.cli.serving import SessionRegistry
+from mote.ztest.telemetry import InlineTelemetry
 
 
 # --------------------------------------------------------------------------
-# Fakes: a role bus fanning events to subscribers; a control that, on input,
+# Fakes: Role Telemetry fanning observations to handlers; a control that, on input,
 # emits an assistant echo on the bus (one turn's worth of output).
 # --------------------------------------------------------------------------
-class FakeBus:
-    def __init__(self) -> None:
-        self.subscribers: List[Any] = []
-
-    def subscribe(self, sub: Any) -> None:
-        self.subscribers.append(sub)
-
-    def unsubscribe(self, sub: Any) -> None:
-        if sub in self.subscribers:
-            self.subscribers.remove(sub)
-
-    async def emit(self, event: Any) -> None:
-        for sub in list(self.subscribers):
-            await sub.handle(event)
-
-
 class FakeAgentEvt:
     def __init__(self, name: str, **fields: Any) -> None:
         self.name = name
@@ -67,7 +52,7 @@ class FakeRole:
             session_id = f"auto-{FakeRole._counter}"
         self.session_id = session_id
         self.state = SimpleNamespace(env=None)
-        self.event_bus = FakeBus()
+        self.telemetry = InlineTelemetry()
         self.role_schema = SimpleNamespace(name=name)
 
     async def cleanup(self) -> None:
@@ -75,7 +60,7 @@ class FakeRole:
 
 
 class EmittingControl:
-    """On input, schedule an assistant echo on the role bus, then be quiescent."""
+    """On input, schedule an assistant echo on Role Telemetry, then be quiescent."""
 
     def __init__(self, role: FakeRole) -> None:
         self.role = role
@@ -101,7 +86,7 @@ class EmittingControl:
         )
 
         async def _emit_then_done():
-            await self.role.event_bus.emit(reply)
+            await self.role.telemetry.emit(reply)
             self._done = True
 
         asyncio.ensure_future(_emit_then_done())
@@ -123,8 +108,8 @@ def make_factory():
 @pytest.fixture
 def patched_backend(monkeypatch):
     """Patch the backend seam at every module the serving/server layer imports."""
-    from mote.cli.serving import connection_scope as cs
-    from mote.cli.serving import session_registry as sr
+    from mote.product.cli.serving import connection_scope as cs
+    from mote.product.cli.serving import session_registry as sr
 
     def build_control(role: FakeRole):
         return EmittingControl(role), SimpleNamespace(role=role)
@@ -133,7 +118,7 @@ def patched_backend(monkeypatch):
     monkeypatch.setattr(sr.backend, "resume_role", lambda role: False)
     monkeypatch.setattr(sr.backend, "role_session_id", lambda role: role.session_id)
     monkeypatch.setattr(sr.backend, "role_cleanup", lambda role: getattr(role, "cleanup", None))
-    monkeypatch.setattr(cs.backend, "role_event_bus", lambda role: role.event_bus)
+    monkeypatch.setattr(cs.backend, "role_telemetry", lambda role: role.telemetry)
     monkeypatch.setattr(cs.backend, "bind_human_channel", lambda role, ch: setattr(role.state, "env", ch))
     monkeypatch.setattr(
         srv.backend, "turn_message", lambda text, image_b64s=None: SimpleNamespace(content=text, id="m-1")
@@ -385,7 +370,7 @@ async def test_unknown_method_is_method_not_found(patched_backend):
 async def test_cancel_interrupts_active_turn(patched_backend):
     # A control that never becomes quiescent until interrupted, so we can cancel
     # mid-turn and observe the prompt resolve.
-    from mote.cli.serving import session_registry as sr
+    from mote.product.cli.serving import session_registry as sr
 
     captured: List[Any] = []
 

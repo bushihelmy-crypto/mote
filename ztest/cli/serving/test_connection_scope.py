@@ -3,13 +3,13 @@
 """Tests for :class:`ConnectionScope` — the per-connection presentation edge.
 
 The scope is the multi-session dual of ``SessionDriver.run()``: it owns a
-per-connection ``BaseProjector`` subscribed to a resident session's role bus,
+per-connection ``BaseProjector`` subscribed to a resident Role's telemetry,
 drives one turn against the shared control plane, and tears its edge down on
 close (leaving the engine running). The headline invariant: **two concurrent
 scopes over two sessions have independent, non-interleaving event streams** —
-an event on one session's bus reaches only that scope's consumers.
+an event on one session's telemetry reaches only that scope's consumers.
 
-A lightweight ``FakeBus`` fans an event out to its subscribers (mirroring the
+A lightweight ``FakeTelemetry`` fans an event out to its handlers (mirroring the
 real observation plane's ``handle``), so folding through the real
 ``ViewProjector`` + ``CapabilityAdapter`` into a recording consumer is exercised
 end-to-end without a real engine.
@@ -23,32 +23,39 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.cli.contracts.base import BaseConsumer
-from mote.cli.contracts.view import Capabilities, MessageBlockCompleted
-from mote.cli.serving.connection_scope import ConnectionScope, _format_turn_error
-from mote.cli.serving.session_registry import ResidentSession
-from mote.common.events.types import MESSAGE_APPENDED
+from mote.contracts.events.types import MESSAGE_APPENDED
+from mote.product.cli.contracts.base import BaseConsumer
+from mote.product.cli.contracts.view import Capabilities, MessageBlockCompleted
+from mote.product.cli.serving.connection_scope import ConnectionScope, _format_turn_error
+from mote.product.cli.serving.session_registry import ResidentSession
 
 
 # --------------------------------------------------------------------------
 # Fakes
 # --------------------------------------------------------------------------
-class FakeBus:
-    """A minimal observation plane: fan an event out to subscribers' ``handle``."""
+class _FakeHandle:
+    def __init__(self, telemetry: "FakeTelemetry", handler: Any) -> None:
+        self._telemetry = telemetry
+        self._handler = handler
+
+    async def aclose(self) -> None:
+        if self._handler in self._telemetry.handlers:
+            self._telemetry.handlers.remove(self._handler)
+
+
+class FakeTelemetry:
+    """A minimal observation plane that fans events out to handlers."""
 
     def __init__(self) -> None:
-        self.subscribers: List[Any] = []
+        self.handlers: List[Any] = []
 
-    def subscribe(self, sub: Any) -> None:
-        self.subscribers.append(sub)
-
-    def unsubscribe(self, sub: Any) -> None:
-        if sub in self.subscribers:
-            self.subscribers.remove(sub)
+    async def subscribe(self, binding: Any) -> _FakeHandle:
+        self.handlers.append(binding.handler)
+        return _FakeHandle(self, binding.handler)
 
     async def emit(self, event: Any) -> None:
-        for sub in list(self.subscribers):
-            await sub.handle(event)
+        for handler in list(self.handlers):
+            await handler.handle(event)
 
 
 class FakeAgentEvt:
@@ -68,7 +75,7 @@ class FakeRole:
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.state = SimpleNamespace(env=None)
-        self.event_bus = FakeBus()
+        self.telemetry = FakeTelemetry()
 
 
 class FakeRuntime:
@@ -129,14 +136,14 @@ def _texts(consumer: RecordingConsumer) -> List[str]:
 # Lifecycle: subscribe / bind / teardown
 # --------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_open_subscribes_projector_to_role_bus():
+async def test_open_subscribes_projector_to_role_telemetry():
     session = make_session("s1")
     consumer = RecordingConsumer()
     scope = ConnectionScope(session, consumers=[consumer])
-    scope.open()
-    assert scope.projector in session.role.event_bus.subscribers
+    await scope.open()
+    assert scope.projector in session.role.telemetry.handlers
     await scope.aclose()
-    assert scope.projector not in session.role.event_bus.subscribers  # unsubscribed
+    assert scope.projector not in session.role.telemetry.handlers
 
 
 @pytest.mark.asyncio
@@ -144,7 +151,7 @@ async def test_aclose_closes_consumers():
     session = make_session("s1")
     consumer = RecordingConsumer()
     scope = ConnectionScope(session, consumers=[consumer])
-    scope.open()
+    await scope.open()
     await scope.aclose()
     assert consumer.closed is True
 
@@ -156,7 +163,7 @@ async def test_port_bound_and_restored():
     session.role.state.env = prior
     port = SimpleNamespace()
     scope = ConnectionScope(session, consumers=[], port=port)
-    scope.open()
+    await scope.open()
     # A human channel wrapping the port is now bound.
     assert session.role.state.env is not prior
     await scope.aclose()
@@ -168,8 +175,8 @@ async def test_context_manager_opens_and_closes():
     session = make_session("s1")
     consumer = RecordingConsumer()
     async with ConnectionScope(session, consumers=[consumer]) as scope:
-        assert scope.projector in session.role.event_bus.subscribers
-    assert scope.projector not in session.role.event_bus.subscribers
+        assert scope.projector in session.role.telemetry.handlers
+    assert scope.projector not in session.role.telemetry.handlers
     assert consumer.closed is True
 
 
@@ -181,7 +188,7 @@ async def test_run_turn_surfaces_user_message_then_sends_input():
     session = make_session("s1")
     consumer = RecordingConsumer()
     scope = ConnectionScope(session, consumers=[consumer])
-    scope.open()
+    await scope.open()
     msg = SimpleNamespace(content="hello there", id="m-1")
     await scope.run_turn(msg)
     # The user's own turn is surfaced as a completed block on the consumer.
@@ -196,7 +203,7 @@ async def test_run_turn_polls_until_quiescent():
     # Not quiescent for two polls, then quiescent — run_turn must wait it out.
     session = make_session("s1", quiescent_seq=[False, False, True])
     scope = ConnectionScope(session, consumers=[RecordingConsumer()], quiescent_poll_interval=0.0)
-    scope.open()
+    await scope.open()
     await scope.run_turn(SimpleNamespace(content="x", id="m"))
     assert session.control._quiescent_seq == []  # sequence fully consumed
     await scope.aclose()
@@ -204,12 +211,12 @@ async def test_run_turn_polls_until_quiescent():
 
 @pytest.mark.asyncio
 async def test_run_turn_errored_surfaces_error_raised():
-    from mote.cli.contracts.view import ErrorRaised
+    from mote.product.cli.contracts.view import ErrorRaised
 
     session = make_session("s1", last_error=RuntimeError("boom"))
     consumer = RecordingConsumer()
     scope = ConnectionScope(session, consumers=[consumer])
-    scope.open()
+    await scope.open()
     await scope.run_turn(SimpleNamespace(content="x", id="m"))
     errs = [e for e in consumer.events if isinstance(e, ErrorRaised)]
     assert len(errs) == 1
@@ -236,13 +243,13 @@ async def test_concurrent_scopes_have_isolated_event_streams():
     consumer_b = RecordingConsumer()
     scope_a = ConnectionScope(sess_a, consumers=[consumer_a])
     scope_b = ConnectionScope(sess_b, consumers=[consumer_b])
-    scope_a.open()
-    scope_b.open()
+    await scope_a.open()
+    await scope_b.open()
 
     # Emit an assistant message on EACH bus, concurrently.
     await asyncio.gather(
-        sess_a.role.event_bus.emit(ev_message("assistant", "reply-A")),
-        sess_b.role.event_bus.emit(ev_message("assistant", "reply-B")),
+        sess_a.role.telemetry.emit(ev_message("assistant", "reply-A")),
+        sess_b.role.telemetry.emit(ev_message("assistant", "reply-B")),
     )
 
     # Each consumer saw ONLY its own session's assistant reply — no cross-talk.
@@ -258,7 +265,7 @@ async def test_session_resident_across_multiple_turns():
     """A resident session drives many turns; each turn reuses the same control."""
     session = make_session("s1")
     scope = ConnectionScope(session, consumers=[RecordingConsumer()])
-    scope.open()
+    await scope.open()
     await scope.run_turn(SimpleNamespace(content="turn-1", id="m1"))
     await scope.run_turn(SimpleNamespace(content="turn-2", id="m2"))
     # Both turns landed on the SAME resident control plane, in order.

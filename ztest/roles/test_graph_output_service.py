@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.common.exception import GraphError
-from mote.common.schema import RunKind
-from mote.roles.graph_output_service import GraphOutputService
+from mote.contracts.output import RunKind
+from mote.runtime.agent.graph_output_service import GraphOutputService
+from mote.runtime.errors import GraphError
 
 
 class _Lease:
@@ -37,9 +37,21 @@ def _spec():
     )
 
 
+async def _drain_writes() -> None:
+    return None
+
+
+def _service() -> GraphOutputService:
+    return GraphOutputService(
+        take_restore=lambda _run_id: None,
+        current_lease=lambda _run_id: _Lease(),
+        drain_writes=_drain_writes,
+    )
+
+
 @pytest.mark.asyncio
 async def test_finalize_validates_and_commits_as_graph_output():
-    service = GraphOutputService(take_restore=lambda _run_id: None, current_lease=lambda _run_id: _Lease())
+    service = _service()
 
     committed = await service.finalize(output={"count": 2}, contract_spec=_spec(), run_id="graph-1")
 
@@ -50,7 +62,7 @@ async def test_finalize_validates_and_commits_as_graph_output():
 
 @pytest.mark.asyncio
 async def test_finalize_reports_normalized_contract_issues():
-    service = GraphOutputService(take_restore=lambda _run_id: None, current_lease=lambda _run_id: _Lease())
+    service = _service()
 
     with pytest.raises(GraphError) as caught:
         await service.finalize(output={"count": "bad"}, contract_spec=_spec(), run_id="graph-1")
@@ -61,6 +73,6 @@ async def test_finalize_reports_normalized_contract_issues():
 
 @pytest.mark.asyncio
 async def test_resume_without_restored_output_is_inert():
-    service = GraphOutputService(take_restore=lambda _run_id: None, current_lease=lambda _run_id: _Lease())
+    service = _service()
 
     assert await service.resume(contract_spec=_spec(), run_id="graph-1") is None

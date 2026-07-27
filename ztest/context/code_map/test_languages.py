@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.context.code_map import languages
+from mote.runtime.context.code_map import languages
 
 _HAS_TS = pytest.importorskip("tree_sitter_language_pack") is not None
 
@@ -30,7 +30,7 @@ def test_javascript_registered_when_runtime_present():
 
 def test_registered_extensions_is_only_py_when_runtime_absent(monkeypatch):
     # Simulate an environment without the tree-sitter runtime and rebuild.
-    from mote.context.code_map import ts_runtime
+    from mote.runtime.context.code_map import ts_runtime
 
     monkeypatch.setattr(ts_runtime, "_AVAILABLE", False)
     languages._build()

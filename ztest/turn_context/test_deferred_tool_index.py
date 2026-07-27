@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.interface import EphemeralContextSource
-from mote.context.turn_context import DeferredToolIndexContextSource
+from mote.contracts.ports import EphemeralContextSource
+from mote.runtime.context.turn_context import DeferredToolIndexContextSource
 
 
 def run(coro):

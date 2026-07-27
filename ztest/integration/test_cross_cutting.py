@@ -18,7 +18,7 @@ import os
 
 import pytest
 
-from mote.common.schema import PermissionConfig
+from mote.contracts.settings.permissions import PermissionConfig
 
 pytestmark = pytest.mark.asyncio
 
@@ -244,8 +244,8 @@ async def test_file_snapshot_captured_and_restorable(make_role, tmp_path):
     with open(target, encoding="utf-8") as f:
         assert "modified" in f.read()
 
-    from mote.session import SessionLog
-    from mote.session.history import file_history, restore
+    from mote.runtime.session import SessionLog
+    from mote.runtime.session.history import file_history, restore
 
     log = SessionLog(role.state.session_id)
     history = file_history(log)
@@ -282,8 +282,8 @@ async def test_multiple_edits_record_indexed_snapshots(make_role, tmp_path):
     with open(target, encoding="utf-8") as f:
         assert f.read().strip() == "v2"
 
-    from mote.session import SessionLog
-    from mote.session.history import diff_snapshot, file_history, restore
+    from mote.runtime.session import SessionLog
+    from mote.runtime.session.history import diff_snapshot, file_history, restore
 
     log = SessionLog(role.state.session_id)
     history = file_history(log)
@@ -316,8 +316,8 @@ async def test_snapshot_of_created_file_restores_by_deleting(make_role, tmp_path
 
     assert os.path.exists(target)
 
-    from mote.session import SessionLog
-    from mote.session.history import file_history, restore
+    from mote.runtime.session import SessionLog
+    from mote.runtime.session.history import file_history, restore
 
     log = SessionLog(role.state.session_id)
     history = file_history(log)

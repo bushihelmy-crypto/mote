@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 
-import mote.common.config.bootstrap as bootstrap
-from mote.common.config.bootstrap import ensure_mote_home
+import mote.runtime.config.bootstrap as bootstrap
+from mote.runtime.config.bootstrap import ensure_mote_home
 
 
 class TestFreshHome:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.think.prompt_builder — PromptBuilder + ThinkContext.
+"""Tests for mote.kernel.think.prompt_builder — PromptBuilder + ThinkContext.
 
 PromptBuilder is a stateless assembler: every method is a pure function over
 ThinkInputs / ThinkContext / the four subsystems. The tests cover the system &
@@ -14,11 +14,11 @@ import asyncio
 
 import pytest
 
-from mote.common import prompt as R
-from mote.common.base.command_channel import PROMPT_VAR_KEYS
-from mote.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems
+from mote.kernel import prompt as R
+from mote.kernel.parser.channel import PROMPT_VAR_KEYS
+from mote.kernel.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems
 
-from .conftest import FakeExecutor, FakeInjector, FakeSkillManager, make_config
+from .conftest import FakeExecutor, FakeSkillManager, make_config
 
 
 def run(coro):
@@ -36,6 +36,9 @@ class _FakeChannel:
 
     def lower(self, text: str) -> str:
         return text
+
+    def wants_tool_catalog(self) -> bool:
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -94,6 +97,11 @@ class TestBuildSystemPrompt:
         # no unresolved placeholders for the keys we mapped
         assert "${env_section}" not in sys_p
 
+    def test_static_toolset_instructions_render_in_system_prompt(self):
+        ctx = ThinkContext(tool_instructions="# Toolset instructions\nStay scoped.")
+        sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
+        assert "# Toolset instructions\nStay scoped." in sys_p
+
     def test_missing_placeholder_tolerated(self):
         # safe_substitute: a template with an unknown $foo is left intact, no raise.
         ctx = ThinkContext()
@@ -142,10 +150,8 @@ class TestBuildTuple:
 # --------------------------------------------------------------------------
 class TestSubstitutionMaps:
     def test_system_substitutions_keys(self):
-        # The volatile catalog placeholders (available_commands / mcp_tools /
-        # pipeline_tools) are gone — the catalog rides the per-turn reminder now.
-        # The static protocol sections come from ctx.prompt_vars (command_guide /
-        # tool_usage_guide), merged in via **ctx.prompt_vars.
+        # XML built-ins have one system-prompt slot; MCP/pipeline definitions use
+        # the reminder catalog. Protocol sections come from ctx.prompt_vars.
         ctx = ThinkContext(
             env_section="ENVBLOCK",
             prompt_vars={"command_guide": "CG", "tool_usage_guide": "TUG"},
@@ -154,6 +160,8 @@ class TestSubstitutionMaps:
         assert d["env_section"] == "ENVBLOCK"
         assert d["command_guide"] == "CG"
         assert d["tool_usage_guide"] == "TUG"
+        assert d["tool_catalog"] == ""
+        assert d["tool_instructions"] == ""
 
     def test_user_substitutions_keys(self):
         # current_state is now empty: cwd + time moved to per-turn reminder sources.
@@ -177,7 +185,7 @@ class TestMakeMemory:
         assert "- [A](a.md) — hook" in context
 
     def test_missing_index_uses_empty_state(self, tmp_path):
-        from mote.common.prompt.memory import MEMORY_EMPTY_STATE
+        from mote.kernel.prompt.memory import MEMORY_EMPTY_STATE
 
         instructions, context = PromptBuilder._make_memory(tmp_path)
         assert instructions  # still produces instructions
@@ -194,15 +202,15 @@ class TestReadMemoryIndex:
 
 
 class TestMakeReminders:
-    def test_none_bus_returns_empty(self):
+    def test_none_turn_context_bus_returns_empty(self):
         import asyncio
 
         assert asyncio.run(PromptBuilder._make_reminders(None, "/work")) == ""
 
-    def test_delegates_to_bus_collect(self):
+    def test_delegates_to_turn_context_bus_collect(self):
         import asyncio
 
-        class FakeBus:
+        class FakeTurnContextBus:
             def __init__(self):
                 self.seen_cwd = "unset"
 
@@ -210,7 +218,7 @@ class TestMakeReminders:
                 self.seen_cwd = cwd
                 return "<system-reminder>\nhi\n</system-reminder>"
 
-        bus = FakeBus()
+        bus = FakeTurnContextBus()
         out = asyncio.run(PromptBuilder._make_reminders(bus, "/work"))
         assert out == "<system-reminder>\nhi\n</system-reminder>"
         assert bus.seen_cwd == "/work"
@@ -218,7 +226,7 @@ class TestMakeReminders:
     def test_blank_cwd_passed_as_none(self):
         import asyncio
 
-        class FakeBus:
+        class FakeTurnContextBus:
             def __init__(self):
                 self.seen_cwd = "unset"
 
@@ -226,7 +234,7 @@ class TestMakeReminders:
                 self.seen_cwd = cwd
                 return ""
 
-        bus = FakeBus()
+        bus = FakeTurnContextBus()
         asyncio.run(PromptBuilder._make_reminders(bus, ""))
         assert bus.seen_cwd is None
 
@@ -301,9 +309,28 @@ class TestCollectContext:
         assert isinstance(ctx, ThinkContext)
         assert ctx.working_dir == "/work"
 
-    # The volatile tool catalog is no longer built into the system prompt /
-    # ThinkContext — it rides the per-turn ToolCatalogContextSource (XML) or the
-    # API ``tools=`` param (native). See ztest/turn_context/test_tool_catalog.py.
+    def test_xml_builtins_populate_system_prompt_catalog(self):
+        from mote.kernel.parser.xml_channel import XmlCommandChannel
+
+        executor = FakeExecutor(tools={"Read": {"name": "Read"}})
+        ctx = run(
+            PromptBuilder.collect_context(
+                ThinkInputs(),
+                self._subsystems(executor=executor, command_channel=XmlCommandChannel()),
+            )
+        )
+        assert "# Available Commands" in ctx.tool_catalog
+        assert '"Read"' in ctx.tool_catalog
+
+    def test_static_toolset_instructions_populate_system_prompt_section(self):
+        executor = FakeExecutor(instructions=("Stay inside the workspace.",))
+        ctx = run(
+            PromptBuilder.collect_context(
+                ThinkInputs(),
+                self._subsystems(executor=executor),
+            )
+        )
+        assert ctx.tool_instructions == ("# Toolset instructions\nStay inside the workspace.")
 
     def test_memory_populated_when_dir_set(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("idx-line", encoding="utf-8")

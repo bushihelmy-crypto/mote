@@ -8,8 +8,6 @@
     "**/*.egg-info"
   ],
   "extraPaths": [".."],
-  "venvPath": "../..",
-  "venv": "anaconda3",
   "typeCheckingMode": "basic",
   "pythonVersion": "3.11",
 

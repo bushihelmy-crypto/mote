@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.utils.git_state.collector`` — read-only git snapshot.
+"""Tests for ``mote.runtime.vcs.collector`` — read-only git snapshot.
 
 Covers: non-repo / empty cwd -> None; branch read filesystem-first from
 .git/HEAD; detached HEAD; staged / unstaged / untracked counting; recent-commit
@@ -9,13 +9,15 @@ raising. Uses a real throwaway git repo in tmp_path.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 
 import pytest
 
-from mote.common.utils.git_state import collector
-from mote.common.utils.git_state.collector import GitState, _parse_status, _read_branch, collect_git_state
+from mote.runtime.context.turn_context import GitContextSource, TurnContextBus
+from mote.runtime.vcs import collector
+from mote.runtime.vcs.collector import GitState, _parse_status, _read_branch, collect_git_state
 
 # Async tests are decorated individually so the pure-function unit tests at the
 # bottom don't inherit a spurious asyncio mark.
@@ -50,7 +52,8 @@ def _clear_cache():
 
 
 @aio
-async def test_non_repo_returns_none(tmp_path):
+async def test_non_repo_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(collector, "find_git_dir", lambda _cwd: None)
     assert await collect_git_state(str(tmp_path)) is None
 
 
@@ -98,6 +101,21 @@ async def test_dirty_counts(tmp_path):
     assert state.staged == 1
     assert state.unstaged == 1
     assert state.untracked == 1
+
+
+@aio
+async def test_git_source_does_not_block_persistent_turn_context(tmp_path):
+    repo = _init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "first commit")
+    source = GitContextSource(get_cwd=lambda: repo)
+    bus = TurnContextBus([source])
+
+    reminder = await asyncio.wait_for(bus.collect_to_context(cwd=repo), timeout=1.0)
+
+    assert "<system-reminder>" in reminder
+    assert "main" in reminder
 
 
 @aio

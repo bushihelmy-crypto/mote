@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for OAuth wiring in OpenAILLM (token-as-api_key + headers + rotate).
+"""Tests for single-slot OAuth wiring in OpenAILLM.
 
 We monkeypatch the OAuthManager imported by ``OpenAILLM._build_oauth_manager``
 so no network/token-endpoint call happens.
 """
 from __future__ import annotations
 
-import mote.router.llm.credentials as cred_mod
-from mote.common.config.config.llm_config import LLMConfig
-from mote.common.config.config.oauth_config import OAuthProviderConfig
-from mote.router.llm.openai_api import OpenAILLM
+import mote.runtime.models.clients.credentials as cred_mod
+from mote.contracts.config.llm import LLMConfig
+from mote.contracts.config.oauth import OAuthProviderConfig
+from mote.product.integrations.models.openai_chat import OpenAILLM
 
 
 class FakeManager:
@@ -38,11 +38,15 @@ def _oauth_cfg(**kw) -> OAuthProviderConfig:
     return OAuthProviderConfig(**base)
 
 
-def test_static_key_path_byte_for_byte_unchanged():
+def test_static_key_path_disables_sdk_retries():
     llm = OpenAILLM(LLMConfig(api_key="sk-static", base_url="https://api.example/v1"))
     assert llm._oauth is None
     kwargs = llm._make_client_kwargs()
-    assert kwargs == {"api_key": "sk-static", "base_url": "https://api.example/v1"}
+    assert kwargs == {
+        "api_key": "sk-static",
+        "base_url": "https://api.example/v1",
+        "max_retries": 0,
+    }
     assert "default_headers" not in kwargs
 
 
@@ -60,20 +64,19 @@ def test_oauth_injects_token_as_api_key_and_headers(monkeypatch):
     assert kwargs["default_headers"] == {"X-Org": "acme"}
 
 
-def test_rotate_credential_refreshes_in_oauth_mode(monkeypatch):
+def test_product_controlled_refresh_rebuilds_oauth_client(monkeypatch):
     monkeypatch.setattr(cred_mod, "OAuthManager", FakeManager)
     cfg = LLMConfig(api_key="", oauth=_oauth_cfg())
     llm = OpenAILLM(cfg)
     assert llm._make_client_kwargs()["api_key"] == "tok-0"
 
-    assert llm.rotate_credential() is True
+    assert llm.refresh_oauth_credential() is True
     assert llm._make_client_kwargs()["api_key"] == "tok-1"
 
 
-def test_rotate_credential_static_mode_uses_key_index():
-    # Two static keys -> one successful rotation, then exhausted.
-    llm = OpenAILLM(LLMConfig(api_key=["k1", "k2"]))
-    assert llm._make_client_kwargs()["api_key"] == "k1"
-    assert llm.rotate_credential() is True
-    assert llm._make_client_kwargs()["api_key"] == "k2"
-    assert llm.rotate_credential() is False
+def test_provider_rejects_unresolved_static_key_pool():
+    # Gateway/Resolver must select one opaque slot before provider construction.
+    import pytest
+
+    with pytest.raises(ValueError, match="one Product-selected credential slot"):
+        OpenAILLM(LLMConfig(api_key=["k1", "k2"]))

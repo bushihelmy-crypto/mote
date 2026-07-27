@@ -1,6 +1,6 @@
 # AGENTS.md — 在本代码库工作的约定
 
-本文件给在 `mote/` 包里写代码的人/agent。内容基于实际源码，不是规划。改动前请先读 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
+本文件给在 `mote/` 包里写代码的人/agent。内容基于实际源码，不是规划。改动前请先读 [`ARCHITECTURE.md`](./zdocs/ARCHITECTURE.md)。
 
 ---
 
@@ -16,16 +16,16 @@
 依赖必须单向向下，**禁止上层泄漏到下层**：
 
 ```
-common  ◀──  context / executor / router / session  ◀──  parser / think / loop  ◀──  roles  ◀──  environment  ◀──  cli
+contracts <- kernel <- runtime <- orchestration <- product
 ```
 
-- 子系统已收敛进所属层：`skills/` 在 `context/skills/`，`tasks/` 在 `executor/tasks/`（含 `bggraph/` DAG），二者不再是顶层包。
-- `common/` 是叶子，永不 import 任何上层。
-- 低层要用高层能力时，**走 `common/interface/` 里的 Protocol**（`@runtime_checkable`），由高层在装配期注入实例。新增跨层能力 = 先在 `common/interface/` 定义 Protocol，再让高层实现并注入，**不要直接 import**。
-- 典型例子：`executor` 要通知 LSP → 依赖 `LspNotifier`；`executor` 文件改写 → 依赖 `FileSnapshotStore`。（会话记录走另一条路：`context` 只往 `common/events` 的 EventBus 发事件，`RecorderSubscriber` 落盘，不经 Protocol。）
-- `session` 虽被 `roles`/`environment` 消费，但自身只依赖 `common`，故归在低层。
-- `environment → session` 可在模块加载期直接 import（无环）；`environment → roles` 必须惰性 import 打破环。
-- 写新源（turn_context source）这类低层组件时，若要 import 高层（如 `executor/tasks`），**把实现放到那个高层包里**（如 `BackgroundTaskContextSource` 放在 `executor/tasks/` 而非 `context/turn_context/`），守住分层。
+- `contracts/` 只放跨边界数据、ID、事件、错误和 Protocol；不得依赖其他层。
+- `kernel/` 只放单 Agent 的 Flow、Think、Parser、prompt 和模型无关执行语义。
+- `runtime/` 负责 IO、模型客户端、工具执行、权限、会话、恢复、持久化和日志。
+- `orchestration/` 负责多 Agent、后台任务、调度、配额和并发控制。
+- `product/` 负责 Coding Agent、内置 Toolsets、Skills、LSP、集成和 CLI。
+- 低层需要高层能力时，在 `contracts/ports/` 定义 Protocol，由高层在装配期注入。禁止反向 import。
+- `common/` 已删除且架构测试禁止重建；不要建立新的 generic utils 包。
 
 ---
 
@@ -40,7 +40,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 
 ## 3. 工具开发
 
-- 在 `executor/tools/` 新建模块，定义 `@register_tool` 的 `BaseTool` 子类即可（`ToolRegistry.discover()` 包扫描自动发现，无需手动注册到 `__init__`）。
+- 内置工具放在 `product/toolsets/builtin/`；执行基础设施和工具契约分别放在 `runtime/tools/` 与 `contracts/tools/`。
 - 用 `requires=(...)` **声明需要的能力名**；只有出现在 `Role.tool_capabilities()` 白名单里的能力才会被注入。**工具拿不到整个 `RoleState`/memory/env** —— 这是最小权限边界，别绕过。
   - 现有能力白名单：`get_cwd, set_cwd, deactivate, ask_user, request_approval, reply_to_user, end_session, record_file_read, get_file_read_mtime, record_file_snapshot, wait_interruptible`。新增能力要同时在 `Role.tool_capabilities()` 注册。
 - 文件改写工具继承 `dependency/_file_base.py::FileMutatingTool`：自动做读后写校验、保留换行、写盘前 `record_file_snapshot`（before-image）。写盘前记得调 `_snapshot_pre_write(full_path)`。
@@ -56,7 +56,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 - native 的 provider 信封（OpenAI vs Anthropic）**不配置**，由 `infer_native_tool_provider` 按 `resolve_api_type` 的 **wire 协议**（端点 transport，非 model 名）推断——Claude 经 OpenAI 网关时仍用 OpenAI envelope。
 - 新增 LLM provider：实现 `BaseLLM` 子类 + `@register_provider([...])`，在 `router/llm/__init__.py` import 触发注册；按需 override `get_choice_text` / `get_choice_tool_calls` / 流式方法。`resolve_api_type` 控制自动识别。
 - `aask`（XML）/`aask_tool`（native）默认 `stream=True`。无流式 provider 透明降级（基类 `_achat_completion_stream_tool` 回退非流式）。
-- 成本统计走 `router/cost/`：`_update_costs` → `TokenUsage.from_usage(...)` → `CostTracker.add(...)`，别只取 prompt/completion（会丢 cache/reasoning token）。
+- 成本统计走 `runtime/models/cost/`：`_update_costs` → `TokenUsage.from_usage(...)` → `CostTracker.add(...)`，别只取 prompt/completion（会丢 cache/reasoning token）。
 
 ---
 
@@ -78,7 +78,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 
 ## 7. 事件与日志
 
-- 跨子系统通信走 `common/events/` 的**两平面** `EventBus`：控制订阅者（暴露 `handle_control`，按 `handles` 路由）可折叠 typed `ControlOutcome` 影响宿主（PreToolUse/UserPromptSubmit/PreCompact…）；观察者 fire-and-forget，返回值被丢弃。深层调用点用 `observe_event`/`observe_event_sync` 发**观察**事件（无 bus 时 no-op，结构上带不了控制），不必手动穿线。
+- 事件数据在 `contracts/events/`，具体双平面 EventBus 在 `runtime/events/`。Kernel 仅通过 `kernel.telemetry` 的注入能力发观察事件。
 - **不要手写 inline `logger.*`**。给关键类加 `@log_class(level="DEBUG", exclude={热路径/平凡 accessor})` 自动埋点。
 - 热路径方法（如 ContextManager 的 `get/add/...`）放进 `exclude`，否则日志会被刷爆。
 - `bind_trace(session_id)` 已在 `Role.run()` 接好，新代码无需重复绑定。
@@ -92,7 +92,7 @@ common  ◀──  context / executor / router / session  ◀──  parser / th
 - 在范围内跑：
 
 ```bash
-python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tasks,environment} -q
+python -m pytest mote/ztest/{roles,flow,executor,think,context,skills,router,tasks,environment} -q
 ```
 
 - 改了某子系统，至少跑该子系统 + 其直接依赖方的 ztest，确认无回归。
@@ -106,6 +106,7 @@ python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tas
 
 ## 9. 改动纪律
 
+- **除 `ztest/` 外，所有 import 必须位于模块顶部。** 禁止在函数、方法或类体内延迟 import；可选依赖、平台依赖用模块顶部的 `try/except ImportError`，纯类型依赖用模块顶部的 `TYPE_CHECKING`。若模块顶部导入暴露循环依赖，必须通过调整分层、拆模块或在 `contracts/ports/` 抽取 Protocol 消除循环，禁止用局部 import 回避。
 - 只做被要求或明确必要的改动；不顺手重构、不加未要求的"可配置性"、不给没改的代码加注释/类型/docstring。
 - 不为不可能发生的场景加防御/兜底/feature flag；只在系统边界（用户输入、外部 API）做校验。
 - 不留向后兼容残渣（重命名未用 `_var`、`// removed` 注释、re-export 已删类型）；确认无用就直接删。
@@ -118,21 +119,17 @@ python -m pytest mote/ztest/{roles,loop,executor,think,context,skills,router,tas
 
 | 我想找… | 去哪 |
 | --- | --- |
-| 程序入口 / REPL | `cli/__main__.py`、`cli/repl.py`、`cli/commands.py` |
-| 主循环 | `loop/react_loop.py` |
-| Role 编排 | `roles/role.py`（配置 `roles/role_schema.py`，状态 `roles/role_state.py`，装配 `roles/role_components.py`） |
-| 调 LLM | `think/think_engine.py` + `router/llm/base_llm.py` |
-| 提示词组装 | `think/prompts/prompt_builder.py` + `common/prompt/` |
-| 命令协议（XML/native） | `parser/`（`factory.py`/`native_channel.py`/`xml_channel.py`，ABC 在 `common/base/command_channel.py`） |
-| 工具 | `executor/tools/`（基类 `executor/base_tool.py`，分发 `executor/tool_executor.py`） |
-| 权限 | `executor/permission/`（`engine.py`/`classifier.py`/`sandbox/`） |
-| 后台任务 / DAG | `executor/tasks/`（`pool.py`/`bggraph/`） |
-| 模型路由 | `router/router.py` + `router/strategy.py` |
-| 上下文/压缩 | `context/manager.py` + `context/autocompact.py`/`microcompact.py` |
-| 技能 | `context/skills/` |
-| per-turn 注入 | `context/turn_context/`（+ `executor/tasks/turn_context_source.py`） |
-| 会话持久化 | `session/`（log/replay/listing/fork/snapshot/history/subscribers） |
-| 多 agent | `environment/`（control/runtime/scheduler/residency/store + `scheduling/` cron + `watching/`） |
-| 事件总线 | `common/events/` |
-| 跨层 Protocol | `common/interface/` |
-| 配置 | `config.yaml` + `common/config/` |
+| 程序入口 / CLI | `product/cli/` |
+| Agent 执行流 | `kernel/flow/` |
+| Role 与装配 | `runtime/agent/` |
+| Think / Parser | `kernel/think/`、`kernel/parser/` |
+| 工具执行 / 内置工具 | `runtime/tools/`、`product/toolsets/builtin/` |
+| 权限与沙箱 | `runtime/tools/permission/`、`runtime/sandbox/` |
+| 后台任务 / DAG | `orchestration/tasks/` |
+| 模型路由与客户端 | `runtime/models/`、`product/integrations/models/` |
+| 上下文 / Skills | `runtime/context/` |
+| 会话持久化 | `runtime/session/` |
+| 多 Agent | `orchestration/environment/` |
+| 事件契约 / 总线 | `contracts/events/`、`runtime/events/` |
+| 跨层 Protocol | `contracts/ports/` |
+| 配置 | `contracts/config/`、`runtime/config/` |

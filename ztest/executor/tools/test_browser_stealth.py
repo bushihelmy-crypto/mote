@@ -10,12 +10,15 @@ the AutomationControlled launch flag, and the ``navigator.webdriver`` patch).
 """
 from __future__ import annotations
 
-from mote.executor.dependency._browser import (
+from mote.runtime.tools.dependency._browser import (
     _LOCALE_PROFILES,
+    _TMALL_ACCEPT_LANGUAGE,
+    _TMALL_REFERER,
     BrowserSession,
     _parse_proxy,
     _resolve_locale,
     _stealth_init_js,
+    _tmall_compatible_headers,
 )
 
 
@@ -113,6 +116,33 @@ def test_context_kwargs_zh_bundle_is_consistent():
     # UA + viewport are locale-independent (shared across bundles).
     assert "HeadlessChrome" not in kwargs["user_agent"]
     assert kwargs["viewport"]["width"] > 0
+
+
+def test_tmall_headers_are_scoped_to_alibaba_retail_hosts():
+    headers = _tmall_compatible_headers(
+        "https://detail.tmall.com/item.htm?id=1",
+        {"accept": "text/html"},
+        is_navigation=True,
+    )
+
+    assert headers["accept"] == "text/html"
+    assert headers["accept-language"] == _TMALL_ACCEPT_LANGUAGE
+    assert headers["referer"] == _TMALL_REFERER
+    assert _tmall_compatible_headers(
+        "https://example.com/",
+        {"accept": "text/html"},
+        is_navigation=True,
+    ) == {"accept": "text/html"}
+
+
+def test_tmall_subresources_do_not_receive_a_navigation_referer():
+    headers = _tmall_compatible_headers(
+        "https://g.alicdn.com/resource.js",
+        {"accept": "*/*"},
+        is_navigation=False,
+    )
+
+    assert headers == {"accept": "*/*"}
 
 
 # --- proxy / exit-IP --------------------------------------------------------

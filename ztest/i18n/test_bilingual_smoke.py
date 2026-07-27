@@ -15,14 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.cli.consumers.render.builders.core import (
+from mote.product.cli.consumers.render.builders.core import (
     compaction_summary_text,
     conversation_compacted_text,
     fold_note_str,
     tool_group_summary_text,
 )
-from mote.cli.view.summaries import _summary_edit, _summary_read, _summary_search
-from mote.common.i18n import use_locale
+from mote.product.cli.view.summaries import _summary_edit, _summary_read, _summary_search
+from mote.product.i18n import use_locale
 
 # A minimal Read body: right-justified ``N→`` numbered lines the summary counts.
 _READ_1 = "     1\u2192only line\n"

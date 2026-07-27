@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from mote.executor.tasks import BgStatus, BgTaskResult, auto_background
+from mote.orchestration.tasks import BgStatus, BgTaskResult, auto_background
 
 from .conftest import boom, echo, gated, wait_started
 

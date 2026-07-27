@@ -9,20 +9,26 @@ can restore it without re-running the tool.
 """
 from __future__ import annotations
 
-from mote.common.schema import AIMessage, ToolMessage, UserMessage
-from mote.session.events import MessageEvent, SessionMetaEvent
-from mote.session.log import SessionLog
-from mote.session.recall import body_for_tool_call
+import asyncio
+
+from mote.contracts.schema import AIMessage, ToolMessage, UserMessage
+from mote.runtime.session.events import MessageEvent, SessionMetaEvent
+from mote.runtime.session.log import SessionLog
+from mote.runtime.session.recall import body_for_tool_call
 
 
 def _log(tmp_path) -> SessionLog:
     log = SessionLog("recall_sess", base_dir=str(tmp_path))
-    log.create(SessionMetaEvent(session_id="recall_sess"))
+    _append(log, SessionMetaEvent(session_id="recall_sess"))
     return log
 
 
+def _append(log: SessionLog, event) -> None:
+    asyncio.run(log.append(event))
+
+
 def _append_result(log: SessionLog, call_id: str, body: str) -> None:
-    log.append(MessageEvent(message=ToolMessage(content=body, tool_call_id=call_id)))
+    _append(log, MessageEvent(message=ToolMessage(content=body, tool_call_id=call_id)))
 
 
 def test_returns_none_for_empty_id(tmp_path):
@@ -53,8 +59,8 @@ def test_recovers_body_after_live_fold_left_rollout_intact(tmp_path):
     log = _log(tmp_path)
     _append_result(log, "c1", "PRE-FOLD full body")
     # Interleave unrelated traffic to prove the scan finds the right record.
-    log.append(MessageEvent(message=UserMessage(content="a user turn")))
-    log.append(MessageEvent(message=AIMessage(content="an assistant turn")))
+    _append(log, MessageEvent(message=UserMessage(content="a user turn")))
+    _append(log, MessageEvent(message=AIMessage(content="an assistant turn")))
 
     msg = body_for_tool_call(log, "c1")
     assert msg is not None
@@ -70,5 +76,8 @@ def test_last_write_wins_for_re_added_id(tmp_path):
 
 def test_only_matches_tool_result_not_plain_messages(tmp_path):
     log = _log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="c1")))  # content equals the id, but no metadata
+    _append(
+        log,
+        MessageEvent(message=UserMessage(content="c1")),
+    )  # content equals the id, but no metadata
     assert body_for_tool_call(log, "c1") is None

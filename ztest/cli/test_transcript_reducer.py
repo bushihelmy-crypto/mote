@@ -11,8 +11,8 @@ the same decision (the terminal + Textual surfaces only *land* these ops).
 
 from __future__ import annotations
 
-from mote.cli.consumers.render.builders import FoldMode
-from mote.cli.consumers.transcript import (
+from mote.product.cli.consumers.render.builders import FoldMode
+from mote.product.cli.consumers.transcript import (
     AddToGroup,
     AppendDelta,
     ClearForCompaction,
@@ -27,6 +27,7 @@ from mote.cli.consumers.transcript import (
     RenderNotice,
     RenderTaskProgress,
     RenderUserMessage,
+    RollbackBlock,
     SetRetry,
     SetThinking,
     ToolCompleted,
@@ -34,16 +35,20 @@ from mote.cli.consumers.transcript import (
     TranscriptReducer,
     UpdateUsage,
 )
-from mote.cli.consumers.transcript.ops import (
+from mote.product.cli.consumers.transcript.ops import (
     AddActivityToolCall,
     CloseActivity,
     CompleteActivityToolCall,
     OpenActivity,
     UpdateActivityNode,
+    UpdateRuntimeDurability,
 )
-from mote.cli.contracts.view import (
+from mote.product.cli.contracts.view import (
     ActivityCompleted,
     ActivityStarted,
+    AttemptStreamCommitted,
+    AttemptStreamDiscarded,
+    AttemptStreamInterrupted,
     ConversationCompacted,
     ErrorRaised,
     MessageBlockCompleted,
@@ -52,6 +57,7 @@ from mote.cli.contracts.view import (
     Notice,
     ReasoningDelta,
     RetryStatus,
+    RuntimeDurabilityStatus,
     TaskProgress,
     ToolCallCompleted,
     ToolCallStarted,
@@ -80,6 +86,24 @@ def test_block_started_delta_completed_streamed():
     ops = r.feed(MessageBlockCompleted(markdown="hi", streamed=True))
     assert _kinds(ops) == ["close_block"]
     assert isinstance(ops[0], CloseBlock) and ops[0].streamed is True
+
+
+def test_provisional_attempt_terminal_commits_or_rolls_back_open_block():
+    committed = TranscriptReducer()
+    committed.feed(MessageBlockStarted())
+    committed.feed(MessageBlockDelta(text="accepted", provisional=True))
+    assert committed.feed(AttemptStreamCommitted(attempt_id="call:1")) == []
+
+    for terminal in (
+        AttemptStreamDiscarded(attempt_id="call:1", reason="timeout"),
+        AttemptStreamInterrupted(attempt_id="call:1", reason="cancelled"),
+    ):
+        reducer = TranscriptReducer()
+        reducer.feed(MessageBlockStarted())
+        reducer.feed(MessageBlockDelta(text="draft", provisional=True))
+        ops = reducer.feed(terminal)
+        assert len(ops) == 1
+        assert isinstance(ops[0], RollbackBlock)
 
 
 def test_user_completion_is_user_message_and_cached_for_compaction():
@@ -138,10 +162,30 @@ def test_usage_is_thinking_transparent():
     assert _kinds(r.feed(UsageUpdated(model="m"))) == ["update_usage"]
 
 
+def test_runtime_durability_is_transparent_status_chrome():
+    r = TranscriptReducer()
+    r.feed(ReasoningDelta(text="x"))
+    ops = r.feed(
+        RuntimeDurabilityStatus(
+            runtime_id="runtime-1",
+            runtime_kind="canvas",
+            state="lagging",
+            current_revision=3,
+            recoverable_revision=1,
+        )
+    )
+
+    assert _kinds(ops) == ["update_runtime_durability"]
+    assert isinstance(ops[0], UpdateRuntimeDurability)
+
+
 # ---------------------------------------------------------------- group ---
 def test_consecutive_search_read_coalesce():
     r = TranscriptReducer()
-    assert _kinds(r.feed(_started("Read", "t1", "/a.py"))) == ["open_group", "add_to_group"]
+    assert _kinds(r.feed(_started("Read", "t1", "/a.py"))) == [
+        "open_group",
+        "add_to_group",
+    ]
     assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["add_to_group"]
     assert _kinds(r.feed(_started("Search", "t3", "*.py"))) == ["add_to_group"]
     # Completions fold into the group (no standalone rows).
@@ -164,7 +208,10 @@ def test_assistant_text_breaks_group_then_next_tool_opens_new_group():
     ops = r.feed(MessageBlockCompleted(markdown="reply", streamed=False))
     assert _kinds(ops) == ["flush_group", "close_block"]
     # The next grouped tool opens a fresh group.
-    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["open_group", "add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == [
+        "open_group",
+        "add_to_group",
+    ]
 
 
 def test_detail_tool_started_carries_detail_fold():
@@ -231,7 +278,10 @@ def test_compaction_resets_group_and_block_state():
     assert isinstance(ops[1], ClearForCompaction)
     assert ops[1].summary == "recap" and ops[1].message_count == 3
     # State reset: a following grouped tool opens a brand-new group.
-    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == ["open_group", "add_to_group"]
+    assert _kinds(r.feed(_started("Search", "t2", "foo"))) == [
+        "open_group",
+        "add_to_group",
+    ]
 
 
 def test_transcript_cleared_resets_state():
@@ -263,7 +313,12 @@ _NODE = ("graph:7f", "node:a")
 
 
 def _activity_started(scope=_GRAPH, kind="graph", label="run_graph"):
-    return ActivityStarted(scope=scope, activity_kind=kind, label=label, topology={"nodes": [], "edges": []})
+    return ActivityStarted(
+        scope=scope,
+        activity_kind=kind,
+        label=label,
+        topology={"nodes": [], "edges": []},
+    )
 
 
 def test_activity_opens_keyed_by_its_own_scope():
@@ -352,7 +407,12 @@ def test_nested_activities_route_to_innermost_owner():
     inner = ("graph:o", "sub:i")
     r.feed(_activity_started(scope=outer))
     r.feed(_activity_started(scope=inner, kind="agent", label="sub"))
-    child = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id=None, scope=("graph:o", "sub:i", "node:n"))
+    child = ToolCallStarted(
+        tool_name="Bash",
+        headline="ls",
+        tool_use_id=None,
+        scope=("graph:o", "sub:i", "node:n"),
+    )
     ops = r.feed(child)
     assert _kinds(ops) == ["add_activity_tool_call"]
     assert ops[0].scope == inner  # longest-prefix wins → innermost activity

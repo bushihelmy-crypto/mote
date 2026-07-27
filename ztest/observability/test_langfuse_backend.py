@@ -10,7 +10,7 @@ generation update/end mapping, and the best-effort swallowing of failures.
 """
 from __future__ import annotations
 
-from mote.common.observability.langfuse_backend import LangfuseBackend
+from mote.runtime.observability.langfuse_backend import LangfuseBackend
 
 
 # -- fakes ------------------------------------------------------------------

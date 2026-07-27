@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the breaker→event-bus bridge (:func:`breaker_bus_hook`).
+"""Tests for the breaker transition telemetry hook.
 
-Wiring a registry's transition hook to :func:`breaker_bus_hook` makes each
-breaker mirror its state changes onto the active bus as
-:class:`BreakerStateChangeEvent` observations. No bus bound → the hook is a
+Wiring a registry's transition hook to :func:`breaker_telemetry_hook` makes each
+breaker mirror its state changes onto active telemetry as
+:class:`BreakerStateChangeEvent` observations. No telemetry bound → the hook is a
 silent no-op (a breaker tripping outside a runtime scope never raises).
 """
 from __future__ import annotations
 
-from mote.common.events import BreakerStateChangeEvent, EventBus, breaker_bus_hook, set_bus
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.common.resilience import BreakerConfig, ResourceHealthRegistry
+from mote.runtime.events import BreakerStateChangeEvent, bind_telemetry, breaker_telemetry_hook
+from mote.runtime.resilience import BreakerConfig, ResourceHealthRegistry
+from mote.ztest.telemetry import InlineTelemetry
 
 
-class _Collector(ObservationSubscriber, SyncObserver):
+class _Collector:
     """Observation sink capturing every event (sync + async paths)."""
 
     def __init__(self) -> None:
@@ -33,15 +33,14 @@ def _trip_registry(reg: ResourceHealthRegistry, key: str) -> None:
         reg.record(key, False)
 
 
-class TestBusBridge:
+class TestTelemetryBridge:
     def test_emits_on_transition(self):
-        bus = EventBus()
         collector = _Collector()
-        bus.subscribe(collector)
-        with set_bus(bus):
+        telemetry = InlineTelemetry(collector)
+        with bind_telemetry(telemetry):
             reg = ResourceHealthRegistry(
                 BreakerConfig(min_samples=2, error_rate_threshold=0.5),
-                on_transition=breaker_bus_hook,
+                on_transition=breaker_telemetry_hook,
             )
             _trip_registry(reg, "llm::gpt::0")
         assert len(collector.events) == 1
@@ -52,10 +51,9 @@ class TestBusBridge:
         assert ev.new_state == "open"
         assert ev.reason
 
-    def test_no_bus_is_silent_noop(self):
-        # No set_bus → observe_event_sync warns + drops; must not raise.
+    def test_no_telemetry_is_silent_noop(self):
         reg = ResourceHealthRegistry(
             BreakerConfig(min_samples=2, error_rate_threshold=0.5),
-            on_transition=breaker_bus_hook,
+            on_transition=breaker_telemetry_hook,
         )
         _trip_registry(reg, "orphan")  # should not raise

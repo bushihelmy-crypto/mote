@@ -13,8 +13,13 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.events.types import LLMErrorEvent, LLMRequestEvent, LLMResponseEvent, SpanEndEvent, SpanStartEvent
-from mote.common.observability.tracing import TracingSubscriber
+from mote.contracts.events.types import (
+    ModelAttemptFinishedEvent,
+    ModelAttemptStartedEvent,
+    SpanEndEvent,
+    SpanStartEvent,
+)
+from mote.runtime.observability.tracing import TracingSubscriber
 
 
 def run(coro):
@@ -82,11 +87,12 @@ def test_generation_nests_under_started_span():
     run(sub.handle(SpanStartEvent(span_id="s1", parent_span_id=None, trace_id="t", label="root")))
     run(
         sub.handle(
-            LLMRequestEvent(
-                request_id="r1",
+            ModelAttemptStartedEvent(
+                model_call_id="call-1",
+                attempt_id="r1",
                 model="gpt-4o",
                 provider="openai",
-                messages=[{"role": "user", "content": "hi"}],
+                input={"messages": [{"role": "user", "content": "hi"}]},
                 parent_span_id="s1",
                 trace_id="t",
             )
@@ -98,32 +104,63 @@ def test_generation_nests_under_started_span():
 
     run(
         sub.handle(
-            LLMResponseEvent(
-                request_id="r1", model="gpt-4o", content="hello", usage={"t": 1}, cost_usd=0.01, latency_ms=5.0
+            ModelAttemptFinishedEvent(
+                model_call_id="call-1",
+                attempt_id="r1",
+                state="succeeded",
+                output={"kind": "generate", "content": "hello"},
+                usage={"total_tokens": 1},
+                cost_usd=0.01,
+                latency_ms=5.0,
             )
         )
     )
     assert gen.ended is True
-    assert gen.updates[-1]["output"] == "hello"
+    assert gen.updates[-1]["output"]["content"] == "hello"
     assert gen.updates[-1]["metadata"]["cost_usd"] == 0.01
     assert "r1" not in sub._gens
 
 
 def test_error_marks_and_ends_generation():
     sub, _ = _sub()
-    run(sub.handle(LLMRequestEvent(request_id="r2", model="claude", provider="anthropic", messages=[])))
+    run(
+        sub.handle(
+            ModelAttemptStartedEvent(
+                model_call_id="call-2",
+                attempt_id="r2",
+                model="claude",
+                provider="anthropic",
+            )
+        )
+    )
     gen = sub._gens["r2"]
-    run(sub.handle(LLMErrorEvent(request_id="r2", model="claude", error_type="RateLimitError", error="429")))
+    run(
+        sub.handle(
+            ModelAttemptFinishedEvent(
+                model_call_id="call-2",
+                attempt_id="r2",
+                state="failed",
+                failure_reason="rate_limited",
+            )
+        )
+    )
     assert gen.ended is True
     assert gen.updates[-1]["level"] == "ERROR"
-    assert "RateLimitError" in gen.updates[-1]["status_message"]
+    assert gen.updates[-1]["status_message"] == "rate_limited"
     assert sub._gens == {}
 
 
-def test_unmatched_response_and_error_are_noops():
+def test_unmatched_attempt_finish_is_noop():
     sub, backend = _sub()
-    run(sub.handle(LLMResponseEvent(request_id="ghost", model="m", content="x")))
-    run(sub.handle(LLMErrorEvent(request_id="ghost", model="m", error_type="E", error="e")))
+    run(
+        sub.handle(
+            ModelAttemptFinishedEvent(
+                model_call_id="ghost",
+                attempt_id="ghost:1",
+                state="failed",
+            )
+        )
+    )
     run(sub.handle(SpanEndEvent(span_id="ghost", trace_id="t")))
     assert backend.calls == []  # nothing started
 
@@ -139,7 +176,16 @@ def test_trace_steps_off_skips_step_spans_but_keeps_root_and_generations():
 
     # Generations still trace; a generation under the skipped step span just
     # gets a None parent handle (skipped span never stored).
-    run(sub.handle(LLMRequestEvent(request_id="r", model="m", messages=[], parent_span_id="step")))
+    run(
+        sub.handle(
+            ModelAttemptStartedEvent(
+                model_call_id="call",
+                attempt_id="r",
+                model="m",
+                parent_span_id="step",
+            )
+        )
+    )
     gen = sub._gens["r"]
     assert gen.kw["parent"] is None
 

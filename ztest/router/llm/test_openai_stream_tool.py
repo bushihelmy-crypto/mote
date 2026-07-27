@@ -13,11 +13,11 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from mote.common.config.config.llm_config import LLMConfig
-from mote.common.events import EventBus, LLMStreamDeltaEvent, set_bus
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.router.cost import CostTracker
-from mote.router.llm.openai_api import OpenAILLM
+from mote.contracts.config.llm import LLMConfig
+from mote.product.integrations.models.openai_chat import OpenAILLM
+from mote.runtime.events import LLMStreamDeltaEvent, bind_telemetry
+from mote.runtime.models.cost import CostTracker
+from mote.ztest.telemetry import InlineTelemetry
 
 
 # -- fakes ------------------------------------------------------------------
@@ -79,10 +79,8 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class _StreamCapture(ObservationSubscriber, SyncObserver):
-    """Bus subscriber that collects streamed LLM tokens (sync delivery)."""
-
-    priority = 50
+class _StreamCapture:
+    """Telemetry handler that collects streamed LLM tokens."""
 
     def __init__(self):
         self.tokens: list[str] = []
@@ -96,11 +94,10 @@ class _StreamCapture(ObservationSubscriber, SyncObserver):
 
 
 def _capture_stream(fn):
-    """Run *fn* while capturing tokens emitted onto a bound event bus."""
-    bus = EventBus()
+    """Run *fn* while capturing tokens emitted through bound telemetry."""
     cap = _StreamCapture()
-    bus.subscribe(cap)
-    with set_bus(bus):
+    telemetry = InlineTelemetry(cap)
+    with bind_telemetry(telemetry):
         result = fn()
     return result, "".join(cap.tokens)
 

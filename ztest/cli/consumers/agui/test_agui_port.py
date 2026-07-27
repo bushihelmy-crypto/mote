@@ -23,11 +23,11 @@ from typing import Any, Dict, List
 
 import pytest
 
-from mote.cli.consumers._wire import agui
-from mote.cli.consumers.agui.port import AguiPort
-from mote.cli.contracts.view.events import ApprovalRequested
-from mote.cli.serving import PromptBroker
-from mote.common.schema import AskUserQuestionInput
+from mote.contracts.interaction import AskUserQuestionInput
+from mote.product.cli.consumers._wire import agui
+from mote.product.cli.consumers.agui.port import AguiPort
+from mote.product.cli.contracts.view.events import ApprovalRequested
+from mote.product.cli.serving import PromptBroker
 
 
 # ── helpers ────────────────────────────────────────────────────────────────

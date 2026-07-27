@@ -1,5 +1,5 @@
 ripgrep is dual-licensed under the MIT License or the Unlicense, at your
-option. mote redistributes the ripgrep binary (see vendor/ripgrep/)
+option. mote redistributes the ripgrep binary (see product/toolsets/builtin/assets/ripgrep/)
 under the terms of the MIT License, reproduced below.
 
 Upstream: https://github.com/BurntSushi/ripgrep

@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import os
 
-from mote.context.code_map.providers.resolvers.cfamily import CIncludeResolver
-from mote.context.code_map.providers.resolvers.go import GoModuleResolver
-from mote.context.code_map.providers.resolvers.java import JavaModuleResolver
-from mote.context.code_map.providers.resolvers.javascript import JsModuleResolver
-from mote.context.code_map.providers.resolvers.rust import RustModuleResolver
+from mote.runtime.context.code_map.providers.resolvers.cfamily import CIncludeResolver
+from mote.runtime.context.code_map.providers.resolvers.go import GoModuleResolver
+from mote.runtime.context.code_map.providers.resolvers.java import JavaModuleResolver
+from mote.runtime.context.code_map.providers.resolvers.javascript import JsModuleResolver
+from mote.runtime.context.code_map.providers.resolvers.rust import RustModuleResolver
 
 
 def _write(path: str, content: str = "") -> str:

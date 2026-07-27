@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.roles.context_provider — ContextProvider + ThinkRequest.
+"""Tests for mote.runtime.agent.context_provider — ContextProvider + ThinkRequest.
 
 Focus on the pure, side-effect-free assembly the provider does by READING the
 Role: loop_context() packing, property forwarders, env-derived strings, and the
@@ -11,15 +11,31 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.base import LoopContext
-from mote.common.output_binding import negotiate_output_binding
-from mote.common.schema import OutputRepresentationCapabilities
-from mote.roles import Role
-from mote.roles.context_provider import ContextProvider
-from mote.roles.context_provider.base import BaseContextProvider
-from mote.roles.context_provider.request import ThinkRequest
+from mote.contracts.output import OutputRepresentationCapabilities
+from mote.kernel.flow import FlowContext
+from mote.kernel.output_binding import negotiate_output_binding
+from mote.runtime.agent import Role
+from mote.runtime.agent.context_provider import ContextProvider
+from mote.runtime.agent.context_provider.base import BaseContextProvider
+from mote.runtime.agent.context_provider.request import ThinkRequest
 
 from .conftest import FakeEnv
+
+
+def _routing_request(messages):
+    binding = negotiate_output_binding(
+        is_text=True,
+        capabilities=OutputRepresentationCapabilities(supports_text=True),
+    )
+    return ThinkRequest(
+        req=messages,
+        system_prompt="",
+        tool_specs=None,
+        output_binding=binding,
+        command_channel=None,
+        output_schema={},
+        schema_fingerprint="test",
+    )
 
 
 class TestThinkRequest:
@@ -58,14 +74,14 @@ class TestProviderWiring:
         assert cp._state is role.state
 
 
-class TestLoopContext:
+class TestFlowContext:
     def test_packs_schema_and_state(self, role):
         role.role_schema.tools = ["Read", "Bash"]
         role.role_schema.enable_memory = False
         role.role_schema.observe_all_msg_from_buffer = False
 
-        lc = role.context_provider.loop_context()
-        assert isinstance(lc, LoopContext)
+        lc = role.context_provider.flow_context()
+        assert isinstance(lc, FlowContext)
         assert lc.name == role.name
         assert lc.display_name == role.role_schema.display_name
         assert lc.tools == ["Read", "Bash"]
@@ -78,44 +94,49 @@ class TestLoopContext:
     def test_reevaluated_per_call(self, role):
         cp = role.context_provider
         role.role_schema.tools = ["Read"]
-        assert cp.loop_context().tools == ["Read"]
+        assert cp.flow_context().tools == ["Read"]
         role.role_schema.tools = ["Read", "Write"]
-        assert cp.loop_context().tools == ["Read", "Write"]
+        assert cp.flow_context().tools == ["Read", "Write"]
 
 
-class TestResolveLLM:
+class TestResolveModelRoute:
     def test_fixed_model_when_router_disabled(self, role):
         # router.routing_enabled is the single routing gate; the default config
         # (strategy None) leaves it False, so the fixed models.default is used.
         assert role.router.routing_enabled is False
-        llm = asyncio.run(role.context_provider.resolve_llm())
+        route = asyncio.run(role.context_provider.resolve_model_route())
         # Should resolve to a concrete provider (fixed config.llm path).
-        assert llm is not None
+        assert route.route_id == "default"
 
     def test_no_messages_uses_fixed_even_if_enabled(self, role, monkeypatch):
         # With routing on but no messages, the provider must use the fixed model
         # (it never invokes the async router without signals to route on).
-        sentinel = object()
+        sentinel = role.router.model_route("summary")
         role.router.routing_enabled = True
-        monkeypatch.setattr(role.router, "route", lambda *, name=None, llm_config=None: sentinel)
-        out = asyncio.run(role.context_provider.resolve_llm(messages=None))
-        assert out is sentinel
+        monkeypatch.setattr(role.router, "model_route", lambda *args, **kwargs: sentinel)
+        out = asyncio.run(role.context_provider.resolve_model_route(request=None))
+        assert out == sentinel
 
     def test_routes_when_enabled_with_messages(self, role, monkeypatch):
-        sentinel = object()
+        sentinel = role.router.model_route("summary")
         # A routing role has ``routing_enabled`` True (set by _build_router for
         # any concrete strategy); the default config leaves it False.
         role.router.routing_enabled = True
         captured = {}
 
         async def fake_aroute(request):
-            assert request.messages  # signals were forwarded
-            captured["session_key"] = request.session_key
-            return sentinel
+            assert request.signals.messages
+            captured["session_key"] = request.session_id
+            return sentinel, object()
 
-        monkeypatch.setattr(role.router, "aroute", fake_aroute)
-        out = asyncio.run(role.context_provider.resolve_llm(messages=[{"role": "user", "content": "hi"}]))
-        assert out is sentinel
+        monkeypatch.setattr(role.router, "aroute_model", fake_aroute)
+        out = asyncio.run(
+            role.context_provider.resolve_model_route(
+                _routing_request([{"role": "user", "content": "hi"}]),
+                model_call_id="call-1",
+            )
+        )
+        assert out == sentinel
         # L2: routing state must be keyed to this role's session, not "default".
         assert captured["session_key"] == role.session_id
         assert captured["session_key"] != "default"
@@ -123,7 +144,7 @@ class TestResolveLLM:
     def test_finalize_reprofiles_binding_and_tool_specs_for_routed_llm(self, role, monkeypatch):
         from types import SimpleNamespace
 
-        routed = object()
+        routed = role.router.model_route("summary")
         binding = negotiate_output_binding(
             is_text=True,
             capabilities=OutputRepresentationCapabilities(
@@ -146,8 +167,8 @@ class TestResolveLLM:
 
         monkeypatch.setattr(
             role.command_channel,
-            "for_llm",
-            lambda llm, **_kwargs: RoutedChannel() if llm is routed else None,
+            "for_model",
+            lambda profile, **_kwargs: RoutedChannel() if profile == routed.profile else None,
         )
         request = SimpleNamespace(
             output_binding=None,
@@ -156,7 +177,7 @@ class TestResolveLLM:
             output_schema={},
         )
 
-        result = role.context_provider.finalize_for_llm(request, routed)
+        result = role.context_provider.finalize_for_model(request, routed)
 
         assert result is request
         assert result.output_binding is binding
@@ -171,8 +192,10 @@ class TestResolveLLM:
         async def fail_aroute(request):
             raise AssertionError("must not route when routing_enabled is False")
 
-        monkeypatch.setattr(role.router, "aroute", fail_aroute)
-        sentinel = object()
-        monkeypatch.setattr(role.router, "route", lambda *, name=None, llm_config=None: sentinel)
-        out = asyncio.run(role.context_provider.resolve_llm(messages=[{"role": "user", "content": "hi"}]))
-        assert out is sentinel
+        monkeypatch.setattr(role.router, "aroute_model", fail_aroute)
+        sentinel = role.router.model_route("summary")
+        monkeypatch.setattr(role.router, "model_route", lambda *args, **kwargs: sentinel)
+        out = asyncio.run(
+            role.context_provider.resolve_model_route(_routing_request([{"role": "user", "content": "hi"}]))
+        )
+        assert out == sentinel

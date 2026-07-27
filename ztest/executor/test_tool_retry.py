@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.tool_retry.retryable_tool``.
+"""Unit tests for ``mote.runtime.tools.tool_retry.retryable_tool``.
 
 The decorator wraps a tool ``call`` in a tenacity retry whose predicate
 defaults to ``is_retryable`` — so ``RetryableToolError`` retries while a plain
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.exception import RetryableToolError, ToolError
-from mote.executor.tool_retry import retryable_tool
+from mote.runtime.errors import RetryableToolError, ToolError
+from mote.runtime.tools.tool_retry import retryable_tool
 
 pytestmark = pytest.mark.asyncio
 

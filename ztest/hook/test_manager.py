@@ -9,9 +9,9 @@ import stat
 
 import pytest
 
-from mote.common.hook.manager import HookManager
-from mote.common.hook.types import HookOutcome
-from mote.common.schema import HookCommandHandler, HookConfig, HookMatcherGroup
+from mote.contracts.settings.hooks import HookCommandHandler, HookConfig, HookMatcherGroup
+from mote.runtime.hook.manager import HookManager
+from mote.runtime.hook.types import HookOutcome
 
 
 @pytest.mark.asyncio

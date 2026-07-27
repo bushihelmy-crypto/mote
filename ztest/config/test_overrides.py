@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.config.overrides`` — -c parsing + ConfigOverrides."""
+"""Tests for ``mote.runtime.config.overrides`` — -c parsing + ConfigOverrides."""
 from __future__ import annotations
 
 import pytest
 
-from mote.common.config.overrides import ConfigOverrides, parse_cli_overrides, parse_override_value, set_nested
+from mote.runtime.config.overrides import ConfigOverrides, parse_cli_overrides, parse_override_value, set_nested
 
 
 def test_parse_override_value_types():

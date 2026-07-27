@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.executor.tool_pipeline import InvokeStage, LedgerStage, ToolExecution, ToolExecutionPipeline
-from mote.executor.tool_result import ToolResult
+from mote.runtime.tools.tool_pipeline import InvokeStage, LedgerStage, ToolExecution, ToolExecutionPipeline
+from mote.runtime.tools.tool_result import ToolResult
 
 
 class _Stage:
@@ -34,6 +34,9 @@ class _Settlement:
         self._events.append("reject")
         return args[2]
 
+    async def start(self, *args):
+        self._events.append("start")
+
     async def finish(self, *args):
         self._events.append("settle")
         return args[2]
@@ -50,11 +53,18 @@ def _pipeline(events, *, authorize=None, ledger=None):
 
 
 @pytest.mark.asyncio
-async def test_success_order_is_resolve_authorize_ledger_invoke_settle():
+async def test_success_order_reaches_start_only_at_invocation_boundary():
     events: list[str] = []
     result = await _pipeline(events).run("Echo", {}, "call-1")
     assert result.output == "ok"
-    assert events == ["resolve", "authorize", "ledger", "invoke", "settle"]
+    assert events == [
+        "resolve",
+        "authorize",
+        "ledger",
+        "start",
+        "invoke",
+        "settle",
+    ]
 
 
 @pytest.mark.asyncio
@@ -77,8 +87,8 @@ async def test_ledger_short_circuit_cannot_invoke_or_settle_as_ran():
 
 @pytest.mark.asyncio
 async def test_invoke_binds_and_restores_ambient_tool_call_id():
-    from mote.common.exception import RecoveryRunner
-    from mote.executor.execution_context import current_tool_call_id
+    from mote.runtime.errors import RecoveryRunner
+    from mote.runtime.tools.execution_context import current_tool_call_id
 
     seen = []
 
@@ -98,7 +108,7 @@ async def test_invoke_binds_and_restores_ambient_tool_call_id():
 def test_started_external_call_reenters_only_for_explicit_reconciliation():
     from types import SimpleNamespace
 
-    from mote.common.schema import ToolEffect
+    from mote.contracts.tools.effects import ToolEffect
 
     class Ledger:
         def __init__(self):
@@ -114,6 +124,9 @@ def test_started_external_call_reenters_only_for_explicit_reconciliation():
         @classmethod
         def resolve_effect(cls):
             return ToolEffect.EXTERNAL
+
+        def resolve_effect_for(self, args):
+            return self.resolve_effect()
 
         def can_resume_started_call(self, call_id):
             return call_id == "recoverable"

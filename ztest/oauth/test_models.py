@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 
-from mote.router.oauth.models import AuthMode, OAuthToken
+from mote.runtime.models.auth.oauth.models import AuthMode, OAuthToken
 
 
 def test_no_expiry_never_expires():

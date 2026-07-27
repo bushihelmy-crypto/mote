@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.config.sources`` — precedence + file discovery."""
+"""Tests for ``mote.runtime.config.sources`` — precedence + file discovery."""
 from __future__ import annotations
 
-from mote.common.config.sources import CONFIG_FILE_NAME, ConfigSource, discover_source_files
+from mote.runtime.config.sources import CONFIG_FILE_NAME, ConfigSource, discover_source_files
 
 
 def test_precedence_is_strictly_ascending():

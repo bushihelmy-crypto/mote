@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.compress.git.GitCompressor``."""
+"""Unit tests for ``mote.runtime.tools.compress.git.GitCompressor``."""
 from __future__ import annotations
 
-from mote.executor.compress.git import GitCompressor
+from mote.runtime.tools.compress.git import GitCompressor
 
 STATUS = """On branch master
 Your branch is up to date with 'origin/master'.

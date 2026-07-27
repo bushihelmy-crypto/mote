@@ -10,9 +10,9 @@ unreadable files, a throwing provider).
 """
 from __future__ import annotations
 
-from mote.common.const import TOOL_CALLS
-from mote.common.schema import AIMessage, UserMessage
-from mote.context.compaction.rehydrate import FileRehydrator
+from mote.contracts.constants.messages import TOOL_CALLS
+from mote.contracts.schema import AIMessage, UserMessage
+from mote.runtime.context.compaction.rehydrate import FileRehydrator
 
 
 def _write(tmp_path, name, body):

@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.common.schema import ContextManagerConfig, UserMessage
-from mote.context.compaction.reducers.summarize import SummarizeReducer
-from mote.context.compaction.request import ReductionRequest
-from mote.context.compaction.transcript import Transcript
+from mote.contracts.schema import ContextManagerConfig, UserMessage
+from mote.runtime.context.compaction.reducers.summarize import SummarizeReducer
+from mote.runtime.context.compaction.request import ReductionRequest
+from mote.runtime.context.compaction.transcript import Transcript
+from mote.ztest.model_fakes import model_route
 
 from ..conftest import FakeLLM, make_pairs, text_msg
 
@@ -34,7 +35,7 @@ def _cfg(**kw) -> ContextManagerConfig:
 
 def _reduce(transcript, *, llm=None, cfg=None, sticky_provider=None, rehydrate_provider=None, target=0):
     reducer = SummarizeReducer(
-        llm or FakeLLM(summary="SUMMARY"),
+        model_route(llm or FakeLLM(summary="SUMMARY")),
         cfg or _cfg(),
         model="gpt-4",
         sticky_provider=sticky_provider,
@@ -64,7 +65,7 @@ def test_summarizes_head_and_rebuilds_with_summary():
     assert out.changed is True
     assert out.summary == "SUMMARY"
     # The FakeLLM was asked exactly once, with the head as msg.
-    assert len(reducer._llm.aask_calls) == 1
+    assert len(reducer._model_route.gateway.llm.aask_calls) == 1
     # The rebuilt history contains the summary user message.
     assert any("SUMMARY" in (m.content or "") for m in out.transcript.to_messages())
 
@@ -100,16 +101,16 @@ def test_no_llm_is_noop():
 
 def test_circuit_breaker_stops_after_max_failures():
     t = Transcript.from_messages([text_msg(f"m{i}") for i in range(8)])
-    reducer = SummarizeReducer(FakeLLM(summary="S"), _cfg(max_consecutive_failures=3), model="gpt-4")
+    reducer = SummarizeReducer(model_route(FakeLLM(summary="S")), _cfg(max_consecutive_failures=3), model="gpt-4")
     reducer.consecutive_failures = 3  # already at the limit
     out = _run(reducer.reduce(t, ReductionRequest(0)))
     assert out.changed is False
-    assert reducer._llm.aask_calls == []  # never even called the LLM
+    assert reducer._model_route.gateway.llm.aask_calls == []  # never even called the LLM
 
 
 def test_failure_increments_counter():
     t = Transcript.from_messages([text_msg(f"m{i}") for i in range(8)])
-    reducer = SummarizeReducer(FakeLLM(raise_exc=RuntimeError("boom")), _cfg(), model="gpt-4")
+    reducer = SummarizeReducer(model_route(FakeLLM(raise_exc=RuntimeError("boom"))), _cfg(), model="gpt-4")
     out = _run(reducer.reduce(t, ReductionRequest(0)))
     assert out.changed is False
     assert reducer.consecutive_failures == 1
@@ -117,7 +118,7 @@ def test_failure_increments_counter():
 
 def test_success_resets_counter():
     t = Transcript.from_messages([text_msg(f"m{i}") for i in range(8)])
-    reducer = SummarizeReducer(FakeLLM(summary="S"), _cfg(), model="gpt-4")
+    reducer = SummarizeReducer(model_route(FakeLLM(summary="S")), _cfg(), model="gpt-4")
     reducer.consecutive_failures = 2
     out = _run(reducer.reduce(t, ReductionRequest(0)))
     assert out.changed is True
@@ -144,7 +145,7 @@ def test_task_result_pointer_reprojected_after_summary():
     # sticky_provider seam: a ResourceRegistry.project projects the registered
     # task_result unit, which must land after the summary (so the model is
     # re-reminded of a result the discarded notification once carried).
-    from mote.common.resource import ResourceRegistry, build_task_result_pointer
+    from mote.runtime.resources import ResourceRegistry, build_task_result_pointer
 
     registry = ResourceRegistry()
     pointer = build_task_result_pointer(

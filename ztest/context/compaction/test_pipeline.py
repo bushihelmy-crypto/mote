@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.context.compaction.pipeline import ReductionPipeline
-from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from mote.context.compaction.request import ReductionRequest, Urgency
-from mote.context.compaction.transcript import Transcript
+from mote.runtime.context.compaction.pipeline import ReductionPipeline
+from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.runtime.context.compaction.request import ReductionRequest, Urgency
+from mote.runtime.context.compaction.transcript import Transcript
 
 from ..conftest import text_msg
 

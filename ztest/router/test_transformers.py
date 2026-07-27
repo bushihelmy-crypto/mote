@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.router.llm.transformers (message-repair recovery handlers)."""
+"""Tests for Runtime message-repair recovery handlers."""
 from __future__ import annotations
 
 import base64
@@ -8,13 +8,13 @@ import io
 
 import pytest
 
-from mote.common.exception import (
+from mote.runtime.errors import (
     LLMImageTooLargeError,
     LLMInvalidRequestStateError,
     LLMMultimodalToolContentError,
     RecoveryAction,
 )
-from mote.router.llm.transformers import (
+from mote.runtime.models.clients.transformers import (
     _IMAGE_TARGET_BYTES,
     DEFAULT_MESSAGE_TRANSFORMERS,
     downgrade_tool_content,

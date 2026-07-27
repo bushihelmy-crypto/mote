@@ -15,8 +15,8 @@ import json
 
 import pytest
 
-from mote.executor.compress import compress_output
-from mote.executor.compress.curl import CurlCompressor, _looks_like_binary, _looks_like_html, _looks_like_json
+from mote.runtime.tools.compress import compress_output
+from mote.runtime.tools.compress.curl import CurlCompressor, _looks_like_binary, _looks_like_html, _looks_like_json
 
 # Conversion depends on the optional markdownify/bs4 stack.
 pytest.importorskip("markdownify")

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.exception import (
+from mote.contracts.errors.codes import ErrorCode, RecoveryAction
+from mote.runtime.errors import (
     ErrorReport,
     GraphBatchFailureError,
     GraphNodeRetryExhaustedError,
@@ -19,7 +20,6 @@ from mote.common.exception import (
     ToolError,
     render_error_block,
 )
-from mote.common.exception.codes import ErrorCode, RecoveryAction
 
 
 class TestFromException:

@@ -11,11 +11,12 @@ surface, never touching stdout. A ``FakeCtx`` stands in for the
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, List, Optional, Tuple
 
 import pytest
 
-from mote.cli.commands.registry import Command, CommandRegistry, default_registry
+from mote.product.cli.commands.registry import Command, CommandRegistry, default_registry
 
 
 class FakeCtx:
@@ -35,6 +36,10 @@ class FakeCtx:
         self.clear_result: int = 3
         self.agent_types: List[Tuple[str, str]] = [("Coder", "writes code"), ("Explore", "")]
         self.spawn_result: Tuple[Optional[str], str] = ("spawn-0001", "coder")
+        self.rewind_result = SimpleNamespace(
+            target=SimpleNamespace(index=2),
+            external=[],
+        )
 
     def notice(self, text: str, level: str = "info") -> None:
         self.notices.append(text)
@@ -79,6 +84,14 @@ class FakeCtx:
         self.calls.append(("clear_conversation", None))
         return self.clear_result
 
+    def list_checkpoints(self):
+        self.calls.append(("list_checkpoints", None))
+        return []
+
+    async def rewind_to(self, index: int):
+        self.calls.append(("rewind_to", index))
+        return self.rewind_result
+
     def list_agent_types(self):
         return self.agent_types
 
@@ -120,6 +133,26 @@ def test_is_command_slash_prefix_without_match_is_conversation(reg):
     assert not reg.is_command("/nonexistent do the thing")
     assert not reg.is_command("/")  # bare slash matches nothing
     assert not reg.is_command("/ hello")  # slash + space + prose
+
+
+def test_registry_rejects_duplicate_command_name():
+    async def handler(ctx, arg):
+        return None
+
+    registry = CommandRegistry()
+    registry.register(Command(name="same", handler=handler))
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(Command(name="same", handler=handler))
+
+
+def test_registry_rejects_alias_collision():
+    async def handler(ctx, arg):
+        return None
+
+    registry = CommandRegistry()
+    registry.register(Command(name="first", handler=handler, aliases=("shared",)))
+    with pytest.raises(ValueError, match="shared"):
+        registry.register(Command(name="second", handler=handler, aliases=("shared",)))
 
 
 def test_builtins_are_registered(reg):
@@ -204,6 +237,14 @@ async def test_usage_command(reg, ctx):
 async def test_usage_alias_cost(reg, ctx):
     await reg.handle(ctx, "/cost")
     assert ("usage_report", None) in ctx.calls
+
+
+@pytest.mark.asyncio
+async def test_rewind_command_awaits_runtime_file_transaction(reg, ctx):
+    await reg.handle(ctx, "/rewind 2")
+
+    assert ("rewind_to", 2) in ctx.calls
+    assert any("rewound working tree" in notice for notice in ctx.notices)
 
 
 @pytest.mark.asyncio

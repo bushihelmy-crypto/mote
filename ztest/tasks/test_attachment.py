@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from mote.executor.tasks import BgStatus, TaskAttachment, TaskAttachmentGenerator, TaskMeta, format_attachment_xml
+from mote.orchestration.tasks import BgStatus, TaskAttachment, TaskAttachmentGenerator, TaskMeta, format_attachment_xml
 
 
 class FakePool:
@@ -70,7 +70,7 @@ class TestFormatXml:
         assert "<status>pending</status>" in xml
 
     def test_error_renders_uniform_error_block(self):
-        from mote.common.exception import ErrorReport
+        from mote.runtime.errors import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
         att = TaskAttachment(
@@ -162,7 +162,7 @@ class TestGenerateTerminal:
 
     @pytest.mark.asyncio
     async def test_failed_terminal_threads_error_report(self):
-        from mote.common.exception import ErrorReport
+        from mote.runtime.errors import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
         meta = TaskMeta(

@@ -1,0 +1,29 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Secret vault configuration for the always-on disclosure boundary."""
+from typing import Optional
+
+from pydantic import Field
+
+from mote.contracts.config.base import ConfigModel as YamlModel
+
+
+class SecretsConfig(YamlModel):
+    """Storage knobs; core prompt/result protection cannot be disabled."""
+
+    cipher: str = Field(
+        default="aes",
+        description="Vault key/cipher strategy name. 'aes' = AES-256-GCM with a ~/.mote/vault.key key file.",
+    )
+    vault_path: Optional[str] = Field(
+        default=None,
+        description="Override the encrypted vault file location (default ~/.mote/secrets.json).",
+    )
+    secrets_config_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override the plaintext, human-edited named-secret file location "
+            "(default ~/.mote/secrets_config.json). A flat {name: value} JSON; "
+            "edits/deletes hot-sync into the encrypted vault by mtime."
+        ),
+    )

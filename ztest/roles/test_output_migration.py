@@ -2,7 +2,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from mote.roles.output_migration import OutputMigrationRegistry, ValidatorMigrationRegistry, ValidatorVersionMigration
+from mote.runtime.agent.output_migration import (
+    OutputMigrationRegistry,
+    ValidatorMigrationRegistry,
+    ValidatorVersionMigration,
+)
 
 
 @dataclass(frozen=True)
@@ -97,9 +101,9 @@ def test_fingerprint_mismatch_fails_before_migration_runs():
 
 @pytest.mark.asyncio
 async def test_output_engine_migrates_then_recommits_current_contract():
-    from mote.common.schema import OutputContractId, RunKind
-    from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
-    from mote.roles.output_engine import OutputEngine
+    from mote.contracts.output import OutputContractId, RunKind
+    from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder
+    from mote.runtime.agent.output_engine import OutputEngine
 
     source_decoder = TypeAdapterOutputDecoder(int)
     target_decoder = TypeAdapterOutputDecoder(dict[str, int])
@@ -141,7 +145,7 @@ async def test_output_engine_migrates_then_recommits_current_contract():
 
 
 def test_validator_identity_migration_preserves_execution_provenance():
-    from mote.common.schema import ValidatorProvenance
+    from mote.contracts.output import ValidatorProvenance
 
     registry = ValidatorMigrationRegistry(
         (

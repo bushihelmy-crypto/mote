@@ -19,8 +19,8 @@ pytest.importorskip("textual")
 from textual.widgets import Static
 from textual.worker import WorkerState
 
-from mote.cli.consumers.textual.app import MoteApp, ViewEventMessage
-from mote.cli.consumers.textual.widgets import (
+from mote.product.cli.consumers.textual.app import MoteApp, ViewEventMessage
+from mote.product.cli.consumers.textual.widgets import (
     AssistantBlock,
     CompactionSummaryRow,
     ConversationCompactedRow,
@@ -31,9 +31,10 @@ from mote.cli.consumers.textual.widgets import (
     ToolGroupWidget,
     UserMessageRow,
 )
-from mote.cli.contracts.view import (
+from mote.product.cli.contracts.view import (
     ConversationCompacted,
     ErrorRaised,
+    MediaBlock,
     MessageBlockCompleted,
     MessageBlockDelta,
     Notice,
@@ -42,8 +43,8 @@ from mote.cli.contracts.view import (
     ToolCallCompleted,
     ToolCallStarted,
 )
-from mote.common.i18n import keys as K
-from mote.common.i18n import t
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
 
 
 class _FakePort:
@@ -125,8 +126,8 @@ async def test_write_file_diff_folds_into_tool_widget_not_standalone():
     invocation + change are one select/fold unit, rather than mounting a separate
     ``FileDiffRow``.
     """
-    from mote.cli.consumers.textual.widgets import FileDiffRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FileDiffRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -145,8 +146,8 @@ async def test_write_file_diff_folds_into_tool_widget_not_standalone():
 @pytest.mark.asyncio
 async def test_unmatched_file_diff_falls_back_to_standalone_row():
     """A ``FileDiffBlock`` whose id matches no tool widget still renders standalone."""
-    from mote.cli.consumers.textual.widgets import FileDiffRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FileDiffRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -255,7 +256,7 @@ async def test_ctrl_o_toggles_standalone_bash_widget():
 @pytest.mark.asyncio
 async def test_click_selects_tool_row_and_scopes_ctrl_o():
     """Clicking a tool row selects it (distinct band); ctrl+o then toggles ONLY it."""
-    from mote.cli.consumers.textual.widgets import FoldableRow
+    from mote.product.cli.consumers.textual.widgets import FoldableRow
 
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -281,7 +282,7 @@ async def test_click_selects_tool_row_and_scopes_ctrl_o():
 @pytest.mark.asyncio
 async def test_click_moves_then_reclick_deselects():
     """Clicking another row moves the selection; re-clicking the selected clears it."""
-    from mote.cli.consumers.textual.widgets import FoldableRow
+    from mote.product.cli.consumers.textual.widgets import FoldableRow
 
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -299,6 +300,51 @@ async def test_click_moves_then_reclick_deselects():
         await pilot.pause()
         assert app._selected_tool is None
         assert second.selected is False
+
+
+@pytest.mark.asyncio
+async def test_canvas_image_and_tool_select_together():
+    """A Canvas result image shares its producing tool row's selection state."""
+    from mote.product.cli.consumers.textual.widgets import FoldableRow, MediaRow
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Canvas", tool_use_id="c1")))
+        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Canvas", tool_use_id="c1", summary="updated")))
+        app.post_message(ViewEventMessage(MediaBlock(media_kind="image", ref="/no/such.png", tool_use_id="c1")))
+        await pilot.pause()
+        tool = app.query(ToolCallWidget).first()
+        image = app.query(MediaRow).first()
+        app.on_foldable_row_clicked(FoldableRow.Clicked(tool))
+        assert tool.selected is True and image.selected is True
+        app.action_toggle_tool_details()
+        assert tool.expanded is True and image.display is True
+        app.action_toggle_tool_details()
+        assert tool.expanded is False and image.display is False
+        app.on_media_row_linked_clicked(MediaRow.LinkedClicked(image))
+        assert app._selected_tool is None
+        assert tool.selected is False and image.selected is False
+
+
+@pytest.mark.asyncio
+async def test_read_image_and_group_select_together():
+    """A Read image shares its coalesced Read/Search group selection state."""
+    from mote.product.cli.consumers.textual.widgets import FoldableRow, MediaRow
+
+    app = MoteApp()
+    async with app.run_test() as pilot:
+        app.post_message(ViewEventMessage(ToolCallStarted(tool_name="Read", tool_use_id="r1")))
+        app.post_message(ViewEventMessage(ToolCallCompleted(tool_name="Read", tool_use_id="r1", summary="image")))
+        app.post_message(ViewEventMessage(MediaBlock(media_kind="image", ref="/no/such.png", tool_use_id="r1")))
+        await pilot.pause()
+        group = app.query(ToolGroupWidget).first()
+        image = app.query(MediaRow).first()
+        app.on_foldable_row_clicked(FoldableRow.Clicked(group))
+        assert group.selected is True and image.selected is True
+        app.action_toggle_tool_details()
+        assert group.expanded is True and image.display is True
+        app.action_toggle_tool_details()
+        assert group.expanded is False and image.display is False
 
 
 @pytest.mark.asyncio
@@ -321,7 +367,7 @@ async def test_ctrl_o_stays_global_when_nothing_selected():
 @pytest.mark.asyncio
 async def test_compaction_clears_tool_selection():
     """A compaction wipes the transcript → the dangling selection is released."""
-    from mote.cli.consumers.textual.widgets import FoldableRow
+    from mote.product.cli.consumers.textual.widgets import FoldableRow
 
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -338,7 +384,7 @@ async def test_compaction_clears_tool_selection():
 @pytest.mark.asyncio
 async def test_click_selects_whole_search_read_group_and_scopes_ctrl_o():
     """Coalesced Read/Search form ONE group → a click selects the whole unit."""
-    from mote.cli.consumers.textual.widgets import FoldableRow, ToolGroupWidget
+    from mote.product.cli.consumers.textual.widgets import FoldableRow, ToolGroupWidget
 
     app = MoteApp()
     async with app.run_test() as pilot:
@@ -451,7 +497,7 @@ async def test_submit_expands_multiline_paste_placeholder():
     """
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     app = MoteApp()
     port = _FakePort(waiting=True)
@@ -585,7 +631,7 @@ async def test_wsl_copy_writes_windows_clipboard_natively():
     """
     import textual.app as _ta
 
-    from mote.cli.consumers.textual import app as _appmod
+    from mote.product.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
     async with app.run_test():
@@ -610,7 +656,7 @@ async def test_non_wsl_copy_uses_osc52():
     """Off WSL (or over SSH) the portable OSC 52 base path is used."""
     import textual.app as _ta
 
-    from mote.cli.consumers.textual import app as _appmod
+    from mote.product.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
     async with app.run_test():
@@ -636,7 +682,7 @@ async def test_wsl_copy_falls_back_to_osc52_when_native_fails():
     """If the native write can't run (no ``powershell.exe``), OSC 52 still copies."""
     import textual.app as _ta
 
-    from mote.cli.consumers.textual import app as _appmod
+    from mote.product.cli.consumers.textual import app as _appmod
 
     app = MoteApp()
     async with app.run_test():
@@ -656,7 +702,7 @@ async def test_wsl_copy_falls_back_to_osc52_when_native_fails():
 
 def test_detect_wsl_clipboard_env(monkeypatch):
     """WSL env vars enable native clipboard; SSH disables it (OSC 52 forwards)."""
-    from mote.cli.consumers.textual.clipboard import detect_wsl_clipboard
+    from mote.product.cli.consumers.textual.clipboard import detect_wsl_clipboard
 
     monkeypatch.delenv("SSH_CONNECTION", raising=False)
     monkeypatch.delenv("SSH_TTY", raising=False)

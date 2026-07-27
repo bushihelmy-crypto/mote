@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.router.complexity (signals → score → tier + rules engine)."""
+"""Tests for Kernel complexity signals, scoring, tiers, and rules."""
 from __future__ import annotations
 
-from mote.router.complexity import (
+from mote.kernel.models.complexity import (
     TIER_THRESHOLDS,
     ComplexitySignals,
     ContextSignals,

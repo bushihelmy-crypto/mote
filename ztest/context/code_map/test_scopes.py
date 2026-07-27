@@ -7,7 +7,7 @@ verifiable without parsing a real file.
 
 from __future__ import annotations
 
-from mote.context.code_map.scopes import Def, Ref, Scope, ScopeGraph
+from mote.runtime.context.code_map.scopes import Def, Ref, Scope, ScopeGraph
 
 
 def _module_and_fn(fn_name: str = "run"):

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.exception import ProviderNotFoundError
-from mote.router.llm.llm_provider_registry import LLMProviderRegistry, register_provider
+from mote.runtime.errors import ProviderNotFoundError
+from mote.runtime.models.clients.registry import LLMProviderRegistry
 
 
 class TestLLMProviderRegistry:
@@ -30,23 +30,41 @@ class TestLLMProviderRegistry:
             assert isinstance(e.__cause__, KeyError)
 
 
-class TestRegisterProviderDecorator:
-    def test_singleton_shared_registry(self):
-        # LLMProviderRegistry uses the Singleton metaclass: instances are shared.
-        assert LLMProviderRegistry() is LLMProviderRegistry()
+class TestRegistryIsolation:
+    def test_registry_instances_are_isolated(self):
+        assert LLMProviderRegistry() is not LLMProviderRegistry()
 
-    def test_decorator_registers_single_key(self):
-        @register_provider("decorated-single")
-        class _P:
-            pass
+    def test_conflicting_registration_is_rejected(self):
+        reg = LLMProviderRegistry()
+        reg.register("same", object)
+        with pytest.raises(ValueError, match="already registered"):
+            reg.register("same", str)
 
-        assert LLMProviderRegistry().get_provider("decorated-single") is _P
+    def test_create_uses_only_this_catalog(self):
+        class Provider:
+            def __init__(self, config):
+                self.config = config
 
-    def test_decorator_registers_list_of_keys(self):
-        @register_provider(["k1", "k2"])
-        class _Q:
-            pass
+        from mote.contracts.config.llm import LLMConfig, LLMType
 
         reg = LLMProviderRegistry()
-        assert reg.get_provider("k1") is _Q
-        assert reg.get_provider("k2") is _Q
+        reg.register(LLMType.OPENAI, Provider)
+        config = LLMConfig(api_type=LLMType.OPENAI, model="test", api_key="x")
+        assert reg.create(config).config is config
+
+
+def test_bare_runtime_context_fails_with_explicit_composition_error():
+    from mote.contracts.config.llm import LLMConfig
+    from mote.contracts.config.models import ModelsConfig
+    from mote.runtime.config.schema import Config
+    from mote.runtime.models.clients.context import Context
+
+    with pytest.raises(ProviderNotFoundError, match="Product composition root"):
+        Context(
+            config=Config(
+                models=ModelsConfig(
+                    default=LLMConfig(model="test"),
+                    tasks={},
+                )
+            )
+        ).llm()

@@ -88,6 +88,58 @@ models:
   #   image_description:
   #     model: "claude-haiku-4-5-20251001"
 
+  # —— 显式 failover 图（可选）——
+  # endpoint、候选组、task route 和恢复预算彼此独立；只有被 group 显式引用的
+  # endpoint 才能参与 fallback。凭据引用在 Runtime 激活时解析，不进入 plan/event。
+  # credential_pools:
+  #   anthropic-main:
+  #     slots:
+  #       - id: anthropic-main-a
+  #         secret_ref: env://ANTHROPIC_API_KEY
+  #   openai-backup:
+  #     slots:
+  #       - id: openai-backup-a
+  #         secret_ref: env://OPENAI_API_KEY
+  # endpoints:
+  #   primary:
+  #     provider: anthropic
+  #     model: "claude-sonnet-4-8"
+  #     credential_pool: anthropic-main
+  #     region: global
+  #     governance_domain: corp-default
+  #     capabilities:
+  #       supports_tools: true
+  #   backup:
+  #     provider: openai
+  #     model: "gpt-5.4"
+  #     credential_pool: openai-backup
+  #     region: global
+  #     governance_domain: corp-default
+  #     capabilities:
+  #       supports_tools: true
+  # failover_groups:
+  #   interactive:
+  #     endpoints: [primary, backup]
+  #     recovery_profile: interactive
+  # routes:
+  #   default: interactive
+  #   # 语义 route 与 task route 分开；值仍是 Gateway 的 failover group。
+  #   semantic:
+  #     interactive.low: interactive-low
+  #     interactive.standard: interactive
+  #     interactive.strong: interactive-strong
+  #     interactive.max: interactive-max
+  # recovery_profiles:
+  #   interactive:
+  #     max_wire_attempts: 4
+  #     max_attempts_per_endpoint: 2
+  #     max_endpoint_switches: 1
+  #     max_credential_rotations: 2
+  #     max_request_transforms: 2
+  #     total_deadline_seconds: 300
+  #     single_attempt_timeout_seconds: 120
+  #     max_backoff_seconds: 20
+
 # ----------------------------------------------------------------------------
 # tools —— 工具运行时（代理 / 浏览器地区）。注意与 models.default.proxy 区分：
 # 这里是给浏览器等工具用的，LLM 客户端用 models.default.proxy。
@@ -241,15 +293,17 @@ workspace:
 # ----------------------------------------------------------------------------
 # resilience —— 熔断器阈值。按资源（LLM 的 api_type::model::key_index，将来 MCP /
 # 出口主机）各自维护一个滑动窗口熔断器：某资源持续失败到阈值即“跳闸”，恢复循环随即
-# 故障转移到健康资源；冷却后放行单个半开探针试探恢复。默认保守，仅在“持续失败”时跳闸。
+# 故障转移到健康资源；冷却后按 quorum 放行半开探针试探恢复。默认保守，仅在“持续失败”时跳闸。
 # ----------------------------------------------------------------------------
 resilience:
   enabled: true                 # 总开关；false 则熔断器全程 inert（永远放行、从不记录）
   window_seconds: 60.0          # 失败率统计的滑动窗口回看秒数
   min_samples: 5                # 窗口内至少这么多次结果后才检查失败率（早期单次失败不跳闸）
   error_rate_threshold: 0.5     # 失败比例达到/超过该值即跳闸（0.0–1.0）
-  open_seconds: 20.0            # 跳闸后冷却秒数；也是被认领却未回报的探针的租约上限
+  open_seconds: 20.0            # 跳闸后的冷却秒数
   half_open_max_probes: 1       # 半开状态下允许的并发恢复探针数
+  half_open_success_quorum: 1   # 至少多少个半开探针成功后才恢复关闭态（不得超过并发探针数）
+  probe_grace_seconds: 1.0      # 探针租约在所属 attempt deadline 后额外保留的秒数
 
 # ----------------------------------------------------------------------------
 # router —— 智能路由（每步选型策略 + spawn 时的初始档位）。默认全关，零行为变化：
@@ -264,10 +318,24 @@ router:
     strategy: null              # null（默认）= 不路由：不装策略，跑固定 models.default（零行为变化）；
                                 # rule = 确定性规则策略（不加载 ML）；
                                 # squilla = ML 后端策略（进程级共享 ~75MB 引擎，缺失则启发式回退）
+    # default_route: interactive.standard
+    # candidates: [interactive.low, interactive.standard, interactive.strong, interactive.max]
+    # class_routes:              # squilla 必须显式、完整配置，候选增删不会改变 R0-R3 语义
+    #   R0: interactive.low
+    #   R1: interactive.standard
+    #   R2: interactive.strong
+    #   R3: interactive.max
+    # deadline_ms: 50
   sub_agent:
     strategy: null              # 同上，作用于 Agent 工具派生的子 agent
   spawn_routing: false          # true 时子 agent spawn 用首个 prompt 定一个「初始地板」（只托底不封顶，
                                 # 后续每步路由仍可升降）。需 sub_agent.strategy=squilla 才生效
+  # 这里只描述 secret-free 的语义元数据；能力/治理取自 ModelGateway 的不可变 route profile。
+  # routes:
+  #   interactive.low: {quality_class: R0, quality_rank: 0, cost_class: low, latency_class: low}
+  #   interactive.standard: {quality_class: R1, quality_rank: 1}
+  #   interactive.strong: {quality_class: R2, quality_rank: 2}
+  #   interactive.max: {quality_class: R3, quality_rank: 3, cost_class: high}
 
 # ----------------------------------------------------------------------------
 # mcp —— MCP 主开关。服务器本身不在这里配置，而在各自的 mcp.json 声明
@@ -330,10 +398,9 @@ ui:
   language: "auto"
 
 # ----------------------------------------------------------------------------
-# secrets —— 密钥脱敏 / 保险库（默认关闭；关闭时完全不接入脱敏/上传接缝）
+# secrets —— 密钥脱敏 / 保险库（核心安全边界始终开启）
 # ----------------------------------------------------------------------------
 secrets:
-  enabled: false
   # 保险库密钥/加密策略名。aes = AES-256-GCM，密钥文件 ~/.mote/vault.key。
   cipher: "aes"
   # 覆盖加密保险库文件位置（默认 ~/.mote/secrets.json）。

@@ -8,8 +8,8 @@ never-raises contract on missing params / malformed patterns.
 """
 from __future__ import annotations
 
-from mote.common.i18n.locale import get_locale
-from mote.common.i18n.message import format_message
+from mote.product.i18n.locale import get_locale
+from mote.product.i18n.message import format_message
 
 EN = get_locale("en")
 ZH = get_locale("zh")

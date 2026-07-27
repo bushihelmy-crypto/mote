@@ -13,8 +13,8 @@ import json
 import os
 import stat
 
-from mote.common.secrets.cipher import AesGcmCipher
-from mote.executor.dependency.browser_profile import BrowserProfileStore
+from mote.runtime.secrets.cipher import AesGcmCipher
+from mote.runtime.tools.dependency.browser_profile import BrowserProfileStore
 
 _STATE = {"cookies": [{"name": "sid", "value": "secret-token", "domain": ".x.com"}], "origins": []}
 

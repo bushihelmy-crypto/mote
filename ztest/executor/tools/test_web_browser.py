@@ -10,9 +10,8 @@ contacted.
 A live browser keeps its Playwright connection on the event loop it was started
 on, so multi-call scenarios run inside ONE ``asyncio.run`` (the conftest ``run``
 opens a fresh loop per call). The live session is owned by the per-test
-``CapRole`` (stored on its ``tool_sessions``, mirroring ``RoleState``), so there
-is no process-global singleton to leak; each test still closes its browser to
-free the subprocess.
+``RuntimeHost``, so there is no process-global singleton to leak; each test still
+closes its browser to free the subprocess.
 
 Skipped entirely when Playwright / its Chromium browser is unavailable.
 """
@@ -20,9 +19,11 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.text import cap_head_tail
-from mote.executor.dependency._browser import TEXT_MAX_CHARS, BrowserSession
-from mote.executor.tools.web_browser import WebBrowser
+from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
+from mote.contracts.runtimes import RuntimeAccessMode
+from mote.contracts.text import cap_head_tail
+from mote.product.toolsets.builtin.web_browser import WebBrowser
+from mote.runtime.tools.dependency._browser import TEXT_MAX_CHARS, BrowserSession
 
 from .conftest import CapRole, bind, run
 
@@ -238,7 +239,11 @@ _IFRAME_LOGIN = (
 
 
 def _has_browser(role: CapRole) -> bool:
-    return role.get_tool_session("WebBrowser") is not None
+    try:
+        role.get_runtime_host().descriptor("browser:default")
+    except ManagedRuntimeNotFoundError:
+        return False
+    return True
 
 
 def _ref_for(snapshot: str, needle: str) -> "str | None":
@@ -298,7 +303,7 @@ class TestNavigateRead:
         # A direct video URL is recognised and the model is guided to download it
         # with yt-dlp then Read the local file — WITHOUT launching a browser (the
         # guide needs no live session).
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_video")
 
@@ -347,8 +352,9 @@ class TestActions:
         async def scenario():
             await tool.call(action="navigate", url=_PAGE_A)
             result = await tool.call(action="screenshot")
-            # ToolResult with a base64 image attached.
-            assert result.images and isinstance(result.images[0], str)
+            assert len(result.media) == 1
+            assert result.media[0].artifact is not None
+            assert await caprole.artifact_store.read(result.media[0].artifact)
             assert result.data["type"] == "screenshot"
             await tool.call(action="close")
 
@@ -356,7 +362,7 @@ class TestActions:
 
     def test_screenshot_non_vision_model_raises(self, workspace):
         """A non-vision default model → refuse the capture (it could never reach it)."""
-        from mote.common.exception import ToolNotConfiguredError
+        from mote.runtime.errors import ToolNotConfiguredError
 
         role = CapRole(cwd=str(workspace), default_model="gpt-4")
         tool = bind(WebBrowser(), role, session_id="b_shot_novision")
@@ -414,7 +420,7 @@ class TestReadImage:
         run(scenario())
 
     def test_read_image_requires_selector(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_img_nosel")
 
@@ -428,7 +434,7 @@ class TestReadImage:
 
     def test_read_image_no_vision_model_raises(self, caprole):
         """No vision model bound → ToolNotConfiguredError, not a plain-text notice."""
-        from mote.common.exception import ToolNotConfiguredError
+        from mote.runtime.errors import ToolNotConfiguredError
 
         caprole.describe_image_text = None  # capability raises NotImplementedError
         tool = bind(WebBrowser(), caprole, session_id="b_img_novision")
@@ -489,7 +495,7 @@ class TestTabs:
 
 class TestErrorsLifecycle:
     def test_unknown_action_errors(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_unknown")
 
@@ -501,7 +507,7 @@ class TestErrorsLifecycle:
         run(scenario())
 
     def test_navigate_requires_url(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_nourl")
 
@@ -527,10 +533,10 @@ class TestErrorsLifecycle:
         async def scenario():
             await tool.call(action="navigate", url=_PAGE_A)
             assert _has_browser(caprole)
+            await tool.cleanup_session("b_cleanup")
+            assert not _has_browser(caprole)
 
         run(scenario())
-        tool.cleanup_session("b_cleanup")
-        assert not _has_browser(caprole)
 
 
 # ---------------------------------------------------------------------------
@@ -547,19 +553,16 @@ class TestStatePersistence:
             await tool.call(action="close")
 
         run(scenario())
-        # At least one browser-state capture recorded (urls + active + storage).
-        assert caprole.browser_states
-        urls, active, storage_state, name = caprole.browser_states[-1]
-        assert any(_PAGE_A in u for u in urls)
-        assert name == "WebBrowser"
+        state = caprole.latest_runtime_state("browser", "browser-state+json@1")
+        assert any(_PAGE_A in url for url in state["urls"])
 
     def test_pending_restore_reopens_tabs(self, caprole):
         """A staged restore re-opens the saved tab in a fresh browser."""
-        caprole._pending_browser_restore = {
-            "urls": [_PAGE_A],
-            "active": 0,
-            "storage_state": None,
-        }
+        caprole.stage_runtime_checkpoint(
+            "browser",
+            "browser-state+json@1",
+            {"urls": [_PAGE_A], "active": 0, "storage_state": None},
+        )
         tool = bind(WebBrowser(), caprole, session_id="b_resume")
 
         async def scenario():
@@ -579,7 +582,7 @@ class TestStatePersistence:
 class TestBrowserProfile:
     def test_profile_persists_login_and_keeps_rollout_clean(self, caprole):
         """With a profile set, storage_state goes to the profile store; the
-        rollout recorder receives ``storage_state=None`` (no plaintext cookies).
+        Runtime checkpoint receives ``storage_state=None`` (no plaintext cookies).
         """
         caprole.browser_profile = "acct"
         tool = bind(WebBrowser(), caprole, session_id="b_profile")
@@ -591,10 +594,9 @@ class TestBrowserProfile:
         run(scenario())
         # The logged-in state was persisted into the (fake) encrypted profile...
         assert caprole.browser_profiles.get("acct") is not None
-        # ...and the rollout event carries NO storage_state (cookies stay out).
-        assert caprole.browser_states
-        _urls, _active, storage_state, _name = caprole.browser_states[-1]
-        assert storage_state is None
+        # ...and the rollout checkpoint carries no cookies.
+        state = caprole.latest_runtime_state("browser", "browser-state+json@1")
+        assert state["storage_state"] is None
 
     def test_no_profile_keeps_cookies_in_rollout(self, caprole):
         """Legacy behavior: without a profile, storage_state rides the rollout."""
@@ -606,8 +608,8 @@ class TestBrowserProfile:
 
         run(scenario())
         assert caprole.browser_profiles == {}  # nothing persisted
-        _urls, _active, storage_state, _name = caprole.browser_states[-1]
-        assert storage_state is not None  # rides the rollout as before
+        state = caprole.latest_runtime_state("browser", "browser-state+json@1")
+        assert state["storage_state"] is not None
 
     def test_profile_storage_state_seeds_fresh_session(self, caprole):
         """A saved profile is loaded and seeds the launched context (rung L0).
@@ -619,20 +621,28 @@ class TestBrowserProfile:
         caprole.browser_profile = "acct"
         caprole.browser_profiles["acct"] = seed
         # A resume also staged state — the profile must win over it.
-        caprole._pending_browser_restore = {"urls": [], "active": 0, "storage_state": {"cookies": [1]}}
+        caprole.stage_runtime_checkpoint(
+            "browser",
+            "browser-state+json@1",
+            {"urls": [], "active": 0, "storage_state": {"cookies": [1]}},
+        )
 
         seen = {}
         tool = bind(WebBrowser(), caprole, session_id="b_seed")
-        orig_ensure = tool._ensure_session
 
         async def scenario():
-            session = await orig_ensure()
-            # The live session was seeded from the profile, not the resume state.
-            seen["state"] = await session.capture_state()
+            await tool._ensure_runtime()
+            host = tool.get_runtime_host()
+            async with host.access(
+                "browser:default",
+                mode=RuntimeAccessMode.READ,
+                owner_id="test:browser-profile",
+            ) as access:
+                seen["state"] = await access.driver.session.capture_state()
             await tool.call(action="close")
 
         # Patch BrowserSession.start to capture what storage_state it was seeded with.
-        from mote.executor.dependency import _browser as browser_mod
+        from mote.runtime.tools.dependency import _browser as browser_mod
 
         real_start = browser_mod.BrowserSession.start
 
@@ -703,7 +713,7 @@ class TestSecretFill:
         run(scenario())
 
     def test_unknown_secret_fails_closed(self, caprole):
-        from mote.common.exception import ToolError
+        from mote.runtime.errors import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_sec_unknown")
 
@@ -759,10 +769,14 @@ class TestClientCerts:
         ]
 
     def test_resolve_client_certs_fails_closed_on_unknown_secret(self, caprole):
-        from mote.common.exception import ToolError
+        from mote.runtime.errors import ToolError
 
         caprole.browser_client_certs = [
-            {"origin": "https://mtls.example.com", "pfxPath": "/c.pfx", "passphrase": "<agent-vault:nope>"}
+            {
+                "origin": "https://mtls.example.com",
+                "pfxPath": "/c.pfx",
+                "passphrase": "<agent-vault:nope>",
+            }
         ]
         tool = bind(WebBrowser(), caprole, session_id="b_certs_fail")
         with pytest.raises(ToolError):
@@ -770,11 +784,21 @@ class TestClientCerts:
 
     def test_resolve_client_certs_without_passphrase_passthrough(self, caprole):
         caprole.browser_client_certs = [
-            {"origin": "https://mtls.example.com", "certPath": "/c.pem", "keyPath": "/k.pem"}
+            {
+                "origin": "https://mtls.example.com",
+                "certPath": "/c.pem",
+                "keyPath": "/k.pem",
+            }
         ]
         tool = bind(WebBrowser(), caprole, session_id="b_certs_plain")
         resolved = tool._resolve_client_certs()
-        assert resolved == [{"origin": "https://mtls.example.com", "certPath": "/c.pem", "keyPath": "/k.pem"}]
+        assert resolved == [
+            {
+                "origin": "https://mtls.example.com",
+                "certPath": "/c.pem",
+                "keyPath": "/k.pem",
+            }
+        ]
 
     def test_context_kwargs_includes_client_certs(self):
         session = BrowserSession(
@@ -928,125 +952,6 @@ class TestCdpAttach:
             assert ctx.closed is True  # we own it -> close it
             assert browser.closed is True
             assert cm.exited is True
-
-        run(scenario())
-
-
-# ---------------------------------------------------------------------------
-# Headed handoff (Login Ladder L3, Phase 3) — relaunch a headless session as a
-# VISIBLE window for a live interactive step a screenshot can't cover (drag /
-# slider captcha, live QR scan). No-op when already visible / attached; the
-# relaunch reuses capture_state -> shutdown -> start(headed) -> restore_state.
-# ---------------------------------------------------------------------------
-
-
-class TestHeadedHandoff:
-    def test_handoff_noop_when_already_headed(self):
-        session = BrowserSession(session_key="k", headless=False)
-        session._context = _FakeContext(pages=[_FakePage("https://x/here")])
-
-        async def scenario():
-            out = await session.handoff_headed()
-            assert "already visible" in out
-            assert "https://x/here" in out
-            assert session.headless is False
-
-        run(scenario())
-
-    def test_handoff_noop_when_attached(self):
-        session = BrowserSession(session_key="k", headless=True)
-        session._attached = True
-        session._context = _FakeContext(pages=[_FakePage("https://y/page")])
-
-        async def scenario():
-            out = await session.handoff_headed()
-            assert "already visible" in out
-
-        run(scenario())
-
-    def test_handoff_relaunches_headed_with_captured_state(self, monkeypatch):
-        session = BrowserSession(session_key="k", headless=True)
-        session._context = _FakeContext(pages=[_FakePage("https://z/login")])
-        calls = []
-
-        async def fake_capture():
-            calls.append("capture")
-            return (["https://z/login"], 0, {"cookies": [1]})
-
-        async def fake_shutdown():
-            calls.append("shutdown")
-
-        async def fake_start(*, storage_state=None):
-            calls.append(("start", session.headless, storage_state))
-            session._context = _FakeContext(pages=[_FakePage("https://z/login")])
-
-        async def fake_restore(urls, active=0, storage_state=None):
-            calls.append(("restore", urls, active, storage_state))
-
-        monkeypatch.setattr(session, "capture_state", fake_capture)
-        monkeypatch.setattr(session, "shutdown", fake_shutdown)
-        monkeypatch.setattr(session, "start", fake_start)
-        monkeypatch.setattr(session, "restore_state", fake_restore)
-
-        async def scenario():
-            out = await session.handoff_headed()
-            assert session.headless is False  # flipped to headed
-            assert "visible browser window" in out
-            # Ordered: capture -> shutdown -> start(headed, seeded) -> restore.
-            assert calls[0] == "capture"
-            assert calls[1] == "shutdown"
-            assert calls[2] == ("start", False, {"cookies": [1]})
-            assert calls[3][0] == "restore"
-            assert calls[3][1] == ["https://z/login"]
-            assert calls[3][3] == {"cookies": [1]}
-
-        run(scenario())
-
-    def test_handoff_action_requires_prompt(self, caprole):
-        from mote.common.exception import ToolError
-
-        tool = bind(WebBrowser(), caprole, session_id="b_handoff_noprompt")
-
-        async def scenario():
-            await tool.call(action="navigate", url=_PAGE_A)  # launches headless
-            with pytest.raises(ToolError):
-                await tool.call(action="handoff")  # guard fires before any relaunch
-            await tool.call(action="close")
-
-        run(scenario())
-
-    def test_handoff_action_hands_off_then_assists(self, caprole, monkeypatch):
-        """The ``handoff`` action opens a window, then runs the headed assist.
-
-        The real headed relaunch would need a display (unsafe on CI / WSL2), so
-        we stub ``handoff_headed`` to a flag-free no-op; ``assist`` then runs its
-        real headed path (text-channel ask_user, no window needed).
-        """
-        caprole.ask_reply = "logged in"
-        tool = bind(WebBrowser(), caprole, session_id="b_handoff_action")
-        from mote.executor.dependency import _browser as browser_mod
-
-        calls = []
-
-        async def fake_handoff(self):
-            calls.append("handoff")
-            return "[opened a visible browser window] now at about:blank"
-
-        monkeypatch.setattr(browser_mod.BrowserSession, "handoff_headed", fake_handoff)
-
-        async def scenario():
-            await tool.call(action="navigate", url=_PAGE_A)
-            out = await tool.call(action="handoff", prompt="solve the slider captcha")
-            assert calls == ["handoff"]  # the handoff ran first
-            assert "visible browser window" in out  # its status line surfaced
-            # Then the headed assist prompted the user with our instruction.
-            assert len(caprole.ask_questions) == 1
-            asked = caprole.ask_questions[0]
-            assert "solve the slider captcha" in asked
-            assert "browser handoff" in asked
-            assert "resumed by user" in out
-            assert "logged in" in out
-            await tool.call(action="close")
 
         run(scenario())
 
@@ -1271,7 +1176,7 @@ class TestSnapshot:
         run(scenario())
 
     def test_stale_index_gives_actionable_error(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_stale")
 
@@ -1360,7 +1265,7 @@ class TestUnifiedTree:
         run(scenario())
 
     def test_navigation_invalidates_refs(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_tree_inval")
 
@@ -1369,7 +1274,13 @@ class TestUnifiedTree:
             snap = await tool.call(action="snapshot")
             ref = _ref_for(snap, "Buy now")
             assert ref is not None, snap
-            session = caprole.get_tool_session("WebBrowser")
+            host = caprole.get_runtime_host()
+            async with host.access(
+                "browser:default",
+                mode=RuntimeAccessMode.READ,
+                owner_id="test:browser-refs",
+            ) as access:
+                session = access.driver.session
             # Navigate away — refs from the old page must be dropped.
             await tool.call(action="navigate", url=_PAGE_B)
             assert session._ref_meta == {}
@@ -1446,7 +1357,7 @@ class TestUnifiedTree:
 
 class TestBlocker:
     def test_click_through_overlay_errors(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_overlay")
 
@@ -1522,7 +1433,7 @@ class TestWait:
         run(scenario())
 
     def test_wait_requires_one_of(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_wait_none")
 
@@ -1571,7 +1482,7 @@ class TestForms:
         run(scenario())
 
     def test_fill_form_requires_fields(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_fill_empty")
 
@@ -1622,7 +1533,7 @@ class TestExtract:
         run(scenario())
 
     def test_extract_requires_schema(self, caprole):
-        from mote.executor.tool_result import ToolError
+        from mote.runtime.tools.tool_result import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_extract_empty")
 
@@ -1646,85 +1557,6 @@ class TestEvalJson:
 
             data = json.loads(out)
             assert data == {"a": 1, "b": [2, 3], "c": "x"}
-            await tool.call(action="close")
-
-        run(scenario())
-
-
-# ---------------------------------------------------------------------------
-# assist — human-in-the-loop handoff (scan QR / SMS / 2FA)
-# ---------------------------------------------------------------------------
-
-
-class TestAssist:
-    def test_headless_screenshots_and_asks_human(self, caprole):
-        """Headless assist screenshots the page to disk, then asks the user.
-
-        No visible window is needed: the engine captures a PNG, writes it under
-        ``{cwd}/.agent_browser/``, and the ask_user prompt names that file so
-        the user can open it, read the code/QR, and reply. We assert the file
-        was written and that the prompt carries both our instruction and the
-        path, then that the user's reply comes back.
-        """
-        import os
-
-        caprole.ask_reply = "123456"
-        caprole.browser_headless = True
-        tool = bind(WebBrowser(), caprole, session_id="b_assist_headless")
-
-        async def scenario():
-            await tool.call(action="navigate", url=_PAGE_A)
-            out = await tool.call(action="assist", prompt="read the one-time code")
-            # The user was prompted, and the prompt carried our instruction.
-            assert len(caprole.ask_questions) == 1
-            asked = caprole.ask_questions[0]
-            assert "read the one-time code" in asked
-            assert ".agent_browser" in asked
-            assert "assist_" in asked and ".png" in asked
-            # The screenshot file the prompt names actually exists on disk.
-            shot_dir = os.path.join(caprole.get_cwd(), ".agent_browser")
-            shots = [f for f in os.listdir(shot_dir) if f.endswith(".png")]
-            assert shots, "expected a screenshot PNG to be written"
-            # The user's reply is surfaced so the model can act on it.
-            assert "123456" in out
-            await tool.call(action="close")
-
-        run(scenario())
-
-    def test_headed_pauses_and_asks_human(self, caprole):
-        """Headed assist asks the user to act in the window, then resumes.
-
-        The browser itself always launches headless (safe on a CI / WSL2 box
-        with no display); we flip the headless *flag* to False only after the
-        session exists, so ``assist`` takes the in-window handoff path without
-        ever opening a real visible window.
-        """
-        caprole.ask_reply = "done"
-        tool = bind(WebBrowser(), caprole, session_id="b_assist_headed")
-
-        async def scenario():
-            await tool.call(action="navigate", url=_PAGE_A)  # launches headless
-            caprole.browser_headless = False  # flag-only: take the handoff path
-            out = await tool.call(action="assist", prompt="scan the login QR code")
-            assert len(caprole.ask_questions) == 1
-            asked = caprole.ask_questions[0]
-            assert "scan the login QR code" in asked
-            assert "browser handoff" in asked
-            assert "resumed by user" in out
-            await tool.call(action="close")
-
-        run(scenario())
-
-    def test_missing_prompt_is_actionable_error(self, caprole):
-        # Browser stays headless (default) — the empty-prompt guard fires in
-        # _dispatch before any screenshot/ask, so no work is done.
-        tool = bind(WebBrowser(), caprole, session_id="b_assist_noprompt")
-
-        async def scenario():
-            await tool.call(action="navigate", url=_PAGE_A)
-            with pytest.raises(Exception) as ei:
-                await tool.call(action="assist")
-            assert "requires a 'prompt'" in str(ei.value)
             await tool.call(action="close")
 
         run(scenario())

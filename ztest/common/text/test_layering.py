@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Import-time layering guard for ``mote.common.text``.
+"""Import-time layering guard for ``mote.contracts.text``.
 
-``common`` is the bottom layer — the only one every other layer may import. This
-subpackage must therefore never reach *up* into any higher layer, and its core
-``elision.py`` must be pure stdlib (no ``mote.`` import at all). A static AST scan
+Contracts are the bottom layer. This package may import sibling Contracts but
+must never reach into Kernel, Runtime, Orchestration, or Product. A static AST scan
 mirrors ``ztest/executor/compress/test_layering.py``.
 """
 from __future__ import annotations
@@ -12,22 +11,22 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import mote.common.text as text_pkg
+import mote.contracts.text as text_pkg
 
 # Every layer that sits above ``common``. ``common.text`` must import none of them.
 _FORBIDDEN_ROOTS = (
     "mote.router",
-    "mote.roles",
-    "mote.context",
-    "mote.executor",
-    "mote.environment",
-    "mote.session",
-    "mote.loop",
-    "mote.cli",
+    "mote.runtime.agent",
+    "mote.runtime.context",
+    "mote.runtime.tools",
+    "mote.orchestration.environment",
+    "mote.runtime.session",
+    "mote.kernel.flow",
+    "mote.product.cli",
     "mote.memory",
-    "mote.parser",
-    "mote.sandbox",
-    "mote.think",
+    "mote.kernel.parser",
+    "mote.runtime.sandbox",
+    "mote.kernel.think",
 )
 
 
@@ -68,10 +67,10 @@ def _mote_imports(py_file: Path) -> list[str]:
     return found
 
 
-def test_core_modules_are_pure_stdlib():
-    """The core value/marker modules must not import any ``mote.*`` (pure stdlib).
+def test_core_modules_only_import_contracts():
+    """Core text modules may only import within Contracts.
 
-    Only ``__init__.py`` is allowed to re-export from sibling ``mote.common.text``
+    Only ``__init__.py`` is allowed to re-export from sibling ``mote.contracts.text``
     submodules; the leaf modules stay dependency-free.
     """
     pkg_dir = Path(text_pkg.__file__).parent
@@ -88,8 +87,9 @@ def test_core_modules_are_pure_stdlib():
         "hunks.py",
     ):
         for module in _mote_imports(pkg_dir / name):
-            offenders.append(f"{name}: imports {module}")
-    assert not offenders, "core common.text modules must be pure stdlib:\n" + "\n".join(offenders)
+            if not module.startswith("mote.contracts"):
+                offenders.append(f"{name}: imports {module}")
+    assert not offenders, "contracts.text imports outside Contracts:\n" + "\n".join(offenders)
 
 
 def test_package_has_modules():

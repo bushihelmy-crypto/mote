@@ -6,13 +6,14 @@ import types
 
 import pytest
 
-from mote.common.schema.messages import UserMessage
-from mote.common.schema.queue import MessageQueue
-from mote.environment.mailbox import Mailbox
-from mote.environment.runtime import AgentRuntime
-from mote.environment.store import ResidencyRecord, ResidencyStore, _strip_history
-from mote.session import SessionLog
-from mote.session.events import MessageEvent, SessionMetaEvent
+from mote.contracts.schema.messages import UserMessage
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.mailbox import Mailbox
+from mote.orchestration.environment.runtime import AgentRuntime
+from mote.orchestration.environment.store import ResidencyRecord, ResidencyStore, _strip_history
+from mote.runtime.agent.base import BaseRole
+from mote.runtime.session import SessionLog
+from mote.runtime.session.events import MessageEvent, SessionMetaEvent
 
 
 class FakeRole:
@@ -44,13 +45,22 @@ class FakeRole:
         }
 
 
+class ValidatingFakeRole(FakeRole, BaseRole):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.validated_meta = None
+
+    def validate_resume_identity(self, meta):
+        self.validated_meta = dict(meta)
+
+
 def make_role_loader():
     """A role_loader that rebuilds a FakeRole from its dump."""
 
     def loader(role_dump):
         state = role_dump.get("state", {})
         context = state.get("context", {})
-        from mote.common.schema import Message
+        from mote.contracts.schema import Message
 
         messages = [Message.load(m) for m in context.get("messages", [])]
         return FakeRole(
@@ -65,9 +75,9 @@ def make_role_loader():
 def seed_rollout(sessions_dir, session_id, contents):
     """Create a rollout.jsonl with session_meta + the given message contents."""
     log = SessionLog(session_id, base_dir=str(sessions_dir))
-    log.create(SessionMetaEvent(session_id=session_id))
+    log.commit_offline(SessionMetaEvent(session_id=session_id))
     for text in contents:
-        log.append(MessageEvent(message=UserMessage(text)))
+        log.commit_offline(MessageEvent(message=UserMessage(text)))
     return log
 
 
@@ -212,6 +222,25 @@ async def test_rehydrate_refills_history_from_rollout(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rehydrate_validates_identity_before_refilling_history(tmp_path):
+    sessions = tmp_path / "sessions"
+    store = ResidencyStore(
+        base_dir=str(tmp_path / "residency"),
+        sessions_base_dir=str(sessions),
+    )
+    seed_rollout(sessions, "sid", ["durable"])
+    await store.materialize(AgentRuntime(ValidatingFakeRole(session_id="sid")))
+
+    def loader(_role_dump):
+        return ValidatingFakeRole(session_id="sid")
+
+    restored = store.rehydrate("sid", role_loader=loader)
+
+    assert restored.role.validated_meta["session_id"] == "sid"
+    assert [message.content for message in restored.role.state.context.messages] == ["durable"]
+
+
+@pytest.mark.asyncio
 async def test_rehydrate_no_rollout_keeps_loaded_history(tmp_path):
     """With no rollout, history isn't stripped and replay refill is a no-op."""
     sessions = tmp_path / "sessions"
@@ -226,16 +255,22 @@ async def test_rehydrate_no_rollout_keeps_loaded_history(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_refill_survives_compaction_checkpoint(tmp_path):
-    """A compacted checkpoint in the rollout is the post-compaction truth."""
-    from mote.session.events import CompactedEvent
+async def test_rehydrate_refill_uses_model_context_projection(tmp_path):
+    from mote.runtime.session.events import ContextCompactedFact
+    from mote.runtime.session.replay import replay
 
     sessions = tmp_path / "sessions"
     store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
     log = seed_rollout(sessions, "sid", ["pre1", "pre2"])
-    # Compaction resets history to the replacement, then a new message appends.
-    log.append(CompactedEvent(messages=[UserMessage("summary")], summary="s"))
-    log.append(MessageEvent(message=UserMessage("after")))
+    source_ids = [str(message.id) for message in replay(log).transcript_messages]
+    await log.append(
+        ContextCompactedFact(
+            model_context_messages=[UserMessage("summary")],
+            source_message_ids=source_ids,
+            summary="s",
+        )
+    )
+    await log.append(MessageEvent(message=UserMessage("after")))
 
     role = FakeRole(session_id="sid")
     await store.materialize(AgentRuntime(role))

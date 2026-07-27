@@ -1,16 +1,16 @@
 """ResourceRegistry: load/unload/get_all + budgeted most-recent-first projection."""
-from mote.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.common.resource import (
+from mote.contracts.constants.messages import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
+from mote.contracts.schema import ResourceMessage
+from mote.runtime.context.sanitization import count_tokens
+from mote.runtime.resources import (
     POST_COMPACT_MAX_ROUNDS,
     POST_COMPACT_MAX_TOKENS_PER_UNIT,
     POST_COMPACT_PER_KIND_BUDGET,
     POST_COMPACT_TOKEN_BUDGET,
     ResourceRegistry,
 )
-from mote.common.resource.registry import _project_one
-from mote.common.resource.unit import ResourceUnit
-from mote.common.schema import ResourceMessage
-from mote.common.utils.prompt_sanitizer import count_tokens
+from mote.runtime.resources.registry import _project_one
+from mote.runtime.resources.unit import ResourceUnit
 
 
 def test_load_and_contains_and_len():

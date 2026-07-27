@@ -9,14 +9,23 @@ capability.
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
 
-from mote.common.schema import PermissionConfig
-from mote.common.schema.permission_types import PermissionDecision
-from mote.executor.base_tool import BaseTool
-from mote.executor.tool_executor import ToolExecutor
+from mote.contracts.permissions import PermissionDecision
+from mote.contracts.settings.permissions import PermissionConfig, SandboxConfig
+from mote.product.toolsets.builtin.edit import Edit
+from mote.product.toolsets.builtin.read import Read
+from mote.product.toolsets.builtin.search import Search
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.permission import PermissionEngine, RuleStore
+from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
+from mote.runtime.tools.policy import DefaultToolCallPolicy, build_tool_call_policy
+from mote.runtime.tools.tool_executor import ToolExecutor
+from mote.runtime.tools.tool_pipeline import AuthorizeStage, ToolExecution
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,6 +59,16 @@ class SafetyTool(BaseTool):
         return "done"
 
 
+class EmptyTargetMutatingTool(BaseTool):
+    """Filesystem-mutating tool that cannot identify the path it would touch."""
+
+    name = "EmptyTargetMutating"
+    mutates_filesystem = True
+
+    async def call(self) -> str:
+        return "must not run"
+
+
 class FakeRole:
     """Publishes a request_approval capability returning a canned ApprovalChoice.
 
@@ -73,10 +92,22 @@ class FakeRole:
 
 
 def build(tool: BaseTool, *, config: PermissionConfig | None, role: FakeRole | None = None) -> ToolExecutor:
-    ex = ToolExecutor("sess", tools=None, role=role, permission_config=config)
-    tool.bind("sess")
-    ex.register_tool_instance(tool, [tool.name, *getattr(tool, "aliases", [])])
+    policy = build_tool_call_policy(config, role=role)
+    ex = ToolExecutor("sess", tools=None, role=role, tool_call_policy=policy)
+    ex.register_native_tool(native_definition(type(tool)), tool)
     return ex
+
+
+def authorize_stage(config: PermissionConfig, *, cwd: str | None = None) -> AuthorizeStage:
+    sandbox = None
+    if config.sandbox is not None:
+        sandbox = SandboxGuard(config.sandbox, get_cwd=lambda: cwd or "")
+    engine = PermissionEngine(
+        mode=config.mode,
+        store=RuleStore.from_config(config),
+        sandbox=sandbox,
+    )
+    return AuthorizeStage(DefaultToolCallPolicy(permission_engine=engine))
 
 
 class TestNoConfigIsLegacy:
@@ -114,6 +145,66 @@ class TestAllowRule:
         ex = build(tool, config=PermissionConfig(allow=["Spy"]))
         res = await ex.run_command("Spy", {"cmd": "ls"})
         assert res.success and tool.ran
+
+
+class TestFilesystemPermissionTargets:
+    @pytest.mark.parametrize(
+        ("tool_type", "args", "relative_path"),
+        [
+            pytest.param(Read, {"file_path": "pkg/../pkg/a.py"}, "pkg/a.py", id="read"),
+            pytest.param(Edit, {"file_path": "./pkg/a.py"}, "pkg/a.py", id="edit"),
+            pytest.param(Search, {"path": "pkg/./sub/.."}, "pkg", id="search"),
+        ],
+    )
+    async def test_relative_path_matches_canonical_absolute_rule(
+        self,
+        tmp_path,
+        tool_type,
+        args,
+        relative_path,
+    ):
+        tool = tool_type()
+        tool.get_cwd = lambda: str(tmp_path)
+        expected = os.path.realpath(tmp_path / relative_path)
+        stage = authorize_stage(
+            PermissionConfig(
+                mode="dontAsk",
+                allow=[f"{tool.name}({expected})"],
+            )
+        )
+        execution = ToolExecution(
+            name=tool.name,
+            args=args,
+            result_id="canonical-path-call",
+            tool=tool,
+        )
+
+        assert tool.permission_target(args) == expected
+        assert await stage.run(execution) is None
+
+    async def test_empty_mutating_target_is_denied_by_authorize_stage(self, tmp_path):
+        tool = EmptyTargetMutatingTool()
+        stage = authorize_stage(
+            PermissionConfig(
+                mode="bypass",
+                sandbox=SandboxConfig(mode="workspace-write"),
+            ),
+            cwd=str(tmp_path),
+        )
+        execution = ToolExecution(
+            name=tool.name,
+            args={},
+            result_id="empty-target-call",
+            tool=tool,
+        )
+
+        assert tool.permission_targets({}) == []
+        denied = await stage.run(execution)
+        assert denied is not None
+        assert denied.success is False
+        assert denied.error is not None
+        assert denied.error.code == "TOOL_PERMISSION_DENIED"
+        assert "no concrete permission target" in denied.output
 
 
 class TestInteractiveApproval:

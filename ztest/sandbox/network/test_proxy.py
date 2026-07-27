@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import ssl
 
-from mote.sandbox.network.credentials import CredentialBroker, CredentialRule
-from mote.sandbox.network.policy import NetworkPolicy
-from mote.sandbox.network.proxy import EgressProxy
+from mote.runtime.sandbox.network.credentials import CredentialBroker, CredentialRule
+from mote.runtime.sandbox.network.policy import NetworkPolicy
+from mote.runtime.sandbox.network.proxy import EgressProxy
 
 
 class _AllowHosts(NetworkPolicy):
@@ -214,7 +214,7 @@ def test_proxy_dials_pinned_ip_end_to_end(monkeypatch):
     with the SSRF table neutralised for this test, the proxy must pin to that IP
     and reach the upstream — proving the dial uses the pinned address.
     """
-    import mote.sandbox.network.proxy as proxy_mod
+    import mote.runtime.sandbox.network.proxy as proxy_mod
 
     async def scenario():
         upstream, up_port = await _start_fake_upstream()
@@ -370,8 +370,8 @@ def test_https_mitm_injects_header(monkeypatch, tmp_path):
     against ``upstream_ca`` (via a monkeypatched default context); the client
     trusts ``mitm_ca``.
     """
-    import mote.sandbox.network.proxy as proxy_mod
-    from mote.sandbox.network.tls import MitmCa
+    import mote.runtime.sandbox.network.proxy as proxy_mod
+    from mote.runtime.sandbox.network.tls import MitmCa
 
     async def scenario():
         captured: dict = {}
@@ -422,7 +422,7 @@ def test_https_non_credentialed_raw_splice(tmp_path):
     Even with a broker + CA present, a host with no matching rule must NOT be
     MITM'd — the tunnel relays raw bytes end-to-end (proven by an echo upstream).
     """
-    from mote.sandbox.network.tls import MitmCa
+    from mote.runtime.sandbox.network.tls import MitmCa
 
     async def scenario():
         async def handle(reader, writer):

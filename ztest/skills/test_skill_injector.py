@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.context.skills.skill_injector.SkillInjector."""
+"""Tests for mote.runtime.context.skills.skill_injector.SkillInjector."""
 from __future__ import annotations
 
-from mote.context.skills.skill_injector import SkillInjector
-from mote.context.skills.skill_pool import SkillPool
+from mote.runtime.context.skills.skill_injector import SkillInjector
+from mote.runtime.context.skills.skill_pool import SkillPool
 
 from .conftest import make_skill_def, write_skill
 

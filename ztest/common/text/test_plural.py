@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.common.text.plural`."""
+"""Behavioral tests for :mod:`mote.contracts.text.plural`."""
 from __future__ import annotations
 
 import pytest
 
-from mote.common.text import count_noun, plural, verb_agree
+from mote.contracts.text import count_noun, plural, verb_agree
 
 
 class TestPlural:

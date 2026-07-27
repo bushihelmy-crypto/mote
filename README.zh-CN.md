@@ -36,8 +36,8 @@ python -m playwright install chromium
 
 ```bash
 mote                               # 控制台入口（默认 Assistant + 工具集）
-python -m mote.cli                 # 等价的模块形式
-python -m mote.cli --model <name> --tools Read,Edit,Search,Bash --cwd .
+python -m mote.product.cli                 # 等价的模块形式
+python -m mote.product.cli --model <name> --tools Read,Edit,Search,Bash --cwd .
 ```
 
 - Ctrl+C：turn 进行中 → 中断本轮；prompt 处双击 → 退出。Ctrl+D：退出。
@@ -77,7 +77,7 @@ DEFAULT → SYSTEM(/etc) → USER(~/.mote|~/.mote) → PROJECT(mote/config.yaml)
 → CLI_FLAG(-c key=value) → PROGRAMMATIC → MANAGED(锁死)
 ```
 
-dict 深合并、list 并集去重、scalar 高层胜。诊断：`python -m mote.common.config.diagnostics --strict`。
+dict 深合并、list 并集去重、scalar 高层胜。诊断：`python -m mote.runtime.config.diagnostics --strict`。
 
 环境变量样例见 [`.env.example`](./.env.example)。
 

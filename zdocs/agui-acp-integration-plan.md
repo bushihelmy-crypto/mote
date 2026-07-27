@@ -124,7 +124,7 @@ HITL：`ApprovalRequested`→前端提示→回传（下一个 /run 或专用回
 **测试**：approval 往返、edited_args 透传、reject 路径。
 
 ### Phase 4 — ACP consumer（复用 Phase 1 思想，换 transport）
-**新增** `cli/consumers/_wire/acp.py`（ViewEvent→ACP item 纯映射）+ `cli/consumers/acp/{consumer,port,server}.py`（复用 `jsonrpc.py` + ConnectionScope）。`acp_registry`(agent.json/icon) 对标 hermes。
+**新增** `cli/consumers/_wire/acp.py`（ViewEvent→ACP item 纯映射）+ `cli/consumers/acp/{consumer,port,server}.py`（复用 `jsonrpc.py` + ConnectionScope）。`product/integrations/acp/registry`（agent.json/icon）对标 hermes。
 **测试**：session load/prompt/fork；tool_call kind/locations；edit_approval diff 往返。
 
 ---
@@ -150,7 +150,7 @@ cli/consumers/agui/port.py             (Phase2/3)
 cli/consumers/agui/server.py           (Phase2)
 cli/consumers/_wire/acp.py             (Phase4)
 cli/consumers/acp/{consumer,port,server}.py  (Phase4)
-acp_registry/{agent.json,icon.svg}     (Phase4)
+product/integrations/acp/registry/{agent.json,icon.svg}     (Phase4)
 ztest/cli/serving/…                    (每阶段)
 ztest/cli/consumers/agui/…
 ztest/cli/consumers/acp/…

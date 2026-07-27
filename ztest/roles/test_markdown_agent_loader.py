@@ -6,17 +6,15 @@ A project (or the user) declares a spawnable subagent by dropping a Markdown fil
 with YAML frontmatter under ``.mote/agents/``. These tests pin the loader's
 contract: frontmatter (name/description/tools/model/aliases) + body is parsed
 into a ``(BaseAgent, Role)`` subclass carrying class-level ``tools`` (read by the
-Agent tool without instantiating), registration is
-idempotent, a rescan cleanly *replaces* a prior markdown agent (aliases included),
-and a hand-written Python agent always wins over a same-named markdown file.
+Agent tool without instantiating), and each scan can be frozen into an isolated,
+content-versioned Application catalog.
 
 Discovery is redirected at a tmp tree by monkeypatching the discovery helpers the
 loader funnels through, so nothing touches the real ``.mote/agents`` on disk.
 """
-import pytest
-
-import mote.roles.agents.markdown_loader as loader
-from mote.roles.agents.markdown_loader import _normalize_tools, discover_md_agents, register_md_agents
+import mote.runtime.agent.agents.markdown_loader as loader
+from mote.runtime.agent.agents.markdown_loader import _normalize_tools, discover_md_agents
+from mote.runtime.tools.agent_registry import AgentCatalog
 
 
 def _write_agent(dir_path, stem, body):
@@ -96,27 +94,8 @@ class TestDiscover:
         assert cls.tools == []
 
 
-class TestRegister:
-    @pytest.fixture(autouse=True)
-    def _restore_registry(self):
-        # These tests seed the GLOBAL agent-registry singleton (register_md_agents
-        # + a hand-seeded _PyAgent). Snapshot/restore around each so the mutation
-        # never leaks into sibling suites — e.g. the Agent tool's custom_schema()
-        # iterates all_agents() and would trip over a leaked bare BaseRole.
-        from mote.executor.agent_registry import registry
-
-        saved = dict(registry._registry)  # noqa: SLF001 — test-scoped save/restore
-        try:
-            yield
-        finally:
-            registry._registry = saved  # noqa: SLF001
-
-    def _registry(self):
-        from mote.executor.agent_registry import registry
-
-        return registry
-
-    def test_registers_primary_and_aliases(self, tmp_path, monkeypatch):
+class TestCatalog:
+    def test_snapshot_resolves_primary_and_aliases(self, tmp_path, monkeypatch):
         agents = tmp_path / ".mote" / "agents"
         _write_agent(
             agents,
@@ -125,14 +104,12 @@ class TestRegister:
         )
         _point_discovery_at(monkeypatch, agents)
 
-        names = register_md_agents(tmp_path)
-        assert names == ["reviewer"]
-        reg = self._registry()
-        cls = reg.get("reviewer")
+        catalog = AgentCatalog.from_types(discover_md_agents(tmp_path).values())
+        cls = catalog.get("reviewer")
         assert cls is not None
-        assert reg.get("rev") is cls
+        assert catalog.get("rev") is cls
 
-    def test_rescan_replaces_and_keeps_aliases_consistent(self, tmp_path, monkeypatch):
+    def test_rescan_produces_new_version_without_mutating_prior_snapshot(self, tmp_path, monkeypatch):
         agents = tmp_path / ".mote" / "agents"
         _write_agent(
             agents,
@@ -141,28 +118,15 @@ class TestRegister:
         )
         _point_discovery_at(monkeypatch, agents)
 
-        register_md_agents(tmp_path)
-        register_md_agents(tmp_path)  # rescan builds a fresh class
-        reg = self._registry()
-        prim = reg.get("reviewer")
-        # Alias must not dangle at the stale pre-rescan class.
-        assert reg.get("rev") is prim
-
-    def test_python_agent_wins_over_markdown(self, tmp_path, monkeypatch):
-        from mote.common.base.role import BaseRole
-
-        reg = self._registry()
-
-        # A hand-written (non-markdown) agent squats the name first.
-        class _PyAgent(BaseRole):
-            agent_name = "pyfixed"
-
-        reg._registry["pyfixed"] = _PyAgent  # noqa: SLF001 — direct seed for the test
-
-        agents = tmp_path / ".mote" / "agents"
-        _write_agent(agents, "pyfixed", "---\nname: pyfixed\ndescription: d\n---\nbody\n")
-        _point_discovery_at(monkeypatch, agents)
-
-        names = register_md_agents(tmp_path)
-        assert "pyfixed" not in names  # skipped — Python agent kept
-        assert reg.get("pyfixed") is _PyAgent
+        first = AgentCatalog.from_types(discover_md_agents(tmp_path).values())
+        _write_agent(
+            agents,
+            "reviewer",
+            "---\nname: reviewer\ndescription: changed\naliases: [review]\n---\nnew body\n",
+        )
+        second = AgentCatalog.from_types(discover_md_agents(tmp_path).values())
+        assert first.version != second.version
+        assert first.get("rev") is not None
+        assert first.get("review") is None
+        assert second.get("rev") is None
+        assert second.get("review") is not None

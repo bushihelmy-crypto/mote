@@ -1,0 +1,22 @@
+{
+  "name": "mote",
+  "title": "Mote",
+  "version": "1",
+  "description": "Mote — an agent framework served over the Agent Client Protocol (stdio JSON-RPC). Point a Zed-style editor at this manifest to run Mote as an in-editor coding agent.",
+  "icon": "./icon.svg",
+  "protocol": "acp",
+  "protocolVersion": 1,
+  "transport": "stdio",
+  "command": "python",
+  "args": ["-m", "mote.product.cli", "--serve", "acp"],
+  "env": {},
+  "agentCapabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "image": false,
+      "audio": false,
+      "embeddedContext": false
+    }
+  },
+  "authMethods": []
+}

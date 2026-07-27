@@ -121,7 +121,41 @@ project's own permission, event, and context subsystems).
    License  : MIT License OR the Unlicense  (zthird_party_licenses/ripgrep.LICENSE.txt)
    Copyright: Copyright (c) 2015 Andrew Gallant
    Modified : No — the ripgrep 14.1.1 x86_64-linux binary is redistributed
-              unmodified under vendor/ripgrep/.
+              unmodified under product/toolsets/builtin/assets/ripgrep/.
+
+--------------------------------------------------------------------------------
+14. Draw.io Scientific Illustrator
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/icebird1998/drawio-scientific-illustrator
+   License  : MIT License
+              (zthird_party_licenses/drawio-scientific-illustrator.LICENSE.txt)
+   Copyright: Copyright (c) 2026 icebird1998
+   Modified : Yes — the draw.io Desktop discovery, CDP graph-reference recovery,
+              and graph-API integration were ported from JavaScript to Python
+              and integrated behind Mote's CanvasBackend and window-presentation
+              infrastructure; the MCP protocol envelope is not included.
+   Used in  : runtime/tools/dependency/canvas_backends/drawio.py.
+
+--------------------------------------------------------------------------------
+15. xterm.js
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/xtermjs/xterm.js
+   Version  : @xterm/xterm 5.5.0
+   License  : MIT License  (zthird_party_licenses/xterm.LICENSE.txt)
+   Copyright: Copyright the xterm.js authors and contributors; see the full
+              license text for upstream copyright notices.
+   Modified : No — the browser runtime bundle and CSS are redistributed unmodified.
+   Used in  : runtime/interactive/assets/xterm/.
+
+--------------------------------------------------------------------------------
+16. xterm.js Fit Addon
+--------------------------------------------------------------------------------
+   Upstream : https://github.com/xtermjs/xterm.js
+   Version  : @xterm/addon-fit 0.10.0
+   License  : MIT License  (zthird_party_licenses/xterm-addon-fit.LICENSE.txt)
+   Copyright: Copyright (c) 2019 The xterm.js authors
+   Modified : No — the browser runtime bundle is redistributed unmodified.
+   Used in  : runtime/interactive/assets/xterm/.
 
 ================================================================================
 Notes

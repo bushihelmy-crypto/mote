@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the pure hunk algebra primitive (:mod:`mote.common.text.hunks`).
+"""Tests for the pure hunk algebra primitive (:mod:`mote.contracts.text.hunks`).
 
 Ported from the reference ``xai-hunk-tracker`` diff suite, adapted to the pure
 value-hunk (geometry + content, no attribution). Covers hunk computation,
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.text.hunks import (
+from mote.contracts.text.hunks import (
     Hunk,
     HunkApplyError,
     apply_hunk,
@@ -95,7 +95,7 @@ class TestSplitHunks:
         assert hunks[1].new_text == "HUNK_C\n"
 
     def test_oversize_returns_empty(self):
-        from mote.common.text.hunks import MAX_DIFF_SIZE_BYTES
+        from mote.contracts.text.hunks import MAX_DIFF_SIZE_BYTES
 
         big = "x\n" * (MAX_DIFF_SIZE_BYTES + 10)
         assert split_hunks("small\n", big) == []

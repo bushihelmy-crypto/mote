@@ -17,7 +17,16 @@ from __future__ import annotations
 
 import pytest
 
-from mote.roles import Role
+from mote.runtime.agent import Role
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "mote.runtime.session.log._default_base_dir",
+        lambda: tmp_path / "workspace" / "sessions",
+    )
+    monkeypatch.setattr("mote.runtime.agent.role.CONFIG_ROOT", tmp_path / "config")
 
 
 class FakeLLM:
@@ -27,8 +36,10 @@ class FakeLLM:
         self.name = name
         self.reply = reply
         self.model = "gpt-4"
+        self.cost_manager = None
+        self.rate_limit_tracker = None
+        self.context_reducer = None
         self.aask_calls: list = []
-        self._fallback_supplier = None
 
     async def aask(self, msg, system_msgs=None, stream=True, **kwargs):
         self.aask_calls.append(msg)
@@ -107,13 +118,36 @@ class FakeEnv:
 
 @pytest.fixture
 def context():
-    """A real router Context (builds offline, no network)."""
-    from mote.router.llm.context import Context
+    """A Runtime Context with an explicitly injected offline provider."""
+    from mote.contracts.config.llm import LLMConfig
+    from mote.contracts.config.models import ModelsConfig
+    from mote.runtime.config.schema import Config
+    from mote.runtime.models.clients.context import Context
+    from mote.ztest.model_fakes import FakeModelGateway
 
-    return Context()
+    context = Context(
+        config=Config(models=ModelsConfig(default=LLMConfig(model="test"))),
+        provider_factory=lambda config: FakeLLM(name=config.model),
+    )
+    context.model_gateway = FakeModelGateway(FakeLLM())
+    return context
 
 
 @pytest.fixture
 def role(context):
     """A bound Role with a real Context but no env."""
-    return Role(name="Alice", context=context)
+    from mote.kernel.output import text_output_contract
+    from mote.orchestration.tasks import build_background_task_pool
+    from mote.runtime.agent import AgentDependencies, AgentWiring
+
+    return Role(
+        name="Alice",
+        wiring=AgentWiring.for_context(
+            context,
+            dependencies=AgentDependencies(
+                deps=None,
+                output_contract=text_output_contract(),
+                background_task_pool_builder=build_background_task_pool,
+            ),
+        ),
+    )

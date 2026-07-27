@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Read tool (``mote.executor.tools.read``).
+"""Tests for the Read tool (``mote.product.toolsets.builtin.read``).
 
 Covers text slicing (offset/limit + line numbers), the empty/short-file and
 binary/device guards, notebook flattening, image media results, the per-instance
@@ -15,9 +15,8 @@ import os
 
 import pytest
 
-from mote.common.const import TOOL_RESULT_RESOURCE_PATH
-from mote.executor.tool_result import ToolError, ToolResult
-from mote.executor.tools.read import FILE_UNCHANGED_STUB, Read
+from mote.product.toolsets.builtin.read import FILE_UNCHANGED_STUB, Read
+from mote.runtime.tools.tool_result import ToolError, ToolResult
 
 from .conftest import CapRole, bind, run, write_file
 
@@ -30,12 +29,22 @@ def _read(tool: Read, **kwargs) -> str:
     normalizes both via :meth:`ToolResult.from_tool_return`. We mirror that here
     and expose ``.output`` so text assertions stay simple.
     """
+    if not hasattr(tool, "capture_file_snapshot"):
+        tool = bind(tool, CapRole())
     return ToolResult.from_tool_return(run(tool.call(**kwargs))).output
 
 
 def _read_result(tool: Read, **kwargs) -> ToolResult:
     """Like ``_read`` but return the full normalized ToolResult (media/metadata)."""
+    if not hasattr(tool, "capture_file_snapshot"):
+        tool = bind(tool, CapRole())
     return ToolResult.from_tool_return(run(tool.call(**kwargs)))
+
+
+def _artifact_bytes(role: CapRole, result: ToolResult, index: int = 0) -> bytes:
+    artifact = result.media[index].artifact
+    assert artifact is not None
+    return run(role.artifact_store.read(artifact))
 
 
 class TestReadText:
@@ -54,6 +63,26 @@ class TestReadText:
         assert "     4→line4" in out
         assert "line2" not in out
         assert "line5" not in out
+
+    def test_partial_text_result_continues_from_immutable_cursor(self, workspace):
+        p = write_file(workspace / "paged.txt", "one\ntwo\nthree")
+        tool = Read()
+        role = CapRole()
+        first = _read_result(bind(tool, role), file_path=p, limit=1)
+        os.unlink(p)
+        second = _read_result(
+            tool,
+            file_path=p,
+            limit=1,
+            cursor=first.data["next_cursor"],
+        )
+
+        assert first.data["status"] == "partial"
+        assert first.data["next_cursor"]
+        assert "1→one" in first.output
+        assert "2→two" in second.output
+        assert "changed" not in second.output
+        assert second.data["snapshot_digest"] == first.data["snapshot_digest"]
 
     def test_relative_path_resolves_against_cwd(self, workspace):
         write_file(workspace / "rel.txt", "hi\n")
@@ -88,7 +117,7 @@ class TestReadText:
         p = write_file(workspace / "a.txt", "one\ntwo\n")
         out = _read(Read(), file_path=p, offset=99)
         assert "shorter than the provided offset" in out
-        assert "2 lines" in out
+        assert "3 lines" in out
 
     def test_long_line_returned_intact(self, workspace):
         # Per-line truncation was removed; a large result is handled by the
@@ -127,7 +156,7 @@ class TestReadGuards:
         p = os.path.join(str(workspace), "bin.txt")
         with open(p, "wb") as f:
             f.write(b"\xff\xfe\x00\x01rubbish")
-        with pytest.raises(ToolError, match="not valid UTF-8"):
+        with pytest.raises(ToolError, match="lossless text encoding"):
             _read(Read(), file_path=p)
 
     def test_blocked_device_path_refused(self):
@@ -142,6 +171,67 @@ class TestReadGuards:
             _read(Read(), file_path=str(workspace / "nope.mp4"))
 
 
+class TestReadPermissionTarget:
+    def test_relative_path_is_canonicalized_against_role_cwd(
+        self,
+        workspace,
+        tmp_path,
+    ):
+        role_dir = tmp_path / "role_dir"
+        role_dir.mkdir()
+        tool = bind(Read(), CapRole(cwd=str(role_dir)))
+
+        target = tool.permission_target({"file_path": "nested/../target.txt"})
+
+        assert target == os.path.realpath(role_dir / "target.txt")
+        assert target != os.path.realpath(workspace / "target.txt")
+
+    def test_symlink_target_resolves_to_its_canonical_path(self, workspace):
+        target = workspace / "target.txt"
+        target.write_text("content", encoding="utf-8")
+        alias = workspace / "alias.txt"
+        alias.symlink_to(target)
+        tool = bind(Read(), CapRole(cwd=str(workspace)))
+
+        assert tool.permission_target({"file_path": "alias.txt"}) == os.path.realpath(target)
+
+
+class TestReadByteViews:
+    def test_raw_reads_binary_as_reversible_base64_from_byte_zero(self, workspace):
+        path = workspace / "payload.zip"
+        path.write_bytes(b"\x00\xffABC")
+
+        result = _read_result(Read(), file_path=str(path), mode="raw", limit=3)
+
+        assert "base64:AP9B" in result.output
+        assert result.data["byte_offset"] == 0
+        assert result.data["next_offset"] == 3
+        assert result.data["encoding"] == "base64"
+
+    def test_hex_reads_arbitrary_byte_offset(self, workspace):
+        path = workspace / "payload.bin"
+        path.write_bytes(b"012ABC\xff")
+
+        result = _read_result(
+            Read(),
+            file_path=str(path),
+            mode="hex",
+            offset=3,
+            limit=4,
+        )
+
+        assert "0000000000000003  41 42 43 ff" in result.output
+        assert "|ABC.|" in result.output
+        assert result.data["status"] == "complete"
+
+    def test_invalid_byte_range_is_a_tool_error(self, workspace):
+        path = workspace / "payload.bin"
+        path.write_bytes(b"data")
+
+        with pytest.raises(ToolError, match="byte offset must be non-negative"):
+            _read(Read(), file_path=str(path), mode="raw", offset=-1)
+
+
 class TestReadVideo:
     """Read absorbs a LOCAL video file: frames as image media + a transcript.
 
@@ -151,7 +241,7 @@ class TestReadVideo:
     """
 
     def _fake_result(self, **kw):
-        from mote.executor.dependency._video import VideoFrame, VideoResult
+        from mote.runtime.tools.dependency._video import VideoFrame, VideoResult
 
         frames = kw.pop(
             "frames",
@@ -166,8 +256,8 @@ class TestReadVideo:
         )
 
     def test_frames_become_image_media(self, workspace, monkeypatch):
-        import mote.executor.tools.read as rd
-        from mote.executor.dependency._video import VideoFrame
+        import mote.product.toolsets.builtin.read as rd
+        from mote.runtime.tools.dependency._video import VideoFrame
 
         frames = [
             VideoFrame(timestamp=0.0, jpeg=b"\xff\xd8a", reason="first-frame"),
@@ -181,7 +271,8 @@ class TestReadVideo:
         p = write_file(workspace / "clip.mp4", "not really a video")
         r = _read_result(Read(), file_path=p)
         assert r.success is True
-        assert len(r.images) == 2
+        assert len(r.media) == 2
+        assert all(item.artifact is not None for item in r.media)
         assert r.data["type"] == "video"
         assert r.data["frames"] == 2
         assert r.data["engine"] == "keyframe"
@@ -189,12 +280,17 @@ class TestReadVideo:
         assert r.resource_path == p
 
     def test_summary_carries_metadata_and_transcript(self, workspace, monkeypatch):
-        import mote.executor.tools.read as rd
+        import mote.product.toolsets.builtin.read as rd
 
         async def fake(*a, **k):
             return self._fake_result(
                 transcript="[00:00] hello",
-                meta={"title": "My Clip", "duration_seconds": 12, "width": 640, "height": 480},
+                meta={
+                    "title": "My Clip",
+                    "duration_seconds": 12,
+                    "width": 640,
+                    "height": 480,
+                },
             )
 
         monkeypatch.setattr(rd, "decompose_video", fake)
@@ -205,7 +301,7 @@ class TestReadVideo:
         assert r.data["has_transcript"] is True
 
     def test_no_frames_fails(self, workspace, monkeypatch):
-        import mote.executor.tools.read as rd
+        import mote.product.toolsets.builtin.read as rd
 
         async def fake(*a, **k):
             return self._fake_result(frames=[])
@@ -216,9 +312,9 @@ class TestReadVideo:
             _read_result(Read(), file_path=p)
 
     def test_unavailable_raises_not_configured(self, workspace, monkeypatch):
-        import mote.executor.tools.read as rd
-        from mote.common.exception import ToolNotConfiguredError
-        from mote.executor.dependency._video import VideoUnavailable
+        import mote.product.toolsets.builtin.read as rd
+        from mote.runtime.errors import ToolNotConfiguredError
+        from mote.runtime.tools.dependency._video import VideoUnavailable
 
         async def fake(*a, **k):
             raise VideoUnavailable("ffmpeg is not installed. install it")
@@ -231,8 +327,8 @@ class TestReadVideo:
             _read_result(Read(), file_path=p)
 
     def test_decode_error_fails(self, workspace, monkeypatch):
-        import mote.executor.tools.read as rd
-        from mote.executor.dependency._video import VideoError
+        import mote.product.toolsets.builtin.read as rd
+        from mote.runtime.tools.dependency._video import VideoError
 
         async def fake(*a, **k):
             raise VideoError("corrupt file")
@@ -320,11 +416,13 @@ class TestReadRecordsState:
         role = CapRole()
         tool = bind(Read(), role)
         _read(tool, file_path=p)
-        assert role.get_file_read_mtime(p) == os.stat(p).st_mtime_ns
+        snapshot = role.get_file_snapshot(p)
+        assert snapshot is not None
+        assert snapshot.version.size == os.stat(p).st_size
 
     def test_unbound_read_skips_recording(self, workspace):
         p = write_file(workspace / "a.txt", "one\n")
-        tool = Read()  # not bound — no record_file_read injected
+        tool = Read()  # not bound — no snapshot capabilities injected
         # Must not raise; just returns content.
         assert "1→one" in _read(tool, file_path=p)
 
@@ -367,30 +465,30 @@ class TestReadImage:
         p = os.path.join(str(workspace), "img.png")
         with open(p, "wb") as f:
             f.write(png)
-        result = _read_result(Read(), file_path=p)
+        role = CapRole()
+        result = _read_result(bind(Read(), role), file_path=p)
         assert isinstance(result, ToolResult)
-        assert result.images and isinstance(result.images[0], str)
-        # A 1x1 image is within MAX_IMAGE_DIMENSION, so it's sent unchanged and
-        # the embedded base64 round-trips to the original bytes.
-        assert base64.b64decode(result.images[0]) == png
+        assert _artifact_bytes(role, result) == png
         assert result.data["type"] == "image"
         assert result.data["detail"] == "high"
 
     def test_large_image_is_downscaled_to_fit(self, workspace):
         from PIL import Image
 
-        from mote.common.const.tools import MAX_IMAGE_DIMENSION
+        from mote.product.toolsets.constants import MAX_IMAGE_DIMENSION
 
         p = os.path.join(str(workspace), "big.png")
         Image.new("RGB", (4000, 2000), (123, 50, 200)).save(p)
 
-        result = _read_result(Read(), file_path=p)
+        role = CapRole()
+        result = _read_result(bind(Read(), role), file_path=p)
         assert isinstance(result, ToolResult)
-        out = Image.open(io.BytesIO(base64.b64decode(result.images[0])))
+        sent = _artifact_bytes(role, result)
+        out = Image.open(io.BytesIO(sent))
         # Longest edge clamped to MAX_IMAGE_DIMENSION, aspect ratio preserved.
         assert max(out.size) == MAX_IMAGE_DIMENSION
         assert out.size == (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION // 2)
-        assert result.data["sent_bytes"] == len(base64.b64decode(result.images[0]))
+        assert result.data["sent_bytes"] == len(sent)
 
     def test_original_detail_sends_raw_bytes(self, workspace):
         from PIL import Image
@@ -400,8 +498,9 @@ class TestReadImage:
         with open(p, "rb") as f:
             raw = f.read()
 
-        result = _read_result(Read(), file_path=p, detail="original")
-        assert base64.b64decode(result.images[0]) == raw
+        role = CapRole()
+        result = _read_result(bind(Read(), role), file_path=p, detail="original")
+        assert _artifact_bytes(role, result) == raw
         assert result.data["detail"] == "original"
 
     def test_small_image_high_detail_unchanged(self, workspace):
@@ -412,8 +511,9 @@ class TestReadImage:
         with open(p, "rb") as f:
             raw = f.read()
 
-        result = _read_result(Read(), file_path=p, detail="high")
-        assert base64.b64decode(result.images[0]) == raw
+        role = CapRole()
+        result = _read_result(bind(Read(), role), file_path=p, detail="high")
+        assert _artifact_bytes(role, result) == raw
 
     def test_invalid_detail_raises(self, workspace):
         png = base64.b64decode(
@@ -427,7 +527,7 @@ class TestReadImage:
 
     def test_non_vision_model_raises(self, workspace):
         """Default model is not vision-capable → refuse before attaching the image."""
-        from mote.common.exception import ToolNotConfiguredError
+        from mote.runtime.errors import ToolNotConfiguredError
 
         png = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -445,7 +545,7 @@ class TestReadPdf:
 
     def test_non_pdf_model_raises(self, workspace):
         """Default model does not accept native PDF input → refuse up-front."""
-        from mote.common.exception import ToolNotConfiguredError
+        from mote.runtime.errors import ToolNotConfiguredError
 
         p = os.path.join(str(workspace), "doc.pdf")
         with open(p, "wb") as f:
@@ -463,3 +563,52 @@ class TestReadPdf:
         result = _read_result(tool, file_path=p, mode="visual")
         assert isinstance(result, ToolResult)
         assert result.data["type"] == "pdf"
+
+    def test_pdf_text_pages_preserve_boundaries(self, workspace):
+        fitz = pytest.importorskip("fitz")
+        path = workspace / "pages.pdf"
+        document = fitz.open()
+        for number in range(1, 4):
+            page = document.new_page(width=300, height=200)
+            page.insert_text((40, 80), f"page-{number}")
+        document.save(path)
+        document.close()
+
+        result = _read_result(
+            Read(),
+            file_path=str(path),
+            mode="text",
+            pages="2-3",
+        )
+
+        assert "PDF page 2/3" in result.output
+        assert "page-2" in result.output
+        assert "PDF page 3/3" in result.output
+        assert result.data["pages"] == [2, 3]
+
+    def test_pdf_render_pages_are_image_media(self, workspace):
+        fitz = pytest.importorskip("fitz")
+        path = workspace / "pages.pdf"
+        document = fitz.open()
+        document.new_page(width=300, height=200)
+        document.new_page(width=300, height=200)
+        document.save(path)
+        document.close()
+        role = CapRole(default_model="claude-sonnet-4")
+        tool = bind(
+            Read(),
+            role,
+            session_id="r_pdf_render",
+        )
+
+        result = _read_result(
+            tool,
+            file_path=str(path),
+            mode="render",
+            pages="2",
+        )
+
+        assert len(result.media) == 1
+        assert _artifact_bytes(role, result).startswith(b"\x89PNG")
+        assert result.data["type"] == "pdf_render"
+        assert result.data["pages"] == [2]

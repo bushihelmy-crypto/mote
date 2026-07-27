@@ -31,10 +31,10 @@
    `Role` 不再继承 Pydantic / 巨型基类，而是一个纯编排器，把 `ThinkEngine`、`ToolExecutor`、`ContextManager`、`CommandChannel`、`LLMRouter`、`SkillManager` 等子系统**组合**进来，且全部 **lazy-init**（`role.py:88-96`）。
 
 2. **依赖注入 + 窄接口（DI over Narrow Seams）**
-   下游组件只看到自己需要的"窄面"，从不反向持有 `Role`。例如 `ReActLoop` 只收到 `MessageStore` / `BaseThinkEngine` / `BaseContextProvider` 等接口（`react_loop.py:55-74`），工具只能拿到 `Role.tool_capabilities()` 白名单里的方法（`base_tool.py:77-96`）。
+   下游组件只看到自己需要的"窄面"，从不反向持有 `Role`。例如 `AgentFlowEngine` 的节点只收到不可变 `FlowServices`，工具只能拿到 `Role.tool_capabilities()` 白名单里的方法。
 
-3. **协议无关的循环（Protocol-agnostic Loop）**
-   "想（think）→ 做（act）"的主循环不关心底层是 XML 文本协议还是原生 tool-use，差异全部被 `CommandChannel` 策略吸收（`react_loop.py` + `parser/`）。
+3. **协议无关的执行图（Protocol-agnostic Graph）**
+   `AgentFlowEngine` 只解释类型化 `AgentGraph`；默认 ReAct 图不关心底层是 XML 文本协议还是原生 tool-use，差异全部被 `CommandChannel` 策略吸收（`flow/graph/react.py` + `parser/`）。
 
 4. **抽象（base）与契约（interface）分离**
    `common/base/` 放需要被**继承**的抽象基类（ABC）；`common/interface/` 放用于**鸭子类型**的结构化 Protocol，且是零依赖叶子包，处处可安全 import，从根上控制循环依赖（`common/base/__init__.py`、`common/interface/__init__.py`）。
@@ -54,9 +54,8 @@ graph TD
 
     subgraph L1["抽象层 common/base （ABC，可继承）"]
         B_ROLE["BaseRole"]
-        B_LOOP["BaseLoop / LoopContext"]
-        B_THINK["BaseThinkEngine"]
         B_CH["CommandChannel"]
+        B_THINK["BaseThinkEngine"]
     end
 
     subgraph L2["数据层 common/schema （Pydantic 模型 + 懒加载）"]
@@ -70,7 +69,7 @@ graph TD
     end
 
     subgraph L4["执行子系统"]
-        E_LOOP["loop.ReActLoop"]
+        E_FLOW["flow.AgentFlowEngine + AgentGraph"]
         E_THINK["think.ThinkEngine"]
         E_EXEC["executor.ToolExecutor"]
         E_CTX["context.ContextManager"]
@@ -87,13 +86,13 @@ graph TD
     L3 --> L2
     L4 --> L1
     L4 --> L2
-    R_ROLE --> E_LOOP
+    R_ROLE --> E_FLOW
     R_ROLE --> E_THINK
     R_ROLE --> E_EXEC
     R_ROLE --> E_CTX
     R_ROLE --> E_ROUTER
     R_ROLE --> R_CP
-    E_LOOP -.->|只见窄接口| R_CP
+    E_FLOW -.->|只见窄接口| R_CP
     ENV --> R_ROLE
 ```
 
@@ -106,9 +105,9 @@ graph TD
 | 模式 | 应用位置 | 作用 |
 |---|---|---|
 | **Facade（门面）** | `Role`（`roles/role.py`）、`ContextManager`（`context/`） | 对外提供统一编排入口，隐藏子系统组合细节 |
-| **Strategy（策略）** | `CommandChannel`（XML/Native）、`RoutingStrategy`（规则/复杂度/LLM 裁判） | 运行时切换协议/路由算法，循环与路由器保持不变 |
+| **Strategy（策略）** | `CommandChannel`（XML/Native）、`RoutingStrategy`（规则/复杂度/LLM 裁判） | 运行时切换协议/路由算法，执行图与路由器保持不变 |
 | **Registry + Decorator（注册表+装饰器）** | `@register_tool`（`executor/tool_registry.py`）、`@register_provider`（`router/llm/llm_provider_registry.py`） | 声明式扩展，自动发现，免改中心列表 |
-| **Dependency Injection（散参注入）** | `Role._make_loop()`（`role.py:523-541`）、`ReActLoop.__init__`（`react_loop.py:55-74`） | 注入可复用组件与纯回调，绝不注入 `self` |
+| **Dependency Injection（散参注入）** | `RoleComponents.make_flow_engine()`、`AgentFlowEngine.__init__()` | 注入可复用组件与纯回调，Node 不持有 Role/Engine |
 | **Capability Allowlist（能力白名单）** | `Role.tool_capabilities()`（`role.py:360-378`）+ `BaseTool.bind()`（`base_tool.py:77-96`） | 工具只能拿到显式发布的方法，碰不到 RoleState/memory |
 | **Template Method（模板方法）** | `BaseTool.get_schema()`（`base_tool.py:123-181`） | schema 自动从 `call()` 签名+docstring 生成，子类只在动态场景覆盖 |
 | **Lazy Initialization（惰性初始化）** | `Role` 全部组件属性、`get_router()`（`router.py:227-237`） | 按需构造，序列化/恢复友好 |
@@ -143,20 +142,20 @@ graph LR
 
 - **静态 vs 运行态分离**：`RoleSchema`（配置）与 `RoleState`（运行快照）分开，序列化只需 dump 这两者（`role.py:108-123`），`Role` 自身无需可序列化。
 - **能力白名单是解耦关键**：工具想用 Role 的能力（如 `get_cwd`、`ask_user`、`wait_interruptible`）必须在 `tool_capabilities()` 中显式列出（`role.py:360-378`），`bind()` 只注入这些，永不 `getattr(role, ...)`。
-- **`active` 信号双重身份**：`state._active` 既是循环的迭代开关，又是工具→循环的"急停开关"——`End` 工具或 `ask_user("...stop")` 调 `deactivate()` 即可中断正在运行的循环（`role.py:380-395`、`role.py:410-413`）。
+- **`active` 信号双重身份**：`state._active` 既控制 Graph 是否继续推进，又是工具→Flow 的“急停开关”——`End` 工具或 `ask_user("...stop")` 调 `deactivate()` 后，Graph 在下一决策节点收敛到 `End`。
 
 ---
 
 ## 五、核心调用流程：一次 `run()` 的全景
 
-这是整个框架最重要的一张图——从 `Role.run()` 到 ReAct 循环的完整时序。
+这是整个框架最重要的一张图——从 `Role.run()` 到 ReAct Graph 的完整时序。
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Caller as 调用方/Env
     participant Role as Role
-    participant Loop as ReActLoop
+    participant Flow as AgentFlowEngine
     participant CP as ContextProvider
     participant CtxMgr as ContextManager
     participant Think as ThinkEngine
@@ -168,61 +167,69 @@ sequenceDiagram
     Caller->>Role: run(with_message)
     Role->>Role: _ensure_ready()（物化 ctx_mgr / skill / init_mcp）
     Role->>Role: put_message(msg) 入 msg_buffer
-    Role->>Loop: _make_loop()（散参注入组件）
-    Role->>Loop: loop.run()
+    Role->>Flow: make_flow_engine()（散参注入组件）
+    Role->>Flow: flow.run()
 
-    Loop->>CP: loop_context()（取静态观察/循环控制参数）
-    Loop->>Loop: _observe() 从 buffer 取信 → 过滤 → 写入 memory
+    Flow->>CP: flow_context()（取静态观察/流控制参数）
+    Flow->>Flow: ObserveNode 从 buffer 取信 → 过滤 → 写入 memory
     alt 无新消息
-        Loop-->>Role: return None
+        Flow-->>Role: return None
     end
-    Loop->>Loop: set_active(True)
+    Flow->>Flow: set_active(True)
 
     loop 直到预算 / 无待办 / 终止信号
-        Loop->>Loop: _observe(NEXT) 二次观察（插入式消息）
-        Note over Loop: ---- THINK ----
-        Loop->>CP: prepare() 组装 ThinkRequest
+        Flow->>Flow: ObserveNode 二次观察（插入式消息）
+        Note over Flow: ---- THINK ----
+        Flow->>CP: prepare() 组装 ThinkRequest
         CP->>CtxMgr: prepare_request(user_prompt)（压缩+组装）
-        Loop->>CP: resolve_llm(req)（经 Router 选模型）
-        Loop->>Think: start(req, sys, tools, llm)
+        Flow->>CP: resolve_llm(req)（经 Router 选模型）
+        Flow->>Think: start(req, sys, tools, llm)
         Think->>LLM: aask / aask_tool
         LLM-->>Think: 文本 or tool_calls
         Think->>Think: 去重检查 → ThinkResult
 
         alt is_terminal（native 无 tool_calls）
-            Loop->>Loop: _finish() 记录最终文本
-            Loop-->>Role: return rsp（终止）
+            Flow->>Flow: ValidateOutputNode 记录并提交最终输出
+            Flow-->>Role: return FlowResult（终止）
         else
-            Note over Loop: ---- ACT ----
-            Loop->>Chan: iter_commands(think, valid_names)
-            Chan-->>Loop: 统一 IR 指令流
+            Note over Flow: ---- ACT ----
+            Flow->>Chan: iter_commands(think, valid_names)
+            Chan-->>Flow: 统一 IR 指令流
             loop 每条指令
-                Loop->>Exec: run_command(name, args, id)
+                Flow->>Exec: run_command(name, args, id)
                 Exec->>Tool: call(**kwargs)
                 Tool-->>Exec: 原始返回
                 Exec->>Exec: 归一化 ToolResult + 大输出落盘
-                Exec-->>Loop: ToolResult
+                Exec-->>Flow: ToolResult
             end
-            Loop->>Chan: record_turn(memory, rsp, executed)
-            Loop->>Think: join()
-            Loop->>Loop: 后置检查（max_loop / 连续次数 → 可能 ask_user）
+            Flow->>Chan: record_turn(memory, rsp, executed)
+            Flow->>Think: join()
+            Flow->>Flow: Graph transition → ObserveNode
         end
     end
-    Loop-->>Role: rsp
+    Flow-->>Role: FlowResult
     Role->>Role: _active=False, 标记 agent, publish_message
     Role-->>Caller: AIMessage
 ```
 
 对应源码：
-- 入口编排 `Role.run()` → `roles/role.py:543-576`
-- 循环主体 `ReActLoop.run()` → `loop/react_loop.py:217-292`
-- 观察步 `_observe()` → `loop/react_loop.py:89-121`
-- think 步 `_step_think()` → `loop/react_loop.py:127-144`
-- act 步 `_step_act()` → `loop/react_loop.py:146-197`
+- 入口编排：`roles/role.py::Role.run`
+- 唯一执行内核：`flow/engine.py::AgentFlowEngine`
+- 公共节点：`flow/graph/nodes.py`
+- ReAct 拓扑：`flow/graph/react.py`
+- Review/refine 拓扑：`flow/graph/review_refine.py`
+- 图验证与 transition runner：`flow/graph/core.py`
+- 领域操作：`flow/services/`
+
+`ReviewRefineGraph` 是第二种生产级拓扑：复用 Restore、Observe、Budget、Think、ValidateOutput、WaitBackground 六个公共节点以及同一 `DurableFlowRunner`，仅替换 Interpret 决策并从结构上移除 Act。它用于禁止工具副作用、只允许候选输出经过校验/纠正的高保证执行。Engine 通过构造期 graph builder 注入拓扑；Role 默认仍固定 ReAct，不存在 graph registry、`loop_kind` 或第二套执行内核。
+
+公共观测面是 `flow/events.py` 的封闭 typed `RunEvent` 联合。`AgentFlowEngine.run_events()` 以 async iterator 输出 run started、语义 phase started/completed、succeeded/failed/cancelled；phase 只承诺 recovery/observation/budget/model/interpretation/action/output/wait，不暴露 `NodeId`、Graph 名称或内部拓扑。事件队列受 `flow/slo.py` 的 256 条上限约束，慢消费者通过背压限制生产者，不允许无界积压。
+
+运行时参考 SLO 见 [`runtime-slo.md`](./runtime-slo.md)，数值的代码事实来源是 `flow/slo.py`，并由 `ztest/flow/test_slo.py` 执行验证。
 
 **两种终止机制（协议相关）**：
-- **XML 协议**：模型发出 `End` 指令 → `deactivate()` → 下一轮 `_step_think()` 因 `is_active()` 为假而返回 `False` → 循环 break（`react_loop.py:133-134, 251`）。
-- **Native 协议**：模型回复纯文本、无 tool_calls → `channel.is_terminal()` 为真 → 走 `_finish()` 直接返回（`react_loop.py:258-260`、`native_channel.py:73-74`）。
+- **XML 协议**：模型发出 `End` 指令 → `deactivate()` → ReAct Graph 在后续决策节点转移到 `End`（`flow/graph/react.py`）。
+- **Native 协议**：模型回复纯文本、无 tool_calls → `InterpretNode` 产出最终候选 → `ValidateOutputNode` 校验、持久化并提交（`flow/graph/react.py`、`parser/native_channel.py`）。
 
 ---
 
@@ -232,8 +239,8 @@ sequenceDiagram
 
 ```mermaid
 graph TD
-    A["ReActLoop._step_think()"] --> B{"is_active()?"}
-    B -->|否| Z["返回 False → 终止循环"]
+    A["ThinkNode → ThinkService.think()"] --> B{"is_active()?"}
+    B -->|否| Z["转移到等待或 End"]
     B -->|是| C["ContextProvider.prepare()"]
 
     subgraph prepare["ContextProvider.prepare() — provider.py:133-159"]
@@ -258,17 +265,15 @@ graph TD
         F --> F1{"有 tool_specs?"}
         F1 -->|是| F2["llm.aask_tool() → content + tool_calls"]
         F1 -->|否| F3["llm.aask() → content"]
-        F2 --> G["去重检查 check_duplicate_calls"]
-        F3 --> G2["去重检查 check_duplicates"]
-        G --> H["ThinkResult(content, tool_calls)"]
-        G2 --> H
+        F2 --> H["ThinkResult(content, tool_calls)"]
+        F3 --> H
     end
 ```
 
 设计要点：
-- **Role 不持有固定 LLM**：每一轮由循环经 router 解析出 `llm` 再传给 `ThinkEngine.start()`（`think_engine.py:34-37, 45-56`），同一 Role 可在不同请求间使用不同模型。
+- **Role 不持有固定 LLM**：每一轮由 `ThinkService` 经 router 解析出 `llm` 再传给 `ThinkEngine.start()`，同一 Role 可在不同请求间使用不同模型。
 - **think 是后台任务**：`start()` 仅 `create_task`，真正等待发生在 act 后的 `join()`（`think_engine.py:107-112`），为 think/act 并行留出空间。
-- **去重按协议分流**：XML 比对原始响应文本，Native 比对结构化调用签名，硬重复时合成一个 `ask_user` 调用兜底（`think_engine.py:80-98`）。
+- **重复调用反馈**：工具执行层的 loop guard 只在连续同参失败或只读调用持续返回相同结果时向模型追加软提示；它不改写模型调用、更不会强制提问（`runtime/tools/loop_guard/`）。
 
 ---
 
@@ -276,7 +281,7 @@ graph TD
 
 ```mermaid
 graph TD
-    A["ReActLoop._step_act() — react_loop.py:146"] --> B["channel.iter_commands(think, valid_names)<br/>产出统一 IR 指令流"]
+    A["ActNode → ActionExecutionService.execute()"] --> B["ActionDispatcher.tool_commands(turn, valid_names)<br/>产出统一 IR 指令流"]
     B --> C{"逐条执行"}
     C --> D{"前序已失败?"}
     D -->|是| E["标记 [SKIPPED] 仍记录结果<br/>（native 要求每个 tool_call 配对 result）"]
@@ -313,8 +318,8 @@ graph TD
 ```
 
 设计要点：
-- **执行前持久化检查点**：本轮若含 EXTERNAL 台账工具，先 `record_call` 写入 assistant 的 tool_calls 消息并 `drain()` 落盘，**再**执行 body；否则走更省的单次 `record_turn`。这样即便副作用执行到一半崩溃，durable 历史里也已有悬空 tool_call，resume 时才能被对账愈合（见第十二节）。`record_turn` = `record_call` + `record_results` 的组合，两条路径永不漂移（`react_loop.py` / `common/base/command_channel.py`）。
-- **失败快停但全记录**：首个失败后停止真正执行，但仍为剩余指令补记 `[SKIPPED]` 结果——因为 native tool-use 协议要求每个 `tool_call` 必须有配对的 `tool_result`（`react_loop.py:156-181`）。
+- **执行前持久化检查点**：本轮若含 EXTERNAL 台账工具，先 `record_call` 写入 assistant 的 tool_calls 消息并 `drain()` 落盘，**再**执行 body；否则走更省的单次 `record_turn`。这样即便副作用执行到一半崩溃，durable 历史里也已有悬空 tool_call，resume 时才能被对账愈合（见第十二节）。`record_turn` = `record_call` + `record_results` 的组合，两条路径永不漂移（`flow/services/action_execution.py` / `common/base/command_channel.py`）。
+- **失败快停但全记录**：首个失败后停止真正执行，但仍为剩余指令补记 `[SKIPPED]` 结果——因为 native tool-use 协议要求每个 `tool_call` 必须有配对的 `tool_result`（`flow/services/action_execution.py`）。
 - **工具实例隔离**：每个 `ToolExecutor` 维护自己的 `_tools` 实例缓存（`tool_executor.py:48-52`），不同 Role 间不共享工具实例，避免并发 bind 冲突。
 - **大输出落盘**：超过 `max_result_size_chars` 的文本结果写盘并替换为预览，但带媒体（图片/PDF）的结果原样发给模型（`tool_executor.py:159-186`）。
 - **工具搜索（Tool Search）——能力（capability）分派，三条互斥路径**：`deferred_tools` 里的外围工具默认隐藏 schema，模型经 `SearchTools` 关键词搜索后揭示。分派**按模型能力**而非 provider：`supports_native_tool_search(model)`（`common/const/llm.py`，仿 `supports_vision`/`supports_pdf_input` 的子串表）是唯一闸门——支持原生 tool search 的模型整体接管到 provider 的原生 wire，不支持的（老 Claude/老 GPT/其它兼容网关/XML）回退到共享的客户端 withhold/reveal（修掉了老模型被误盖 `defer_loading` 被 API 拒的潜伏 bug）。三路共享同一权威 `RoleState.revealed_tools`（resume-safe，不扫历史）+ 同一匹配器 `SearchTools`，仅 wire 投影不同：**(A) Anthropic native** — 语料工具全量上线标 `defer_loading:true`（以语料成员身份为准，跨揭示 `tools=` 前缀字节稳定，prompt 缓存不失效），`SearchTools` 结果经 `ToolResult.data["tool_references"]` → `ToolMessage.tool_references` → `_tool_references` 私有 wire key → `AnthropicLLM._convert_messages` 渲染成 `tool_reference` 块，缓存断点移到最后一个非 `defer_loading` 工具（规避 `defer_loading`+`cache_control` 同存的 400）；**(B) OpenAI Responses native**（gpt-5.4+）——`resolve_api_type` 把可用模型整体路由到新 provider `OpenAIResponsesLLM`（`LLMType.OPENAI_RESPONSES`，`responses.create`，仿 AnthropicLLM 的 convert-in/normalize-out），同一 `_tool_references` seam 渲染成 `tool_search_call`+`tool_search_output` 对（`execution=client`，内嵌工具定义标 `defer_loading:true`，前缀字节稳定），响应里的 `tool_search_call` 归一回 `SearchTools` 调用走同一 executor；`to_native_tool_specs` 新增扁平 `"openai_responses"` envelope；**(C) 客户端回退**，再细分两种（不再一刀切 withhold）：**(C1) SPLIT（老模型 native 通道）** — 语料工具的**函数名 + 参数结构（input_schema）留在 `tools=`**（保留结构化/受约束调用能力 + `tools=` 前缀字节稳定 → 揭示不失效缓存），仅把**工具描述**换成常量占位 `SPLIT_TOOLSPEC_DESC`（不标 `defer_loading`）。描述走**未揭示→揭示的两段生命周期**（缓存经济学：临时尾部每轮重发完整描述 = O(揭示数×描述长) 永久未缓存开销，故揭示后改走持久化）：**未揭示**工具的一行简述放临时提醒尾部（缓存断点之后）的 `SplitToolMenuContextSource`（"# Additional tools"，`split_tool_menu()` 仅列未揭示语料工具的 `_one_line` 简述）；**揭示**时 `SearchTools` 把该工具**完整（多行）描述**（`catalog.describe_deferred(names)`）既写进结果 body（进入可缓存历史）、又经 `register_resource(kind="tool")` 注册为 sticky 资源持久化进 `common/resource` ResourceRegistry（`kind="tool"` 不在 `POST_COMPACT_MAX_ROUNDS`/`PER_KIND_BUDGET` 里 → 永久 re-project、无子上限，同 skill body 语义 → 压缩后经 `sticky_provider` 重投影存活），该工具随即从临时菜单**掉出**（菜单只增不减地缩小）——因此 `SearchTools.reconstructable=False`（否则 fold 会把承载持久描述的 body 清空）。resume 时 `session_manager._rebuild_revealed_tool_resources()` 从 `RoleState.revealed_tools`（durable 权威）× `catalog.describe_deferred()` 重新注册描述，即便崩溃前原 body 已被压缩也能重投影。老模型无法展开 `tool_reference`/`tool_search` 块，故 `record_results` 的 `tool_references` 打标按 `_server_side_tool_search` 门控**抑制**（老模型经 RoleState 揭示 + 尾部描述菜单发现），与 `native_specs` 字节对齐。**(C2) WITHHOLD（仅 XML）** — `schemas_for` 里 `_is_hidden` 直接扣掉 schema 直到揭示（XML 无 `tools=` 前缀需保护）。关键洞见：native wire **永不 withhold**（要么 server_defer 标记、要么 SPLIT 占位），withhold 在 native 上的"省"是幻觉（一次揭示即重算整个前缀）。菜单源仅在 `_effective_deferred_tools(role) and not _uses_native_tool_search(role)` 时构建（native → `SplitToolMenuContextSource`；XML → `DeferredToolIndexContextSource`；A/B 能力路抑制——API 自带索引已见全量 deferred 定义）。
@@ -337,7 +342,7 @@ graph LR
 
 ## 八、CommandChannel：协议分流（XML vs Native）
 
-`CommandChannel` 是吸收协议差异的策略接口（`common/base/command_channel.py`），让 ReAct 循环对协议无感。
+`CommandChannel` 是吸收协议差异的策略接口（`common/base/command_channel.py`），让 ReAct Graph 对协议无感。
 
 ```mermaid
 graph TD
@@ -502,7 +507,7 @@ graph TD
 
 **为什么没有“幂等键”这一层**：幂等是**接口提供方**的职责，不是台账能替它实现的。一个 EXTERNAL 副作用崩溃在半途时，它是否已生效对框架而言**物理上不可知**——框架无权替远端断言“可安全重跑”。所以台账只做一件诚实的事：如实记录 `started` 并在 resume 时上报 `<unknown-after-crash>`，把“核验 / 重试 / 放弃”的决策权交给模型。曾经的 `idempotency_key` / `annotate_tool_effect` 抽象是一层框架替提供方猜测的死抽象，已删除。
 
-**执行前持久化检查点**（第七节，`react_loop.py`）：ReAct 循环把 `record_turn` 拆成 `record_call`（assistant 的 tool_calls 消息）+ `record_results`（各工具结果）。本轮含 EXTERNAL 台账工具时，**先** `record_call` 并 `drain()` 落盘，**再**执行 body。这保证崩溃时 durable 历史里已有悬空 tool_call —— 否则连“悬空调用”都不存在，对账无从谈起。
+**执行前持久化检查点**（第七节，`flow/services/action_execution.py`）：ActionExecutionService 把 `record_turn` 拆成 `record_call`（assistant 的 tool_calls 消息）+ `record_results`（各工具结果）。本轮含 EXTERNAL 台账工具时，**先** `record_call` 并 `drain()` 落盘，**再**执行 body。这保证崩溃时 durable 历史里已有悬空 tool_call —— 否则连“悬空调用”都不存在，对账无从谈起。
 
 **Resume 对账**（`session/reconcile.py` + `roles/session_manager.py`）：`replay()` 重建历史后，`reconcile_tool_calls(messages, ledger)` 扫描悬空 tool_call（assistant 请求了但历史里无配对 tool_result），逐个查台账并注入合成 tool_result（恢复 provider 配对不变式）：
 
@@ -514,9 +519,17 @@ graph TD
 
 对账成功后 `ledger.reap(resolved_ids)` 清理已解决记录，台账不随会话无限增长。层次上 `session` 通过窄结构协议 `LedgerView`（只 `status`）读台账，不反向依赖 `executor`；对账函数是纯函数，从不改台账，只返回待 reap 的 id 集。
 
+**进程级故障注入**（`ztest/flow/durable/test_process_crash_recovery.py`）：测试子进程在真实 rollout/journal 的磁盘 barrier 后直接 `os._exit(91)`，父进程只从磁盘重建组件。固定覆盖 call 已记录但 effect 未发生、effect 已发生但 result 未记录、result 已记录但 journal 未 reap、think result 未 reap、output accepted 未 commit、output committed 未 publish 六类窗口；测试不以普通 Python 异常代替进程崩溃。
+
 **bggraph 协同**：`run_graph` 前台运行在**一次**顶层 `run_command` 内，其自身 EXTERNAL 台账条目就是崩溃恢复单元（resume 只对账这一个顶层调用）。图内节点分派（`Role.dispatch_tool`）**刻意不传 result_id**、不逐节点入账——因为图内调用从不作为 tool_calls 出现在 durable 历史里，对账器永远够不到它，逐节点入账的 `started` 记录会永久泄漏。于是形成两级保护：**图内** = 节点级重放（暂停/恢复只重跑未完成节点），**图整体** = 顶层台账条目。
 
 **默认开启**：`EffectLedgerConfig.enabled = True`（`common/schema/tool_config.py`）。YAML 开关在 `tools.effect_ledger`，由 `_build_executor` 从 `role.config.tools.effect_ledger` 读入并传给 `ToolExecutor`（与兄弟 `ToolResultLimitConfig` 同构、并列挂在 `tools.result_limit`：都是 tool-exec-scope 的纯数据策略，executor 是唯一属主——compaction 的 spill reducer 复用 executor 借出的同一个 `result_limit` 实例，单一来源无漂移）。
+
+### 托管 Tool 服务的第二级恢复
+
+媒体生成、WebSearch 等具有远端 lifecycle 的 Tool 还会进入 `runtime/service_gateway/`。Role 只向 Tool 注入窄能力 `invoke_service`，由稳定的 `session_id + tool_call_id + operation_key` 派生 logical service-call identity。ServiceGateway 持久化 plan、attempt、receipt、decision 和 terminal response；receipt 一旦落盘，后续只允许 poll/reconcile，禁止因 poll 异常重新 submit。
+
+因此 `GenerateMedia` 的 EffectLedger 条目保护整个顶层 Tool，per-asset Service journal 保护每个远端生成任务；`WebSearch` 以 `PURE` 服务调用复用同一恢复路径。两者都明确允许崩溃后重新进入 Gateway，由 Gateway 返回已完成 checkpoint、继续原 receipt，或按声明的安全语义恢复。provider-native 搜索在 Product adapter 内用稳定 model-call identity 委托 ModelGateway，LLM endpoint failover 不会被复制。完整设计见 [`service-failover-architecture.md`](./service-failover-architecture.md)。
 
 ---
 
@@ -530,8 +543,9 @@ graph TD
 | **加一种路由策略** | 实现 `RoutingStrategy.select()`，`router.set_strategy()` 注入 | `router/strategy.py`、`router/router.py:114` |
 | **加一个任务路由** | 在 `DEFAULT_TASK_MODELS` 加一行 + Config 加 `LLMConfig` 字段 | `router/router.py:37-40` |
 | **加一种命令协议** | 实现 `CommandChannel` 五个抽象方法，在 `make_command_channel` 分流 | `common/base/command_channel.py`、`parser/native_channel.py:94` |
-| **换 ReAct 循环策略** | 实现 `BaseLoop`，在 `Role._make_loop()` 选择（当前固定 ReActLoop，已留注释） | `common/base/loop.py`、`roles/role.py:523` |
+| **新增 Agent 流程** | 复用 `FlowServices` 定义并验证新的 `AgentGraph`；不新增 Engine 子类 | `flow/graph/`、`flow/engine.py` |
 | **加一个后台任务工具** | 工具返回 `BgTaskResult`，由 `BackgroundTaskPool` 接管 | `tasks/pool.py`、`tool_executor.py:147-150` |
+| **加一种托管 Tool 服务** | 实现单次 wire `ServiceEndpointAdapter`，编译 route/snapshot，Tool 只调用 `invoke_service` | `runtime/service_gateway/`、`product/integrations/services/` |
 | **多 agent 编排** | 用 `AgentControl` 注册 runtime、`send_input`/`send_inter_agent_communication` 投递 | `environment/control.py` |
 
 ---
@@ -541,13 +555,13 @@ graph TD
 ```
 用户消息
   → Role.run() 入 msg_buffer
-  → ReActLoop.run() 观察并写入 memory
-  → [循环] ContextProvider.prepare() 组装请求（ContextManager 压缩历史）
+  → AgentFlowEngine.run() 经 ObserveNode 观察并写入 memory
+  → [Graph] ContextProvider.prepare() 组装请求（ContextManager 压缩历史）
   → Router 选模型 → ThinkEngine 调 LLM → ThinkResult
   → CommandChannel 解析出指令 → ToolExecutor 逐个执行 → 写回 memory
   → 终止条件满足 → 返回 AIMessage → publish 回环境
 ```
 
-> **设计精髓**：把"可扩展的接缝"放在工具、协议、路由、循环、环境这五处，每处都用「抽象基类/Protocol + 注册表/工厂 + 依赖注入」组合实现，使得主流程（ReAct 循环）在任何一处被替换时都保持不变。
+> **设计精髓**：把“可扩展的接缝”放在工具、协议、路由、Graph、环境这五处。执行侧只保留一个 `AgentFlowEngine`，行为变化由类型化 node/transition 组合表达；其余接缝使用窄接口、注册表或依赖注入扩展。
 </content>
 </invoke>

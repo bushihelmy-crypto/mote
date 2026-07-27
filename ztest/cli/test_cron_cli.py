@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.cli cron`` — imperative CRUD over the scheduled-task store."""
+"""Tests for ``mote.product.cli cron`` — imperative CRUD over the scheduled-task store."""
 
 import pytest
 
-from mote.cli import cron_cli
-from mote.environment.scheduling.store import CronTaskStore
+from mote.orchestration.environment.scheduling.store import CronTaskStore
+from mote.product.cli import cron_cli
 
 
 @pytest.fixture

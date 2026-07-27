@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 
-import mote.common.const.paths as paths
-from mote.common.hook.config_source import load_global_hooks, merge_hook_configs
-from mote.common.schema.hook_config import HookConfig
+import mote.runtime.paths as paths
+from mote.contracts.settings.hooks import HookConfig
+from mote.runtime.hook.config_source import load_global_hooks, merge_hook_configs
 
 
 def _write(path, obj):
@@ -105,6 +105,6 @@ class TestMergeHookConfigs:
 
 
 def _hmg(matcher, command):
-    from mote.common.schema.hook_config import HookCommandHandler, HookMatcherGroup
+    from mote.contracts.settings.hooks import HookCommandHandler, HookMatcherGroup
 
     return HookMatcherGroup(matcher=matcher, handlers=[HookCommandHandler(command=command)])

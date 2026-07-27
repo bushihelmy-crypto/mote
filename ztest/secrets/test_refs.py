@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.secrets.refs import SecretRefError, expand_secret_refs, has_secret_refs
-from mote.common.secrets.totp import totp_now
+from mote.runtime.secrets.refs import SecretRefError, expand_secret_refs, has_secret_refs
+from mote.runtime.secrets.totp import totp_now
 
 _SEED = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 

@@ -1,27 +1,42 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the ``WebSearch`` tool (mote.executor.tools.web_search).
+"""Tests for the ``WebSearch`` tool (mote.product.toolsets.builtin.web_search).
 
-``WebSearch`` issues an isolated secondary LLM call (via the Role's ``web_search``
-capability) carrying the provider's server-side web-search tool and renders the
-returned hits as a CC-aligned markdown link list. These tests drive it through
-the same ``CapRole`` capability allowlist the real Role publishes, with the
-``web_search`` capability scripted (hit list or NotImplementedError) — fully
-offline, no network, no real LLM.
+``WebSearch`` submits one PURE logical service call and renders the returned hits
+as a CC-aligned markdown link list. These tests inject the narrow
+``invoke_service`` capability directly — fully offline, no network, no real LLM.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.common.exception import ToolNotConfiguredError
-from mote.executor.tools.web_search import WebSearch
-from mote.router.llm.llm_response import WebSearchHit
+from mote.contracts.errors.services import ServiceCallExhaustedError
+from mote.contracts.models import WebSearchHit
+from mote.contracts.services import ServiceExecutionSemantics
+from mote.product.toolsets.builtin.web_search import WebSearch
+from mote.runtime.errors import ToolNotConfiguredError
+from mote.runtime.tools.definitions import native_definition
 
-from .conftest import CapRole, bind, run
+from .conftest import run
 
 
-def _call(role: CapRole, **kwargs):
-    tool = bind(WebSearch(), role)
+def _tool(hits=None, *, error: Exception | None = None) -> WebSearch:
+    config = type("SearchConfig", (), {"backend": "provider"})()
+    tool = WebSearch(config)
+    tool.service_calls = []
+
+    async def invoke_service(**kwargs):
+        tool.service_calls.append(kwargs)
+        if error is not None:
+            raise error
+        selected = HITS if hits is None else hits
+        return {"hits": [{"title": hit.title, "url": hit.url, "snippet": hit.snippet} for hit in selected]}
+
+    tool.invoke_service = invoke_service
+    return tool
+
+
+def _call(tool: WebSearch, **kwargs):
     return run(tool.call(**kwargs))
 
 
@@ -33,9 +48,7 @@ HITS = [
 
 class TestFormat:
     def test_hits_rendered_as_links(self):
-        role = CapRole()
-        role.web_search_hits = HITS
-        result = _call(role, query="python tutorial")
+        result = _call(_tool(), query="python tutorial")
         assert result.success
         assert 'Web search results for query: "python tutorial"' in result.output
         assert "Links:" in result.output
@@ -48,30 +61,27 @@ class TestFormat:
         )
 
     def test_query_forwarded_to_capability(self):
-        role = CapRole()
-        role.web_search_hits = HITS
-        _call(role, query="cats", allowed_domains=["a.com"])
-        assert len(role.web_search_calls) == 1
-        query, kwargs = role.web_search_calls[0]
-        assert query == "cats"
-        assert kwargs["allowed_domains"] == ["a.com"]
-        # num_results is a client-side result cap, NOT the API's search budget
-        # (max_uses) — the tool no longer conflates the two, so it is not forwarded.
-        assert "max_uses" not in kwargs
+        tool = _tool()
+        _call(tool, query="cats", allowed_domains=["a.com"])
+        assert len(tool.service_calls) == 1
+        call = tool.service_calls[0]
+        assert call["route_id"] == "web.search"
+        assert call["capability"] == "web.search"
+        assert call["operation_key"] == "query"
+        assert call["semantics"] is ServiceExecutionSemantics.PURE
+        assert call["payload"]["query"] == "cats"
+        assert call["payload"]["allowed_domains"] == ["a.com"]
+        assert call["payload"]["max_uses"] == 8
 
     def test_num_results_caps_returned_links(self):
         # num_results truncates the hit list client-side; it does not change how
         # many searches the API runs (that stays the provider default).
-        role = CapRole()
-        role.web_search_hits = HITS  # two hits
-        result = _call(role, query="python", num_results=1)
+        result = _call(_tool(), query="python", num_results=1)
         assert "Python docs" in result.output
         assert "Real Python" not in result.output
 
     def test_no_results_message(self):
-        role = CapRole()
-        role.web_search_hits = []
-        result = _call(role, query="obscure query")
+        result = _call(_tool([]), query="obscure query")
         assert result.success
         assert "No search results found." in result.output
         # Reminder still present even with zero hits (matches CC's shape).
@@ -80,13 +90,9 @@ class TestFormat:
 
 class TestDegradation:
     def test_unavailable_raises_not_configured(self):
-        # web_search_hits None → capability raises NotImplementedError → the tool
-        # raises ToolNotConfiguredError naming the config path + steering to
-        # WebBrowser (option 1A: no scraper fallback). The executor turns this
-        # into ToolResult(success=False) with the message as output.
-        role = CapRole()  # web_search_hits defaults to None
+        error = ServiceCallExhaustedError("search unavailable")
         with pytest.raises(ToolNotConfiguredError) as excinfo:
-            _call(role, query="anything")
+            _call(_tool(error=error), query="anything")
         msg = str(excinfo.value)
         assert "unavailable" in msg.lower()
         assert "models.tasks.web_search" in msg
@@ -95,23 +101,24 @@ class TestDegradation:
 
 class TestValidation:
     def test_empty_query_rejected(self):
-        from mote.common.exception import ToolValidationError
+        from mote.runtime.errors import ToolValidationError
 
-        role = CapRole()
-        role.web_search_hits = HITS
+        tool = _tool()
         with pytest.raises(ToolValidationError, match="Missing query"):
-            _call(role, query="   ")
+            _call(tool, query="   ")
         # The capability is never reached on a validation failure.
-        assert role.web_search_calls == []
+        assert tool.service_calls == []
 
     def test_allowed_and_blocked_mutually_exclusive(self):
-        from mote.common.exception import ToolValidationError
+        from mote.runtime.errors import ToolValidationError
 
-        role = CapRole()
-        role.web_search_hits = HITS
+        tool = _tool()
         with pytest.raises(ToolValidationError, match="Cannot specify both"):
-            _call(role, query="cats", allowed_domains=["a.com"], blocked_domains=["b.com"])
-        assert role.web_search_calls == []
+            _call(tool, query="cats", allowed_domains=["a.com"], blocked_domains=["b.com"])
+        assert tool.service_calls == []
+
+    def test_started_call_reenters_service_gateway(self):
+        assert _tool().can_resume_started_call("call-id") is True
 
 
 class TestSchema:
@@ -119,12 +126,12 @@ class TestSchema:
         # Docstring-native: the full operating manual (the Sources: requirement +
         # current-year guidance) lives in the call() docstring body, so it rides
         # the auto-generated wire description.
-        schema = WebSearch.get_schema()
+        schema = native_definition(WebSearch).render(_tool())
         assert "Sources:" in schema["description"]
         assert "current year" in schema["description"]
 
     def test_native_schema_carries_all_params(self):
-        native = WebSearch.get_native_schema()
+        native = native_definition(WebSearch).render(_tool())
         props = native["input_schema"]["properties"]
         for name in ("query", "allowed_domains", "blocked_domains", "num_results"):
             assert name in props

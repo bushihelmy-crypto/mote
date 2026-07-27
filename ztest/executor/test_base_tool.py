@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.base_tool.BaseTool``.
+"""Unit tests for ``mote.runtime.tools.base_tool.BaseTool``.
 
 Covers binding/capability injection (the narrow allowlist), schema generation
 (auto + custom), and the native-schema path.
@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, ToolEffect
-from mote.executor.base_tool import BaseTool
+from mote.contracts.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
+from mote.contracts.tools.effects import ToolEffect
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition, xml_definition
 
 from .conftest import AddTool, CapTool, EchoTool, FakeRole
 
@@ -51,8 +53,9 @@ class TestBind:
 
 
 class TestSchema:
-    def test_get_schema_auto_from_signature(self):
-        schema = EchoTool.get_schema()
+    def test_xml_definition_renders_signature(self):
+        definition = xml_definition(EchoTool)
+        schema = definition.render(EchoTool())
         assert schema["name"] == "Echo"
         # description falls back to the call() docstring (not the class docstring).
         assert "Return" in schema["description"]
@@ -77,7 +80,7 @@ class TestSchema:
                 """
                 return "ok"
 
-        desc = Described.get_schema()["description"]
+        desc = xml_definition(Described).description
         assert desc.startswith("One-line summary.")
         assert "fuller operating manual" in desc
         assert "should not leak" not in desc  # Args: stripped from the wire prose
@@ -94,7 +97,7 @@ class TestSchema:
                 """
                 return "ok"
 
-        assert Described.summary() == "One-line summary."
+        assert xml_definition(Described).summary == "One-line summary."
 
     def test_summary_tracks_custom_schema_description(self):
         # A dynamic-description tool's menu tracks its custom_schema description's
@@ -103,14 +106,14 @@ class TestSchema:
             name = "Dyn"
 
             @classmethod
-            def custom_schema(cls):
-                return {"name": "Dyn", "description": "Live blurb.\nMore detail.", "parameters": {}}
+            def model_description(cls):
+                return "Live blurb.\nMore detail."
 
             async def call(self):  # pragma: no cover
                 """Ignored docstring."""
                 return "ok"
 
-        assert Dyn.summary() == "Live blurb."
+        assert xml_definition(Dyn).summary == "Live blurb."
 
     def test_search_text_appends_keywords(self):
         # search_text() = summary + recall keywords (the SEARCH corpus). The
@@ -123,9 +126,10 @@ class TestSchema:
                 """Do a thing."""
                 return "ok"
 
-        assert Kw.summary() == "Do a thing."  # menu/wire unaffected
-        assert "synonym" not in Kw.get_schema()["description"]  # never on the wire
-        assert Kw.search_text() == "Do a thing. synonym 别名"
+        definition = xml_definition(Kw)
+        assert definition.summary == "Do a thing."
+        assert "synonym" not in definition.description
+        assert definition.search_text == "Do a thing. synonym 别名"
 
     def test_search_text_no_keywords_equals_summary(self):
         # No keywords → search corpus is just the summary (no trailing space/join).
@@ -136,31 +140,18 @@ class TestSchema:
                 """Only a summary."""
                 return "ok"
 
-        assert NoKw.search_text() == NoKw.summary() == "Only a summary."
+        definition = xml_definition(NoKw)
+        assert definition.search_text == definition.summary == "Only a summary."
 
-    def test_custom_schema_short_circuits(self):
-        custom = {"name": "X", "description": "d", "parameters": "p"}
-
-        class CustomSchemaTool(BaseTool):
-            name = "X"
-
-            @classmethod
-            def custom_schema(cls):
-                return custom
-
-            async def call(self):  # pragma: no cover
-                return "ok"
-
-        assert CustomSchemaTool.get_schema() == custom
-
-    def test_tool_schema_delegates_to_get_schema(self):
+    def test_execution_capability_has_no_wire_schema_surface(self):
         tool = AddTool()
-        assert tool.tool_schema() == AddTool.get_schema()
+        assert not hasattr(tool, "tool_schema")
+        assert not hasattr(tool, "native_schema")
 
 
 class TestNativeSchema:
-    def test_get_native_schema_shape(self):
-        native = AddTool.get_native_schema()
+    def test_native_definition_shape(self):
+        native = native_definition(AddTool).render(AddTool())
         assert native["name"] == "Add"
         assert "description" in native
         input_schema = native["input_schema"]
@@ -169,9 +160,8 @@ class TestNativeSchema:
         # `a` has no default -> required; `b` defaults to 0 -> optional.
         assert input_schema["required"] == ["a"]
 
-    def test_native_schema_instance_delegates_to_class(self):
-        tool = AddTool()
-        assert tool.native_schema() == AddTool.get_native_schema()
+    def test_native_and_xml_definitions_are_distinct_types(self):
+        assert type(native_definition(AddTool)) is not type(xml_definition(AddTool))
 
 
 class TestResolveEffect:
@@ -211,14 +201,14 @@ class TestResolveEffect:
         assert PureButFs.resolve_effect() is ToolEffect.PURE
 
     def test_read_tools_are_pure(self):
-        from mote.executor.tools.read import Read
-        from mote.executor.tools.search import Search
+        from mote.product.toolsets.builtin.read import Read
+        from mote.product.toolsets.builtin.search import Search
 
         assert Read.resolve_effect() is ToolEffect.PURE
         assert Search.resolve_effect() is ToolEffect.PURE
 
     def test_external_tools_derive_external(self):
-        from mote.executor.tools.bash import Bash
+        from mote.product.toolsets.builtin.bash import Bash
 
         assert Bash.resolve_effect() is ToolEffect.EXTERNAL
 

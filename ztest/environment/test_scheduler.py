@@ -7,11 +7,11 @@ import types
 
 import pytest
 
-from mote.common.schema.messages import UserMessage
-from mote.common.schema.queue import MessageQueue
-from mote.environment.mailbox import DeliveryMode
-from mote.environment.runtime import AgentRuntime, AgentStatus
-from mote.environment.turn_scheduler import EventDrivenScheduler
+from mote.contracts.schema.messages import UserMessage
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.mailbox import DeliveryMode
+from mote.orchestration.environment.runtime import AgentRuntime, AgentStatus
+from mote.orchestration.environment.turn_scheduler import EventDrivenScheduler
 
 
 class FakeRole:

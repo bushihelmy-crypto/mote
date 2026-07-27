@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Sleep tool (``mote.executor.tools.sleep``).
+"""Tests for the Sleep tool (``mote.product.toolsets.builtin.sleep``).
 
 Sleep delegates the actual wait to the ``wait_interruptible`` Role capability
 (which we fake via CapRole), so these tests are instant and deterministic. The
@@ -9,7 +9,7 @@ step is a no-op here. Covers the slept / interrupted return wording.
 """
 from __future__ import annotations
 
-from mote.executor.tools.sleep import _MAX_WAIT_SECONDS, Sleep
+from mote.product.toolsets.builtin.sleep import _MAX_WAIT_SECONDS, Sleep
 
 from .conftest import CapRole, bind, run
 

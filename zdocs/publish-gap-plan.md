@@ -101,7 +101,7 @@ web/feishu consumer 和 AG-UI consumer 是同一 seam 的不同 transport。
 
 ## 点四 — Memory（跳过）
 
-`common/prompt/memory.py` 已有 prompt 契约但未实现存储层。本轮不做。
+`kernel/prompt/memory.py` 已有 prompt 契约但未实现存储层。本轮不做。
 
 ---
 
@@ -159,14 +159,14 @@ Role/loop ─────┤
 2. **依赖 CVE 扫描**：`common/security/osv_check.py`（OSV 查询），可选，安装 MCP/skill 带依赖时触发。
 
 **B. 体验（发布后跟进）**
-3. **MCP OAuth 打通**：mote 有独立 MCP（`executor/mcp/`）+ 独立 OAuth（`router/oauth/`，含
+3. **MCP OAuth 打通**：mote 有独立 MCP（`runtime/tools/mcp/`）+ 独立 OAuth（`runtime/models/auth/oauth/`，含
    auth_code/device_code/pkce/keyring）——**两者未连**。补 `executor/mcp/oauth.py` 桥接：MCP server
-   需 OAuth 时复用 `router/oauth/manager.py`。零新框架，纯接线。
+   需 OAuth 时复用 `runtime/models/auth/oauth/manager.py`。零新框架，纯接线。
 4. **title_generator**：自动会话标题（辅助模型一次调用），落 session 层。小、独立。
 
 **C. 锦上添花（需求驱动）**
 5. **rate_limit_tracker**：追踪 provider 响应 `x-ratelimit-*` header，`/usage` 展示。mote 已有
-   `router/cost/`（pricing/tracker/usage），这是补限流侧可见性，接在 `router/llm/base_llm` 响应处理。
+   `runtime/models/cost/`（pricing/tracker/usage），这是补限流侧可见性，接在模型响应处理。
 6. **多源 credential pool**：mote 现有单 provider 内 key rotation（`credentials.py`
    `CredentialRotationMixin`）。若需跨源 failover（env/OAuth/device code 混合池），扩展该 mixin。
 7. **onboarding**：首次运行引导。低优先级。

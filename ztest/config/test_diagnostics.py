@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.config.diagnostics`` — strict mode + dump."""
+"""Tests for ``mote.runtime.config.diagnostics`` — strict mode + dump."""
 from __future__ import annotations
 
 import pytest
 
-from mote.common.config.diagnostics import unknown_key_paths
-from mote.common.config.loader import load_config
-from mote.common.config.meta_config import Config
-from mote.common.config.report import format_report
-from mote.common.exception import UnknownConfigKeysError
+from mote.runtime.config.diagnostics import unknown_key_paths
+from mote.runtime.config.loader import load_config
+from mote.runtime.config.report import format_report
+from mote.runtime.config.schema import Config
+from mote.runtime.errors import UnknownConfigKeysError
 
 
 def test_unknown_key_paths_flags_top_level_and_nested():

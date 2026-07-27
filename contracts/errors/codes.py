@@ -1,0 +1,184 @@
+"""Stable error codes for the Mote exception hierarchy.
+
+Each concrete exception declares a ``default_code`` from this enum so that
+serialized errors (``MoteError.to_dict``) carry a stable, machine-readable
+identifier independent of the human-readable message or the class name.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class ErrorCode(StrEnum):
+    """Machine-readable error codes (stable across releases)."""
+
+    UNKNOWN = "UNKNOWN"
+
+    # LLM / provider tier
+    LLM_CONNECTION = "LLM_CONNECTION"
+    LLM_TIMEOUT = "LLM_TIMEOUT"
+    LLM_RATE_LIMIT = "LLM_RATE_LIMIT"
+    LLM_EMPTY_RESPONSE = "LLM_EMPTY_RESPONSE"
+    LLM_AUTH = "LLM_AUTH"
+    LLM_BAD_REQUEST = "LLM_BAD_REQUEST"
+    LLM_PARSE = "LLM_PARSE"
+    LLM_CONTEXT_WINDOW = "LLM_CONTEXT_WINDOW"
+    LLM_PAYLOAD_TOO_LARGE = "LLM_PAYLOAD_TOO_LARGE"
+    LLM_BILLING = "LLM_BILLING"
+    LLM_OVERLOADED = "LLM_OVERLOADED"
+    LLM_SERVER = "LLM_SERVER"
+    LLM_CONTENT_POLICY = "LLM_CONTENT_POLICY"
+    LLM_IMAGE_TOO_LARGE = "LLM_IMAGE_TOO_LARGE"
+    LLM_MULTIMODAL_TOOL_CONTENT = "LLM_MULTIMODAL_TOOL_CONTENT"
+    LLM_INVALID_REQUEST_STATE = "LLM_INVALID_REQUEST_STATE"
+    LLM_RESOURCE_UNAVAILABLE = "LLM_RESOURCE_UNAVAILABLE"
+    LLM_UNUSABLE_RESPONSE = "LLM_UNUSABLE_RESPONSE"
+    MODEL_CALL_EXHAUSTED = "MODEL_CALL_EXHAUSTED"
+    MODEL_CALL_DEADLINE_EXCEEDED = "MODEL_CALL_DEADLINE_EXCEEDED"
+    MODEL_CALL_BUDGET_EXCEEDED = "MODEL_CALL_BUDGET_EXCEEDED"
+    MODEL_ROUTE_UNAVAILABLE = "MODEL_ROUTE_UNAVAILABLE"
+    MODEL_CAPABILITY_UNSATISFIED = "MODEL_CAPABILITY_UNSATISFIED"
+    MODEL_GOVERNANCE_VIOLATION = "MODEL_GOVERNANCE_VIOLATION"
+    MODEL_CALL_IN_DOUBT = "MODEL_CALL_IN_DOUBT"
+
+    # Externally hosted Tool service execution tier
+    SERVICE_CALL_EXHAUSTED = "SERVICE_CALL_EXHAUSTED"
+    SERVICE_CALL_DEADLINE_EXCEEDED = "SERVICE_CALL_DEADLINE_EXCEEDED"
+    SERVICE_CALL_IN_DOUBT = "SERVICE_CALL_IN_DOUBT"
+    SERVICE_ROUTE_UNAVAILABLE = "SERVICE_ROUTE_UNAVAILABLE"
+
+    # Router tier (model selection / provider registry)
+    ROUTER_MODEL_NOT_FOUND = "ROUTER_MODEL_NOT_FOUND"
+    ROUTER_PROVIDER_NOT_FOUND = "ROUTER_PROVIDER_NOT_FOUND"
+
+    # Router control-plane tier (operator model holds)
+
+    # Tool tier
+    TOOL = "TOOL"
+    TOOL_VALIDATION = "TOOL_VALIDATION"
+    TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
+    TOOL_NOT_CONFIGURED = "TOOL_NOT_CONFIGURED"
+    TOOL_PERMISSION_DENIED = "TOOL_PERMISSION_DENIED"
+    TOOL_NON_RETRYABLE = "TOOL_NON_RETRYABLE"
+    TOOL_RETRYABLE = "TOOL_RETRYABLE"
+
+    # File Operations bounded context
+    FILE_STALE_SNAPSHOT = "FILE_STALE_SNAPSHOT"
+    FILE_IDENTITY_CHANGED = "FILE_IDENTITY_CHANGED"
+    FILE_CONTENT_CHANGED = "FILE_CONTENT_CHANGED"
+    FILE_LOCK_TIMEOUT = "FILE_LOCK_TIMEOUT"
+    FILE_LOCK_CANCELLED = "FILE_LOCK_CANCELLED"
+    FILE_ENCODING_REJECTED = "FILE_ENCODING_REJECTED"
+    FILE_SNAPSHOT_DURABILITY = "FILE_SNAPSHOT_DURABILITY"
+    FILE_JOURNAL_DURABILITY = "FILE_JOURNAL_DURABILITY"
+    FILE_METADATA_PRESERVATION = "FILE_METADATA_PRESERVATION"
+    FILE_PUBLISH = "FILE_PUBLISH"
+    FILE_UNSUPPORTED_FILESYSTEM = "FILE_UNSUPPORTED_FILESYSTEM"
+    FILE_RECOVERY_IN_DOUBT = "FILE_RECOVERY_IN_DOUBT"
+    FILE_REVIEW_CONFLICT = "FILE_REVIEW_CONFLICT"
+    FILE_REWIND_FAILED = "FILE_REWIND_FAILED"
+    FILE_RECOVERY_FENCE = "FILE_RECOVERY_FENCE"
+    FILE_SEARCH_PATTERN = "FILE_SEARCH_PATTERN"
+    FILE_SEARCH_DISCOVERY = "FILE_SEARCH_DISCOVERY"
+    FILE_SEARCH_CURSOR = "FILE_SEARCH_CURSOR"
+    FILE_READ_RANGE = "FILE_READ_RANGE"
+    FILE_READ_CURSOR = "FILE_READ_CURSOR"
+    FILE_PDF_PROCESSING = "FILE_PDF_PROCESSING"
+    FILE_DOCUMENT_EXTRACTION = "FILE_DOCUMENT_EXTRACTION"
+    FILE_DOCUMENT_RESOURCE_LIMIT = "FILE_DOCUMENT_RESOURCE_LIMIT"
+    FILE_BINARY_CONTENT = "FILE_BINARY_CONTENT"
+
+    # Media generation tier (mote.product.toolsets.builtin.generate_media)
+    MEDIA_GENERATION_RETRYABLE = "MEDIA_GENERATION_RETRYABLE"
+    MEDIA_GENERATION_PERMANENT = "MEDIA_GENERATION_PERMANENT"
+
+    # Graph execution tier (mote.runtime.tools.bggraph)
+    GRAPH_ROUTER = "GRAPH_ROUTER"
+    GRAPH_RECURSION = "GRAPH_RECURSION"
+    GRAPH_BATCH_FAILURE = "GRAPH_BATCH_FAILURE"
+    GRAPH_NODE_TIMEOUT = "GRAPH_NODE_TIMEOUT"
+    GRAPH_NODE_RETRY_EXHAUSTED = "GRAPH_NODE_RETRY_EXHAUSTED"
+    GRAPH_PARAM_TYPE_ERROR = "GRAPH_PARAM_TYPE_ERROR"
+
+    # Background-task tier (mote.orchestration.tasks.pool — whole-task outcomes)
+    BG_TASK_TIMEOUT = "BG_TASK_TIMEOUT"
+    BG_TASK_CANCELLED = "BG_TASK_CANCELLED"
+
+    # OAuth / credential tier (runtime model authentication)
+    OAUTH = "OAUTH"
+    OAUTH_CONFIG = "OAUTH_CONFIG"
+    OAUTH_HTTP = "OAUTH_HTTP"
+    OAUTH_REFRESH = "OAUTH_REFRESH"
+    OAUTH_JWT = "OAUTH_JWT"
+
+    # Config / environment tier
+    CONFIG_INVALID = "CONFIG_INVALID"
+    CONFIG_UNKNOWN_KEYS = "CONFIG_UNKNOWN_KEYS"
+    CONFIG_MISSING_API_KEY = "CONFIG_MISSING_API_KEY"
+    ENV_KEY_NOT_FOUND = "ENV_KEY_NOT_FOUND"
+
+    # Agent / role tier
+    AGENT_CONTEXT_NOT_SET = "AGENT_CONTEXT_NOT_SET"
+    SESSION_RESUME_IDENTITY_MISMATCH = "SESSION_RESUME_IDENTITY_MISMATCH"
+
+    # Typed run output tier
+    OUTPUT_CORRECTION_EXHAUSTED = "OUTPUT_CORRECTION_EXHAUSTED"
+    OUTPUT_COMMIT_INVALID_STATE = "OUTPUT_COMMIT_INVALID_STATE"
+    OUTPUT_VALIDATOR_FAILED = "OUTPUT_VALIDATOR_FAILED"
+    OUTPUT_VALIDATOR_UNAVAILABLE = "OUTPUT_VALIDATOR_UNAVAILABLE"
+    OUTPUT_RESUME_CONTRACT_MISMATCH = "OUTPUT_RESUME_CONTRACT_MISMATCH"
+    OUTPUT_COMMIT_FENCED = "OUTPUT_COMMIT_FENCED"
+    RUN_LEASE_UNAVAILABLE = "RUN_LEASE_UNAVAILABLE"
+    RUN_LEASE_COORDINATOR_UNAVAILABLE = "RUN_LEASE_COORDINATOR_UNAVAILABLE"
+
+    # Generic lease + managed interactive runtime tier
+    LEASE_FENCED = "LEASE_FENCED"
+    LEASE_UNAVAILABLE = "LEASE_UNAVAILABLE"
+    LEASE_COORDINATOR_UNAVAILABLE = "LEASE_COORDINATOR_UNAVAILABLE"
+    RUNTIME_NOT_FOUND = "RUNTIME_NOT_FOUND"
+    RUNTIME_ALIAS_CONFLICT = "RUNTIME_ALIAS_CONFLICT"
+    RUNTIME_INVALID_STATE = "RUNTIME_INVALID_STATE"
+    RUNTIME_REVISION_CONFLICT = "RUNTIME_REVISION_CONFLICT"
+    RUNTIME_DURABILITY_FAILED = "RUNTIME_DURABILITY_FAILED"
+
+    # Immutable Artifact tier
+    ARTIFACT_NOT_FOUND = "ARTIFACT_NOT_FOUND"
+    ARTIFACT_REVISION_CONFLICT = "ARTIFACT_REVISION_CONFLICT"
+    ARTIFACT_IDEMPOTENCY_CONFLICT = "ARTIFACT_IDEMPOTENCY_CONFLICT"
+    ARTIFACT_RETENTION = "ARTIFACT_RETENTION"
+
+    # Agent control-plane tier (mote.orchestration.environment)
+    AGENT_CONTROL = "AGENT_CONTROL"
+    AGENT_LIMIT_REACHED = "AGENT_LIMIT_REACHED"
+    AGENT_NOT_FOUND = "AGENT_NOT_FOUND"
+    AGENT_PATH_EXISTS = "AGENT_PATH_EXISTS"
+    AGENT_NOT_KNOWN = "AGENT_NOT_KNOWN"
+
+    # Resource / budget tier
+    RESOURCE_NO_MONEY = "RESOURCE_NO_MONEY"
+
+
+class RecoveryAction(StrEnum):
+    """Suggested recovery for an error — a *hint* for the retry/failover loop.
+
+    ``MoteError.recovery`` derives a sensible default from ``retryable`` (RETRY
+    vs ABORT); concrete exceptions override ``default_recovery`` when a more
+    specific action applies (e.g. context overflow → COMPRESS, auth/billing →
+    ROTATE_CREDENTIAL).
+
+    Runtime classifies these hints into provider-neutral failover decisions.
+    ``AttemptOrchestrator`` owns every retry/switch/rotation decision; request
+    repairs are applied by ``CanonicalRequestTransformer``. The exception layer
+    only emits hints and never imports Runtime policy or transformers.
+    """
+
+    ABORT = "abort"  # give up — surface to caller (default for non-retryable)
+    RETRY = "retry"  # retry the same request, typically with backoff
+    COMPRESS = "compress"  # request too large — compress context then retry
+    ROTATE_CREDENTIAL = "rotate_credential"  # auth/billing — switch key/account
+    FALLBACK = "fallback"  # switch to a different model / provider
+    # ── Reserved: "repair the outgoing request, then retry the same provider" ──
+    SHRINK_IMAGE = "shrink_image"  # an image part exceeds the provider's per-image limit
+    DOWNGRADE_TOOL_CONTENT = "downgrade_tool_content"  # provider rejects list-type tool content
+    STRIP_REQUEST_STATE = "strip_request_state"  # drop opaque request state the provider rejects

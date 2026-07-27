@@ -18,15 +18,15 @@ import asyncio
 
 import pytest
 
-from mote.sandbox import resources
-from mote.sandbox.resources import (
+from mote.runtime.sandbox import resources
+from mote.runtime.sandbox.resources import (
     ResourceLimits,
     cgroup_limits_available,
     cpu_controller_delegated,
     rlimit_prelude,
     systemd_run_prefix,
 )
-from mote.sandbox.runtime import SandboxRuntime
+from mote.runtime.sandbox.runtime import SandboxRuntime
 
 _HAS_CGROUP = cgroup_limits_available()
 
@@ -285,7 +285,7 @@ class TestRlimitFallbackEndToEnd:
         import os
         import shlex
 
-        import mote.sandbox.runtime as rtmod
+        import mote.runtime.sandbox.runtime as rtmod
 
         monkeypatch.setattr(rtmod, "cgroup_limits_available", lambda: False)
         rt = SandboxRuntime(backend="none", harden_process=False, network="open", memory_max="128M")

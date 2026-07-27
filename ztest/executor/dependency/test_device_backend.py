@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import DeviceConfig
-from mote.executor.dependency._device import android_adb
-from mote.executor.dependency._device.backend import DeviceError, NullDeviceBackend, select_device_backend
+from mote.contracts.settings.device import DeviceConfig
+from mote.runtime.tools.dependency._device import android_adb
+from mote.runtime.tools.dependency._device.backend import DeviceError, NullDeviceBackend, select_device_backend
 
 
 def _run(coro):

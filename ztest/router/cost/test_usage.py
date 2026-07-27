@@ -1,7 +1,7 @@
 """TokenUsage adapters + accumulation."""
 from openai.types import CompletionUsage
 
-from mote.router.cost import EMPTY_USAGE, TokenUsage
+from mote.runtime.models.cost import EMPTY_USAGE, TokenUsage
 
 
 def test_from_openai_dict_with_details():
@@ -47,6 +47,24 @@ def test_from_anthropic_reconstructs_input_total():
     assert u.cache_creation_tokens == 40
     assert u.non_cached_input() == 500
     assert u.total_tokens == 800 + 40 + 90
+
+
+def test_from_usage_autodetects_responses_input_output_shape():
+    usage = TokenUsage.from_usage(
+        {
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "total_tokens": 150,
+            "input_tokens_details": {"cached_tokens": 20},
+            "output_tokens_details": {"reasoning_tokens": 8},
+        }
+    )
+
+    assert usage.input_tokens == 120
+    assert usage.cached_input_tokens == 20
+    assert usage.output_tokens == 30
+    assert usage.reasoning_tokens == 8
+    assert usage.total_tokens == 150
 
 
 def test_from_usage_autodetect():

@@ -13,7 +13,17 @@ from __future__ import annotations
 
 import pytest
 
-from mote.cli.view import (
+from mote.contracts.events.types import (
+    LLMStreamCommittedEvent,
+    LLMStreamDeltaEvent,
+    LLMStreamDiscardedEvent,
+    OutputCommittedEvent,
+    OutputSnapshotEvent,
+    OutputSnapshotInvalidatedEvent,
+    RuntimeDurabilityChangedEvent,
+)
+from mote.product.cli.view import (
+    AttemptStreamDiscarded,
     BaseProjector,
     Capabilities,
     ConversationCompacted,
@@ -21,16 +31,16 @@ from mote.cli.view import (
     MessageBlockDelta,
     MessageBlockStarted,
     Notice,
-    RetryStatus,
+    RuntimeDurabilityStatus,
     SystemReminder,
     TaskProgress,
     ToolCallCompleted,
     ToolCallStarted,
     ViewProjector,
 )
-from mote.common.events.types import OutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
-from mote.common.i18n import keys as K
-from mote.common.i18n import t
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
+from mote.ztest.artifact_fakes import artifact_media
 
 from .conftest import (
     RecordingConsumer,
@@ -40,11 +50,10 @@ from .conftest import (
     ev_error,
     ev_message,
     ev_post_tool,
-    ev_pre_tool,
     ev_progress,
-    ev_retry,
     ev_stream_end,
     ev_system_reminder,
+    ev_tool_started,
 )
 
 # --------------------------------------------------------------------------
@@ -68,6 +77,26 @@ def test_first_delta_opens_block_then_passes_through():
 def test_empty_delta_is_dropped():
     p = ViewProjector()
     assert p.project(ev_delta("")) == []
+
+
+def test_runtime_durability_change_projects_to_human_status():
+    out = ViewProjector().project(
+        RuntimeDurabilityChangedEvent(
+            runtime_id="runtime-1",
+            runtime_kind="canvas",
+            alias="main",
+            state="lagging",
+            current_revision=4,
+            recoverable_revision=2,
+            detail="OSError: unavailable",
+        )
+    )
+
+    assert len(out) == 1
+    assert isinstance(out[0], RuntimeDurabilityStatus)
+    assert out[0].runtime_kind == "canvas"
+    assert out[0].current_revision == 4
+    assert out[0].recoverable_revision == 2
 
 
 def test_streamed_message_completes_with_streamed_true():
@@ -215,7 +244,7 @@ def test_system_reminder_split_tool_menu_lists_names():
 def test_pre_tool_headline_and_body():
     p = ViewProjector()
     # A whole-file write = Edit with an empty old_string; new_string is the body.
-    out = p.project(ev_pre_tool("Edit", {"file_path": "a.py", "old_string": "", "new_string": "print(1)\n"}))
+    out = p.project(ev_tool_started("Edit", {"file_path": "a.py", "old_string": "", "new_string": "print(1)\n"}))
     assert len(out) == 1
     started = out[0]
     assert isinstance(started, ToolCallStarted)
@@ -228,7 +257,7 @@ def test_pre_tool_headline_and_body():
 
 def test_pre_tool_bash_has_body_no_headline():
     p = ViewProjector()
-    out = p.project(ev_pre_tool("Bash", {"command": "ls -la"}))
+    out = p.project(ev_tool_started("Bash", {"command": "ls -la"}))
     started = out[0]
     assert started.headline == ""
     assert started.body == "ls -la"
@@ -237,12 +266,12 @@ def test_pre_tool_bash_has_body_no_headline():
 
 def test_pre_tool_ask_user_question_suppressed():
     p = ViewProjector()
-    assert p.project(ev_pre_tool("AskUserQuestion", {"questions": []})) == []
+    assert p.project(ev_tool_started("AskUserQuestion", {"questions": []})) == []
 
 
 def test_unknown_tool_shows_plain_key_value_body():
     p = ViewProjector()
-    out = p.project(ev_pre_tool("MysteryTool", {"x": 1, "y": "z"}))
+    out = p.project(ev_tool_started("MysteryTool", {"x": 1, "y": "z"}))
     started = out[0]
     # Plain "key: value" lines — no JSON braces, no json lexer.
     assert started.lexer is None
@@ -336,7 +365,13 @@ def test_summary_search_files_mode():
 
 def test_summary_search_count_mode():
     p = ViewProjector()
-    out = p.project(ev_post_tool("Search", "/a:5\n/b:2\n\nFound 7 total occurrences across 2 files", success=True))
+    out = p.project(
+        ev_post_tool(
+            "Search",
+            "/a:5\n/b:2\n\nFound 7 total occurrences across 2 files",
+            success=True,
+        )
+    )
     assert out[0].summary == t(K.SUMMARY_GREP_MATCHES_FILES, matches=7, files=2)
 
 
@@ -373,12 +408,22 @@ def test_summary_whole_file_write_created_and_overwritten():
     p = ViewProjector()
     fc_create = [SimpleNamespace(path="/a.py", old="", new="x\n" * 42)]
     created = p.project(
-        ev_post_tool("Edit", "The file /a.py has been created successfully.", success=True, file_changes=fc_create)
+        ev_post_tool(
+            "Edit",
+            "The file /a.py has been created successfully.",
+            success=True,
+            file_changes=fc_create,
+        )
     )
     assert created[0].summary == t(K.SUMMARY_CREATED_LINES, count=42)
     fc_overwrite = [SimpleNamespace(path="/a.py", old="a\nb\nc\n", new="X\nY\n")]
     updated = p.project(
-        ev_post_tool("Edit", "The file /a.py has been updated successfully.", success=True, file_changes=fc_overwrite)
+        ev_post_tool(
+            "Edit",
+            "The file /a.py has been updated successfully.",
+            success=True,
+            file_changes=fc_overwrite,
+        )
     )
     assert updated[0].summary == t(K.SUMMARY_EDIT_ADDED_REMOVED, added=2, removed=3)
 
@@ -389,7 +434,12 @@ def test_summary_edit_reports_added_removed_from_file_changes():
 
     fc = [SimpleNamespace(path="/a.py", old="a\nb\nc\n", new="a\nX\nc\nd\n")]
     out = p.project(
-        ev_post_tool("Edit", "The file /a.py has been updated successfully.", success=True, file_changes=fc)
+        ev_post_tool(
+            "Edit",
+            "The file /a.py has been updated successfully.",
+            success=True,
+            file_changes=fc,
+        )
     )
     assert out[0].summary == t(K.SUMMARY_EDIT_ADDED_REMOVED, added=2, removed=1)
 
@@ -400,7 +450,12 @@ def test_summary_edit_create_is_all_additions():
 
     fc = [SimpleNamespace(path="/n.py", old="", new="x\ny\nz\n")]
     out = p.project(
-        ev_post_tool("Edit", "The file /n.py has been created successfully.", success=True, file_changes=fc)
+        ev_post_tool(
+            "Edit",
+            "The file /n.py has been created successfully.",
+            success=True,
+            file_changes=fc,
+        )
     )
     assert out[0].summary == t(K.SUMMARY_CREATED_LINES, count=3)
 
@@ -413,9 +468,14 @@ def test_summary_bash_falls_back_to_first_line():
 
 
 def test_compaction_folds_to_conversation_compacted():
-    """A COMPACTION_CHECKPOINT surfaces as a ConversationCompacted boundary marker."""
+    """CONTEXT_COMPACTED surfaces as a ConversationCompacted boundary marker."""
     p = ViewProjector()
-    out = p.project(ev_compaction(summary="recap of earlier turns", messages=[1, 2, 3, 4]))
+    out = p.project(
+        ev_compaction(
+            summary="recap of earlier turns",
+            model_context_messages=[1, 2, 3, 4],
+        )
+    )
     assert len(out) == 1
     ev = out[0]
     assert isinstance(ev, ConversationCompacted)
@@ -424,16 +484,20 @@ def test_compaction_folds_to_conversation_compacted():
 
 
 def test_history_edited_folds_to_nothing_no_compaction_marker():
-    """A react-unit delete is persisted as a checkpoint but MUST NOT surface a
+    """A durable react-unit delete MUST NOT surface a
     ``ConversationCompacted`` boundary marker. The projector ignores the source
     ``HistoryEditedEvent`` by construction (unknown name → ``[]``), so the delete
     silently prunes history with no "conversation compacted" UI."""
-    from mote.common.events.types import HISTORY_EDITED
+    from mote.contracts.events.types import HISTORY_EDITED
 
     from .conftest import AgentEvt
 
     p = ViewProjector()
-    ev = AgentEvt(HISTORY_EDITED, messages=[1, 2, 3], reason="delete")
+    ev = AgentEvt(
+        HISTORY_EDITED,
+        remaining_messages=[1, 2, 3],
+        reason="delete",
+    )
     assert p.project(ev) == []
 
 
@@ -533,8 +597,8 @@ def test_post_tool_media_block_from_structured_image():
     ``event.media``; the projector resolves the path and emits the block directly,
     independent of the ``tool_response`` text.
     """
-    from mote.cli.contracts.view import MediaBlock
-    from mote.executor.tool_result import ToolMedia
+    from mote.product.cli.contracts.view import MediaBlock
+    from mote.runtime.tools.tool_result import ToolMedia
 
     p = ViewProjector()
     out = p.project(
@@ -542,7 +606,7 @@ def test_post_tool_media_block_from_structured_image():
             "Read",
             "Read image /tmp/pic.png (png, 42 bytes). Shown below.",
             tool_input={"file_path": "/tmp/pic.png"},
-            media=[ToolMedia(kind="image", ref="/tmp/pic.png")],
+            media=[artifact_media("image", ref="/tmp/pic.png")],
         )
     )
     assert isinstance(out[0], ToolCallCompleted)
@@ -559,8 +623,8 @@ def test_post_tool_media_block_from_structured_pdf():
 
     This is the P1 gap the old sniff couldn't cover — visual PDF reads now render.
     """
-    from mote.cli.contracts.view import MediaBlock
-    from mote.executor.tool_result import ToolMedia
+    from mote.product.cli.contracts.view import MediaBlock
+    from mote.runtime.tools.tool_result import ToolMedia
 
     p = ViewProjector()
     out = p.project(
@@ -568,7 +632,7 @@ def test_post_tool_media_block_from_structured_pdf():
             "Read",
             "Read PDF /tmp/doc.pdf (9000 bytes). Shown below.",
             tool_input={"file_path": "/tmp/doc.pdf"},
-            media=[ToolMedia(kind="pdf", ref="/tmp/doc.pdf")],
+            media=[artifact_media("pdf", ref="/tmp/doc.pdf")],
         )
     )
     media = [e for e in out if isinstance(e, MediaBlock)]
@@ -584,7 +648,7 @@ def test_post_tool_media_empty_list_emits_no_block():
     field is the structured fact ("this result carries no media") and wins over
     the legacy prefix heuristic.
     """
-    from mote.cli.contracts.view import MediaBlock
+    from mote.product.cli.contracts.view import MediaBlock
 
     p = ViewProjector()
     out = p.project(
@@ -601,15 +665,15 @@ def test_post_tool_media_empty_list_emits_no_block():
 def test_post_tool_media_ref_without_path_degrades():
     """A structured artifact with an empty ``ref`` (bytes-only, e.g. a screenshot)
     still emits a block, degrading ``alt`` to the media kind for a text host."""
-    from mote.cli.contracts.view import MediaBlock
-    from mote.executor.tool_result import ToolMedia
+    from mote.product.cli.contracts.view import MediaBlock
+    from mote.runtime.tools.tool_result import ToolMedia
 
     p = ViewProjector()
     out = p.project(
         ev_post_tool(
             "web_browser",
             "[screenshot of the active tab; shown below]",
-            media=[ToolMedia(kind="image", ref="")],
+            media=[artifact_media("image", ref="")],
         )
     )
     media = [e for e in out if isinstance(e, MediaBlock)]
@@ -626,8 +690,8 @@ def test_post_tool_file_diff_block_from_structured_change():
     independent of the tool_response text (which says "updated successfully", not a
     diff). The ToolCallCompleted still rides alongside.
     """
-    from mote.cli.contracts.view import FileDiffBlock
-    from mote.executor.tool_result import FileChange
+    from mote.product.cli.contracts.view import FileDiffBlock
+    from mote.runtime.tools.tool_result import FileChange
 
     p = ViewProjector()
     out = p.project(
@@ -649,8 +713,8 @@ def test_post_tool_file_diff_block_from_structured_change():
 
 def test_post_tool_multiple_file_changes_fold_to_multiple_blocks():
     """A tool may touch several files → one ``FileDiffBlock`` per change."""
-    from mote.cli.contracts.view import FileDiffBlock
-    from mote.executor.tool_result import FileChange
+    from mote.product.cli.contracts.view import FileDiffBlock
+    from mote.runtime.tools.tool_result import FileChange
 
     p = ViewProjector()
     out = p.project(
@@ -678,7 +742,7 @@ def test_post_tool_no_file_changes_emits_no_diff_block():
     Bash's diff-shaped text still falls to the ``_looks_like_diff`` path in the
     completed event — the structured block is only for old/new-bearing tools.
     """
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     p = ViewProjector()
     out = p.project(ev_post_tool("Bash", "some plain output"))
@@ -693,7 +757,7 @@ def test_git_diff_text_classifies_as_diff_without_file_diff_block():
     carries no ``old``/``new`` fact, so it takes the text path and emits no
     ``FileDiffBlock``.
     """
-    from mote.cli.contracts.view import RESULT_KIND_DIFF, FileDiffBlock
+    from mote.product.cli.contracts.view import RESULT_KIND_DIFF, FileDiffBlock
 
     p = ViewProjector()
     body = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new"
@@ -711,8 +775,8 @@ def test_structured_change_emits_block_without_text_diff_classification():
     diff text, so the completion is classified ``plain`` — the text-diff path is
     not triggered for a structured change.
     """
-    from mote.cli.contracts.view import RESULT_KIND_PLAIN, FileDiffBlock
-    from mote.executor.tool_result import FileChange
+    from mote.product.cli.contracts.view import RESULT_KIND_PLAIN, FileDiffBlock
+    from mote.runtime.tools.tool_result import FileChange
 
     p = ViewProjector()
     out = p.project(
@@ -764,18 +828,6 @@ def test_llm_error_folds_to_nothing():
     assert p.project(ev_error(error="boom")) == []
 
 
-def test_llm_retry_fold():
-    p = ViewProjector()
-    out = p.project(
-        ev_retry(attempt=2, max_attempts=6, delay_ms=3000.0, error="overloaded", error_type="LLMOverloadedError")
-    )
-    assert len(out) == 1
-    rs = out[0]
-    assert isinstance(rs, RetryStatus)
-    assert (rs.attempt, rs.max_attempts, rs.delay_ms) == (2, 6, 3000.0)
-    assert (rs.error, rs.error_type) == ("overloaded", "LLMOverloadedError")
-
-
 def test_unknown_event_folds_to_nothing():
     p = ViewProjector()
     from .conftest import AgentEvt
@@ -804,6 +856,84 @@ def test_base_projector_routes_sync_handle_to_consumer():
     # streaming consumer sees: block-started + delta
     kinds = [type(e).__name__ for e in consumer.events]
     assert kinds == ["MessageBlockStarted", "MessageBlockDelta"]
+
+
+def test_nonrollback_consumer_releases_only_committed_attempt_stream():
+    consumer = RecordingConsumer(Capabilities(streaming=True))
+    bp = BaseProjector([consumer], projector=ViewProjector())
+
+    bp.handle_sync(
+        LLMStreamDeltaEvent(
+            token="bad",
+            model_call_id="call",
+            attempt_id="call:1",
+            sequence=1,
+            provisional=True,
+        )
+    )
+    bp.handle_sync(
+        LLMStreamDiscardedEvent(
+            model_call_id="call",
+            attempt_id="call:1",
+            chunk_count=1,
+        )
+    )
+    assert consumer.events == []
+
+    bp.handle_sync(
+        LLMStreamDeltaEvent(
+            token="good",
+            model_call_id="call",
+            attempt_id="call:2",
+            sequence=1,
+            provisional=True,
+        )
+    )
+    bp.handle_sync(
+        LLMStreamCommittedEvent(
+            model_call_id="call",
+            attempt_id="call:2",
+            chunk_count=1,
+        )
+    )
+
+    assert [type(event).__name__ for event in consumer.events] == [
+        "MessageBlockStarted",
+        "MessageBlockDelta",
+    ]
+    assert consumer.events[1].text == "good"
+    assert consumer.events[1].provisional is False
+
+
+def test_rollback_consumer_receives_live_delta_and_discard_terminal():
+    consumer = RecordingConsumer(Capabilities(streaming=True, provisional_rollback=True))
+    bp = BaseProjector([consumer], projector=ViewProjector())
+
+    bp.handle_sync(
+        LLMStreamDeltaEvent(
+            token="draft",
+            model_call_id="call",
+            attempt_id="call:1",
+            sequence=1,
+            provisional=True,
+        )
+    )
+    bp.handle_sync(
+        LLMStreamDiscardedEvent(
+            model_call_id="call",
+            attempt_id="call:1",
+            chunk_count=1,
+            reason="timeout",
+        )
+    )
+
+    assert [type(event).__name__ for event in consumer.events] == [
+        "MessageBlockStarted",
+        "MessageBlockDelta",
+        "AttemptStreamDiscarded",
+    ]
+    assert isinstance(consumer.events[-1], AttemptStreamDiscarded)
+    assert consumer.events[-1].reason == "timeout"
 
 
 @pytest.mark.asyncio

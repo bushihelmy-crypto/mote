@@ -53,6 +53,7 @@ dependencies = [
     # Terminal UI
     "rich",
     "textual",
+    "pyte>=0.8.2,<1",
     # Tokenizers / ML routing
     "numpy",
     "scikit-learn",
@@ -75,10 +76,10 @@ dependencies = [
     "pdfminer.six",
     "markdownify",
     "pylatexenc",  # flatten LaTeX math ($…$/$$…$$) to Unicode for terminal render
-    # Multi-language CodeMap (JS/TS/Go/Rust/Java/C#/C/C++ via tree-sitter). Behind
-    # an import guard in ts_runtime.py: a failed native build degrades to Python-only.
-    "tree-sitter>=0.22",  # NEW get_parser / Parser(Language(ptr)) API
-    "tree-sitter-language-pack>=1.0",
+    # Multi-language CodeMap (JS/TS/Go/Rust/Java/C#/C/C++ via tree-sitter). Keep
+    # the Python binding and precompiled grammars as one validated native pair.
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==1.12.5",
     # Observability
     "langfuse",
     "sentry-sdk",
@@ -95,7 +96,7 @@ dev = ["pytest", "black", "isort", "flake8", "pyright", "pre-commit"]
 temporal = ["temporalio>=1.7"]
 
 [project.scripts]
-mote = "mote.cli.__main__:main"
+mote = "mote.product.cli.__main__:main"
 
 [tool.setuptools]
 # packages / package-dir are computed imperatively in setup.py so the current

@@ -1,7 +1,7 @@
 """Tests for the backend-agnostic device outline (parse / stabilize / render / diff)."""
 from __future__ import annotations
 
-from mote.executor.dependency._device.outline import (
+from mote.runtime.tools.dependency._device.outline import (
     RawNode,
     RawOutline,
     build_snapshot,

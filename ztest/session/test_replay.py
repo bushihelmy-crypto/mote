@@ -1,19 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.session.replay`` — rebuild history from a rollout.
-
-Covers: plain message stream replays in order; a ``compacted`` checkpoint resets
-the history to its self-contained ``replacement_history``; messages after a
-checkpoint append onto it; meta is captured; corrupt/unloadable payloads are
-skipped (counted) without aborting; turn_context is ignored for history.
-"""
+"""Tests for deterministic transcript and model-context session projections."""
 from __future__ import annotations
 
-import json
+from datetime import datetime, timezone
 
-from mote.common.schema import AIMessage, UserMessage
-from mote.session.events import (
-    CompactedEvent,
+import pytest
+
+from mote.contracts.events import EventId, EventType, StreamId
+from mote.contracts.ports.event_journal import UncommittedFact
+from mote.contracts.runtimes import (
+    CheckpointFidelity,
+    RuntimeCheckpoint,
+    RuntimeCommitFact,
+    RuntimeProjectionAck,
+    RuntimeProjectionIntent,
+    RuntimeProjectionRequest,
+)
+from mote.contracts.schema import AIMessage, UserMessage
+from mote.runtime.events.journal import LocalEventJournal
+from mote.runtime.session.codec import session_stream_id
+from mote.runtime.session.events import (
+    ContextCompactedFact,
+    HistoryEditedFact,
     KernelStateEvent,
     MessageEvent,
     OutputAcceptedEvent,
@@ -24,79 +33,170 @@ from mote.session.events import (
     OutputPublicationQueuedEvent,
     OutputPublishedEvent,
     OutputValidationRejectedEvent,
+    RuntimeCheckpointEvent,
+    RuntimeCommitEvent,
+    RuntimeProjectionAcknowledgedEvent,
     SessionMetaEvent,
     TerminalStateEvent,
     TurnContextEvent,
 )
-from mote.session.log import SessionLog
-from mote.session.replay import replay
+from mote.runtime.session.log import SessionLog
+from mote.runtime.session.replay import replay
 
 
 def _fresh_log(tmp_path, sid="r"):
     log = SessionLog(sid, base_dir=str(tmp_path))
-    log.create(SessionMetaEvent(session_id=sid, working_dir="/w", project_root="/p"))
+    log.commit_offline(SessionMetaEvent(session_id=sid, working_dir="/w", project_root="/p"))
     return log
 
 
 def test_replay_plain_history(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="hi")))
-    log.append(MessageEvent(message=AIMessage(content="hello")))
+    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
+    log.commit_offline(MessageEvent(message=AIMessage(content="hello")))
     result = replay(log)
-    assert [m.content for m in result.messages] == ["hi", "hello"]
+    assert [m.content for m in result.transcript_messages] == ["hi", "hello"]
+    assert [m.content for m in result.model_context_messages] == ["hi", "hello"]
     assert result.message_events == 2
-    assert result.checkpoints == 0
-    assert result.from_checkpoint is False
+    assert result.compactions == 0
     assert result.meta["session_id"] == "r"
     assert result.meta["working_dir"] == "/w"
 
 
-def test_compacted_resets_to_replacement_history(tmp_path):
+def test_compaction_changes_model_context_without_overwriting_transcript(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="old-1")))
-    log.append(MessageEvent(message=UserMessage(content="old-2")))
-    # Compaction folds the two olds into a summary+tail checkpoint.
-    log.append(
-        CompactedEvent(
-            messages=[
+    old_1 = UserMessage(content="old-1")
+    old_2 = UserMessage(content="old-2")
+    log.commit_offline(MessageEvent(message=old_1))
+    log.commit_offline(MessageEvent(message=old_2))
+    log.commit_offline(
+        ContextCompactedFact(
+            model_context_messages=[
                 UserMessage(content="[summary of olds]"),
                 AIMessage(content="tail"),
             ],
+            source_message_ids=[str(old_1.id), str(old_2.id)],
             summary="s",
+            strategy="summarize",
         )
     )
     result = replay(log)
-    # Pre-checkpoint appends are discarded; history == replacement_history.
-    assert [m.content for m in result.messages] == ["[summary of olds]", "tail"]
-    assert result.from_checkpoint is True
-    assert result.checkpoints == 1
+    assert [m.content for m in result.transcript_messages] == ["old-1", "old-2"]
+    assert [m.content for m in result.model_context_messages] == [
+        "[summary of olds]",
+        "tail",
+    ]
+    assert result.compactions == 1
 
 
-def test_messages_after_checkpoint_append(tmp_path):
+def test_messages_after_compaction_append_to_both_projections(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="old")))
-    log.append(CompactedEvent(messages=[UserMessage(content="[summary]")], summary="s"))
-    log.append(MessageEvent(message=UserMessage(content="new-1")))
-    log.append(MessageEvent(message=AIMessage(content="new-2")))
+    old = UserMessage(content="old")
+    log.commit_offline(MessageEvent(message=old))
+    log.commit_offline(
+        ContextCompactedFact(
+            model_context_messages=[UserMessage(content="[summary]")],
+            source_message_ids=[str(old.id)],
+            summary="s",
+            strategy="summarize",
+        )
+    )
+    log.commit_offline(MessageEvent(message=UserMessage(content="new-1")))
+    log.commit_offline(MessageEvent(message=AIMessage(content="new-2")))
     result = replay(log)
-    assert [m.content for m in result.messages] == ["[summary]", "new-1", "new-2"]
+    assert [m.content for m in result.transcript_messages] == [
+        "old",
+        "new-1",
+        "new-2",
+    ]
+    assert [m.content for m in result.model_context_messages] == [
+        "[summary]",
+        "new-1",
+        "new-2",
+    ]
 
 
-def test_latest_checkpoint_wins(tmp_path):
+def test_latest_context_compaction_wins_only_for_model_projection(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(CompactedEvent(messages=[UserMessage(content="cp1")], summary="1"))
-    log.append(MessageEvent(message=UserMessage(content="mid")))
-    log.append(CompactedEvent(messages=[UserMessage(content="cp2")], summary="2"))
-    log.append(MessageEvent(message=UserMessage(content="after")))
+    first = UserMessage(content="first")
+    mid = UserMessage(content="mid")
+    cp1 = UserMessage(content="cp1")
+    log.commit_offline(MessageEvent(message=first))
+    log.commit_offline(
+        ContextCompactedFact(
+            model_context_messages=[cp1],
+            source_message_ids=[str(first.id)],
+            summary="1",
+        )
+    )
+    log.commit_offline(MessageEvent(message=mid))
+    log.commit_offline(
+        ContextCompactedFact(
+            model_context_messages=[UserMessage(content="cp2")],
+            source_message_ids=[str(cp1.id), str(mid.id)],
+            summary="2",
+        )
+    )
+    log.commit_offline(MessageEvent(message=UserMessage(content="after")))
     result = replay(log)
-    assert [m.content for m in result.messages] == ["cp2", "after"]
-    assert result.checkpoints == 2
+    assert [m.content for m in result.transcript_messages] == [
+        "first",
+        "mid",
+        "after",
+    ]
+    assert [m.content for m in result.model_context_messages] == ["cp2", "after"]
+    assert result.compactions == 2
+
+
+def test_history_delete_removes_ids_without_discarding_compacted_source_facts(
+    tmp_path,
+):
+    log = _fresh_log(tmp_path)
+    old = UserMessage(content="old")
+    recent = UserMessage(content="recent")
+    log.commit_offline(MessageEvent(message=old))
+    log.commit_offline(MessageEvent(message=recent))
+    summary = UserMessage(content="summary")
+    log.commit_offline(
+        ContextCompactedFact(
+            model_context_messages=[summary, recent],
+            source_message_ids=[str(old.id), str(recent.id)],
+            summary="s",
+        )
+    )
+    log.commit_offline(
+        HistoryEditedFact(
+            removed_message_ids=[str(recent.id)],
+            reason="delete",
+        )
+    )
+
+    result = replay(log)
+
+    assert [message.content for message in result.transcript_messages] == ["old"]
+    assert [message.content for message in result.model_context_messages] == ["summary"]
+    assert result.history_edits == 1
+
+
+def test_history_clear_empties_both_projections_without_rewriting_prior_facts(
+    tmp_path,
+):
+    log = _fresh_log(tmp_path)
+    log.commit_offline(MessageEvent(message=UserMessage(content="old")))
+    log.commit_offline(HistoryEditedFact(removed_message_ids=[], clear_all=True, reason="clear"))
+
+    result = replay(log)
+
+    assert result.transcript_messages == []
+    assert result.model_context_messages == []
 
 
 def test_output_state_survives_message_compaction(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(OutputCandidateReceivedEvent(candidate_id="c1", contract_id="test.report@1", raw={"count": "bad"}))
-    log.append(
+    log.commit_offline(
+        OutputCandidateReceivedEvent(candidate_id="c1", contract_id="test.report@1", raw={"count": "bad"})
+    )
+    log.commit_offline(
         OutputValidationRejectedEvent(
             candidate_id="c1",
             contract_id="test.report@1",
@@ -105,9 +205,16 @@ def test_output_state_survives_message_compaction(tmp_path):
             correction_allowed=True,
         )
     )
-    log.append(CompactedEvent(messages=[UserMessage(content="summary")]))
-    log.append(OutputCandidateReceivedEvent(candidate_id="c2", contract_id="test.report@1", raw={"count": 1}))
-    log.append(
+    original = UserMessage(content="original")
+    log.commit_offline(MessageEvent(message=original))
+    log.commit_offline(
+        ContextCompactedFact(
+            model_context_messages=[UserMessage(content="summary")],
+            source_message_ids=[str(original.id)],
+        )
+    )
+    log.commit_offline(OutputCandidateReceivedEvent(candidate_id="c2", contract_id="test.report@1", raw={"count": 1}))
+    log.commit_offline(
         OutputAcceptedEvent(
             candidate_id="c2",
             contract_id="test.report@1",
@@ -116,8 +223,8 @@ def test_output_state_survives_message_compaction(tmp_path):
             correction_attempts=1,
         )
     )
-    log.append(OutputCommitStartedEvent(candidate_id="c2", contract_id="test.report@1"))
-    log.append(
+    log.commit_offline(OutputCommitStartedEvent(candidate_id="c2", contract_id="test.report@1"))
+    log.commit_offline(
         OutputCommittedEvent(
             candidate_id="c2",
             contract_id="test.report@1",
@@ -136,11 +243,12 @@ def test_output_state_survives_message_compaction(tmp_path):
             correction_attempts=1,
         )
     )
-    log.append(OutputPublishedEvent(candidate_id="c2", contract_id="test.report@1"))
+    log.commit_offline(OutputPublishedEvent(candidate_id="c2", contract_id="test.report@1"))
 
     result = replay(log)
 
-    assert [message.content for message in result.messages] == ["summary"]
+    assert [message.content for message in result.transcript_messages] == ["original"]
+    assert [message.content for message in result.model_context_messages] == ["summary"]
     assert result.output_state == {
         "status": "published",
         "candidate_id": "c2",
@@ -164,14 +272,27 @@ def test_output_state_survives_message_compaction(tmp_path):
 
 def test_unknown_event_is_ignored_without_hiding_later_facts(tmp_path):
     log = _fresh_log(tmp_path)
-    list(log.iter_raw())
-    with open(log.path, "a", encoding="utf-8") as file:
-        file.write(json.dumps({"type": "future_event", "payload": {"value": 1}}) + "\n")
-    log.append(MessageEvent(message=UserMessage(content="after-unknown")))
+    stream_id = StreamId(session_stream_id(log.session_id))
+    occurred_at = datetime.now(timezone.utc)
+    LocalEventJournal(log.path, stream_id).append_committed(
+        stream_id,
+        (
+            UncommittedFact(
+                event_id=EventId("future-event"),
+                event_type=EventType("mote.extension.future_event"),
+                schema_version=1,
+                occurred_at=occurred_at,
+                payload={"value": 1},
+            ),
+        ),
+        expected_version=1,
+    )
+    log = SessionLog(log.session_id, base_dir=str(tmp_path))
+    log.commit_offline(MessageEvent(message=UserMessage(content="after-unknown")))
 
     result = replay(log)
 
-    assert [message.content for message in result.messages] == ["after-unknown"]
+    assert [message.content for message in result.model_context_messages] == ["after-unknown"]
 
 
 def test_duplicate_output_fact_is_idempotent(tmp_path):
@@ -183,8 +304,8 @@ def test_duplicate_output_fact_is_idempotent(tmp_path):
         value={"count": 1},
         run_id="run-1",
     )
-    log.append(committed)
-    log.append(committed)
+    log.commit_offline(committed)
+    log.commit_offline(committed)
 
     state = replay(log).output_states["run-1"]
 
@@ -195,15 +316,111 @@ def test_duplicate_output_fact_is_idempotent(tmp_path):
 
 def test_turn_context_ignored(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="hi")))
-    log.append(TurnContextEvent(turn_id="t1", working_dir="/w"))
+    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
+    log.commit_offline(TurnContextEvent(turn_id="t1", working_dir="/w"))
     result = replay(log)
-    assert [m.content for m in result.messages] == ["hi"]
+    assert [m.content for m in result.model_context_messages] == ["hi"]
+
+
+def test_runtime_checkpoint_is_last_write_wins_per_readable_runtime(tmp_path):
+    log = _fresh_log(tmp_path)
+    first = RuntimeCheckpoint(
+        runtime_id="terminal-old",
+        kind="terminal",
+        epoch=1,
+        revision=1,
+        codec="terminal@1",
+        schema_version=1,
+        payload_ref="memory:first",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+    latest = RuntimeCheckpoint(
+        runtime_id="terminal-new",
+        kind="terminal",
+        epoch=2,
+        revision=3,
+        codec="terminal@1",
+        schema_version=1,
+        payload_ref="memory:latest",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+    secondary = RuntimeCheckpoint(
+        runtime_id="terminal-secondary",
+        kind="terminal",
+        alias="secondary",
+        epoch=1,
+        revision=4,
+        codec="terminal@1",
+        schema_version=1,
+        payload_ref="memory:secondary",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+    log.commit_offline(RuntimeCheckpointEvent(first, reason="write-commit"))
+    log.commit_offline(RuntimeCheckpointEvent(secondary, reason="write-commit"))
+    log.commit_offline(RuntimeCheckpointEvent(latest, reason="handoff-after"))
+
+    result = replay(log)
+
+    assert result.runtime_checkpoints == {
+        "terminal:default": latest,
+        "terminal:secondary": secondary,
+    }
+
+
+def test_runtime_commit_replays_only_unacknowledged_projection_work(tmp_path):
+    log = _fresh_log(tmp_path)
+    checkpoint = RuntimeCheckpoint(
+        runtime_id="canvas-1",
+        kind="canvas",
+        epoch=3,
+        revision=9,
+        codec="canvas+json@1",
+        schema_version=1,
+        payload_ref="memory:canvas",
+        fidelity=CheckpointFidelity.FULL,
+    )
+    completed = RuntimeProjectionIntent(
+        intent_id="svg",
+        projector="canvas-artifact",
+        schema_version=1,
+    )
+    pending = RuntimeProjectionIntent(
+        intent_id="drawio",
+        projector="canvas-artifact",
+        schema_version=1,
+    )
+    fact = RuntimeCommitFact(
+        commit_id="canvas-1.3.9",
+        checkpoint=checkpoint,
+        projections=(completed, pending),
+        reason="write-commit",
+    )
+    log.commit_offline(RuntimeCommitEvent(fact))
+    log.commit_offline(
+        RuntimeProjectionAcknowledgedEvent(
+            RuntimeProjectionAck(
+                commit_id=fact.commit_id,
+                intent_id=completed.intent_id,
+            )
+        )
+    )
+    # A retried append of the same commit fact must not resurrect acknowledged work.
+    log.commit_offline(RuntimeCommitEvent(fact))
+
+    result = replay(log)
+
+    request = RuntimeProjectionRequest(
+        commit_id=fact.commit_id,
+        checkpoint=checkpoint,
+        intent=pending,
+    )
+    assert result.runtime_checkpoints == {"canvas:default": checkpoint}
+    assert result.pending_runtime_projections == {request.key: request}
 
 
 def test_publication_outbox_survives_crash_before_ack(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(
+    log.commit_offline(
         OutputCommittedEvent(
             candidate_id="c2",
             contract_id="test.report@1",
@@ -222,7 +439,7 @@ def test_publication_outbox_survives_crash_before_ack(tmp_path):
             run_id="run-1",
         )
     )
-    log.append(
+    log.commit_offline(
         OutputPublicationQueuedEvent(
             publication_id="pub-1",
             candidate_id="c2",
@@ -258,7 +475,7 @@ def test_publication_outbox_survives_crash_before_ack(tmp_path):
 
 def test_interleaved_agent_and_graph_outputs_fold_by_run_id(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(
+    log.commit_offline(
         OutputAcceptedEvent(
             candidate_id="agent-candidate",
             contract_id="mote.text@1",
@@ -268,7 +485,7 @@ def test_interleaved_agent_and_graph_outputs_fold_by_run_id(tmp_path):
             run_kind="agent",
         )
     )
-    log.append(
+    log.commit_offline(
         OutputAcceptedEvent(
             candidate_id="graph-candidate",
             contract_id="mote.graph-json@1",
@@ -278,7 +495,7 @@ def test_interleaved_agent_and_graph_outputs_fold_by_run_id(tmp_path):
             run_kind="graph",
         )
     )
-    log.append(
+    log.commit_offline(
         OutputCommitStartedEvent(
             candidate_id="agent-candidate",
             contract_id="mote.text@1",
@@ -301,7 +518,7 @@ def test_interleaved_agent_and_graph_outputs_fold_by_run_id(tmp_path):
 
 def test_migrated_output_replays_as_current_contract_acceptance(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(
+    log.commit_offline(
         OutputMigratedEvent(
             candidate_id="candidate-1",
             source_contract_id="test.integer@1",
@@ -329,37 +546,39 @@ def test_migrated_output_replays_as_current_contract_acceptance(tmp_path):
     assert state["migration_provenance"][0]["name"] == "integer-to-report"
 
 
-def test_corrupt_lines_skipped(tmp_path):
+def test_corrupt_v3_line_is_rejected(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="good")))
+    log.commit_offline(MessageEvent(message=UserMessage(content="good")))
     with open(log.path, "a", encoding="utf-8") as f:
         f.write("not json\n")
-    log.append(MessageEvent(message=AIMessage(content="also good")))
-    result = replay(log)
-    assert [m.content for m in result.messages] == ["good", "also good"]
+
+    reopened = SessionLog(log.session_id, base_dir=str(tmp_path))
+    with pytest.raises(RuntimeError, match="integrity failure"):
+        replay(reopened)
 
 
 def test_replay_missing_log_is_empty(tmp_path):
     log = SessionLog("nope", base_dir=str(tmp_path))
     result = replay(log)
-    assert result.messages == []
+    assert result.transcript_messages == []
+    assert result.model_context_messages == []
     assert result.meta is None
 
 
 def test_terminal_state_none_by_default(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="hi")))
+    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
     result = replay(log)
     assert result.terminal_state is None
 
 
 def test_terminal_state_captured(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="hi")))
-    log.append(TerminalStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Terminal"))
+    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
+    log.commit_offline(TerminalStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Terminal"))
     result = replay(log)
     # Terminal state is not part of the message-history rebuild.
-    assert [m.content for m in result.messages] == ["hi"]
+    assert [m.content for m in result.model_context_messages] == ["hi"]
     assert result.terminal_state == {
         "cwd": "/tmp",
         "env": {"FOO": "bar"},
@@ -369,8 +588,8 @@ def test_terminal_state_captured(tmp_path):
 
 def test_terminal_state_last_write_wins(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(TerminalStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
-    log.append(TerminalStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
+    log.commit_offline(TerminalStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
+    log.commit_offline(TerminalStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
     result = replay(log)
     assert result.terminal_state == {
         "cwd": "/second",
@@ -381,18 +600,18 @@ def test_terminal_state_last_write_wins(tmp_path):
 
 def test_kernel_state_none_by_default(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="hi")))
+    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
     result = replay(log)
     assert result.kernel_state is None
 
 
 def test_kernel_state_captured(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(MessageEvent(message=UserMessage(content="hi")))
-    log.append(KernelStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Jupyter"))
+    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
+    log.commit_offline(KernelStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Jupyter"))
     result = replay(log)
     # Kernel state is not part of the message-history rebuild.
-    assert [m.content for m in result.messages] == ["hi"]
+    assert [m.content for m in result.model_context_messages] == ["hi"]
     assert result.kernel_state == {
         "cwd": "/tmp",
         "env": {"FOO": "bar"},
@@ -402,8 +621,8 @@ def test_kernel_state_captured(tmp_path):
 
 def test_kernel_state_last_write_wins(tmp_path):
     log = _fresh_log(tmp_path)
-    log.append(KernelStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
-    log.append(KernelStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
+    log.commit_offline(KernelStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
+    log.commit_offline(KernelStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
     result = replay(log)
     assert result.kernel_state == {"cwd": "/second", "env": {"B": "2"}, "unset": ["A"]}
 
@@ -411,8 +630,8 @@ def test_kernel_state_last_write_wins(tmp_path):
 def test_terminal_and_kernel_states_are_independent(tmp_path):
     """Both restore on resume without clobbering each other (the split's point)."""
     log = _fresh_log(tmp_path)
-    log.append(TerminalStateEvent(cwd="/shell", env={"SH": "1"}, unset=[]))
-    log.append(KernelStateEvent(cwd="/kernel", env={"KE": "2"}, unset=[]))
+    log.commit_offline(TerminalStateEvent(cwd="/shell", env={"SH": "1"}, unset=[]))
+    log.commit_offline(KernelStateEvent(cwd="/kernel", env={"KE": "2"}, unset=[]))
     result = replay(log)
     assert result.terminal_state == {"cwd": "/shell", "env": {"SH": "1"}, "unset": []}
     assert result.kernel_state == {"cwd": "/kernel", "env": {"KE": "2"}, "unset": []}

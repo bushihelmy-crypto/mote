@@ -7,10 +7,10 @@ import types
 
 import pytest
 
-from mote.common.schema.messages import UserMessage
-from mote.common.schema.queue import MessageQueue
-from mote.environment.mailbox import Mailbox
-from mote.environment.runtime import FINAL_STATUSES, AgentRuntime, AgentStatus, is_final
+from mote.contracts.schema.messages import UserMessage
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.mailbox import Mailbox
+from mote.orchestration.environment.runtime import FINAL_STATUSES, AgentRuntime, AgentStatus, is_final
 
 
 class FakeRole:
@@ -37,8 +37,16 @@ class FakeRole:
 
 
 def test_is_final_classifies_statuses():
-    assert FINAL_STATUSES == frozenset({AgentStatus.COMPLETED, AgentStatus.ERRORED, AgentStatus.INTERRUPTED})
+    assert FINAL_STATUSES == frozenset(
+        {
+            AgentStatus.COMPLETED,
+            AgentStatus.REJECTED,
+            AgentStatus.ERRORED,
+            AgentStatus.INTERRUPTED,
+        }
+    )
     assert is_final(AgentStatus.COMPLETED)
+    assert is_final(AgentStatus.REJECTED)
     assert is_final(AgentStatus.ERRORED)
     assert is_final(AgentStatus.INTERRUPTED)
     assert not is_final(AgentStatus.IDLE)
@@ -83,6 +91,25 @@ async def test_run_one_turn_passes_message():
     assert rsp == "ran:hi"
     assert role.run_calls == ["hi"]
     assert rt.status == AgentStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_run_one_turn_preserves_rejected_outcome_and_status():
+    from mote.contracts.output import RunRejected, RunRejectionKind, TranscriptRef
+
+    async def reject(_):
+        return RunRejected(
+            kind=RunRejectionKind.PROMPT_ADMISSION,
+            reason="denied",
+            transcript=TranscriptRef(session_id="sess-1"),
+        )
+
+    rt = AgentRuntime(FakeRole(behavior=reject))
+    result = await rt.run_one_turn(with_message="blocked")
+
+    assert isinstance(result, RunRejected)
+    assert rt.last_run_result is result
+    assert rt.status == AgentStatus.REJECTED
 
 
 @pytest.mark.asyncio

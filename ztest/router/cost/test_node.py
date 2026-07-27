@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for CostNode — the fleet cost mirror tree."""
 
-from mote.router.cost import CostNode, CostTracker, TokenUsage, format_cost_tree
+from mote.runtime.models.cost import CostNode, CostTracker, TokenUsage, format_cost_tree
 
 
 def _node(path, agent_id=None, parent=None):

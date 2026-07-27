@@ -1,4 +1,4 @@
-"""Tests for :mod:`mote.executor.tasks.bggraph.base_node`."""
+"""Tests for :mod:`mote.orchestration.tasks.bggraph.base_node`."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from typing import Annotated
 
 import pytest
 
-from mote.executor.tasks.bggraph import END, START, BaseNode, BgGraph, From, GraphParamTypeError, GraphState, Stage
-from mote.executor.tasks.types import BgTaskResult
+from mote.orchestration.tasks.bggraph import END, START, BaseNode, BgGraph, From, GraphParamTypeError, GraphState, Stage
+from mote.orchestration.tasks.types import BgTaskResult
 
 from .conftest import S
 
@@ -383,7 +383,7 @@ async def test_runtime_type_mismatch_raises():
 
     # Pydantic coerces "5" → 5 for int fields, but let's test with extra="allow"
     # by setting state directly
-    from mote.executor.tasks.bggraph.engine import _validate_node_params_runtime
+    from mote.orchestration.tasks.bggraph.engine import _validate_node_params_runtime
 
     state = BadState(x=0)
     object.__setattr__(state, "x", "not_an_int")  # bypass pydantic to force wrong type
@@ -406,7 +406,7 @@ async def test_runtime_type_ok_passes():
 
 async def test_runtime_none_value_skipped():
     """None values on state skip the isinstance check (not an error)."""
-    from mote.executor.tasks.bggraph.engine import _validate_node_params_runtime
+    from mote.orchestration.tasks.bggraph.engine import _validate_node_params_runtime
 
     class NullState(GraphState):
         x: int = 0
@@ -429,7 +429,7 @@ async def test_runtime_none_value_skipped():
 
 async def test_runtime_generic_type_validated():
     """TypeAdapter catches list[str] containing ints — deep generic validation."""
-    from mote.executor.tasks.bggraph.engine import _validate_node_params_runtime
+    from mote.orchestration.tasks.bggraph.engine import _validate_node_params_runtime
 
     class ListState(GraphState):
         items: list = []

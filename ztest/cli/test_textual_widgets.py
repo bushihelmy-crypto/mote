@@ -17,11 +17,23 @@ pytest.importorskip("textual")
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 
-from mote.cli.consumers.textual.style import textual_css_vars
-from mote.cli.consumers.textual.widgets import ActivityWidget, AssistantBlock, StatusBar, ToolCallWidget, UserMessageRow
-from mote.cli.contracts.view import RetryStatus, ToolCallCompleted, ToolCallStarted, UsageUpdated
-from mote.common.i18n import keys as K
-from mote.common.i18n import t
+from mote.product.cli.consumers.textual.style import textual_css_vars
+from mote.product.cli.consumers.textual.widgets import (
+    ActivityWidget,
+    AssistantBlock,
+    StatusBar,
+    ToolCallWidget,
+    UserMessageRow,
+)
+from mote.product.cli.contracts.view import (
+    RetryStatus,
+    RuntimeDurabilityStatus,
+    ToolCallCompleted,
+    ToolCallStarted,
+    UsageUpdated,
+)
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
 
 
 class _Harness(App):
@@ -71,7 +83,9 @@ def _widget_text(widget) -> str:
 async def test_assistant_block_accumulates_deltas():
     async with _Harness().run_test() as pilot:
         block = await pilot.app.add(AssistantBlock())
+        assert block.display is False
         block.append_delta("Hello ")
+        assert block.display is True
         block.append_delta("world")
         assert block._buf == "Hello world"
         block.append_delta("")  # empty delta is a no-op
@@ -125,7 +139,12 @@ async def test_bash_widget_collapsed_hides_detail_then_expands():
         widget = await pilot.app.add(ToolCallWidget(started))  # collapsed by default
         assert widget._folds_detail is True and widget.expanded is False
         widget.complete(
-            ToolCallCompleted(tool_name="Bash", tool_use_id="b-1", summary="2146 passed", detail="SECRETOUTPUT")
+            ToolCallCompleted(
+                tool_name="Bash",
+                tool_use_id="b-1",
+                summary="2146 passed",
+                detail="SECRETOUTPUT",
+            )
         )
         await pilot.pause()
         collapsed = _widget_text(widget)
@@ -141,18 +160,29 @@ async def test_bash_widget_collapsed_hides_detail_then_expands():
 
 
 @pytest.mark.asyncio
-async def test_noncollapsible_widget_ignores_expanded_flag():
-    """A Read/Edit call is not detail-collapsible: set_expanded is inert and the
-    full detail always renders (no ctrl+o hint)."""
+async def test_standalone_tool_widget_folds_call_and_result_as_one_unit():
+    """Even non-DETAIL tool rows fold their call body and result together."""
     async with _Harness().run_test() as pilot:
         started = ToolCallStarted(tool_name="Read", title="Read", headline="a.py", tool_use_id="r-1")
         widget = await pilot.app.add(ToolCallWidget(started))
-        assert widget._folds_detail is False
-        widget.complete(ToolCallCompleted(tool_name="Read", tool_use_id="r-1", summary="12 lines", detail="FILEBODY"))
-        widget.set_expanded(False)  # no-op for a non-collapsible tool
+        assert widget._folds_detail is False and widget._folds is True
+        widget.complete(
+            ToolCallCompleted(
+                tool_name="Read",
+                tool_use_id="r-1",
+                summary="12 lines",
+                detail="FILEBODY",
+            )
+        )
         await pilot.pause()
-        text = _widget_text(widget)
-        assert "FILEBODY" in text and "ctrl+o" not in text
+        collapsed = _widget_text(widget)
+        assert "12 lines" in collapsed
+        assert "FILEBODY" not in collapsed
+        assert "ctrl+o" not in collapsed
+        widget.set_expanded(True)
+        await pilot.pause()
+        expanded = _widget_text(widget)
+        assert "FILEBODY" in expanded and "12 lines" in expanded
 
 
 @pytest.mark.asyncio
@@ -197,7 +227,7 @@ async def test_unrendered_selectable_static_returns_none():
     """Before any render (no strip cache) selection extraction is a safe no-op."""
     from textual.selection import Selection
 
-    from mote.cli.consumers.textual.widgets import SelectableStatic
+    from mote.product.cli.consumers.textual.widgets import SelectableStatic
 
     widget = SelectableStatic("never rendered")
     assert widget.get_selection(Selection(None, None)) is None
@@ -310,7 +340,7 @@ async def test_partial_selection_copies_only_selected_text():
 async def test_user_message_row_mounts_with_text():
     from rich.console import Console
 
-    from mote.cli.consumers.render.builders import user_message_row
+    from mote.product.cli.consumers.render.builders import user_message_row
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(UserMessageRow("fix the bug in foo.py"))
@@ -342,10 +372,39 @@ async def test_status_bar_derives_total_from_in_out():
 
 
 @pytest.mark.asyncio
+async def test_status_bar_shows_runtime_lag_and_clears_on_recovery():
+    async with _Harness().run_test() as pilot:
+        bar = await pilot.app.add(StatusBar())
+        lagging = RuntimeDurabilityStatus(
+            runtime_id="runtime-1",
+            runtime_kind="canvas",
+            alias="main",
+            state="lagging",
+            current_revision=5,
+            recoverable_revision=3,
+        )
+        bar.update_runtime_durability(lagging)
+
+        assert "canvas:main checkpoint lagging" in bar.render().plain
+        assert "r5, recoverable r3" in bar.render().plain
+
+        bar.update_runtime_durability(lagging.model_copy(update={"state": "current"}))
+        assert bar.durability_msg == ""
+        assert "checkpoint lagging" not in bar.render().plain
+
+
+@pytest.mark.asyncio
 async def test_status_bar_set_retry_shows_countdown():
     async with _Harness().run_test() as pilot:
         bar = await pilot.app.add(StatusBar())
-        bar.set_retry(RetryStatus(attempt=2, max_attempts=6, delay_ms=3000.0, error_type="LLMOverloadedError"))
+        bar.set_retry(
+            RetryStatus(
+                attempt=2,
+                max_attempts=6,
+                delay_ms=3000.0,
+                error_type="LLMOverloadedError",
+            )
+        )
         assert bar.retry_msg
         assert bar.retry_secs == pytest.approx(3.0)
         rendered = bar.render().plain
@@ -434,7 +493,7 @@ async def test_status_bar_no_longer_carries_ctrl_o_hint():
 
 
 def test_format_tok_compacts_counts():
-    from mote.cli.consumers.textual.widgets import _format_tok
+    from mote.product.cli.consumers.textual.widgets import _format_tok
 
     assert _format_tok(840) == "840"
     assert _format_tok(3400) == "3.4k"
@@ -449,7 +508,7 @@ def test_format_tok_compacts_counts():
 @pytest.mark.asyncio
 async def test_status_bar_thinking_shows_reasoning_label():
     """A reasoning stream flips the bar to the distinct ``✻ 思考中`` state."""
-    from mote.cli.consumers.render.palette import COMPACT
+    from mote.product.cli.consumers.render.palette import COMPACT
 
     async with _Harness().run_test() as pilot:
         bar = await pilot.app.add(StatusBar())
@@ -529,7 +588,7 @@ async def test_prompt_multiline_paste_stashes_placeholder_and_expands():
     """
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -557,7 +616,7 @@ async def test_prompt_carriage_return_paste_is_multiline():
     """
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -575,7 +634,7 @@ async def test_prompt_singleline_paste_inserts_verbatim():
     """A single-line paste keeps Textual's default behaviour (no placeholder)."""
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -592,7 +651,7 @@ async def test_prompt_paste_mixed_with_typed_text_expands_inline():
     """A placeholder embedded among typed text expands in place on submit."""
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -619,7 +678,7 @@ async def test_prompt_base_paste_handler_is_prevented():
     """
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -642,7 +701,7 @@ async def test_prompt_dropped_file_path_is_cleaned(tmp_path):
     """
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     dropped = tmp_path / "a file (1).txt"
     dropped.write_text("hi", encoding="utf-8")
@@ -665,7 +724,7 @@ async def test_prompt_nonexistent_path_falls_through_to_text(tmp_path):
     """A slash-leading string that isn't an existing file stays ordinary text."""
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -680,7 +739,7 @@ async def test_prompt_escape_clears_field():
     """A single Esc empties the prompt and drops any staged paste text."""
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     async with _Harness().run_test() as pilot:
         prompt = await pilot.app.add(PromptInput())
@@ -712,7 +771,7 @@ async def test_prompt_dropped_image_is_staged_as_token(tmp_path):
     """
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -738,7 +797,7 @@ async def test_prompt_consume_images_drops_removed_tokens(tmp_path):
     """An image whose token was deleted from the field is not sent."""
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -757,7 +816,7 @@ async def test_prompt_dropped_nonimage_file_stays_a_path(tmp_path):
     """A dropped non-image file is still inserted as a (cleaned) path, not staged."""
     from textual.events import Paste
 
-    from mote.cli.consumers.textual.widgets import PromptInput
+    from mote.product.cli.consumers.textual.widgets import PromptInput
 
     doc = tmp_path / "notes.txt"
     doc.write_text("hi", encoding="utf-8")
@@ -774,8 +833,8 @@ async def test_prompt_dropped_nonimage_file_stays_a_path(tmp_path):
 @pytest.mark.asyncio
 async def test_media_row_renders_inline_image(tmp_path):
     """``MediaRow`` paints an image inline when the ref is a readable image file."""
-    from mote.cli.consumers.textual.widgets import MediaRow
-    from mote.cli.contracts.view import MediaBlock
+    from mote.product.cli.consumers.textual.widgets import MediaRow
+    from mote.product.cli.contracts.view import MediaBlock
 
     img = tmp_path / "pic.png"
     _write_png(img)
@@ -791,8 +850,8 @@ async def test_media_row_renders_inline_image(tmp_path):
 @pytest.mark.asyncio
 async def test_media_row_missing_image_degrades_to_caption():
     """A non-existent image ref degrades to the reference caption (no crash)."""
-    from mote.cli.consumers.textual.widgets import MediaRow
-    from mote.cli.contracts.view import MediaBlock
+    from mote.product.cli.consumers.textual.widgets import MediaRow
+    from mote.product.cli.contracts.view import MediaBlock
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(MediaRow(MediaBlock(media_kind="image", ref="/no/such.png")))
@@ -803,8 +862,8 @@ async def test_media_row_missing_image_degrades_to_caption():
 @pytest.mark.asyncio
 async def test_file_diff_row_renders_caption_and_diff():
     """``FileDiffRow`` builds a caption naming the file + the synthesized diff."""
-    from mote.cli.consumers.textual.widgets import FileDiffRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FileDiffRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")))
@@ -821,8 +880,8 @@ async def test_file_diff_row_renders_caption_and_diff():
 @pytest.mark.asyncio
 async def test_file_diff_row_caption_verb_for_creation():
     """A creation (empty old) labels the caption ``(created)``."""
-    from mote.cli.consumers.textual.widgets import FileDiffRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FileDiffRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/new.py", old="", new="hi\n")))
@@ -838,8 +897,8 @@ async def test_file_diff_row_folds_under_ctrl_o():
     (driven by the global/scoped ctrl+o) collapses it to just the ``⎿ path (verb)``
     caption, hiding the +/- body, and re-expands it back to the full diff.
     """
-    from mote.cli.consumers.textual.widgets import FileDiffRow, FoldableRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FileDiffRow, FoldableRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")))
@@ -862,8 +921,8 @@ async def test_file_diff_row_plain_click_posts_selected():
     from rich.style import Style
     from textual.events import Click
 
-    from mote.cli.consumers.textual.widgets import FileDiffRow, FoldableRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FileDiffRow, FoldableRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(FileDiffRow(FileDiffBlock(path="/tmp/a.py", old="x = 1\n", new="x = 2\n")))
@@ -895,8 +954,8 @@ async def test_write_diff_folds_into_tool_widget_as_one_unit():
     row so the diff shows; ctrl+o then folds the whole unit — invocation, result
     AND diff — down to just the ``● Write`` + ``⎿ summary`` lines.
     """
-    from mote.cli.consumers.textual.widgets import FoldableRow
-    from mote.cli.contracts.view import FileDiffBlock
+    from mote.product.cli.consumers.textual.widgets import FoldableRow
+    from mote.product.cli.contracts.view import FileDiffBlock
 
     async with _Harness().run_test() as pilot:
         started = ToolCallStarted(tool_name="Edit", title="Edit", headline="a.py", tool_use_id="w-1")
@@ -933,8 +992,8 @@ def _has_link_span(text, url: str) -> bool:
 @pytest.mark.asyncio
 async def test_notice_row_linkifies_bare_url():
     """A URL in a system notice becomes a clickable link span."""
-    from mote.cli.consumers.textual.widgets import NoticeRow
-    from mote.cli.contracts.view import Notice
+    from mote.product.cli.consumers.textual.widgets import NoticeRow
+    from mote.product.cli.contracts.view import Notice
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(NoticeRow(Notice(text="see https://example.com now", level="info")))
@@ -944,9 +1003,9 @@ async def test_notice_row_linkifies_bare_url():
 @pytest.mark.asyncio
 async def test_system_reminder_row_renders_note_glyph():
     """A SystemReminder renders as a dim ⚑ note carrying the summary text."""
-    from mote.cli.consumers.textual.style import NOTE
-    from mote.cli.consumers.textual.widgets import SystemReminderRow
-    from mote.cli.contracts.view import SystemReminder
+    from mote.product.cli.consumers.textual.style import NOTE
+    from mote.product.cli.consumers.textual.widgets import SystemReminderRow
+    from mote.product.cli.contracts.view import SystemReminder
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(SystemReminderRow(SystemReminder(text="Git status · Files changed")))
@@ -958,9 +1017,9 @@ async def test_system_reminder_row_renders_note_glyph():
 @pytest.mark.asyncio
 async def test_conversation_compacted_row_renders_marker():
     """A ConversationCompacted renders the dim ✻ boundary with the retained count."""
-    from mote.cli.consumers.textual.style import COMPACT
-    from mote.cli.consumers.textual.widgets import ConversationCompactedRow
-    from mote.cli.contracts.view import ConversationCompacted
+    from mote.product.cli.consumers.textual.style import COMPACT
+    from mote.product.cli.consumers.textual.widgets import ConversationCompactedRow
+    from mote.product.cli.contracts.view import ConversationCompacted
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(ConversationCompactedRow(ConversationCompacted(summary="recap", message_count=5)))
@@ -975,14 +1034,19 @@ async def test_error_row_linkifies_bare_url():
     """A URL in an error message becomes a clickable link span (inside the bullet_row)."""
     from rich.console import Console
 
-    from mote.cli.consumers.textual.widgets import ErrorRow
-    from mote.cli.contracts.view import ErrorRaised
+    from mote.product.cli.consumers.textual.widgets import ErrorRow
+    from mote.product.cli.contracts.view import ErrorRaised
 
     async with _Harness().run_test() as pilot:
         row = await pilot.app.add(ErrorRow(ErrorRaised(text="failed: https://example.com/err")))
         # The error text is wrapped in a bullet_row grid; render it and assert the
         # URL emits an OSC 8 hyperlink.
-        console = Console(file=__import__("io").StringIO(), force_terminal=True, color_system="truecolor", width=80)
+        console = Console(
+            file=__import__("io").StringIO(),
+            force_terminal=True,
+            color_system="truecolor",
+            width=80,
+        )
         console.print(row._Static__content)
         out = console.file.getvalue()
         assert "\x1b]8;;" in out
@@ -1020,7 +1084,7 @@ def _click_spy(widget):
     """Record ``FoldableRow.Clicked`` posts while still delegating to the real
     ``post_message`` — a non-delegating stub would swallow Textual's shutdown
     messages and hang ``run_test`` teardown."""
-    from mote.cli.consumers.textual.widgets import FoldableRow
+    from mote.product.cli.consumers.textual.widgets import FoldableRow
 
     posted: list = []
     original = widget.post_message
@@ -1040,7 +1104,7 @@ async def test_foldable_row_plain_click_posts_selected():
     from rich.style import Style
     from textual.events import Click
 
-    from mote.cli.consumers.textual.widgets import FoldableRow
+    from mote.product.cli.consumers.textual.widgets import FoldableRow
 
     async with _Harness().run_test() as pilot:
         started = ToolCallStarted(tool_name="Bash", headline="ls", tool_use_id="c-1")
@@ -1156,14 +1220,14 @@ async def test_selected_foldable_row_shows_ctrl_o_hint_bottom_right():
 
 
 @pytest.mark.asyncio
-async def test_selected_nonfolding_row_shows_no_hint():
-    """A standalone Read (always full, never folds) shows no ctrl+o hint even selected."""
+async def test_selected_standalone_group_tool_row_shows_ctrl_o_hint():
+    """A standalone Read row is still one foldable call/result unit if mounted."""
     async with _Harness().run_test() as pilot:
         started = ToolCallStarted(tool_name="Read", headline="a.py", tool_use_id="h-2")
         widget = await pilot.app.add(ToolCallWidget(started))
         widget.selected = True
         await pilot.pause()
-        assert "ctrl+o" not in _widget_text(widget)
+        assert t(K.KEY_EXPAND_HINT) in _widget_text(widget)
 
 
 @pytest.mark.asyncio
@@ -1234,7 +1298,7 @@ async def test_activity_widget_updates_node_status():
 @pytest.mark.asyncio
 async def test_activity_widget_folds_child_tool_call():
     """A dispatched child tool call folds into the activity's body."""
-    from mote.cli.contracts.view import ToolCallCompleted, ToolCallStarted
+    from mote.product.cli.contracts.view import ToolCallCompleted, ToolCallStarted
 
     async with _Harness().run_test() as pilot:
         widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
@@ -1251,7 +1315,13 @@ async def test_activity_widget_finalizes_to_outcome():
     async with _Harness().run_test() as pilot:
         widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
         node_states = [
-            {"id": "fetch", "kind": "tool", "label": "fetch url", "status": "success", "attempts": 1},
+            {
+                "id": "fetch",
+                "kind": "tool",
+                "label": "fetch url",
+                "status": "success",
+                "attempts": 1,
+            },
             {
                 "id": "sum",
                 "kind": "fold",
@@ -1281,7 +1351,13 @@ async def test_activity_widget_stays_displayed_after_finalize():
         widget = await pilot.app.add(ActivityWidget("graph", "run_graph", _TOPOLOGY))
         assert widget.display is True
         node_states = [
-            {"id": "fetch", "kind": "tool", "label": "fetch url", "status": "success", "attempts": 1},
+            {
+                "id": "fetch",
+                "kind": "tool",
+                "label": "fetch url",
+                "status": "success",
+                "attempts": 1,
+            },
         ]
         widget.finalize_outcome("success", node_states, "")
         await pilot.pause()

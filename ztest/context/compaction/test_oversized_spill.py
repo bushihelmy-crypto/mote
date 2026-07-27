@@ -19,14 +19,14 @@ from __future__ import annotations
 import asyncio
 import json
 
-from mote.common.const import RETENTION, RETENTION_PIN, TOOL_CALLS
-from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ContextManagerConfig, Message, ToolResultLimitConfig
-from mote.common.workspace import ArtifactKind, WorkspaceStore
-from mote.context.compaction.pipeline import ReductionPipeline
-from mote.context.compaction.reducers.base import ReducerCost, ReductionOutcome
-from mote.context.compaction.reducers.spill import OversizedSpillReducer
-from mote.context.compaction.request import ReductionRequest
-from mote.context.compaction.transcript import Transcript
+from mote.contracts.constants.messages import RETENTION, RETENTION_PIN, TOOL_CALLS
+from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ContextManagerConfig, Message, ToolResultLimitConfig
+from mote.runtime.context.compaction.pipeline import ReductionPipeline
+from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
+from mote.runtime.context.compaction.reducers.spill import OversizedSpillReducer
+from mote.runtime.context.compaction.request import ReductionRequest
+from mote.runtime.context.compaction.transcript import Transcript
+from mote.runtime.workspace import ArtifactKind, WorkspaceStore
 
 from ..conftest import COMPACTABLE, text_msg, tool_call_msg, tool_result_msg
 

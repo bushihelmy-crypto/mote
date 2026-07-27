@@ -3,33 +3,26 @@
 """Tests for ResilienceConfig (config-v2) + its wiring into the health registry.
 
 ``ResilienceConfig`` is the user-facing pydantic surface that maps onto the
-framework-agnostic frozen ``BreakerConfig``. Building a :class:`Config` runs a
-``model_validator`` that applies the projected breaker config to the shared
-process-global registry (so every breaker built thereafter inherits it).
+framework-agnostic frozen ``BreakerConfig``. Parsing remains pure; the Runtime
+Context composition boundary applies it to the Engine-owned registry.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.common.config.config.llm_config import LLMConfig
-from mote.common.config.config.models_config import ModelsConfig
-from mote.common.config.config.resilience_config import ResilienceConfig
-from mote.common.config.meta_config import Config
-from mote.common.resilience import BreakerConfig, get_health_registry, reset_health_registry
+from mote.contracts.config.llm import LLMConfig
+from mote.contracts.config.models import ModelsConfig
+from mote.contracts.config.resilience import ResilienceConfig
+from mote.runtime.config.schema import Config
+from mote.runtime.models.clients.context import Context
+from mote.runtime.resilience import BreakerConfig, ResourceHealthRegistry
 
 
-@pytest.fixture(autouse=True)
-def _reset_singleton():
-    reset_health_registry()
-    yield
-    reset_health_registry()
-
-
-def _config(resilience: ResilienceConfig | None = None) -> Config:
+def _context(resilience: ResilienceConfig | None = None) -> Context:
     kwargs = {"models": ModelsConfig(default=LLMConfig(api_key="sk-x", model="gpt-4o"))}
     if resilience is not None:
         kwargs["resilience"] = resilience
-    return Config(**kwargs)
+    return Context(config=Config(**kwargs))
 
 
 class TestResilienceConfig:
@@ -46,6 +39,8 @@ class TestResilienceConfig:
             error_rate_threshold=0.75,
             open_seconds=10.0,
             half_open_max_probes=2,
+            half_open_success_quorum=2,
+            probe_grace_seconds=0.5,
         )
         assert rc.to_breaker_config() == BreakerConfig(
             window_seconds=30.0,
@@ -53,6 +48,8 @@ class TestResilienceConfig:
             error_rate_threshold=0.75,
             open_seconds=10.0,
             half_open_max_probes=2,
+            half_open_success_quorum=2,
+            probe_grace_seconds=0.5,
             enabled=False,
         )
 
@@ -65,38 +62,53 @@ class TestResilienceConfig:
             ("error_rate_threshold", -0.1),
             ("open_seconds", 0.0),
             ("half_open_max_probes", 0),
+            ("half_open_success_quorum", 0),
+            ("probe_grace_seconds", -0.1),
         ],
     )
     def test_rejects_out_of_range(self, field, value):
         with pytest.raises(Exception):
             ResilienceConfig(**{field: value})
 
+    def test_rejects_quorum_above_probe_limit(self):
+        with pytest.raises(Exception):
+            ResilienceConfig(
+                half_open_max_probes=1,
+                half_open_success_quorum=2,
+            )
+
 
 class TestWiring:
+    def test_parsing_config_does_not_mutate_runtime_registry(self):
+        reg = ResourceHealthRegistry()
+        Config(
+            models=ModelsConfig(default=LLMConfig(api_key="sk-x", model="gpt-4o")),
+            resilience=ResilienceConfig(min_samples=9),
+        )
+        assert reg._config == BreakerConfig()
+
     def test_config_default_applies_conservative_thresholds(self):
-        _config()
-        assert get_health_registry()._config == BreakerConfig()
+        assert _context().health_registry._config == BreakerConfig()
 
     def test_config_applies_custom_thresholds(self):
-        _config(ResilienceConfig(min_samples=9, error_rate_threshold=0.9, open_seconds=5.0))
-        cfg = get_health_registry()._config
+        cfg = _context(
+            ResilienceConfig(min_samples=9, error_rate_threshold=0.9, open_seconds=5.0)
+        ).health_registry._config
         assert cfg.min_samples == 9
         assert cfg.error_rate_threshold == 0.9
         assert cfg.open_seconds == 5.0
 
     def test_disabled_makes_breakers_inert(self):
-        _config(ResilienceConfig(enabled=False))
-        reg = get_health_registry()
+        reg = _context(ResilienceConfig(enabled=False)).health_registry
         # An inert breaker always admits and never records → never trips.
         for _ in range(50):
             assert reg.admit("res::x::0") is True
             reg.record("res::x::0", False)
         assert reg.snapshot()["res::x::0"] == "closed"
 
-    def test_config_mutates_existing_registry_in_place(self):
-        # A holder that grabbed the registry BEFORE config load must see the new
-        # thresholds (set_config mutates in place, does not replace the singleton).
-        reg_before = get_health_registry()
-        _config(ResilienceConfig(min_samples=7))
-        assert reg_before is get_health_registry()
-        assert reg_before._config.min_samples == 7
+    def test_contexts_do_not_share_breaker_state(self):
+        first = _context(ResilienceConfig(min_samples=7))
+        second = _context(ResilienceConfig(min_samples=3))
+        assert first.health_registry is not second.health_registry
+        assert first.health_registry._config.min_samples == 7
+        assert second.health_registry._config.min_samples == 3

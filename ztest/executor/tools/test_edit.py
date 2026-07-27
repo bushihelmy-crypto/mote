@@ -1,32 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the Edit tool (``mote.executor.tools.edit``).
-
-Covers exact string replacement, replace_all, the forgiving match cascade (curly
-quotes + tab/space), create-via-empty-old_string, the read-before-edit guard,
-and the not-found / multi-match / no-change error paths. Also exercises the pure
-helper functions directly.
-"""
+"""Tests for the exact, plan-backed Edit tool."""
 from __future__ import annotations
 
 import os
 
 import pytest
 
-from mote.executor.tool_result import ToolError
-from mote.executor.tools.edit import (
-    Edit,
-    _apply_edit,
-    _find_actual_string,
-    _normalize_quotes,
-    _normalize_whitespace,
-    _preserve_quote_style,
-)
+from mote.product.toolsets.builtin.edit import Edit
+from mote.product.toolsets.builtin.read import Read
+from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, mark_read, run, write_file
 
 
 def _edit(tool: Edit, **kwargs):
+    if not hasattr(tool, "commit_edit_plan"):
+        tool = bind(tool, CapRole())
     return run(tool.call(**kwargs))
 
 
@@ -77,11 +67,10 @@ class TestExactReplace:
         with pytest.raises(ToolError, match="no changes to make"):
             _edit(tool, file_path=p, old_string="hello", new_string="hello")
 
-    def test_delete_consumes_trailing_newline(self, workspace):
+    def test_delete_replaces_only_the_exact_literal(self, workspace):
         tool, p, _ = _ready(workspace, "a.py", "keep\nremove\nkeep2\n")
         _edit(tool, file_path=p, old_string="remove", new_string="")
-        # The line is removed entirely, no blank line left behind.
-        assert open(p, encoding="utf-8").read() == "keep\nkeep2\n"
+        assert open(p, encoding="utf-8").read() == "keep\n\nkeep2\n"
 
 
 class TestWholeFileWrite:
@@ -108,10 +97,11 @@ class TestWholeFileWrite:
         assert "2 lines" in out.output
         assert "5 bytes" in out.output
 
-    def test_creates_missing_parent_dirs(self, workspace):
+    def test_create_requires_an_existing_parent_directory(self, workspace):
         p = str(workspace / "a" / "b" / "c.txt")
-        _edit(Edit(), file_path=p, old_string="", new_string="x")
-        assert os.path.isfile(p)
+        with pytest.raises(ToolError, match="parent directory does not exist"):
+            _edit(Edit(), file_path=p, old_string="", new_string="x")
+        assert not os.path.lexists(workspace / "a")
 
     def test_creates_empty_file(self, workspace):
         # old_string="" and new_string="" is a legitimate create-empty (the no-op
@@ -146,24 +136,23 @@ class TestWholeFileWrite:
     def test_overwrite_modified_since_read_blocked(self, workspace):
         p = write_file(workspace / "exists.py", "existing\n")
         role = CapRole()
-        role.record_file_read(p, os.stat(p).st_mtime_ns - 5_000_000)  # stale => modified
+        mark_read(role, p)
+        write_file(p, "external\n")
         tool = bind(Edit(), role)
-        with pytest.raises(ToolError, match="has been modified since"):
+        with pytest.raises(ToolError, match="changed since"):
             _edit(tool, file_path=p, old_string="", new_string="clobber")
 
-    def test_unbound_overwrite_skips_guard(self, workspace):
-        # No role bound => the read-before-write guard self-skips (isolation/tests).
+    def test_unobserved_overwrite_is_blocked(self, workspace):
         p = write_file(workspace / "exists.txt", "old")
-        out = _edit(Edit(), file_path=p, old_string="", new_string="new")
-        assert "Updated" in out.output
-        assert open(p, encoding="utf-8").read() == "new"
+        with pytest.raises(ToolError, match="has not been read"):
+            _edit(Edit(), file_path=p, old_string="", new_string="new")
 
     def test_content_too_large_raises(self, workspace):
-        from mote.common.const.tools import MAX_CONTENT_SIZE_BYTES
+        from mote.runtime.fileops.edit_plans import MAX_EDIT_PLAN_OUTPUT_BYTES
 
         p = str(workspace / "big.txt")
-        oversized = "x" * (MAX_CONTENT_SIZE_BYTES + 1)
-        with pytest.raises(ToolError, match="exceeds the maximum"):
+        oversized = "x" * (MAX_EDIT_PLAN_OUTPUT_BYTES + 1)
+        with pytest.raises(ToolError, match="exceeding the limit"):
             _edit(Edit(), file_path=p, old_string="", new_string=oversized)
 
     def test_whole_file_result_has_no_structural_summary(self, workspace):
@@ -176,8 +165,8 @@ class TestWholeFileWrite:
         assert open(p, encoding="utf-8").read() == body
 
     def test_ipynb_whole_file_write_allowed(self, workspace):
-        # A whole-file write CAN emit a .ipynb (raw notebook JSON) — only
-        # substring edits of .ipynb are refused (use the notebook edit tool).
+        # A whole-file write CAN emit a .ipynb (raw notebook JSON); only
+        # substring edits of .ipynb are refused.
         p = str(workspace / "nb.ipynb")
         out = _edit(Edit(), file_path=p, old_string="", new_string='{"cells": []}')
         assert "Created" in out.output
@@ -212,27 +201,14 @@ class TestEditGuards:
 
     def test_ipynb_refused(self, workspace):
         p = write_file(workspace / "nb.ipynb", "{}")
-        with pytest.raises(ToolError, match="Jupyter notebook"):
+        with pytest.raises(ToolError, match="Jupyter notebook") as exc_info:
             _edit(Edit(), file_path=p, old_string="{}", new_string="[]")
+        assert "notebook edit tool" not in str(exc_info.value).lower()
+        assert "Edit does not support substring changes" in str(exc_info.value)
 
     def test_directory_refused(self, workspace):
         with pytest.raises(ToolError, match="is a directory"):
             _edit(Edit(), file_path=str(workspace), old_string="x", new_string="y")
-
-
-class TestMatchCascade:
-    def test_tab_space_normalized_match(self, workspace):
-        # File uses a real tab; the model copies it as 4 spaces (Read renders so).
-        tool, p, _ = _ready(workspace, "t.py", "def f():\n\treturn 1\n")
-        out = _edit(tool, file_path=p, old_string="    return 1", new_string="    return 2")
-        assert "updated successfully" in out.output
-        assert "return 2" in open(p, encoding="utf-8").read()
-
-    def test_curly_quote_normalized_match(self, workspace):
-        tool, p, _ = _ready(workspace, "q.py", "s = \u201chello\u201d\n")
-        # Model emits straight quotes; matcher normalizes curly->straight.
-        out = _edit(tool, file_path=p, old_string='s = "hello"', new_string='s = "world"')
-        assert "updated successfully" in out.output
 
 
 class TestEditNewlinePreservation:
@@ -245,43 +221,56 @@ class TestEditNewlinePreservation:
         assert open(p, "rb").read() == b"x\r\nb\r\n"
 
 
-# --- Pure-helper unit tests --------------------------------------------------
+class TestBytePreservingEdit:
+    def test_gbk_roundtrip_uses_read_encoding_decision(self, workspace):
+        p = str(workspace / "gbk.txt")
+        original = "前缀\n中文\n后缀".encode("gbk")
+        open(p, "wb").write(original)
+        role = CapRole()
+        run(bind(Read(), role).call(file_path=p, encoding="gbk"))
 
+        _edit(
+            bind(Edit(), role),
+            file_path=p,
+            old_string="中文",
+            new_string="汉字",
+        )
 
-class TestHelpers:
-    def test_normalize_quotes(self):
-        assert _normalize_quotes("\u2018a\u2019 \u201cb\u201d") == "'a' \"b\""
+        assert open(p, "rb").read() == original.replace("中文".encode("gbk"), "汉字".encode("gbk"))
 
-    def test_normalize_whitespace_expands_tabs(self):
-        assert _normalize_whitespace("\tx") == "    x"
+    def test_unencodable_replacement_does_not_write_or_prepare(self, workspace):
+        p = str(workspace / "gbk.txt")
+        original = "中文".encode("gbk")
+        open(p, "wb").write(original)
+        role = CapRole()
+        run(bind(Read(), role).call(file_path=p, encoding="gbk"))
 
-    def test_find_actual_string_exact(self):
-        assert _find_actual_string("abc def", "def") == "def"
+        with pytest.raises(ToolError, match="cannot be represented"):
+            _edit(
+                bind(Edit(), role),
+                file_path=p,
+                old_string="中文",
+                new_string="😀",
+            )
 
-    def test_find_actual_string_missing(self):
-        assert _find_actual_string("abc", "zzz") is None
+        assert open(p, "rb").read() == original
+        assert role.file_operations.journal.records() == ()
 
-    def test_find_actual_string_via_quotes(self):
-        # Curly in file, straight in search => matched substring is the curly form.
-        assert _find_actual_string("x = \u201chi\u201d", '"hi"') == "\u201chi\u201d"
+    def test_mixed_newlines_outside_edit_are_byte_identical(self, workspace):
+        p = str(workspace / "mixed.txt")
+        original = b"first\r\nchange\nlast\r"
+        open(p, "wb").write(original)
+        role = CapRole()
+        run(bind(Read(), role).call(file_path=p))
 
-    def test_apply_edit_replace_all(self):
-        assert _apply_edit("a a a", "a", "b", True) == "b b b"
+        _edit(
+            bind(Edit(), role),
+            file_path=p,
+            old_string="change",
+            new_string="updated",
+        )
 
-    def test_apply_edit_single(self):
-        assert _apply_edit("a a a", "a", "b", False) == "b a a"
-
-    def test_apply_edit_delete_consumes_newline(self):
-        assert _apply_edit("keep\ndrop\n", "drop", "", False) == "keep\n"
-
-    def test_preserve_quote_style_no_op_on_exact_match(self):
-        # When old_string matched exactly, new_string is untouched.
-        assert _preserve_quote_style('"x"', '"x"', '"y"') == '"y"'
-
-    def test_preserve_quote_style_restyles_double(self):
-        # Matched via curly normalization => new_string's double quotes go curly.
-        result = _preserve_quote_style('"x"', "\u201cx\u201d", 'say "hi"')
-        assert "\u201c" in result or "\u201d" in result
+        assert open(p, "rb").read() == b"first\r\nupdated\nlast\r"
 
 
 class TestCwdResolution:
@@ -298,3 +287,28 @@ class TestCwdResolution:
     def test_create_relative_unbound_uses_process_cwd(self, workspace):
         _edit(Edit(), file_path="unbound.txt", old_string="", new_string="ok\n")
         assert os.path.isfile(workspace / "unbound.txt")
+
+
+class TestPermissionTarget:
+    def test_relative_path_is_canonicalized_against_role_cwd(
+        self,
+        workspace,
+        tmp_path,
+    ):
+        role_dir = tmp_path / "role_dir"
+        role_dir.mkdir()
+        tool = bind(Edit(), CapRole(cwd=str(role_dir)))
+
+        target = tool.permission_target({"file_path": "nested/../target.txt"})
+
+        assert target == os.path.realpath(role_dir / "target.txt")
+        assert target != os.path.realpath(workspace / "target.txt")
+
+    def test_symlink_target_resolves_to_its_canonical_path(self, workspace):
+        target = workspace / "target.txt"
+        target.write_text("content", encoding="utf-8")
+        alias = workspace / "alias.txt"
+        alias.symlink_to(target)
+        tool = bind(Edit(), CapRole(cwd=str(workspace)))
+
+        assert tool.permission_target({"file_path": "alias.txt"}) == os.path.realpath(target)

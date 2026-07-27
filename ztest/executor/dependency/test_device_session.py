@@ -5,8 +5,8 @@ import asyncio
 
 import pytest
 
-from mote.executor.dependency._device.backend import DeviceError
-from mote.executor.dependency._device.session import DeviceSession
+from mote.runtime.tools.dependency._device.backend import DeviceError
+from mote.runtime.tools.dependency._device.session import DeviceSession
 from mote.ztest.executor.dependency.device_fakes import FAKE_PNG, FakeDeviceBackend
 
 
@@ -42,6 +42,18 @@ def test_observe_visual_omits_outline():
     assert obs.text == ""
     assert obs.empty is True
     assert obs.width == 1080
+
+
+def test_capture_screen_does_not_mutate_semantic_snapshot():
+    sess = _session()
+    observed = _run(sess.observe(mode="semantic"))
+
+    screenshot, width, height = _run(sess.capture_screen())
+
+    assert screenshot == FAKE_PNG
+    assert (width, height) == (1080, 2340)
+    assert sess.resolve_ref("@e1", state_id=observed.state_id) == (970, 150)
+    assert _run(sess.observe(mode="semantic")).state_id == "s2"
 
 
 def test_observe_unknown_mode_raises():

@@ -6,12 +6,10 @@ Proves the productionized secret system on the *real* control plane, in both
 directions, over the encrypted two-section vault:
 
 1. ``policy.redact`` in isolation — the guards (min length, placeholders).
-2. The OUTPUT bus fold — a real ``EventBus`` + ``RedactionSubscriber`` folds a
-   redacted ``updated_response`` out of a ``PostToolUseEvent`` (the
-   ``cat config.yaml``-style leak the seam must catch).
-3. The INPUT bus fold — ``SecretUploadSubscriber`` vaults ``<secret>…</secret>``
-   spans in a ``UserPromptSubmitEvent`` and rewrites the prompt before it leaves the
-   seam.
+2. ToolResultPolicy redacts output before hooks, observers, persistence, or the
+   model can receive it.
+3. ``PromptPolicy`` vaults ``<secret>…</secret>`` spans before hooks, history,
+   observation, or the model can receive the prompt.
 4. The real ``ToolExecutor.run_command`` — an echo tool leaks a config api_key;
    the model-facing ``result.output`` comes back redacted, no per-tool changes.
 """
@@ -19,13 +17,16 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.events import EventBus, PostToolUseEvent, UserPromptSubmitEvent
-from mote.common.secrets.cipher import AesGcmCipher
-from mote.common.secrets.policy import MIN_REDACT_LENGTH, redact
-from mote.common.secrets.store import SecretStore
-from mote.executor.base_tool import BaseTool
-from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
-from mote.executor.tool_executor import ToolExecutor
+from mote.contracts.policy.prompt import PromptIntent
+from mote.contracts.policy.tool import ToolResultIntent
+from mote.runtime.prompt import build_prompt_policy
+from mote.runtime.secrets.cipher import AesGcmCipher
+from mote.runtime.secrets.policy import MIN_REDACT_LENGTH, redact
+from mote.runtime.secrets.store import SecretStore
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.policy import build_tool_result_policy
+from mote.runtime.tools.tool_executor import ToolExecutor
 
 # A realistic-looking secret value, comfortably above MIN_REDACT_LENGTH.
 _API_KEY = "sk-proj-abc123SUPERsecretVALUE456"
@@ -68,93 +69,79 @@ class TestPolicy:
 
 
 # ---------------------------------------------------------------------------
-# 2. OUTPUT bus fold (real EventBus + RedactionSubscriber)
+# 2. ToolResultPolicy output boundary
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-class TestOutputBusFold:
-    async def test_post_tool_use_output_is_redacted(self, tmp_path):
-        bus = EventBus()
-        bus.subscribe(RedactionSubscriber(_config_store(tmp_path)))
-
-        event = PostToolUseEvent(
-            tool_name="Bash",
-            tool_input={"command": "cat config.yaml"},
-            tool_response=f"api_key: {_API_KEY}\nport: 3000",
+class TestOutputPolicy:
+    async def test_tool_output_is_redacted(self, tmp_path):
+        policy = build_tool_result_policy(secret_store=_config_store(tmp_path))
+        presentation = await policy.present(
+            ToolResultIntent(
+                tool_name="Bash",
+                arguments={"command": "cat config.yaml"},
+                output=f"api_key: {_API_KEY}\nport: 3000",
+            )
         )
-        outcome = await bus.emit(event)
 
-        assert outcome is not None
-        assert outcome.updated_response is not None
-        assert _API_KEY not in outcome.updated_response
-        assert "<secret:llm.api_key>" in outcome.updated_response
+        assert _API_KEY not in presentation.output
+        assert "<secret:llm.api_key>" in presentation.output
 
-    async def test_no_rewrite_when_output_clean(self, tmp_path):
-        bus = EventBus()
-        bus.subscribe(RedactionSubscriber(_config_store(tmp_path)))
-
-        event = PostToolUseEvent(tool_name="Bash", tool_response="port: 3000\nhost: localhost")
-        outcome = await bus.emit(event)
-        assert outcome is None or outcome.updated_response is None
+    async def test_clean_output_is_unchanged(self, tmp_path):
+        policy = build_tool_result_policy(secret_store=_config_store(tmp_path))
+        presentation = await policy.present(
+            ToolResultIntent(
+                tool_name="Bash",
+                output="port: 3000\nhost: localhost",
+            )
+        )
+        assert presentation.output == "port: 3000\nhost: localhost"
 
 
 # ---------------------------------------------------------------------------
-# 3. INPUT bus fold (real EventBus + SecretUploadSubscriber)
+# 3. PromptPolicy input boundary
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-class TestInputBusFold:
+class TestInputPromptPolicy:
     async def test_named_upload_vaulted_and_prompt_rewritten(self, tmp_path):
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(
+            PromptIntent(prompt='use <secret name="TG">1234567890:AAtokenvalue</secret> to post')
+        )
 
-        event = UserPromptSubmitEvent(prompt='use <secret name="TG">1234567890:AAtokenvalue</secret> to post')
-        outcome = await bus.emit(event)
-
-        assert outcome is not None
-        assert outcome.updated_prompt == "use <agent-vault:TG> to post"
+        assert decision.accepted is True
+        assert decision.prompt == "use <agent-vault:TG> to post"
         # The raw value was vaulted (persisted) — a fresh store recovers it.
         reloaded = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
         assert "1234567890:AAtokenvalue" in reloaded.as_map()
 
-    async def test_observer_sees_rewritten_prompt(self, tmp_path):
+    async def test_anonymous_upload_returns_only_safe_prompt(self, tmp_path):
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
-        event = UserPromptSubmitEvent(prompt="anon <secret>my-anonymous-secret-value</secret> here")
-        # ``emit`` returns the folded outcome; the rewritten event is threaded to
-        # any later subscriber/observer — assert the prompt no longer leaks.
-        outcome = await bus.emit(event)
-        assert "my-anonymous-secret-value" not in outcome.updated_prompt
-        assert "<agent-vault:session-" in outcome.updated_prompt
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(PromptIntent(prompt="anon <secret>my-anonymous-secret-value</secret> here"))
+        assert "my-anonymous-secret-value" not in decision.prompt
+        assert "<agent-vault:session-" in decision.prompt
 
     async def test_value_containing_at_is_captured_whole(self, tmp_path):
         # An email value contains an ``@``; the explicit ``</secret>`` close captures
         # it whole, so nothing is truncated at the email's own ``@`` and leaked.
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
-        outcome = await bus.emit(UserPromptSubmitEvent(prompt="mail <secret>user@example.com</secret> ok"))
-        assert outcome is not None
-        assert "user@example.com" not in outcome.updated_prompt
-        assert "example.com" not in outcome.updated_prompt  # no truncated leak
-        assert "<agent-vault:session-" in outcome.updated_prompt
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(PromptIntent(prompt="mail <secret>user@example.com</secret> ok"))
+        assert "user@example.com" not in decision.prompt
+        assert "example.com" not in decision.prompt  # no truncated leak
+        assert "<agent-vault:session-" in decision.prompt
         assert "user@example.com" in store.as_map()  # full value vaulted
 
     async def test_named_email_value_persisted_whole(self, tmp_path):
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
-        outcome = await bus.emit(
-            UserPromptSubmitEvent(prompt='reset <secret name="email">user@example.com</secret> now')
-        )
-        assert outcome.updated_prompt == "reset <agent-vault:email> now"
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(PromptIntent(prompt='reset <secret name="email">user@example.com</secret> now'))
+        assert decision.prompt == "reset <agent-vault:email> now"
         reloaded = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
         assert reloaded.as_map().get("user@example.com") == "<agent-vault:email>"
 
@@ -162,53 +149,43 @@ class TestInputBusFold:
         # The XML close means the value may contain spaces and ``=`` (a connection
         # string) with no ambiguity — this is what the old ``@``-fence could not do.
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
+        policy = build_prompt_policy(secret_store=store)
         raw = "Server=db;User Id=admin;Password=p@ss w0rd="
-        outcome = await bus.emit(UserPromptSubmitEvent(prompt=f'db <secret name="dsn">{raw}</secret> end'))
-        assert outcome.updated_prompt == "db <agent-vault:dsn> end"
+        decision = await policy.process(PromptIntent(prompt=f'db <secret name="dsn">{raw}</secret> end'))
+        assert decision.prompt == "db <agent-vault:dsn> end"
         assert raw in store.as_map()
 
     async def test_two_spans_not_merged(self, tmp_path):
         # Non-greedy ``</secret>`` close keeps two spans distinct even when the first
         # value contains an ``@`` (a greedy close would swallow both).
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
-        outcome = await bus.emit(
-            UserPromptSubmitEvent(
-                prompt='a <secret name="e">user@x.com</secret> b <secret>second-anon-value</secret> c'
-            )
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(
+            PromptIntent(prompt='a <secret name="e">user@x.com</secret> b <secret>second-anon-value</secret> c')
         )
-        assert "user@x.com" not in outcome.updated_prompt
-        assert "second-anon-value" not in outcome.updated_prompt
-        assert outcome.updated_prompt.startswith("a <agent-vault:e> b <agent-vault:session-")
-        assert outcome.updated_prompt.endswith(" c")
-        assert outcome.updated_prompt.count("<agent-vault:") == 2
+        assert "user@x.com" not in decision.prompt
+        assert "second-anon-value" not in decision.prompt
+        assert decision.prompt.startswith("a <agent-vault:e> b <agent-vault:session-")
+        assert decision.prompt.endswith(" c")
+        assert decision.prompt.count("<agent-vault:") == 2
         assert "user@x.com" in store.as_map()
 
     async def test_unterminated_tag_stops_and_masks(self, tmp_path):
         # No ``</secret>`` close → the whole remainder (marker + half-typed secret)
         # is masked to end-of-string and the turn stops: a partial secret can't leak.
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
-        event = UserPromptSubmitEvent(prompt="oops <secret>half-typed-no-close")
-        outcome = await bus.emit(event)
-        assert outcome.stop is True
-        assert "half-typed-no-close" not in outcome.updated_prompt  # tail masked, not just marker
-        assert "<secret" not in outcome.updated_prompt  # dangling opener masked
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(PromptIntent(prompt="oops <secret>half-typed-no-close"))
+        assert decision.accepted is False
+        assert "half-typed-no-close" not in decision.prompt  # tail masked, not just marker
+        assert "<secret" not in decision.prompt  # dangling opener masked
 
     async def test_clean_prompt_is_noop(self, tmp_path):
         store = _config_store(tmp_path)
-        bus = EventBus()
-        bus.subscribe(SecretUploadSubscriber(store))
-
-        outcome = await bus.emit(UserPromptSubmitEvent(prompt="just a normal question"))
-        assert outcome is None or outcome.updated_prompt is None
+        policy = build_prompt_policy(secret_store=store)
+        decision = await policy.process(PromptIntent(prompt="just a normal question"))
+        assert decision.accepted is True
+        assert decision.prompt == "just a normal question"
 
 
 # ---------------------------------------------------------------------------
@@ -228,13 +205,11 @@ class _LeakyEcho(BaseTool):
 @pytest.mark.asyncio
 class TestExecutorEndToEnd:
     async def test_run_command_output_is_redacted(self, tmp_path):
-        bus = EventBus()
-        bus.subscribe(RedactionSubscriber(_config_store(tmp_path)))
-
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+        policy = build_tool_result_policy(secret_store=_config_store(tmp_path))
+        ex = ToolExecutor("sess", tools=None, tool_result_policy=policy)
         tool = _LeakyEcho()
         tool.bind("sess")
-        ex.register_tool_instance(tool, [tool.name])
+        ex.register_native_tool(native_definition(type(tool)), tool)
 
         result = await ex.run_command("LeakyEcho", {"text": f"api_key: {_API_KEY}"})
 

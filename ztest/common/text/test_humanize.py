@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.common.text.humanize`."""
+"""Behavioral tests for :mod:`mote.contracts.text.humanize`."""
 from __future__ import annotations
 
 import pytest
 
-from mote.common.text import format_elapsed, format_file_size, format_token_count
+from mote.contracts.text import format_elapsed, format_file_size, format_token_count
 
 
 class TestFormatFileSize:

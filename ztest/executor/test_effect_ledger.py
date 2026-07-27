@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :mod:`mote.executor.effect_ledger`.
+"""Unit tests for :mod:`mote.runtime.tools.effect_ledger`.
 
 Covers the durable started/completed/failed ledger for EXTERNAL tool calls:
 fold-latest-per-id on load, ``unresolved`` surfacing only ``started`` records,
@@ -14,8 +14,8 @@ import json
 
 import pytest
 
-from mote.common.workspace import ArtifactKind, WorkspaceStore
-from mote.executor.effect_ledger import COMPLETED, FAILED, LEDGER_FILE_NAME, STARTED, EffectLedger, EffectRecord
+from mote.runtime.tools.effect_ledger import COMPLETED, FAILED, LEDGER_FILE_NAME, STARTED, EffectLedger, EffectRecord
+from mote.runtime.workspace import ArtifactKind, WorkspaceStore
 
 SESSION = "sess-1"
 

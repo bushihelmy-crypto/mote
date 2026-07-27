@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from mote.router.ratelimit import RateLimitSnapshot
-from mote.router.ratelimit.snapshot import _parse_duration, _to_int
+from datetime import datetime, timezone
+
+from mote.runtime.models.ratelimit import RateLimitSnapshot
+from mote.runtime.models.ratelimit.snapshot import _parse_duration, _to_int
 
 
 class TestToInt:
@@ -97,6 +99,22 @@ class TestFromHeadersAnthropic:
         assert snap.limit_tokens == 40000
         assert snap.remaining_tokens == 39000
         assert snap.reset_tokens_raw == "2026-07-21T00:01:00Z"
+
+    def test_normalizes_anthropic_reset_timestamp_for_admission(self):
+        reset_at = datetime.now(timezone.utc).timestamp() + 30.0
+        reset = datetime.fromtimestamp(reset_at, timezone.utc).isoformat()
+        snap = RateLimitSnapshot.from_headers(
+            "anthropic",
+            "claude",
+            {
+                "anthropic-ratelimit-requests-remaining": "0",
+                "anthropic-ratelimit-requests-reset": reset,
+            },
+        )
+
+        assert snap is not None
+        assert snap.normalized_reset_requests_seconds is not None
+        assert 29.0 <= snap.normalized_reset_requests_seconds <= 30.0
 
 
 class TestFromHeadersRetryAfter:

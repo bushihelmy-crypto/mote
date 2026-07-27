@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.roles.role.Role (construction, serialization, properties,
+"""Tests for mote.runtime.agent.role.Role (construction, serialization, properties,
 capabilities, messaging, and the async human/sleep helpers)."""
 from __future__ import annotations
 
@@ -10,15 +10,32 @@ import types
 
 import pytest
 
-from mote.common.agent_control import set_control
-from mote.common.const import MESSAGE_ROUTE_TO_SELF
-from mote.common.exception import RoleContextNotSetError
-from mote.common.schema import AIMessage, Message
-from mote.common.utils.common import any_to_str
-from mote.roles import Role, RoleSchema, RoleState
-from mote.roles.runtime_modules import dedupe_tools
+from mote.contracts.constants.messages import MESSAGE_ROUTE_TO_SELF
+from mote.contracts.policy.run_completion import RunCompletionDecision
+from mote.contracts.schema import AIMessage, Message
+from mote.contracts.services import ResolvedServiceResponse, ServiceExecutionSemantics, ServiceResponse
+from mote.kernel.output import text_output_contract
+from mote.product.agents import CodingAgentFactory
+from mote.runtime.agent import AgentDependencies, AgentWiring, Role, RoleSchema, RoleState
+from mote.runtime.agent.control import set_control
+from mote.runtime.agent.execution import any_to_str
+from mote.runtime.agent.runtime_modules import dedupe_tools
+from mote.runtime.errors import RoleContextNotSetError
+from mote.runtime.services import EngineServices
+from mote.runtime.tools.execution_context import bind_tool_call_id
 
-from .conftest import FakeContextManager, FakeEnv
+from .conftest import FakeContextManager, FakeEnv, FakeLLM
+
+coding_agent_factory = CodingAgentFactory()
+
+
+def _context_with_gateway(llm):
+    from mote.runtime.models.clients.context import Context
+    from mote.ztest.model_fakes import FakeModelGateway, offline_config
+
+    context = Context(config=offline_config(), provider_factory=lambda config: llm)
+    context.model_gateway = FakeModelGateway(llm)
+    return context
 
 
 # =============================================================================
@@ -62,7 +79,7 @@ class TestConstruction:
         for name in (
             "think_engine_factory",
             "think_subsystems_factory",
-            "loop_factory",
+            "flow_engine_factory",
             "executor",
             "skill_manager",
             "bg_pool",
@@ -118,7 +135,7 @@ class TestSerialization:
     def test_dump_shape(self):
         r = Role(name="Alice", profile="Shipper")
         data = r.dump()
-        assert data["__module_class_name"] == "mote.roles.role.Role"
+        assert data["type_id"] == "mote.agent.role.v1"
         assert data["role_schema"]["name"] == "Alice"
         assert data["role_schema"]["profile"] == "Shipper"
         assert "state" in data
@@ -136,13 +153,22 @@ class TestSerialization:
         restored = Role.load(r.dump())
         assert restored.session_id == r.session_id
 
-    def test_load_missing_class_name_raises(self):
+    def test_load_missing_type_id_raises(self):
         with pytest.raises(ValueError):
             Role.load({"state": {}, "role_schema": {}})
 
     def test_load_unknown_class_raises(self):
         with pytest.raises(TypeError):
-            Role.load({"__module_class_name": "no.such.Class"})
+            Role.load({"type_id": "no.such.type.v1"})
+
+    def test_load_legacy_module_path(self):
+        r = Role(name="Legacy")
+        data = r.dump()
+        data.pop("type_id")
+        data["__module_class_name"] = "mote.roles.role.Role"
+        restored = Role.load(data)
+        assert isinstance(restored, Role)
+        assert restored.name == "Legacy"
 
 
 # =============================================================================
@@ -159,9 +185,9 @@ class TestProperties:
         with pytest.raises(RoleContextNotSetError):
             _ = Role(name="X").context
 
-    def test_context_setter_getter(self, context):
+    def test_bind_services_sets_context(self, context):
         r = Role(name="X")
-        r.context = context
+        r.bind_services(EngineServices(context=context))
         assert r.context is context
 
     def test_config_prefers_injected(self):
@@ -169,7 +195,7 @@ class TestProperties:
         assert r.config == "injected-config"
 
     def test_config_falls_back_to_context(self, context):
-        r = Role(name="X", context=context)
+        r = Role(name="X", wiring=AgentWiring.for_context(context))
         # context.config is the real Config; just assert delegation works.
         assert r.config is context.config
 
@@ -219,8 +245,8 @@ class TestTurnContextBus:
         # (self-suppresses until the reconstructable-result count nears the fold
         # trigger).
         # The default model does not advertise server-side native tool search, so
-        # deferred tools use the split projection: callable shapes stay on the
-        # native wire while their compact descriptions ride the reminder tail.
+        # deferred tools are absent from the native wire until reveal; only their
+        # compact one-line hints ride the reminder tail.
         bus = role.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
         # The credential index is OPT-IN and gated on the ambient user config
@@ -230,6 +256,7 @@ class TestTurnContextBus:
         names.discard("credential_index")
         assert names == {
             "tool_catalog",
+            "toolset_instructions",
             "git",
             "team",
             "timestamp",
@@ -244,14 +271,17 @@ class TestTurnContextBus:
         }
 
     def test_lsp_source_present_when_configured(self):
-        from mote.common.schema import LspConfig, LspServerConfig
-        from mote.router.llm.context import Context
+        from mote.contracts.settings.lsp import LspConfig, LspServerConfig
 
         cfg = LspConfig(
             enabled=True,
             servers=[LspServerConfig(name="x", command=["x"], extensions=[".py"])],
         )
-        r = Role(name="X", role_schema=RoleSchema(name="X", lsp=cfg), context=Context())
+        r = Role(
+            name="X",
+            role_schema=RoleSchema(name="X", lsp=cfg),
+            wiring=AgentWiring.for_context(_context_with_gateway(FakeLLM())),
+        )
         bus = r.turn_context_bus
         names = {getattr(s, "name", "") for s in bus._sources}
         assert "lsp" in names
@@ -265,21 +295,18 @@ class TestTurnContextBus:
 
     def test_dual_role_sources_auto_subscribed_from_roster(self, role):
         # The single roster drives both edges: every feed exposing ``handle``
-        # (a dual-role ObservationSubscriber) is auto-subscribed to the event
-        # bus; render-only feeds are not. This is the invariant that lets adding
+        # is registered with Telemetry; render-only feeds are not. This lets adding
         # a feed touch exactly one list.
-        from mote.common.interface import ObservationSubscriber
-
         roster = role._components.turn_context_sources
         subscribers = _wired_subscribers(role)
         for src in roster:
-            if isinstance(src, ObservationSubscriber):
+            if callable(getattr(src, "handle", None)):
                 assert src in subscribers, f"{src.name} (dual-role) not subscribed"
             else:
                 assert src not in subscribers, f"{src.name} (render-only) subscribed"
 
-    def test_single_roster_shared_by_both_buses(self, role):
-        # The event-bus wiring and the turn-context bus must read the SAME
+    def test_single_roster_shared_by_telemetry_and_turn_context(self, role):
+        # Telemetry and the TurnContextBus must read the SAME
         # roster instances (not two parallel builds), or a dual-role feed's
         # armed state would be invisible to its renderer.
         roster = role._components.turn_context_sources
@@ -296,90 +323,78 @@ class TestTurnContextBus:
 
 
 def _wired_subscribers(role) -> list:
-    """Wire the spine (as the run lifecycle does) then return the bus subscribers.
-
-    The ``event_bus`` getter is a pure leaf — an unwired spine by design — so a
-    test that inspects the roster must first perform the same explicit wiring step
-    the runtime performs in ``Role._ensure_ready``.
-    """
-    role._components._wire_spine()
-    return role.event_bus.subscribers
+    """Return the declarative structural-handler roster."""
+    return role._components._build_telemetry_subscribers()
 
 
-class TestEventSubscriberRoster:
-    """The single declarative roster wires all subscribers (infra + dual-role)."""
+class TestTelemetryHandlerRoster:
+    """The declarative roster wires infrastructure and dual-role handlers."""
 
     def test_infra_observers_always_present(self, role):
-        # Recorder + logger are unconditional observers; both must be on the bus
-        # regardless of any opt-in layer.
-        from mote.common.events.log_subscriber import LogSubscriber
-        from mote.session.subscribers import RecorderSubscriber
+        # Logging is unconditional; durable recording is owned by EventFabric.
+        from mote.runtime.events.log_subscriber import LogSubscriber
 
         subs = _wired_subscribers(role)
-        assert any(isinstance(s, RecorderSubscriber) for s in subs)
         assert any(isinstance(s, LogSubscriber) for s in subs)
 
-    def test_resource_reconcile_subscriber_always_present(self, role):
-        # The resource side-store reconciler is an unconditional infra observer:
-        # a /clear or user delete must re-derive the registry regardless of layers.
-        from mote.roles.session_manager import ResourceReconcileSubscriber
-
+    def test_correctness_projections_are_not_telemetry_subscribers(self, role):
         subs = _wired_subscribers(role)
-        assert any(isinstance(s, ResourceReconcileSubscriber) for s in subs)
+        assert role.context_manager not in subs
+        rebuild_sources = [
+            source
+            for source in role.turn_context_bus._sources
+            if callable(getattr(source, "on_model_context_rebuilt", None))
+        ]
+        assert rebuild_sources
+        assert not any(source in subs for source in rebuild_sources)
 
     def test_optin_subscribers_absent_on_bare_role(self, role):
         # No hook layer, no LSP, no tracing/reporter env => none of the opt-in
         # subscribers are wired (the roster drops the ``None`` entries).
-        from mote.common.hook.subscriber import HookSubscriber
-        from mote.roles.lsp.service import LspService
+        from mote.runtime.agent.lsp.service import LspService
+        from mote.runtime.hook.subscriber import HookSubscriber
 
         subs = _wired_subscribers(role)
         assert not any(isinstance(s, HookSubscriber) for s in subs)
         assert not any(isinstance(s, LspService) for s in subs)
 
     def test_hook_subscriber_wired_when_hook_layer_exists(self, role):
-        from mote.common.hook.subscriber import HookSubscriber
+        from mote.runtime.hook.subscriber import HookSubscriber
 
         role.register_hook("Stop", lambda hook_input: None)
         subs = _wired_subscribers(role)
         assert any(isinstance(s, HookSubscriber) for s in subs)
 
-    def test_secret_subscribers_absent_when_secrets_disabled(self, role):
-        # secrets disabled → neither secret subscriber wired and the shared store
-        # getter is None (no vault touched). Force-disable rather than rely on the
-        # default so the test is hermetic even when the dev's ~/.mote/config.yaml
-        # turns the layer on.
-        from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
+    def test_secret_store_is_always_wired_but_io_lazy(self, role, tmp_path, monkeypatch):
+        from mote.runtime.agent.runtime_modules import integrations
 
-        role.config.secrets.enabled = False
-        subs = _wired_subscribers(role)
-        assert not any(isinstance(s, (SecretUploadSubscriber, RedactionSubscriber)) for s in subs)
-        assert role._components.secret_store is None
+        monkeypatch.setattr(integrations, "_primary_config_path", lambda cwd: None)
+        role.config.secrets.vault_path = str(tmp_path / "vault.json")
+        store = role._components.secret_store
+        assert role.prompt_policy._secret_store is store
+        assert not (tmp_path / "vault.json").exists()
 
-    def test_secret_subscribers_wired_when_secrets_enabled(self, role, tmp_path, monkeypatch):
-        # Enabling the layer wires BOTH secret subscribers onto the shared store.
+    def test_secret_store_wired_into_prompt_and_result_policy_when_enabled(self, role, tmp_path, monkeypatch):
+        # Enabling the layer injects one vault into both domain policies.
         # Redirect the key file + vault into tmp and skip config discovery so the
         # test never touches the real ~/.mote or harvests a real config.yaml.
-        from mote.executor.secrets.subscriber import RedactionSubscriber, SecretUploadSubscriber
-        from mote.roles.runtime_modules import integrations
+        from mote.runtime.agent.runtime_modules import integrations
 
-        monkeypatch.setattr("mote.common.secrets.cipher.CONFIG_ROOT", tmp_path)
+        monkeypatch.setattr("mote.runtime.secrets.cipher.CONFIG_ROOT", tmp_path)
         monkeypatch.setattr(integrations, "_primary_config_path", lambda cwd: None)
-        role.config.secrets.enabled = True
         role.config.secrets.vault_path = str(tmp_path / "vault.json")
 
         store = role._components.secret_store
         assert store is not None
         assert not (tmp_path / "vault.key").exists()
         assert not (tmp_path / "vault.json").exists()
-        subs = _wired_subscribers(role)
-        assert any(isinstance(s, SecretUploadSubscriber) for s in subs)
-        assert any(isinstance(s, RedactionSubscriber) for s in subs)
+        assert role.prompt_policy._secret_store is store
+        assert role.tool_result_policy is not None
 
     def test_checkpoint_subscriber_absent_when_disabled(self, role):
         # ``record_checkpoints=False`` drops the /rewind recorder regardless of
         # backend — the builder returns None so it never lands on the bus.
-        from mote.session.subscribers import CheckpointSubscriber
+        from mote.runtime.session.subscribers import CheckpointSubscriber
 
         role.role_schema.record_checkpoints = False
         subs = _wired_subscribers(role)
@@ -388,68 +403,81 @@ class TestEventSubscriberRoster:
     def test_checkpoint_subscriber_absent_on_non_git_backend(self, role, monkeypatch):
         # A non-repo workspace (blob backend) leaves the feature inert — no
         # per-turn capture is wired even with the flag on.
-        from mote.roles.runtime_modules import session as session_module
-        from mote.session.subscribers import CheckpointSubscriber
+        from mote.runtime.agent.runtime_modules import session as session_module
+        from mote.runtime.session.subscribers import CheckpointSubscriber
 
         role.role_schema.record_checkpoints = True
-        monkeypatch.setattr(session_module, "detect_blob_backend", lambda _wd: "blob")
+        monkeypatch.setattr(session_module, "checkpoint_supported", lambda _wd: False)
         subs = _wired_subscribers(role)
         assert not any(isinstance(s, CheckpointSubscriber) for s in subs)
 
     def test_checkpoint_subscriber_wired_on_git_backend(self, role, monkeypatch):
         # A git-backed code workspace engages the whole-tree checkpoint recorder.
-        from mote.roles.runtime_modules import session as session_module
-        from mote.session.subscribers import CheckpointSubscriber
+        from mote.runtime.agent.runtime_modules import session as session_module
+        from mote.runtime.session.subscribers import CheckpointSubscriber
 
         role.role_schema.record_checkpoints = True
-        monkeypatch.setattr(session_module, "detect_blob_backend", lambda _wd: "git")
+        monkeypatch.setattr(session_module, "checkpoint_supported", lambda _wd: True)
         subs = _wired_subscribers(role)
         assert any(isinstance(s, CheckpointSubscriber) for s in subs)
 
-    def test_lsp_service_wired_and_gets_bus_backref(self):
-        # The LSP service is an observer that also *produces* DiagnosticsEvent:
-        # subscribing it must hand it the bus via ``on_subscribed`` (no host
-        # special-case), and it must land on the bus.
-        from mote.common.schema import LspConfig, LspServerConfig
-        from mote.roles.lsp.service import LspService
-        from mote.router.llm.context import Context
+    def test_lsp_service_wired_and_gets_telemetry_backref(self):
+        # The LSP service both consumes FileMutatedEvent and produces
+        # DiagnosticsEvent on the same Role Telemetry runtime.
+        from mote.contracts.settings.lsp import LspConfig, LspServerConfig
+        from mote.runtime.agent.lsp.service import LspService
 
         cfg = LspConfig(
             enabled=True,
             servers=[LspServerConfig(name="x", command=["x"], extensions=[".py"])],
         )
-        r = Role(name="X", role_schema=RoleSchema(name="X", lsp=cfg), context=Context())
-        subs = _wired_subscribers(r)
-        lsp = next((s for s in subs if isinstance(s, LspService)), None)
-        assert lsp is not None
-        assert lsp.bus is r.event_bus
+        r = Role(
+            name="X",
+            role_schema=RoleSchema(name="X", lsp=cfg),
+            wiring=AgentWiring.for_context(_context_with_gateway(FakeLLM())),
+        )
 
-    def test_event_bus_getter_is_a_pure_leaf(self, role):
-        # Reading ``event_bus`` constructs a bare spine with zero subscribers —
+        async def scenario():
+            await r._components._wire_telemetry()
+            handlers = [worker.binding.handler for worker in r.telemetry._workers.values()]
+            lsp = next((s for s in handlers if isinstance(s, LspService)), None)
+            assert lsp is not None
+            assert lsp._telemetry is r.telemetry
+            await r.telemetry.aclose()
+
+        asyncio.run(scenario())
+
+    def test_telemetry_getter_is_a_pure_leaf(self, role):
+        # Reading telemetry constructs a bare runtime with zero handlers —
         # wiring is a *separate* lifecycle step, never a getter side-effect. This
         # is the property that keeps construction a pure DAG (no component read can
-        # transitively pull a wired bus, so no construction cycle can form).
-        bus = role.event_bus
-        assert bus.subscribers == []
-        assert role._components._spine_wired is False
+        # transitively wire Telemetry, so no construction cycle can form).
+        telemetry = role.telemetry
+        assert telemetry.snapshots() == ()
+        assert role._components._telemetry_wired is False
 
     def test_construction_order_independent(self):
-        # Reading ``context_manager`` first (it reads ``event_bus`` back during its
+        # Reading ``context_manager`` first (it reads telemetry during its
         # own construction) must not double-build or deadlock: the build graph is a
-        # DAG (the leaf bus carries no subscribers), so access order is immaterial.
-        from mote.router.llm.context import Context
-
-        r = Role(name="Y", role_schema=RoleSchema(name="Y"), context=Context())
+        # DAG, so access order is immaterial.
+        r = Role(
+            name="Y",
+            role_schema=RoleSchema(name="Y"),
+            wiring=AgentWiring.for_context(_context_with_gateway(FakeLLM())),
+        )
         cm = r.context_manager  # trigger via the manager edge first
-        assert r.event_bus is r._components._graph.peek("event_bus")  # same leaf, reused
+        assert r.telemetry is r._components._graph.peek("telemetry")
         assert r.context_manager is cm  # same instance — not rebuilt
 
-    def test_wire_spine_is_idempotent(self, role):
-        # Wiring twice must not double-subscribe (the spine wires exactly once).
-        role._components._wire_spine()
-        before = list(role.event_bus.subscribers)
-        role._components._wire_spine()  # redundant call (e.g. a second _ensure_ready)
-        assert role.event_bus.subscribers == before
+    def test_wire_telemetry_is_idempotent(self, role):
+        async def scenario():
+            await role._components._wire_telemetry()
+            before = role.telemetry.snapshots()
+            await role._components._wire_telemetry()
+            assert role.telemetry.snapshots() == before
+            await role.telemetry.aclose()
+
+        asyncio.run(scenario())
 
     def test_context_manager_getter_does_not_wire_the_reducer(self, role):
         # Reading ``context_manager`` is a pure build: it must NOT mutate the
@@ -475,17 +503,14 @@ class TestEventSubscriberRoster:
         assert role.router.context_reducer is first
 
     def test_summarize_llm_is_reducer_less(self, role):
-        # The safety invariant behind the no-runtime-guard design: the LLM the
-        # ContextManager's summarize reducer issues its inner aask() on MUST carry
-        # no COMPRESS reducer, or that inner overflow would recurse
-        # _compress → summarize → forever. It is the router's COMPRESSION-variant
-        # instance (route_for_task(COMPRESSION_TASK)); stamping the router's reducer
-        # afterwards must NOT leak onto it.
+        # Compression uses a dedicated canonical route without the request
+        # transformer that may invoke ContextManager recovery. Therefore its
+        # inner model call cannot recurse through compression again.
         cm = role.context_manager
         role._components._wire_collaborators()  # stamps router.context_reducer
-        summarize_llm = cm._summarize._llm
-        assert summarize_llm is cm._llm  # same instance summarize runs on
-        assert summarize_llm.context_reducer is None
+        summarize_route = cm._summarize._model_route
+        assert summarize_route is cm._model_route
+        assert summarize_route.request_transformer is None
         # And it is genuinely distinct from a reducer-bearing think instance.
         assert role.router.context_reducer is not None
 
@@ -500,7 +525,12 @@ class TestSkillsWiring:
 
     @staticmethod
     def _role(context, *, global_on, **schema_kwargs):
-        r = Role(name="X", role_schema=RoleSchema(name="X", **schema_kwargs), context=context)
+        r = coding_agent_factory.build(
+            Role,
+            name="X",
+            role_schema=RoleSchema(name="X", **schema_kwargs),
+            services=EngineServices(context=context),
+        )
         # Pin the ambient project config so the assertions isolate the switch.
         r.config.context.skills.enabled = global_on
         return r
@@ -536,13 +566,13 @@ class TestSkillsWiring:
 class TestToolSearchWiring:
     """A non-empty ``deferred_tools`` auto-binds the ``SearchTools`` meta-tool and
     the byte-stable index turn-context source; an empty list wires neither (zero
-    overhead when unused). Deferral filters *schema visibility* on both channels
-    while the tool stays dispatchable — revelation lives on RoleState."""
+    overhead when unused). Deferral filters schema visibility on both channels
+    and rejects guessed calls until revelation, which lives on RoleState."""
 
     @staticmethod
     def _role(context, *, tools, deferred):
         schema = RoleSchema(name="X", tools=tools, deferred_tools=deferred)
-        return Role(name="X", role_schema=schema, context=context)
+        return coding_agent_factory.build(Role, name="X", role_schema=schema, services=EngineServices(context=context))
 
     def test_deferred_tools_autobinds_search_tool(self, context):
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
@@ -557,7 +587,7 @@ class TestToolSearchWiring:
     def test_split_menu_present_without_native_tool_search(self, context):
         # Native transport alone is insufficient: the selected model must also
         # advertise server-side tool search. The default test model does not, so
-        # it gets the split menu and byte-stable stub descriptions instead.
+        # it gets one-line menu hints and no deferred schema before reveal.
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
         assert r.turn_context_source("deferred_tool_index") is None
         assert r.turn_context_source("split_tool_menu") is not None
@@ -567,21 +597,17 @@ class TestToolSearchWiring:
         # (the API needs every definition to expand tool_reference blocks) but
         # carries ``defer_loading:true``. Revealing it does NOT change the wire —
         # defer_loading is keyed on corpus membership, so the tools= prefix is
-        # byte-stable (prompt cache preserved). The XML view still hides it.
+        # byte-stable (prompt cache preserved). No XML projection exists on this executor.
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
-        # XML schema view (schemas_for) keeps the client-side hide.
-        assert "WebBrowser" not in r.executor.get_tool_schemas()
-        assert "Read" in r.executor.get_tool_schemas()
-        assert "SearchTools" in r.executor.get_tool_schemas()
         # Native (anthropic) wire: present + deferred, even before any reveal.
         # The server-side path is now capability-gated, so a capable model name
         # must be threaded (the executor gets it from the resolved model config).
-        before = r.executor.get_native_tool_specs("anthropic", model="claude-opus-4-8")
+        before = r.executor.native_tool_specs("anthropic", model="claude-opus-4-8")
         wb = next(s for s in before if s["name"] == "WebBrowser")
         assert wb.get("defer_loading") is True
         # Reveal it — the native wire is byte-identical (cache-stable).
         r.reveal_tools(["WebBrowser"])
-        after = r.executor.get_native_tool_specs("anthropic", model="claude-opus-4-8")
+        after = r.executor.native_tool_specs("anthropic", model="claude-opus-4-8")
         assert after == before
 
     def test_index_source_present_on_xml_fallback(self, context):
@@ -593,16 +619,16 @@ class TestToolSearchWiring:
             deferred_tools=["WebBrowser"],
             command_protocol="xml",
         )
-        r = Role(name="X", role_schema=schema, context=context)
+        r = coding_agent_factory.build(Role, name="X", role_schema=schema, services=EngineServices(context=context))
         assert r.turn_context_source("deferred_tool_index") is not None
 
     @staticmethod
     def _openai_role(context, *, model, deferred=("WebBrowser",)):
         # A native role forced onto a genuine OpenAI endpoint; the model name
-        # decides whether resolve_api_type picks the Responses (native tool
-        # search) transport. Mutate the resolved default config in place so
-        # infer_native_tool_provider sees the OpenAI host + chosen model.
-        from mote.common.config.config.llm_config import LLMType
+        # decides whether the immutable Gateway profile advertises native tool
+        # search. Configure the route before constructing the role and snapshot.
+        from mote.contracts.config.llm import LLMType
+        from mote.ztest.model_fakes import FakeModelGateway
 
         schema = RoleSchema(
             name="X",
@@ -610,11 +636,14 @@ class TestToolSearchWiring:
             deferred_tools=list(deferred),
             command_protocol="native",
         )
-        r = Role(name="X", role_schema=schema, context=context)
-        d = r.config.models.default
+        d = context.config.models.default
         d.api_type = LLMType.OPENAI
         d.base_url = "https://api.openai.com/v1"
         d.model = model
+        llm = FakeLLM()
+        llm.model = model
+        context.model_gateway = FakeModelGateway(llm)
+        r = coding_agent_factory.build(Role, name="X", role_schema=schema, services=EngineServices(context=context))
         return r
 
     def test_index_present_on_capable_openai_native(self, context):
@@ -629,25 +658,31 @@ class TestToolSearchWiring:
 
     def test_split_menu_present_on_incapable_openai_native(self, context):
         # An older OpenAI model has no native tool search → falls back to the
-        # client-side SPLIT path (native): the split_tool_menu source is wired
-        # (descriptions on the reminder tail), NOT the withhold deferred_tool_index.
+        # client-side path (native): the split_tool_menu source is wired (one-line
+        # hints on the reminder tail), NOT the deferred_tool_index source.
         r = self._openai_role(context, model="gpt-4o")
         assert r.turn_context_source("split_tool_menu") is not None
         assert r.turn_context_source("deferred_tool_index") is None
 
-    def test_deferred_tool_present_with_stub_on_incapable_openai_native(self, context):
-        # SPLIT wire projection: the deferred tool stays present (callable) with a
-        # stub description + no defer_loading, byte-stable across reveal.
-        from mote.executor.tool_catalog import SPLIT_TOOLSPEC_DESC
-
+    def test_deferred_tool_withheld_until_reveal_on_incapable_openai_native(self, context):
         r = self._openai_role(context, model="gpt-4o")
-        before = r.executor.get_native_tool_specs("openai", model="gpt-4o")
-        wb = next(s for s in before if s["function"]["name"] == "WebBrowser")
-        assert wb["function"]["description"] == SPLIT_TOOLSPEC_DESC
-        assert "defer_loading" not in wb
+        before = r.executor.native_tool_specs("openai", model="gpt-4o")
+        assert not any(spec["function"]["name"] == "WebBrowser" for spec in before)
         r.reveal_tools(["WebBrowser"])
-        after = r.executor.get_native_tool_specs("openai", model="gpt-4o")
-        assert after == before  # cache-stable
+        after = r.executor.native_tool_specs("openai", model="gpt-4o")
+        wb = next(spec for spec in after if spec["function"]["name"] == "WebBrowser")
+        assert wb["function"]["description"] != ""
+        assert "defer_loading" not in wb
+
+    @pytest.mark.asyncio
+    async def test_guessed_deferred_tool_is_rejected_until_reveal(self, context):
+        r = self._openai_role(context, model="gpt-4o")
+
+        result = await r.executor.run_command("WebBrowser", {})
+
+        assert result.success is False
+        assert "SearchTools" in result.output
+        assert r.state.revealed_tools == set()
 
     def test_index_lists_deferred_tool(self, context):
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
@@ -681,12 +716,10 @@ class TestToolSearchWiring:
         assert "SearchTools" not in r._components.executor._tools
 
     def test_master_switch_off_shows_all_tools_on_native_wire(self, context):
-        # With the switch off, the corpus tool is fully visible on BOTH channels —
-        # no defer_loading stamp on the native wire, present in the XML schema.
+        # With the switch off, the corpus tool is fully visible on this Native channel.
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
         r.config.tools.tool_search.enabled = False
-        assert "WebBrowser" in r.executor.get_tool_schemas()  # XML no longer hides
-        specs = r.executor.get_native_tool_specs("anthropic", model="claude-opus-4-8")
+        specs = r.executor.native_tool_specs("anthropic", model="claude-opus-4-8")
         wb = next(s for s in specs if s["name"] == "WebBrowser")
         assert "defer_loading" not in wb  # not deferred → no stamp
 
@@ -699,7 +732,7 @@ class TestToolSearchWiring:
             deferred_tools=["WebBrowser"],
             command_protocol="xml",
         )
-        r = Role(name="X", role_schema=schema, context=context)
+        r = coding_agent_factory.build(Role, name="X", role_schema=schema, services=EngineServices(context=context))
         r.config.tools.tool_search.enabled = False
         assert r.turn_context_source("deferred_tool_index") is None
 
@@ -711,14 +744,14 @@ class TestToolSearchWiring:
         assert "DeviceUse" in schema.tools
         assert "DeviceUse" in schema.deferred_tools
 
-    def test_deviceuse_deferred_but_dispatchable(self, context):
-        # A deferred tool is still bound + dispatchable (revelation only lifts
-        # schema visibility) and appears in the searchable menu. Pin the master
+    def test_deviceuse_deferred_but_searchable(self, context):
+        # A deferred tool stays bound internally but is not dispatchable until
+        # reveal; it appears in the searchable menu. Pin the master
         # switch on BEFORE building (the deferred set is fixed at build time) —
         # a sibling test mutates the shared config cache off.
         context.config.tools.tool_search.enabled = True
         schema = RoleSchema(name="X", tools=["Read", "DeviceUse"], deferred_tools=["DeviceUse"])
-        r = Role(name="X", role_schema=schema, context=context)
+        r = coding_agent_factory.build(Role, name="X", role_schema=schema, services=EngineServices(context=context))
         assert "DeviceUse" in r._components.executor._tools  # bound
         assert "DeviceUse" in r.list_deferred_tools()  # searchable in the menu
 
@@ -729,8 +762,8 @@ class TestToolSearchWiring:
 class TestTurnContextRegistry:
     """`context.turn_context.disabled` is a name blacklist that suppresses any
     normally-on ephemeral source; the credential index is the one OPT-IN source,
-    CONSTRUCTED only when (toggle on) AND (secrets enabled) AND (WebBrowser
-    equipped), and RENDERS only on a turn where WebBrowser was recently used."""
+    CONSTRUCTED only when (toggle on) AND (WebBrowser equipped), and RENDERS only
+    on a turn where WebBrowser was recently used."""
 
     @pytest.fixture(autouse=True)
     def _restore_shared_config(self, context):
@@ -762,25 +795,24 @@ class TestTurnContextRegistry:
             deferred_tools=["WebBrowser"],
             command_protocol="xml",
         )
-        return Role(name="X", role_schema=schema, context=context)
+        return Role(name="X", role_schema=schema, wiring=AgentWiring.for_context(context))
 
     @staticmethod
     def _wb_role(context, *, tools=("Read", "WebBrowser")):
         return Role(
             name="X",
             role_schema=RoleSchema(name="X", tools=list(tools)),
-            context=context,
+            wiring=AgentWiring.for_context(context),
         )
 
     @staticmethod
     def _enable_secrets(role, tmp_path, monkeypatch):
         # Redirect the key file + vault into tmp and skip config discovery so the
         # test never touches the real ~/.mote or harvests a real config.yaml.
-        from mote.roles.runtime_modules import integrations
+        from mote.runtime.agent.runtime_modules import integrations
 
-        monkeypatch.setattr("mote.common.secrets.cipher.CONFIG_ROOT", tmp_path)
+        monkeypatch.setattr("mote.runtime.secrets.cipher.CONFIG_ROOT", tmp_path)
         monkeypatch.setattr(integrations, "_primary_config_path", lambda cwd: None)
-        role.config.secrets.enabled = True
         role.config.secrets.vault_path = str(tmp_path / "vault.json")
         role.config.secrets.secrets_config_path = str(tmp_path / "secrets_config.json")
 
@@ -803,7 +835,7 @@ class TestTurnContextRegistry:
         # Opt-in: the schema default is off, and a role with it off wires nothing
         # even when WebBrowser-equipped. (Assert the SCHEMA default directly — the
         # ambient user config may enable it, so pin the role's toggle off here.)
-        from mote.common.config.config.context_config import TurnContextConfig
+        from mote.contracts.config.context import TurnContextConfig
 
         assert TurnContextConfig().credential_index is False
         r = self._wb_role(context)
@@ -817,12 +849,10 @@ class TestTurnContextRegistry:
         r.config.context.turn_context.credential_index = True
         assert r.turn_context_source("credential_index") is None
 
-    def test_credential_index_off_when_secrets_disabled(self, context):
-        # Toggle on + WebBrowser, but secrets disabled → no live vault → not wired.
+    def test_credential_index_wires_without_a_disableable_secret_gate(self, context):
         r = self._wb_role(context)
-        r.config.secrets.enabled = False
         r.config.context.turn_context.credential_index = True
-        assert r.turn_context_source("credential_index") is None
+        assert r.turn_context_source("credential_index") is not None
 
     def test_credential_index_wired_when_all_gates_pass(self, context, tmp_path, monkeypatch):
         r = self._wb_role(context)
@@ -948,7 +978,7 @@ class TestTaskCompletionWake:
 
 
 # =============================================================================
-# Compaction-notice feed (dual-role: bus subscriber + turn_context source)
+# Compaction-notice feed (explicit rebuild projection + turn-context source)
 # =============================================================================
 class TestCompactionNotice:
     def test_roster_slot_starts_none(self):
@@ -960,20 +990,17 @@ class TestCompactionNotice:
         assert notice is not None
         assert role.turn_context_source("compaction") is notice  # cached roster
 
-    def test_subscribed_to_event_bus(self, role):
-        assert role.turn_context_source("compaction") in _wired_subscribers(role)
+    def test_not_registered_with_telemetry(self, role):
+        assert role.turn_context_source("compaction") not in _wired_subscribers(role)
 
-    def test_same_instance_in_both_buses(self, role):
-        # The object subscribed to the event bus (input edge) must be the same
-        # object rendered by the turn-context bus (output edge), else the armed
-        # flag set by handle() would never be seen by render().
+    def test_rebuild_projection_is_owned_by_turn_context_bus(self, role):
         notice = role.turn_context_source("compaction")
-        assert notice in _wired_subscribers(role)
         assert notice in role.turn_context_bus._sources
+        assert callable(notice.on_model_context_rebuilt)
 
 
 # =============================================================================
-# File-watch service wiring (opt-in, bus subscriber, cleanup)
+# File-watch service wiring (opt-in producer and cleanup)
 # =============================================================================
 class TestFileWatchService:
     def test_slot_starts_none(self):
@@ -983,41 +1010,46 @@ class TestFileWatchService:
         # No file_watch config => watcher disabled.
         assert role.file_watch_service is None
 
-    def test_none_when_enabled_but_no_hook_layer(self, role):
-        from mote.common.schema import FileWatchConfig
+    def test_built_when_enabled_without_hook_layer(self, role):
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True)
-        # No hook layer (no HookConfig, no registered callback) => nothing would
-        # consume FileChanged events, so the watcher stays off.
-        assert role.file_watch_service is None
+        svc = role.file_watch_service
+        assert svc is not None
+        assert svc not in _wired_subscribers(role)
 
     def test_built_when_enabled_with_hook_layer(self, role):
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True)
         role.register_hook("FileChanged", lambda hook_input: None)
         svc = role.file_watch_service
         assert svc is not None
         assert role.file_watch_service is svc  # cached
-        # The service subscribed itself to the role's event bus.
-        assert svc in role.event_bus.subscribers
+        # The service only produces typed events; it is not a telemetry handler.
+        assert svc not in _wired_subscribers(role)
 
     def test_cleanup_stops_and_unsubscribes(self, role):
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True)
         role.register_hook("FileChanged", lambda hook_input: None)
 
         async def scenario():
             svc = role.file_watch_service
-            svc.start()
+
+            async def empty_snapshot():
+                return {}
+
+            svc.watcher._snapshot_async = empty_snapshot
+            await svc.start_async()
             assert svc.watcher.is_running() is True
             await role.cleanup()
             return svc
 
         svc = asyncio.run(scenario())
         assert svc.watcher.is_running() is False
-        assert svc not in role.event_bus.subscribers
+        assert svc not in _wired_subscribers(role)
 
     def test_cleanup_safe_when_watcher_never_built(self, role):
         # Nothing to stop — cleanup short-circuits without error.
@@ -1029,7 +1061,7 @@ class TestFileWatchHotReload:
     """The reload_skills / reload_config flags auto-wire FileChanged handlers."""
 
     def test_reload_skills_engages_hook_and_watches_skill_dir(self, role):
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         # No manual hook registered: the auto-registered skill handler is what
@@ -1040,7 +1072,7 @@ class TestFileWatchHotReload:
         assert os.path.abspath(skill_root) in svc.watcher._roots
 
     def test_skill_filechanged_fires_reload(self, role, monkeypatch):
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         _ = role.file_watch_service  # builds + registers the handler
@@ -1071,10 +1103,10 @@ class TestFileWatchHotReload:
         a home / large directory (no repo) from recursively walking the whole
         tree — the reload_* config dirs are watched regardless.
         """
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         monkeypatch.setattr(
-            "mote.roles.runtime_modules.watching.find_git_root",
+            "mote.runtime.agent.runtime_modules.watching.find_git_root",
             lambda cwd: "/proj/repo",
         )
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
@@ -1083,9 +1115,12 @@ class TestFileWatchHotReload:
 
     def test_base_root_omitted_outside_a_git_repo(self, role, monkeypatch):
         """Outside a repo the cwd is NOT added — no whole-tree walk from home."""
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
-        monkeypatch.setattr("mote.roles.runtime_modules.watching.find_git_root", lambda cwd: None)
+        monkeypatch.setattr(
+            "mote.runtime.agent.runtime_modules.watching.find_git_root",
+            lambda cwd: None,
+        )
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_skills=True)
         svc = role.file_watch_service
         # The cwd is never pulled in as a root when there is no repo boundary.
@@ -1096,14 +1131,17 @@ class TestFileWatchHotReload:
         assert os.path.abspath(skill_root) in svc.watcher._roots
 
     def test_reload_config_engages_hook_and_swaps_config(self, role, monkeypatch):
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_config=True)
         svc = role.file_watch_service
         assert svc is not None  # config handler alone engaged the hook layer
 
         sentinel = object()
-        monkeypatch.setattr("mote.roles.runtime_maintenance.load_config", lambda *a, **k: sentinel)
+        monkeypatch.setattr(
+            "mote.runtime.agent.runtime_maintenance.load_config",
+            lambda *a, **k: sentinel,
+        )
 
         async def scenario():
             await role.hook_manager.fire(
@@ -1123,7 +1161,7 @@ class TestFileWatchHotReload:
         that eventually killed the CLI. Every watched root here must be an
         ``mcp.json`` file (a bare directory root would recurse).
         """
-        from mote.common.schema import FileWatchConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         role.role_schema.file_watch = FileWatchConfig(enabled=True, reload_mcp=True)
         svc = role.file_watch_service
@@ -1193,12 +1231,6 @@ class TestFrameworkProperties:
         r.state.working_dir = ""
         assert r.get_cwd() == r.state.original_working_dir
 
-    def test_record_and_get_file_read(self):
-        r = Role(name="X")
-        assert r.get_file_read_mtime("/a") is None
-        r.record_file_read("/a", 999)
-        assert r.get_file_read_mtime("/a") == 999
-
 
 # =============================================================================
 # Fork-skill isolated execution (run_skill_fork)
@@ -1214,7 +1246,7 @@ class _ForkProbeRole(Role):
             "state": self.state,
             "message": with_message,
         }
-        from mote.common.schema.output import CommittedOutput, RunResult, TranscriptRef
+        from mote.contracts.output import CommittedOutput, RunResult, TranscriptRef
 
         committed = CommittedOutput("candidate", "mote.text@1", "sha", "  child summary  ")
         return RunResult(
@@ -1250,7 +1282,7 @@ class _InlineForkControl:
     """Minimal plane for skill-fork: builds the child via the spec factory."""
 
     async def spawn_agent(self, spec):
-        from mote.common.agent_control import SpawnContext
+        from mote.contracts.spawn import SpawnContext
 
         return _ForkHandle(spec.role_factory(SpawnContext(parent_id=spec.parent_id)))
 
@@ -1314,34 +1346,32 @@ class TestCapabilities:
             "request_approval",
             "reply_to_user",
             "end_session",
-            "record_file_read",
-            "get_file_read_mtime",
+            "capture_file_snapshot",
+            "observe_file_snapshot",
+            "read_file_view",
+            "search_files",
+            "plan_file_edit",
+            "commit_edit_plan",
+            "commit_generated_files",
             "record_file_glimpsed",
             "is_resource_visible",
-            "record_file_snapshot",
-            "record_file_baseline",
-            "attribute_external_change",
-            "get_tool_session",
-            "set_tool_session",
-            "record_terminal_state",
-            "take_pending_terminal_restore",
-            "record_kernel_state",
-            "take_pending_kernel_restore",
-            "record_browser_state",
-            "take_pending_browser_restore",
-            "get_browser_headless",
+            "get_runtime_host",
+            "get_artifact_store",
+            "get_artifact_publisher",
+            "handoff_runtime",
             "get_browser_stealth",
             "get_browser_locale",
             "get_browser_proxy",
+            "get_browser_cdp_endpoint",
             "get_browser_profile",
             "load_browser_profile",
             "save_browser_profile",
             "get_browser_client_certs",
-            "get_browser_cdp_endpoint",
             "get_secret",
             "wait_interruptible",
             "get_bg_pool",
             "get_skill_pool",
+            "build_child_agent",
             "run_skill_fork",
             "register_resource",
             "register_task_result",
@@ -1359,8 +1389,8 @@ class TestCapabilities:
             "list_deferred_tools",
             "reveal_tools",
             "describe_deferred_tools",
-            "web_search",
             "describe_image",
+            "invoke_service",
             "get_default_model",
         }
 
@@ -1370,6 +1400,89 @@ class TestCapabilities:
         assert caps["get_cwd"]() == r.get_cwd()
         # Bound methods compare equal (same instance + same function).
         assert caps["set_cwd"] == r.set_cwd
+
+    @pytest.mark.asyncio
+    async def test_service_identity_is_stable_per_tool_call_and_agent(self):
+        class RecordingGateway:
+            def __init__(self):
+                self.invocations = []
+
+            def supports_route(self, route_id, capability):
+                return True
+
+            async def execute(self, invocation):
+                self.invocations.append(invocation)
+                return ResolvedServiceResponse(
+                    response=ServiceResponse(value="ok"),
+                    endpoint_id="endpoint",
+                    endpoint_fingerprint="fingerprint",
+                    credential_slot_id="slot",
+                    tenant_fingerprint="tenant",
+                    service_call_id=invocation.service_call_id,
+                    successful_attempt_id="attempt",
+                )
+
+            async def resume(self, invocation):
+                return await self.execute(invocation)
+
+            async def cancel(self, service_call_id):
+                return False
+
+        gateway = RecordingGateway()
+        context = types.SimpleNamespace(service_gateway=gateway, aclose=lambda: None)
+        left = Role(name="left", wiring=AgentWiring.for_context(context))
+        right = Role(name="right", wiring=AgentWiring.for_context(context))
+        kwargs = {
+            "route_id": "media.image",
+            "capability": "media.generate.image",
+            "operation_key": "image:0",
+            "payload": {"item": {"filename": "a.png"}},
+            "semantics": ServiceExecutionSemantics.IDEMPOTENT,
+        }
+
+        with bind_tool_call_id("same-provider-call-id"):
+            await left.invoke_service(**kwargs)
+        with bind_tool_call_id("same-provider-call-id"):
+            await right.invoke_service(**kwargs)
+        with bind_tool_call_id("same-provider-call-id"):
+            await left.invoke_service(**kwargs)
+
+        first, second, replay = gateway.invocations
+        assert first.service_call_id == replay.service_call_id
+        assert first.idempotency_key == replay.idempotency_key
+        assert first.service_call_id != second.service_call_id
+
+    def test_child_agent_construction_requires_an_injected_factory(self):
+        build_child_agent = Role(name="X").tool_capabilities()["build_child_agent"]
+
+        with pytest.raises(RuntimeError, match="AgentDependencies.agent_factory"):
+            build_child_agent(dict)
+
+    def test_child_agent_construction_uses_the_injected_factory(self):
+        class RecordingFactory:
+            def __init__(self):
+                self.calls = []
+
+            def build(self, agent_cls, /, **kwargs):
+                self.calls.append((agent_cls, kwargs))
+                return agent_cls(**kwargs)
+
+        class Child:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        factory = RecordingFactory()
+        dependencies = AgentDependencies(
+            deps=None,
+            output_contract=text_output_contract(),
+            agent_factory=factory,
+        )
+        role = Role(wiring=AgentWiring.for_dependencies(dependencies))
+
+        child = role.tool_capabilities()["build_child_agent"](Child, parent_session_id="parent")
+
+        assert child.kwargs == {"parent_session_id": "parent"}
+        assert factory.calls == [(Child, {"parent_session_id": "parent"})]
 
 
 # =============================================================================
@@ -1420,6 +1533,13 @@ class TestBrowserProxy:
 # Browser profile capability (durable encrypted login store)
 # =============================================================================
 class TestBrowserProfile:
+    def test_get_browser_cdp_endpoint_from_schema(self):
+        role = Role(
+            name="X",
+            role_schema=RoleSchema(name="X", browser_cdp_endpoint="http://127.0.0.1:9222"),
+        )
+        assert role.get_browser_cdp_endpoint() == "http://127.0.0.1:9222"
+
     def test_get_browser_profile_empty_by_default(self):
         assert Role(name="X").get_browser_profile() == ""
 
@@ -1617,7 +1737,7 @@ class TestWaitInterruptible:
     def test_bounded_wait_wakes_on_deadline(self, context):
         # A positive duration caps the wait: with no event, it returns when the
         # deadline elapses rather than blocking forever.
-        r = Role(name="X", context=context)
+        r = Role(name="X", wiring=AgentWiring.for_context(context))
 
         async def scenario():
             return await asyncio.wait_for(r.wait_interruptible(0.1), timeout=2.0)
@@ -1629,9 +1749,9 @@ class TestWaitInterruptible:
         # A bounded wait opens+closes a durable timer in the run journal so a
         # crash-resume could continue by remaining time. After it returns the
         # timer's terminal is recorded (its countdown is over).
-        from mote.common.ledger import COMPLETED, KIND_TIMER
+        from mote.runtime.ledger import COMPLETED, KIND_TIMER
 
-        r = Role(name="X", context=context)
+        r = Role(name="X", wiring=AgentWiring.for_context(context))
         journal = r.executor.journal
         assert journal is not None  # durable config enabled by default
 
@@ -1696,56 +1816,34 @@ class TestDedupeTools:
 
 
 # =============================================================================
-# Auto-continue seam (_should_auto_continue) — framework only, default off
+# Auto-continue decision application
 # =============================================================================
 class TestAutoContinue:
-    """The TurnEnd auto-continue decision: a control subscriber blocking the stop
-    (``TurnOutcome.block=True``) forces another turn, bounded by
-    max_auto_continue."""
-
-    def _outcome(self, **kw):
-        from mote.common.events import TurnOutcome
-
-        return TurnOutcome(**kw)
-
-    def test_default_budget_zero_never_continues(self):
+    def test_continue_enqueues_context(self):
         r = Role(name="A")
-        out = self._outcome(block=True, additional_context=["go on"])
-        # budget 0 → no continuation, no message enqueued (byte-identical to old).
-        assert r._should_auto_continue(out, 0) is False
-        assert r.state.msg_buffer.empty()
-
-    def test_block_with_budget_continues_and_enqueues_context(self):
-        r = Role(name="A")
-        out = self._outcome(block=True, additional_context=["keep working"])
-        assert r._should_auto_continue(out, 2) is True
+        decision = RunCompletionDecision(
+            continue_run=True,
+            additional_context=("keep working",),
+        )
+        assert r._apply_continuation_decision(decision) is True
         assert not r.state.msg_buffer.empty()
         msg = r.state.msg_buffer.pop()
         assert "keep working" in msg.content
 
-    def test_block_falls_back_to_system_message(self):
+    def test_complete_does_not_enqueue_context(self):
         r = Role(name="A")
-        out = self._outcome(block=True, system_message="not done yet")
-        assert r._should_auto_continue(out, 1) is True
-        msg = r.state.msg_buffer.pop()
-        assert "not done yet" in msg.content
-
-    def test_none_outcome_does_not_continue(self):
-        r = Role(name="A")
-        assert r._should_auto_continue(None, 3) is False
+        decision = RunCompletionDecision(
+            continue_run=False,
+            additional_context=("must not enqueue",),
+        )
+        assert r._apply_continuation_decision(decision) is False
         assert r.state.msg_buffer.empty()
 
-    def test_non_blocking_outcome_does_not_continue(self):
+    def test_continue_without_context_does_not_enqueue(self):
         r = Role(name="A")
-        out = self._outcome(block=False)
-        assert r._should_auto_continue(out, 3) is False
+        decision = RunCompletionDecision(continue_run=True)
+        assert r._apply_continuation_decision(decision) is True
         assert r.state.msg_buffer.empty()
-
-    def test_block_without_context_continues_without_enqueue(self):
-        r = Role(name="A")
-        out = self._outcome(block=True)
-        assert r._should_auto_continue(out, 1) is True
-        assert r.state.msg_buffer.empty()  # nothing to inject, but still continues
 
     def test_schema_default_is_zero(self):
         assert RoleSchema().max_auto_continue == 0
@@ -1772,14 +1870,11 @@ class TestFullResolutionSmoke:
     @staticmethod
     def _fully_configured_role(context):
         """A Role whose schema flips every opt-in ``available`` gate true."""
-        from mote.common.schema import (
-            FileWatchConfig,
-            HookConfig,
-            LspConfig,
-            LspServerConfig,
-            PermissionConfig,
-            SandboxRuntimeConfig,
-        )
+        from mote.contracts.settings.hooks import HookConfig
+        from mote.contracts.settings.lsp import LspConfig, LspServerConfig
+        from mote.contracts.settings.permissions import PermissionConfig
+        from mote.contracts.settings.sandbox import SandboxRuntimeConfig
+        from mote.contracts.settings.watching import FileWatchConfig
 
         schema = RoleSchema(
             name="FullyLoaded",
@@ -1798,7 +1893,19 @@ class TestFullResolutionSmoke:
             # consumer) makes _build_file_watch_service return a real service.
             file_watch=FileWatchConfig(enabled=True),
         )
-        return Role(role_schema=schema, context=context)
+        from mote.orchestration.tasks import build_background_task_pool
+
+        return Role(
+            role_schema=schema,
+            wiring=AgentWiring.for_context(
+                context,
+                dependencies=AgentDependencies(
+                    deps=None,
+                    output_contract=text_output_contract(),
+                    background_task_pool_builder=build_background_task_pool,
+                ),
+            ),
+        )
 
     def test_every_spec_resolves_without_error(self, context):
         # The core assertion: resolving each registered component exercises its
@@ -1840,7 +1947,11 @@ class TestToolExecConfigWiring:
     instance back off the executor — proven here by identity)."""
 
     def test_result_limit_and_ledger_config_reach_executor(self, context):
-        role = Role(name="X", context=context, role_schema=RoleSchema(tools=["Read"]))
+        role = Role(
+            name="X",
+            wiring=AgentWiring.for_context(context),
+            role_schema=RoleSchema(tools=["Read"]),
+        )
         # Override before the (lazy) executor is built.
         role.config.tools.result_limit.default_max_result_size_chars = 12345
         role.config.tools.effect_ledger.enabled = True
@@ -1854,7 +1965,11 @@ class TestToolExecConfigWiring:
         assert ex.ledger is not None  # enabled -> a real ledger is built
 
     def test_ledger_disabled_yields_no_ledger(self, context):
-        role = Role(name="X", context=context, role_schema=RoleSchema(tools=["Read"]))
+        role = Role(
+            name="X",
+            wiring=AgentWiring.for_context(context),
+            role_schema=RoleSchema(tools=["Read"]),
+        )
         role.config.tools.effect_ledger.enabled = False
         assert role.executor.ledger is None  # disabled -> run_command skips all ledger work
 
@@ -1862,6 +1977,10 @@ class TestToolExecConfigWiring:
         # Zero-drift proof: the compaction spill reducer does not build its own
         # ToolResultLimitConfig — it reuses the one the executor owns, which is
         # the one configured under ``tools``.
-        role = Role(name="X", context=context, role_schema=RoleSchema(tools=["Read"]))
+        role = Role(
+            name="X",
+            wiring=AgentWiring.for_context(context),
+            role_schema=RoleSchema(tools=["Read"]),
+        )
         cm = role._components._graph.get("context_manager")
         assert cm._spill._limit is role.config.tools.result_limit

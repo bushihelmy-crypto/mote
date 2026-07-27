@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphState
 
 from .conftest import S, sync_node
 

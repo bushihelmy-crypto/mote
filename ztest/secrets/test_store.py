@@ -5,8 +5,7 @@
 Covers the store's three tiers and their invariants: config auto-sync (hot on
 mtime), persisted user secrets, in-memory session secrets; encrypted
 persist/reload; section-isolated writes (a config reseed never clobbers user
-secrets); and fail-open reads (an undecryptable / malformed vault is empty, never
-a crash).
+secrets); and fail-closed reads for damaged protection state.
 """
 from __future__ import annotations
 
@@ -14,8 +13,10 @@ import json
 import os
 import stat
 
-from mote.common.secrets.cipher import AesGcmCipher
-from mote.common.secrets.store import SecretStore
+import pytest
+
+from mote.runtime.secrets.cipher import AesGcmCipher
+from mote.runtime.secrets.store import SecretStore
 
 _API_KEY = "sk-proj-abc123SUPERsecretVALUE456"
 
@@ -57,8 +58,10 @@ class TestConfigHarvest:
         assert "<secret:langfuse.secret_key>" in store.as_map().values()
 
     def test_no_config_path_means_no_config_tier(self, tmp_path):
-        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json")
+        vault = tmp_path / "vault.json"
+        store = SecretStore(_cipher(), vault_path=vault)
         assert store.as_map() == {}
+        assert not vault.exists()
 
 
 class TestUserAndSession:
@@ -217,19 +220,19 @@ class TestSecretsConfigFile:
         assert m["file-secret-value-123"] == "<agent-vault:file-key>"  # file tier
         assert m["user-secret-value-456"] == "<agent-vault:user-key>"  # user tier
 
-    def test_malformed_file_ignored(self, tmp_path):
+    def test_malformed_file_fails_closed(self, tmp_path):
         sc = tmp_path / "secrets_config.json"
         sc.write_text("{not valid json")
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
-        assert store.as_map() == {}
+        with pytest.raises(ValueError, match="malformed"):
+            store.as_map()
 
-    def test_non_string_values_dropped(self, tmp_path):
+    def test_non_string_values_fail_closed(self, tmp_path):
         sc = tmp_path / "secrets_config.json"
         sc.write_text(json.dumps({"good": "keepme-secret-value", "bad": 12345}))
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", secrets_config_file=sc)
-        m = store.as_map()
-        assert "keepme-secret-value" in m
-        assert 12345 not in m and "12345" not in m
+        with pytest.raises(ValueError, match="strings"):
+            store.as_map()
 
 
 class TestLabels:
@@ -247,7 +250,12 @@ class TestLabels:
         _write_config(cfg, _API_KEY)
         sc = tmp_path / "secrets_config.json"
         self._write_sc(sc, {"xhs_phone": "13800000000"})
-        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg, secrets_config_file=sc)
+        store = SecretStore(
+            _cipher(),
+            vault_path=tmp_path / "vault.json",
+            config_path=cfg,
+            secrets_config_file=sc,
+        )
         store.add_user_secret("gh_token", "ghp_uservalue123")
         labels = store.labels()
         # config tier keyed by dotted path
@@ -282,22 +290,25 @@ class TestLabels:
         assert "blank" not in labels
 
 
-class TestFailOpen:
-    def test_undecryptable_vault_is_empty(self, tmp_path):
+class TestFailClosed:
+    def test_undecryptable_vault_raises(self, tmp_path):
         vault = tmp_path / "vault.json"
         # A vault encrypted with one key, opened with another → empty (no crash).
         SecretStore(AesGcmCipher(bytes(32)), vault_path=vault).add_user_secret("k", "v-secret-value")
         other = SecretStore(AesGcmCipher(b"\x02" * 32), vault_path=vault)
-        assert other.as_map() == {}
+        with pytest.raises(ValueError, match="undecryptable"):
+            other.as_map()
 
-    def test_garbage_vault_is_empty(self, tmp_path):
+    def test_garbage_vault_raises(self, tmp_path):
         vault = tmp_path / "vault.json"
         vault.write_bytes(b"not an encrypted blob")
         store = SecretStore(_cipher(), vault_path=vault)
-        assert store.as_map() == {}
+        with pytest.raises(ValueError, match="undecryptable"):
+            store.as_map()
 
-    def test_malformed_config_ignored(self, tmp_path):
+    def test_malformed_config_raises(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("this: : : not: valid: yaml: [")
         store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
-        assert store.as_map() == {}
+        with pytest.raises(ValueError, match="malformed"):
+            store.as_map()

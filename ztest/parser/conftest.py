@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Shared fixtures for the parser (command-channel) test suite.
 
-The two channels (:class:`~mote.parser.native_channel.NativeToolChannel`,
-:class:`~mote.parser.xml_channel.XmlCommandChannel`) only touch three
+The two channels (:class:`~mote.kernel.parser.native_channel.NativeToolChannel`,
+:class:`~mote.kernel.parser.xml_channel.XmlCommandChannel`) only touch three
 collaborators, all of which are duck-typed here so the tests stay offline:
 
 - :class:`FakeThinkEngine` exposes the slice the channels read from a finished
@@ -23,13 +23,20 @@ from typing import Any, Optional
 
 import pytest
 
-from mote.common.schema import Message, ThinkResult
+from mote.contracts.schema import Message
+from mote.contracts.think import ThinkResult
 
 
 class FakeThinkEngine:
     """Duck-typed BaseThinkEngine exposing only what the channels read."""
 
-    def __init__(self, *, content: str = "", tool_calls: Optional[list[dict]] = None, done: bool = True):
+    def __init__(
+        self,
+        *,
+        content: str = "",
+        tool_calls: Optional[list[dict]] = None,
+        done: bool = True,
+    ):
         self.result = ThinkResult(content=content, tool_calls=tool_calls)
         self.done = done
         self.join_calls = 0
@@ -62,10 +69,15 @@ class FakeExecutor:
         self.provider_calls: list[str] = []
         self.model_calls: list[Optional[str]] = []
 
-    def get_native_tool_specs(self, provider: str, model: Optional[str] = None) -> Optional[list[dict]]:
+    def native_tool_specs(self, provider: str, model: Optional[str] = None) -> Optional[list[dict]]:
         self.provider_calls.append(provider)
         self.model_calls.append(model)
         return self._specs
+
+    def canonical_tool_specs(self, *, include_hidden: bool = True) -> Optional[list[dict]]:
+        if include_hidden:
+            return self._specs
+        return [spec for spec in self._specs or [] if not spec.get("defer_loading")]
 
 
 def executed_command(
@@ -75,8 +87,7 @@ def executed_command(
     args: Optional[dict] = None,
     output: str = "ok",
     success: bool = True,
-    images: Optional[list[str]] = None,
-    pdfs: Optional[list[str]] = None,
+    media: Optional[list[Any]] = None,
     resource_path: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build one entry of the ``executed`` list that ``record_turn`` consumes."""
@@ -87,10 +98,8 @@ def executed_command(
         "output": output,
         "success": success,
     }
-    if images is not None:
-        cmd["images"] = images
-    if pdfs is not None:
-        cmd["pdfs"] = pdfs
+    if media is not None:
+        cmd["media"] = media
     if resource_path is not None:
         cmd["resource_path"] = resource_path
     return cmd
@@ -102,15 +111,10 @@ async def collect(channel, think_engine, valid_names: set[str]) -> list[dict]:
 
 
 class _LLMConfig:
-    """Tiny object mimicking an LLMConfig for ``infer_native_tool_provider``.
-
-    ``infer_native_tool_provider`` resolves the envelope from the transport
-    (``api_type`` / ``base_url``), so the stub carries both; ``model`` is kept
-    for back-compat but no longer affects the result.
-    """
+    """Tiny LLMConfig-shaped object retained by parser fixture call sites."""
 
     def __init__(self, model=None, api_type=None, base_url=""):
-        from mote.common.config.config.llm_config import LLMType
+        from mote.contracts.config.llm import LLMType
 
         self.model = model
         self.api_type = api_type if api_type is not None else LLMType.OPENAI

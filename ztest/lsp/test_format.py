@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.roles.lsp.format`` — diagnostics -> context block."""
+"""Tests for ``mote.runtime.agent.lsp.format`` — diagnostics -> context block."""
 from __future__ import annotations
 
-from mote.roles.lsp.format import format_diagnostics
-from mote.roles.lsp.registry import Diagnostic
+from mote.runtime.agent.lsp.format import format_diagnostics
+from mote.runtime.agent.lsp.registry import Diagnostic
 
 
 def test_empty_is_blank():

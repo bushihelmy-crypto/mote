@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""ResourceReconcileSubscriber + RoleSessionManager.reconcile_resources.
+"""Direct history-edit projection + RoleSessionManager.reconcile_resources.
 
 A ``/clear`` or user delete emits :class:`HistoryEditedEvent` carrying the
 surviving message list. The reconciler must re-derive the in-memory
@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.const import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.common.events.types import HistoryEditedEvent, PostCompactEvent
-from mote.common.resource.registry import ResourceRegistry
-from mote.common.schema import Message
-from mote.roles.session_manager import ResourceReconcileSubscriber, RoleSessionManager
+from mote.contracts.constants.messages import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
+from mote.contracts.schema import LLMCallContext, Message
+from mote.runtime.agent.session_manager import RoleSessionManager
+from mote.runtime.context import ContextManager
+from mote.runtime.resources.registry import ResourceRegistry
 
 
 class _FakeExecutor:
@@ -110,55 +110,23 @@ def test_reconcile_empty_history_empties_registry():
 
 
 # ---------------------------------------------------------------------------
-# ResourceReconcileSubscriber — the bus adapter
+# ContextManager — explicit post-commit projection
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_subscriber_reconciles_on_history_edited():
+async def test_context_clear_reconciles_resources_without_telemetry():
     role = _FakeRole()
     mgr = RoleSessionManager(role)
     role.resource_registry.load(id="stale", kind="skill", content="old", sticky=True)
-    sub = ResourceReconcileSubscriber(mgr)
-
     survivors = [_resource_msg("skill-a", "skill", "BODY A")]
-    await sub.handle(HistoryEditedEvent(messages=survivors, reason="delete"))
+    context = LLMCallContext(messages=survivors)
+    manager = ContextManager(
+        context,
+        history_edited=lambda event: mgr.reconcile_resources(event.remaining_messages),
+    )
+
+    mgr.reconcile_resources(survivors)
+    await manager.clear()
 
     assert "stale" not in role.resource_registry
-    assert "skill-a" in role.resource_registry
-
-
-@pytest.mark.asyncio
-async def test_subscriber_reconciles_on_clear():
-    role = _FakeRole()
-    mgr = RoleSessionManager(role)
-    role.resource_registry.load(id="x", kind="skill", content="b", sticky=True)
-    sub = ResourceReconcileSubscriber(mgr)
-
-    await sub.handle(HistoryEditedEvent(messages=[], reason="clear"))
-
+    assert "skill-a" not in role.resource_registry
     assert len(role.resource_registry) == 0
-
-
-@pytest.mark.asyncio
-async def test_subscriber_ignores_post_compact_event():
-    # Compaction re-projects sticky bodies via the pull provider; resetting the
-    # registry here would drop units the compaction is trying to keep alive.
-    role = _FakeRole()
-    mgr = RoleSessionManager(role)
-    role.resource_registry.load(id="keep", kind="skill", content="b", sticky=True)
-    sub = ResourceReconcileSubscriber(mgr)
-
-    await sub.handle(PostCompactEvent(trigger="auto", summary="s"))
-
-    assert "keep" in role.resource_registry
-
-
-@pytest.mark.asyncio
-async def test_subscriber_ignores_unrelated_event():
-    role = _FakeRole()
-    mgr = RoleSessionManager(role)
-    role.resource_registry.load(id="keep", kind="skill", content="b", sticky=True)
-    sub = ResourceReconcileSubscriber(mgr)
-
-    await sub.handle(object())  # not an event it handles
-
-    assert "keep" in role.resource_registry

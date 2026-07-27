@@ -1,7 +1,7 @@
 """CostTracker aggregation + legacy CostManager shim."""
 import pytest
 
-from mote.router.cost import Costs, CostTracker, PricingMode, TokenUsage
+from mote.runtime.models.cost import Costs, CostTracker, PricingMode, TokenUsage
 
 
 def test_per_model_and_session_aggregation():
@@ -56,6 +56,22 @@ def test_free_mode_tracks_tokens_without_cost():
     t.add(TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "local-llm")
     assert t.total_cost == 0.0
     assert t.total_token_usage().input_tokens == 1000
+
+
+def test_gateway_settlement_records_authoritative_cost_without_repricing():
+    tracker = CostTracker()
+
+    tracker.record_settled(
+        TokenUsage(input_tokens=120, output_tokens=30, total_tokens=150),
+        "provider-deployment",
+        0.0123,
+    )
+
+    assert tracker.total_cost == pytest.approx(0.0123)
+    assert tracker.last_cost == pytest.approx(0.0123)
+    assert tracker.last_usage.total_tokens == 150
+    assert tracker.model_usage["provider-deployment"].requests == 1
+    assert not tracker.has_unknown_model_cost
 
 
 def test_context_remaining():

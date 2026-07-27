@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.config.watcher`` — mtime-poll hot reload."""
+"""Tests for ``mote.runtime.config.watcher`` — mtime-poll hot reload."""
 from __future__ import annotations
 
 import os
 
-from mote.common.config.loader import load_config
-from mote.common.config.watcher import ConfigWatcher
+from mote.runtime.config.loader import load_config
+from mote.runtime.config.watcher import ConfigWatcher
 
 
 def _write_workdir_cfg(tmp_path, text: str):

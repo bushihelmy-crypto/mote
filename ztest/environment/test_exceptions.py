@@ -4,7 +4,7 @@
 
 import pytest
 
-from mote.environment.exceptions import (
+from mote.orchestration.environment.exceptions import (
     AgentControlError,
     AgentLimitReached,
     AgentNotFound,

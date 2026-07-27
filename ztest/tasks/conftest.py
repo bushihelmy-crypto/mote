@@ -4,7 +4,7 @@
 
 The fixtures keep every test fully offline and deterministic:
 
-- ``msg_buffer`` is a real :class:`~mote.common.schema.MessageQueue` (it
+- ``msg_buffer`` is a real :class:`~mote.contracts.schema.MessageQueue` (it
   builds offline and is what the pool pushes notifications into).
 - ``pool`` is a real :class:`~mote.tasks.BackgroundTaskPool` bound to that
   buffer.
@@ -22,8 +22,8 @@ from typing import Optional
 
 import pytest
 
-from mote.common.schema import MessageQueue
-from mote.executor.tasks import BackgroundTaskPool
+from mote.contracts.schema import MessageQueue
+from mote.orchestration.tasks import BackgroundTaskPool
 
 # ---------------------------------------------------------------------------
 # Coroutine factories
@@ -77,7 +77,7 @@ def msg_buffer() -> MessageQueue:
 def pool(msg_buffer) -> BackgroundTaskPool:
     """A pool that pushes completion notifications straight into the buffer.
 
-    The pool delivers directly to ``msg_buffer`` (no event-bus round-trip), so
+    The pool delivers directly to ``msg_buffer`` (no Telemetry round-trip), so
     completions land in the buffer just as they do in production.
     """
     return BackgroundTaskPool(msg_buffer)

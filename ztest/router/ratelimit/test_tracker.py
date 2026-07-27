@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mote.router.ratelimit import RateLimitSnapshot, RateLimitTracker
+from mote.runtime.models.ratelimit import RateLimitSnapshot, RateLimitTracker
 
 
 class TestObserveHeaders:

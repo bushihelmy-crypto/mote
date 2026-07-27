@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""End-to-end tests for the ``run_graph`` orchestrator (mote.executor.tools.run_graph).
+"""End-to-end tests for the ``run_graph`` orchestrator (mote.product.toolsets.builtin.run_graph).
 
 ``run_graph`` lets the model wire existing tools into a declarative graph —
 sequential steps, parallel fan-out (``map``), pure computation (``compute``), and
@@ -14,13 +14,12 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.events import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRESS
-from mote.common.events.bus import EventBus
-from mote.common.events.context import set_bus
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.executor.execution_context import bind_tool_call_id
-from mote.executor.tool_result import ToolError, ToolResult
-from mote.executor.tools.run_graph import RunGraph
+from mote.product.toolsets.builtin.run_graph import RunGraph
+from mote.runtime.events import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRESS
+from mote.runtime.events.context import bind_telemetry
+from mote.runtime.tools.execution_context import bind_tool_call_id
+from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.ztest.telemetry import InlineTelemetry
 
 from .conftest import CapRole, bind, run
 
@@ -191,24 +190,24 @@ class TestNoGraphNesting:
         return role
 
     def test_tool_node_referencing_graph_tool_rejected(self, workspace):
-        role = self._role_with_graph_tool("CodeReview")
+        role = self._role_with_graph_tool("GraphWorkflow")
         graph = {
             "inputs": {},
-            "nodes": [{"id": "n", "kind": "tool", "tool": "CodeReview", "args": {}}],
+            "nodes": [{"id": "n", "kind": "tool", "tool": "GraphWorkflow", "args": {}}],
             "output": {"$ref": "n"},
         }
         with pytest.raises(ToolError, match="cannot nest another graph"):
             _call(role, graph)
 
     def test_map_node_referencing_graph_tool_rejected(self, workspace):
-        role = self._role_with_graph_tool("CodeReview")
+        role = self._role_with_graph_tool("GraphWorkflow")
         graph = {
             "inputs": {"xs": {"type": "list", "description": "xs"}},
             "nodes": [
                 {
                     "id": "m",
                     "kind": "map",
-                    "tool": "CodeReview",
+                    "tool": "GraphWorkflow",
                     "over": {"$input": "xs"},
                     "as": "x",
                     "args": {},
@@ -225,7 +224,7 @@ class TestNoGraphNesting:
             return ToolResult(output=kw["s"], data=kw["s"])
 
         role = _role(echo=_echo)
-        role.graph_tools = {"CodeReview"}  # present but unused by the graph
+        role.graph_tools = {"GraphWorkflow"}  # present but unused by the graph
         graph = {
             "inputs": {},
             "nodes": [{"id": "n", "kind": "tool", "tool": "echo", "args": {"s": "hi"}}],
@@ -399,7 +398,7 @@ class TestCompute:
         # the real wait_for path with a tiny ceiling + a sleeping eval stub.
         import time
 
-        from mote.executor.tasks.bggraph import from_spec
+        from mote.orchestration.tasks.bggraph import from_spec
 
         def _slow(expr, symbols, node_id):
             time.sleep(5)
@@ -1446,11 +1445,11 @@ class TestOnItemError:
 # The graph scope pushed around the run also makes every dispatched node tool
 # call carry a non-empty ``current_scope()`` — the mechanism that fixes orphan
 # child rows (graph-internal calls whose PreToolUse/PostToolUse would otherwise
-# render top-level). These tests bind a capturing observer to the event bus for
-# the duration of the call and assert on what the spine emitted.
+# render top-level). These tests bind a capturing telemetry handler for the
+# duration of the call and assert on emitted observations.
 
 
-class _CaptureObserver(ObservationSubscriber, SyncObserver):
+class _CaptureObserver:
     """Collects every observation event (both async and sync) for assertions."""
 
     def __init__(self) -> None:
@@ -1467,14 +1466,13 @@ class _CaptureObserver(ObservationSubscriber, SyncObserver):
 
 
 def _call_capturing(role: CapRole, graph, inputs=None):
-    """Run the graph under a live bus, returning ``(result, observer)``."""
-    bus = EventBus()
+    """Run the graph with inline telemetry, returning ``(result, observer)``."""
     obs = _CaptureObserver()
-    bus.subscribe(obs)
+    telemetry = InlineTelemetry(obs)
     tool = bind(RunGraph(), role)
 
     async def _driven():
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             return await tool.call(graph=graph, inputs=inputs)
 
     return run(_driven()), obs
@@ -1592,7 +1590,7 @@ class TestActivityLineage:
         seen: dict[str, tuple] = {}
 
         async def _record_scope(kw):
-            from mote.common.events.scope import current_scope
+            from mote.runtime.events.scope import current_scope
 
             seen[kw["tag"]] = current_scope()
             return ToolResult(output="ok", data="ok")
@@ -1631,7 +1629,7 @@ class TestActivityLineage:
         seen: list[tuple] = []
 
         async def _record(kw):
-            from mote.common.events.scope import current_scope
+            from mote.runtime.events.scope import current_scope
 
             seen.append(current_scope())
             return ToolResult(output=str(kw["x"]), data=kw["x"])
@@ -1699,8 +1697,8 @@ class TestActivityLineage:
         names = [getattr(e, "name", None) for e in obs.events]
         assert names.index(ACTIVITY_STARTED) < names.index(ACTIVITY_COMPLETED)
 
-    def test_no_bus_bound_still_runs(self, workspace):
-        # The emit helpers are best-effort: with no bus bound the events drop
+    def test_no_telemetry_bound_still_runs(self, workspace):
+        # The emit helpers are best-effort: with no Telemetry bound events drop
         # silently and the graph still completes normally.
         role = _role(double=_double)
         graph = {
@@ -1715,7 +1713,7 @@ class TestActivityLineage:
             ],
             "output": {"$ref": "dp"},
         }
-        result = _call(role, graph, inputs={"p": 5})  # plain path, no bus
+        result = _call(role, graph, inputs={"p": 5})
         assert result.success
         assert result.data == 10
 
@@ -2014,7 +2012,7 @@ def test_explicit_output_contract_exposes_only_committed_value():
 
 
 def test_replayed_committed_graph_short_circuits_before_node_execution():
-    from mote.common.schema import CommittedOutput, RunKind
+    from mote.contracts.output import CommittedOutput, RunKind
 
     role = _role()
     role.graph_resume_result = CommittedOutput(

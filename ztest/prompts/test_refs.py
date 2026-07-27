@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for common.prompt.refs — the protocol-symbol primitive.
+"""Unit tests for kernel.prompt.refs — the protocol-symbol primitive.
 
 These cover the lowerer in isolation (the channel-agnostic core): symbol token
 rendering, ``lower`` substitution + ``UnknownSymbolError``, ``find_symbols``,
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.prompt.refs import (
+from mote.kernel.prompt.refs import (
     CAP_READ,
     CTL_FINISH,
     Sym,

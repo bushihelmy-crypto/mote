@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.compress.pytest.PytestCompressor``."""
+"""Unit tests for ``mote.runtime.tools.compress.pytest.PytestCompressor``."""
 from __future__ import annotations
 
-from mote.executor.compress.pytest import PytestCompressor
+from mote.runtime.tools.compress.pytest import PytestCompressor
 
 # A representative failing run with lots of progress noise.
 OUTPUT = (

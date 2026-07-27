@@ -25,7 +25,7 @@ from typing import Any, List, Tuple
 
 import pytest
 
-from mote.cli.contracts.view import (
+from mote.product.cli.contracts.view import (
     ConversationCompacted,
     ErrorRaised,
     FileDiffBlock,
@@ -38,8 +38,8 @@ from mote.cli.contracts.view import (
     ToolCallStarted,
     UsageUpdated,
 )
-from mote.common.i18n import keys as K
-from mote.common.i18n import t
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
 
 
 def _script() -> List[Any]:
@@ -135,7 +135,7 @@ def test_reducer_golden():
     thinking / wipe on compaction" is decided **once**, host-blind — so the two
     surfaces below can only ever render the same decisions.
     """
-    from mote.cli.consumers.transcript import TranscriptReducer
+    from mote.product.cli.consumers.transcript import TranscriptReducer
 
     reducer = TranscriptReducer()
     ops: List[Tuple[Any, ...]] = []
@@ -160,8 +160,8 @@ except ImportError:  # pragma: no cover
 def test_terminal_landing():
     from rich.console import Console
 
-    from mote.cli.consumers.terminal.surface import TerminalSurface
-    from mote.cli.consumers.transcript import SurfaceDriver
+    from mote.product.cli.consumers.terminal.surface import TerminalSurface
+    from mote.product.cli.consumers.transcript import SurfaceDriver
 
     console = Console(file=io.StringIO(), force_terminal=True, width=120)
     driver = SurfaceDriver(TerminalSurface(console=console))
@@ -175,7 +175,7 @@ def test_terminal_landing():
     # The DETAIL Bash tool renders expanded (headline visible) on the linear host.
     assert "Bash" in out and "ls" in out
     # Compaction prints an in-place ✻ boundary (no wipe — scrollback survives).
-    from mote.cli.consumers.render.palette import COMPACT
+    from mote.product.cli.consumers.render.palette import COMPACT
 
     assert COMPACT in out
     assert "boom" in out  # the error surfaced
@@ -192,8 +192,8 @@ pytest.importorskip("textual")
 
 @pytest.mark.asyncio
 async def test_textual_landing():
-    from mote.cli.consumers.textual.app import MoteApp, ViewEventMessage
-    from mote.cli.consumers.textual.widgets import (
+    from mote.product.cli.consumers.textual.app import MoteApp, ViewEventMessage
+    from mote.product.cli.consumers.textual.widgets import (
         CompactionSummaryRow,
         ConversationCompactedRow,
         StatusBar,

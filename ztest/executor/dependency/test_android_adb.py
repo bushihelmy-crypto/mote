@@ -5,9 +5,9 @@ import asyncio
 
 import pytest
 
-from mote.executor.dependency._device import android_adb
-from mote.executor.dependency._device.android_adb import AndroidAdbBackend
-from mote.executor.dependency._device.backend import DeviceError
+from mote.runtime.tools.dependency._device import android_adb
+from mote.runtime.tools.dependency._device.android_adb import AndroidAdbBackend
+from mote.runtime.tools.dependency._device.backend import DeviceError
 from mote.ztest.executor.dependency.device_fakes import FAKE_PNG, FAKE_XML
 
 

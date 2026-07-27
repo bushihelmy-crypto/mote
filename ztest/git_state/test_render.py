@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.common.utils.git_state.render`` — GitState -> env lines."""
+"""Tests for ``mote.runtime.vcs.render`` — GitState -> env lines."""
 from __future__ import annotations
 
-from mote.common.utils.git_state.collector import GitState
-from mote.common.utils.git_state.render import render_git_section
+from mote.runtime.vcs.collector import GitState
+from mote.runtime.vcs.render import render_git_section
 
 
 def test_render_none_is_empty():

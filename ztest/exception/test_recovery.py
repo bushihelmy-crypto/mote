@@ -5,8 +5,9 @@ import asyncio
 
 import pytest
 
-from mote.common.exception import MoteError, NonRetryableError, RecoveryAction, RecoveryRunner, RetryableError
-from mote.common.interface.event_subscriber import ObservationSubscriber
+from mote.runtime.errors import MoteError, NonRetryableError, RecoveryAction, RecoveryRunner, RetryableError
+from mote.runtime.events import bind_telemetry
+from mote.ztest.telemetry import InlineTelemetry
 
 pytestmark = pytest.mark.asyncio
 
@@ -236,39 +237,31 @@ async def _always(exc):
 
 
 # ---------------------------------------------------------------------------
-# Bus emission: the runner mirrors each recovery decision as a RecoveryEvent
+# Telemetry emission: the runner mirrors each recovery decision
 # ---------------------------------------------------------------------------
 
 
-class _RecordingBusSub(ObservationSubscriber):
-    """Records every RecoveryEvent seen on the bus (observation-only)."""
-
-    priority = 50
+class _RecordingTelemetryHandler:
+    """Records every RecoveryEvent observation."""
 
     def __init__(self):
         self.events = []
 
     async def handle(self, event):
-        from mote.common.events import RecoveryEvent
+        from mote.runtime.events import RecoveryEvent
 
         if isinstance(event, RecoveryEvent):
             self.events.append(event)
         return None
 
 
-def _bus_with_recorder():
-    from mote.common.events import EventBus
-
-    bus = EventBus()
-    rec = _RecordingBusSub()
-    bus.subscribe(rec)
-    return bus, rec
+def _telemetry_with_recorder():
+    rec = _RecordingTelemetryHandler()
+    return InlineTelemetry(rec), rec
 
 
 class TestRecoveryEmission:
     async def test_successful_recovery_emits_recovered(self):
-        from mote.common.events import set_bus
-
         attempts = []
 
         async def call():
@@ -277,9 +270,9 @@ class TestRecoveryEmission:
                 raise _CompressError("too big")
             return "ok"
 
-        bus, rec = _bus_with_recorder()
+        telemetry, rec = _telemetry_with_recorder()
         runner = RecoveryRunner({RecoveryAction.COMPRESS: _always})
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             assert await runner.run(call) == "ok"
         assert len(rec.events) == 1
         e = rec.events[0]
@@ -287,57 +280,49 @@ class TestRecoveryEmission:
         assert e.error_type == "_CompressError"
 
     async def test_abort_emits_give_up(self):
-        from mote.common.events import set_bus
-
         class _Permanent(NonRetryableError):
             pass
 
         async def call():
             raise _Permanent("nope")
 
-        bus, rec = _bus_with_recorder()
+        telemetry, rec = _telemetry_with_recorder()
         runner = RecoveryRunner({RecoveryAction.COMPRESS: _always})
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             with pytest.raises(_Permanent):
                 await runner.run(call)
         assert len(rec.events) == 1 and rec.events[0].phase == "give_up"
 
     async def test_missing_strategy_emits_give_up(self):
-        from mote.common.events import set_bus
-
         async def call():
             raise _CompressError("too big")
 
-        bus, rec = _bus_with_recorder()
+        telemetry, rec = _telemetry_with_recorder()
         runner = RecoveryRunner({})
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             with pytest.raises(_CompressError):
                 await runner.run(call)
         assert len(rec.events) == 1 and rec.events[0].phase == "give_up"
         assert rec.events[0].action == "compress"
 
     async def test_strategy_false_emits_give_up(self):
-        from mote.common.events import set_bus
-
         async def call():
             raise _CompressError("too big")
 
-        bus, rec = _bus_with_recorder()
+        telemetry, rec = _telemetry_with_recorder()
         runner = RecoveryRunner({RecoveryAction.COMPRESS: _never})
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             with pytest.raises(_CompressError):
                 await runner.run(call)
         assert len(rec.events) == 1 and rec.events[0].phase == "give_up"
 
     async def test_budget_exhausted_emits_recovered_then_give_up(self):
-        from mote.common.events import set_bus
-
         async def call():
             raise _CompressError("still too big")
 
-        bus, rec = _bus_with_recorder()
+        telemetry, rec = _telemetry_with_recorder()
         runner = RecoveryRunner({RecoveryAction.COMPRESS: _always}, max_recoveries=2)
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             with pytest.raises(_CompressError):
                 await runner.run(call)
         phases = [e.phase for e in rec.events]
@@ -345,7 +330,7 @@ class TestRecoveryEmission:
         assert phases == ["recovered", "recovered", "give_up"]
         assert [e.attempt for e in rec.events] == [1, 2, 2]
 
-    async def test_unbound_bus_no_emit_no_error(self):
+    async def test_unbound_telemetry_no_emit_no_error(self):
         attempts = []
 
         async def call():
@@ -354,19 +339,17 @@ class TestRecoveryEmission:
                 raise _CompressError("too big")
             return "ok"
 
-        # No set_bus -> emit is a no-op; behaviour is unchanged.
+        # No telemetry -> emit is a no-op; behaviour is unchanged.
         runner = RecoveryRunner({RecoveryAction.COMPRESS: _always})
         assert await runner.run(call) == "ok"
 
     async def test_cancelled_error_passes_through_without_emit(self):
-        from mote.common.events import set_bus
-
         async def call():
             raise asyncio.CancelledError()
 
-        bus, rec = _bus_with_recorder()
+        telemetry, rec = _telemetry_with_recorder()
         runner = RecoveryRunner({RecoveryAction.COMPRESS: _always})
-        with set_bus(bus):
+        with bind_telemetry(telemetry):
             with pytest.raises(asyncio.CancelledError):
                 await runner.run(call)
         assert rec.events == []

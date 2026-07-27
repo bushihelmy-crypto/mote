@@ -7,15 +7,15 @@ from datetime import datetime
 
 import pytest
 
-from mote.common.schema.queue import MessageQueue
-from mote.environment.agent_path import AgentPath
-from mote.environment.control import AgentControl
-from mote.environment.mailbox import DeliveryMode
-from mote.environment.registry import AgentMetadata
-from mote.environment.runtime import AgentRuntime
-from mote.environment.scheduling.service import MAX_CRON_TASKS, CronService, validate_new_task
-from mote.environment.scheduling.store import CronTaskStore
-from mote.environment.scheduling.task import CronTask
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.agent_path import AgentPath
+from mote.orchestration.environment.control import AgentControl
+from mote.orchestration.environment.mailbox import DeliveryMode
+from mote.orchestration.environment.registry import AgentMetadata
+from mote.orchestration.environment.runtime import AgentRuntime
+from mote.orchestration.environment.scheduling.service import MAX_CRON_TASKS, CronService, validate_new_task
+from mote.orchestration.environment.scheduling.store import CronTaskStore
+from mote.orchestration.environment.scheduling.task import CronTask
 
 
 def _ms(year, month, day, hour=0, minute=0, second=0):

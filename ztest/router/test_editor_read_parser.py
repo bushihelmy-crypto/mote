@@ -3,7 +3,7 @@
 """Tests for mote.router.llm.editor_read_parser (Editor.read segment parsing)."""
 from __future__ import annotations
 
-from mote.router.llm.editor_read_parser import EDITOR_READ_MARKER, find_editor_read_segments
+from mote.runtime.models.clients.editor_read_parser import EDITOR_READ_MARKER, find_editor_read_segments
 
 
 class TestFindEditorReadSegments:

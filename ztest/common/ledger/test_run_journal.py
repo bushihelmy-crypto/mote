@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :mod:`mote.common.ledger.run_journal`.
+"""Unit tests for :mod:`mote.runtime.ledger.run_journal`.
 
 Exercises the run-level step journal on top of the generic append-only base:
 started/completed/failed lifecycle, frontier (``unresolved``), self-anchored
@@ -14,9 +14,9 @@ import json
 
 import pytest
 
-from mote.common.ledger import COMPLETED, FAILED, KIND_THINK, KIND_TOOL, STARTED, RunJournal, StepRecord
-from mote.common.ledger.run_journal import JOURNAL_FILE_NAME
-from mote.common.workspace import ArtifactKind, WorkspaceStore
+from mote.runtime.ledger import COMPLETED, FAILED, KIND_THINK, KIND_TOOL, STARTED, RunJournal, StepRecord
+from mote.runtime.ledger.run_journal import JOURNAL_FILE_NAME
+from mote.runtime.workspace import ArtifactKind, WorkspaceStore
 
 
 @pytest.fixture

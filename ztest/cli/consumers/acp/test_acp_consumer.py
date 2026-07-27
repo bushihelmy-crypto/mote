@@ -15,9 +15,9 @@ from typing import Any, Dict, List
 
 import pytest
 
-from mote.cli.consumers._wire import acp
-from mote.cli.consumers.acp.consumer import ACP_CAPS, AcpConsumer
-from mote.cli.contracts.view import events as ev
+from mote.product.cli.consumers._wire import acp
+from mote.product.cli.consumers.acp.consumer import ACP_CAPS, AcpConsumer
+from mote.product.cli.contracts.view import events as ev
 
 
 class RecordingSink:

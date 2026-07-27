@@ -3,9 +3,9 @@
 """Tests for the PROFILE overlay layer (``~/.mote/<name>.config.yaml``)."""
 from __future__ import annotations
 
-import mote.common.config.sources as sources_mod
-from mote.common.config.loader import build_layer_stack
-from mote.common.config.sources import ConfigSource, discover_source_files
+import mote.runtime.config.sources as sources_mod
+from mote.runtime.config.loader import build_layer_stack
+from mote.runtime.config.sources import ConfigSource, discover_source_files
 
 
 def _point_user_dir_at(tmp_path, monkeypatch):

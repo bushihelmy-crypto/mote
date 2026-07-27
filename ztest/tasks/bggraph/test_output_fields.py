@@ -12,11 +12,11 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel
 
-from mote.common.schema import OutputContractId
-from mote.executor.tasks.bggraph import END, START, BgGraph, GraphState, Output, Stage
-from mote.executor.tasks.bggraph.channels import derive_output_fields
-from mote.roles.output_contract import OutputContract, TypeAdapterOutputDecoder
-from mote.roles.output_engine import OutputEngine
+from mote.contracts.output import OutputContractId
+from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder
+from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphState, Output, Stage
+from mote.orchestration.tasks.bggraph.channels import derive_output_fields
+from mote.runtime.agent.output_engine import OutputEngine
 
 
 def _sync_node(fn, *, field=None):

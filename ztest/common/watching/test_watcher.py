@@ -9,16 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 
-from mote.common.watching.events import CREATED, DELETED, MODIFIED, FileChangeEvent
-from mote.common.watching.watcher import FileWatcher
+import pytest
+
+from mote.contracts.events.types import FileChangedEvent
+from mote.contracts.fileops.models import FileChangeKind, PresentVersion
+from mote.runtime.fileops.facade import FileOperations
+from mote.runtime.fileops.transactions import ScopedMutationArtifacts
+from mote.runtime.watching.watcher import FileWatcher
 
 
 def _collect():
     """Return (on_change coroutine, captured-list) recording every event."""
-    captured: list[FileChangeEvent] = []
+    captured: list[FileChangedEvent] = []
 
-    async def on_change(event: FileChangeEvent) -> None:
+    async def on_change(event: FileChangedEvent) -> None:
         captured.append(event)
 
     return on_change, captured
@@ -26,114 +32,190 @@ def _collect():
 
 def _watcher(tmp_path, **kw):
     on_change, captured = _collect()
-    return FileWatcher([str(tmp_path)], on_change, **kw), captured
+    state = tmp_path.parent / f"{tmp_path.name}-watch-state"
+    operations = FileOperations(
+        session_id=tmp_path.name,
+        journal_path=state / "rollout.jsonl",
+        get_project_root=lambda: str(tmp_path),
+        lock_root=state / "locks",
+    )
+    return FileWatcher([str(tmp_path)], on_change, operations, **kw), captured
 
 
-def test_unprimed_first_poll_emits_created_for_existing(tmp_path):
+@pytest.mark.asyncio
+async def test_unprimed_first_poll_emits_created_for_existing(tmp_path):
     (tmp_path / "a.txt").write_text("x")
     w, captured = _watcher(tmp_path)
-    events = asyncio.run(w.poll())
-    assert {e.change_type for e in events} == {CREATED}
+    events = await w.poll()
+    assert {e.change_type for e in events} == {FileChangeKind.CREATED}
     assert [e.path for e in captured] == [str(tmp_path / "a.txt")]
 
 
-def test_prime_suppresses_initial_burst(tmp_path):
+@pytest.mark.asyncio
+async def test_prime_suppresses_initial_burst(tmp_path):
     (tmp_path / "a.txt").write_text("x")
     w, captured = _watcher(tmp_path)
     w.prime()
-    events = asyncio.run(w.poll())
+    events = await w.poll()
     assert events == []
     assert captured == []
 
 
-def test_detects_new_file_after_prime(tmp_path):
+@pytest.mark.asyncio
+async def test_detects_new_file_after_prime(tmp_path):
     w, captured = _watcher(tmp_path)
     w.prime()
     (tmp_path / "new.txt").write_text("hello")
-    events = asyncio.run(w.poll())
+    events = await w.poll()
     assert len(events) == 1
-    assert events[0].change_type == CREATED
+    assert events[0].change_type is FileChangeKind.CREATED
     assert events[0].path == str(tmp_path / "new.txt")
-    assert events[0].size == len("hello")
+    assert isinstance(events[0].version, PresentVersion)
+    assert events[0].version.size == len("hello")
 
 
-def test_detects_modification(tmp_path):
+@pytest.mark.asyncio
+async def test_detects_modification(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("v1")
     w, _ = _watcher(tmp_path)
     w.prime()
     # Bump mtime deterministically (size also changes).
     target.write_text("v2-longer")
-    events = asyncio.run(w.poll())
+    events = await w.poll()
     assert len(events) == 1
-    assert events[0].change_type == MODIFIED
+    assert events[0].change_type is FileChangeKind.MODIFIED
 
 
-def test_detects_same_size_modification_via_mtime(tmp_path):
+@pytest.mark.asyncio
+async def test_detects_same_size_modification_via_mtime(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("aaa")
     w, _ = _watcher(tmp_path)
     w.prime()
     # Same size, different mtime -> still a modification (mtime_ns in signature).
     os.utime(target, ns=(10**18, 10**18))
-    events = asyncio.run(w.poll())
-    assert [e.change_type for e in events] == [MODIFIED]
+    events = await w.poll()
+    assert [e.change_type for e in events] == [FileChangeKind.MODIFIED]
 
 
-def test_detects_deletion(tmp_path):
+@pytest.mark.asyncio
+async def test_detects_digest_change_when_size_and_mtime_are_restored(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_text("aaa")
+    original = os.stat(target)
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    target.write_text("bbb")
+    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    events = await w.poll()
+
+    assert [event.change_type for event in events] == [FileChangeKind.MODIFIED]
+    assert events[0].prior_version.digest != events[0].version.digest
+
+
+@pytest.mark.asyncio
+async def test_detects_deletion(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("bye")
     w, _ = _watcher(tmp_path)
     w.prime()
     os.remove(target)
-    events = asyncio.run(w.poll())
+    events = await w.poll()
     assert len(events) == 1
-    assert events[0].change_type == DELETED
+    assert events[0].change_type is FileChangeKind.DELETED
     assert events[0].path == str(target)
-    assert events[0].size == 0
 
 
-def test_no_changes_emits_nothing(tmp_path):
+@pytest.mark.asyncio
+async def test_no_changes_emits_nothing(tmp_path):
     (tmp_path / "f.txt").write_text("stable")
     w, _ = _watcher(tmp_path)
     w.prime()
-    assert asyncio.run(w.poll()) == []
+    assert await asyncio.wait_for(w.poll(), timeout=5) == []
 
 
-def test_ignore_prunes_matching_files(tmp_path):
+@pytest.mark.asyncio
+async def test_poll_probes_off_the_event_loop_thread(tmp_path, monkeypatch):
+    target = tmp_path / "f.txt"
+    target.write_text("stable")
+    w, _ = _watcher(tmp_path)
+    w.prime()
+    main_thread = threading.get_ident()
+    probe_threads: list[int] = []
+    original = w._file_changes.probe_file_version
+
+    def record_thread(path, *, prior=None):
+        probe_threads.append(threading.get_ident())
+        return original(path, prior=prior)
+
+    monkeypatch.setattr(w._file_changes, "probe_file_version", record_thread)
+
+    assert await w.poll() == []
+    assert probe_threads
+    assert all(thread_id != main_thread for thread_id in probe_threads)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_polls_emit_one_transition(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_text("before")
+    w, captured = _watcher(tmp_path)
+    w.prime()
+    target.write_text("external-after")
+
+    first, second = await asyncio.gather(w.poll(), w.poll())
+
+    assert len(first) + len(second) == 1
+    assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_ignore_prunes_matching_files(tmp_path):
     (tmp_path / "keep.txt").write_text("k")
     (tmp_path / "skip.pyc").write_text("s")
     w, _ = _watcher(tmp_path, ignore=["*.pyc"])
-    events = asyncio.run(w.poll())
+    events = await asyncio.wait_for(w.poll(), timeout=5)
     paths = {e.path for e in events}
     assert str(tmp_path / "keep.txt") in paths
     assert str(tmp_path / "skip.pyc") not in paths
 
 
-def test_ignore_prunes_directories(tmp_path):
+@pytest.mark.asyncio
+async def test_ignore_prunes_directories(tmp_path):
     sub = tmp_path / ".git"
     sub.mkdir()
     (sub / "config").write_text("ignored")
     (tmp_path / "real.txt").write_text("seen")
     w, _ = _watcher(tmp_path, ignore=[".git"])
-    events = asyncio.run(w.poll())
+    events = await w.poll()
     paths = {e.path for e in events}
     assert str(tmp_path / "real.txt") in paths
     assert all(".git" not in p for p in paths)
 
 
-def test_watches_single_file_root(tmp_path):
+@pytest.mark.asyncio
+async def test_watches_single_file_root(tmp_path):
     target = tmp_path / "only.txt"
     target.write_text("a")
     on_change, captured = _collect()
-    w = FileWatcher([str(target)], on_change)
+    state = tmp_path.parent / f"{tmp_path.name}-single-state"
+    operations = FileOperations(
+        session_id=f"{tmp_path.name}-single",
+        journal_path=state / "rollout.jsonl",
+        get_project_root=lambda: str(tmp_path),
+        lock_root=state / "locks",
+    )
+    w = FileWatcher([str(target)], on_change, operations)
     w.prime()
     target.write_text("bb")
-    events = asyncio.run(w.poll())
-    assert [e.change_type for e in events] == [MODIFIED]
+    events = await w.poll()
+    assert [e.change_type for e in events] == [FileChangeKind.MODIFIED]
 
 
-def test_multiple_changes_in_one_poll(tmp_path):
+@pytest.mark.asyncio
+async def test_multiple_changes_in_one_poll(tmp_path):
     keep = tmp_path / "keep.txt"
     gone = tmp_path / "gone.txt"
     keep.write_text("1")
@@ -143,88 +225,106 @@ def test_multiple_changes_in_one_poll(tmp_path):
     keep.write_text("1-changed")
     os.remove(gone)
     (tmp_path / "added.txt").write_text("3")
-    events = asyncio.run(w.poll())
+    events = await w.poll()
     by_type = {e.change_type for e in events}
-    assert by_type == {CREATED, MODIFIED, DELETED}
+    assert by_type == {
+        FileChangeKind.CREATED,
+        FileChangeKind.MODIFIED,
+        FileChangeKind.DELETED,
+    }
 
 
-def test_self_write_suppressed(tmp_path):
-    """A file noted as a self-write is not reported on the next poll."""
+@pytest.mark.asyncio
+async def test_durable_commit_suppresses_before_file_mutated_event_arrives(tmp_path):
     target = tmp_path / "f.txt"
-    target.write_text("v1")
+    target.write_bytes(b"before")
     w, _ = _watcher(tmp_path)
+    operations = w._file_changes
+    snapshot, _ = operations.capture(str(target))
     w.prime()
-    # Simulate the agent's own tool writing the file, then noting it.
-    target.write_text("v2-by-agent")
-    w.note_self_write(str(target))
-    assert asyncio.run(w.poll()) == []
+    with operations.artifacts.write_scope(
+        owner="watcher-managed-transition-test",
+        maximum_bytes=len(b"managed-after"),
+        ttl_seconds=60,
+    ) as scope:
+        mutation = operations.mutation_factory.replacement(
+            snapshot,
+            b"managed-after",
+            scope=scope,
+        )
+        mutation_set = operations.mutation_factory.mutation_set(
+            source="test-managed-write",
+            mutations=(mutation,),
+        )
+        operations.mutations.commit(
+            mutation_set,
+            ScopedMutationArtifacts(scope),
+        )
+
+    second_snapshot, _ = operations.capture(str(target))
+    with operations.artifacts.write_scope(
+        owner="watcher-managed-transition-test-2",
+        maximum_bytes=len(b"managed-after-2"),
+        ttl_seconds=60,
+    ) as scope:
+        second_mutation = operations.mutation_factory.replacement(
+            second_snapshot,
+            b"managed-after-2",
+            scope=scope,
+        )
+        second_set = operations.mutation_factory.mutation_set(
+            source="test-managed-write-2",
+            mutations=(second_mutation,),
+        )
+        operations.mutations.commit(
+            second_set,
+            ScopedMutationArtifacts(scope),
+        )
+
+    assert await asyncio.wait_for(w.poll(), timeout=5) == []
+
+    target.write_bytes(b"external-after")
+    events = await asyncio.wait_for(w.poll(), timeout=5)
+    assert [event.change_type for event in events] == [FileChangeKind.MODIFIED]
 
 
-def test_self_write_note_consumed_after_one_poll(tmp_path):
-    """The note is one-shot: a later genuine change is reported normally."""
-    target = tmp_path / "f.txt"
-    target.write_text("v1")
+@pytest.mark.asyncio
+async def test_batch_changes_scan_durable_journal_once(tmp_path, monkeypatch):
+    paths = []
+    for index in range(20):
+        path = tmp_path / f"file-{index}.txt"
+        path.write_text("before")
+        paths.append(path)
     w, _ = _watcher(tmp_path)
+    operations = w._file_changes
     w.prime()
-    target.write_text("v2-by-agent")
-    w.note_self_write(str(target))
-    assert asyncio.run(w.poll()) == []
-    # A subsequent external change must surface (note was consumed). Use a
-    # different-length payload so detection doesn't hinge on mtime resolution
-    # (coarse on some filesystems, e.g. WSL2) when two writes share a size.
-    target.write_text("v3-external-change")
-    events = asyncio.run(w.poll())
-    assert [e.change_type for e in events] == [MODIFIED]
+    calls = 0
+    original = operations.journal.records
+
+    def counted_records():
+        nonlocal calls
+        calls += 1
+        return original()
+
+    monkeypatch.setattr(operations.journal, "records", counted_records)
+    for path in paths:
+        path.write_text("external-after")
+
+    events = await w.poll()
+
+    assert len(events) == len(paths)
+    assert calls == 1
 
 
-def test_external_change_after_self_write_not_suppressed(tmp_path):
-    """If the file diverges past our recorded signature, it's still reported."""
-    target = tmp_path / "f.txt"
-    target.write_text("v1")
-    w, _ = _watcher(tmp_path)
-    w.prime()
-    target.write_text("v2-by-agent")
-    w.note_self_write(str(target))
-    # External actor changes it again before the poll -> signatures differ.
-    target.write_text("v3-external-bigger")
-    events = asyncio.run(w.poll())
-    assert [e.change_type for e in events] == [MODIFIED]
-
-
-def test_self_write_delete_suppressed(tmp_path):
-    """A self-write that deletes the file is recorded and suppressed."""
-    target = tmp_path / "f.txt"
-    target.write_text("bye")
-    w, _ = _watcher(tmp_path)
-    w.prime()
-    os.remove(target)
-    w.note_self_write(str(target))
-    assert asyncio.run(w.poll()) == []
-
-
-def test_self_write_does_not_suppress_other_files(tmp_path):
-    """Noting one path leaves changes to sibling files untouched."""
-    mine = tmp_path / "mine.txt"
-    other = tmp_path / "other.txt"
-    mine.write_text("a")
-    other.write_text("b")
-    w, _ = _watcher(tmp_path)
-    w.prime()
-    mine.write_text("a-changed")
-    w.note_self_write(str(mine))
-    other.write_text("b-changed")
-    events = asyncio.run(w.poll())
-    assert [e.path for e in events] == [str(other)]
-
-
-def test_is_running_reflects_lifecycle(tmp_path):
+@pytest.mark.asyncio
+async def test_is_running_reflects_lifecycle(tmp_path):
     w, _ = _watcher(tmp_path)
     assert w.is_running() is False
 
     async def scenario():
-        w.start()
+        await w.start_async()
         assert w.is_running() is True
         await w.stop()
         assert w.is_running() is False
 
-    asyncio.run(scenario())
+    await scenario()

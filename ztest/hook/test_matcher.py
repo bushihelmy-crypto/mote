@@ -3,7 +3,7 @@
 """Tests for HookManager._matches (glob pattern matcher)."""
 from __future__ import annotations
 
-from mote.common.hook.manager import HookManager
+from mote.runtime.hook.manager import HookManager
 
 m = HookManager._matches
 

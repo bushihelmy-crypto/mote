@@ -6,10 +6,10 @@ import types
 
 import pytest
 
-from mote.common.const import MESSAGE_ROUTE_TO_ALL
-from mote.common.schema.messages import UserMessage
-from mote.common.schema.queue import MessageQueue
-from mote.environment.base_env import AgentEnvironment
+from mote.contracts.constants.messages import MESSAGE_ROUTE_TO_ALL
+from mote.contracts.schema.messages import UserMessage
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.base_env import AgentEnvironment
 
 
 class FakeRole:

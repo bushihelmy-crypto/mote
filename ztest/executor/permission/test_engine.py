@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.permission.engine.PermissionEngine``.
+"""Unit tests for ``mote.runtime.tools.permission.engine.PermissionEngine``.
 
 Covers the 11-step decision pipeline: bypass-immune deny/ask, mode shortcuts
 (bypass / acceptEdits / plan / dontAsk), rule allows, tool self-checks, and the
@@ -13,11 +13,11 @@ import os
 
 import pytest
 
-from mote.common.schema import PermissionConfig, SandboxConfig
-from mote.common.schema.permission_types import PermissionDecision
-from mote.executor.permission.engine import PermissionEngine
-from mote.executor.permission.rule_store import RuleStore
-from mote.executor.permission.sandbox.guard import SandboxGuard
+from mote.contracts.permissions import PermissionDecision
+from mote.contracts.settings.permissions import PermissionConfig, SandboxConfig
+from mote.runtime.tools.permission.engine import PermissionEngine
+from mote.runtime.tools.permission.rule_store import RuleStore
+from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
 pytestmark = pytest.mark.asyncio
 
@@ -237,6 +237,13 @@ class TestStickyPrefix:
 
 
 class TestSandbox:
+    async def test_empty_mutating_target_fails_closed(self, tmp_path):
+        eng = sandboxed_engine(str(tmp_path))
+        d = await eng.check("Edit", target="", mutates_fs=True)
+        assert d.behavior == "deny"
+        assert d.reason.type == "sandbox"
+        assert "no concrete permission target" in d.message
+
     async def test_write_inside_sandbox_allowed(self, tmp_path):
         cwd = str(tmp_path)
         eng = sandboxed_engine(cwd)

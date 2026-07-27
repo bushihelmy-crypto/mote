@@ -7,7 +7,7 @@ a ``TaskOutputStore`` progress sink, then asserts:
 
 * only decision-point notifications reach the msg_buffer — the whole-task
   terminal (END, via pool._on_done), a route pause, and a node failure. START
-  and per-node completions are disk-only (no event bus), and
+  and per-node completions are disk-only (no telemetry publication), and
 * per-node ``report_progress`` events were appended to the task's disk output
   (the basis for ``<delta-summary>`` blocks).
 """
@@ -17,9 +17,9 @@ import asyncio
 
 import pytest
 
-from mote.common.schema import MessageQueue
-from mote.executor.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskOutputStore
-from mote.executor.tasks.bggraph import END, START, BgGraph
+from mote.contracts.schema import MessageQueue
+from mote.orchestration.tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskOutputStore
+from mote.orchestration.tasks.bggraph import END, START, BgGraph
 
 from .conftest import S, gated_node, sync_node
 
@@ -322,8 +322,8 @@ class TestPoolResultLimitPolicy:
     """
 
     async def test_large_error_persists_under_config(self, tmp_path, msg_buffer):
-        from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
-        from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
+        from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+        from mote.orchestration.tasks import BackgroundTaskPool, TaskOutputStore
 
         store = TaskOutputStore(base_dir=tmp_path)
         # Tiny cap so a modest error block trips the persist threshold.
@@ -352,8 +352,8 @@ class TestPoolResultLimitPolicy:
         assert meta.result.startswith(PERSISTED_OUTPUT_OPEN_TAG)
 
     async def test_limit_disabled_passes_error_through_whole(self, tmp_path, msg_buffer):
-        from mote.common.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
-        from mote.executor.tasks import BackgroundTaskPool, TaskOutputStore
+        from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+        from mote.orchestration.tasks import BackgroundTaskPool, TaskOutputStore
 
         store = TaskOutputStore(base_dir=tmp_path)
         pool = BackgroundTaskPool(
@@ -390,8 +390,8 @@ def _wire_registry(pool):
     ``retire_result`` callback. Returns the registry so a test can assert what
     survived compaction.
     """
-    from mote.common.resource import ResourceRegistry, build_task_result_pointer
-    from mote.common.schema import PAUSE_STATUSES, TERMINAL_STATUSES
+    from mote.orchestration.tasks.status import PAUSE_STATUSES, TERMINAL_STATUSES
+    from mote.runtime.resources import ResourceRegistry, build_task_result_pointer
 
     registry = ResourceRegistry()
 

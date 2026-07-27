@@ -16,8 +16,8 @@ import asyncio
 
 import pytest
 
-from mote.executor.tasks import BgStatus, StallDetector, TaskMeta
-from mote.executor.tasks.stall_detector import _matches_interactive_prompt
+from mote.orchestration.tasks import BgStatus, StallDetector, TaskMeta
+from mote.orchestration.tasks.stall_detector import _matches_interactive_prompt
 
 
 class FakePool:

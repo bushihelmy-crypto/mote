@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.compress.ruff.RuffCompressor``."""
+"""Unit tests for ``mote.runtime.tools.compress.ruff.RuffCompressor``."""
 from __future__ import annotations
 
-from mote.executor.compress.ruff import RuffCompressor
+from mote.runtime.tools.compress.ruff import RuffCompressor
 
 OUTPUT = (
     "\n".join(f"src/mod{i}.py:{i}:1: F401 `os` imported but unused" for i in range(20))

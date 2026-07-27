@@ -14,18 +14,18 @@ import asyncio
 
 import pytest
 
-from mote.common.events.types import BUDGET
+from mote.contracts.events.types import BUDGET
 
 
 @pytest.fixture
 def captured_events(role, monkeypatch):
-    """Record every event the provider observes onto the role's bus."""
+    """Record every event the provider emits onto Role telemetry."""
     events: list = []
 
     async def _record(event):
         events.append(event)
 
-    monkeypatch.setattr(role.event_bus, "observe", _record)
+    monkeypatch.setattr(role.telemetry, "emit", _record)
     return events
 
 

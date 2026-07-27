@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.config.config.llm_config import LLMConfig, LLMType
-from mote.router.llm.provider_catalog import (
+from mote.contracts.config.llm import LLMConfig, LLMType
+from mote.runtime.models.clients.provider_catalog import (
     PROVIDER_CATALOG,
     apply_provider_preset,
     detect_provider,
@@ -313,7 +313,7 @@ def test_detect_provider_gemini_model_hint():
 
 
 def test_alias_index_rejects_cross_brand_collision():
-    from mote.common.config.config.llm_config import ProviderPreset, _build_alias_index
+    from mote.contracts.config.llm import ProviderPreset, _build_alias_index
 
     bad = {
         "a": ProviderPreset(base_url="https://a/v1", api_type=LLMType.OPENAI, aliases=("shared",)),

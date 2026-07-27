@@ -10,7 +10,7 @@ min-samples gate, abandoned half-open probe reclaim, and the fail-open
 """
 from __future__ import annotations
 
-from mote.common.resilience import BreakerConfig, BreakerState, CircuitBreaker
+from mote.runtime.resilience import BreakerConfig, BreakerState, CircuitBreaker
 
 
 class FakeClock:
@@ -173,6 +173,12 @@ class TestHalfOpen:
         assert b.admit() is False
         clock.advance(20)  # lease (== open_seconds) elapses
         assert b.admit() is True  # reclaimed
+
+    def test_explicit_abandon_releases_probe_immediately(self):
+        clock = FakeClock()
+        b = self._half_open(clock)
+        b.abandon()
+        assert b.admit() is True
 
 
 class TestDisabled:

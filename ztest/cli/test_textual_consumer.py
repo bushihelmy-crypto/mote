@@ -14,9 +14,10 @@ import pytest
 
 pytest.importorskip("textual")
 
-from mote.cli.consumers.textual.app import ViewEventMessage
-from mote.cli.consumers.textual.consumer import TextualConsumer
-from mote.cli.contracts.view import (
+from mote.product.cli.consumers.textual.app import ViewEventMessage
+from mote.product.cli.consumers.textual.consumer import TextualConsumer
+from mote.product.cli.consumers.textual.surface import TextualSurface
+from mote.product.cli.contracts.view import (
     ApprovalRequested,
     ErrorRaised,
     MediaBlock,
@@ -92,7 +93,43 @@ def test_sync_handle_routes_to_post(ev):
     assert app.posted[0].event is ev
 
 
-def test_capabilities_are_terminal_caps():
-    from mote.cli.contracts.view import TERMINAL_CAPS
+def test_capabilities_enable_provisional_rollback():
+    from mote.product.cli.contracts.view import TEXTUAL_CAPS
 
-    assert TextualConsumer.capabilities is TERMINAL_CAPS
+    assert TextualConsumer.capabilities is TEXTUAL_CAPS
+    assert TextualConsumer.capabilities.provisional_rollback is True
+
+
+def test_textual_surface_rollback_removes_only_open_provisional_block():
+    class Block:
+        removed = False
+
+        def remove(self):
+            self.removed = True
+
+    block = Block()
+    app = type("App", (), {"_open_block": block})()
+
+    TextualSurface(app).rollback_block()
+
+    assert block.removed is True
+    assert app._open_block is None
+
+
+def test_textual_surface_empty_delta_does_not_create_placeholder_block():
+    class App:
+        def _ensure_block(self):
+            raise AssertionError("empty delta must not create a transcript block")
+
+    TextualSurface(App()).append_delta("", reasoning=False)
+
+
+def test_textual_surface_empty_notice_does_not_mount_placeholder_row():
+    class App:
+        def _close_block(self):
+            raise AssertionError("empty notice must not mutate the transcript")
+
+        def _mount(self, widget):
+            raise AssertionError("empty notice must not mount a transcript row")
+
+    assert TextualSurface(App()).render_notice(Notice(text="")) is None

@@ -42,13 +42,13 @@ pre-commit run --all-files
 mote is strictly layered (see `AGENTS.md` and `zdocs/ARCHITECTURE.md`):
 
 ```
-common ◀ context/executor/router/session ◀ parser/think/loop ◀ roles ◀ environment ◀ cli
+contracts <- kernel <- runtime <- orchestration <- product
 ```
 
 Dependencies point **downward only**. Cross-layer access goes through the
-Protocols in `common/interface/` — never import an upper layer directly.
+Protocols in `contracts/ports/` - never import an upper layer directly.
 
-- **Human-facing text** is localized via `common/i18n/` (zh/en).
+- **Human-facing text** is localized via `product/i18n/` (zh/en).
 - **Model-facing text** (prompts, tool output, `<system-reminder>`) stays plain
   English and must not be routed through i18n.
 
@@ -104,7 +104,7 @@ The workflow's `publish` job runs in the `pypi` GitHub Environment and requests
 The tag push runs `publish.yml`, which:
 
 - builds the sdist + wheel and **asserts the runtime data files are packaged**
-  (`config.example.yaml`, `router/ml/router.runtime.yaml` — first-run bootstrap
+  (`config.example.yaml`, `product/routing/squilla/ml/router.runtime.yaml` — first-run bootstrap
   and the ML router read these, so a missing file fails the build);
 - publishes to PyPI (skips already-uploaded files, so re-runs are safe);
 - signs the artifacts with Sigstore and creates/updates the GitHub Release with

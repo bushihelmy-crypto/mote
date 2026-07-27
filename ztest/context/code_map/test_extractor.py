@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 
-from mote.context.code_map.extractor import CodeMapExtractor
-from mote.context.code_map.model import SUMMARY_MAX_CHARS
+import mote.runtime.context.code_map.extractor as extractor_module
+from mote.runtime.context.code_map.extractor import CodeMapExtractor
+from mote.runtime.context.code_map.model import SUMMARY_MAX_CHARS
 
 
 def _write(tmp_path, name: str, source: str) -> str:
@@ -251,6 +252,23 @@ def test_unreadable_path_yields_empty_extract(tmp_path):
     extract = CodeMapExtractor().extract(missing)
     assert extract.symbols == []
     assert extract.path == os.path.abspath(missing)
+
+
+def test_skips_native_parser_for_minified_source(tmp_path, monkeypatch):
+    class NativeProvider:
+        language = "javascript"
+
+        def extract_tree(self, source, abspath):
+            raise AssertionError("minified source must not reach the native parser")
+
+    path = _write(tmp_path, "bundle.js", "x=" + "1" * 1200)
+    monkeypatch.setattr(extractor_module, "provider_for", lambda _path: NativeProvider())
+
+    extract = CodeMapExtractor().extract(path)
+
+    assert extract.language == "javascript"
+    assert extract.content_hash
+    assert extract.symbols == []
 
 
 def test_needs_refresh_true_before_first_parse(tmp_path):

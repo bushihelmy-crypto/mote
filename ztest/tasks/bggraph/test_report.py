@@ -1,23 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the bggraph progress writer's dual sink: disk append + bus emit.
+"""Tests for the bggraph progress writer's disk and telemetry sinks.
 
 ``make_progress_writer`` keeps the on-disk append as the source of truth and,
-when a ``task_id`` is supplied, also mirrors each event onto the active bus as a
-:class:`TaskProgressEvent` (so subscribers see live progress without polling).
+when a ``task_id`` is supplied, also mirrors each event onto active telemetry.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.common.events import EventBus, TaskProgressEvent, set_bus
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.executor.tasks.bggraph.report import make_progress_writer
+from mote.orchestration.tasks.bggraph.report import make_progress_writer
+from mote.runtime.events import TaskProgressEvent, bind_telemetry
+from mote.ztest.telemetry import InlineTelemetry
 
 
-class _Recorder(ObservationSubscriber, SyncObserver):
-    priority = 50
-
+class _Recorder:
     def __init__(self):
         self.events = []
 
@@ -29,18 +26,16 @@ class _Recorder(ObservationSubscriber, SyncObserver):
         return None
 
 
-def _bus():
-    bus = EventBus()
+def _telemetry():
     rec = _Recorder()
-    bus.subscribe(rec)
-    return bus, rec
+    return InlineTelemetry(rec), rec
 
 
 def test_writer_appends_and_emits():
     lines = []
-    bus, rec = _bus()
+    telemetry, rec = _telemetry()
     writer = make_progress_writer(lines.append, task_id="bg_1")
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         writer("split", "running", "detail-text")
     # disk append (source of truth)
     assert lines == ["[split] running: detail-text\n"]
@@ -55,9 +50,9 @@ def test_status_enum_value_used():
         value = "DONE"
 
     lines = []
-    bus, rec = _bus()
+    telemetry, rec = _telemetry()
     writer = make_progress_writer(lines.append, task_id="bg_2")
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         writer("merge", _Status(), None)
     assert lines == ["[merge] DONE: \n"]
     assert rec.events[0].status == "DONE" and rec.events[0].detail == ""
@@ -65,9 +60,9 @@ def test_status_enum_value_used():
 
 def test_empty_task_id_appends_but_does_not_emit():
     lines = []
-    bus, rec = _bus()
+    telemetry, rec = _telemetry()
     writer = make_progress_writer(lines.append)  # task_id="" default
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         writer("split", "running", "x")
     assert lines == ["[split] running: x\n"]
     assert rec.events == []
@@ -77,30 +72,30 @@ def test_detail_is_not_truncated_in_either_sink():
     # Truncation was deliberately removed — full detail flows through both sinks
     # so notifications/progress are never cut mid-content.
     lines = []
-    bus, rec = _bus()
+    telemetry, rec = _telemetry()
     writer = make_progress_writer(lines.append, task_id="bg_3")
     big = "y" * 200_000
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         writer("node", "running", big)
     assert big in lines[0]
     assert rec.events[0].detail == big
 
 
-def test_no_bus_still_appends():
+def test_no_telemetry_still_appends():
     lines = []
     writer = make_progress_writer(lines.append, task_id="bg_4")
-    # No set_bus -> emit is a no-op; the append must still happen.
+    # No telemetry -> emit is a no-op; the append must still happen.
     writer("split", "running", "x")
     assert lines == ["[split] running: x\n"]
 
 
 # ---------------------------------------------------------------------------
-# Structured delivery via the injected ``deliver`` choke point (no event bus)
+# Structured delivery via the injected ``deliver`` choke point
 # ---------------------------------------------------------------------------
 
 
 def test_node_failure_delivers_structured_notification():
-    from mote.executor.tasks.types import BackgroundTaskNotification
+    from mote.orchestration.tasks.types import BackgroundTaskNotification
 
     lines, delivered = [], []
     writer = make_progress_writer(lines.append, task_id="bg_1", command_name="my_graph", deliver=delivered.append)
@@ -141,7 +136,7 @@ def test_running_status_not_delivered():
 
 
 def test_graph_start_marker_not_delivered():
-    from mote.executor.tasks.bggraph.types import END
+    from mote.orchestration.tasks.bggraph.types import END
 
     lines, delivered = [], []
     writer = make_progress_writer(lines.append, task_id="bg_1", deliver=delivered.append)
@@ -153,7 +148,7 @@ def test_graph_start_marker_not_delivered():
 
 
 def test_writer_delivers_only_node_failures():
-    from mote.executor.tasks.bggraph.types import END
+    from mote.orchestration.tasks.bggraph.types import END
 
     delivered = []
     writer = make_progress_writer(lambda _l: None, task_id="bg_1", deliver=delivered.append)
@@ -176,14 +171,14 @@ def test_writer_delivers_only_node_failures():
 
 def test_current_placeholder_substituted_with_task_id():
     lines, delivered = [], []
-    bus, rec = _bus()
+    telemetry, rec = _telemetry()
     writer = make_progress_writer(lines.append, task_id="bg_7", deliver=delivered.append)
-    with set_bus(bus):
+    with bind_telemetry(telemetry):
         # A node failure is the one event that reaches all three sinks (disk +
         # bus + deliver), so it exercises substitution on the delivered path too.
         writer("split", "failed", "task (current) finished")
     # Substitution now happens in the writer, so every sink sees the real id:
-    # disk append, event bus and the delivered notification — never the literal.
+    # disk append, telemetry observation, and delivered notification — never the literal.
     assert lines == ["[split] failed: task bg_7 finished\n"]
     assert rec.events[0].detail == "task bg_7 finished"
     assert [m.content for m in delivered] == ["task bg_7 finished"]

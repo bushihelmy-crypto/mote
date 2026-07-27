@@ -3,21 +3,21 @@
 """Tests for the FREE :class:`FoldReducer` — count-gated in-place body fold.
 
 This is the old ``microcompact`` behavior expressed as a reducer: once more than
-``trigger`` reconstructable tool results have piled up, clear all but the most
-recent ``keep_recent``. It shrinks ``Message.content`` in place (leaving the
-tool_call↔tool_result pairing fully intact) and never touches sticky resource
-bodies or non-reconstructable (conversational) results.
+``trigger`` reconstructable model tool-call turns have piled up, clear eligible
+results older than the most recent ``keep_recent`` complete rounds. It shrinks
+``Message.content`` in place (leaving the tool_call↔tool_result pairing fully
+intact) and never touches sticky resource bodies or non-reconstructable results.
 """
 from __future__ import annotations
 
 import asyncio
 
-from mote.common.const import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
-from mote.common.const.context import FOLDED_WRITE_MARKER, TOOL_RESULT_CLEARED_MESSAGE
-from mote.common.schema import ContextManagerConfig
-from mote.context.compaction.reducers.fold import FoldReducer
-from mote.context.compaction.request import ReductionRequest
-from mote.context.compaction.transcript import Transcript
+from mote.contracts.constants.context import FOLDED_WRITE_MARKER, TOOL_RESULT_CLEARED_MESSAGE
+from mote.contracts.constants.messages import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
+from mote.contracts.schema import ContextManagerConfig
+from mote.runtime.context.compaction.reducers.fold import FoldReducer
+from mote.runtime.context.compaction.request import ReductionRequest
+from mote.runtime.context.compaction.transcript import Transcript
 
 from ..conftest import COMPACTABLE, make_pairs, tool_call_msg, tool_result_msg
 
@@ -42,6 +42,14 @@ def make_writes(n: int, *, name: str = "Edit", body: str = _BIG_BODY, start: int
     for i in range(start, start + n):
         msgs += write_pair(f"w-{i}", name=name, body=body)
     return msgs
+
+
+def parallel_read_round(prefix: str, count: int, *, result: str = "x" * 200):
+    """One thinking turn containing several parallel Read calls and results."""
+    call_ids = [f"{prefix}-{index}" for index in range(count)]
+    assistant = tool_call_msg(call_ids[0], "Read")
+    assistant.metadata[TOOL_CALLS] = [{"id": call_id, "name": "Read", "args": {}} for call_id in call_ids]
+    return [assistant, *[tool_result_msg(call_id, result) for call_id in call_ids]]
 
 
 def _new_strings(transcript):
@@ -108,6 +116,54 @@ def test_over_trigger_folds_all_but_keep_recent():
     assert contents[:4] == [PLACEHOLDER] * 4
     assert contents[4] != PLACEHOLDER
     assert out.tokens_freed > 0
+
+
+def test_parallel_results_count_as_one_tool_call_turn():
+    t = _transcript(parallel_read_round("parallel", 8))
+    out = _fold(t)
+    assert out.changed is False
+    assert all(content != PLACEHOLDER for content in _contents(out.transcript))
+
+
+def test_last_five_complete_tool_call_turns_are_protected():
+    old = make_pairs(5, start=0)
+    recent = [
+        *make_pairs(1, start=5),
+        tool_call_msg("ask", "AskUserQuestion"),
+        tool_result_msg("ask", "human answer"),
+        *make_pairs(3, start=6),
+    ]
+    t = _transcript([*old, *recent])
+    out = _fold(
+        t,
+        _cfg(microcompact_trigger_threshold=3, microcompact_keep_recent=5),
+    )
+    contents = _contents(out.transcript)
+    assert contents[:5] == [PLACEHOLDER] * 5
+    assert contents[5:] == ["x" * 200, "human answer", *(["x" * 200] * 3)]
+
+
+def test_old_tool_call_turn_can_fold_eligible_result_without_pinned_sibling():
+    old = parallel_read_round("old", 2)
+    old[1].add_metadata(RETENTION, RETENTION_PIN)
+    t = _transcript([*old, *make_pairs(4)])
+    out = _fold(t)
+    contents = _contents(out.transcript)
+    assert contents[0] == "x" * 200
+    assert contents[1] == PLACEHOLDER
+
+
+def test_default_fold_requires_ten_turns_and_protects_latest_five():
+    cfg = ContextManagerConfig()
+    ten = _transcript(make_pairs(10, result="y" * 20_000))
+    assert _fold(ten, cfg).changed is False
+
+    eleven = _transcript(make_pairs(11, result="y" * 20_000))
+    out = _fold(eleven, cfg)
+    contents = _contents(out.transcript)
+    assert contents[:6] == [PLACEHOLDER] * 6
+    assert contents[6:] == ["y" * 20_000] * 5
+    assert out.tokens_freed >= cfg.microcompact_clear_at_least
 
 
 def test_sticky_results_are_never_folded():

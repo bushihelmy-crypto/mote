@@ -1,22 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.tool_registry.ToolRegistry``.
+"""Unit tests for ``mote.runtime.tools.tool_registry.ToolRegistry``.
 
-Uses the ``fresh_registry`` fixture (an isolated instance built via ``__new__``)
-so the process-wide singleton is never mutated.
+Uses an ordinary isolated ``fresh_registry`` fixture.
 """
 from __future__ import annotations
 
 import pytest
 
-from mote.executor.base_tool import BaseTool
+from mote.runtime.tools.base_tool import BaseTool
 
 
 def _tool(name: str = "", aliases=None):
     """Build a throwaway BaseTool subclass (NOT auto-registered)."""
 
     class _T(BaseTool):
-        async def call(self):  # pragma: no cover - never invoked
+        async def call(self, *, action: str = ""):  # pragma: no cover - never invoked
             return "ok"
 
     _T.name = name
@@ -50,6 +49,56 @@ class TestRegister:
         assert fresh_registry.get("Delta") is cls
         assert fresh_registry.get("d") is cls
         assert fresh_registry.get("delta.run") is cls
+
+    def test_stateful_tool_requires_runtime_host_capability(self, fresh_registry):
+        cls = _tool("StatefulWithoutHost")
+        cls.stateful = True
+
+        with pytest.raises(TypeError, match="get_runtime_host"):
+            fresh_registry.register(cls)
+
+    def test_stateful_tool_with_runtime_host_capability_is_accepted(self, fresh_registry):
+        cls = _tool("ManagedStateful")
+        cls.stateful = True
+        cls.requires = ("get_runtime_host", "handoff_runtime")
+
+        assert fresh_registry.register(cls) is cls
+
+    def test_stateful_tool_requires_handoff_capability(self, fresh_registry):
+        cls = _tool("StatefulWithoutHandoff")
+        cls.stateful = True
+        cls.requires = ("get_runtime_host",)
+
+        with pytest.raises(TypeError, match="handoff_runtime"):
+            fresh_registry.register(cls)
+
+    def test_stateful_tool_requires_action_parameter(self, fresh_registry):
+        class MissingAction(BaseTool):
+            name = "MissingAction"
+            stateful = True
+            requires = ("get_runtime_host", "handoff_runtime")
+
+            async def call(self):  # pragma: no cover
+                return "ok"
+
+        with pytest.raises(TypeError, match="action parameter"):
+            fresh_registry.register(MissingAction)
+
+    def test_stateful_bind_cannot_bypass_registry_validation(self):
+        cls = _tool("DynamicStatefulWithoutHost")
+        cls.stateful = True
+
+        with pytest.raises(TypeError, match="get_runtime_host"):
+            cls().bind("session")
+
+    def test_stateful_tool_cannot_store_business_state_on_instance(self):
+        cls = _tool("ManagedStateful")
+        cls.stateful = True
+        cls.requires = ("get_runtime_host", "handoff_runtime")
+        tool = cls()
+
+        with pytest.raises(AttributeError, match="RuntimeDriver"):
+            tool.document = {"hidden": "state"}
 
 
 class TestFrozenMethods:

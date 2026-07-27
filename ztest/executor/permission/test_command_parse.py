@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.permission.command_parse``."""
+"""Unit tests for ``mote.runtime.tools.permission.command_parse``."""
 from __future__ import annotations
 
-from mote.executor.permission.command_parse import command_prefix, parse_segments, prefix_tokens, segment_strings
+from mote.runtime.tools.permission.command_parse import command_prefix, parse_segments, prefix_tokens, segment_strings
 
 
 class TestParseSegments:

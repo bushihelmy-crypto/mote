@@ -14,19 +14,22 @@ import asyncio
 
 import pytest
 
-from mote.common.config.config.llm_config import LLMConfig, LLMType
-from mote.common.events import EventBus, LLMStreamDeltaEvent, set_bus
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.router.cost import CostTracker
-from mote.router.llm.anthropic_api import AnthropicLLM
-from mote.router.llm.llm_provider_registry import create_llm_instance, resolve_api_type
+from mote.contracts.config.llm import LLMConfig, LLMType
+from mote.product.integrations.bootstrap import builtin_provider_registry
+from mote.product.integrations.models.anthropic import AnthropicLLM
+from mote.runtime.events import LLMStreamDeltaEvent, bind_telemetry
+from mote.runtime.models.clients.registry import resolve_api_type
+from mote.runtime.models.cost import CostTracker
+from mote.ztest.telemetry import InlineTelemetry
+
+
+def create_llm_instance(config):
+    return builtin_provider_registry().create(config)
 
 
 # -- fakes ------------------------------------------------------------------
-class _StreamCapture(ObservationSubscriber, SyncObserver):
-    """Bus subscriber that collects streamed LLM tokens (sync delivery)."""
-
-    priority = 50
+class _StreamCapture:
+    """Telemetry handler that collects streamed LLM tokens."""
 
     def __init__(self):
         self.tokens: list[str] = []
@@ -441,7 +444,7 @@ class TestCompletion:
         llm = _make_llm()
         fake = _FakeMessages(resp=_Resp([]))
         llm.aclient = _FakeClient(fake)
-        from mote.common.exception import LLMEmptyResponseError
+        from mote.runtime.errors import LLMEmptyResponseError
 
         with pytest.raises(LLMEmptyResponseError):
             run(llm._achat_completion([{"role": "user", "content": "hi"}], raise_if_empty=True))
@@ -477,7 +480,7 @@ class TestCompletion:
         response = httpx.Response(429, request=request)
         exc = anthropic.RateLimitError("rate limited", response=response, body=None)
         llm.aclient = _FakeClient(_FakeMessages(raise_exc=exc))
-        from mote.common.exception import LLMRateLimitError
+        from mote.runtime.errors import LLMRateLimitError
 
         with pytest.raises(LLMRateLimitError):
             run(llm._achat_completion([{"role": "user", "content": "hi"}]))
@@ -495,10 +498,9 @@ class TestCompletion:
         fake = _FakeMessages(stream_texts=["let me ", "read it"], final=final)
         llm.aclient = _FakeClient(fake)
 
-        bus = EventBus()
         cap = _StreamCapture()
-        bus.subscribe(cap)
-        with set_bus(bus):
+        telemetry = InlineTelemetry(cap)
+        with bind_telemetry(telemetry):
             rsp = run(llm._achat_completion_stream_tool([{"role": "user", "content": "hi"}], raise_if_empty=False))
 
         # Text deltas mirrored to the bus as they arrived.
@@ -528,7 +530,7 @@ class TestAutoDetection:
         assert isinstance(create_llm_instance(cfg), AnthropicLLM)
 
     def test_gateway_claude_stays_openai(self):
-        from mote.router.llm.openai_api import OpenAILLM
+        from mote.product.integrations.models.openai_chat import OpenAILLM
 
         cfg = LLMConfig(
             api_type="openai", base_url="https://openrouter.ai/api/v1", model="claude-3-5-sonnet", api_key="x"
@@ -553,7 +555,7 @@ class TestAutoDetection:
             assert isinstance(create_llm_instance(cfg), AnthropicLLM)
 
     def test_openai_v1_surface_of_same_vendor_stays_openai(self):
-        from mote.router.llm.openai_api import OpenAILLM
+        from mote.product.integrations.models.openai_chat import OpenAILLM
 
         # The vendor's OpenAI-compatible /v1 surface must NOT match the
         # /anthropic detector — only the explicit anthropic surface takes native.
@@ -628,8 +630,8 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.common.exception import LLMAuthenticationError, LLMBadRequestError, classify_llm_error
-        from mote.common.exception.handlers import is_retryable
+        from mote.runtime.errors import LLMAuthenticationError, LLMBadRequestError, classify_llm_error
+        from mote.runtime.errors.classification import is_retryable
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
@@ -647,7 +649,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.common.exception import LLMRateLimitError, classify_llm_error
+        from mote.runtime.errors import LLMRateLimitError, classify_llm_error
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         response = httpx.Response(429, request=request, headers={"retry-after": "17"})
@@ -662,7 +664,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.common.exception import LLMRateLimitError, classify_llm_error
+        from mote.runtime.errors import LLMRateLimitError, classify_llm_error
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         response = httpx.Response(429, request=request)  # no Retry-After header
@@ -679,7 +681,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.common.exception import classify_llm_error
+        from mote.runtime.errors import classify_llm_error
 
         # RFC 7231 second form: an absolute HTTP-date → converted to a positive
         # delay by subtracting *now* (aware UTC). Use a far-future instant so the
@@ -701,7 +703,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.common.exception import classify_llm_error
+        from mote.runtime.errors import classify_llm_error
 
         past = datetime.now(timezone.utc) - timedelta(seconds=60)
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -716,7 +718,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.common.exception import classify_llm_error
+        from mote.runtime.errors import classify_llm_error
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         response = httpx.Response(429, request=request, headers={"retry-after": "not-a-date-or-number"})

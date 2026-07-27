@@ -1,23 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""ContextManager hooks: PreCompact custom_instructions override + veto, PostCompact.
+"""ContextManager hooks: PreCompact enrichment and PostCompact observation.
 
 The reduction now runs through the ``ContextEngine`` (fold → summarize → drop),
 so these tests drive a real summarize with a fake LLM and a forced-low threshold
 rather than monkeypatching module functions. They assert the PreCompact hook can
-override the summarize ``custom_instructions``, can veto the whole pass (stop),
-and that PostCompact fires after a compaction with the summary.
+enrich summarize instructions but cannot veto core compaction, and that
+PostCompact fires after a compaction with the summary.
 """
 from __future__ import annotations
 
 import pytest
 
-import mote.context.budget as token_budget
-from mote.common.events import EventBus
-from mote.common.hook.manager import HookManager
-from mote.common.hook.subscriber import HookSubscriber
-from mote.common.schema import ContextManagerConfig, UserMessage
-from mote.context.manager import ContextManager
+import mote.runtime.context.budget as token_budget
+from mote.contracts.schema import ContextManagerConfig, UserMessage
+from mote.runtime.context.compaction.policy import build_compaction_policy
+from mote.runtime.context.manager import ContextManager
+from mote.runtime.hook.manager import HookManager
+from mote.runtime.hook.subscriber import HookSubscriber
+from mote.ztest.telemetry import InlineTelemetry
 
 
 class _FakeLLM:
@@ -38,10 +39,8 @@ def _summarizing_cfg() -> ContextManagerConfig:
     return ContextManagerConfig(enable_microcompact=False, keep_tail_messages=1, keep_tail_tokens=1)
 
 
-def _bus_with_hooks(mgr: HookManager) -> EventBus:
-    bus = EventBus()
-    bus.subscribe(HookSubscriber(mgr))
-    return bus
+def _telemetry_with_hooks(mgr: HookManager) -> InlineTelemetry:
+    return InlineTelemetry(HookSubscriber(mgr))
 
 
 @pytest.fixture(autouse=True)
@@ -56,29 +55,39 @@ async def _seed(cm: ContextManager):
 
 
 @pytest.mark.asyncio
-async def test_precompact_overrides_custom_instructions():
+async def test_precompact_enriches_custom_instructions():
     mgr = HookManager()
     mgr.register("PreCompact", lambda hi: {"additionalContext": "FOCUS ON API"})
-    cm = ContextManager(llm=_FakeLLM(), config=_summarizing_cfg(), model="m", bus=_bus_with_hooks(mgr))
+    cm = ContextManager(
+        llm=_FakeLLM(),
+        config=_summarizing_cfg(),
+        model="m",
+        telemetry=_telemetry_with_hooks(mgr),
+        compaction_policy=build_compaction_policy(hook_manager=mgr),
+    )
     await _seed(cm)
 
     await cm.manage_history(custom_instructions="original")
-    # The PreCompact hook's additionalContext reached the summarize reducer,
-    # overriding the caller's "original".
-    assert cm._summarize.custom_instructions == "FOCUS ON API"
+    assert cm._summarize.custom_instructions == "original\nFOCUS ON API"
 
 
 @pytest.mark.asyncio
-async def test_precompact_veto_skips_compaction():
+async def test_precompact_veto_is_ignored():
     llm = _FakeLLM()
     mgr = HookManager()
     mgr.register("PreCompact", lambda hi: {"continue": False, "stopReason": "not now"})
-    cm = ContextManager(llm=llm, config=_summarizing_cfg(), model="m", bus=_bus_with_hooks(mgr))
+    cm = ContextManager(
+        llm=llm,
+        config=_summarizing_cfg(),
+        model="m",
+        telemetry=_telemetry_with_hooks(mgr),
+        compaction_policy=build_compaction_policy(hook_manager=mgr),
+    )
     await _seed(cm)
 
     changed = await cm.manage_history()
-    assert changed is False
-    assert llm.aask_calls == []  # vetoed before the pipeline (and the LLM) ran
+    assert changed is True
+    assert len(llm.aask_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -87,7 +96,10 @@ async def test_postcompact_fires_after_compaction():
     mgr = HookManager()
     mgr.register("PostCompact", lambda hi: fired.append(hi.payload.get("compact_summary")))
     cm = ContextManager(
-        llm=_FakeLLM(summary="my summary"), config=_summarizing_cfg(), model="m", bus=_bus_with_hooks(mgr)
+        llm=_FakeLLM(summary="my summary"),
+        config=_summarizing_cfg(),
+        model="m",
+        telemetry=_telemetry_with_hooks(mgr),
     )
     await _seed(cm)
 

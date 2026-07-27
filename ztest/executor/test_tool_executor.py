@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for ``mote.executor.tool_executor.ToolExecutor``.
+"""Unit tests for ``mote.runtime.tools.tool_executor.ToolExecutor``.
 
 The dispatch tests inject already-bound instances via ``register_tool_instance``
 (see ``make_executor``) so they never touch the global registry. One test
@@ -9,16 +9,24 @@ exercises the constructor's registry-prebind path using the
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from mote.common.exception import ToolValidationError
-from mote.common.interface.event_subscriber import ObservationSubscriber
-from mote.common.schema import ToolResultLimitConfig
-from mote.executor.base_tool import BaseTool
-from mote.executor.mcp_adapter import MCPToolAdapter
-from mote.executor.tasks.types import BgTaskResult
-from mote.executor.tool_executor import ToolExecutor
-from mote.executor.tool_pipeline import validate_call_args
+from mote.contracts.schema import ToolResultLimitConfig
+from mote.orchestration.tasks.types import BgTaskResult
+from mote.runtime.errors import ToolValidationError
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.mcp.adapter import MCPToolAdapter
+from mote.runtime.tools.mcp.types import DiscoveredMcpTool
+from mote.runtime.tools.tool_executor import ToolExecutor
+from mote.runtime.tools.tool_pipeline import validate_call_args
+from mote.runtime.tools.tool_registry import NativeCatalogToolset
+from mote.runtime.tools.tool_result import FileChange, ToolResult
+from mote.runtime.tools.tool_result_receipt import decode_tool_result_receipt
+from mote.ztest.artifact_fakes import artifact_media
+from mote.ztest.telemetry import InlineTelemetry
 
 from .conftest import (
     AddTool,
@@ -33,6 +41,10 @@ from .conftest import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+def _register_native(executor: ToolExecutor, tool: BaseTool) -> None:
+    executor.register_native_tool(native_definition(type(tool)), tool)
 
 
 class TestRunCommandDispatch:
@@ -156,7 +168,7 @@ class TestRunCommandReturnNormalization:
     async def test_media_result_passthrough(self):
         ex = make_executor(MediaTool())
         result = await ex.run_command("Media", {"payload": "BASE64"})
-        assert result.images == ["BASE64"]
+        assert result.media[0].artifact.size == len(b"BASE64")
         assert result.output == "Read image (1KB)"
 
 
@@ -164,7 +176,7 @@ class TestResultLimiting:
     async def test_large_output_persisted(self, tmp_path):
         big = "x" * 60_000  # over DEFAULT_MAX_RESULT_SIZE_CHARS (50k)
 
-        from mote.executor.base_tool import BaseTool
+        from mote.runtime.tools.base_tool import BaseTool
 
         class BigTool(BaseTool):
             name = "Big"
@@ -174,7 +186,7 @@ class TestResultLimiting:
 
         # Point persistence at a tmp dir by injecting a WorkspaceStore rooted
         # there; the persisted result co-locates under the session directory.
-        from mote.common.workspace import WorkspaceStore
+        from mote.runtime.workspace import WorkspaceStore
 
         ex = make_executor(BigTool(), session_id="limit-sess", workspace_store=WorkspaceStore(tmp_path))
         result = await ex.run_command("Big", {}, result_id="rid-1")
@@ -184,7 +196,7 @@ class TestResultLimiting:
     async def test_limiting_disabled_passes_through(self):
         big = "y" * 60_000
 
-        from mote.executor.base_tool import BaseTool
+        from mote.runtime.tools.base_tool import BaseTool
 
         class BigTool2(BaseTool):
             name = "Big2"
@@ -201,15 +213,16 @@ class TestResultLimiting:
 
     async def test_media_result_not_limited(self):
         # Even oversized, media results bypass persistence (sent verbatim).
-        from mote.executor.base_tool import BaseTool
+        from mote.runtime.tools.base_tool import BaseTool
 
         class BigMedia(BaseTool):
             name = "BigMedia"
 
             async def call(self):
-                from mote.executor.tool_result import ToolMedia, ToolResult
-
-                return ToolResult(output="z" * 60_000, media=[ToolMedia(kind="image", b64="img")])
+                return ToolResult(
+                    output="z" * 60_000,
+                    media=[artifact_media("image", "img")],
+                )
 
         ex = make_executor(BigMedia())
         result = await ex.run_command("BigMedia", {})
@@ -227,7 +240,7 @@ class TestPersistLargeArgs:
     """
 
     async def test_large_args_replaced_by_envelope(self, tmp_path):
-        from mote.common.workspace import WorkspaceStore
+        from mote.runtime.workspace import WorkspaceStore
 
         ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
         big = {"new_string": "x" * 60_000}
@@ -237,7 +250,7 @@ class TestPersistLargeArgs:
         assert (tmp_path / ".agent_sessions" / "args-sess" / "tool_results" / "call-1-args.txt").exists()
 
     async def test_small_args_returned_unchanged(self, tmp_path):
-        from mote.common.workspace import WorkspaceStore
+        from mote.runtime.workspace import WorkspaceStore
 
         ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
         small = {"path": "a.py"}
@@ -250,14 +263,14 @@ class TestPersistLargeArgs:
         assert ex.persist_large_args(big, "call-1") is big
 
     async def test_string_args_over_threshold_persisted(self, tmp_path):
-        from mote.common.workspace import WorkspaceStore
+        from mote.runtime.workspace import WorkspaceStore
 
         ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
         out = ex.persist_large_args("y" * 60_000, "call-2")
         assert out.startswith("<persisted-output>")
 
     async def test_idempotent_already_persisted_args(self, tmp_path):
-        from mote.common.workspace import WorkspaceStore
+        from mote.runtime.workspace import WorkspaceStore
 
         ex = make_executor(session_id="args-sess", workspace_store=WorkspaceStore(tmp_path))
         big = {"new_string": "x" * 60_000}
@@ -267,20 +280,19 @@ class TestPersistLargeArgs:
 
 
 class TestSchemas:
-    async def test_get_tool_schemas_deduplicates_aliases(self):
+    async def test_native_specs_deduplicate_aliases(self):
         ex = make_executor(EchoTool())
-        schemas = ex.get_tool_schemas()
-        # Echo has aliases but appears once keyed by primary name.
-        assert set(schemas) == {"Echo"}
+        specs = ex.native_tool_specs()
+        assert [spec["name"] for spec in specs] == ["Echo"]
 
-    async def test_get_all_tool_schemas_includes_multiple_tools(self):
+    async def test_native_specs_include_multiple_tools(self):
         ex = make_executor(EchoTool(), AddTool())
-        schemas = ex.get_all_tool_schemas()
-        assert set(schemas) == {"Echo", "Add"}
+        specs = ex.native_tool_specs()
+        assert {spec["name"] for spec in specs} == {"Echo", "Add"}
 
     async def test_native_tool_specs_anthropic(self):
         ex = make_executor(AddTool())
-        specs = ex.get_native_tool_specs(provider="anthropic")
+        specs = ex.native_tool_specs(provider="anthropic")
         assert len(specs) == 1
         spec = specs[0]
         assert spec["name"] == "Add"
@@ -288,7 +300,7 @@ class TestSchemas:
 
     async def test_native_tool_specs_openai(self):
         ex = make_executor(AddTool())
-        specs = ex.get_native_tool_specs(provider="openai")
+        specs = ex.native_tool_specs(provider="openai")
         assert specs[0]["type"] == "function"
         assert specs[0]["function"]["name"] == "Add"
 
@@ -319,25 +331,17 @@ class TestMcpFiltering:
             "description": "an mcp tool",
             "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
         }
-        return MCPToolAdapter(mcp=None, tool_name=name, schema=schema)
+        return MCPToolAdapter.from_discovery(_FakeMcp(), DiscoveredMcpTool(name, "an mcp tool", schema["parameters"]))
 
-    async def test_builtin_schemas_exclude_mcp(self):
+    async def test_mcp_definition_registers_only_on_native_surface(self):
         ex = make_executor(EchoTool())
-        ex.register_tool_instance(self._adapter(), ["server:tool"])
-        builtin = ex.get_tool_schemas()
-        assert "Echo" in builtin
-        assert "server:tool" not in builtin
-
-    async def test_mcp_schemas_only(self):
-        ex = make_executor(EchoTool())
-        ex.register_tool_instance(self._adapter(), ["server:tool"])
-        mcp = ex.get_mcp_tool_schemas()
-        assert set(mcp) == {"server:tool"}
-
-    async def test_all_schemas_include_both(self):
-        ex = make_executor(EchoTool())
-        ex.register_tool_instance(self._adapter(), ["server:tool"])
-        assert set(ex.get_all_tool_schemas()) == {"Echo", "server:tool"}
+        adapter = self._adapter()
+        ex.register_native_tool(adapter.native_definition(), adapter)
+        assert {spec["name"] for spec in ex.native_tool_specs()} == {
+            "Echo",
+            "server:tool",
+        }
+        assert ex._catalog.category(ex._get_tool("server:tool")) == "mcp"
 
 
 class TestPipelineFiltering:
@@ -346,7 +350,7 @@ class TestPipelineFiltering:
     in its own category, separate from built-in and MCP tools."""
 
     def _pipeline_tool(self, name="Pipe"):
-        from mote.executor.tasks.bggraph.marker import mark_pipeline_executor
+        from mote.orchestration.tasks.bggraph.marker import mark_pipeline_executor
 
         async def _exec(**state):  # a stand-in compiled-graph executor
             return None
@@ -361,24 +365,10 @@ class TestPipelineFiltering:
         tool._executor = mark_pipeline_executor(_exec)
         return tool
 
-    async def test_builtin_schemas_exclude_pipeline(self):
+    async def test_pipeline_uses_same_native_execution_surface(self):
         ex = make_executor(EchoTool(), self._pipeline_tool())
-        builtin = ex.get_tool_schemas()
-        assert "Echo" in builtin
-        assert "Pipe" not in builtin
-
-    async def test_pipeline_schemas_only(self):
-        ex = make_executor(EchoTool(), self._pipeline_tool())
-        pipeline = ex.get_pipeline_tool_schemas()
-        assert set(pipeline) == {"Pipe"}
-
-    async def test_pipeline_excluded_from_mcp(self):
-        ex = make_executor(self._pipeline_tool())
-        assert ex.get_mcp_tool_schemas() == {}
-
-    async def test_all_schemas_include_pipeline(self):
-        ex = make_executor(EchoTool(), self._pipeline_tool())
-        assert set(ex.get_all_tool_schemas()) == {"Echo", "Pipe"}
+        assert {spec["name"] for spec in ex.native_tool_specs()} == {"Echo", "Pipe"}
+        assert ex._catalog.category(ex._get_tool("Pipe")) == "pipeline"
 
 
 class TestPipelinesEnabledGate:
@@ -388,7 +378,7 @@ class TestPipelinesEnabledGate:
     XML catalog). Non-pipeline tools are unaffected."""
 
     def _register_pipeline_cls(self, registry, name="RegPipe"):
-        from mote.executor.tasks.bggraph.marker import mark_pipeline_executor
+        from mote.orchestration.tasks.bggraph.marker import mark_pipeline_executor
 
         async def _exec(**state):
             return None
@@ -409,19 +399,20 @@ class TestPipelinesEnabledGate:
 
     async def test_switch_off_skips_pipeline_tool(self, restore_global_registry):
         self._register_pipeline_cls(restore_global_registry)
-        ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=False)
+        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+        ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=False, toolsets=(toolset,))
         # Never bound → absent from every schema view.
-        assert ex.get_pipeline_tool_schemas() == {}
-        assert "RegPipe" not in ex.get_all_tool_schemas()
+        assert "RegPipe" not in {spec["name"] for spec in ex.native_tool_specs()}
         assert "RegPipe" not in ex._tools
 
     async def test_switch_on_loads_pipeline_tool(self, restore_global_registry):
         self._register_pipeline_cls(restore_global_registry)
-        ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=True)
-        assert set(ex.get_pipeline_tool_schemas()) == {"RegPipe"}
+        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+        ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=True, toolsets=(toolset,))
+        assert {spec["name"] for spec in ex.native_tool_specs()} == {"RegPipe"}
 
     async def test_switch_off_keeps_non_pipeline_tools(self, restore_global_registry):
-        from mote.executor.base_tool import BaseTool as _BT
+        from mote.runtime.tools.base_tool import BaseTool as _BT
 
         class PlainTool(_BT):
             name = "Plain"
@@ -431,17 +422,22 @@ class TestPipelinesEnabledGate:
 
         restore_global_registry.register(PlainTool)
         self._register_pipeline_cls(restore_global_registry)
-        ex = ToolExecutor("sess", tools=["Plain", "RegPipe"], pipelines_enabled=False)
+        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+        ex = ToolExecutor(
+            "sess",
+            tools=["Plain", "RegPipe"],
+            pipelines_enabled=False,
+            toolsets=(toolset,),
+        )
         # The non-pipeline tool is still bound; only the pipeline one is dropped.
-        assert "Plain" in ex.get_tool_schemas()
-        assert "RegPipe" not in ex.get_all_tool_schemas()
+        assert {spec["name"] for spec in ex.native_tool_specs()} == {"Plain"}
 
 
 class TestConstructorAndCleanup:
     async def test_first_use_binds_from_registry(self, restore_global_registry):
         # Register a test tool into the (snapshotted) global registry, then let
         # the constructor resolve it by name.
-        from mote.executor.base_tool import BaseTool
+        from mote.runtime.tools.base_tool import BaseTool
 
         class RegTool(BaseTool):
             name = "RegTool"
@@ -451,7 +447,8 @@ class TestConstructorAndCleanup:
                 return v
 
         restore_global_registry.register(RegTool)
-        ex = ToolExecutor("sess", tools=["RegTool"])
+        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+        ex = ToolExecutor("sess", tools=["RegTool"], toolsets=(toolset,))
         result = await ex.run_command("RegTool", {"v": "hello"})
         assert result.output == "hello"
         # Alias also routes to the same instance.
@@ -473,15 +470,17 @@ class TestConstructorAndCleanup:
 
         restore_global_registry.register(LazyTool)
         discover_calls = 0
-        original_discover = restore_global_registry.discover
 
         def discover():
             nonlocal discover_calls
             discover_calls += 1
-            return original_discover()
 
-        monkeypatch.setattr(restore_global_registry, "discover", discover)
-        executor = ToolExecutor("sess", tools=["Lazy"])
+        toolset = NativeCatalogToolset(
+            id="test",
+            catalog=restore_global_registry.snapshot(),
+            prepare=discover,
+        )
+        executor = ToolExecutor("sess", tools=["Lazy"], toolsets=(toolset,))
         assert discover_calls == 0
         assert created == 0
 
@@ -511,10 +510,10 @@ class TestConstructorAndCleanup:
 
 
 class TestFileMutatedEmission:
-    """A successful filesystem-mutating tool emits a FileMutatedEvent on the bus."""
+    """A mutating tool emits a successful FileMutatedEvent on Telemetry."""
 
     def _writey(self):
-        from mote.executor.base_tool import BaseTool
+        from mote.runtime.tools.base_tool import BaseTool
 
         class WriteyTool(BaseTool):
             name = "Writey"
@@ -529,11 +528,7 @@ class TestFileMutatedEmission:
         return WriteyTool
 
     def _recorder(self):
-        from mote.common.events import EventBus
-
-        class Recorder(ObservationSubscriber):
-            priority = 0
-
+        class Recorder:
             def __init__(self):
                 self.events = []
 
@@ -541,22 +536,20 @@ class TestFileMutatedEmission:
                 self.events.append(event)
                 return None
 
-        bus = EventBus()
         rec = Recorder()
-        bus.subscribe(rec)
-        return bus, rec
+        return InlineTelemetry(rec), rec
 
-    def _executor(self, tool, bus):
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+    def _executor(self, tool, telemetry):
+        ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
         tool.bind("sess")
-        ex.register_tool_instance(tool, [tool.name])
+        _register_native(ex, tool)
         return ex
 
     async def test_emits_file_mutated_on_success(self):
-        from mote.common.events import FileMutatedEvent
+        from mote.runtime.events import FileMutatedEvent
 
-        bus, rec = self._recorder()
-        ex = self._executor(self._writey()(), bus)
+        telemetry, rec = self._recorder()
+        ex = self._executor(self._writey()(), telemetry)
         result = await ex.run_command("Writey", {"path": "/tmp/x.txt"})
         assert result.success is True
         mutated = [e for e in rec.events if isinstance(e, FileMutatedEvent)]
@@ -565,32 +558,32 @@ class TestFileMutatedEmission:
         assert mutated[0].tool == "Writey"
 
     async def test_no_event_when_target_empty(self):
-        from mote.common.events import FileMutatedEvent
+        from mote.runtime.events import FileMutatedEvent
 
-        bus, rec = self._recorder()
-        ex = self._executor(self._writey()(), bus)
+        telemetry, rec = self._recorder()
+        ex = self._executor(self._writey()(), telemetry)
         # No path => permission_target is empty => no FileMutatedEvent.
         result = await ex.run_command("Writey", {})
         assert result.success is True
         assert not [e for e in rec.events if isinstance(e, FileMutatedEvent)]
 
     async def test_no_event_when_tool_is_not_mutating(self):
-        from mote.common.events import FileMutatedEvent
+        from mote.runtime.events import FileMutatedEvent
 
-        bus, rec = self._recorder()
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+        telemetry, rec = self._recorder()
+        ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
         tool = EchoTool()
         tool.bind("sess")
-        ex.register_tool_instance(tool, [tool.name])
+        _register_native(ex, tool)
         await ex.run_command("Echo", {"text": "hi"})
         assert not [e for e in rec.events if isinstance(e, FileMutatedEvent)]
 
-    async def test_no_event_without_bus(self):
-        # No bus wired => emission path is skipped (no crash).
+    async def test_no_event_without_telemetry(self):
+        # No Telemetry wired => emission is skipped without failing the tool.
         ex = ToolExecutor("sess", tools=None)
         tool = self._writey()()
         tool.bind("sess")
-        ex.register_tool_instance(tool, [tool.name])
+        _register_native(ex, tool)
         result = await ex.run_command("Writey", {"path": "/tmp/y.txt"})
         assert result.success is True
 
@@ -598,14 +591,10 @@ class TestFileMutatedEmission:
 class TestDeregisterTool:
     """``deregister_tool`` is the inverse of registration: it removes a bound tool
     by any of its names — every alias and the instance's session resources go
-    together — and announces the change on the bus so the volatile views refresh."""
+    together — and announces the change on Telemetry so volatile views refresh."""
 
-    def _recorder_bus(self):
-        from mote.common.events import EventBus
-
-        class Recorder(ObservationSubscriber):
-            priority = 0
-
+    def _recording_telemetry(self):
+        class Recorder:
             def __init__(self):
                 self.events = []
 
@@ -613,10 +602,8 @@ class TestDeregisterTool:
                 self.events.append(event)
                 return None
 
-        bus = EventBus()
         rec = Recorder()
-        bus.subscribe(rec)
-        return bus, rec
+        return InlineTelemetry(rec), rec
 
     async def test_removes_tool_and_all_aliases_together(self):
         ex = make_executor(EchoTool())
@@ -642,7 +629,7 @@ class TestDeregisterTool:
     async def test_schemas_drop_the_removed_tool(self):
         ex = make_executor(EchoTool(), AddTool())
         await ex.deregister_tool("Echo")
-        assert set(ex.get_tool_schemas()) == {"Add"}
+        assert {spec["name"] for spec in ex.native_tool_specs()} == {"Add"}
 
     async def test_reclaims_session_resources(self):
         closed: list[str] = []
@@ -658,6 +645,21 @@ class TestDeregisterTool:
         await ex.deregister_tool("Stateful")
         assert closed == ["sess"]
 
+    async def test_awaits_async_session_cleanup(self):
+        closed: list[str] = []
+
+        class StatefulTool(EchoTool):
+            name = "AsyncStateful"
+            aliases: list[str] = []
+
+            async def cleanup_session(self, session_id):
+                await asyncio.sleep(0)
+                closed.append(session_id)
+
+        ex = make_executor(StatefulTool(), session_id="sess")
+        await ex.deregister_tool("AsyncStateful")
+        assert closed == ["sess"]
+
     async def test_reconstructable_set_refreshes_after_removal(self):
         class ReconTool(EchoTool):
             name = "Recon"
@@ -670,13 +672,13 @@ class TestDeregisterTool:
         assert ex.reconstructable_tool_names() == frozenset()
 
     async def test_emits_tools_changed_event(self):
-        from mote.common.events import ToolsChangedEvent
+        from mote.runtime.events import ToolsChangedEvent
 
-        bus, rec = self._recorder_bus()
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+        telemetry, rec = self._recording_telemetry()
+        ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
         tool = EchoTool()
         tool.bind("sess")
-        ex.register_tool_instance(tool, [tool.name, *tool.aliases])
+        _register_native(ex, tool)
         await ex.deregister_tool("Echo")
 
         changed = [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
@@ -688,7 +690,7 @@ class TestDeregisterTool:
     async def test_event_carries_fresh_reconstructable_set(self):
         # Two reconstructable tools; removing one must leave the other's names in
         # the announced set, so a compaction consumer refreshes from the event alone.
-        from mote.common.events import ToolsChangedEvent
+        from mote.runtime.events import ToolsChangedEvent
 
         class ReconA(EchoTool):
             name = "ReconA"
@@ -699,11 +701,11 @@ class TestDeregisterTool:
             name = "ReconB"
             reconstructable = True
 
-        bus, rec = self._recorder_bus()
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+        telemetry, rec = self._recording_telemetry()
+        ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
         for t in (ReconA(), ReconB()):
             t.bind("sess")
-            ex.register_tool_instance(t, [t.name, *getattr(t, "aliases", [])])
+            _register_native(ex, t)
         await ex.deregister_tool("ReconA")
 
         evt = [e for e in rec.events if isinstance(e, ToolsChangedEvent)][0]
@@ -711,13 +713,13 @@ class TestDeregisterTool:
         assert set(evt.reconstructable) == {"ReconB"}
 
     async def test_noop_removal_emits_nothing(self):
-        from mote.common.events import ToolsChangedEvent
+        from mote.runtime.events import ToolsChangedEvent
 
-        bus, rec = self._recorder_bus()
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+        telemetry, rec = self._recording_telemetry()
+        ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
         tool = EchoTool()
         tool.bind("sess")
-        ex.register_tool_instance(tool, [tool.name])
+        _register_native(ex, tool)
         await ex.deregister_tool("Nope")
         assert not [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
 
@@ -732,8 +734,8 @@ class TestRecoveryWiring:
 
     @staticmethod
     def _flaky_tool():
-        from mote.common.exception import MoteError, RecoveryAction
-        from mote.executor.base_tool import BaseTool
+        from mote.runtime.errors import MoteError, RecoveryAction
+        from mote.runtime.tools.base_tool import BaseTool
 
         class _CompressError(MoteError):
             default_recovery = RecoveryAction.COMPRESS
@@ -764,7 +766,7 @@ class TestRecoveryWiring:
         assert tool.calls == 1
 
     async def test_injected_strategy_recovers(self):
-        from mote.common.exception import RecoveryAction
+        from mote.runtime.errors import RecoveryAction
 
         FlakyTool, _ = self._flaky_tool()
         tool = FlakyTool()
@@ -783,13 +785,7 @@ class TestRecoveryWiring:
 
 
 class _FakeMcp:
-    """A stand-in for ``UniversalMCP`` that registers a fixed adapter set.
-
-    ``reload_mcp`` news up ``UniversalMCP()`` then calls ``initialize`` (which we
-    make a no-op) and ``register_tools(executor)``. This fake registers one MCP
-    adapter per configured tool name so a reload is fully observable without ever
-    touching a real MCP server. ``cleanup_clients`` records that teardown ran.
-    """
+    """A stand-in for the shared MCP discovery/connection owner."""
 
     #: The tool names the *next* ``UniversalMCP()`` instance will register. Set
     #: by the test before each reload to model a changed ``mcp_config.json``.
@@ -803,14 +799,18 @@ class _FakeMcp:
     async def initialize(self, server_names=None, servers=None):
         return None
 
-    def register_tools(self, executor):
-        for name in self._tools:
-            schema = {
-                "name": name,
-                "description": "an mcp tool",
-                "parameters": {"type": "object", "properties": {}},
-            }
-            executor.register_tool_instance(MCPToolAdapter(mcp=None, tool_name=name, schema=schema), [name])
+    def discovered_tools(self):
+        return tuple(
+            DiscoveredMcpTool(
+                name=name,
+                description="an mcp tool",
+                input_schema={"type": "object", "properties": {}},
+            )
+            for name in self._tools
+        )
+
+    async def call_tool(self, tool_name, parameters):
+        return f"{tool_name}:{parameters}"
 
     async def cleanup_clients(self):
         _FakeMcp.cleanups += 1
@@ -820,24 +820,19 @@ class TestReloadMcp:
     """``reload_mcp`` is the reentrant sibling of ``init_mcp``, driven by the file
     watcher when ``mcp_config.json`` changes. It tears the old MCP adapters out by
     identity, rebuilds from the freshly read config, and announces the churn on the
-    bus so the volatile views refresh. The native channel just rebuilds tool_specs."""
+    Telemetry so volatile views refresh. The native channel rebuilds tool_specs."""
 
     def _patch(self, monkeypatch, tools):
         # UniversalMCP is constructed inside the McpLifecycle collaborator, so the
         # fake is swapped in there (the executor delegates its MCP slot to it).
-        from mote.executor import mcp_lifecycle
+        from mote.runtime.tools.mcp import lifecycle as mcp_lifecycle
 
         _FakeMcp.next_tools = list(tools)
         _FakeMcp.cleanups = 0
         monkeypatch.setattr(mcp_lifecycle, "UniversalMCP", _FakeMcp)
 
-    def _recorder_bus(self):
-        from mote.common.events import EventBus
-        from mote.common.interface.event_subscriber import ObservationSubscriber
-
-        class Recorder(ObservationSubscriber):
-            priority = 0
-
+    def _recording_telemetry(self):
+        class Recorder:
             def __init__(self):
                 self.events = []
 
@@ -845,10 +840,8 @@ class TestReloadMcp:
                 self.events.append(event)
                 return None
 
-        bus = EventBus()
         rec = Recorder()
-        bus.subscribe(rec)
-        return bus, rec
+        return InlineTelemetry(rec), rec
 
     async def test_noop_when_switch_off(self, monkeypatch):
         # The ``config.mcp.enabled`` switch is the sole gate: with it off, a
@@ -858,15 +851,24 @@ class TestReloadMcp:
         assert await ex.reload_mcp(None) is False
         assert await ex.reload_mcp(["server"]) is False
         # No MCP adapters were ever wired.
-        assert ex.get_mcp_tool_schemas() == {}
+        assert ex._catalog.mcp_names() == []
 
     async def test_reload_registers_current_config(self, monkeypatch):
         self._patch(monkeypatch, ["server:a", "server:b"])
         ex = make_executor(EchoTool())
         assert await ex.reload_mcp(["server"], enabled=True) is True
-        assert set(ex.get_mcp_tool_schemas()) == {"server:a", "server:b"}
+        assert set(ex._catalog.mcp_names()) == {"server:a", "server:b"}
+        assert set(ex.mcp_tool_schemas()) == {"server:a", "server:b"}
         # Built-in tools are untouched by an MCP reload.
-        assert "Echo" in ex.get_tool_schemas()
+        assert "Echo" in {spec["name"] for spec in ex.native_tool_specs()}
+
+    async def test_xml_reload_uses_xml_projection_and_reminder_catalog(self, monkeypatch):
+        self._patch(monkeypatch, ["server:a", "server:b"])
+        ex = ToolExecutor("xml-mcp", command_protocol="xml")
+        assert await ex.reload_mcp(["server"], enabled=True) is True
+        assert set(ex.mcp_tool_schemas()) == {"server:a", "server:b"}
+        with pytest.raises(TypeError, match="no Native tool specs"):
+            ex.native_tool_specs()
 
     async def test_reload_swaps_old_adapters_out(self, monkeypatch):
         # First reload wires {a, b}; a second reload models a changed config
@@ -877,7 +879,7 @@ class TestReloadMcp:
 
         _FakeMcp.next_tools = ["server:a", "server:c"]
         await ex.reload_mcp(["server"], enabled=True)
-        assert set(ex.get_mcp_tool_schemas()) == {"server:a", "server:c"}
+        assert set(ex._catalog.mcp_names()) == {"server:a", "server:c"}
 
     async def test_reload_tears_down_old_manager(self, monkeypatch):
         self._patch(monkeypatch, ["server:a"])
@@ -888,11 +890,11 @@ class TestReloadMcp:
         assert _FakeMcp.cleanups == 1
 
     async def test_emits_tools_changed_event_with_removed(self, monkeypatch):
-        from mote.common.events import ToolsChangedEvent
+        from mote.runtime.events import ToolsChangedEvent
 
         self._patch(monkeypatch, ["server:a", "server:b"])
-        bus, rec = self._recorder_bus()
-        ex = ToolExecutor("sess", tools=None, bus=bus)
+        telemetry, rec = self._recording_telemetry()
+        ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
         await ex.reload_mcp(["server"], enabled=True)  # wires {a, b}, removed=[] (nothing prior)
 
         # Second reload drops b, so its name is announced as removed.
@@ -910,18 +912,19 @@ class TestReloadMcp:
         ex = make_executor(EchoTool())
         for _ in range(3):
             await ex.reload_mcp(["server"], enabled=True)
-        assert set(ex.get_mcp_tool_schemas()) == {"server:a"}
+        assert set(ex._catalog.mcp_names()) == {"server:a"}
 
 
 # ---------------------------------------------------------------------------
 # EXTERNAL-effect idempotency ledger integration (run_command chokepoint)
 # ---------------------------------------------------------------------------
 
-from mote.common.ledger import KIND_TOOL  # noqa: E402
-from mote.common.schema import DurableConfig, EffectLedgerConfig, ToolEffect  # noqa: E402
-from mote.common.workspace import WorkspaceStore  # noqa: E402
-from mote.executor.effect_ledger import COMPLETED, FAILED, STARTED, EffectLedger  # noqa: E402
-from mote.executor.tool_result import ToolError  # noqa: E402
+from mote.contracts.schema import DurableConfig, EffectLedgerConfig  # noqa: E402
+from mote.contracts.tools.effects import ToolEffect  # noqa: E402
+from mote.runtime.ledger import KIND_TOOL  # noqa: E402
+from mote.runtime.tools.effect_ledger import COMPLETED, FAILED, STARTED, EffectLedger  # noqa: E402
+from mote.runtime.tools.tool_result import ToolError  # noqa: E402
+from mote.runtime.workspace import WorkspaceStore  # noqa: E402
 
 
 class _ExternalTool(BaseTool):
@@ -973,6 +976,29 @@ class _LocalTool(BaseTool):
         return text
 
 
+class _StructuredLocalTool(BaseTool):
+    name = "StructuredLocal"
+    effect = ToolEffect.LOCAL
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ran = 0
+
+    async def call(self) -> ToolResult:
+        self.ran += 1
+        media = artifact_media("image", b"receipt-image", ref="image.png")
+        return ToolResult(
+            output="structured",
+            data={"bytes": b"payload"},
+            media=[media],
+            artifacts=[media.artifact],
+            file_changes=[FileChange(path="/tmp/file", old="a", new="b")],
+            terminate=True,
+            retention="pin",
+            resource_path="/tmp/file",
+        )
+
+
 class TestEffectLedgerIntegration:
     async def test_external_call_records_started_then_completed(self, tmp_path):
         store = WorkspaceStore(tmp_path)
@@ -981,7 +1007,8 @@ class TestEffectLedgerIntegration:
         assert result.output == "hi"
         rec = ex.ledger.status("c1")  # type: ignore[union-attr]
         assert rec is not None and rec.status == COMPLETED
-        assert rec.success is True and rec.result == "hi"
+        assert rec.success is True
+        assert decode_tool_result_receipt(rec.result, success=True).output == "hi"
 
     async def test_failed_external_records_failed(self, tmp_path):
         store = WorkspaceStore(tmp_path)
@@ -1078,7 +1105,8 @@ class TestLocalLedgering:
         result = await ex.run_command("Local", {"text": "hi"}, result_id="c1")
         assert result.output == "hi"
         rec = ex.ledger.status("c1")  # type: ignore[union-attr]
-        assert rec is not None and rec.status == COMPLETED and rec.result == "hi"
+        assert rec is not None and rec.status == COMPLETED
+        assert decode_tool_result_receipt(rec.result, success=True).output == "hi"
 
     async def test_local_record_carries_local_effect(self, tmp_path):
         # The started/terminal records tag the call LOCAL so the resume reconciler
@@ -1103,6 +1131,34 @@ class TestLocalLedgering:
         assert result.output == "cached-local"
         assert tool.ran == 0  # body was NOT re-run
 
+    async def test_completed_local_replays_full_structured_result(self, tmp_path):
+        store = WorkspaceStore(tmp_path)
+        tool = _StructuredLocalTool()
+        first_executor = make_executor(
+            tool,
+            session_id="s",
+            workspace_store=store,
+        )
+        first = await first_executor.run_command(
+            "StructuredLocal",
+            {},
+            result_id="structured-call",
+        )
+
+        replay_executor = make_executor(
+            tool,
+            session_id="s",
+            workspace_store=store,
+        )
+        replayed = await replay_executor.run_command(
+            "StructuredLocal",
+            {},
+            result_id="structured-call",
+        )
+
+        assert tool.ran == 1
+        assert replayed == first
+
     async def test_started_local_is_rerun_not_refused(self, tmp_path):
         # Unlike EXTERNAL, a LOCAL call left ``started`` by a crash is replay-safe
         # (before-image protected) → re-run to a fresh result, never refused.
@@ -1124,17 +1180,17 @@ class TestLocalLedgering:
         # it is journaled at settle time but never forces the checkpoint drain.
         store = WorkspaceStore(tmp_path)
         ex = make_executor(_LocalTool(), session_id="s", workspace_store=store)
-        assert ex.will_ledger("Local", "c1") is False
+        assert ex.will_ledger("Local", {}, "c1") is False
 
     async def test_external_still_triggers_precheckpoint(self, tmp_path):
         store = WorkspaceStore(tmp_path)
         ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)
-        assert ex.will_ledger("Ext", "c1") is True
+        assert ex.will_ledger("Ext", {}, "c1") is True
 
     async def test_pure_is_never_prechecked_or_ledgered(self, tmp_path):
         store = WorkspaceStore(tmp_path)
         ex = make_executor(_PureTool(), session_id="s", workspace_store=store)
-        assert ex.will_ledger("Pure", "c1") is False
+        assert ex.will_ledger("Pure", {}, "c1") is False
         await ex.run_command("Pure", {}, result_id="c1")
         assert ex.ledger.status("c1") is None  # type: ignore[union-attr]
 
@@ -1194,8 +1250,8 @@ class TestSharedJournalWiring:
     async def test_jsonl_backend_composes_over_executor_journal(self, tmp_path):
         # The loop builds its Tier-1 backend over the executor's journal — a
         # completed think step recorded through it is replayed, not re-run.
-        from mote.common.ledger import KIND_THINK
-        from mote.loop.durable import JsonlBackend
+        from mote.runtime.durable import JsonlBackend
+        from mote.runtime.ledger import KIND_THINK
 
         store = WorkspaceStore(tmp_path)
         ex = make_executor(_ExternalTool(), session_id="s", workspace_store=store)

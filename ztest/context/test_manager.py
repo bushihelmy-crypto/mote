@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.context.manager.ContextManager`` — the facade.
+"""Tests for ``mote.runtime.context.manager.ContextManager`` — the facade.
 
 Two responsibilities:
 
 1. Message store (the slice of the old ``Memory`` the loop depends on):
    ``get`` / ``add`` / ``add_batch`` / ``delete`` / ``count`` / ``clear`` /
-   ``messages`` — all backed by the injected ``LLMCallContext`` so the history is
-   checkpointed.
+   ``messages`` — all backed by the injected ``LLMCallContext`` as the live model
+   context projection.
 2. History orchestration: ``manage_history`` runs microcompact then autocompact,
    ``token_state`` reports the budget, and ``prepare_request`` assembles the
    per-call request (managed history + the user prompt, without storing it).
@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.common.schema import ContextManagerConfig, LLMCallContext, UserMessage
-from mote.context import ContextManager
+from mote.contracts.schema import ContextManagerConfig, LLMCallContext, UserMessage
+from mote.runtime.context import ContextManager
+from mote.ztest.model_fakes import model_route
 
 from .conftest import COMPACTABLE, FakeLLM, make_pairs, text_msg
 
@@ -32,6 +33,11 @@ MICRO_CFG = ContextManagerConfig(
     # the count-driven fold still fires (the token gate is tested in test_fold).
     microcompact_clear_at_least=0,
 )
+
+
+class _FailingFactSink:
+    async def commit_fact(self, _event):
+        raise RuntimeError("journal unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -48,12 +54,28 @@ async def test_add_and_count_and_get_all():
     assert [m.content for m in cm.get()] == ["a", "b"]
 
 
+@pytest.mark.asyncio
+async def test_add_commit_failure_does_not_change_history():
+    existing = text_msg("existing")
+    ctx = LLMCallContext(messages=[existing])
+    cm = ContextManager(
+        ctx,
+        model="gpt-4",
+        session_fact_sink=_FailingFactSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await cm.add(text_msg("uncommitted"))
+
+    assert cm.messages == [existing]
+
+
 def test_recovery_reducer_includes_summarize():
     """The reactive (HARD) recovery reducer now escalates fold → summarize → drop
     (summarize preserves history far better than a raw head-drop; drop is the floor)."""
-    from mote.context.compaction.reducers.drop import HeadDropReducer
-    from mote.context.compaction.reducers.fold import FoldReducer
-    from mote.context.compaction.reducers.summarize import SummarizeReducer
+    from mote.runtime.context.compaction.reducers.drop import HeadDropReducer
+    from mote.runtime.context.compaction.reducers.fold import FoldReducer
+    from mote.runtime.context.compaction.reducers.summarize import SummarizeReducer
 
     cm = ContextManager(model="gpt-4")
     reducers = cm.recovery_reducer._pipeline._reducers
@@ -81,31 +103,16 @@ def test_compactable_threaded_into_transcript():
     assert cm._compactable == custom
 
 
-@pytest.mark.asyncio
-async def test_tools_changed_event_refreshes_compactable():
-    """When the executor de-registers a tool it announces the fresh
-    reconstructable set on the shared bus; the manager (an observer on that same
-    bus) refreshes ``_compactable`` so compaction never keeps folding a result
-    whose tool has since gone."""
-    from mote.common.events import EventBus, ToolsChangedEvent
+def test_compactable_provider_reads_live_executor_state_without_telemetry():
+    current = {"value": frozenset({"Read", "Write"})}
+    cm = ContextManager(
+        model="gpt-4",
+        compactable_provider=lambda: current["value"],
+    )
 
-    bus = EventBus()
-    cm = ContextManager(model="gpt-4", compactable=frozenset({"Read", "Write"}), bus=bus)
-    # Subscribing in __init__ means the event routes here when the bus fans out.
-    await bus.observe(ToolsChangedEvent(removed=["Write"], reconstructable=["Read"]))
-    assert cm._compactable == frozenset({"Read"})
-
-
-@pytest.mark.asyncio
-async def test_non_tools_changed_event_leaves_compactable_untouched():
-    """The manager also *emits* on the same bus; its own emissions (and any
-    unrelated event) fall through ``handle`` without disturbing the set."""
-    from mote.common.events import EventBus
-
-    bus = EventBus()
-    cm = ContextManager(model="gpt-4", compactable=frozenset({"Read"}), bus=bus)
-    await cm.handle(object())
-    assert cm._compactable == frozenset({"Read"})
+    assert cm._current_compactable() == frozenset({"Read", "Write"})
+    current["value"] = frozenset({"Read"})
+    assert cm._current_compactable() == frozenset({"Read"})
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +135,23 @@ def test_rebuild_replaces_every_reducer_instance():
     """A no-arg rebuild reconstructs the whole stack — fresh reducer objects, a
     fresh engine and recovery reducer — so nothing stale is left behind."""
     cm = ContextManager(model="gpt-4")
-    before = (cm._erase, cm._fold, cm._summarize, cm._drop, cm._engine, cm._recovery_reducer)
+    before = (
+        cm._erase,
+        cm._fold,
+        cm._summarize,
+        cm._drop,
+        cm._engine,
+        cm._recovery_reducer,
+    )
     cm.rebuild_compression()
-    after = (cm._erase, cm._fold, cm._summarize, cm._drop, cm._engine, cm._recovery_reducer)
+    after = (
+        cm._erase,
+        cm._fold,
+        cm._summarize,
+        cm._drop,
+        cm._engine,
+        cm._recovery_reducer,
+    )
     assert all(a is not b for a, b in zip(after, before))
 
 
@@ -144,37 +165,38 @@ def test_rebuild_with_config_retunes_reducers():
     assert cm._summarize._cfg is new_cfg
 
 
-def test_rebuild_with_llm_rebinds_rederives_model_and_refreshes_accountant():
+def test_rebuild_with_model_route_rebinds_rederives_model_and_refreshes_accountant():
     """Rebinding the LLM re-derives the model (``self.model`` reads ``llm.model``),
     threads it into the reducers, and refreshes the token accountant."""
     # No explicit model pin, so ``self.model`` derives from the bound llm.
-    cm = ContextManager(llm=FakeLLM(model="orig"))
+    original = model_route(FakeLLM(model="orig"))
+    cm = ContextManager(model_route=original)
     old_accountant = cm._accountant
-    big = FakeLLM(model="big-context-model")
-    cm.rebuild_compression(llm=big)
+    big = model_route(FakeLLM(model="big-context-model"))
+    cm.rebuild_compression(model_route=big)
     assert cm.model == "big-context-model"
-    assert cm._summarize._llm is big
+    assert cm._summarize._model_route is big
     assert cm._summarize._model == "big-context-model"
     assert cm._accountant is not old_accountant
 
 
 def test_rebuild_omitting_args_leaves_inputs_untouched():
     """Sentinel-guarded: omitting an argument leaves that input exactly as-is."""
-    llm = FakeLLM(model="orig")
+    route = model_route(FakeLLM(model="orig"))
     cfg = ContextManagerConfig()
-    cm = ContextManager(llm=llm, config=cfg)
+    cm = ContextManager(model_route=route, config=cfg)
     cm.rebuild_compression()
-    assert cm._llm is llm
+    assert cm._model_route is route
     assert cm.config is cfg
 
 
-def test_rebuild_llm_none_is_an_explicit_value():
+def test_rebuild_model_route_none_is_an_explicit_value():
     """``None`` is a meaningful llm (it disables summarize) — the sentinel keeps
     it distinct from 'leave unchanged', so passing it actually unbinds the llm."""
-    cm = ContextManager(llm=FakeLLM(model="orig"))
+    cm = ContextManager(model_route=model_route(FakeLLM(model="orig")))
     assert cm.model == "orig"
-    cm.rebuild_compression(llm=None)
-    assert cm._llm is None
+    cm.rebuild_compression(model_route=None)
+    assert cm._model_route is None
     assert cm.model == "gpt-4"  # falls back to the generic default
 
 
@@ -214,22 +236,75 @@ async def test_delete_present_and_absent():
 
 @pytest.mark.asyncio
 async def test_clear():
-    from mote.common.events import HistoryEditedEvent
+    from mote.runtime.events import HistoryEditedEvent
 
-    bus = _RecordingBus()
-    cm = ContextManager(model="gpt-4", bus=bus)
+    telemetry = _RecordingTelemetry()
+    cm = ContextManager(model="gpt-4", telemetry=telemetry)
     await cm.add_batch([text_msg("a"), text_msg("b")])
-    bus.emitted.clear()  # ignore the MessageAppended events from add_batch
+    telemetry.emitted.clear()  # ignore the MessageAppended events from add_batch
 
     await cm.clear()
 
     assert cm.count() == 0
     # /clear announces the structural rebuild as an empty-history edit so every
     # history-derived signal (SR frontiers, the resource side-store) resets.
-    edits = [e for e in bus.emitted if isinstance(e, HistoryEditedEvent)]
+    edits = [e for e in telemetry.emitted if isinstance(e, HistoryEditedEvent)]
     assert len(edits) == 1
-    assert edits[0].messages == []
+    assert edits[0].remaining_messages == []
+    assert edits[0].clear_all is True
     assert edits[0].reason == "clear"
+
+
+@pytest.mark.asyncio
+async def test_clear_commit_failure_does_not_change_history():
+    messages = [text_msg("a"), text_msg("b")]
+    ctx = LLMCallContext(messages=list(messages))
+    cm = ContextManager(
+        ctx,
+        model="gpt-4",
+        session_fact_sink=_FailingFactSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await cm.clear()
+
+    assert cm.messages == messages
+
+
+@pytest.mark.asyncio
+async def test_clear_applies_local_projections_after_commit_before_telemetry():
+    order = []
+    messages = [text_msg("a")]
+
+    class FactSink:
+        async def commit_fact(self, event):
+            order.append("commit")
+
+    class Telemetry:
+        async def emit(self, event):
+            order.append("telemetry")
+
+    def history_edited(event):
+        assert cm.messages == messages
+        order.append("resources")
+
+    async def model_context_rebuilt(event):
+        assert cm.messages == messages
+        order.append("turn-context")
+
+    cm = ContextManager(
+        LLMCallContext(messages=list(messages)),
+        model="gpt-4",
+        telemetry=Telemetry(),
+        session_fact_sink=FactSink(),
+        history_edited=history_edited,
+        model_context_rebuilt=model_context_rebuilt,
+    )
+
+    await cm.clear()
+
+    assert order == ["commit", "resources", "turn-context", "telemetry"]
+    assert cm.messages == []
 
 
 @pytest.mark.asyncio
@@ -237,7 +312,7 @@ async def test_messages_backs_injected_context():
     ctx = LLMCallContext()
     cm = ContextManager(ctx, model="gpt-4")
     await cm.add(text_msg("a"))
-    # the store mutates the shared context (so it gets checkpointed)
+    # the store mutates the shared live model-context projection
     assert ctx.messages is cm.messages
     assert [m.content for m in ctx.messages] == ["a"]
 
@@ -245,7 +320,7 @@ async def test_messages_backs_injected_context():
 def test_model_property_fallback():
     assert ContextManager().model == "gpt-4"  # generic default
     assert ContextManager(model="explicit").model == "explicit"
-    assert ContextManager(llm=FakeLLM(model="from-llm")).model == "from-llm"
+    assert ContextManager(model_route=model_route(FakeLLM(model="from-llm"))).model == "from-llm"
 
 
 @pytest.mark.asyncio
@@ -317,12 +392,44 @@ async def test_manage_history_empty_returns_false():
 async def test_manage_history_microcompact_only():
     # No llm → only the cheap pass runs. 4 Read pairs over trigger=2 fold.
     ctx = LLMCallContext()
-    cm = ContextManager(ctx, config=MICRO_CFG, model="gpt-4", compactable=COMPACTABLE)
+    rebuilds = []
+
+    async def model_context_rebuilt(event):
+        assert not [message for message in ctx.messages if message.content == "[Old tool result content cleared]"]
+        rebuilds.append(event)
+
+    cm = ContextManager(
+        ctx,
+        config=MICRO_CFG,
+        model="gpt-4",
+        compactable=COMPACTABLE,
+        model_context_rebuilt=model_context_rebuilt,
+    )
     await cm.add_batch(make_pairs(4))
     changed = await cm.manage_history()
     assert changed is True
     cleared = [m for m in ctx.messages if m.content == "[Old tool result content cleared]"]
     assert len(cleared) == 3
+    assert len(rebuilds) == 1
+    assert rebuilds[0].trigger == "auto"
+
+
+@pytest.mark.asyncio
+async def test_microcompact_commit_failure_leaves_live_messages_untouched():
+    ctx = LLMCallContext(messages=make_pairs(4))
+    before = [message.model_dump(mode="python") for message in ctx.messages]
+    cm = ContextManager(
+        ctx,
+        config=MICRO_CFG,
+        model="gpt-4",
+        compactable=COMPACTABLE,
+        session_fact_sink=_FailingFactSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await cm.manage_history()
+
+    assert [message.model_dump(mode="python") for message in ctx.messages] == before
 
 
 @pytest.mark.asyncio
@@ -341,7 +448,7 @@ async def test_manage_history_runs_autocompact(force_autocompact_threshold):
         keep_tail_tokens=1,
     )
     llm = FakeLLM(summary="<summary>compacted</summary>")
-    cm = ContextManager(ctx, llm=llm, config=cfg, model="m")
+    cm = ContextManager(ctx, model_route=model_route(llm), config=cfg, model="m")
     await cm.add_batch([text_msg(f"turn {i} content here") for i in range(6)])
     changed = await cm.manage_history()
     assert changed is True
@@ -351,7 +458,33 @@ async def test_manage_history_runs_autocompact(force_autocompact_threshold):
 
 
 @pytest.mark.asyncio
-async def test_manage_history_reprojects_sticky_after_compaction(force_autocompact_threshold):
+async def test_compaction_commit_failure_leaves_live_messages_untouched(
+    force_autocompact_threshold,
+):
+    ctx = LLMCallContext(messages=[text_msg(f"turn {i} content here") for i in range(6)])
+    before = [message.model_dump(mode="python") for message in ctx.messages]
+    cm = ContextManager(
+        ctx,
+        model_route=model_route(FakeLLM(summary="<summary>compacted</summary>")),
+        config=ContextManagerConfig(
+            enable_microcompact=False,
+            keep_tail_messages=1,
+            keep_tail_tokens=1,
+        ),
+        model="m",
+        session_fact_sink=_FailingFactSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await cm.manage_history()
+
+    assert [message.model_dump(mode="python") for message in ctx.messages] == before
+
+
+@pytest.mark.asyncio
+async def test_manage_history_reprojects_sticky_after_compaction(
+    force_autocompact_threshold,
+):
     # A wired sticky_provider re-inserts loaded bodies right after the summary
     # when autocompact discards the head.
     ctx = LLMCallContext()
@@ -363,7 +496,7 @@ async def test_manage_history_reprojects_sticky_after_compaction(force_autocompa
     llm = FakeLLM(summary="<summary>compacted</summary>")
     cm = ContextManager(
         ctx,
-        llm=llm,
+        model_route=model_route(llm),
         config=cfg,
         model="m",
         sticky_provider=lambda: [text_msg("STICKY SKILL BODY", role="user")],
@@ -385,7 +518,7 @@ async def test_manage_history_threads_failure_counter(force_autocompact_threshol
         max_consecutive_failures=5,
     )
     llm = FakeLLM(raise_exc=RuntimeError("nope"))
-    cm = ContextManager(llm=llm, config=cfg, model="m")
+    cm = ContextManager(model_route=model_route(llm), config=cfg, model="m")
     await cm.add_batch([text_msg(f"turn {i}") for i in range(6)])
     await cm.manage_history()
     assert cm._consecutive_failures == 1
@@ -405,7 +538,7 @@ async def test_prepare_request_appends_prompt_without_storing():
     req = await cm.prepare_request("the new prompt")
     assert [m.content for m in req] == ["history", "the new prompt"]
     assert isinstance(req[-1], UserMessage)
-    # the prompt is in the request but NOT in the stored history
+    # the prompt is in the request but NOT in the live model context
     assert cm.count() == 1
 
 
@@ -442,21 +575,14 @@ async def test_prepare_request_manage_false_skips_compaction():
 # ---------------------------------------------------------------------------
 # React-unit delete (direct history editing)
 # ---------------------------------------------------------------------------
-from mote.common.schema import AIMessage  # noqa: E402
+from mote.contracts.schema import AIMessage  # noqa: E402
 
 
-class _RecordingBus:
-    """Minimal event bus double — records every emitted event for assertions.
-
-    ``subscribe`` is a no-op (the manager registers itself to observe
-    ``ToolsChangedEvent``); ``emit`` records so tests can assert on the stream.
-    """
+class _RecordingTelemetry:
+    """Minimal telemetry double that records emitted events for assertions."""
 
     def __init__(self):
         self.emitted: list = []
-
-    def subscribe(self, subscriber) -> None:
-        pass
 
     async def emit(self, event) -> None:
         self.emitted.append(event)
@@ -469,7 +595,7 @@ def _human(content: str) -> UserMessage:
 
 def _reminder() -> UserMessage:
     """A role=user <system-reminder> envelope — NOT a react-unit boundary."""
-    from mote.common.text import wrap_system_reminder
+    from mote.contracts.text import wrap_system_reminder
 
     return UserMessage(content=wrap_system_reminder(["injected context"]))
 
@@ -481,19 +607,34 @@ def _drop(messages, anchor_ids):
 
 def test_drop_indices_single_unit():
     """One anchor drops its prompt + reply + tool turns, up to the next prompt."""
-    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    msgs = [
+        _human("q1"),
+        AIMessage(content="a1"),
+        _human("q2"),
+        AIMessage(content="a2"),
+    ]
     assert _drop(msgs, [msgs[0].id]) == {0, 1}
 
 
 def test_drop_indices_last_unit_runs_to_end():
     """The final react-unit has no following prompt — drops to end of history."""
-    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    msgs = [
+        _human("q1"),
+        AIMessage(content="a1"),
+        _human("q2"),
+        AIMessage(content="a2"),
+    ]
     assert _drop(msgs, [msgs[2].id]) == {2, 3}
 
 
 def test_drop_indices_adjacent_units():
     """Two selected adjacent anchors drop both whole turns."""
-    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    msgs = [
+        _human("q1"),
+        AIMessage(content="a1"),
+        _human("q2"),
+        AIMessage(content="a2"),
+    ]
     assert _drop(msgs, [msgs[0].id, msgs[2].id]) == {0, 1, 2, 3}
 
 
@@ -515,45 +656,78 @@ def test_drop_indices_empty_selection():
 
 
 def test_drop_indices_delete_all():
-    msgs = [_human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")]
+    msgs = [
+        _human("q1"),
+        AIMessage(content="a1"),
+        _human("q2"),
+        AIMessage(content="a2"),
+    ]
     assert _drop(msgs, [msgs[0].id, msgs[2].id]) == {0, 1, 2, 3}
 
 
 @pytest.mark.asyncio
 async def test_delete_react_units_prunes_and_emits_one_event():
     """A delete rebuilds history once and emits exactly one HistoryEditedEvent."""
-    from mote.common.events import HistoryEditedEvent
+    from mote.runtime.events import HistoryEditedEvent
 
     ctx = LLMCallContext()
-    bus = _RecordingBus()
-    cm = ContextManager(ctx, model="gpt-4", bus=bus)
-    q1, a1, q2, a2 = _human("q1"), AIMessage(content="a1"), _human("q2"), AIMessage(content="a2")
+    telemetry = _RecordingTelemetry()
+    cm = ContextManager(ctx, model="gpt-4", telemetry=telemetry)
+    q1, a1, q2, a2 = (
+        _human("q1"),
+        AIMessage(content="a1"),
+        _human("q2"),
+        AIMessage(content="a2"),
+    )
     await cm.add_batch([q1, a1, q2, a2])
-    bus.emitted.clear()  # ignore the MessageAppended events from add_batch
+    telemetry.emitted.clear()  # ignore the MessageAppended events from add_batch
 
     removed = await cm.delete_react_units([q1.id])
 
     assert removed == 2
     assert [m.content for m in cm.get()] == ["q2", "a2"]
-    edits = [e for e in bus.emitted if isinstance(e, HistoryEditedEvent)]
+    edits = [e for e in telemetry.emitted if isinstance(e, HistoryEditedEvent)]
     assert len(edits) == 1
-    assert [m.content for m in edits[0].messages] == ["q2", "a2"]
+    assert [m.content for m in edits[0].remaining_messages] == ["q2", "a2"]
+    assert edits[0].removed_message_ids == [str(q1.id), str(a1.id)]
     assert edits[0].reason == "delete"
+
+
+@pytest.mark.asyncio
+async def test_delete_react_units_commit_failure_does_not_change_history():
+    q1, a1, q2, a2 = (
+        _human("q1"),
+        AIMessage(content="a1"),
+        _human("q2"),
+        AIMessage(content="a2"),
+    )
+    messages = [q1, a1, q2, a2]
+    ctx = LLMCallContext(messages=list(messages))
+    cm = ContextManager(
+        ctx,
+        model="gpt-4",
+        session_fact_sink=_FailingFactSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await cm.delete_react_units([q1.id])
+
+    assert cm.messages == messages
 
 
 @pytest.mark.asyncio
 async def test_delete_react_units_noop_emits_nothing():
     """An empty/unknown selection removes nothing and emits no event."""
-    from mote.common.events import HistoryEditedEvent
+    from mote.runtime.events import HistoryEditedEvent
 
     ctx = LLMCallContext()
-    bus = _RecordingBus()
-    cm = ContextManager(ctx, model="gpt-4", bus=bus)
+    telemetry = _RecordingTelemetry()
+    cm = ContextManager(ctx, model="gpt-4", telemetry=telemetry)
     await cm.add_batch([_human("q1"), AIMessage(content="a1")])
-    bus.emitted.clear()
+    telemetry.emitted.clear()
 
     removed = await cm.delete_react_units(["ghost"])
 
     assert removed == 0
     assert cm.count() == 2
-    assert not [e for e in bus.emitted if isinstance(e, HistoryEditedEvent)]
+    assert not [e for e in telemetry.emitted if isinstance(e, HistoryEditedEvent)]

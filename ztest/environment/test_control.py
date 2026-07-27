@@ -7,16 +7,17 @@ import types
 
 import pytest
 
-from mote.common.interface.event_subscriber import ObservationSubscriber, SyncObserver
-from mote.common.schema.messages import UserMessage
-from mote.common.schema.queue import MessageQueue
-from mote.environment.agent_path import AgentPath
-from mote.environment.control import AgentControl, format_completion_notification
-from mote.environment.exceptions import AgentLimitReached, AgentNotFound, AgentNotKnown
-from mote.environment.mailbox import DeliveryMode, InterAgentCommunication
-from mote.environment.registry import AgentMetadata
-from mote.environment.runtime import AgentRuntime, AgentStatus
-from mote.environment.store import ResidencyStore
+from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.schema.messages import UserMessage
+from mote.contracts.schema.queue import MessageQueue
+from mote.orchestration.environment.agent_path import AgentPath
+from mote.orchestration.environment.control import AgentControl, format_completion_notification
+from mote.orchestration.environment.exceptions import AgentLimitReached, AgentNotFound, AgentNotKnown
+from mote.orchestration.environment.mailbox import DeliveryMode, InterAgentCommunication
+from mote.orchestration.environment.registry import AgentMetadata
+from mote.orchestration.environment.runtime import AgentRuntime, AgentStatus
+from mote.orchestration.environment.store import ResidencyStore
+from mote.runtime.events import TelemetryBinding
 
 
 class FakeRole:
@@ -250,11 +251,7 @@ def test_format_completion_notification():
 # ---------------------------------------------------------------------------
 
 
-class _CaptureSub(ObservationSubscriber, SyncObserver):
-    """A sync subscriber that records agent-lifecycle events off the runtime bus."""
-
-    priority = 50
-
+class _CaptureSub:
     def __init__(self):
         self.events = []
 
@@ -262,32 +259,53 @@ class _CaptureSub(ObservationSubscriber, SyncObserver):
         return None
 
     def handle_sync(self, event) -> None:
-        from mote.common.events import AgentLifecycleEvent
+        from mote.runtime.events import AgentLifecycleEvent
 
         if isinstance(event, AgentLifecycleEvent):
             self.events.append((event.phase, event.session_id))
 
 
-def test_runtime_bus_emits_added_on_add_agent(control):
-    cap = _CaptureSub()
-    control.event_bus.subscribe(cap)
-    control.add_agent(make_runtime("a"))
-    assert ("added", "a") in cap.events
+async def _subscribe_capture(control, cap):
+    return await control.telemetry.subscribe(
+        TelemetryBinding(
+            TelemetrySubscriptionSpec(
+                identity=TelemetryIdentity("mote.test.agent_lifecycle_capture"),
+                capacity=32,
+                overflow=TelemetryOverflow.DROP_NEWEST,
+            ),
+            cap,
+        )
+    )
 
 
 @pytest.mark.asyncio
-async def test_runtime_bus_emits_interrupted(control):
+async def test_runtime_telemetry_emits_added_on_add_agent(control):
     cap = _CaptureSub()
-    control.event_bus.subscribe(cap)
+    control.start()
+    await _subscribe_capture(control, cap)
+    control.add_agent(make_runtime("a"))
+    await control.telemetry.drain()
+    assert ("added", "a") in cap.events
+    await control.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_telemetry_emits_interrupted(control):
+    cap = _CaptureSub()
+    control.start()
+    await _subscribe_capture(control, cap)
     control.add_agent(make_runtime("a", status=AgentStatus.RUNNING))
     await control.interrupt("a")
+    await control.telemetry.drain()
     assert ("interrupted", "a") in cap.events
+    await control.stop()
 
 
 # ---------------------------------------------------------------------------
 # Spawn authority: AgentControl.spawn_agent (the single birth channel)
 # ---------------------------------------------------------------------------
-from mote.common.agent_control import ContextPolicy, Lifecycle, SpawnSpec, current_control  # noqa: E402
+from mote.contracts.spawn import ContextPolicy, Lifecycle, SpawnSpec
+from mote.runtime.agent.control import current_control
 
 
 class SpawnRole:
@@ -299,7 +317,7 @@ class SpawnRole:
         SpawnRole._counter += 1
         self._session_id = f"spawned-{SpawnRole._counter}"
         self.state = types.SimpleNamespace(msg_buffer=MessageQueue())
-        from mote.common.schema.output import CommittedOutput, RunResult, TranscriptRef
+        from mote.contracts.output import CommittedOutput, RunResult, TranscriptRef
 
         committed = CommittedOutput("candidate", "mote.text@1", "sha", summary)
         self.run_result = RunResult(
@@ -340,6 +358,25 @@ async def test_spawn_agent_registers_path_and_nickname(control):
     meta = control.registry.agent_metadata_for_id(handle.session_id)
     assert meta is not None
     assert meta.agent_path == handle.agent_path
+
+
+@pytest.mark.asyncio
+async def test_spawn_policy_extension_denies_before_any_reservation(tmp_path):
+    from mote.contracts.policy.spawn import SpawnPolicyContribution
+    from mote.contracts.ports.spawn_policy import SpawnPolicyExtensionSpec
+
+    class Deny:
+        async def evaluate(self, intent):
+            return SpawnPolicyContribution.deny("organization denied child")
+
+    control = make_control(
+        tmp_path,
+        spawn_policy_extensions=(SpawnPolicyExtensionSpec("organization", Deny),),
+    )
+
+    with pytest.raises(AgentLimitReached, match="organization denied child"):
+        await control.spawn_agent(_spec())
+    assert control.registry.live_agents() == []
 
 
 @pytest.mark.asyncio
@@ -458,14 +495,15 @@ async def test_sustained_back_pressure_emits_lifecycle_event(tmp_path):
     # threshold a single AgentLifecycleEvent(phase="delivery_back_pressure") is
     # surfaced (pure observability — delivery semantics are unchanged: it stays
     # parked the whole time).
-    from mote.environment.control import _DELIVERY_STUCK_FLUSHES
+    from mote.orchestration.environment.control import _DELIVERY_STUCK_FLUSHES
 
     control = make_control(tmp_path, max_agents=1)
     await control.store.materialize(AgentRuntime(FakeRole("evicted")))
     busy = make_runtime("busy", status=AgentStatus.RUNNING)  # never evictable
     control.add_agent(busy)
     cap = _CaptureSub()
-    control.event_bus.subscribe(cap)
+    control.start()
+    await _subscribe_capture(control, cap)
     assert control.send_input("evicted", UserMessage("wake")) is None
 
     # Below the threshold: parked, but no event yet.
@@ -475,17 +513,19 @@ async def test_sustained_back_pressure_emits_lifecycle_event(tmp_path):
 
     # The pass that crosses the threshold emits exactly once.
     assert await control._flush_pending_deliveries() == 0
+    await control.telemetry.drain()
     assert ("delivery_back_pressure", "evicted") in cap.events
     assert cap.events.count(("delivery_back_pressure", "evicted")) == 1
     # The message was never lost — it is still parked under back-pressure.
     assert control._pending.has_pending("evicted")
+    await control.stop()
 
 
 @pytest.mark.asyncio
 async def test_back_pressure_event_resets_after_delivery(tmp_path):
     # Once a delivery is finally fulfilled the stuck counter resets, so a later
     # parked delivery starts its own silent grace period again.
-    from mote.environment.control import _DELIVERY_STUCK_FLUSHES
+    from mote.orchestration.environment.control import _DELIVERY_STUCK_FLUSHES
 
     control = make_control(tmp_path, max_agents=1)
     await control.store.materialize(AgentRuntime(FakeRole("evicted")))
@@ -638,7 +678,7 @@ async def test_managed_ttl_watchdog_noops_when_child_finishes_early(control):
 
 
 def _cost_role(summary="result"):
-    from mote.router.cost import CostTracker
+    from mote.runtime.models.cost import CostTracker
 
     role = SpawnRole(summary=summary)
     role._context = types.SimpleNamespace(cost_manager=CostTracker(), config=None)
@@ -685,7 +725,7 @@ async def test_child_usage_only_in_own_bucket_but_subtree_includes_it(control):
         )
     )
     # Child records 1000 tokens against a known model; parent records nothing.
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     child_node = control.cost_node_for(handle.session_id)
     child_node.tracker.add(TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "gpt-4o")
@@ -718,7 +758,7 @@ async def test_skill_fork_shared_tracker_not_double_counted(control):
     assert child_role._context is parent_role._context
     # No separate node is created for the shared bucket.
     assert control.cost_node_for(handle.session_id) is None
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     shared.add(TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "gpt-4o")
     # Counted exactly once (root self == subtree).
@@ -738,7 +778,7 @@ async def test_subtree_estimated_flag_rolls_up(control):
             parent_id=parent_rt.session_id,
         )
     )
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     # Unknown model -> has_unknown_model_cost on the child, rolled up to root.
     control.cost_node_for(handle.session_id).tracker.add(
@@ -751,7 +791,7 @@ async def test_subtree_estimated_flag_rolls_up(control):
 
 @pytest.mark.asyncio
 async def test_spawn_denied_when_fleet_token_budget_reached(tmp_path):
-    # SpawnUsageGate reads the LIVE cumulative subtree spend off the cost tree:
+    # SpawnAdmissionPolicy reads the LIVE cumulative subtree spend off the cost tree:
     # once the fleet has burned its token budget, the next spawn is refused.
     control = make_control(tmp_path, max_total_tokens=1000)
     parent_role = _cost_role()
@@ -766,7 +806,7 @@ async def test_spawn_denied_when_fleet_token_budget_reached(tmp_path):
             parent_id=parent_rt.session_id,
         )
     )
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     # The child burns past the fleet token budget.
     control.cost_node_for(handle.session_id).tracker.add(
@@ -797,7 +837,7 @@ async def test_spawn_denied_when_fleet_cost_budget_reached(tmp_path):
             parent_id=parent_rt.session_id,
         )
     )
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     # A big known-model spend pushes fleet USD cost past the tiny cap.
     control.cost_node_for(handle.session_id).tracker.add(
@@ -816,8 +856,8 @@ async def test_spawn_denied_when_fleet_cost_budget_reached(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_usage_gate_inert_without_caps(tmp_path):
-    # No token/cost caps -> the usage gate never denies regardless of spend.
+async def test_spawn_policy_usage_checks_are_inert_without_caps(tmp_path):
+    # No token/cost caps -> admission never denies regardless of spend.
     control = make_control(tmp_path)
     parent_role = _cost_role()
     parent_rt = AgentRuntime(parent_role)
@@ -830,7 +870,7 @@ async def test_usage_gate_inert_without_caps(tmp_path):
             parent_id=parent_rt.session_id,
         )
     )
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     control.cost_node_for(handle.session_id).tracker.add(
         TokenUsage(input_tokens=10**6, output_tokens=10**6, total_tokens=2 * 10**6),
@@ -848,7 +888,7 @@ async def test_usage_gate_inert_without_caps(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_usage_gate_denies_spawn_over_token_budget(tmp_path):
+async def test_spawn_policy_denies_spawn_over_token_budget(tmp_path):
     # Once the fleet's live spend crosses the token ceiling, the next spawn is
     # refused — the runaway-fan-out guard's cost dimension.
     control = make_control(tmp_path, max_total_tokens=1000)
@@ -863,7 +903,7 @@ async def test_usage_gate_denies_spawn_over_token_budget(tmp_path):
             parent_id=parent_rt.session_id,
         )
     )
-    from mote.router.cost import TokenUsage
+    from mote.runtime.models.cost import TokenUsage
 
     control.cost_node_for(handle.session_id).tracker.add(
         TokenUsage(input_tokens=800, output_tokens=400, total_tokens=1200), "gpt-4o"
@@ -882,7 +922,7 @@ async def test_usage_gate_denies_spawn_over_token_budget(tmp_path):
 async def test_spawn_provisions_fresh_context_by_default(control):
     # A context-less role from the factory MUST come out of spawn_agent with a
     # real Context: provisioning is the authority's invariant, not the factory's.
-    from mote.router.llm.context import Context
+    from mote.runtime.models.clients.context import Context
 
     child_role = SpawnRole()
     assert not hasattr(child_role, "_context")
@@ -942,7 +982,7 @@ async def test_scheduler_binds_ambient_control_during_turn(control):
 # ---------------------------------------------------------------------------
 # Workflow C: communication graph (channels + subtree broadcast)
 # ---------------------------------------------------------------------------
-from mote.environment.comms import CommKind  # noqa: E402
+from mote.orchestration.environment.comms import CommKind  # noqa: E402
 
 
 @pytest.mark.asyncio
@@ -1007,7 +1047,7 @@ async def test_release_child_clears_comm_graph(control):
 
 
 def test_completion_notification_carries_notification_kind(control):
-    from mote.environment.mailbox import MAILBOX_KIND
+    from mote.orchestration.environment.mailbox import MAILBOX_KIND
 
     rt = make_runtime("a")
     control.add_agent(rt)

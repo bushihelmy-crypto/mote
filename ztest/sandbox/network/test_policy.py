@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.sandbox.network.policy import NetworkPolicy, is_blocked_host, normalize_host
+from mote.runtime.sandbox.network.policy import NetworkPolicy, is_blocked_host, normalize_host
 
 
 class TestNormalizeHost:

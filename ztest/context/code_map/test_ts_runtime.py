@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import gc
+
 import pytest
 
-from mote.context.code_map import ts_runtime
+from mote.runtime.context.code_map import ts_runtime
 
 pytest.importorskip("tree_sitter_language_pack")
 
@@ -29,11 +31,18 @@ def test_parser_for_unknown_returns_none():
     assert ts_runtime.parser_for("definitely_not_a_grammar") is None
 
 
-def test_parse_returns_root_node():
-    root = ts_runtime.parse("javascript", "const x = 1;\n")
-    assert root is not None
-    assert root.type == "program"
+def test_parse_returns_owned_tree():
+    tree = ts_runtime.parse("javascript", "const x = 1;\n")
+    assert tree is not None
+    assert tree.root_node.type == "program"
 
 
 def test_parse_unknown_grammar_none():
     assert ts_runtime.parse("nope_grammar", "x") is None
+
+
+def test_native_tree_guard_restores_automatic_gc():
+    assert gc.isenabled()
+    with ts_runtime.native_tree_guard():
+        assert not gc.isenabled()
+    assert gc.isenabled()
