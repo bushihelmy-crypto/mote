@@ -1,0 +1,17 @@
+{
+  "checker_id": "durable-policy-security-retention",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:14fe7ed0456c3c774480ab95072ac54f9d21efba9516a3828b0d1ed4dc67db37",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/DURABLE-POLICY.txt",
+  "executed_at": "2026-07-31T08:21:12.652618+00:00",
+  "executed_command": "python -B ztest/architecture/durable_policy.py",
+  "gate_id": "DURABLE-POLICY",
+  "remediation_owner": "event-runtime-owners",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

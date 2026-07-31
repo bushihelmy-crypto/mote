@@ -11,12 +11,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mote.contracts.conversation.compaction_policy import CompactionIntent
+from mote.contracts.events.conversation import ContextCompactedEvent, PostCompactEvent
 from mote.runtime.context.compaction.pipeline import ReductionPipeline
 from mote.runtime.context.compaction.policy import build_compaction_policy
 from mote.runtime.context.compaction.reducers.base import ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest, Urgency
 from mote.runtime.context.compaction.transcript import Transcript
-from mote.runtime.events import ContextCompactedEvent, PostCompactEvent
 
 if TYPE_CHECKING:
     from mote.contracts.ports.session.facts import SessionFactSink

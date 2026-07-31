@@ -22,6 +22,15 @@ import json
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+try:
+    import openai
+except ImportError:
+    openai = None
+
 from mote.contracts.foundation.errors.base import MoteError
 from mote.runtime.errors.handlers import handle_exception
 from mote.runtime.errors.llm import (
@@ -155,20 +164,18 @@ def is_retryable(exc: BaseException | None) -> bool:
     # (APIConnectionError/APITimeoutError), throttling (RateLimitError) and
     # server-side 5xx (InternalServerError) are all transient. The OpenAI and
     # Anthropic SDKs expose the same class names with matching semantics.
-    for mod_name in ("openai", "anthropic"):
-        try:
-            mod = __import__(mod_name)
-        except Exception:  # SDK not installed / import failure
+    for module in (openai, anthropic):
+        if module is None:
             continue
         transient = tuple(
-            getattr(mod, n)
+            getattr(module, n)
             for n in (
                 "APIConnectionError",
                 "APITimeoutError",
                 "RateLimitError",
                 "InternalServerError",
             )
-            if hasattr(mod, n)
+            if hasattr(module, n)
         )
         if transient and isinstance(exc, transient):
             return True
@@ -197,14 +204,12 @@ def classify_llm_error(exc: BaseException | None) -> MoteError | None:
     # Recognize both the OpenAI and Anthropic SDK error hierarchies. Both expose
     # the same class names (APIError/APITimeoutError/APIConnectionError) with a
     # ``status_code`` attribute, so a single status-driven mapping serves both.
-    for mod_name in ("openai", "anthropic"):
-        try:
-            mod = __import__(mod_name)
-        except Exception:  # SDK not installed / import failure
+    for module in (openai, anthropic):
+        if module is None:
             continue
-        api_timeout = getattr(mod, "APITimeoutError", None)
-        api_connection = getattr(mod, "APIConnectionError", None)
-        api_error = getattr(mod, "APIError", None)
+        api_timeout = getattr(module, "APITimeoutError", None)
+        api_connection = getattr(module, "APIConnectionError", None)
+        api_error = getattr(module, "APIError", None)
         if api_timeout is not None and isinstance(exc, api_timeout):
             return LLMTimeoutError(str(exc), cause=exc)
         if api_connection is not None and isinstance(exc, api_connection):

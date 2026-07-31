@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/wire_authority.py
+exit_code: 0
+
+[stdout]
+wire authority outputs are current
+
+[stderr]

@@ -29,7 +29,7 @@ from mote.product.models.generation_builder import (
 )
 from mote.product.models.registry import LLMProviderRegistry
 from mote.product.models.runtime_generation import build_model_runtime_generation
-from mote.runtime.events import observe_event_sync
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.inference.cache import ExactCacheIdentity, MemoryExactInferenceCache
 from mote.runtime.models.cached_gateway import ExactCachedModelGateway
 from mote.runtime.models.composition import build_runtime_composition

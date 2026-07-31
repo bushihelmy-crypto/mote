@@ -26,8 +26,8 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Optional, Protocol
 
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
-from mote.runtime.events import MODEL_CONTEXT_REBUILT_EVENTS
 
 
 class _IndexedSkill(Protocol):
@@ -43,11 +43,9 @@ class _SkillInjector(Protocol):
     manager; any object exposing these two members satisfies it.
     """
 
-    def _index_skills(self) -> Iterable[_IndexedSkill]:
-        ...
+    def _index_skills(self) -> Iterable[_IndexedSkill]: ...
 
-    def build_index(self, *, max_tokens: int = ..., only_names: Optional[set[str]] = ...) -> Optional[str]:
-        ...
+    def build_index(self, *, max_tokens: int = ..., only_names: Optional[set[str]] = ...) -> Optional[str]: ...
 
 
 class SkillListingContextSource:

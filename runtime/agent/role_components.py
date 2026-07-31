@@ -73,6 +73,7 @@ from mote.runtime.agent.components import (
     action_component_specs,
     cognition_component_specs,
     context_component_specs,
+    event_fabric_component_spec,
     integration_component_specs,
     integration_event_subscribers,
     policy_component_specs,
@@ -83,8 +84,8 @@ from mote.runtime.agent.components import (
 from mote.runtime.agent.role_state import RoleStateController
 from mote.runtime.agent.runtime_maintenance import RuntimeMaintenance
 from mote.runtime.agent.session_manager import RoleSessionManager
-from mote.runtime.events import LogSubscriber
-from mote.runtime.events.telemetry import TelemetryBinding, TelemetryManifest, TelemetryRuntime
+from mote.runtime.events.log_subscriber import LogSubscriber
+from mote.runtime.events.telemetry import TelemetryManifest, TelemetryRuntime
 from mote.runtime.interactive import RuntimeHost
 from mote.runtime.models.composition_context import bind_runtime_composition, reset_runtime_composition
 from mote.runtime.persistence.async_io import run_disk_io
@@ -98,17 +99,14 @@ if TYPE_CHECKING:
     from mote.runtime.tools.permission.sandbox.resource_guard import ResourceGuard
 
 
-def _telemetry_binding(handler: object) -> TelemetryBinding:
+def _telemetry_spec(handler: object) -> TelemetrySubscriptionSpec:
     qualified = f"{type(handler).__module__}.{type(handler).__qualname__}".lower()
     segments = re.findall(r"[a-z0-9]+", qualified)
     identity = TelemetryIdentity("mote.telemetry." + ".".join(segments))
-    return TelemetryBinding(
-        spec=TelemetrySubscriptionSpec(
-            identity=identity,
-            capacity=1024,
-            overflow=TelemetryOverflow.DROP_OLDEST,
-        ),
-        handler=cast(Any, handler),
+    return TelemetrySubscriptionSpec(
+        identity=identity,
+        capacity=1024,
+        overflow=TelemetryOverflow.DROP_OLDEST,
     )
 
 
@@ -414,6 +412,7 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
                 lambda ctx: TelemetryRuntime(TelemetryManifest(())),
             ),
             *integration_component_specs(),
+            event_fabric_component_spec(),
             *policy_component_specs(),
             *context_component_specs(),
             *cognition_component_specs(self._execution_engine_factory_key),
@@ -464,7 +463,7 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             bind = getattr(subscriber, "bind_telemetry", None)
             if bind is not None:
                 bind(telemetry)
-            await telemetry.subscribe(_telemetry_binding(subscriber))
+            await telemetry.subscribe_all(_telemetry_spec(subscriber), subscriber)
         self.context_manager.bind_telemetry(telemetry)
         self._telemetry_wired = True
 
@@ -511,7 +510,6 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
         subs = [
             *integration_event_subscribers(
                 lambda: self._graph.get(HOOK_MANAGER),
-                lambda: self._graph.get(LSP_SERVICE),
             ),
             *session_event_subscribers(
                 lambda: self._graph.get(CHECKPOINT_SUBSCRIBER),

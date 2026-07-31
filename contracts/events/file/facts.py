@@ -152,6 +152,7 @@ class FileTransactionPreparedEvent:
 @dataclass(frozen=True)
 class FileTransactionCommittedEvent:
     transaction_id: str
+    paths: tuple[str, ...]
     versions: tuple[FileVersion, ...]
 
     type: ClassVar[str] = FILE_TRANSACTION_COMMITTED
@@ -159,16 +160,21 @@ class FileTransactionCommittedEvent:
     def payload(self) -> dict[str, Any]:
         return {
             "transaction_id": self.transaction_id,
+            "paths": list(self.paths),
             "versions": [version_to_dict(version) for version in self.versions],
         }
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "FileTransactionCommittedEvent":
-        _require_keys(payload, {"transaction_id", "versions"})
+        _require_keys(payload, {"transaction_id", "paths", "versions"})
         if type(payload["versions"]) is not list or not payload["versions"]:
             raise ValueError("committed transaction versions are invalid")
+        paths = _string_list(payload, "paths")
+        if not paths or len(paths) != len(payload["versions"]):
+            raise ValueError("committed transaction paths do not match versions")
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),
+            paths=paths,
             versions=tuple(version_from_dict(item) for item in payload["versions"]),
         )
 

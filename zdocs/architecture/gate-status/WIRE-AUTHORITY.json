@@ -1,0 +1,17 @@
+{
+  "checker_id": "wire-authority-conformance",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:0770f9e9751a3971693836164aba588ae285153e6ab298cc9817e327c083b5e8",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/WIRE-AUTHORITY.txt",
+  "executed_at": "2026-07-31T08:21:14.759195+00:00",
+  "executed_command": "python -B ztest/architecture/wire_authority.py",
+  "gate_id": "WIRE-AUTHORITY",
+  "remediation_owner": "product-integration-owners",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

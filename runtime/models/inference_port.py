@@ -25,7 +25,7 @@ from mote.contracts.model.routing import RoutingHints, RoutingInput, RoutingMess
 from mote.contracts.model.topology_codec import encode_route_id
 from mote.contracts.ports.model.gateway import ModelRoute
 from mote.kernel.telemetry.context import current_trace_id
-from mote.runtime.events import observe_event_sync
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.models.model_calls import generate
 
 
@@ -235,16 +235,18 @@ class RuntimeModelInferencePort:
             else:
                 result = InferenceResult(
                     content=output.content or "",
-                    tool_calls=[
-                        {
-                            "id": call.id,
-                            "command_name": call.name,
-                            "args": call.arguments,
-                        }
-                        for call in output.tool_calls
-                    ]
-                    if payload.get("tools") is not None
-                    else None,
+                    tool_calls=(
+                        [
+                            {
+                                "id": call.id,
+                                "command_name": call.name,
+                                "args": call.arguments,
+                            }
+                            for call in output.tool_calls
+                        ]
+                        if payload.get("tools") is not None
+                        else None
+                    ),
                     structured_value=getattr(output, "structured", None),
                 )
                 self._results[attempt_key] = result

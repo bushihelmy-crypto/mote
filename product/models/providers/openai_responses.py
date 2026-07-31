@@ -25,6 +25,7 @@ stable). A ``tool_search_call`` in the response is normalized back into a
 ``SearchTools`` tool call so it flows through the SAME executor + RoleState
 reveal as every other path. NO server-hosted BM25 builtin — mote runs the match.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,7 +62,7 @@ from mote.contracts.model.constants import USE_CONFIG_TIMEOUT
 from mote.contracts.model.profile import profile_for
 from mote.kernel.inference.tokenization import count_message_tokens, count_string_tokens
 from mote.runtime.errors import LLMEmptyResponseError, LLMTimeoutError, classify_llm_error
-from mote.runtime.events import log_llm_stream
+from mote.runtime.events.stream import log_llm_stream
 from mote.runtime.models.clients.base import BaseLLM
 from mote.runtime.models.clients.credentials import CredentialBindingMixin
 from mote.runtime.models.clients.schema_output import openai_strict_schema

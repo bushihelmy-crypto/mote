@@ -17,6 +17,7 @@ from mote.contracts.ports.tool.policy import ToolCallPolicy
 from mote.contracts.tool.effects import ToolEffect
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.contracts.tool.policy import ToolCallIntent
+from mote.kernel.telemetry.events import span
 from mote.runtime.errors import (
     ErrorReport,
     RecoveryRunner,
@@ -25,7 +26,6 @@ from mote.runtime.errors import (
     ToolValidationError,
     render_error_block,
 )
-from mote.runtime.events import span
 from mote.runtime.events.scope import current_scope
 from mote.runtime.ledger import COMPLETED, FAILED, KIND_TOOL, RunJournal
 from mote.runtime.presentation import plural

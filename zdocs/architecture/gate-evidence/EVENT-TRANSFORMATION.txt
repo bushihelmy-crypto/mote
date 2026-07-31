@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/event_governance.py
+exit_code: 0
+
+[stdout]
+event transformations and subscription sources are closed
+
+[stderr]

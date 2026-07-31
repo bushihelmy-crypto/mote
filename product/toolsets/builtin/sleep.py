@@ -12,6 +12,7 @@ The wake coordination touches Role-owned internals (the message buffer, the
 background task pool, the run journal), so it lives behind the
 ``wait_interruptible`` Role capability; this tool stays a thin trigger.
 """
+
 from __future__ import annotations
 
 from typing import ClassVar
@@ -20,7 +21,6 @@ from mote.contracts.tool.effects import ToolEffect
 from mote.runtime.telemetry.reporting import ArtifactsReporter
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import WaitInterruptible
-from mote.runtime.tools.tool_registry import register_tool
 
 # Safety ceiling for a single wait: the agent wakes on any event long before
 # this, but never parks past it (a stuck agent can't hang forever).
@@ -32,7 +32,6 @@ _MSG_SLEEPING = "Waiting for an event (new message or background task completion
 _MSG_WOKE = "Woke after {seconds}s"
 
 
-@register_tool
 class Sleep(BaseTool):
     """Wait until an event wakes you — the moment a message arrives or a background task completes.
 
@@ -49,7 +48,19 @@ class Sleep(BaseTool):
     aliases = ["sleep"]
     # Recall synonyms for tool-search: ways a model asks to wait/pause that the
     # summary ("wait until an event wakes you") does not spell out.
-    keywords: ClassVar[list[str]] = ["pause", "delay", "wait", "hold", "poll", "backoff", "暂停", "等待", "延迟", "后台", "轮询"]
+    keywords: ClassVar[list[str]] = [
+        "pause",
+        "delay",
+        "wait",
+        "hold",
+        "poll",
+        "backoff",
+        "暂停",
+        "等待",
+        "延迟",
+        "后台",
+        "轮询",
+    ]
     requires = ("wait_interruptible",)
     # Pure wait — blocks on an external wake event but produces NO side effect.
     # Declare PURE so it opts out of the effect ledger and, on a crash-resume,

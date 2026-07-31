@@ -16,8 +16,7 @@ from mote.runtime.tools.tool_executor import ToolExecutor
 
 
 class ArtifactCollector(Protocol):
-    async def collect(self) -> object:
-        ...
+    async def collect(self) -> object: ...
 
 
 class ArtifactRepositoryBundleView(Protocol):
@@ -25,8 +24,7 @@ class ArtifactRepositoryBundleView(Protocol):
 
 
 class ReloadableSkillService(Protocol):
-    def reload(self) -> bool:
-        ...
+    def reload(self) -> bool: ...
 
 
 class RuntimeMaintenance:
@@ -201,6 +199,7 @@ class RuntimeMaintenance:
                 session_ttl_days=config.session_ttl_days,
                 artifact_ttl_days=config.artifact_ttl_days,
                 exclude_session_id=self._role.state.session_id,
+                legal_hold_session_ids=config.legal_hold_session_ids,
             )
         except asyncio.CancelledError:
             raise

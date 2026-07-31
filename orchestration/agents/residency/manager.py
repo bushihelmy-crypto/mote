@@ -26,12 +26,13 @@ import threading
 from collections import deque
 from typing import Awaitable, Callable, Optional
 
+from mote.contracts.events.agent import AgentLifecycleEvent
 from mote.orchestration.agents._scope import ScopedExitMixin
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.orchestration.agents.residency.store import ResidencyStore
 from mote.runtime.agent.base import BaseRole
 from mote.runtime.errors import AgentLimitReached
-from mote.runtime.events import AgentLifecycleEvent, TelemetryRuntime
+from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.telemetry.logging import logger
 
 RuntimeLookup = Callable[[str], Optional[AgentRuntime]]

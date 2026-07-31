@@ -20,7 +20,6 @@ from mote.runtime.fileops.identity import path_token
 from mote.runtime.presentation import count_noun, verb_agree
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import CommitEditPlan, GetCwd, PlanFileEdit
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import FileChange, ToolResult
 
 _MSG_FILE_PATH_REQUIRED = "Error: 'file_path' argument is required."
@@ -36,7 +35,6 @@ _MSG_UPDATED = "The file {path} has been updated successfully."
 _MSG_WHOLE_FILE_OK = "{verb} {path} ({lines}, {size} bytes written)."
 
 
-@register_tool
 class Edit(BaseTool):
     """Create, overwrite, or exactly edit one file through File Operations."""
 

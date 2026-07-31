@@ -1,31 +1,13 @@
-"""LspService — an event-spine subscriber that both consumes and produces.
-
-The single object the Role lazily builds (gated on ``role_schema.lsp.enabled``)
-and is registered with the shared telemetry runtime. It wires
-the manager (lazy server launch + routing) to the agent's file-mutation signal
-on the **input** side and broadcasts diagnostics on the **output** side:
-
-- ``handle(event)`` : on a :class:`FileMutatedEvent` (a tool just wrote a file),
-  route the edit to a matching server, sync the doc, let diagnostics publish,
-  then emit a :class:`DiagnosticsEvent` carrying any *changed* set;
-- ``shutdown()`` : tear down all servers (called on session cleanup by the Role).
-
-It is a structural telemetry handler on both edges: the
-executor does not poke it directly (it emits a ``FileMutatedEvent`` this
-service receives), and the diagnostics it produces ride Telemetry as a
-``DiagnosticsEvent`` (the :class:`DiagnosticsBuffer` accumulates them for
-next-turn context; other subscribers may react too). The emit is gated on a
-wired telemetry runtime, so a standalone service used directly in tests stays
-inert. Best-effort throughout: every method swallows its own errors so the
-LSP layer can never break a turn.
-"""
+"""LSP projection driven by confirmed file versions; diagnostics are advisory."""
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from collections.abc import Mapping
 
+from mote.contracts.events.envelope import EventEnvelope, JsonValue
+from mote.contracts.events.file.facts import FileTransactionCommittedEvent
+from mote.contracts.events.telemetry import DiagnosticsEvent
 from mote.runtime.config.lsp import LspConfig
-from mote.runtime.events import DiagnosticsEvent, FileMutatedEvent
 from mote.runtime.lsp.format import format_diagnostics
 from mote.runtime.lsp.manager import LspServerManager
 from mote.runtime.telemetry.logging import logger
@@ -34,32 +16,24 @@ from mote.runtime.telemetry.logging import logger
 class LspService:
     """LSP diagnostics for one Role session."""
 
-    # bookkeeping, but its ordering vs other subscribers is immaterial (it only
-    # reacts to FileMutatedEvent).
     def __init__(self, config: LspConfig, root_path: str, *, telemetry=None) -> None:
         self._manager = LspServerManager(config, root_path)
         self._telemetry = telemetry
 
-    def bind_telemetry(self, telemetry) -> None:
-        self._telemetry = telemetry
-
-    async def handle(self, event) -> None:
-        """Sync a just-mutated file, then broadcast any changed diagnostics."""
-        if isinstance(event, FileMutatedEvent) and event.path:
-            await self.file_saved(event.path)
-            await self._publish_diagnostics()
-        return None
+    async def handle(self, envelope: EventEnvelope[Mapping[str, JsonValue]]) -> None:
+        """Synchronize exact versions from one committed File Operations fact."""
+        event = FileTransactionCommittedEvent.from_payload(dict(envelope.payload))
+        for path in event.paths:
+            await self.file_saved(path)
+        await self._publish_diagnostics()
 
     async def file_saved(self, path: str) -> None:
-        """Sync a just-written file to its language server (best-effort no-op)."""
+        """Sync a confirmed file version, raising so reliable delivery can retry."""
         if not path:
             return
-        try:
-            server = await self._manager.server_for(path)
-            if server is not None:
-                await server.did_save(path)
-        except Exception as exc:  # noqa: BLE001 — never break the tool/turn
-            logger.debug(f"LspService: did_save for {path} failed: {exc}")
+        server = await self._manager.server_for_confirmed_transition(path)
+        if server is not None:
+            await server.did_save(path)
 
     async def _publish_diagnostics(self) -> None:
         """Drain changed diagnostics and publish them to Telemetry."""
@@ -72,7 +46,7 @@ class LspService:
         except Exception as exc:  # noqa: BLE001 — never break the turn
             logger.debug(f"LspService: diagnostics publish failed: {exc}")
 
-    def _drain_changed(self) -> Tuple[str, List[str]]:
+    def _drain_changed(self) -> tuple[str, list[str]]:
         """Render changed diagnostics + their paths, marking them delivered."""
         if not self._manager.registry.has_changes():
             return "", []

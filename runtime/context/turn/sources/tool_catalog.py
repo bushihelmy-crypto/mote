@@ -31,8 +31,8 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional, Protocol
 
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
-from mote.runtime.events import MODEL_CONTEXT_REBUILT_EVENTS
 
 
 class _CatalogExecutor(Protocol):
@@ -42,18 +42,15 @@ class _CatalogExecutor(Protocol):
     any object exposing these two dynamic-schema getters satisfies it.
     """
 
-    def mcp_tool_schemas(self) -> Optional[dict]:
-        ...
+    def mcp_tool_schemas(self) -> Optional[dict]: ...
 
-    def xml_pipeline_tool_schemas(self) -> Optional[dict]:
-        ...
+    def xml_pipeline_tool_schemas(self) -> Optional[dict]: ...
 
 
 class _CatalogChannel(Protocol):
     """The command-channel slice this source consults (duck-typed)."""
 
-    def wants_tool_catalog(self) -> bool:
-        ...
+    def wants_tool_catalog(self) -> bool: ...
 
 
 class ToolCatalogContextSource:

@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/store_cutover.py
+exit_code: 0
+
+[stdout]
+active store generations and forward-only cutover mechanisms are closed
+
+[stderr]

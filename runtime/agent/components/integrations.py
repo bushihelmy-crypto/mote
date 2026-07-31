@@ -1,4 +1,5 @@
 """Optional hook, LSP, sandbox, and secrets integration manifest."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +11,7 @@ from mote.runtime.agent.component_keys import (
     LSP_SERVICE,
     SANDBOX_RUNTIME,
     SECRET_STORE,
+    TELEMETRY,
 )
 from mote.runtime.hook import HookManager
 from mote.runtime.hook.subscriber import HookSubscriber
@@ -35,12 +37,11 @@ def integration_component_specs() -> list[ComponentSpec]:
     ]
 
 
-def integration_event_subscribers(get_hook_manager, get_lsp_service) -> list:
+def integration_event_subscribers(get_hook_manager) -> list:
     """Return subscribers owned by enabled optional integrations."""
     hook_manager = get_hook_manager()
     return [
         HookSubscriber(hook_manager) if hook_manager is not None else None,
-        get_lsp_service(),
     ]
 
 
@@ -81,7 +82,7 @@ def _lsp_available(role, state) -> bool:
 def _build_lsp_service(ctx):
     cfg = ctx.role.role_schema.lsp
     root = ctx.role.state.project_root or ctx.role.get_cwd()
-    return ctx.role.wiring.dependencies.lsp_service_factory.build_service(cfg, Path(root))
+    return ctx.role.wiring.dependencies.lsp_service_factory.build_service(cfg, Path(root), ctx.dep(TELEMETRY))
 
 
 def _build_diagnostics_provider(ctx):

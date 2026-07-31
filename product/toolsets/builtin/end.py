@@ -1,12 +1,11 @@
 """End command — terminate the current session."""
+
 from __future__ import annotations
 
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import EndSession
-from mote.runtime.tools.tool_registry import register_tool
 
 
-@register_tool
 class End(BaseTool):
     """End the current session."""
 

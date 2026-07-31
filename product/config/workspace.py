@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Workspace disk-layer settings (currently: the periodic TTL cleanup sweep)."""
+
 from __future__ import annotations
 
 from pydantic import Field
@@ -28,6 +29,10 @@ class WorkspaceCleanupConfig(YamlModel):
     # overflow artifacts (tool_results/ + task_outputs/), keeping rollout +
     # blobs. Kept shorter than the session TTL. 0 = never shed artifacts.
     artifact_ttl_days: int = 7
+
+    # Session ids protected by an operator/legal hold. Held sessions and their
+    # artifacts are excluded from every retention tier.
+    legal_hold_session_ids: frozenset[str] = frozenset()
 
 
 class WorkspaceConfig(YamlModel):

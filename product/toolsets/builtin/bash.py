@@ -15,6 +15,7 @@ Cwd ownership stays in the Role. This tool only borrows two narrow accessors
 (get_cwd for the stable base dir, get_sandbox_runtime) injected by bind(); it
 never sees RoleState or memory, and it never writes cwd back.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,6 @@ from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetSandboxRuntime
 from mote.runtime.tools.permission.classifier import classify_command
 from mote.runtime.tools.permission.command_parse import segment_strings
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -83,7 +83,6 @@ def _structured(stdout: str) -> Any:
         return clean
 
 
-@register_tool
 class Bash(BaseTool):
     """Run a bash command against the stable working directory and return its output."""
 

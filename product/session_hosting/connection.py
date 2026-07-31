@@ -35,7 +35,7 @@ from mote.product.interaction.turn import TurnRunner, format_turn_error
 from mote.product.presentation.input_events import is_presentation_input
 from mote.product.presentation.projection.base import BaseProjector
 from mote.product.presentation.projection.projector import ViewProjector
-from mote.runtime.events import TelemetryHandle
+from mote.runtime.events.telemetry import TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
 _format_turn_error = format_turn_error

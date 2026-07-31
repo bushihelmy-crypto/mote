@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.conversation.message_sink import MessageSink
@@ -15,43 +15,36 @@ class BackgroundMessageSink(MessageSink, MessageActivity, Protocol):
     pass
 
 
+BackgroundWakeReason = Literal["task_done", "new_message", "timeout"]
+
+
 class BackgroundTaskService(Protocol):
-    def has_pending(self) -> bool:
-        ...
+    def has_pending(self) -> bool: ...
 
     @property
-    def pending_count(self) -> int:
-        ...
+    def pending_count(self) -> int: ...
 
-    async def wait_any(self, timeout: float = ...) -> Any:
-        ...
+    async def wait_any(self, timeout: float = ...) -> BackgroundWakeReason: ...
 
-    async def wait_for_completion(self, timeout: float | None = ...) -> bool:
-        ...
+    async def wait_for_completion(self, timeout: float | None = ...) -> bool: ...
 
-    def set_wake(self, wake: Callable[[], None] | None) -> None:
-        ...
+    def set_wake(self, wake: Callable[[], None] | None) -> None: ...
 
-    async def aclose(self) -> None:
-        ...
+    async def aclose(self) -> None: ...
 
 
 class TaskResultRegistry(Protocol):
-    def register_task_result(self, task_id: TaskId, content: str) -> None:
-        ...
+    def register_task_result(self, task_id: TaskId, content: str) -> None: ...
 
-    def unload(self, task_id: TaskId) -> TaskResultRecord | None:
-        ...
+    def unload(self, task_id: TaskId) -> TaskResultRecord | None: ...
 
 
 class TaskOutputLocationPort(Protocol):
-    def output_directory(self, session_id: SessionId) -> Path:
-        ...
+    def output_directory(self, session_id: SessionId) -> Path: ...
 
 
 class AgentWakePort(Protocol):
-    def wake(self) -> None:
-        ...
+    def wake(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +65,7 @@ __all__ = [
     "BackgroundTaskBuildContext",
     "BackgroundTaskService",
     "BackgroundTaskServiceFactory",
+    "BackgroundWakeReason",
     "TaskOutputLocationPort",
     "TaskResultRegistry",
 ]

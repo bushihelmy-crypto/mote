@@ -1,0 +1,17 @@
+{
+  "checker_id": "telemetry-erasure",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:3d234d1bc091fcab218808e86376628bbb29bb400a5edd8c5124fbcd55cb72f7",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/TYPE-TELEMETRY-ERASURE.txt",
+  "executed_at": "2026-07-31T08:21:05.209197+00:00",
+  "executed_command": "python -B ztest/architecture/static_governance.py telemetry-erasure",
+  "gate_id": "TYPE-TELEMETRY-ERASURE",
+  "remediation_owner": "runtime-telemetry-owner",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

@@ -4,11 +4,14 @@ This module owns every Role component whose durable source of truth is the
 session workspace.  The composition root consumes the manifest; it does not
 need to know how individual recorders are constructed.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Optional
 from uuid import uuid4
 
+from mote.contracts.events.file.facts import FILE_TRANSACTION_COMMITTED
+from mote.contracts.events.governance import SideEffectPolicy
 from mote.contracts.ports.events.subscription import (
     CheckpointPolicy,
     EventFilter,
@@ -16,6 +19,7 @@ from mote.contracts.ports.events.subscription import (
     OverflowPolicy,
     Reliability,
     RetryPolicy,
+    SubscriptionIdentity,
     SubscriptionSpec,
 )
 from mote.runtime.agent.component_graph import ComponentSpec
@@ -29,6 +33,7 @@ from mote.runtime.agent.component_keys import (
     CHECKPOINT_SUBSCRIBER,
     EVENT_FABRIC,
     FILE_OPERATIONS,
+    LSP_SERVICE,
     ROUTER,
     RUNTIME_CHECKPOINT_RECORDER,
     RUNTIME_HANDOFF_JOURNAL,
@@ -52,8 +57,9 @@ from mote.runtime.artifacts import (
     ReliableArtifactPublisher,
     StoreArtifactResolver,
 )
-from mote.runtime.events import EventFabric, SubscriptionBinding, SubscriptionManifest
 from mote.runtime.events.backends import SQLiteSubscriptionStateStore
+from mote.runtime.events.dispatcher import SubscriptionBinding, SubscriptionManifest
+from mote.runtime.events.fabric import EventFabric
 from mote.runtime.fileops import FileOperations
 from mote.runtime.interactive import ArtifactCheckpointPayloadStore
 from mote.runtime.models.model_calls import generate
@@ -74,12 +80,13 @@ from mote.runtime.session import (
 )
 from mote.runtime.session.artifact_roots import SessionFileOpsArtifactRoots
 from mote.runtime.session.checkpoint import checkpoint_supported
-from mote.runtime.session.codec import iter_file_operations_events
+from mote.runtime.session.codec import iter_file_operations_events, stable_event_type
 from mote.runtime.session.runtime_handoff import SessionRuntimeHandoffJournal
 from mote.runtime.session.runtime_operation import SessionRuntimeOperationJournal
 from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscriber
 
 _SESSION_PROJECTION_MAILBOX_CAPACITY = 1024
+_LSP_SUBSCRIPTION = SubscriptionIdentity("mote.lsp.confirmed-file-versions.v1")
 
 
 def session_component_specs() -> list[ComponentSpec]:
@@ -88,7 +95,6 @@ def session_component_specs() -> list[ComponentSpec]:
         ComponentSpec(SESSION_LOG, _build_session_log),
         ComponentSpec(SESSION_PROJECTION, _build_session_projection),
         ComponentSpec(SUBSCRIPTION_STATE_STORE, _build_subscription_state_store),
-        ComponentSpec(EVENT_FABRIC, _build_event_fabric),
         ComponentSpec(SESSION_FACT_COMMITTER, _build_session_fact_committer),
         ComponentSpec(FILE_OPERATIONS, _build_file_operations),
         ComponentSpec(
@@ -124,6 +130,10 @@ def session_component_specs() -> list[ComponentSpec]:
         ComponentSpec(TITLE_SUBSCRIBER, _build_title_subscriber),
         ComponentSpec(RUNTIME_CHECKPOINT_RECORDER, _build_runtime_checkpoint_recorder),
     ]
+
+
+def event_fabric_component_spec() -> ComponentSpec:
+    return ComponentSpec(EVENT_FABRIC, _build_event_fabric)
 
 
 def session_event_subscribers(
@@ -169,11 +179,35 @@ def _build_event_fabric(ctx) -> EventFabric:
         overflow=OverflowPolicy.BACKPRESSURE,
         retry=RetryPolicy(),
         checkpoint=CheckpointPolicy(persist_every=1),
+        side_effect_policy=SideEffectPolicy.TRANSACTIONAL_PROJECTION,
     )
+    bindings = [SubscriptionBinding(projection_spec, projection)]
+    lsp_service = ctx.dep(LSP_SERVICE)
+    if lsp_service is not None:
+        bindings.append(
+            SubscriptionBinding(
+                SubscriptionSpec(
+                    identity=_LSP_SUBSCRIPTION,
+                    event_filter=EventFilter(
+                        event_types=frozenset({stable_event_type(FILE_TRANSACTION_COMMITTED)}),
+                        stream_prefixes=(str(session_log.stream_id),),
+                    ),
+                    reliability=Reliability.RELIABLE,
+                    ordering=Ordering.PER_STREAM,
+                    capacity=256,
+                    overflow=OverflowPolicy.BACKPRESSURE,
+                    retry=RetryPolicy(max_attempts=5),
+                    checkpoint=CheckpointPolicy(persist_every=1),
+                    side_effect_policy=SideEffectPolicy.IDEMPOTENT_EXTERNAL_EFFECT,
+                    effect_identity="committed-event-id + confirmed-file-version",
+                ),
+                lsp_service,
+            )
+        )
     return EventFabric(
         journal=session_log.event_journal,
         streams=(session_log.stream_id,),
-        subscriptions=SubscriptionManifest((SubscriptionBinding(projection_spec, projection),)),
+        subscriptions=SubscriptionManifest(tuple(bindings)),
         state_store=ctx.dep(SUBSCRIPTION_STATE_STORE),
         telemetry=ctx.dep(TELEMETRY),
         on_commit=session_log.accept_commit,

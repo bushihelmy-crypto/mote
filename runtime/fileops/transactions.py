@@ -206,6 +206,7 @@ class MutationCoordinator:
                 self.journal.append(
                     FileTransactionCommittedEvent(
                         transaction_id=mutation_set.transaction_id,
+                        paths=tuple(mutation.target_path.display for mutation in mutation_set.mutations),
                         versions=versions,
                     )
                 )
@@ -352,6 +353,7 @@ class MutationCoordinator:
             self.journal.append(
                 FileTransactionCommittedEvent(
                     mutation_set.transaction_id,
+                    tuple(mutation.target_path.display for mutation in mutation_set.mutations),
                     versions,
                 )
             )

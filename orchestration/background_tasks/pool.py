@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Callable, Coroutine, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, Coroutine, Optional, Protocol
 from xml.sax.saxutils import escape as _escape_xml
 
 from mote.contracts.config.tool import ToolResultLimitConfig
 from mote.contracts.conversation import CauseBy, MessagePriority
+from mote.contracts.ports.task.operations import BackgroundWakeReason
 from mote.orchestration.background_tasks.model import (
     BackgroundTaskNotification,
     BgStatus,
@@ -68,7 +69,7 @@ from mote.runtime.errors import (
     ErrorReport,
     render_error_block,
 )
-from mote.runtime.events import bind_telemetry, current_telemetry
+from mote.runtime.events.context import bind_telemetry, current_telemetry
 from mote.runtime.resources.spill import enforce_tool_result_limit
 
 
@@ -281,10 +282,7 @@ class BackgroundTaskPool:
             # wait_for cancelled the future; _discard_waiter has dropped it.
             return False
 
-    # Wake-up reason type returned by ``wait_any``.
-    WakeReason = Literal["task_done", "new_message", "timeout"]
-
-    async def wait_any(self, timeout: float = 120.0) -> WakeReason:
+    async def wait_any(self, timeout: float = 120.0) -> BackgroundWakeReason:
         """Block until a background task finishes, a new message arrives in
         the msg_buffer, or *timeout* expires.
 

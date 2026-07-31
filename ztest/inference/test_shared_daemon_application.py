@@ -126,7 +126,7 @@ def test_shared_daemon_application_stages_generation_and_opens_admission(tmp_pat
             backup = tmp_path / "backup.sqlite3"
             operations_client = SharedGrpcClient(socket_path)
             with pytest.raises(grpc.aio.AioRpcError) as denied:
-                await client.backup(backup, consistency="daemon_consistent")
+                await client.backup(backup, consistency="crash_consistent")
             assert denied.value.code() is grpc.StatusCode.PERMISSION_DENIED
             unsigned = _handshake().model_copy(
                 update={
@@ -140,8 +140,8 @@ def test_shared_daemon_application_stages_generation_and_opens_admission(tmp_pat
             await operations_client.authenticate(
                 sign_handshake(SharedHandshake.model_validate(unsigned), b"application-secret")
             )
-            created = await operations_client.backup(backup, consistency="daemon_consistent")
-            assert created.consistency == "daemon_consistent"
+            created = await operations_client.backup(backup, consistency="crash_consistent")
+            assert created.consistency == "crash_consistent"
             assert created.digest.startswith("sha256:")
             verified = await operations_client.verify_restore(backup)
             assert verified.verified is True

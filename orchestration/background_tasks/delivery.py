@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from mote.contracts.conversation import CauseBy
+from mote.contracts.events.task import TaskProgressEvent
 from mote.orchestration.background_tasks.model import BackgroundTaskNotification
-from mote.runtime.events import TaskProgressEvent, observe_event_sync
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.events.progress_scope import (
     ProgressWriter,
     bind_progress_writer,

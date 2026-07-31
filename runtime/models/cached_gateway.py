@@ -15,7 +15,7 @@ from mote.contracts.model.invocation import (
 )
 from mote.contracts.ports.inference.cache import InferenceCache
 from mote.contracts.ports.model.gateway import ModelGateway
-from mote.runtime.events import observe_event_sync
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.inference.cache import ExactCacheIdentity, exact_cache_key
 
 

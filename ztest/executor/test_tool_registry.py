@@ -1,183 +1,70 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""Unit tests for ``mote.runtime.tools.tool_registry.ToolRegistry``.
+"""Unit tests for immutable Application-owned tool catalogs."""
 
-Uses an ordinary isolated ``fresh_registry`` fixture.
-"""
 from __future__ import annotations
 
 import pytest
 
 from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.tool_registry import ToolCatalog
 
 
-def _tool(name: str = "", aliases=None):
-    """Build a throwaway BaseTool subclass (NOT auto-registered)."""
-
-    class _T(BaseTool):
-        async def call(self, *, action: str = ""):  # pragma: no cover - never invoked
+def _tool(name: str = "", aliases=()):
+    class Tool(BaseTool):
+        async def call(self, *, action: str = ""):
             return "ok"
 
-    _T.name = name
-    _T.aliases = aliases or []
-    return _T
+    Tool.name = name
+    Tool.aliases = aliases
+    return Tool
 
 
-class TestRegister:
-    def test_register_by_explicit_name(self, fresh_registry):
-        cls = _tool("Alpha")
-        fresh_registry.register(cls)
-        assert fresh_registry.get("Alpha") is cls
-
-    def test_register_defaults_name_to_classname(self, fresh_registry):
-        class Beta(BaseTool):
-            async def call(self):  # pragma: no cover
-                return "ok"
-
-        fresh_registry.register(Beta)
-        # name was empty -> resolved to the class name, and set back on the class.
-        assert Beta.name == "Beta"
-        assert fresh_registry.get("Beta") is Beta
-
-    def test_register_returns_the_class(self, fresh_registry):
-        cls = _tool("Gamma")
-        assert fresh_registry.register(cls) is cls
-
-    def test_aliases_are_registered(self, fresh_registry):
-        cls = _tool("Delta", aliases=["d", "delta.run"])
-        fresh_registry.register(cls)
-        assert fresh_registry.get("Delta") is cls
-        assert fresh_registry.get("d") is cls
-        assert fresh_registry.get("delta.run") is cls
-
-    def test_stateful_tool_requires_runtime_host_capability(self, fresh_registry):
-        cls = _tool("StatefulWithoutHost")
-        cls.stateful = True
-
-        with pytest.raises(TypeError, match="get_runtime_host"):
-            fresh_registry.register(cls)
-
-    def test_stateful_tool_with_runtime_host_capability_is_accepted(self, fresh_registry):
-        cls = _tool("ManagedStateful")
-        cls.stateful = True
-        cls.requires = ("get_runtime_host", "handoff_runtime")
-
-        assert fresh_registry.register(cls) is cls
-
-    def test_stateful_tool_requires_handoff_capability(self, fresh_registry):
-        cls = _tool("StatefulWithoutHandoff")
-        cls.stateful = True
-        cls.requires = ("get_runtime_host",)
-
-        with pytest.raises(TypeError, match="handoff_runtime"):
-            fresh_registry.register(cls)
-
-    def test_stateful_tool_requires_action_parameter(self, fresh_registry):
-        class MissingAction(BaseTool):
-            name = "MissingAction"
-            stateful = True
-            requires = ("get_runtime_host", "handoff_runtime")
-
-            async def call(self):  # pragma: no cover
-                return "ok"
-
-        with pytest.raises(TypeError, match="action parameter"):
-            fresh_registry.register(MissingAction)
-
-    def test_stateful_bind_cannot_bypass_registry_validation(self):
-        cls = _tool("DynamicStatefulWithoutHost")
-        cls.stateful = True
-
-        with pytest.raises(TypeError, match="get_runtime_host"):
-            cls().bind("session")
-
-    def test_stateful_tool_cannot_store_business_state_on_instance(self):
-        cls = _tool("ManagedStateful")
-        cls.stateful = True
-        cls.requires = ("get_runtime_host", "handoff_runtime")
-        tool = cls()
-
-        with pytest.raises(AttributeError, match="RuntimeDriver"):
-            tool.document = {"hidden": "state"}
+def test_catalog_is_immutable_and_aliases_resolve() -> None:
+    alpha = _tool("Alpha", ("a",))
+    catalog = ToolCatalog.from_types((alpha,))
+    assert catalog.get("Alpha") is alpha
+    assert catalog.get("a") is alpha
+    assert catalog.get("missing") is None
+    assert catalog.all_tools() == {"Alpha": alpha}
 
 
-class TestFrozenMethods:
-    def test_overriding_bind_is_rejected(self, fresh_registry):
-        class BadBind(BaseTool):
-            name = "BadBind"
-
-            def bind(self, session_id, role=None):  # noqa: D401 - illegal override
-                return self
-
-            async def call(self):  # pragma: no cover
-                return "ok"
-
-        with pytest.raises(TypeError, match="must not override 'bind'"):
-            fresh_registry.register(BadBind)
-
-    def test_overriding_session_id_is_rejected(self, fresh_registry):
-        class BadSession(BaseTool):
-            name = "BadSession"
-
-            @property
-            def session_id(self):  # illegal override
-                return "x"
-
-            async def call(self):  # pragma: no cover
-                return "ok"
-
-        with pytest.raises(TypeError, match="must not override 'session_id'"):
-            fresh_registry.register(BadSession)
+def test_with_types_returns_a_new_content_addressed_snapshot() -> None:
+    alpha = _tool("Alpha")
+    beta = _tool("Beta")
+    original = ToolCatalog.from_types((alpha,))
+    extended = original.with_types(beta)
+    assert original.get("Beta") is None
+    assert extended.all_tools() == {"Alpha": alpha, "Beta": beta}
+    assert original.version != extended.version
 
 
-class TestConflicts:
-    def test_duplicate_name_different_class_rejected(self, fresh_registry):
-        fresh_registry.register(_tool("Dup"))
-        with pytest.raises(ValueError, match="already registered"):
-            fresh_registry.register(_tool("Dup"))
-
-    def test_alias_collision_with_other_tool_rejected(self, fresh_registry):
-        fresh_registry.register(_tool("First", aliases=["shared"]))
-        with pytest.raises(ValueError, match="already registered"):
-            fresh_registry.register(_tool("Second", aliases=["shared"]))
-
-    def test_reregistering_same_class_is_idempotent(self, fresh_registry):
-        cls = _tool("Same", aliases=["s"])
-        fresh_registry.register(cls)
-        # Re-running registration (as discover() re-import would) must not raise.
-        fresh_registry.register(cls)
-        assert fresh_registry.get("Same") is cls
-        assert fresh_registry.get("s") is cls
+def test_duplicate_primary_or_dispatch_name_is_rejected() -> None:
+    with pytest.raises(ValueError, match="declared more than once"):
+        ToolCatalog.from_types((_tool("Dup"), _tool("Dup")))
+    with pytest.raises(ValueError, match="dispatch name"):
+        ToolCatalog.from_types((_tool("First", ("shared",)), _tool("Second", ("shared",))))
 
 
-class TestLookup:
-    def test_get_unknown_returns_none(self, fresh_registry):
-        assert fresh_registry.get("missing") is None
+def test_stateful_tool_contract_is_validated_at_snapshot_creation() -> None:
+    invalid = _tool("Stateful")
+    invalid.stateful = True
+    with pytest.raises(TypeError, match="get_runtime_host"):
+        ToolCatalog.from_types((invalid,))
 
-    def test_all_tools_deduplicates_aliases(self, fresh_registry):
-        cls = _tool("Solo", aliases=["a", "b"])
-        fresh_registry.register(cls)
-        tools = fresh_registry.all_tools()
-        # Registered under 3 keys, but all_tools() returns one entry keyed by primary name.
-        assert tools == {"Solo": cls}
 
-    def test_all_tools_returns_each_class_once(self, fresh_registry):
-        c1 = _tool("One", aliases=["1"])
-        c2 = _tool("Two")
-        fresh_registry.register(c1)
-        fresh_registry.register(c2)
-        assert set(fresh_registry.all_tools().values()) == {c1, c2}
+def test_stateful_tool_requires_handoff_and_action() -> None:
+    missing_handoff = _tool("MissingHandoff")
+    missing_handoff.stateful = True
+    missing_handoff.requires = ("get_runtime_host",)
+    with pytest.raises(TypeError, match="handoff_runtime"):
+        ToolCatalog.from_types((missing_handoff,))
 
-    def test_all_names_lists_primary_and_aliases(self, fresh_registry):
-        cls = _tool("Main", aliases=["m1", "m2"])
-        fresh_registry.register(cls)
-        assert fresh_registry.all_names(cls) == ["Main", "m1", "m2"]
+    class MissingAction(BaseTool):
+        name = "MissingAction"
+        stateful = True
+        requires = ("get_runtime_host", "handoff_runtime")
 
-    def test_all_names_falls_back_to_classname(self, fresh_registry):
-        class NoName(BaseTool):
-            async def call(self):  # pragma: no cover
-                return "ok"
+        async def call(self):
+            return "ok"
 
-        # Not registered (so name stays empty) -> all_names uses __name__.
-        assert NoName.name == ""
-        assert fresh_registry.all_names(NoName) == ["NoName"]
+    with pytest.raises(TypeError, match="action parameter"):
+        ToolCatalog.from_types((MissingAction,))

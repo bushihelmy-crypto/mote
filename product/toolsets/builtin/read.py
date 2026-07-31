@@ -38,6 +38,7 @@ The shape: text offsets are 1-indexed and default to a bounded 2,000-line page;
 partial results carry an explicit continuation offset. Size guards, blocked
 device paths, and empty/short-file reminders round it out.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -90,7 +91,6 @@ from mote.runtime.tools.capability_types import (
     ObserveFileSnapshot,
     ReadFileView,
 )
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -236,7 +236,6 @@ def _is_blocked_device(path: str) -> bool:
     return False
 
 
-@register_tool
 class Read(BaseTool):
     """Read a file from the local filesystem (text, image, PDF, or notebook)."""
 

@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py fact-admission
+exit_code: 0
+
+[stdout]
+fact-admission architecture invariant is closed
+
+[stderr]

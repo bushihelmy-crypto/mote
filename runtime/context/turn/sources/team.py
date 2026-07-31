@@ -30,9 +30,9 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Set
 
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.contracts.ports.agent.team_roster import TeamRosterMember, TeamRosterProvider
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
-from mote.runtime.events import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.runtime.telemetry.logging import logger
 
 RosterProvider = Callable[[], Optional[TeamRosterProvider]]

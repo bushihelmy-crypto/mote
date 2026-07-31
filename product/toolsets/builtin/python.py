@@ -21,6 +21,7 @@ The kernel is a managed runtime owned by the Role's ``RuntimeHost``. Calls
 acquire serialized, fenced write access; the host owns identity, revision and
 teardown.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -47,7 +48,6 @@ from mote.runtime.tools.capability_types import (
     GetSandboxRuntime,
     HandoffRuntime,
 )
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -63,7 +63,6 @@ _MSG_EXPORT_FAILED = (
 _RUNTIME = "jupyter:default"
 
 
-@register_tool
 class Python(BaseTool):
     """Execute code in a persistent Python kernel (one per session)."""
 

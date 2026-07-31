@@ -1,0 +1,17 @@
+{
+  "checker_id": "product-owner-export",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:cb7d0ed00a0422c8c2bf1c585b2d19bab17d7144bdab522752b0c16030e85400",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/PRODUCT-OWNER-EXPORT.txt",
+  "executed_at": "2026-07-31T08:21:06.550191+00:00",
+  "executed_command": "python -B ztest/architecture/composition_governance.py",
+  "gate_id": "PRODUCT-OWNER-EXPORT",
+  "remediation_owner": "product-architecture-owner",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

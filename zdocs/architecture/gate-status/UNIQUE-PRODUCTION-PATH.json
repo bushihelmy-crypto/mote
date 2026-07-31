@@ -1,0 +1,17 @@
+{
+  "checker_id": "unique-production-path",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:306acc5074c0987842d0eb2b7681ccd4bcf58b02e4b39eb131ffe8fa6eda01ad",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/UNIQUE-PRODUCTION-PATH.txt",
+  "executed_at": "2026-07-31T08:21:14.570039+00:00",
+  "executed_command": "python -B ztest/architecture/unique_production_path.py",
+  "gate_id": "UNIQUE-PRODUCTION-PATH",
+  "remediation_owner": "architecture-owner",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

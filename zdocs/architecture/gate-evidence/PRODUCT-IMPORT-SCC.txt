@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py product-scc
+exit_code: 0
+
+[stdout]
+product-scc architecture invariant is closed
+
+[stderr]

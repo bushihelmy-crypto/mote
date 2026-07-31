@@ -38,7 +38,7 @@ from mote.product.presentation.input_events import is_presentation_input
 from mote.product.presentation.projection.base import BaseProjector
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.engine import EngineAgentRequest
-from mote.runtime.events import TelemetryHandle
+from mote.runtime.events.telemetry import TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
 _format_turn_error = format_turn_error

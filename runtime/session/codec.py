@@ -9,6 +9,14 @@ from uuid import uuid4
 
 from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, JsonValue, thaw_json
 from mote.contracts.events.file.facts import FileOperationsEvent
+from mote.contracts.events.governance import (
+    ArtifactPolicy,
+    CodecState,
+    CompactionDisposition,
+    EventCodecEntry,
+    Sensitivity,
+    StoragePolicy,
+)
 from mote.contracts.ports.events.journal import UncommittedFact
 from mote.runtime.session.events import (
     FILE_EDIT_PLAN_STORED,
@@ -74,6 +82,22 @@ STABLE_SESSION_EVENT_CLASSES = MappingProxyType(
 )
 _STABLE_FILEOPS_EVENT_TYPES = frozenset(stable_event_type(event_type) for event_type in _FILEOPS_EVENT_TYPES)
 
+SESSION_STORAGE_POLICY = StoragePolicy(
+    sensitivity=Sensitivity.RESTRICTED,
+    semantic_inline_size_limit=1024 * 1024,
+    retention_requirement="session-scoped; stream deletion releases artifact ownership first",
+    redaction_at_source=True,
+    compaction_disposition=CompactionDisposition.STREAM_DELETE,
+    legal_hold_behavior="retain the complete session stream while the hold is active",
+    artifact_policy=ArtifactPolicy.REFERENCES_ONLY,
+    secondary_copy_policy="diagnostics and quarantine store identifiers and redacted excerpts only",
+)
+
+
+def _validate_catalog_event(event: SessionEvent) -> None:
+    if event.type not in SESSION_EVENT_CLASSES:
+        raise TypeError(f"unsupported session event: {type(event).__name__}")
+
 
 def encode_session_event(
     event: SessionEvent,
@@ -136,8 +160,28 @@ def _optional_text(event: SessionEvent, name: str) -> Optional[str]:
     return value if type(value) is str and value else None
 
 
+SESSION_ACTIVE_CODECS = tuple(
+    EventCodecEntry(
+        logical_store="session-rollout",
+        event_family=event_type,
+        event_type=stable_event_type(event_type),
+        event_schema_version=SESSION_FACT_SCHEMA_VERSION,
+        store_generation=1,
+        state=CodecState.ACTIVE,
+        owner_id=("file-operations" if event_type in _FILEOPS_EVENT_TYPES else "session"),
+        encoder=encode_session_event,
+        decoder=decode_session_event,
+        validator=_validate_catalog_event,
+        policy=SESSION_STORAGE_POLICY,
+    )
+    for event_type in SESSION_EVENT_CLASSES
+)
+
+
 __all__ = [
     "SESSION_FACT_SCHEMA_VERSION",
+    "SESSION_ACTIVE_CODECS",
+    "SESSION_STORAGE_POLICY",
     "SESSION_STREAM_PREFIX",
     "STABLE_SESSION_EVENT_CLASSES",
     "UnsupportedSessionFactVersion",

@@ -40,6 +40,30 @@ class BoundTool:
 
         return self._capability.call
 
+    @property
+    def reconstructable(self) -> bool:
+        return bool(self._capability.reconstructable)
+
+    @property
+    def graph_excluded(self) -> bool:
+        return bool(self._capability.graph_excluded)
+
+    @property
+    def max_result_size_chars(self) -> int:
+        return int(self._capability.max_result_size_chars)
+
+    def resolve_effect(self):
+        return self._capability.resolve_effect()
+
+    def resolve_effect_for(self, args: dict[str, Any]):
+        return self._capability.resolve_effect_for(args)
+
+    def mutates_filesystem_for(self, args: dict[str, Any]) -> bool:
+        return self._capability.mutates_filesystem_for(args)
+
+    def permission_targets(self, args: dict[str, Any]) -> list[str]:
+        return self._capability.permission_targets(args)
+
     def check_permissions(self, args: dict[str, Any]) -> PermissionDecision | None:
         decision = self._capability.check_permissions(args)
         if decision is not None and decision.behavior == "deny":
@@ -67,9 +91,6 @@ class BoundTool:
         arguments = self.definition.argument_decoder(kwargs)
         result = self._capability.call(**arguments)
         return await result if inspect.isawaitable(result) else result
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._capability, name)
 
 
 __all__ = ["BoundApprovalPolicy", "BoundTool"]

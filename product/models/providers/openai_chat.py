@@ -24,7 +24,7 @@ from mote.kernel.inference.tokenization import count_message_tokens, count_strin
 from mote.product.models.compiler import context_tokens_for_model
 from mote.runtime.errors import LLMEmptyResponseError, classify_llm_error
 from mote.runtime.errors.handlers import handle_exception
-from mote.runtime.events import log_llm_stream
+from mote.runtime.events.stream import log_llm_stream
 from mote.runtime.models.clients.base import BaseLLM
 from mote.runtime.models.clients.credentials import CredentialBindingMixin
 from mote.runtime.models.clients.schema_output import openai_strict_schema

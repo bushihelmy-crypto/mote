@@ -1,0 +1,109 @@
+{
+  "all_passed": true,
+  "gates": [
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/ARCH-LOCAL-IMPORT.txt",
+      "gate_id": "ARCH-LOCAL-IMPORT",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/ARCH-LOCAL-IMPORT.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/CAP-REACHABILITY.txt",
+      "gate_id": "CAP-REACHABILITY",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/CAP-REACHABILITY.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/DERIVED-ARTIFACT.txt",
+      "gate_id": "DERIVED-ARTIFACT",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/DERIVED-ARTIFACT.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/DURABLE-POLICY.txt",
+      "gate_id": "DURABLE-POLICY",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/DURABLE-POLICY.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/DYNAMIC-DISCOVERY.txt",
+      "gate_id": "DYNAMIC-DISCOVERY",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/DYNAMIC-DISCOVERY.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/EVENT-FACT-ADMISSION.txt",
+      "gate_id": "EVENT-FACT-ADMISSION",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/EVENT-FACT-ADMISSION.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/EVENT-TRANSFORMATION.txt",
+      "gate_id": "EVENT-TRANSFORMATION",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/EVENT-TRANSFORMATION.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/MIGRATION-DEBT.txt",
+      "gate_id": "MIGRATION-DEBT",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/MIGRATION-DEBT.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/PRODUCT-IMPORT-SCC.txt",
+      "gate_id": "PRODUCT-IMPORT-SCC",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/PRODUCT-IMPORT-SCC.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/PRODUCT-OWNER-EXPORT.txt",
+      "gate_id": "PRODUCT-OWNER-EXPORT",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/PRODUCT-OWNER-EXPORT.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/RESTORE-ADMISSION.txt",
+      "gate_id": "RESTORE-ADMISSION",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/RESTORE-ADMISSION.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/STORE-CUTOVER.txt",
+      "gate_id": "STORE-CUTOVER",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/STORE-CUTOVER.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/SUBSCRIPTION-RELIABILITY.txt",
+      "gate_id": "SUBSCRIPTION-RELIABILITY",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/SUBSCRIPTION-RELIABILITY.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/TYPE-GOVERNED-BOUNDARY.txt",
+      "gate_id": "TYPE-GOVERNED-BOUNDARY",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/TYPE-GOVERNED-BOUNDARY.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/TYPE-TELEMETRY-ERASURE.txt",
+      "gate_id": "TYPE-TELEMETRY-ERASURE",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/TYPE-TELEMETRY-ERASURE.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/UNIQUE-PRODUCTION-PATH.txt",
+      "gate_id": "UNIQUE-PRODUCTION-PATH",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/UNIQUE-PRODUCTION-PATH.json"
+    },
+    {
+      "evidence_path": "zdocs/architecture/gate-evidence/WIRE-AUTHORITY.txt",
+      "gate_id": "WIRE-AUTHORITY",
+      "result": "pass",
+      "status_path": "zdocs/architecture/gate-status/WIRE-AUTHORITY.json"
+    }
+  ],
+  "runtime_input": false,
+  "schema": "gate-status-index-v1"
+}

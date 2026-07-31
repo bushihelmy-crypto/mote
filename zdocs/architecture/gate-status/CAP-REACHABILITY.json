@@ -1,0 +1,17 @@
+{
+  "checker_id": "capability-reachability",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:14ea225bba3c47240cc592bef75247b97285c3ebab85d0c99ac369790844c08e",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/CAP-REACHABILITY.txt",
+  "executed_at": "2026-07-31T08:21:07.079885+00:00",
+  "executed_command": "python -B ztest/architecture/composition_governance.py",
+  "gate_id": "CAP-REACHABILITY",
+  "remediation_owner": "product-composition-owner",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

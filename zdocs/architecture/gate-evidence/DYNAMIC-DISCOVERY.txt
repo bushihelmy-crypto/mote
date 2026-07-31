@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py dynamic-discovery
+exit_code: 0
+
+[stdout]
+dynamic-discovery architecture invariant is closed
+
+[stderr]

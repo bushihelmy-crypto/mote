@@ -17,6 +17,7 @@ import json
 import uuid
 from typing import Any, ClassVar
 
+from mote.contracts.events.task import ActivityCompletedEvent, ActivityStartedEvent, TaskProgressEvent
 from mote.contracts.task.graph_errors import GraphError
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.orchestration.workflows.events import reset_progress_writer, set_progress_writer
@@ -30,7 +31,7 @@ from mote.product.workflows.run_graph.compiler import (
 )
 from mote.product.workflows.run_graph.spec import GraphSpec
 from mote.runtime.errors import ToolError
-from mote.runtime.events import ActivityCompletedEvent, ActivityStartedEvent, TaskProgressEvent, observe_event_sync
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.events.scope import ScopeRef, current_scope, push_scope
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import (
@@ -44,7 +45,6 @@ from mote.runtime.tools.capability_types import (
     ResumeGraphOutput,
 )
 from mote.runtime.tools.execution_context import current_tool_call_id
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 _MSG_INVALID_SPEC = "Error: invalid graph spec — {error}"
@@ -61,7 +61,6 @@ _MSG_EXCLUDED_TOOL = (
 )
 
 
-@register_tool
 class RunGraph(BaseTool):
     """Orchestrate tools as a declarative graph (map / branch / parallel) in one call."""
 

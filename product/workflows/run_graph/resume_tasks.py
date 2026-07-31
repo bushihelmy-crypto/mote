@@ -9,6 +9,7 @@ supports per-node resume (from_node), per-node skip (skip_node — bypasses only
 the named node while the rest of the graph keeps running downstream), and
 parameter overrides (**kwargs applied to the graph state).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -18,7 +19,6 @@ from mote.orchestration.background_tasks.status import PAUSE_STATUSES
 from mote.runtime.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetBgPool
-from mote.runtime.tools.tool_registry import register_tool
 
 # Messages aligned with the design doc (§9)
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
@@ -75,7 +75,6 @@ def _missing_upstreams(
     return missing
 
 
-@register_tool
 class ResumeTasks(BaseTool):
     name = "ResumeTasks"
     aliases = ["resume_tasks"]

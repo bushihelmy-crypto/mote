@@ -1,4 +1,5 @@
 """Crash-durable, cross-process run leases with monotonic fencing tokens."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,10 +10,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
+from mote.contracts.events.session import RunLeaseEvent
 from mote.contracts.ports.session.run_lease import LeaseEpoch, RunLeaseCoordinator
 from mote.contracts.session.lease import RunLease, RunLeasePolicy
 from mote.runtime.errors import OutputCommitFencedError, RunLeaseCoordinatorUnavailableError, RunLeaseUnavailableError
-from mote.runtime.events import RunLeaseEvent, observe_event
+from mote.runtime.events.context import observe_event
 from mote.runtime.persistence import disk_io
 
 

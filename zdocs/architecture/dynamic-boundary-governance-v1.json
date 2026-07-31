@@ -1,0 +1,1060 @@
+{
+  "active_stores": [
+    {
+      "activation_authority": "mote.runtime.events.journal.LocalEventJournal",
+      "active_generation": 1,
+      "canonical_reader": "mote.runtime.session.log.SessionLog.iter_events",
+      "canonical_writer": "mote.runtime.session.committer.SessionFactCommitter",
+      "cutover_unit_id": "session-rollout-v1",
+      "included_event_families": [
+        "session_meta",
+        "message",
+        "context_compacted",
+        "history_edited",
+        "turn_context",
+        "prompt_rejected",
+        "meta_update",
+        "file_history_imported",
+        "file_edit_plan_stored",
+        "checkpoint",
+        "llm_call",
+        "routing_decision",
+        "runtime_checkpoint",
+        "runtime_commit",
+        "runtime_projection_acknowledged",
+        "runtime_operation_prepared",
+        "runtime_operation_completed",
+        "runtime_operation_aborted",
+        "runtime_handoff_prepared",
+        "runtime_handoff_activated",
+        "runtime_handoff_resolved",
+        "output_candidate_received",
+        "output_validation_rejected",
+        "output_accepted",
+        "output_commit_started",
+        "output_migrated",
+        "output_committed",
+        "output_publication_queued",
+        "output_published",
+        "file_transaction_prepared",
+        "file_transaction_committed",
+        "file_transaction_aborted",
+        "file_transaction_in_doubt",
+        "hunk_detected",
+        "hunk_review_transitioned",
+        "rewind_prepared",
+        "rewind_committed",
+        "rewind_aborted",
+        "rewind_in_doubt"
+      ],
+      "logical_store": "session-rollout",
+      "restore_admission": "session streams are admitted only by verified canonical journal replay",
+      "storage_format_version": 1
+    },
+    {
+      "activation_authority": "mote.runtime.events.journal.LocalEventJournal",
+      "active_generation": 1,
+      "canonical_reader": "mote.product.inference.daemon.operations_audit.SharedOperationsAudit.read",
+      "canonical_writer": "mote.product.inference.daemon.operations_audit.SharedOperationsAudit.record",
+      "cutover_unit_id": "inference-operations-audit-v1",
+      "included_event_families": [
+        "operations-audit"
+      ],
+      "logical_store": "inference-operations-audit",
+      "restore_admission": "audit streams are retained with their daemon authority and admitted only by verified canonical journal replay",
+      "storage_format_version": 1
+    },
+    {
+      "activation_authority": "mote.product.inference.backends.sqlite.SQLiteAttemptReceiptStore.activate_generation",
+      "active_generation": 1,
+      "canonical_reader": "mote.product.inference.backends.sqlite.SQLiteAttemptReceiptStore",
+      "canonical_writer": "mote.product.inference.daemon.application.SharedDaemonApplication",
+      "cutover_unit_id": "inference-gateway-sqlite-v1",
+      "included_event_families": [
+        "inference-gateway-authority"
+      ],
+      "logical_store": "inference-gateway-authority",
+      "restore_admission": "mote.product.inference.restore.IsolatedSQLiteRestoreService.apply",
+      "storage_format_version": 1
+    }
+  ],
+  "archive_capabilities": [
+    {
+      "archival_generation": null,
+      "authority": "product composition",
+      "capability_id": "cold-durable-archive",
+      "disposition": "not provided: binary document readers and verified backups are not cold archives",
+      "online_archive_reader": ""
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "model-runtime",
+      "implementation": "mote.runtime.models.composition.SharedRuntimeCompositionHandle",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.composition.model_builder.build_application_candidate"
+    },
+    {
+      "candidate_id": "telemetry",
+      "implementation": "mote.runtime.events.telemetry.TelemetryRuntime",
+      "role": "infrastructure_factory",
+      "source_symbol": "mote.runtime.agent.role_components.RoleComponents._build_telemetry"
+    },
+    {
+      "candidate_id": "event-fabric",
+      "implementation": "mote.runtime.events.fabric.EventFabric",
+      "role": "infrastructure_factory",
+      "source_symbol": "mote.runtime.agent.components.session._build_event_fabric"
+    },
+    {
+      "candidate_id": "session-persistence",
+      "implementation": "mote.runtime.session.log.SessionLog",
+      "role": "infrastructure_factory",
+      "source_symbol": "mote.runtime.agent.components.session._build_session_log"
+    },
+    {
+      "candidate_id": "artifact-store",
+      "implementation": "mote.runtime.artifacts.DurableArtifactStore",
+      "role": "governed_port_implementation",
+      "source_symbol": "mote.runtime.agent.components.session._build_artifact_store"
+    },
+    {
+      "candidate_id": "journal",
+      "implementation": "mote.runtime.events.journal.LocalEventJournal",
+      "role": "governed_port_implementation",
+      "source_symbol": "mote.runtime.session.log.SessionLog"
+    },
+    {
+      "candidate_id": "tool-executor",
+      "implementation": "mote.runtime.tools.tool_executor.ToolExecutor",
+      "role": "infrastructure_factory",
+      "source_symbol": "mote.runtime.agent.components.action._build_executor"
+    },
+    {
+      "candidate_id": "tool-catalog",
+      "implementation": "mote.runtime.tools.tool_registry.ToolCatalog",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.toolsets.builtin_tool_catalog"
+    },
+    {
+      "candidate_id": "permission-sandbox",
+      "implementation": "mote.runtime.sandbox.SandboxRuntime",
+      "role": "infrastructure_factory",
+      "source_symbol": "mote.runtime.agent.components.integrations._build_sandbox_runtime"
+    },
+    {
+      "candidate_id": "background-task",
+      "implementation": "mote.orchestration.background_tasks.pool.BackgroundTaskPool",
+      "role": "governed_port_implementation",
+      "source_symbol": "mote.product.agents.background_tasks.build_background_task_pool"
+    },
+    {
+      "candidate_id": "lsp",
+      "implementation": "mote.runtime.lsp.service.LspService",
+      "role": "governed_port_implementation",
+      "source_symbol": "mote.runtime.agent.components.integrations._build_lsp_service"
+    },
+    {
+      "candidate_id": "file-watch",
+      "implementation": "mote.runtime.watching.FileWatchService",
+      "role": "governed_port_implementation",
+      "source_symbol": "mote.runtime.agent.components.watching._build_file_watch_service"
+    },
+    {
+      "candidate_id": "hook",
+      "implementation": "mote.runtime.hook.manager.HookManager",
+      "role": "infrastructure_factory",
+      "source_symbol": "mote.runtime.agent.components.integrations._build_hook_manager"
+    },
+    {
+      "candidate_id": "hosted-service-gateway",
+      "implementation": "mote.runtime.models.inference_port.RuntimeModelInferencePort",
+      "role": "governed_port_implementation",
+      "source_symbol": "mote.runtime.agent.components.cognition.cognition_component_specs"
+    },
+    {
+      "candidate_id": "agent-catalog-factory",
+      "implementation": "mote.product.agents.catalog.AgentCatalog",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.composition.container.ProductContainer.standard"
+    },
+    {
+      "candidate_id": "inference-daemon",
+      "implementation": "mote.product.inference.daemon.application.SharedDaemonApplication",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.inference.daemon.application.SharedDaemonApplication"
+    },
+    {
+      "candidate_id": "optional-interface-textual",
+      "implementation": "mote.product.interfaces.textual.bootstrap.run_textual",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.interfaces.textual.bootstrap.run_textual"
+    },
+    {
+      "candidate_id": "optional-interface-agui",
+      "implementation": "mote.product.interfaces.agui.server.create_app",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.interfaces.agui.server.create_app"
+    },
+    {
+      "candidate_id": "optional-interface-acp",
+      "implementation": "mote.product.interfaces.acp.server.serve",
+      "role": "production_root_reference",
+      "source_symbol": "mote.product.interfaces.acp.server.serve"
+    }
+  ],
+  "canonicalization": "sorted-key compact JSON; declaration order is authoritative",
+  "capabilities": [
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.product.composition.model_builder.build_application_candidate",
+      "capability_id": "model-runtime",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.models.composition.SharedRuntimeCompositionHandle",
+      "implementation_owner": "runtime",
+      "instance_scope": "application",
+      "lifecycle_owner": "product-composition",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.model"
+      ],
+      "start_owner": "product-composition",
+      "status": "active",
+      "stop_owner": "product-composition"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.role_components.RoleComponents._build_telemetry",
+      "capability_id": "telemetry",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.events.telemetry.TelemetryRuntime",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.session._build_event_fabric",
+      "capability_id": "event-fabric",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.events.fabric.EventFabric",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.session._build_session_log",
+      "capability_id": "session-persistence",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.session.log.SessionLog",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.session._build_artifact_store",
+      "capability_id": "artifact-store",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.artifacts.DurableArtifactStore",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.artifact.store.ArtifactStore"
+      ],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.session.log.SessionLog",
+      "capability_id": "journal",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.events.journal.LocalEventJournal",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.events.journal.EventJournal"
+      ],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.action._build_executor",
+      "capability_id": "tool-executor",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.tools.tool_executor.ToolExecutor",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.product.toolsets.builtin_tool_catalog",
+      "capability_id": "tool-catalog",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.tools.tool_registry.ToolCatalog",
+      "implementation_owner": "runtime",
+      "instance_scope": "application",
+      "lifecycle_owner": "product-composition",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "product-composition",
+      "status": "active",
+      "stop_owner": "product-composition"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.integrations._build_sandbox_runtime",
+      "capability_id": "permission-sandbox",
+      "deployment_mode": "embedded",
+      "enablement": "configured",
+      "implementation": "mote.runtime.sandbox.SandboxRuntime",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.product.agents.background_tasks.build_background_task_pool",
+      "capability_id": "background-task",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.orchestration.background_tasks.pool.BackgroundTaskPool",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.task.operations.BackgroundTaskService"
+      ],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.integrations._build_lsp_service",
+      "capability_id": "lsp",
+      "deployment_mode": "embedded",
+      "enablement": "configured",
+      "implementation": "mote.runtime.lsp.service.LspService",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.code_intelligence.lsp.DiagnosticsProvider"
+      ],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.watching._build_file_watch_service",
+      "capability_id": "file-watch",
+      "deployment_mode": "embedded",
+      "enablement": "configured",
+      "implementation": "mote.runtime.watching.FileWatchService",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.file.changes.FileChangePort"
+      ],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.integrations._build_hook_manager",
+      "capability_id": "hook",
+      "deployment_mode": "embedded",
+      "enablement": "configured",
+      "implementation": "mote.runtime.hook.manager.HookManager",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.runtime.agent.components.cognition.cognition_component_specs",
+      "capability_id": "hosted-service-gateway",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.runtime.models.inference_port.RuntimeModelInferencePort",
+      "implementation_owner": "runtime",
+      "instance_scope": "session",
+      "lifecycle_owner": "runtime-role",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.inference"
+      ],
+      "start_owner": "runtime-role",
+      "status": "active",
+      "stop_owner": "runtime-role"
+    },
+    {
+      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "canonical_factory": "mote.product.composition.container.ProductContainer.standard",
+      "capability_id": "agent-catalog-factory",
+      "deployment_mode": "embedded",
+      "enablement": "required",
+      "implementation": "mote.product.agents.catalog.AgentCatalog",
+      "implementation_owner": "product",
+      "instance_scope": "application",
+      "lifecycle_owner": "product-composition",
+      "replacement_capability_id": "",
+      "required_ports": [],
+      "start_owner": "product-composition",
+      "status": "active",
+      "stop_owner": "product-composition"
+    },
+    {
+      "applicable_root": "mote.product.inference.daemon.application.SharedDaemonApplication",
+      "canonical_factory": "mote.product.inference.daemon.application.SharedDaemonApplication",
+      "capability_id": "inference-daemon",
+      "deployment_mode": "shared_daemon",
+      "enablement": "required",
+      "implementation": "mote.product.inference.daemon.application.SharedDaemonApplication",
+      "implementation_owner": "inference-daemon",
+      "instance_scope": "process",
+      "lifecycle_owner": "inference-daemon",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.inference"
+      ],
+      "start_owner": "inference-daemon",
+      "status": "active",
+      "stop_owner": "inference-daemon"
+    },
+    {
+      "applicable_root": "mote.product.interfaces.textual.bootstrap.run_textual",
+      "canonical_factory": "mote.product.interfaces.textual.bootstrap.run_textual",
+      "capability_id": "optional-interface-textual",
+      "deployment_mode": "optional_host",
+      "enablement": "optional_dependency",
+      "implementation": "mote.product.interfaces.textual.bootstrap.run_textual",
+      "implementation_owner": "textual-interface",
+      "instance_scope": "process",
+      "lifecycle_owner": "textual-interface",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.interaction",
+        "mote.contracts.ports.surface"
+      ],
+      "start_owner": "textual-interface",
+      "status": "active",
+      "stop_owner": "textual-interface"
+    },
+    {
+      "applicable_root": "mote.product.interfaces.agui.server.create_app",
+      "canonical_factory": "mote.product.interfaces.agui.server.create_app",
+      "capability_id": "optional-interface-agui",
+      "deployment_mode": "optional_host",
+      "enablement": "optional_dependency",
+      "implementation": "mote.product.interfaces.agui.server.create_app",
+      "implementation_owner": "agui-interface",
+      "instance_scope": "process",
+      "lifecycle_owner": "agui-interface",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.interaction",
+        "mote.contracts.ports.surface"
+      ],
+      "start_owner": "agui-interface",
+      "status": "active",
+      "stop_owner": "agui-interface"
+    },
+    {
+      "applicable_root": "mote.product.interfaces.acp.server.serve",
+      "canonical_factory": "mote.product.interfaces.acp.server.serve",
+      "capability_id": "optional-interface-acp",
+      "deployment_mode": "optional_host",
+      "enablement": "optional_dependency",
+      "implementation": "mote.product.interfaces.acp.server.serve",
+      "implementation_owner": "acp-interface",
+      "instance_scope": "process",
+      "lifecycle_owner": "acp-interface",
+      "replacement_capability_id": "",
+      "required_ports": [
+        "mote.contracts.ports.interaction",
+        "mote.contracts.ports.surface"
+      ],
+      "start_owner": "acp-interface",
+      "status": "active",
+      "stop_owner": "acp-interface"
+    }
+  ],
+  "classifier_version": "product-composition-v1",
+  "facades": [
+    {
+      "defining_symbol": "mote.product.composition.application.Application",
+      "facade_id": "product.application",
+      "owner_id": "product-composition",
+      "status": "canonical",
+      "symbol": "mote.product.Application"
+    },
+    {
+      "defining_symbol": "mote.product.composition.container.ProductContainer",
+      "facade_id": "product.container",
+      "owner_id": "product-composition",
+      "status": "canonical",
+      "symbol": "mote.product.ProductContainer"
+    }
+  ],
+  "gates": [
+    {
+      "authority": "Python AST",
+      "checker_id": "pytest-local-imports",
+      "checker_status": "present",
+      "declaration_owner": "architecture-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "always",
+      "fixed_command": "python -B ztest/architecture/static_governance.py local-imports",
+      "gate_id": "ARCH-LOCAL-IMPORT"
+    },
+    {
+      "authority": "Python imports",
+      "checker_id": "pytest-product-scc",
+      "checker_status": "present",
+      "declaration_owner": "product-architecture-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "expected SCC sets are empty",
+      "fixed_command": "python -B ztest/architecture/static_governance.py product-scc",
+      "gate_id": "PRODUCT-IMPORT-SCC"
+    },
+    {
+      "authority": "typed telemetry boundary",
+      "checker_id": "telemetry-erasure",
+      "checker_status": "present",
+      "declaration_owner": "runtime-telemetry-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "raw caller set is empty",
+      "fixed_command": "python -B ztest/architecture/static_governance.py telemetry-erasure",
+      "gate_id": "TYPE-TELEMETRY-ERASURE"
+    },
+    {
+      "authority": "codec declarations and Python AST",
+      "checker_id": "event-fact-admission",
+      "checker_status": "present",
+      "declaration_owner": "event-runtime-owners",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "business construction set is empty",
+      "fixed_command": "python -B ztest/architecture/static_governance.py fact-admission",
+      "gate_id": "EVENT-FACT-ADMISSION"
+    },
+    {
+      "authority": "owner declarations and source exports",
+      "checker_id": "product-owner-export",
+      "checker_status": "present",
+      "declaration_owner": "product-architecture-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "owner scope resolution is closed",
+      "fixed_command": "python -B ztest/architecture/composition_governance.py",
+      "gate_id": "PRODUCT-OWNER-EXPORT"
+    },
+    {
+      "authority": "candidate classifications and composition declarations",
+      "checker_id": "capability-reachability",
+      "checker_status": "present",
+      "declaration_owner": "product-composition-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "candidate/declaration bidirectional difference is empty",
+      "fixed_command": "python -B ztest/architecture/composition_governance.py",
+      "gate_id": "CAP-REACHABILITY"
+    },
+    {
+      "authority": "active store declarations and cutover state validation",
+      "checker_id": "store-cutover",
+      "checker_status": "present",
+      "declaration_owner": "store-owners",
+      "evidence_schema": "cutover-status-v1",
+      "final_hard_prerequisite": "persistent fence, history replay, quiesce and activation evidence are executable",
+      "fixed_command": "python -B ztest/architecture/store_cutover.py",
+      "gate_id": "STORE-CUTOVER"
+    },
+    {
+      "authority": "restore inventory and isolated conversion authority",
+      "checker_id": "restore-admission",
+      "checker_status": "present",
+      "declaration_owner": "store-owners",
+      "evidence_schema": "restore-status-v1",
+      "final_hard_prerequisite": "source-derived restore inventory is closed and every copy is controlled",
+      "fixed_command": "python -B ztest/architecture/restore_admission.py",
+      "gate_id": "RESTORE-ADMISSION"
+    },
+    {
+      "authority": "typed migration debt declarations",
+      "checker_id": "migration-debt",
+      "checker_status": "present",
+      "declaration_owner": "domain-owners",
+      "evidence_schema": "migration-debt-status-v1",
+      "final_hard_prerequisite": "storage evidence proves production migration debt is empty",
+      "fixed_command": "python -B ztest/architecture/unique_production_path.py",
+      "gate_id": "MIGRATION-DEBT"
+    },
+    {
+      "authority": "Application catalogs and Python AST",
+      "checker_id": "dynamic-discovery-diff",
+      "checker_status": "present",
+      "declaration_owner": "product-composition-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "legacy discovery set is empty",
+      "fixed_command": "python -B ztest/architecture/static_governance.py dynamic-discovery",
+      "gate_id": "DYNAMIC-DISCOVERY"
+    },
+    {
+      "authority": "codec, translator and subscription declarations plus Python AST",
+      "checker_id": "event-transformation-closure",
+      "checker_status": "present",
+      "declaration_owner": "event-runtime-owners",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "all stage crossings and durable codecs are source-derived and uniquely owned",
+      "fixed_command": "python -B ztest/architecture/event_governance.py",
+      "gate_id": "EVENT-TRANSFORMATION"
+    },
+    {
+      "authority": "codec storage policy and durable payload validators",
+      "checker_id": "durable-policy-security-retention",
+      "checker_status": "present",
+      "declaration_owner": "event-runtime-owners",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "security, retention, redaction, size and secondary-copy checks are complete",
+      "fixed_command": "python -B ztest/architecture/durable_policy.py",
+      "gate_id": "DURABLE-POLICY"
+    },
+    {
+      "authority": "subscription specs, handler effect policy and state-store transaction semantics",
+      "checker_id": "subscription-reliability",
+      "checker_status": "present",
+      "declaration_owner": "event-runtime-owners",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "recoverable checkpoint, quarantine and side-effect invariants are executable",
+      "fixed_command": "python -B ztest/architecture/subscription_reliability.py",
+      "gate_id": "SUBSCRIPTION-RELIABILITY"
+    },
+    {
+      "authority": "typed production-path and migration-debt classification",
+      "checker_id": "unique-production-path",
+      "checker_status": "present",
+      "declaration_owner": "architecture-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "source-derived double-path and typed debt sets are empty",
+      "fixed_command": "python -B ztest/architecture/unique_production_path.py",
+      "gate_id": "UNIQUE-PRODUCTION-PATH"
+    },
+    {
+      "authority": "per-API wire authority and one-way derivation declarations",
+      "checker_id": "wire-authority-conformance",
+      "checker_status": "present",
+      "declaration_owner": "product-integration-owners",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "every governed wire API has one authority and one-way conformance",
+      "fixed_command": "python -B ztest/architecture/wire_authority.py",
+      "gate_id": "WIRE-AUTHORITY"
+    },
+    {
+      "authority": "typed authority and deterministic generator declarations",
+      "checker_id": "derived-artifact-conformance",
+      "checker_status": "present",
+      "declaration_owner": "architecture-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "all committed governance artifacts are fresh",
+      "fixed_command": "python -B ztest/architecture/static_governance.py derived-artifact",
+      "gate_id": "DERIVED-ARTIFACT"
+    },
+    {
+      "authority": "governed public annotations and Python AST",
+      "checker_id": "governed-boundary-any",
+      "checker_status": "present",
+      "declaration_owner": "architecture-owner",
+      "evidence_schema": "gate-status-v1",
+      "final_hard_prerequisite": "governed public Any set is empty",
+      "fixed_command": "python -B ztest/architecture/static_governance.py governed-boundary",
+      "gate_id": "TYPE-GOVERNED-BOUNDARY"
+    }
+  ],
+  "generator_version": "dynamic-boundary-governance-v1",
+  "migration_debt": [],
+  "owners": [
+    {
+      "owner_id": "contracts",
+      "path_prefix": "contracts",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "kernel",
+      "path_prefix": "kernel",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "runtime",
+      "path_prefix": "runtime",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "orchestration",
+      "path_prefix": "orchestration",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "product",
+      "path_prefix": "product",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "product-composition",
+      "path_prefix": "product/composition",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "product-cli",
+      "path_prefix": "product/entrypoints/cli",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "inference-daemon",
+      "path_prefix": "product/inference/daemon",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "textual-interface",
+      "path_prefix": "product/interfaces/textual",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "agui-interface",
+      "path_prefix": "product/interfaces/agui",
+      "replacement_owner_id": "",
+      "status": "active"
+    },
+    {
+      "owner_id": "acp-interface",
+      "path_prefix": "product/interfaces/acp",
+      "replacement_owner_id": "",
+      "status": "active"
+    }
+  ],
+  "public_symbols": [
+    {
+      "evidence": "Runtime assembly aggregate; Product roots consume narrower component builders",
+      "owner_id": "runtime",
+      "role": "internal_factory",
+      "symbol": "mote.runtime.EngineServices"
+    },
+    {
+      "evidence": "canonical session lifecycle implementation",
+      "owner_id": "runtime",
+      "role": "production_capability",
+      "symbol": "mote.runtime.agent.Role"
+    },
+    {
+      "evidence": "artifact-store capability declaration",
+      "owner_id": "runtime",
+      "role": "production_capability",
+      "symbol": "mote.runtime.artifacts.DurableArtifactStore"
+    },
+    {
+      "evidence": "configured durable backend adapter boundary",
+      "owner_id": "runtime",
+      "role": "external_adapter",
+      "symbol": "mote.runtime.durable.make_durable_backend"
+    },
+    {
+      "evidence": "event-fabric capability declaration",
+      "owner_id": "runtime",
+      "role": "production_capability",
+      "symbol": "mote.runtime.events.EventFabric"
+    },
+    {
+      "evidence": "inference daemon generation lifecycle authority",
+      "owner_id": "runtime",
+      "role": "production_capability",
+      "symbol": "mote.runtime.inference.GatewayGenerationOwner"
+    },
+    {
+      "evidence": "pure immutable route snapshot builder",
+      "owner_id": "runtime",
+      "role": "internal_factory",
+      "symbol": "mote.runtime.models.routing.build_route_catalog"
+    },
+    {
+      "evidence": "session-owned policy builder",
+      "owner_id": "runtime",
+      "role": "internal_factory",
+      "symbol": "mote.runtime.prompt.build_prompt_policy"
+    },
+    {
+      "evidence": "agent control lifecycle capability",
+      "owner_id": "orchestration",
+      "role": "production_capability",
+      "symbol": "mote.orchestration.agents.AgentControl"
+    },
+    {
+      "evidence": "explicit automation service lifecycle",
+      "owner_id": "orchestration",
+      "role": "production_capability",
+      "symbol": "mote.orchestration.automation.cron.CronService"
+    },
+    {
+      "evidence": "background-task capability declaration",
+      "owner_id": "orchestration",
+      "role": "production_capability",
+      "symbol": "mote.orchestration.background_tasks.BackgroundTaskPool"
+    },
+    {
+      "evidence": "workflow definition builder, not a runtime service locator",
+      "owner_id": "orchestration",
+      "role": "internal_factory",
+      "symbol": "mote.orchestration.workflows.WorkflowBuilder"
+    }
+  ],
+  "restore_copies": [],
+  "restore_sources": [
+    {
+      "admission_contract": "mote.product.inference.restore.IsolatedSQLiteRestoreService.apply",
+      "disposition": "restore_capable",
+      "lifecycle_policy": "operator retention and legal hold; isolated restore only",
+      "logical_store": "inference-gateway-authority",
+      "metadata_authority": "mote.product.inference.backends.sqlite.SQLiteAttemptReceiptStore.describe_backup",
+      "source_id": "inference-sqlite-online-backup",
+      "source_symbol": "mote.product.inference.backends.sqlite.SQLiteAttemptReceiptStore.backup_to"
+    },
+    {
+      "admission_contract": "never admitted directly; forensic evidence only",
+      "disposition": "evidence_only",
+      "lifecycle_policy": "operator incident retention and destruction",
+      "logical_store": "inference-gateway-authority",
+      "metadata_authority": "startup integrity failure plus byte identity",
+      "source_id": "inference-sqlite-corrupt-image",
+      "source_symbol": "mote.product.inference.backends.sqlite.SQLiteAttemptReceiptStore.preserve_corrupt_copy"
+    },
+    {
+      "admission_contract": "never mounted as a journal; replay requires domain re-admission",
+      "disposition": "evidence_only",
+      "lifecycle_policy": "session directory retention and legal hold",
+      "logical_store": "subscription-state",
+      "metadata_authority": "mote.contracts.ports.events.subscription.DeadLetterEntry",
+      "source_id": "event-subscription-dead-letter",
+      "source_symbol": "mote.runtime.events.backends.subscription_state.SQLiteSubscriptionStateStore.quarantine"
+    },
+    {
+      "admission_contract": "no production import or mount path",
+      "disposition": "not_production_data",
+      "lifecycle_policy": "session TTL releases artifact ownership before deletion",
+      "logical_store": "session-rollout",
+      "metadata_authority": "session workspace ownership catalog",
+      "source_id": "session-export-and-artifact-payloads",
+      "source_symbol": "mote.runtime.session.workspace.store.SessionWorkspace"
+    }
+  ],
+  "runtime_input": false,
+  "schema": "governance-review-v1",
+  "source_digest": "sha256:96dbba037fb66308a4b08aa8bdffa6a29bbb71de999ffb7bdfe9db623707d20f",
+  "transformations": [
+    {
+      "authority": "authoritative",
+      "bounded_domain": "session",
+      "conversion_owner": "session",
+      "converter": "mote.runtime.session.committer.SessionFactCommitter.commit_fact",
+      "persistence": "journaled",
+      "side_effect_policy": "transactional_projection",
+      "source_stage": "runtime_semantic",
+      "source_type": "mote.contracts.events.conversation.MessageAppendedEvent",
+      "target_stage": "persisted_domain",
+      "target_type": "mote.runtime.session.events.MessageEvent",
+      "transformation_id": "session.semantic-to-domain"
+    },
+    {
+      "authority": "authoritative",
+      "bounded_domain": "session",
+      "conversion_owner": "session",
+      "converter": "mote.runtime.session.codec.encode_session_event",
+      "persistence": "journaled",
+      "side_effect_policy": "pure_reducer",
+      "source_stage": "persisted_domain",
+      "source_type": "mote.runtime.session.events.SessionEvent",
+      "target_stage": "durable_envelope",
+      "target_type": "mote.contracts.ports.events.journal.UncommittedFact",
+      "transformation_id": "session.domain-to-envelope"
+    },
+    {
+      "authority": "authoritative",
+      "bounded_domain": "session",
+      "conversion_owner": "session",
+      "converter": "mote.runtime.session.codec.decode_session_event",
+      "persistence": "journaled",
+      "side_effect_policy": "pure_reducer",
+      "source_stage": "durable_envelope",
+      "source_type": "mote.contracts.events.envelope.EventEnvelope",
+      "target_stage": "current_model",
+      "target_type": "mote.runtime.session.events.SessionEvent",
+      "transformation_id": "session.envelope-to-current"
+    },
+    {
+      "authority": "authoritative",
+      "bounded_domain": "session",
+      "conversion_owner": "session",
+      "converter": "mote.runtime.projections.session.SessionLiveProjection.handle",
+      "persistence": "journaled",
+      "side_effect_policy": "transactional_projection",
+      "source_stage": "durable_envelope",
+      "source_type": "mote.contracts.events.envelope.EventEnvelope",
+      "target_stage": "view",
+      "target_type": "mote.runtime.projections.session.SessionProjectionState",
+      "transformation_id": "session.envelope-to-live-projection"
+    },
+    {
+      "authority": "advisory",
+      "bounded_domain": "file-operations",
+      "conversion_owner": "runtime-lsp",
+      "converter": "mote.runtime.lsp.service.LspService.handle",
+      "persistence": "journaled",
+      "side_effect_policy": "idempotent_external_effect",
+      "source_stage": "persisted_domain",
+      "source_type": "mote.contracts.events.file.facts.FileTransactionCommittedEvent",
+      "target_stage": "current_model",
+      "target_type": "mote.runtime.lsp.service.LspService",
+      "transformation_id": "fileops.confirmed-to-lsp"
+    },
+    {
+      "authority": "advisory",
+      "bounded_domain": "lsp",
+      "conversion_owner": "runtime-lsp",
+      "converter": "mote.runtime.lsp.buffer.DiagnosticsBuffer.handle",
+      "persistence": "transient",
+      "side_effect_policy": "pure_reducer",
+      "source_stage": "runtime_semantic",
+      "source_type": "mote.contracts.events.telemetry.DiagnosticsEvent",
+      "target_stage": "view",
+      "target_type": "mote.runtime.lsp.buffer.DiagnosticsBuffer",
+      "transformation_id": "lsp.diagnostics-to-turn-context"
+    },
+    {
+      "authority": "authoritative",
+      "bounded_domain": "inference-daemon",
+      "conversion_owner": "inference-daemon",
+      "converter": "mote.product.inference.daemon.operations_audit_codec.encode_operations_audit_event",
+      "persistence": "journaled",
+      "side_effect_policy": "pure_reducer",
+      "source_stage": "persisted_domain",
+      "source_type": "mote.product.inference.daemon.operations_audit_codec.OperationsAuditEvent",
+      "target_stage": "durable_envelope",
+      "target_type": "mote.contracts.ports.events.journal.UncommittedFact",
+      "transformation_id": "inference.audit-to-envelope"
+    },
+    {
+      "authority": "authoritative",
+      "bounded_domain": "inference-daemon",
+      "conversion_owner": "inference-daemon",
+      "converter": "mote.product.inference.daemon.operations_audit_codec.decode_operations_audit_event",
+      "persistence": "journaled",
+      "side_effect_policy": "pure_reducer",
+      "source_stage": "durable_envelope",
+      "source_type": "mote.contracts.events.envelope.EventEnvelope.payload",
+      "target_stage": "current_model",
+      "target_type": "mote.product.inference.daemon.operations_audit_codec.OperationsAuditEvent",
+      "transformation_id": "inference.audit-envelope-to-current"
+    }
+  ],
+  "wire_authorities": [
+    {
+      "api_id": "inference-shared-grpc",
+      "authority_kind": "contract_first",
+      "authority_path": "zdocs/parity/rpc/gateway-v1.proto",
+      "conformance_checker": "ztest/architecture/wire_authority.py",
+      "generated_outputs": [
+        "product/inference/daemon/rpc/gateway_v1_pb2.py",
+        "product/inference/daemon/rpc/gateway_v1_pb2_grpc.py"
+      ],
+      "owner_id": "inference-daemon",
+      "protocol_generation": 1
+    },
+    {
+      "api_id": "inference-http",
+      "authority_kind": "code_first",
+      "authority_path": "zdocs/parity/api/inference-v1.openapi.yaml",
+      "conformance_checker": "zdocs/parity/freeze_idl_baseline.py",
+      "generated_outputs": [],
+      "owner_id": "inference-daemon",
+      "protocol_generation": 1
+    },
+    {
+      "api_id": "inference-admin-http",
+      "authority_kind": "code_first",
+      "authority_path": "zdocs/parity/api/admin-v1.openapi.yaml",
+      "conformance_checker": "zdocs/parity/freeze_idl_baseline.py",
+      "generated_outputs": [],
+      "owner_id": "inference-daemon",
+      "protocol_generation": 1
+    },
+    {
+      "api_id": "inference-realtime-webhook",
+      "authority_kind": "code_first",
+      "authority_path": "zdocs/parity/api/realtime-webhook-v1.asyncapi.yaml",
+      "conformance_checker": "zdocs/parity/freeze_idl_baseline.py",
+      "generated_outputs": [],
+      "owner_id": "inference-daemon",
+      "protocol_generation": 1
+    }
+  ]
+}

@@ -13,7 +13,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 from uuid import uuid4
 
 from mote.contracts.events.application import (
@@ -49,32 +49,28 @@ from mote.contracts.runtime.application import (
     SourceRevision,
     StaleReloadError,
 )
-from mote.runtime.events import observe_event_sync
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.telemetry.logging import log_class
+
+ProductConfigSnapshot = dict[str, object]
 
 
 class AsyncResource(Protocol):
-    async def aclose(self) -> None:
-        ...
+    async def aclose(self) -> None: ...
 
 
 class SharedRuntimeCompositionHandle(Protocol):
     @property
-    def runtime_generation_id(self) -> RuntimeGenerationId:
-        ...
+    def runtime_generation_id(self) -> RuntimeGenerationId: ...
 
     @property
-    def topology_revision(self) -> str:
-        ...
+    def topology_revision(self) -> str: ...
 
-    def retain(self) -> "SharedRuntimeCompositionHandle":
-        ...
+    def retain(self) -> "SharedRuntimeCompositionHandle": ...
 
-    async def acquire(self) -> RuntimeCompositionLeasePort:
-        ...
+    async def acquire(self) -> RuntimeCompositionLeasePort: ...
 
-    async def release(self) -> None:
-        ...
+    async def release(self) -> None: ...
 
 
 class CandidateState(str, Enum):
@@ -128,7 +124,7 @@ class ApplicationCompositionCandidate:
         reload_sequence: ReloadSequence,
         model: SharedRuntimeCompositionHandle,
         runtime_role_config: RuntimeRoleConfigView,
-        product_config: Any = None,
+        product_config: ProductConfigSnapshot | None = None,
         product_resources: tuple[AsyncResource, ...] = (),
     ) -> None:
         self.source_revision = source_revision
@@ -176,7 +172,7 @@ class _Generation:
     reload_sequence: ReloadSequence
     model: SharedRuntimeCompositionHandle
     runtime_role_config: RuntimeRoleConfigView
-    product_config: Any
+    product_config: ProductConfigSnapshot | None
     product_resources: tuple[AsyncResource, ...]
     leases: int = 0
     retired_at: float | None = None
@@ -210,7 +206,7 @@ class ApplicationLease:
         return self._generation.runtime_role_config
 
     @property
-    def product_config(self) -> Any:
+    def product_config(self) -> ProductConfigSnapshot | None:
         """Product-owned immutable view; absent from the contracts lease port."""
         return deepcopy(self._generation.product_config)
 

@@ -9,9 +9,10 @@ from types import MappingProxyType
 from mote.contracts.events.envelope import StreamId
 from mote.product.inference.daemon.operations_audit_codec import (
     OperationsAuditEvent,
+    decode_operations_audit_event,
     encode_operations_audit_event,
 )
-from mote.runtime.events import LocalEventJournal
+from mote.runtime.events.journal import LocalEventJournal
 
 _STREAM = StreamId("inference/shared-operations")
 
@@ -45,11 +46,12 @@ class SharedOperationsAudit:
 
     async def read(self, *, after: int = 0) -> AsyncIterator[dict[str, object]]:
         async for envelope in self._journal.read(_STREAM, after=after):
+            event = decode_operations_audit_event(envelope.payload)
             yield {
                 "sequence": envelope.sequence,
                 "recorded_at": envelope.recorded_at.isoformat(),
-                "operation": str(envelope.payload["operation"]),
-                "outcome": str(envelope.payload["outcome"]),
+                "operation": event.operation,
+                "outcome": event.outcome,
             }
 
 

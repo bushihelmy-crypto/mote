@@ -1,7 +1,9 @@
 # 动态边界、Product 依赖与事件治理实施规范
 
-规范状态：架构批准，实施 Gate 未就绪  
-代码合规状态：迁移中  
+规范状态：架构批准，实施完成；动态合规结论由第 13 节生成工件提供
+
+代码合规状态：不得手写完成结论；仅以第 13 节可执行 Gate 的生成证据为准
+
 Hard Gate 状态：由第 13 节声明所指向的生成状态工件分别记录  
 基线日期：2026-07-31  
 适用范围：`contracts/`、`kernel/`、`runtime/`、`orchestration/`、`product/` 及其架构门禁
@@ -776,17 +778,23 @@ Generated documentation、inventory、graph、dashboard 和 review snapshot 默�
 
 | Gate ID | Authority | Checker ID | Checker status | Fixed command | Declaration owner | Final-hard prerequisite | Evidence schema |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ARCH-LOCAL-IMPORT` | Python AST | `pytest-local-imports` | `present` | `python -B -m pytest ztest/architecture/test_local_imports.py -q --tb=short -p no:cacheprovider` | architecture owner | 始终 | `gate-status-v1` |
-| `PRODUCT-IMPORT-SCC` | Python imports | `pytest-product-scc` | `present` | `python -B -m pytest ztest/architecture/test_product_dependencies.py::test_product_cycles_match_exact_migration_facts -q --tb=short -p no:cacheprovider` | product architecture owner | expected SCC sets 为空 | `gate-status-v1` |
-| `TYPE-TELEMETRY-ERASURE` | typed boundary + exact debt baseline | `telemetry-erasure` | `absent` | `null` | runtime-telemetry owner | raw caller 归零 | `gate-status-v1` |
-| `EVENT-FACT-ADMISSION` | codec declarations + Python AST + exact debt baseline | `event-fact-admission` | `absent` | `null` | event-runtime owners | business construction 归零 | `gate-status-v1` |
-| `PRODUCT-OWNER-EXPORT` | owner scopes + source exports | `product-owner-export` | `absent` | `null` | product architecture owner | export classifier 闭合 | `gate-status-v1` |
-| `CAP-REACHABILITY` | candidate classifiers + composition declarations | `capability-reachability` | `absent` | `null` | Product composition owner | 双向差集归零 | `gate-status-v1` |
-| `STORE-CUTOVER` | cutover declaration + transition history + generation/CAS record | `store-cutover` | `absent` | `null` | store owner | fence/quiesce/activation/restore 可执行 | `cutover-status-v1` |
-| `RESTORE-ADMISSION` | restore inventory + copy metadata + conversion evidence | `restore-admission` | `absent` | `null` | store/backup owners | restore entry 全部受控 | `restore-status-v1` |
-| `MIGRATION-DEBT` | store evidence + typed debt declarations | `migration-debt` | `absent` | `null` | domain owner | remaining debt 归零 | `migration-debt-status-v1` |
-| `DYNAMIC-DISCOVERY` | bundled discovery evidence + Application catalog | `dynamic-discovery-diff` | `absent` | `null` | Product composition owner | legacy discovery 归零 | `gate-status-v1` |
-| `DERIVED-ARTIFACT` | authority + generator declarations | `derived-artifact-conformance` | `absent` | `null` | owning domain | generator 确定 | `gate-status-v1` |
+| `ARCH-LOCAL-IMPORT` | Python AST | `pytest-local-imports` | `present` | `python -B ztest/architecture/static_governance.py local-imports` | architecture owner | 始终 | `gate-status-v1` |
+| `PRODUCT-IMPORT-SCC` | Python imports | `pytest-product-scc` | `present` | `python -B ztest/architecture/static_governance.py product-scc` | product architecture owner | expected SCC sets 为空 | `gate-status-v1` |
+| `TYPE-TELEMETRY-ERASURE` | typed boundary + exact debt baseline | `telemetry-erasure` | `present` | `python -B ztest/architecture/static_governance.py telemetry-erasure` | runtime-telemetry owner | raw caller 归零 | `gate-status-v1` |
+| `EVENT-FACT-ADMISSION` | codec declarations + Python AST + exact debt baseline | `event-fact-admission` | `present` | `python -B ztest/architecture/static_governance.py fact-admission` | event-runtime owners | business construction 归零 | `gate-status-v1` |
+| `PRODUCT-OWNER-EXPORT` | owner scopes + source exports | `product-owner-export` | `present` | `python -B ztest/architecture/composition_governance.py` | product architecture owner | export classifier 闭合 | `gate-status-v1` |
+| `CAP-REACHABILITY` | candidate classifiers + composition declarations | `capability-reachability` | `present` | `python -B ztest/architecture/composition_governance.py` | Product composition owner | 双向差集归零 | `gate-status-v1` |
+| `STORE-CUTOVER` | active-store declarations + persisted transition mechanism | `store-cutover` | `present` | `python -B ztest/architecture/store_cutover.py` | store owner | stable active state 唯一；下一次迁移须追加持久 transition evidence | `cutover-status-v1` |
+| `RESTORE-ADMISSION` | source-derived restore inventory + copy metadata + conversion evidence | `restore-admission` | `present` | `python -B ztest/architecture/restore_admission.py` | store/backup owners | restore-capable source classifier 闭合 | `restore-status-v1` |
+| `MIGRATION-DEBT` | store evidence + typed debt declarations | `migration-debt` | `present` | `python -B ztest/architecture/unique_production_path.py` | domain owner | production typed debt inventory 归零 | `migration-debt-status-v1` |
+| `DYNAMIC-DISCOVERY` | Application catalog + Python AST | `dynamic-discovery-diff` | `present` | `python -B ztest/architecture/static_governance.py dynamic-discovery` | Product composition owner | legacy discovery 归零 | `gate-status-v1` |
+| `EVENT-TRANSFORMATION` | codec/translator/subscription declarations + Python AST | `event-transformation-closure` | `present` | `python -B ztest/architecture/event_governance.py` | event/runtime owners | 全部 stage crossing source-derived 且 owner 唯一 | `gate-status-v1` |
+| `DURABLE-POLICY` | codec storage policy + durable payload validator | `durable-policy-security-retention` | `present` | `python -B ztest/architecture/durable_policy.py` | event/runtime owners | 安全、retention、size、secondary-copy 闭合 | `gate-status-v1` |
+| `SUBSCRIPTION-RELIABILITY` | subscription spec/effect policy/state-store transaction | `subscription-reliability` | `present` | `python -B ztest/architecture/subscription_reliability.py` | event/runtime owners | recoverable checkpoint/quarantine/effect 语义可执行 | `gate-status-v1` |
+| `UNIQUE-PRODUCTION-PATH` | typed production-path + migration-debt classifier | `unique-production-path` | `present` | `python -B ztest/architecture/unique_production_path.py` | architecture owner | source-derived 双路径与 debt set 均为空 | `gate-status-v1` |
+| `WIRE-AUTHORITY` | per-API wire authority + 单向派生声明 | `wire-authority-conformance` | `present` | `python -B ztest/architecture/wire_authority.py` | Product integration owners | 每个 wire API 唯一 authority | `gate-status-v1` |
+| `DERIVED-ARTIFACT` | authority + deterministic generator | `derived-artifact-conformance` | `present` | `python -B ztest/architecture/static_governance.py derived-artifact` | owning domain | generator 确定 | `gate-status-v1` |
+| `TYPE-GOVERNED-BOUNDARY` | governed public annotations + Python AST | `governed-boundary-any` | `present` | `python -B ztest/architecture/static_governance.py governed-boundary` | architecture owner | governed public `Any` 归零 | `gate-status-v1` |
 
 `PRODUCT-IMPORT-SCC` 使用精确 node ID。源码中的一级和二级 expected cycle sets 当前均为空，因此该测试证明零非平凡 SCC；若 expected set 非空，生成状态不得把它标为 final hard/pass。其他依赖方向断言属于不同 Gate，不能借该 ID 混合执行。
 
@@ -937,6 +945,8 @@ Checker 落地后按 `report → ratchet → hard` 收紧。Ratchet baseline 必
 
 完成不要求全仓文本意义上的 `Any` 为零，也不建立全局 event union、全局 durable catalog、全局 capability service locator 或完整运行时对象图。但 governed production boundary 不得暴露 `Any`；任何动态外部输入必须在所属 adapter 内完成验证和类型收窄。
 
+本次最终切换的机器可审阅快照是 [`architecture/dynamic-boundary-governance-v1.json`](./architecture/dynamic-boundary-governance-v1.json)，第 12、13、16 节到 Gate 的完整证据映射是 [`architecture/dynamic-boundary-requirement-evidence-v1.json`](./architecture/dynamic-boundary-requirement-evidence-v1.json)，动态状态索引由 [`architecture/gate-status/index.json`](./architecture/gate-status/index.json) 生成。治理快照由 typed authority 确定性生成，所有审阅工件均为 `runtime_input=false`；动态 Gate 执行结果由 `gate-status-v1` runner 作为 CI-only evidence 产生，不在 Markdown 中手写通过结论。
+
 ## 17. 正式决议摘要
 
 | 议题 | 正式决议 |
@@ -967,5 +977,5 @@ Checker 落地后按 `report → ratchet → hard` 收紧。Ratchet baseline 必
 | 双写决议 | 本规范不批准双写；普通 ADR 无权例外，改变原则必须修改并重新批准本规范。 |
 | Debt classification | 只由 typed debt role 识别迁移债务，不按 fallback/compatibility/v1 等名称扫描；长期韧性与协议能力另行治理。 |
 | 派生工件 | 同一语义只有一个 authority；其余确定性生成或单向 conformance，不允许双向 parity 共享决策权。 |
-| Gate status | Declaration 的 absent checker 必须配 `fixed_command=null`；状态工件支持 unavailable/report/ratchet/hard。 |
+| Gate status | declaration 与真实 checker 能力逐项校准；只有实际执行并生成原始证据后才能报告结果。 |
 | 零债务验收 | Online data 全部处于 active format，production compatibility/migration inventory 为零。 |

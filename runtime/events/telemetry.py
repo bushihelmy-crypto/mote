@@ -380,6 +380,16 @@ class TelemetryRuntime:
 
         return await self.subscribe(_TypedTelemetryBinding(spec, accepts, handler, sync_handler).erase())
 
+    async def subscribe_all(
+        self,
+        spec: TelemetrySubscriptionSpec,
+        handler: TelemetryHandler[object],
+        sync_handler: SyncTelemetryHandler[object] | None = None,
+    ) -> TelemetryHandle:
+        """Register an observer that intentionally accepts every event."""
+
+        return await self.subscribe(TelemetryBinding(spec, handler, sync_handler))
+
     async def unsubscribe(self, identity: TelemetryIdentity) -> None:
         worker = self._workers.pop(identity, None)
         if worker is not None:

@@ -10,19 +10,16 @@ from uuid import UUID, uuid4
 from aiohttp import ClientSession, UnixConnector
 from pydantic import BaseModel, Field, PrivateAttr
 
-from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
-from mote.runtime.events import (
+from mote.contracts.events.model import (
     LLMStreamCommittedEvent,
     LLMStreamDeltaEvent,
     LLMStreamDiscardedEvent,
     LLMStreamInterruptedEvent,
-    ResourceReportEvent,
-    TelemetryBinding,
-    TelemetryHandle,
-    current_telemetry,
-    observe_event,
-    observe_event_sync,
 )
+from mote.contracts.events.telemetry import ResourceReportEvent
+from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.runtime.events.context import current_telemetry, observe_event, observe_event_sync
+from mote.runtime.events.telemetry import TelemetryBinding, TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
 

@@ -7,9 +7,9 @@ import inspect
 from contextlib import AsyncExitStack
 from typing import Any, Generic, TypeAlias, TypeVar, cast
 
+from mote.contracts.events.tool import ToolsChangedEvent
 from mote.contracts.tool import CommandProtocol
 from mote.kernel.execution.run_context import RunContext
-from mote.runtime.events import ToolsChangedEvent
 from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
 from mote.runtime.tools.mcp.lifecycle import McpLifecycle, NativeMcpRegistrar, XmlMcpRegistrar
 from mote.runtime.tools.provider import (

@@ -2,9 +2,10 @@
 
 Lets MCP tools share the single dispatch path in ToolExecutor instead of a
 separate fallback registry. Constructed at runtime (name/schema are only known
-after MCP discovery), so it is NOT @register_tool'd — ToolExecutor places
+after MCP discovery), so it is not part of the built-in catalog — ToolExecutor places
 instances directly into its _tools map.
 """
+
 from __future__ import annotations
 
 import re

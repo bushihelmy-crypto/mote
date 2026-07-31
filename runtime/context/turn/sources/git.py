@@ -34,8 +34,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
-from mote.runtime.events import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.vcs import collect_git_state, render_git_section
 

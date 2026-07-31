@@ -11,6 +11,7 @@ bggraph engine and snapshotted onto the task meta. Two modes:
   (where it lands on the state + which downstream nodes consume it). Drilling
   into specific nodes keeps the output small even for large graphs.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,6 @@ from mote.runtime.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetBgPool
 from mote.runtime.tools.text_normalization import collapse_whitespace
-from mote.runtime.tools.tool_registry import register_tool
 
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_NO_RUN_STATE = (
@@ -159,7 +159,6 @@ def _record_header(rec, *, self_loop: bool = False) -> str:
     return line
 
 
-@register_tool
 class GetNodeState(BaseTool):
     name = "GetNodeStates"
     aliases = ["get_node_state"]

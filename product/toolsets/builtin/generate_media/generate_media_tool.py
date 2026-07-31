@@ -21,7 +21,6 @@ from mote.contracts.tool.effects import ToolEffect
 from mote.runtime.errors import ToolNotConfiguredError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import InvokeService
-from mote.runtime.tools.tool_registry import register_tool
 
 # Requested-kind -> (multimodal sub-config attribute, human label, model-field
 # names). The tool refuses a kind up-front when its service endpoint/key is
@@ -66,7 +65,6 @@ def _check_configured(multimodal: Any, kinds: list[str]) -> None:
         raise ToolNotConfiguredError("Media generation service not configured for: " + "; ".join(missing) + ".")
 
 
-@register_tool
 class GenerateMedia(BaseTool):
     """Generate media assets — images, speech (TTS), music, and video — in one call."""
 

@@ -37,8 +37,8 @@ from typing import TYPE_CHECKING, cast
 import mote.runtime.context.history.budget as budget
 from mote.contracts.conversation import ContextManagerConfig, FoldState, LLMCallContext
 from mote.contracts.conversation.fields import CACHE_INTENT, CACHE_INTENT_EPHEMERAL_TAIL
+from mote.contracts.events.conversation import HistoryEditedEvent, MessageAppendedEvent, PostCompactEvent
 from mote.runtime.context.markers import is_system_reminder
-from mote.runtime.events import HistoryEditedEvent, MessageAppendedEvent, PostCompactEvent
 from mote.runtime.telemetry.logging import log_class
 
 if TYPE_CHECKING:

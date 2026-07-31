@@ -1,4 +1,5 @@
 """Human interaction commands — ask_user, reply_to_user, AskUserQuestion."""
+
 from __future__ import annotations
 
 from typing import ClassVar
@@ -10,7 +11,6 @@ from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import AskUser as AskUserCap
 from mote.runtime.tools.capability_types import AskUserQuestion as AskUserQuestionCap
 from mote.runtime.tools.capability_types import ReplyToUser as ReplyToUserCap
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -34,7 +34,6 @@ def _self_approve(self, args: dict) -> PermissionDecision:
     return PermissionDecision.allow("safe", "human-interaction tool needs no approval")
 
 
-@register_tool
 class AskUser(BaseTool):
     """Ask the user a question and wait for their response."""
 
@@ -59,7 +58,6 @@ class AskUser(BaseTool):
         return await self.ask_user(question)
 
 
-@register_tool
 class ReplyToUser(BaseTool):
     """Reply to the user with the content provided."""
 
@@ -89,7 +87,6 @@ class ReplyToUser(BaseTool):
 # ---------------------------------------------------------------------------
 
 
-@register_tool
 class AskUserQuestion(BaseTool):
     """Ask the user multiple choice questions to gather information or make decisions."""
 

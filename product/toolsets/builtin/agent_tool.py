@@ -17,7 +17,6 @@ from mote.product.toolsets.builtin.agent_prompts import AGENT_TASK_PROMPT
 from mote.runtime.agent.control import spawn_and_run
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.base_tool import BaseTool
-from mote.runtime.tools.tool_registry import register_tool
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the return site).
@@ -27,7 +26,6 @@ _MSG_SPAWN_FAILED = "Error: could not spawn agent '{agent_type}' (agent limit re
 _MSG_NO_SUMMARY = "Agent finished without a final summary."
 
 
-@register_tool
 class Agent(BaseTool):
     """Spawn a typed child agent for bounded subtasks.
 

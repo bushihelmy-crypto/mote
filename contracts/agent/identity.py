@@ -3,19 +3,19 @@ Agent identity contract for spawnable agent types.
 
 An agent type is a Role subclass that also inherits BaseAgent to carry its
 spawn-time identity (agent_name/description/aliases) and to describe itself via
-get_schema(). Registration is done with @register_agent; the registry only
-registers and looks up — an agent owns its own schema, mirroring BaseTool.
+get_schema(). Product composition places agent types in an immutable catalog;
+the agent owns its own schema, mirroring BaseTool.
 
 Note: `agent_name` (not `name`) is used deliberately so it never shadows
 Role.name (which returns role_schema.name at runtime).
 
 Usage:
-    @register_agent
     class ExploreAgent(BaseAgent, Role):
         agent_name = "ExploreAgent"
         aliases = ["Explore"]
         description = "Fast codebase search."
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

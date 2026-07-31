@@ -1,0 +1,17 @@
+{
+  "checker_id": "store-cutover",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:5793f3a447dbbc832727b79de3c37065a82369a1d2b5413d7cd20b0c5d9a6ae3",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/STORE-CUTOVER.txt",
+  "executed_at": "2026-07-31T08:21:07.840737+00:00",
+  "executed_command": "python -B ztest/architecture/store_cutover.py",
+  "gate_id": "STORE-CUTOVER",
+  "remediation_owner": "store-owners",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

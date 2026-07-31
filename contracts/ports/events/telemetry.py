@@ -40,18 +40,19 @@ EventT_co = TypeVar("EventT_co", covariant=True)
 
 
 class TelemetryHandler(Protocol[EventT_contra]):
-    async def handle(self, event: EventT_contra) -> None:
-        ...
+    async def handle(self, event: EventT_contra) -> None: ...
+
+
+class TelemetryEmitter(Protocol):
+    async def emit(self, event: object) -> None: ...
 
 
 class SyncTelemetryHandler(Protocol[EventT_contra]):
-    def handle_sync(self, event: EventT_contra) -> None:
-        ...
+    def handle_sync(self, event: EventT_contra) -> None: ...
 
 
 class EventNarrower(Protocol[EventT_co]):
-    def __call__(self, event: object) -> TypeGuard[EventT_co]:
-        ...
+    def __call__(self, event: object) -> TypeGuard[EventT_co]: ...
 
 
 __all__ = [
@@ -60,6 +61,7 @@ __all__ = [
     "EventNarrower",
     "SyncTelemetryHandler",
     "TelemetryHandler",
+    "TelemetryEmitter",
     "TelemetryIdentity",
     "TelemetryOverflow",
     "TelemetrySubscriptionSpec",

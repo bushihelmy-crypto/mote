@@ -1,7 +1,7 @@
 """DiagnosticsBuffer — the push→pull bridge that surfaces LSP diagnostics.
 
 The output-side counterpart to :class:`LspService`. The service *produces*
-:class:`~mote.runtime.events.DiagnosticsEvent`\\s on Telemetry when a synced edit
+:class:`~mote.contracts.events.telemetry.DiagnosticsEvent`\\s on Telemetry when a synced edit
 yields a changed diagnostic set; this object *accumulates* their rendered blocks
 until the turn boundary, then *renders* them into the cycle's
 ``<system-reminder>``.
@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from mote.contracts.events.telemetry import DiagnosticsEvent
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
-from mote.runtime.events import DiagnosticsEvent
 
 
 class DiagnosticsBuffer:

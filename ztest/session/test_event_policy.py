@@ -1,4 +1,5 @@
 """Persistence policy stays orthogonal to fact-stream consumers."""
+
 from __future__ import annotations
 
 from mote.runtime.events import (
@@ -13,7 +14,14 @@ from mote.runtime.session.event_policy import ROLLOUT_EVENT_TYPES, is_rollout_ev
 
 def test_rollout_policy_selects_facts_without_changing_their_types():
     assert is_rollout_event(OutputCommittedEvent())
-    assert is_rollout_event(PromptRejectedEvent())
+    assert is_rollout_event(
+        PromptRejectedEvent(
+            prompt_digest="sha256:deadbeef",
+            redacted_excerpt="denied",
+            classification="deny",
+            reason="denied",
+        )
+    )
     assert is_rollout_event(TurnEndEvent())
     assert not hasattr(TurnEndEvent, "outcome_type")
     assert not hasattr(OutputCommittedEvent, "outcome_type")

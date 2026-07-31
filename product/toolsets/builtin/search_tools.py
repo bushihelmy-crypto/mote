@@ -47,7 +47,6 @@ from typing import Optional
 from mote.runtime.errors import ToolValidationError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import DescribeDeferredTools, ListDeferredTools, RegisterResource, RevealTools
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 _MSG_NO_DEFERRED = "No additional tools are available to search."
@@ -60,7 +59,6 @@ _STATEFUL_HANDOFF_RULE = (
 )
 
 
-@register_tool
 class SearchTools(BaseTool):
     """Search for and reveal additional (deferred) tools by keyword."""
 

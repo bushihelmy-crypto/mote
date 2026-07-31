@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py telemetry-erasure
+exit_code: 0
+
+[stdout]
+telemetry-erasure architecture invariant is closed
+
+[stderr]

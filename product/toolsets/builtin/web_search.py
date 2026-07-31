@@ -28,7 +28,6 @@ from mote.contracts.tool.effects import ToolEffect
 from mote.runtime.errors import ToolNotConfiguredError, ToolValidationError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import InvokeService
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 
@@ -55,7 +54,6 @@ _MSG_NO_RESULTS = "No search results found."
 _REMINDER = "\nREMINDER: You MUST include the sources above in your response to the " "user using markdown hyperlinks."
 
 
-@register_tool
 class WebSearch(BaseTool):
     """Search the web for current information, returning a list of source links."""
 

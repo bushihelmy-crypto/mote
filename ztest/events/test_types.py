@@ -5,6 +5,7 @@
 ``RecoveryEvent`` / ``TaskProgressEvent`` / ``ResourceReportEvent`` — their
 discriminators, default fields, and re-export from ``mote.runtime.events``.
 """
+
 from __future__ import annotations
 
 import mote.runtime.events as ev
@@ -68,7 +69,9 @@ def test_reexported_from_events_package():
 
 def test_prompt_rejected_is_a_distinct_safe_observation_fact():
     event = PromptRejectedEvent(
-        prompt="safe prompt",
+        prompt_digest="sha256:deadbeef",
+        redacted_excerpt="safe prompt",
+        classification="deny",
         reason="denied",
         terminate=True,
     )

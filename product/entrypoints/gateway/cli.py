@@ -232,7 +232,7 @@ async def _mutate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         client = await _authenticated_client(args)
         if args.action == "backup":
             destination = args.destination.resolve()
-            response = await client.backup(destination, consistency="daemon_consistent", timeout=args.timeout)
+            response = await client.backup(destination, consistency="crash_consistent", timeout=args.timeout)
             details = {
                 "destination": response.destination,
                 "consistency": response.consistency,

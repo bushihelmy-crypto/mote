@@ -24,7 +24,6 @@ from typing import ClassVar
 from mote.runtime.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetSkillPool, RegisterResource, RunSkillFork
-from mote.runtime.tools.tool_registry import register_tool
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise/return site).
@@ -35,7 +34,6 @@ _MSG_HUMAN_ONLY = "Skill '{name}' is human-invocable only."
 _MSG_NO_MATCH = "No skills match '{query}'."
 
 
-@register_tool
 class Skill(BaseTool):
     """Invoke a project Skill by name, or search for one by keyword.
 

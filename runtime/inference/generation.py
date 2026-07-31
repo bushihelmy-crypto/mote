@@ -151,7 +151,7 @@ class GatewayGenerationOwner:
             candidate = self._require(generation_id)
             if candidate.artifact.artifact_digest != artifact_digest:
                 raise ValueError("generation artifact digest mismatch")
-            if candidate.state not in {GenerationState.STAGED, GenerationState.DRAINING}:
+            if candidate.state is not GenerationState.STAGED:
                 raise ValueError(f"generation cannot activate from {candidate.state.value}")
             if self._active_id is not None and self._active_id != generation_id:
                 current = self._require(self._active_id)

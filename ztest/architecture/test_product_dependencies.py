@@ -18,10 +18,6 @@ EXPECTED_PACKAGE_CYCLES: set[tuple[str, ...]] = set()
 
 MIGRATION_FORBIDDEN_EDGES: set[tuple[str, str]] = set()
 
-# Discovery is temporarily exact-scoped to these reviewed call sites. The
-# owning migration replaces them with immutable, Application-owned catalogs.
-DYNAMIC_IMPORT_MIGRATION_FACTS = {"product/interfaces/textual/__init__.py:48"}
-
 FORBIDDEN_TARGETS = {
     "config": {
         "agents",
@@ -312,13 +308,7 @@ def test_target_product_packages_follow_dependency_direction() -> None:
 
 def test_product_dynamic_imports_are_statically_auditable() -> None:
     _, violations = _imports()
-    current = set(violations)
-    stale = DYNAMIC_IMPORT_MIGRATION_FACTS - current
-    added = current - DYNAMIC_IMPORT_MIGRATION_FACTS
-    assert not stale, "Delete resolved dynamic-import migration facts:\n" + "\n".join(sorted(stale))
-    assert not added, "Non-literal Product dynamic imports require an exact reviewed exception:\n" + "\n".join(
-        sorted(added)
-    )
+    assert not violations, "Product dynamic imports must be statically auditable:\n" + "\n".join(sorted(violations))
 
 
 def test_presentation_internal_dependencies_stay_narrow() -> None:

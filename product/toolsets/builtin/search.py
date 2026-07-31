@@ -14,7 +14,6 @@ from mote.runtime.file_paths import display_path
 from mote.runtime.presentation import count_noun, plural
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, RecordFileGlimpsed, SearchFiles
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 _MSG_NO_AXIS = "Error: provide 'files' (a glob), 'content' (a regex), or 'cursor' " "to continue a previous search."
@@ -26,7 +25,6 @@ _MSG_NO_FILES = "No files found"
 _MSG_NO_MATCHES = "No matches found"
 
 
-@register_tool
 class Search(BaseTool):
     """Search file names and immutable file contents through File Operations."""
 

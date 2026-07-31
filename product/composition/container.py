@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from typing import Any
 
 from mote.contracts.tool import CommandProtocol
 from mote.product.agents.catalog import AgentCatalog
@@ -15,6 +14,7 @@ from mote.product.composition.lifecycle import lifecycle_resources
 from mote.product.config.adapters.hooks import load_global_hooks
 from mote.product.config.adapters.mcp import load_mcp_servers
 from mote.product.config.diagnostics import is_secret_path
+from mote.product.config.schema import MoteConfig
 from mote.product.config.sources import discover_source_files
 from mote.product.media_generation.catalog import builtin_media_provider_registry
 from mote.product.media_generation.registry import MediaProviderRegistry
@@ -37,7 +37,7 @@ class _AgentComposition:
 
     def __init__(
         self,
-        config: Any,
+        config: MoteConfig,
         *,
         tools: ToolCatalog,
         routing_models: RoutingModelRuntime,
@@ -122,12 +122,12 @@ class ProductContainer:
     agents: AgentCatalog[str]
     routing_models: RoutingModelRuntime
     paths: RuntimePaths
-    _config: Any = field(repr=False, compare=False)
+    _config: MoteConfig = field(repr=False, compare=False)
 
     @classmethod
     def standard(
         cls,
-        config: Any,
+        config: MoteConfig,
         *,
         cwd: Path | None = None,
         paths: RuntimePaths | None = None,

@@ -7,9 +7,10 @@ Tools inherit BaseTool and implement call(**kwargs).
 All kwargs are LLM-specified parameters. The only framework context injected
 is session_id (via bind(session_id) before call()).
 
-Declaration: Product-owned builtins use @register_tool during bootstrap.
+Declaration: Product-owned builtins are listed in an immutable Application catalog.
 Instance management: ToolExecutor creates and caches instances per-Role.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -22,8 +23,7 @@ from mote.contracts.tool.execution import ToolExecutionKind
 
 
 class ToolCapabilityProvider(Protocol):
-    def tool_capabilities(self) -> dict[str, Any]:
-        ...
+    def tool_capabilities(self) -> dict[str, Any]: ...
 
 
 class BaseTool(ABC):
@@ -31,8 +31,8 @@ class BaseTool(ABC):
 
     Subclass contract:
     - Set `name` (primary), optionally `aliases` (alternative names).
-    - Product builtins decorate with @register_tool for bootstrap collection;
-      external integrations add the type to an Application catalog generation.
+    - Product builtins and external integrations enter an Application catalog
+      through their Product-owned composition declarations.
     - Implement call(**kwargs) with type hints and docstring.
     - All call() parameters are LLM-specified. Framework context is self.session_id.
     - If the tool needs Role behavior, list the method names in `requires`;

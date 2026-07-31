@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
+from mote.contracts.inference.backup import BackupConsistency
 from mote.contracts.ports.inference.command_transport import BoundCommandTransportResolver
 from mote.contracts.ports.inference.provider_transport import GenerateTransportResolver
 from mote.contracts.ports.inference.session_transport import SessionTransportResolver
@@ -219,14 +219,24 @@ class SharedDaemonApplication:
         self._started = False
 
     async def backup(self, destination: Path, consistency: str) -> str:
-        if consistency != "daemon_consistent":
-            raise ValueError("Shared daemon backup consistency must be daemon_consistent")
+        if consistency != BackupConsistency.CRASH_CONSISTENT.value:
+            raise ValueError("Shared daemon online backup consistency must be crash_consistent")
         if not destination.is_absolute():
             raise ValueError("backup destination must be absolute")
         await self._receipts.backup_to(destination)
-        digest = "sha256:" + hashlib.sha256(destination.read_bytes()).hexdigest()
-        await self._operations_audit.record("backup", "committed", consistency=consistency, digest=digest)
-        return digest
+        metadata = await self._receipts.describe_backup(destination)
+        await self._operations_audit.record(
+            "backup",
+            "committed",
+            consistency=consistency,
+            digest=metadata.authority_digest,
+            logical_store=metadata.logical_store,
+            cutover_unit_id=metadata.cutover_unit_id,
+            source_generation=metadata.source_generation,
+            storage_format_version=metadata.storage_format_version,
+            high_water_mark=metadata.high_water_mark,
+        )
+        return metadata.authority_digest
 
     async def verify_restore(self, source: Path) -> str:
         if not source.is_absolute():

@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py derived-artifact
+exit_code: 0
+
+[stdout]
+derived-artifact architecture invariant is closed
+
+[stderr]

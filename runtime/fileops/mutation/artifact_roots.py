@@ -94,8 +94,7 @@ class ArtifactReachability:
 class ExternalArtifactRootSource(Protocol):
     """A durable authority for additional objects stored in the shared CAS."""
 
-    def scan_blob_roots(self) -> tuple[ContentIdentity, ...]:
-        ...
+    def scan_blob_roots(self) -> tuple[ContentIdentity, ...]: ...
 
 
 @dataclass
@@ -486,6 +485,12 @@ class ArtifactReachabilityProjector:
         prepared: FileTransactionPreparedEvent,
         committed: FileTransactionCommittedEvent,
     ) -> None:
+        expected_paths = tuple(mutation.target_path.display for mutation in prepared.mutation_set.mutations)
+        if committed.paths != expected_paths:
+            raise ArtifactReachabilityError(
+                "committed paths do not match the prepared mutations",
+                transaction_id=committed.transaction_id,
+            )
         for mutation, version in zip(
             prepared.mutation_set.mutations,
             committed.versions,

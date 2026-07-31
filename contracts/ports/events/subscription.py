@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import Mapping, NewType, Protocol
 
 from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, JsonValue, StreamId
+from mote.contracts.events.governance import SideEffectPolicy
 
 SubscriptionIdentity = NewType("SubscriptionIdentity", str)
 
@@ -104,6 +105,8 @@ class SubscriptionSpec:
     overflow: OverflowPolicy
     retry: RetryPolicy = field(default_factory=RetryPolicy)
     checkpoint: CheckpointPolicy = field(default_factory=CheckpointPolicy)
+    side_effect_policy: SideEffectPolicy = SideEffectPolicy.PURE_REDUCER
+    effect_identity: str = ""
 
     def __post_init__(self) -> None:
         if type(self.identity) is not str or _IDENTITY_PATTERN.fullmatch(self.identity) is None:
@@ -117,6 +120,16 @@ class SubscriptionSpec:
                 raise ValueError("recoverable subscriptions must use backpressure")
         elif self.overflow is OverflowPolicy.BACKPRESSURE:
             raise ValueError("live and lossy subscriptions must not backpressure")
+        if (
+            self.reliability in {Reliability.DURABLE, Reliability.RELIABLE}
+            and self.side_effect_policy
+            in {
+                SideEffectPolicy.IDEMPOTENT_EXTERNAL_EFFECT,
+                SideEffectPolicy.OUTBOX_INBOX,
+            }
+            and not self.effect_identity
+        ):
+            raise ValueError("recoverable external effects require a stable identity contract")
 
 
 @dataclass(frozen=True)
@@ -168,8 +181,7 @@ class CommittedEventHandler(Protocol):
     async def handle(
         self,
         envelope: EventEnvelope[Mapping[str, JsonValue]],
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class SubscriptionStateStore(Protocol):
@@ -182,28 +194,23 @@ class SubscriptionStateStore(Protocol):
         self,
         identity: SubscriptionIdentity,
         stream_id: StreamId,
-    ) -> int:
-        ...
+    ) -> int: ...
 
-    async def save(self, checkpoint: SubscriptionCheckpoint) -> None:
-        ...
+    async def save(self, checkpoint: SubscriptionCheckpoint) -> None: ...
 
     async def quarantine(
         self,
         entry: DeadLetterEntry,
         checkpoint: SubscriptionCheckpoint,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class ManagedSubscriptionStateStore(SubscriptionStateStore, Protocol):
     """Explicit lifecycle for the process-owned subscription state backend."""
 
-    async def aopen(self) -> None:
-        ...
+    async def aopen(self) -> None: ...
 
-    async def aclose(self) -> None:
-        ...
+    async def aclose(self) -> None: ...
 
 
 __all__ = [

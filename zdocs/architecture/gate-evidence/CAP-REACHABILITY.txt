@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/composition_governance.py
+exit_code: 0
+
+[stdout]
+composition recipes, source candidates, exports and lifecycle are closed
+
+[stderr]

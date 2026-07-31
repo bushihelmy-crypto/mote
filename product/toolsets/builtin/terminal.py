@@ -20,6 +20,7 @@ interactively.
 The PTY is a managed runtime owned by the Role's ``RuntimeHost``. Calls acquire
 serialized, fenced write access; the host owns identity, revision and teardown.
 """
+
 from __future__ import annotations
 
 import os
@@ -35,7 +36,6 @@ from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetRuntimeHost, GetSandboxRuntime, HandoffRuntime
 from mote.runtime.tools.permission.classifier import classify_command
 from mote.runtime.tools.permission.command_parse import segment_strings
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -46,7 +46,6 @@ _MSG_UNKNOWN_ACTION = "Error: unknown terminal action '{action}'. Use handoff or
 _RUNTIME = "terminal:default"
 
 
-@register_tool
 class Terminal(BaseTool):
     """Type into a persistent interactive terminal (one per session)."""
 

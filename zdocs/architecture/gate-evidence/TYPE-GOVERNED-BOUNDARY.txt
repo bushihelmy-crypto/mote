@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py governed-boundary
+exit_code: 0
+
+[stdout]
+governed-boundary architecture invariant is closed
+
+[stderr]

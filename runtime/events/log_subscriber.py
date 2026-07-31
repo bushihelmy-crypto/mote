@@ -87,7 +87,10 @@ _EVENT_LOG: dict[type, tuple[str, "Callable[[Any], str]"]] = {
     ),
     PromptRejectedEvent: (
         "info",
-        lambda e: f"event prompt_rejected terminate={e.terminate} reason='{_clip(e.reason)}'",
+        lambda e: (
+            f"event prompt_rejected classification={e.classification} "
+            f"terminate={e.terminate} digest={e.prompt_digest}"
+        ),
     ),
     ToolInvocationStartedEvent: (
         "debug",

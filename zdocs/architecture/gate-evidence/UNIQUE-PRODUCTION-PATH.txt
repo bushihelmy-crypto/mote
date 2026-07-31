@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/unique_production_path.py
+exit_code: 0
+
+[stdout]
+typed migration debt and alternate production paths are zero
+
+[stderr]

@@ -148,6 +148,7 @@ def sweep_workspace(
     session_ttl_days: int,
     artifact_ttl_days: int,
     exclude_session_id: str = "",
+    legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
 ) -> CleanupStats:
     """Sweep the whole workspace once and return what was reclaimed.
@@ -164,7 +165,7 @@ def sweep_workspace(
     now = time.time() if now is None else now
     stats = CleanupStats()
     for session_id in store.iter_session_ids():
-        if session_id == exclude_session_id:
+        if session_id == exclude_session_id or session_id in legal_hold_session_ids:
             continue
         stats.scanned += 1
         try:
@@ -187,13 +188,14 @@ async def sweep_workspace_async(
     session_ttl_days: int,
     artifact_ttl_days: int,
     exclude_session_id: str = "",
+    legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
 ) -> CleanupStats:
     """Cooperative, cancellation-safe runtime counterpart of ``sweep_workspace``."""
     now = time.time() if now is None else now
     stats = CleanupStats()
     for index, session_id in enumerate(store.iter_session_ids(), start=1):
-        if session_id != exclude_session_id:
+        if session_id != exclude_session_id and session_id not in legal_hold_session_ids:
             stats.scanned += 1
             try:
                 _sweep_session(
@@ -222,6 +224,7 @@ def run_cleanup_if_due(
     session_ttl_days: int,
     artifact_ttl_days: int,
     exclude_session_id: str = "",
+    legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
 ) -> Optional[CleanupStats]:
     """Run :func:`sweep_workspace`, at most once per 24h, when enabled.
@@ -251,6 +254,7 @@ def run_cleanup_if_due(
         session_ttl_days=session_ttl_days,
         artifact_ttl_days=artifact_ttl_days,
         exclude_session_id=exclude_session_id,
+        legal_hold_session_ids=legal_hold_session_ids,
         now=now,
     )
     logger.debug(
@@ -273,6 +277,7 @@ async def run_cleanup_if_due_async(
     session_ttl_days: int,
     artifact_ttl_days: int,
     exclude_session_id: str = "",
+    legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
 ) -> Optional[CleanupStats]:
     """Cancellation-safe runtime cleanup with the same throttle contract."""
@@ -292,6 +297,7 @@ async def run_cleanup_if_due_async(
         session_ttl_days=session_ttl_days,
         artifact_ttl_days=artifact_ttl_days,
         exclude_session_id=exclude_session_id,
+        legal_hold_session_ids=legal_hold_session_ids,
         now=now,
     )
 

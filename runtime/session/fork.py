@@ -174,6 +174,7 @@ async def _inherit_file_history(source: SessionLog, child: SessionLog) -> None:
                 source_repository,
                 FileTransactionCommittedEvent(
                     transaction_id=inherited_id,
+                    paths=event.paths,
                     versions=event.versions,
                 ),
                 (),

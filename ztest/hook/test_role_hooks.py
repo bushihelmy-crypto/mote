@@ -7,6 +7,7 @@ replaced with one that records nothing and returns None, while the hook seams in
 run() still fire. ``hooks=None`` + no callbacks => zero hook calls (backward
 compat).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -223,7 +224,8 @@ async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_
     assert role_in_tmp.context_manager.get() == history_before
     rejected = [e for e in capture.events if isinstance(e, PromptRejectedEvent)]
     assert len(rejected) == 1
-    assert rejected[0].prompt.startswith("[prompt withheld")
+    assert rejected[0].redacted_excerpt.startswith("[prompt withheld")
+    assert rejected[0].prompt_digest.startswith("sha256:")
     assert raw_secret not in repr(capture.events)
     assert raw_secret not in role_in_tmp._components.session_log.path.read_text(encoding="utf-8")
     await handle.aclose()

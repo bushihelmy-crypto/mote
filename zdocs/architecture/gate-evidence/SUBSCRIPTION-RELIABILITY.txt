@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/subscription_reliability.py
+exit_code: 0
+
+[stdout]
+subscription reliability invariants are closed
+
+[stderr]

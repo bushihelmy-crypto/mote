@@ -68,14 +68,24 @@ class UserPromptSubmitEvent:
 
 @dataclass
 class PromptRejectedEvent(_DurableFact):
-    """Secret-safe fact that PromptPolicy denied admission before a turn."""
+    """Data-minimized audit fact for a prompt denied before admission."""
 
-    prompt: str = ""
+    prompt_digest: str = ""
+    redacted_excerpt: str = ""
+    classification: str = ""
     reason: str = ""
     terminate: bool = False
 
     name: ClassVar[str] = PROMPT_REJECTED
     type: ClassVar[str] = PROMPT_REJECTED
+
+    def __post_init__(self) -> None:
+        if not self.prompt_digest.startswith("sha256:"):
+            raise ValueError("prompt rejection digest must be a sha256 identity")
+        if len(self.redacted_excerpt) > 160:
+            raise ValueError("prompt rejection excerpt exceeds 160 characters")
+        if not self.classification or not self.reason:
+            raise ValueError("prompt rejection classification and reason are required")
 
 
 @dataclass

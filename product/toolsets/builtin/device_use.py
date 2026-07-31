@@ -30,6 +30,7 @@ The live :class:`DeviceSession` is owned by the Role's ``RuntimeHost``, so each
 Role's device handle is isolated, fenced, revisioned, handed off, and torn down
 through the same lifecycle as Terminal, Jupyter, Browser, and Canvas.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -54,7 +55,6 @@ from mote.runtime.tools.capability_types import (
     GetRuntimeHost,
     HandoffRuntime,
 )
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 # Model-facing sentences, hoisted so the wording lives in one place.
@@ -86,7 +86,6 @@ _SCROLL_DIRS = ("up", "down", "left", "right")
 _RUNTIME = "device:default"
 
 
-@register_tool
 class DeviceUse(BaseTool):
     """Drive an external GUI device (Android over adb) — observe the screen then act."""
 

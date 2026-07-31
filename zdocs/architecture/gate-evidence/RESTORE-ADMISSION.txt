@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/restore_admission.py
+exit_code: 0
+
+[stdout]
+restore-capable sources and admission metadata are closed
+
+[stderr]

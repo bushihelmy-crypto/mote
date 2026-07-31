@@ -1,4 +1,5 @@
 """Persistent vector Canvas builtin backed by the shared RuntimeHost."""
+
 from __future__ import annotations
 
 import hashlib
@@ -33,7 +34,6 @@ from mote.runtime.tools.capability_types import (
     HandoffRuntime,
 )
 from mote.runtime.tools.execution_context import current_tool_call_id
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 _RUNTIME = "canvas:default"
@@ -47,7 +47,6 @@ _MSG_EXPORT_FAILED = (
 )
 
 
-@register_tool
 class Canvas(BaseTool):
     """Create and edit one persistent interactive vector canvas."""
 

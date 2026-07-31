@@ -1,0 +1,17 @@
+{
+  "checker_id": "governed-boundary-any",
+  "checker_status": "present",
+  "checker_version": "gate-status-runner-v1",
+  "declaration_digest": "sha256:0644be76ed9c51c5ce1872ac9935dceab057f75b0a81cd66918f04aeec788d12",
+  "enforcement": "hard",
+  "evidence_path": "zdocs/architecture/gate-evidence/TYPE-GOVERNED-BOUNDARY.txt",
+  "executed_at": "2026-07-31T08:21:16.270482+00:00",
+  "executed_command": "python -B ztest/architecture/static_governance.py governed-boundary",
+  "gate_id": "TYPE-GOVERNED-BOUNDARY",
+  "remediation_owner": "architecture-owner",
+  "result": "pass",
+  "runtime_input": false,
+  "source_digest": "sha256:a42ab692b534d71abc8c7c286ac18ddaee21eada7b86da7fcecb942cda599dbf",
+  "violation_count": 0,
+  "violations": []
+}

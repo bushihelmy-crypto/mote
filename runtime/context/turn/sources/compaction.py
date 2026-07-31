@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from mote.contracts.events.conversation import PostCompactEvent
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
-from mote.runtime.events import PostCompactEvent
 
 
 class CompactionNoticeContextSource:

@@ -3,21 +3,33 @@
 """Unit tests for the smaller executor helpers:
 
 - ``tool_convert`` — function/AST -> tool schema.
-- ``agent_registry`` — spawnable-agent registry (must subclass Role).
+- immutable spawnable-agent catalog.
 - ``mcp_adapter`` — wrap a discovered MCP tool as a BaseTool.
 
 NOTE: deliberately NO ``from __future__ import annotations`` here — these tests
 assert the rendered ``inspect.signature`` of locally-defined functions, which
 would be stringized (``'int'`` instead of ``int``) under PEP 563.
 """
+
 import pytest
 
-from mote.product.agents.registry import AgentRegistry
+from mote.product.agents.catalog import AgentCatalog
 from mote.runtime.tools.mcp.adapter import MCPToolAdapter, McpXmlSchemaError
 from mote.runtime.tools.mcp.toolsets import NativeMcpToolset, XmlMcpToolset
 from mote.runtime.tools.mcp.types import DiscoveredMcpTool
 from mote.runtime.tools.tool_convert import function_docstring_to_schema
 from mote.runtime.tools.tool_executor import ToolExecutor
+
+
+class _FakeAgentBuilder:
+    def build(self, request):
+        raise AssertionError("catalog lookup must not construct an agent")
+
+
+class _FakeAgentFactory:
+    def child_builder(self, agent_cls):
+        return _FakeAgentBuilder()
+
 
 # ---------------------------------------------------------------------------
 # tool_convert
@@ -49,89 +61,37 @@ class TestFunctionDocstringToSchema:
         assert "the a." in schema["parameters"]
 
     def test_empty_docstring_yields_empty_params(self):
-        def fn(x):
-            ...
+        def fn(x): ...
 
         schema = function_docstring_to_schema(fn, "")
         assert schema["parameters"] == ""
 
 
 # ---------------------------------------------------------------------------
-# agent_registry
+# agent catalog
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def fresh_agent_registry() -> AgentRegistry:
-    """Return an isolated Agent registry."""
-    return AgentRegistry()
-
-
-class TestAgentRegistry:
-    def test_register_non_role_rejected(self, fresh_agent_registry):
+class TestAgentCatalog:
+    def test_non_role_rejected(self):
         class NotARole:
             agent_name = "Nope"
 
-        with pytest.raises(TypeError, match="must subclass Role"):
-            fresh_agent_registry.register(NotARole)
+        with pytest.raises(TypeError, match="must subclass BaseRole"):
+            AgentCatalog.from_types((NotARole,), _FakeAgentFactory())
 
-    def test_register_role_subclass(self, fresh_agent_registry):
+    def test_role_subclass_and_alias_resolve(self):
         from mote.runtime.agent.role import Role
 
         class MyAgent(Role):
             agent_name = "MyAgent"
             aliases = ["ma"]
 
-        fresh_agent_registry.register(MyAgent)
-        assert fresh_agent_registry.get("MyAgent") is MyAgent
-        assert fresh_agent_registry.get("ma") is MyAgent
-
-    def test_default_agent_name_from_classname(self, fresh_agent_registry):
-        from mote.runtime.agent.role import Role
-
-        class Defaulted(Role):
-            pass
-
-        fresh_agent_registry.register(Defaulted)
-        assert Defaulted.agent_name == "Defaulted"
-        assert fresh_agent_registry.get("Defaulted") is Defaulted
-
-    def test_conflict_rejected(self, fresh_agent_registry):
-        from mote.runtime.agent.role import Role
-
-        class AgentA(Role):
-            agent_name = "Shared"
-
-        class AgentB(Role):
-            agent_name = "Shared"
-
-        fresh_agent_registry.register(AgentA)
-        with pytest.raises(ValueError, match="already registered"):
-            fresh_agent_registry.register(AgentB)
-
-    def test_idempotent_reregister(self, fresh_agent_registry):
-        from mote.runtime.agent.role import Role
-
-        class AgentC(Role):
-            agent_name = "C"
-            aliases = ["c"]
-
-        fresh_agent_registry.register(AgentC)
-        fresh_agent_registry.register(AgentC)  # no raise
-        assert fresh_agent_registry.get("c") is AgentC
-
-    def test_all_agents_deduplicates(self, fresh_agent_registry):
-        from mote.runtime.agent.role import Role
-
-        class AgentD(Role):
-            agent_name = "D"
-            aliases = ["d1", "d2"]
-
-        fresh_agent_registry.register(AgentD)
-        assert fresh_agent_registry.all_agents() == {"D": AgentD}
-
-    def test_get_unknown_returns_none(self, fresh_agent_registry):
-        assert fresh_agent_registry.get("ghost") is None
+        catalog = AgentCatalog.from_types((MyAgent,), _FakeAgentFactory())
+        assert catalog.get("MyAgent").name == "MyAgent"
+        assert catalog.get("ma").name == "MyAgent"
+        assert catalog.agent_type("ma") is MyAgent
+        assert catalog.get("ghost") is None
 
 
 # ---------------------------------------------------------------------------

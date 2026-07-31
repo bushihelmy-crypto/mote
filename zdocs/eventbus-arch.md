@@ -111,7 +111,8 @@
 ───────────────────────────────────────────────────────────────────────────────────
  工具        PreToolUseEvent          ToolExecutor.run_command  Hook(deny/改参)   控制 ★
              PostToolUseEvent         ToolExecutor              Hook(注入/block)  控制 ★
-             FileMutatedEvent         ToolExecutor(写盘后)       LspService/Watcher观察
+             FileMutatedEvent         ToolExecutor(写盘后)       观察订阅者         观察
+ 文件事实    FileTransactionCommitted FileOperations(提交后)     LspService          可靠派生
  用户        UserPromptSubmitEvent    Role.run                  Hook(注入/veto)   控制
 ───────────────────────────────────────────────────────────────────────────────────
  LLM         LLMRequest/Response/Error BaseLLM._run_with_recovery TracingSubscriber 观察
@@ -412,4 +413,3 @@ MIRROR（渲染/日志）慢了挂了直接丢弃+计数，绝不拖垮 turn；D
 | 观察面 priority 改为 ObserverPriority 命名枚举 | 取代旧的裸魔数：LIVE/STREAM/REPORT/PERSIST/TRACE/LOG/BOOKKEEPING 七档语义命名（曾出现 LogSubscriber 与 FileWatchService 双 90 静默撞车，正是此改动催化剂）。加新观察者挑一档带语义的 tier 而非猜一个不撞的整数 |
 | 全局 contextvar 态 | 忘 set_bus 则 observe 静默 no-op，测试易踩；反面是 standalone/测试自动安全 |
 | turn 边界粒度持久性 | 崩溃丢进行中一轮，换来不必每条消息 fsync（每轮 drain 一次） |
-

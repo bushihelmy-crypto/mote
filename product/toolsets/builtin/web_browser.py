@@ -22,6 +22,7 @@ The live :class:`BrowserSession` is owned by the Role's ``RuntimeHost`` rather
 than a process-global singleton, so each Role's browser is isolated, fenced,
 revisioned, handed off, and torn down through the shared runtime lifecycle.
 """
+
 from __future__ import annotations
 
 from typing import Any, ClassVar, Optional
@@ -55,7 +56,6 @@ from mote.runtime.tools.capability_types import (
     LoadBrowserProfile,
     SaveBrowserProfile,
 )
-from mote.runtime.tools.tool_registry import register_tool
 from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -113,7 +113,6 @@ async def _no_vision(_artifact, *, prompt: str = "") -> str:
     raise NotImplementedError("no vision-capable model bound")
 
 
-@register_tool
 class WebBrowser(BaseTool):
     """Drive a persistent web browser (one per session)."""
 

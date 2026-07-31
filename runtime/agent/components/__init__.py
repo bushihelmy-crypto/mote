@@ -14,7 +14,11 @@ from mote.runtime.agent.components.integrations import (
     integration_event_subscribers,
 )
 from mote.runtime.agent.components.policy import policy_component_specs
-from mote.runtime.agent.components.session import session_component_specs, session_event_subscribers
+from mote.runtime.agent.components.session import (
+    event_fabric_component_spec,
+    session_component_specs,
+    session_event_subscribers,
+)
 from mote.runtime.agent.components.watching import WatchingCallbacks, watching_component_specs
 
 __all__ = [
@@ -24,6 +28,7 @@ __all__ = [
     "build_args_limiter",
     "dedupe_tools",
     "effective_deferred_tools",
+    "event_fabric_component_spec",
     "hook_available",
     "integration_component_specs",
     "integration_event_subscribers",

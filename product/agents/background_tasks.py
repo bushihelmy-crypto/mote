@@ -1,7 +1,8 @@
 """Coding-Agent composition adapter for background task orchestration."""
+
 from __future__ import annotations
 
-from mote.contracts.ports.task.operations import BackgroundTaskBuildContext
+from mote.contracts.ports.task.operations import BackgroundTaskBuildContext, BackgroundWakeReason
 from mote.contracts.task.models import (
     CommandName,
     CompletedInlineTaskResultPointer,
@@ -12,7 +13,7 @@ from mote.contracts.task.models import (
     TaskFailure,
     TaskId,
 )
-from mote.orchestration.background_tasks.pool import BackgroundTaskPool
+from mote.orchestration.background_tasks import BackgroundTaskPool
 from mote.orchestration.background_tasks.result_pointer import render_task_result_pointer
 from mote.orchestration.background_tasks.results.store import TaskOutputStore
 from mote.orchestration.background_tasks.status import PAUSE_STATUSES, TERMINAL_STATUSES, BgStatus
@@ -131,7 +132,7 @@ class AgentBackgroundTasks:
     def pending_count(self) -> int:
         return self._pool.pending_count
 
-    async def wait_any(self, timeout: float = 120.0):
+    async def wait_any(self, timeout: float = 120.0) -> BackgroundWakeReason:
         return await self._pool.wait_any(timeout)
 
     async def wait_for_completion(self, timeout: float | None = None) -> bool:
@@ -139,6 +140,14 @@ class AgentBackgroundTasks:
 
     def set_wake(self, wake) -> None:
         self._pool.set_wake(wake)
+
+    def mark_retrieved(self, task_id: str) -> None:
+        self._pool.mark_retrieved(task_id)
+        if self._pool.get_task_info(task_id) is None:
+            self._inspection.discard(task_id)
+
+    def cancel(self, task_id: str) -> bool:
+        return self._pool.cancel(task_id)
 
     @staticmethod
     def _workflow_run(graph_meta) -> WorkflowRun:
@@ -162,9 +171,6 @@ class AgentBackgroundTasks:
 
     def get_outcome(self, task_id: str):
         return self._pool.get_outcome(task_id)
-
-    def __getattr__(self, name: str):
-        return getattr(self._pool, name)
 
     async def aclose(self) -> None:
         await self._pool.aclose()

@@ -7,15 +7,15 @@ servers. The building blocks are:
 
 - A set of plain :class:`~mote.runtime.tools.base_tool.BaseTool` subclasses
   (``EchoTool`` / ``AddTool`` / ``FailTool`` / ``BoomTool`` / ``BgTool`` /
-  ``MediaTool`` / ``CapTool``). They are NOT decorated with ``@register_tool``,
-  so importing this module never pollutes the global tool registry.
-- ``fresh_registry`` - an ordinary isolated :class:`ToolRegistry`.
-- ``restore_global_registry`` - snapshot/restore the default Product catalog.
+  ``MediaTool`` / ``CapTool``). Importing this module has no discovery side
+  effects.
+- ``fresh_catalog`` - an immutable isolated :class:`ToolCatalog`.
 - ``FakeRole`` — exposes a ``tool_capabilities()`` allowlist so ``bind()`` can
   inject narrow capabilities exactly like the real Role.
 - ``make_executor`` — build a :class:`ToolExecutor` with no registry lookup and
   inject already-bound tool instances via ``register_tool_instance``.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -34,8 +34,7 @@ from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition
 from mote.runtime.tools.provider import NativeToolset
 from mote.runtime.tools.tool_executor import ToolExecutor
-from mote.runtime.tools.tool_registry import ToolRegistry
-from mote.runtime.tools.tool_registry import registry as global_registry
+from mote.runtime.tools.tool_registry import ToolCatalog
 from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 from mote.ztest.artifact_fakes import artifact_media
 
@@ -165,22 +164,9 @@ class FakeRole:
 
 
 @pytest.fixture
-def fresh_registry() -> ToolRegistry:
-    """Return an isolated registry with no hidden process state."""
-    return ToolRegistry()
-
-
-@pytest.fixture
-def restore_global_registry():
-    """Snapshot the real global registry and restore it after the test."""
-    from mote.product.toolsets import discover_builtin_tools
-
-    discover_builtin_tools()
-    saved = dict(global_registry._registry)
-    try:
-        yield global_registry
-    finally:
-        global_registry._registry = saved
+def fresh_catalog() -> ToolCatalog:
+    """Return an immutable catalog with no hidden process state."""
+    return ToolCatalog.from_types(())
 
 
 # ---------------------------------------------------------------------------

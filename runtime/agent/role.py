@@ -16,6 +16,9 @@ from mote.contracts.agent import ContextPolicy, SpawnContext
 from mote.contracts.conversation import AIMessage, CauseBy, Message
 from mote.contracts.conversation.fields import MESSAGE_ROUTE_TO_SELF
 from mote.contracts.conversation.prompt_policy import PromptIntent
+from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSubmitEvent
+from mote.contracts.events.output import OutputPublicationQueuedEvent, OutputPublishedEvent
+from mote.contracts.events.session import SessionStartEvent, TurnEndEvent
 from mote.contracts.output import RunOutcome, RunRejected, RunRejectionKind, RunResult, TranscriptRef
 from mote.contracts.output.policy import RunCompletionDecision, RunCompletionIntent
 from mote.contracts.ports.skill.registry import SkillCatalog, SkillService
@@ -23,6 +26,7 @@ from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.contracts.service import ServiceExecutionSemantics, ServiceInvocation
 from mote.kernel.commands import CommandChannel
 from mote.kernel.execution.run_context import RunContext
+from mote.kernel.telemetry.events import span
 from mote.runtime.agent.base import BaseRole
 from mote.runtime.agent.components.context_provider import ContextProvider
 from mote.runtime.agent.execution import any_to_str, role_raise_decorator
@@ -35,16 +39,7 @@ from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.context import ContextManager
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.errors import RoleContextNotSetError, ToolNotConfiguredError
-from mote.runtime.events import (
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
-    PromptRejectedEvent,
-    SessionStartEvent,
-    TurnEndEvent,
-    UserPromptSubmitEvent,
-    bind_telemetry,
-    span,
-)
+from mote.runtime.events.context import bind_telemetry
 from mote.runtime.models.clients.context import Context
 from mote.runtime.models.gateway import LLMRouter
 from mote.runtime.models.model_calls import describe_image as describe_image_with_model
@@ -1234,8 +1229,15 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                     decision = await self.prompt_policy.process(PromptIntent(prompt=msg.content))
                     msg.content = decision.prompt
                     if not decision.accepted:
+                        prompt_bytes = decision.prompt.encode("utf-8")
+                        classification = next(
+                            (entry.disposition for entry in reversed(decision.trace) if entry.disposition != "allow"),
+                            "deny",
+                        )
                         event = PromptRejectedEvent(
-                            prompt=decision.prompt,
+                            prompt_digest=f"sha256:{hashlib.sha256(prompt_bytes).hexdigest()}",
+                            redacted_excerpt=decision.prompt[:160],
+                            classification=classification,
                             reason=decision.reason,
                             terminate=decision.terminate,
                         )

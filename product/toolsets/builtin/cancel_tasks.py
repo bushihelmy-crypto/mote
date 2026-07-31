@@ -4,6 +4,7 @@ Cancels the entire DAG. All in-flight nodes receive asyncio cancellation.
 Already-completed node results are preserved in the state snapshot, so the
 task can be resumed later via resume_tasks.
 """
+
 from __future__ import annotations
 
 from mote.orchestration.background_tasks.model import BgStatus
@@ -11,7 +12,6 @@ from mote.orchestration.background_tasks.status import PAUSE_STATUSES
 from mote.runtime.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetBgPool
-from mote.runtime.tools.tool_registry import register_tool
 
 _MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
 _MSG_CANCEL_DONE = "Task {task_id} is already {status}, cannot cancel."
@@ -22,7 +22,6 @@ _MSG_CANCEL_SUCCESS = (
 )
 
 
-@register_tool
 class CancelTasks(BaseTool):
     name = "CancelTasks"
     aliases = ["cancel_tasks"]

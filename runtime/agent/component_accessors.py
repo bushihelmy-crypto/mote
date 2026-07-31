@@ -68,8 +68,8 @@ if TYPE_CHECKING:
     from mote.runtime.agent.capabilities import RoleCapabilities
     from mote.runtime.agent.role_state import RoleStateController
     from mote.runtime.agent.session_manager import RoleSessionManager
-    from mote.runtime.events import EventFabric
     from mote.runtime.events.backends import SQLiteSubscriptionStateStore
+    from mote.runtime.events.fabric import EventFabric
     from mote.runtime.fileops import FileOperations
     from mote.runtime.interactive import RuntimeHost
     from mote.runtime.interactive.browser.profile import BrowserProfileStore

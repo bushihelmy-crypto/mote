@@ -67,6 +67,15 @@ class LspServerManager:
             self._failed.add(name)
             return None
 
+    async def server_for_confirmed_transition(self, path: str) -> Optional[LspServerInstance]:
+        """Resolve a projection target, exposing configured server failure to retry."""
+        if self.config.server_for(path) is None:
+            return None
+        server = await self.server_for(path)
+        if server is None:
+            raise RuntimeError(f"configured LSP server is unavailable for {path}")
+        return server
+
     async def document_symbols(self, path: str) -> list:
         """documentSymbol for *path* via its server (``[]`` when none/failed)."""
         server = await self.server_for(path)

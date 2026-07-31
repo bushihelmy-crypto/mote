@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from mote.contracts.conversation import Message, to_role_content_dicts
 from mote.contracts.conversation.fields import IMAGES, PDFS
+from mote.contracts.events.agent import BudgetEvent
 from mote.contracts.model.inference import InferenceIntent, InferenceRequirements
 from mote.contracts.output import OutputBindingKind
 from mote.kernel.commands.prompts import BUDGET_EXHAUSTED
@@ -24,7 +25,6 @@ from mote.kernel.execution.context_provider import BaseContextProvider
 from mote.kernel.inference import build_routing_signals
 from mote.kernel.inference.prompt_builder import InferenceContext, InferenceInputs, InferenceSubsystems, PromptBuilder
 from mote.kernel.inference.request import InferenceRequest
-from mote.runtime.events import BudgetEvent
 from mote.runtime.run_context import current_run_context
 
 if TYPE_CHECKING:

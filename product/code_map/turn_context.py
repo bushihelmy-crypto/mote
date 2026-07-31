@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 from mote.product.code_map.collection import collect_code_map_files
 from mote.product.code_map.enrichment import (
@@ -51,7 +52,6 @@ from mote.product.code_map.enrichment import (
 )
 from mote.product.code_map.rendering import render_code_map
 from mote.runtime.code_map import CodeMap, FileNeighborhood
-from mote.runtime.events import MODEL_CONTEXT_REBUILT_EVENTS
 
 # When a file defines more than this many symbols, fold the tail behind a
 # "(+N more)" summary so one large file cannot dominate the map block.

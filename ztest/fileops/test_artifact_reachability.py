@@ -272,6 +272,7 @@ def test_committed_transaction_versions_are_validated(tmp_path):
                 FileTransactionCommittedEvent(
                     plan.mutation_set.transaction_id,
                     (),
+                    (),
                 ),
             ]
         )
@@ -301,6 +302,7 @@ def test_committed_version_bytes_must_match_the_prepared_artifact(tmp_path):
                 FileTransactionPreparedEvent(plan.mutation_set),
                 FileTransactionCommittedEvent(
                     plan.mutation_set.transaction_id,
+                    (mutation.target_path.display,),
                     (forged,),
                 ),
             ]

@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/static_governance.py local-imports
+exit_code: 0
+
+[stdout]
+local-imports architecture invariant is closed
+
+[stderr]

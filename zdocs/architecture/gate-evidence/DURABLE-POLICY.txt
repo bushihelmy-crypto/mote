@@ -1,0 +1,7 @@
+command: python -B ztest/architecture/durable_policy.py
+exit_code: 0
+
+[stdout]
+durable policy and restricted audit payloads are closed
+
+[stderr]

@@ -10,6 +10,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from mote.contracts.artifact import ArtifactResolutionPolicy, ResolvedArtifact
+from mote.contracts.events.model import (
+    ModelAttemptAdmissionRejectedEvent,
+    ModelAttemptFinishedEvent,
+    ModelAttemptStartedEvent,
+    ModelCallFinishedEvent,
+    ModelCallPlannedEvent,
+    ModelFallbackSelectedEvent,
+)
 from mote.contracts.foundation.errors.base import MoteError
 from mote.contracts.inference.attempt import InferenceAttemptRequest
 from mote.contracts.inference.deadline import CrossProcessDeadline
@@ -58,16 +66,7 @@ from mote.contracts.ports.artifact.store import ArtifactResolver
 from mote.contracts.ports.model.call_journal import ModelCallJournal
 from mote.contracts.ports.model.request_transformer import ModelRequestTransformer
 from mote.contracts.ports.session.facts import SessionFactSink
-from mote.runtime.events import (
-    ModelAttemptAdmissionRejectedEvent,
-    ModelAttemptFinishedEvent,
-    ModelAttemptStartedEvent,
-    ModelCallFinishedEvent,
-    ModelCallPlannedEvent,
-    ModelFallbackSelectedEvent,
-    observe_event,
-    observe_event_sync,
-)
+from mote.runtime.events.context import observe_event, observe_event_sync
 from mote.runtime.events.stream import (
     capture_attempt_stream,
     commit_attempt_stream,

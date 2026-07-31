@@ -36,11 +36,6 @@ class WorkflowTaskView:
         run_state = self.run_state
         return set(run_state.completed_names()) if run_state is not None else set()
 
-    def __getattr__(self, name: str):
-        if self.task_meta is None:
-            raise AttributeError(name)
-        return getattr(self.task_meta, name)
-
 
 class WorkflowInspectionPort:
     def __init__(self) -> None:

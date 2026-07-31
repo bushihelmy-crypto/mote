@@ -5,8 +5,9 @@
 The dispatch tests inject already-bound instances via ``register_tool_instance``
 (see ``make_executor``) so they never touch the global registry. One test
 exercises the constructor's registry-prebind path using the
-``restore_global_registry`` snapshot fixture.
+immutable catalog fixtures.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -382,7 +383,7 @@ class TestPipelinesEnabledGate:
     bound, so it appears in no schema view (neither askllm's native set nor the
     XML catalog). Non-pipeline tools are unaffected."""
 
-    def _register_pipeline_cls(self, registry, name="RegPipe"):
+    def _pipeline_cls(self, name="RegPipe"):
         from mote.contracts.tool.execution import ToolExecutionKind
 
         class RegPipelineTool(BaseTool):
@@ -392,24 +393,23 @@ class TestPipelinesEnabledGate:
                 return None
 
         RegPipelineTool.name = name
-        registry.register(RegPipelineTool)
         return RegPipelineTool
 
-    async def test_switch_off_skips_pipeline_tool(self, restore_global_registry):
-        self._register_pipeline_cls(restore_global_registry)
-        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+    async def test_switch_off_skips_pipeline_tool(self, fresh_catalog):
+        catalog = fresh_catalog.with_types(self._pipeline_cls())
+        toolset = NativeCatalogToolset(id="test", catalog=catalog)
         ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=False, toolsets=(toolset,))
         # Never bound → absent from every schema view.
         assert "RegPipe" not in {spec["name"] for spec in ex.native_tool_specs()}
         assert "RegPipe" not in ex._tools
 
-    async def test_switch_on_loads_pipeline_tool(self, restore_global_registry):
-        self._register_pipeline_cls(restore_global_registry)
-        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+    async def test_switch_on_loads_pipeline_tool(self, fresh_catalog):
+        catalog = fresh_catalog.with_types(self._pipeline_cls())
+        toolset = NativeCatalogToolset(id="test", catalog=catalog)
         ex = ToolExecutor("sess", tools=["RegPipe"], pipelines_enabled=True, toolsets=(toolset,))
         assert {spec["name"] for spec in ex.native_tool_specs()} == {"RegPipe"}
 
-    async def test_switch_off_keeps_non_pipeline_tools(self, restore_global_registry):
+    async def test_switch_off_keeps_non_pipeline_tools(self, fresh_catalog):
         from mote.runtime.tools.base_tool import BaseTool as _BT
 
         class PlainTool(_BT):
@@ -418,9 +418,8 @@ class TestPipelinesEnabledGate:
             async def call(self, **kwargs):
                 return None
 
-        restore_global_registry.register(PlainTool)
-        self._register_pipeline_cls(restore_global_registry)
-        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+        catalog = fresh_catalog.with_types(PlainTool, self._pipeline_cls())
+        toolset = NativeCatalogToolset(id="test", catalog=catalog)
         ex = ToolExecutor(
             "sess",
             tools=["Plain", "RegPipe"],
@@ -432,9 +431,7 @@ class TestPipelinesEnabledGate:
 
 
 class TestConstructorAndCleanup:
-    async def test_first_use_binds_from_registry(self, restore_global_registry):
-        # Register a test tool into the (snapshotted) global registry, then let
-        # the constructor resolve it by name.
+    async def test_first_use_binds_from_catalog(self, fresh_catalog):
         from mote.runtime.tools.base_tool import BaseTool
 
         class RegTool(BaseTool):
@@ -444,15 +441,14 @@ class TestConstructorAndCleanup:
             async def call(self, *, v: str = "v") -> str:
                 return v
 
-        restore_global_registry.register(RegTool)
-        toolset = NativeCatalogToolset(id="test", catalog=restore_global_registry.snapshot())
+        toolset = NativeCatalogToolset(id="test", catalog=fresh_catalog.with_types(RegTool))
         ex = ToolExecutor("sess", tools=["RegTool"], toolsets=(toolset,))
         result = await ex.run_command("RegTool", {"v": "hello"})
         assert result.output == "hello"
         # Alias also routes to the same instance.
         assert await ex.run_command("rt", {"v": "z"}) is not None
 
-    async def test_constructor_does_not_discover_or_instantiate_tools(self, restore_global_registry, monkeypatch):
+    async def test_constructor_does_not_discover_or_instantiate_tools(self, fresh_catalog):
         created = 0
 
         class LazyTool(BaseTool):
@@ -466,7 +462,6 @@ class TestConstructorAndCleanup:
             async def call(self) -> str:
                 return "ready"
 
-        restore_global_registry.register(LazyTool)
         discover_calls = 0
 
         def discover():
@@ -475,7 +470,7 @@ class TestConstructorAndCleanup:
 
         toolset = NativeCatalogToolset(
             id="test",
-            catalog=restore_global_registry.snapshot(),
+            catalog=fresh_catalog.with_types(LazyTool),
             prepare=discover,
         )
         executor = ToolExecutor("sess", tools=["Lazy"], toolsets=(toolset,))
@@ -486,7 +481,7 @@ class TestConstructorAndCleanup:
         assert discover_calls == 1
         assert created == 1
 
-    async def test_unknown_declared_tool_is_skipped(self, restore_global_registry):
+    async def test_unknown_declared_tool_is_skipped(self):
         # A declared name with no registered class is silently skipped.
         ex = ToolExecutor("sess", tools=["DoesNotExist"])
         result = await ex.run_command("DoesNotExist", {})

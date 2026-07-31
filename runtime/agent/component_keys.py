@@ -25,8 +25,8 @@ from mote.runtime.agent.session_manager import RoleSessionManager
 from mote.runtime.artifacts import ArtifactRepositoryBlobStore, ArtifactRepositoryBundle
 from mote.runtime.context import ContextManager, ContextVisibility
 from mote.runtime.context.turn import TurnContextBus
-from mote.runtime.events import EventFabric
 from mote.runtime.events.backends import SQLiteSubscriptionStateStore
+from mote.runtime.events.fabric import EventFabric
 from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.fileops import FileOperations
 from mote.runtime.hook.manager import HookManager

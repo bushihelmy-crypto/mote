@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from mote.contracts.inference.generation_artifact import GenerationArtifact
+from mote.product.inference.backends.sqlite import ReceiptConflictError, SQLiteAttemptReceiptStore
 from mote.product.inference.daemon.generation import SharedGenerationBackend
 from mote.runtime.inference.generation import GatewayGenerationOwner, GenerationDomain, GenerationState
 
@@ -95,6 +96,23 @@ def test_unknown_generation_is_rejected_without_changing_active_generation():
     assert owner.active_generation_id == first.generation_id
 
 
+def test_draining_generation_cannot_be_reactivated():
+    owner = GatewayGenerationOwner()
+    first = _artifact("generation-1")
+    second = _artifact("generation-2", "generation-1")
+    owner.stage(first)
+    owner.activate(first.generation_id, first.artifact_digest)
+    lease = owner.acquire(GenerationDomain.MODEL)
+    owner.stage(second)
+    owner.activate(second.generation_id, second.artifact_digest)
+
+    with pytest.raises(ValueError, match="cannot activate from draining"):
+        owner.activate(first.generation_id, first.artifact_digest)
+
+    assert owner.active_generation_id == second.generation_id
+    lease.release()
+
+
 def test_shared_generation_backend_activates_only_exact_staged_digest():
     async def scenario():
         owner = GatewayGenerationOwner()
@@ -110,3 +128,19 @@ def test_shared_generation_backend_activates_only_exact_staged_digest():
     result, activations = asyncio.run(scenario())
     assert result[2] == "active"
     assert activations == [True]
+
+
+def test_persistent_draining_generation_cannot_be_reactivated(tmp_path):
+    async def scenario():
+        store = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
+        await store.initialize()
+        first = _artifact("generation-1")
+        second = _artifact("generation-2", "generation-1")
+        await store.stage_generation(first)
+        await store.activate_generation(first.generation_id, first.artifact_digest)
+        await store.stage_generation(second)
+        await store.activate_generation(second.generation_id, second.artifact_digest)
+        with pytest.raises(ReceiptConflictError, match="cannot activate from draining"):
+            await store.activate_generation(first.generation_id, first.artifact_digest)
+
+    asyncio.run(scenario())

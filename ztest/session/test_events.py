@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Typed session event payloads round-trip through the v3 fact codec."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -175,7 +176,9 @@ def test_prompt_rejected_event_roundtrips_as_safe_audit_fact():
     from mote.runtime.session.events import PROMPT_REJECTED, PromptRejectedEvent
 
     event = PromptRejectedEvent(
-        prompt="use <agent-vault:token>",
+        prompt_digest="sha256:deadbeef",
+        redacted_excerpt="use <agent-vault:token>",
+        classification="deny",
         reason="organization policy denied the prompt",
         terminate=True,
     )

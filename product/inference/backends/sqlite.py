@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from mote.contracts.events.governance import RestoreCopyMetadata
 from mote.contracts.inference.generation_artifact import GenerationArtifact
 from mote.contracts.inference.governance import BudgetReservation, ReservationState, UsageSettlement
 from mote.contracts.inference.persisted_event import PersistedLifecycleEvent
@@ -37,6 +39,12 @@ from mote.contracts.inference.session import (
 from mote.runtime.inference.generation import GenerationState
 from mote.runtime.inference.reconciliation import ReconciliationRecord, acknowledge_owner_action, require_owner_action
 from mote.runtime.persistence.async_io import run_disk_io as _run_disk_io
+
+INFERENCE_GATEWAY_LOGICAL_STORE = "inference-gateway-authority"
+INFERENCE_GATEWAY_CUTOVER_UNIT = "inference-gateway-sqlite-v1"
+INFERENCE_GATEWAY_STORE_GENERATION = 1
+INFERENCE_GATEWAY_STORAGE_FORMAT_VERSION = 1
+_BACKUP_METADATA_TABLE = "mote_restore_copy_metadata"
 
 
 class ReceiptConflictError(RuntimeError):
@@ -119,8 +127,11 @@ class SQLiteAttemptReceiptStore:
     async def verify_backup(self, source: Path) -> str:
         return await run_disk_io(self._verify_backup, source)
 
-    async def restore_from(self, source: Path) -> None:
-        await run_disk_io(self._restore_from, source)
+    async def describe_backup(self, source: Path) -> RestoreCopyMetadata:
+        return await run_disk_io(self._describe_backup, source)
+
+    async def restore_from(self, source: Path) -> RestoreCopyMetadata:
+        return await run_disk_io(self._restore_from, source)
 
     async def preserve_corrupt_copy(self) -> Path:
         return await run_disk_io(self._preserve_corrupt_copy)
@@ -183,8 +194,7 @@ class SQLiteAttemptReceiptStore:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self._path.parent, 0o700)
         with self._connect() as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE IF NOT EXISTS attempt_receipts (
                     attempt_id TEXT NOT NULL,
                     generation_id TEXT NOT NULL,
@@ -315,8 +325,7 @@ class SQLiteAttemptReceiptStore:
                     artifact TEXT NOT NULL,
                     activation_sequence INTEGER
                 );
-                """
-            )
+                """)
         os.chmod(self._path, 0o600)
 
     def _verify_startup(self, hard_min_free_bytes: int) -> SQLiteStartupReport:
@@ -356,6 +365,23 @@ class SQLiteAttemptReceiptStore:
                 result = target.execute("PRAGMA quick_check").fetchone()
                 if result is None or result[0] != "ok":
                     raise SQLiteIntegrityError("SQLite backup verification failed")
+            metadata = self._metadata_for_verified_copy(temporary, created_at=datetime.now(timezone.utc))
+            with sqlite3.connect(temporary) as target:
+                target.execute(
+                    f"CREATE TABLE {_BACKUP_METADATA_TABLE} ("
+                    "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), "
+                    "payload TEXT NOT NULL)"
+                )
+                target.execute(
+                    f"INSERT INTO {_BACKUP_METADATA_TABLE} (singleton, payload) " "VALUES (1, ?)",
+                    (json.dumps(self._metadata_to_json(metadata), sort_keys=True),),
+                )
+                target.commit()
+                result = target.execute("PRAGMA quick_check").fetchone()
+                if result is None or result[0] != "ok":
+                    raise SQLiteIntegrityError("SQLite backup metadata verification failed")
+            with sqlite3.connect(temporary) as target:
+                target.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             os.chmod(temporary, 0o600)
             os.replace(temporary, destination)
             self._fsync_directory(destination.parent)
@@ -363,28 +389,34 @@ class SQLiteAttemptReceiptStore:
             temporary.unlink(missing_ok=True)
             raise
 
-    def _restore_from(self, source: Path) -> None:
-        if not source.is_file() or source == self._path:
+    def _restore_from(self, source: Path) -> RestoreCopyMetadata:
+        if source == self._path:
             raise ValueError("SQLite restore source is invalid")
-        with sqlite3.connect(source) as candidate:
-            result = candidate.execute("PRAGMA quick_check").fetchone()
-        if result is None or result[0] != "ok":
-            raise SQLiteIntegrityError("SQLite restore source failed verification")
+        metadata = self._describe_backup(source)
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{self._path.name}.restore.", dir=self._path.parent)
         os.close(descriptor)
         temporary = Path(temporary_name)
         try:
-            with sqlite3.connect(source) as backup, sqlite3.connect(temporary) as target:
+            with (
+                sqlite3.connect(source) as backup,
+                sqlite3.connect(temporary) as target,
+            ):
                 backup.backup(target)
+                target.execute(f"DROP TABLE {_BACKUP_METADATA_TABLE}")
+                target.commit()
+                target.execute("PRAGMA journal_mode=DELETE")
                 verified = target.execute("PRAGMA quick_check").fetchone()
                 if verified is None or verified[0] != "ok":
                     raise SQLiteIntegrityError("restored SQLite copy failed verification")
+            for suffix in ("-wal", "-shm"):
+                self._path.with_name(self._path.name + suffix).unlink(missing_ok=True)
             os.chmod(temporary, 0o600)
             os.replace(temporary, self._path)
             self._fsync_directory(self._path.parent)
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
+        return metadata
 
     @staticmethod
     def _verify_backup(source: Path) -> str:
@@ -393,11 +425,151 @@ class SQLiteAttemptReceiptStore:
         try:
             with sqlite3.connect(f"file:{source}?mode=ro&immutable=1", uri=True) as candidate:
                 result = candidate.execute("PRAGMA quick_check").fetchone()
+                digest = SQLiteAttemptReceiptStore._logical_authority_digest(candidate)
         except sqlite3.DatabaseError as exc:
             raise SQLiteIntegrityError("SQLite backup verification could not run") from exc
         if result is None or result[0] != "ok":
             raise SQLiteIntegrityError("SQLite backup failed verification")
-        return "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+        return digest
+
+    @staticmethod
+    def _logical_authority_digest(connection: sqlite3.Connection) -> str:
+        """Digest canonical SQLite content, excluding transport metadata."""
+
+        digest = hashlib.sha256()
+        objects = connection.execute(
+            "SELECT type, name, sql FROM sqlite_master " "WHERE name != ? AND sql IS NOT NULL ORDER BY type, name",
+            (_BACKUP_METADATA_TABLE,),
+        ).fetchall()
+        for object_type, name, sql in objects:
+            digest.update(
+                json.dumps(
+                    [object_type, name, sql],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            digest.update(b"\0")
+            if object_type != "table" or name.startswith("sqlite_"):
+                continue
+            quoted = '"' + name.replace('"', '""') + '"'
+            rows = [
+                json.dumps(
+                    [SQLiteAttemptReceiptStore._canonical_sql_value(value) for value in row],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                for row in connection.execute(f"SELECT * FROM {quoted}").fetchall()
+            ]
+            for row in sorted(rows):
+                digest.update(row.encode("utf-8"))
+                digest.update(b"\0")
+        sequence_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"
+        ).fetchone()
+        if sequence_exists:
+            for name, sequence in connection.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name").fetchall():
+                digest.update(f"sqlite_sequence:{name}:{sequence}\0".encode())
+        return "sha256:" + digest.hexdigest()
+
+    @staticmethod
+    def _canonical_sql_value(value: object) -> object:
+        if isinstance(value, bytes):
+            return {"bytes": base64.b64encode(value).decode("ascii")}
+        if value is None or type(value) in {str, int, float}:
+            return value
+        raise TypeError(f"unsupported SQLite authority value: {type(value).__name__}")
+
+    @classmethod
+    def _describe_backup(cls, source: Path) -> RestoreCopyMetadata:
+        digest = cls._verify_backup(source)
+        try:
+            with sqlite3.connect(f"file:{source}?mode=ro&immutable=1", uri=True) as candidate:
+                row = candidate.execute(f"SELECT payload FROM {_BACKUP_METADATA_TABLE} WHERE singleton = 1").fetchone()
+            if row is None:
+                raise ValueError("missing restore metadata row")
+            payload = json.loads(row[0])
+            metadata = cls._metadata_from_json(payload)
+        except (sqlite3.DatabaseError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise SQLiteIntegrityError("SQLite restore copy metadata is invalid") from exc
+        if metadata.authority_digest != digest:
+            raise SQLiteIntegrityError("SQLite restore copy metadata digest does not match authority")
+        observed = cls._metadata_for_verified_copy(source, created_at=metadata.created_at)
+        if observed != metadata:
+            raise SQLiteIntegrityError("SQLite restore copy metadata does not match contained state")
+        return metadata
+
+    @classmethod
+    def _metadata_for_verified_copy(cls, source: Path, *, created_at: datetime) -> RestoreCopyMetadata:
+        digest = cls._verify_backup(source)
+        with sqlite3.connect(f"file:{source}?mode=ro&immutable=1", uri=True) as candidate:
+            generations = candidate.execute(
+                "SELECT generation_id, artifact_digest FROM gateway_generations " "WHERE state = ?",
+                (GenerationState.ACTIVE.value,),
+            ).fetchall()
+            if len(generations) != 1:
+                raise SQLiteIntegrityError("restore copy must contain exactly one active generation")
+            high_water = candidate.execute(
+                "SELECT "
+                "COALESCE((SELECT MAX(sequence) FROM lifecycle_events), 0), "
+                "COALESCE((SELECT MAX(sequence) FROM receipt_outbox), 0), "
+                "COALESCE((SELECT MAX(sequence) FROM session_outbox), 0)"
+            ).fetchone()
+        generation_id, artifact_digest = generations[0]
+        return RestoreCopyMetadata(
+            logical_store=INFERENCE_GATEWAY_LOGICAL_STORE,
+            cutover_unit_id=INFERENCE_GATEWAY_CUTOVER_UNIT,
+            source_generation=INFERENCE_GATEWAY_STORE_GENERATION,
+            storage_format_version=INFERENCE_GATEWAY_STORAGE_FORMAT_VERSION,
+            created_at=created_at,
+            authority_digest=digest,
+            sequence_checkpoint_domain="gateway-sqlite-transaction",
+            high_water_mark=(
+                f"active={generation_id}@{artifact_digest};"
+                f"lifecycle={high_water[0]};receipt_outbox={high_water[1]};session_outbox={high_water[2]}"
+            ),
+            retention_policy="operator-managed crash-consistent backup retention",
+            legal_hold_policy="operator legal hold prevents destruction, not format admission",
+            destruction_policy="securely delete when retention and legal hold permit",
+            restore_conversion_contract="inference-gateway-sqlite-v1-exact",
+        )
+
+    @staticmethod
+    def _metadata_to_json(metadata: RestoreCopyMetadata) -> dict[str, object]:
+        return {
+            "schema": "inference-gateway-restore-copy-v1",
+            "logical_store": metadata.logical_store,
+            "cutover_unit_id": metadata.cutover_unit_id,
+            "source_generation": metadata.source_generation,
+            "storage_format_version": metadata.storage_format_version,
+            "created_at": metadata.created_at.isoformat(),
+            "authority_digest": metadata.authority_digest,
+            "sequence_checkpoint_domain": metadata.sequence_checkpoint_domain,
+            "high_water_mark": metadata.high_water_mark,
+            "retention_policy": metadata.retention_policy,
+            "legal_hold_policy": metadata.legal_hold_policy,
+            "destruction_policy": metadata.destruction_policy,
+            "restore_conversion_contract": metadata.restore_conversion_contract,
+        }
+
+    @staticmethod
+    def _metadata_from_json(payload: object) -> RestoreCopyMetadata:
+        if not isinstance(payload, dict) or payload.get("schema") != ("inference-gateway-restore-copy-v1"):
+            raise ValueError("unsupported restore metadata schema")
+        return RestoreCopyMetadata(
+            logical_store=str(payload["logical_store"]),
+            cutover_unit_id=str(payload["cutover_unit_id"]),
+            source_generation=int(payload["source_generation"]),
+            storage_format_version=int(payload["storage_format_version"]),
+            created_at=datetime.fromisoformat(str(payload["created_at"])),
+            authority_digest=str(payload["authority_digest"]),
+            sequence_checkpoint_domain=str(payload["sequence_checkpoint_domain"]),
+            high_water_mark=str(payload["high_water_mark"]),
+            retention_policy=str(payload["retention_policy"]),
+            legal_hold_policy=str(payload["legal_hold_policy"]),
+            destruction_policy=str(payload["destruction_policy"]),
+            restore_conversion_contract=str(payload["restore_conversion_contract"]),
+        )
 
     def _preserve_corrupt_copy(self) -> Path:
         if not self._path.is_file():
@@ -511,7 +683,12 @@ class SQLiteAttemptReceiptStore:
                 "INSERT INTO gateway_generations "
                 "(generation_id, artifact_digest, state, artifact) "
                 "VALUES (?, ?, ?, ?)",
-                (artifact.generation_id, artifact.artifact_digest, GenerationState.STAGED.value, payload),
+                (
+                    artifact.generation_id,
+                    artifact.artifact_digest,
+                    GenerationState.STAGED.value,
+                    payload,
+                ),
             )
             connection.commit()
 
@@ -526,14 +703,18 @@ class SQLiteAttemptReceiptStore:
                 raise ReceiptConflictError("unknown durable generation")
             if row[0] != artifact_digest:
                 raise ReceiptConflictError("generation artifact digest mismatch")
-            if row[1] not in {GenerationState.STAGED.value, GenerationState.DRAINING.value}:
+            if row[1] != GenerationState.STAGED.value:
                 raise ReceiptConflictError(f"generation cannot activate from {row[1]}")
             sequence = connection.execute(
                 "SELECT COALESCE(MAX(activation_sequence), 0) + 1 " "FROM gateway_generations"
             ).fetchone()[0]
             connection.execute(
                 "UPDATE gateway_generations SET state = ? " "WHERE state = ? AND generation_id != ?",
-                (GenerationState.DRAINING.value, GenerationState.ACTIVE.value, generation_id),
+                (
+                    GenerationState.DRAINING.value,
+                    GenerationState.ACTIVE.value,
+                    generation_id,
+                ),
             )
             connection.execute(
                 "UPDATE gateway_generations SET state = ?, activation_sequence = ? " "WHERE generation_id = ?",
@@ -969,7 +1150,13 @@ class SQLiteReconciliationAuthority:
             record = require_owner_action(proposal)
             connection.execute(
                 "INSERT INTO reconciliation_records VALUES (?, ?, ?, ?, ?, NULL)",
-                (proposal.proposal_id, execution_id, binding[0], record.state.value, proposal.model_dump_json()),
+                (
+                    proposal.proposal_id,
+                    execution_id,
+                    binding[0],
+                    record.state.value,
+                    proposal.model_dump_json(),
+                ),
             )
             connection.execute(
                 "INSERT INTO reconciliation_outbox (proposal_id, payload) " "VALUES (?, ?)",
@@ -987,7 +1174,12 @@ class SQLiteReconciliationAuthority:
             )
             connection.execute(
                 "INSERT INTO owner_command_outbox " "(command_id, owner_id, proposal_id, payload) VALUES (?, ?, ?, ?)",
-                (command.command_id, command.owner_id, command.proposal_id, command.model_dump_json()),
+                (
+                    command.command_id,
+                    command.owner_id,
+                    command.proposal_id,
+                    command.model_dump_json(),
+                ),
             )
             connection.commit()
             return record
@@ -1048,7 +1240,11 @@ class SQLiteReconciliationAuthority:
                 return current
             connection.execute(
                 "UPDATE reconciliation_records SET state = ?, acknowledgement = ? " "WHERE proposal_id = ?",
-                (updated.state.value, acknowledgement.model_dump_json(), acknowledgement.proposal_id),
+                (
+                    updated.state.value,
+                    acknowledgement.model_dump_json(),
+                    acknowledgement.proposal_id,
+                ),
             )
             connection.commit()
             return updated
