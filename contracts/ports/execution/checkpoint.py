@@ -1,0 +1,31 @@
+"""Inference checkpoint lifecycle port."""
+
+from typing import Protocol
+
+from mote.contracts.execution.models import InferenceCheckpointState
+
+
+class InferenceCheckpointPort(Protocol):
+    def reinstate(self) -> bool:
+        ...
+
+    def resume(self) -> InferenceCheckpointState | None:
+        ...
+
+    def begin_call(self, state: InferenceCheckpointState) -> None:
+        ...
+
+    def refresh(self, state: InferenceCheckpointState) -> None:
+        ...
+
+    def record_result(self) -> None:
+        ...
+
+    def discard(self) -> None:
+        ...
+
+    def abort(self) -> None:
+        ...
+
+
+__all__ = ["InferenceCheckpointPort"]

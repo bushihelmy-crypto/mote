@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.text import html_to_markdown
+from mote.runtime.media.html import html_to_markdown
 
 # The conversion depends on the optional ``markdownify`` library.
 pytest.importorskip("markdownify")
@@ -77,16 +77,5 @@ class TestPostProcessing:
 
 class TestDegradation:
     def test_markdownify_absent_returns_none(self, monkeypatch):
-        # Simulate the optional dep being unavailable: the import inside the
-        # function fails -> None (caller falls back).
-        import builtins
-
-        real_import = builtins.__import__
-
-        def _fake_import(name, *args, **kwargs):
-            if name == "markdownify":
-                raise ImportError("simulated missing markdownify")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _fake_import)
+        monkeypatch.setattr("mote.runtime.media.html._markdownify", None)
         assert html_to_markdown("<p>x</p>") is None

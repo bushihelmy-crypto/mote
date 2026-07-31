@@ -4,9 +4,8 @@ from dataclasses import replace
 
 import pytest
 
-from mote.contracts.handoff import RuntimeHandoffIntent
-from mote.contracts.ports import RuntimeHandoffJournal
-from mote.contracts.runtimes import (
+from mote.contracts.ports.runtime.handoff import RuntimeHandoffJournal
+from mote.contracts.runtime import (
     CheckpointFidelity,
     DriverCheckpoint,
     DriverStartResult,
@@ -15,6 +14,7 @@ from mote.contracts.runtimes import (
     RuntimeHealth,
     RuntimeState,
 )
+from mote.contracts.runtime.handoff import RuntimeHandoffIntent
 from mote.runtime.interactive import RuntimeHost
 from mote.runtime.session import RuntimeCheckpointEvent, SessionLog, SessionMetaEvent
 from mote.runtime.session.replay import replay

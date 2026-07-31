@@ -30,7 +30,7 @@ import json
 from typing import Any
 
 from mote.runtime.hook.types import EMPTY, HookOutcome
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 
 def _coerce_context(value: Any) -> list[str]:

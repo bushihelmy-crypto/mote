@@ -26,7 +26,7 @@ from typing import AsyncGenerator, Generator, Optional
 
 import httpx
 
-from mote.contracts.config.mcp import MCPServerConfig
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.models.auth.oauth import OAuthManager
 
 

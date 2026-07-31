@@ -3,14 +3,8 @@
 """Tests for the PROFILE overlay layer (``~/.mote/<name>.config.yaml``)."""
 from __future__ import annotations
 
-import mote.runtime.config.sources as sources_mod
-from mote.runtime.config.loader import build_layer_stack
-from mote.runtime.config.sources import ConfigSource, discover_source_files
-
-
-def _point_user_dir_at(tmp_path, monkeypatch):
-    """Redirect the user config dir so profile files resolve under tmp_path."""
-    monkeypatch.setattr(sources_mod, "CONFIG_ROOT", tmp_path)
+from mote.product.config.loader import build_layer_stack
+from mote.product.config.sources import ConfigSource, discover_source_files
 
 
 def test_no_profile_means_no_profile_layer():
@@ -19,34 +13,31 @@ def test_no_profile_means_no_profile_layer():
 
 
 def test_profile_file_discovered_when_named(tmp_path, monkeypatch):
-    _point_user_dir_at(tmp_path, monkeypatch)
     (tmp_path / "work.config.yaml").write_text("proxy: http://profile\n")
-    files = discover_source_files(profile="work")
+    files = discover_source_files(profile="work", user_config_root=tmp_path)
     profiles = [f for f in files if f.source is ConfigSource.PROFILE]
     assert len(profiles) == 1
     assert profiles[0].path.name == "work.config.yaml"
 
 
 def test_missing_profile_file_is_silently_skipped(tmp_path, monkeypatch):
-    _point_user_dir_at(tmp_path, monkeypatch)
-    files = discover_source_files(profile="does-not-exist")
+    files = discover_source_files(profile="does-not-exist", user_config_root=tmp_path)
     assert not any(f.source is ConfigSource.PROFILE for f in files)
 
 
 def test_profile_overlay_overrides_lower_layers(tmp_path, monkeypatch):
-    _point_user_dir_at(tmp_path, monkeypatch)
     (tmp_path / "work.config.yaml").write_text("proxy: from-profile\n")
-    stack = build_layer_stack(profile="work")
+    stack = build_layer_stack(profile="work", user_config_root=tmp_path)
     assert stack.effective().get("proxy") == "from-profile"
 
 
 def test_profile_is_below_env_and_cli(tmp_path, monkeypatch):
-    _point_user_dir_at(tmp_path, monkeypatch)
     (tmp_path / "work.config.yaml").write_text("proxy: from-profile\n")
     stack = build_layer_stack(
         profile="work",
         env={"MOTE_PROXY": "from-env"},
         cli_overrides=["proxy=from-cli"],
+        user_config_root=tmp_path,
     )
     # ENV (50) and CLI_FLAG (60) both outrank PROFILE (40)
     assert stack.effective().get("proxy") == "from-cli"
@@ -54,17 +45,15 @@ def test_profile_is_below_env_and_cli(tmp_path, monkeypatch):
 
 
 def test_profile_selected_via_env_var(tmp_path, monkeypatch):
-    _point_user_dir_at(tmp_path, monkeypatch)
     (tmp_path / "work.config.yaml").write_text("proxy: env-selected-profile\n")
     # No explicit profile arg; MOTE_PROFILE picks it.
-    stack = build_layer_stack(env={"MOTE_PROFILE": "work"})
+    stack = build_layer_stack(env={"MOTE_PROFILE": "work"}, user_config_root=tmp_path)
     assert stack.effective().get("proxy") == "env-selected-profile"
 
 
 def test_profile_layer_is_trusted_credentials_survive(tmp_path, monkeypatch):
-    _point_user_dir_at(tmp_path, monkeypatch)
     (tmp_path / "work.config.yaml").write_text("llm:\n  api_key: profile-key\n  base_url: http://profile\n")
-    stack = build_layer_stack(profile="work")
+    stack = build_layer_stack(profile="work", user_config_root=tmp_path)
     layer = next(l for l in stack.layers if l.source is ConfigSource.PROFILE)
     # PROFILE is trusted: unlike WORKDIR, its credentials are NOT stripped.
     assert layer.data["llm"]["api_key"] == "profile-key"

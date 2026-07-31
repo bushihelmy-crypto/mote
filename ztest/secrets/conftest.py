@@ -9,13 +9,3 @@ store module resolves its defaults) at a fresh empty tmp dir so every test is
 hermetic regardless of the machine it runs on.
 """
 from __future__ import annotations
-
-import pytest
-
-import mote.runtime.secrets.store as store_mod
-
-
-@pytest.fixture(autouse=True)
-def _isolate_config_root(tmp_path_factory, monkeypatch):
-    empty = tmp_path_factory.mktemp("home_mote")
-    monkeypatch.setattr(store_mod, "CONFIG_ROOT", empty)

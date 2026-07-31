@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.events.types import FileChangedEvent, FileMutatedEvent
-from mote.contracts.fileops.models import AbsentVersion, FileChangeKind, NameIdentity, PresentVersion, TargetIdentity
-from mote.contracts.ports import EphemeralContextSource
-from mote.runtime.context.turn_context import ChangedFilesContextSource
+from mote.contracts.events.file.observation import FileChangedEvent, FileMutatedEvent
+from mote.contracts.file.identity import AbsentVersion, FileChangeKind, NameIdentity, PresentVersion, TargetIdentity
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
+from mote.runtime.context.turn import ChangedFilesContextSource
 
 
 def run(coro):

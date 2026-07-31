@@ -18,6 +18,7 @@ from mote.runtime.ledger.run_journal import (
     STARTED,
     RunJournal,
     StepRecord,
+    UnsupportedRunJournalRecord,
     run_journaled_step,
 )
 
@@ -26,6 +27,7 @@ __all__ = [
     "LedgerRecord",
     "RunJournal",
     "StepRecord",
+    "UnsupportedRunJournalRecord",
     "run_journaled_step",
     "STARTED",
     "COMPLETED",

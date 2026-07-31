@@ -164,6 +164,7 @@ allure-results
 .vscode
 .cursor
 .claude
+.codex
 key.yaml
 /data/
 data.ms

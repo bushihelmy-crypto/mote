@@ -34,8 +34,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.constants.messages import CACHE_INTENT, TOOL_CALL_ID, TOOL_CALLS, TOOL_REFERENCES
-from mote.contracts.schema import Message
+from mote.contracts.conversation import Message
+from mote.contracts.conversation.fields import CACHE_INTENT, TOOL_CALL_ID, TOOL_CALLS, TOOL_REFERENCES
 from mote.runtime.context.compaction.pipeline import ReductionPipeline
 from mote.runtime.context.compaction.request import ReductionReason, ReductionRequest, Urgency
 from mote.runtime.context.compaction.transcript import Transcript

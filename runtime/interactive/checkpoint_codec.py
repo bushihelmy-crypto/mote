@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from mote.contracts.runtimes import CheckpointFidelity, DriverCheckpoint, RuntimeCheckpoint
+from mote.contracts.runtime import CheckpointFidelity, DriverCheckpoint, RuntimeCheckpoint
 
 _DATA_PREFIX = "data:application/json;base64,"
 

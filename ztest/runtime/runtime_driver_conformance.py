@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from mote.contracts.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint, RuntimeRef
-from mote.contracts.surfaces import SurfaceInput, SurfacePresentationMode
+from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint, RuntimeRef
+from mote.contracts.surface import SurfaceInput, SurfacePresentationMode
 
 
 @dataclass(frozen=True, slots=True)

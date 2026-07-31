@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
-from mote.contracts.runtimes import RuntimeAccessMode
-from mote.contracts.text import cap_head_tail
+from mote.contracts.artifact import ArtifactRef
+from mote.contracts.runtime import RuntimeAccessMode
+from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
 from mote.product.toolsets.builtin.web_browser import WebBrowser
-from mote.runtime.tools.dependency._browser import TEXT_MAX_CHARS, BrowserSession
+from mote.runtime.interactive.browser.session import TEXT_MAX_CHARS, BrowserSession
+from mote.runtime.text.elision import cap_head_tail
 
 from .conftest import CapRole, bind, run
 
@@ -395,8 +396,9 @@ class TestReadImage:
             assert "#chart" in out.output
             # The vision capability was called once with real image bytes + prompt.
             assert len(caprole.describe_image_calls) == 1
-            b64, kwargs = caprole.describe_image_calls[0]
-            assert isinstance(b64, str) and b64  # non-empty base64 PNG
+            artifact, kwargs = caprole.describe_image_calls[0]
+            assert isinstance(artifact, ArtifactRef)
+            assert artifact.mime_type == "image/png"
             assert kwargs.get("prompt") == "describe the chart"
             await tool.call(action="close")
 
@@ -642,7 +644,7 @@ class TestBrowserProfile:
             await tool.call(action="close")
 
         # Patch BrowserSession.start to capture what storage_state it was seeded with.
-        from mote.runtime.tools.dependency import _browser as browser_mod
+        from mote.runtime.interactive.browser import session as browser_mod
 
         real_start = browser_mod.BrowserSession.start
 
@@ -837,6 +839,9 @@ class _FakeContext:
         self.pages.append(page)
         return page
 
+    async def route(self, *_args, **_kwargs):
+        return None
+
     async def close(self):
         self.closed = True
 
@@ -889,8 +894,10 @@ class _FakeCM:
 
 def _install_fake_pw(monkeypatch, chromium):
     """Point the engine's ``async_playwright`` factory at our fakes."""
+    from mote.runtime.interactive.browser import session as browser_session
+
     cm = _FakeCM(_FakePw(chromium))
-    monkeypatch.setattr(playwright, "async_playwright", lambda: cm)
+    monkeypatch.setattr(browser_session, "async_playwright", lambda: cm)
     return cm
 
 

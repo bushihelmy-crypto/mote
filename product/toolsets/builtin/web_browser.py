@@ -26,13 +26,16 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Optional
 
-from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
-from mote.contracts.models.capabilities import supports_vision
-from mote.contracts.permissions import PermissionDecision
-from mote.contracts.runtimes import RuntimeAccessMode
+from mote.contracts.authorization import PermissionDecision
+from mote.contracts.model.capabilities import supports_vision
+from mote.contracts.runtime import RuntimeAccessMode
+from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
 from mote.runtime.artifacts.media import publish_media_artifact
-from mote.runtime.errors import ToolNotConfiguredError
+from mote.runtime.errors import ToolError, ToolNotConfiguredError
+from mote.runtime.interactive.browser.driver import BrowserRuntimeDriver
+from mote.runtime.interactive.browser.session import BrowserSession
+from mote.runtime.media.video import looks_like_video_path
 from mote.runtime.secrets.refs import SecretRefError, expand_secret_refs
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import (
@@ -52,11 +55,8 @@ from mote.runtime.tools.capability_types import (
     LoadBrowserProfile,
     SaveBrowserProfile,
 )
-from mote.runtime.tools.dependency._browser import BrowserSession
-from mote.runtime.tools.dependency._browser_runtime import BrowserRuntimeDriver
-from mote.runtime.tools.dependency._video import looks_like_video_path
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError, ToolMedia, ToolResult
+from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).
@@ -85,7 +85,7 @@ _READ_IMAGE_HEADER = "Image reading of {target}:"
 _MSG_SCREENSHOT_MODEL_UNSUPPORTED = (
     "Cannot take a screenshot: the default model '{model}' is not vision-capable, "
     "so the captured image would never reach it. Configure a multimodal (vision) "
-    "model as models.default, or use the 'read' action to get the page's text."
+    "model on the default route, or use the 'read' action to get the page's text."
 )
 _MSG_NAVIGATE_IS_VIDEO = (
     "'{url}' is a video URL. Navigating a browser to a raw video only loads a "

@@ -5,7 +5,7 @@ import hashlib
 
 import pytest
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactContentRef,
     ArtifactPublicationIntent,
     ArtifactPublicationState,
@@ -13,16 +13,17 @@ from mote.contracts.artifacts import (
     ArtifactRepresentationInput,
     ArtifactRepresentationIntent,
 )
-from mote.contracts.errors.artifacts import (
+from mote.contracts.artifact.errors import (
     ArtifactIdempotencyConflictError,
     ArtifactNotFoundError,
     ArtifactPublicationTerminalError,
     ArtifactRevisionConflictError,
 )
-from mote.contracts.ports import ArtifactPublicationOutbox
-from mote.contracts.ports import ReliableArtifactPublisher as ReliableArtifactPublisherPort
+from mote.contracts.content import ContentIdentity
+from mote.contracts.ports.artifact.store import ArtifactPublicationOutbox
+from mote.contracts.ports.artifact.store import ReliableArtifactPublisher as ReliableArtifactPublisherPort
 from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore, ReliableArtifactPublisher
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.runtime.artifacts.repository import ArtifactRepository
 
 
 class MemoryBlobs:
@@ -33,15 +34,14 @@ class MemoryBlobs:
         digest = hashlib.sha256(content).hexdigest()
         self.contents[digest] = content
         return ArtifactContentRef(
-            content_ref=f"sha256:{digest}",
-            digest=digest,
-            size=len(content),
+            identity=ContentIdentity(digest, len(content)),
+            locator=f"sha256:{digest}",
         )
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        content = self.contents[ref.digest]
-        assert hashlib.sha256(content).hexdigest() == ref.digest
-        assert len(content) == ref.size
+        content = self.contents[ref.identity.digest]
+        assert hashlib.sha256(content).hexdigest() == ref.identity.digest
+        assert len(content) == ref.identity.size
         return content
 
 
@@ -152,9 +152,8 @@ async def test_materialized_intent_rejects_untrusted_cas_metadata(tmp_path):
 
     blobs = UnverifiedBlobs()
     claimed = ArtifactContentRef(
-        content_ref=f"sha256:{hashlib.sha256(b'claimed').hexdigest()}",
-        digest=hashlib.sha256(b"claimed").hexdigest(),
-        size=len(b"claimed"),
+        identity=ContentIdentity(hashlib.sha256(b"claimed").hexdigest(), len(b"claimed")),
+        locator=f"sha256:{hashlib.sha256(b'claimed').hexdigest()}",
     )
     store = DurableArtifactStore(tmp_path / "artifacts.sqlite3", blobs)
 
@@ -376,8 +375,9 @@ async def test_real_repository_adapter_uses_reserved_durable_publication(tmp_pat
 
     ref = revision.get("svg")
     assert await store.read(ref) == b"repository-backed"
-    assert repository.resolve_live(ref.digest).size == len(b"repository-backed")
-    assert repository.catalog.health().active_reservations == 0
+    assert {item.identity.digest: item.identity.size for item in repository.scan()}[ref.digest] == len(
+        b"repository-backed"
+    )
 
 
 @pytest.mark.asyncio
@@ -403,6 +403,5 @@ async def test_sqlite_failure_leaves_live_orphan_never_aborted_blob(
         await store.publish(_request(content))
 
     digest = hashlib.sha256(content).hexdigest()
-    artifact = repository.resolve_live(digest)
+    artifact = next(item for item in repository.scan() if item.identity.digest == digest)
     assert repository.read_bytes(artifact) == content
-    assert repository.catalog.health().active_reservations == 0

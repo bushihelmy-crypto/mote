@@ -1,0 +1,1 @@
+"""Conversation configuration contracts."""

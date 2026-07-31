@@ -1,0 +1,116 @@
+"""Conversation context-manager result types and configuration.
+
+Contains the pure-data models that context modules produce/consume.
+The algorithmic logic stays in its respective module.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from pydantic import BaseModel
+
+from mote.contracts.conversation.constants import AUTOCOMPACT_BUFFER_TOKENS as _AUTOCOMPACT_BUFFER_TOKENS
+from mote.contracts.conversation.constants import AUTOCOMPACT_KEEP_TAIL_MESSAGES as _AUTOCOMPACT_KEEP_TAIL_MESSAGES
+from mote.contracts.conversation.constants import AUTOCOMPACT_KEEP_TAIL_TOKENS as _AUTOCOMPACT_KEEP_TAIL_TOKENS
+from mote.contracts.conversation.constants import (
+    MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES as _MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+)
+from mote.contracts.conversation.constants import MAX_OUTPUT_TOKENS_FOR_SUMMARY as _MAX_OUTPUT_TOKENS_FOR_SUMMARY
+from mote.contracts.conversation.constants import (
+    MICROCOMPACT_CLEAR_AT_LEAST_TOKENS as _MICROCOMPACT_CLEAR_AT_LEAST_TOKENS,
+)
+from mote.contracts.conversation.constants import MICROCOMPACT_KEEP_RECENT as _MICROCOMPACT_KEEP_RECENT
+from mote.contracts.conversation.constants import MICROCOMPACT_TRIGGER_THRESHOLD as _MICROCOMPACT_TRIGGER_THRESHOLD
+
+# ---------------------------------------------------------------------------
+# ContextManagerConfig (from context/config.py)
+# ---------------------------------------------------------------------------
+
+
+class ContextManagerConfig(BaseModel):
+    """Tunable knobs for the context manager's own scopes (history + request).
+
+    The tool-execution scope (per-tool result caps + disk persistence) is NOT
+    here — it is owned by ``ToolResultLimitConfig`` and configured on the
+    ``ToolExecutor`` directly.
+    """
+
+    # --- History-level: microcompact (fold old tool results) ---
+    enable_microcompact: bool = True
+    microcompact_keep_recent: int = _MICROCOMPACT_KEEP_RECENT
+    microcompact_trigger_threshold: int = _MICROCOMPACT_TRIGGER_THRESHOLD
+    # Min tokens a fold must free to be worth the prompt-cache write it forces
+    # (mirrors Anthropic context-editing's ``clear_at_least``). Below this the
+    # fold is skipped so a trivial trim never eats a cache miss.
+    microcompact_clear_at_least: int = _MICROCOMPACT_CLEAR_AT_LEAST_TOKENS
+
+    # --- History-level: autocompact (summarize & rebuild) ---
+    enable_autocompact: bool = True
+    autocompact_buffer_tokens: int = _AUTOCOMPACT_BUFFER_TOKENS
+    max_output_tokens_for_summary: int = _MAX_OUTPUT_TOKENS_FOR_SUMMARY
+    keep_tail_tokens: int = _AUTOCOMPACT_KEEP_TAIL_TOKENS
+    keep_tail_messages: int = _AUTOCOMPACT_KEEP_TAIL_MESSAGES
+    max_consecutive_failures: int = _MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
+
+
+# ---------------------------------------------------------------------------
+# TokenState (from context/budget.py)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TokenState:
+    """A snapshot of where the conversation sits relative to the window.
+
+    Captures the token warning state plus the autocompact decision.
+    """
+
+    token_count: int
+    model: str
+    effective_window: int
+    autocompact_threshold: int
+    percent_left: int
+    above_warning: bool
+    above_error: bool
+    above_autocompact: bool
+    at_blocking_limit: bool
+
+    @property
+    def should_autocompact(self) -> bool:
+        """True when the stored history should be summarized & rebuilt."""
+        return self.above_autocompact
+
+
+# ---------------------------------------------------------------------------
+# FoldState (from context/manager.fold_state)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FoldState:
+    """A snapshot of where the history sits relative to the count-based fold.
+
+    The token-based autocompact is described by :class:`TokenState`; this is its
+    count-based sibling for the FREE microcompact fold, which clears eligible
+    tool-result bodies from old model tool-call turns once the number of live
+    reconstructable turns exceeds ``trigger``, while protecting the most recent
+    ``keep_recent`` complete turns. One turn is an assistant thinking response,
+    its tool-call batch, and the corresponding results. Lets a pre-fold pressure
+    warning reason about the same count the reducer will act on.
+    """
+
+    enabled: bool
+    active_count: int
+    trigger: int
+    keep_recent: int
+
+    @property
+    def near_fold(self) -> bool:
+        """True when active tool-call turns have reached 80% of the trigger (but not yet
+        past it): the last window to record anything before the oldest bodies are
+        cleared. Silent when folding is disabled or the trigger is non-positive."""
+        if not self.enabled or self.trigger <= 0:
+            return False
+        warn_at = -(-self.trigger * 4 // 5)  # ceil(trigger * 0.8), int-only
+        return warn_at <= self.active_count <= self.trigger

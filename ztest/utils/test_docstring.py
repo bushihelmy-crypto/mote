@@ -1,8 +1,8 @@
-"""Tests for :mod:`mote.contracts.introspection.docstrings` shared parsing utilities."""
+"""Tests for :mod:`mote.kernel.tools.docstrings` shared parsing utilities."""
 
 from __future__ import annotations
 
-from mote.contracts.introspection.docstrings import first_line, parse_section
+from mote.kernel.tools.docstrings import first_line, parse_section
 
 # ---------------------------------------------------------------------------
 # first_line

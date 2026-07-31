@@ -17,8 +17,8 @@ from typing import Optional
 import pytest
 import yaml
 
-from mote.runtime.context.skills.skill_definition import SkillDefinition
-from mote.runtime.context.skills.skill_pool import SkillPool
+from mote.product.skills.skill_definition import SkillDefinition
+from mote.product.skills.skill_pool import SkillPool
 
 
 def write_skill(

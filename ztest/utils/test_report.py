@@ -22,8 +22,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-import mote.runtime.reporting as report_mod
-from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+import mote.runtime.telemetry.reporting as report_mod
+from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.runtime.events import (
     LLMStreamCommittedEvent,
     LLMStreamDeltaEvent,
@@ -34,7 +34,7 @@ from mote.runtime.events import (
     TelemetryRuntime,
     bind_telemetry,
 )
-from mote.runtime.reporting import (
+from mote.runtime.telemetry.reporting import (
     CURRENT_ROLE,
     END_MARKER_NAME,
     BlockType,

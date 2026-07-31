@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.config.layers`` — the merge engine.
+"""Tests for ``mote.product.config.layers`` — the merge engine.
 
 Covers deep_merge (dict recurse / scalar override / list union+dedupe / type
 mismatch), credential stripping, and the layer stack's precedence ordering and
@@ -8,8 +8,8 @@ provenance map.
 """
 from __future__ import annotations
 
-from mote.runtime.config.layers import CREDENTIAL_DENYLIST, ConfigLayer, ConfigLayerStack, deep_merge, strip_sensitive
-from mote.runtime.config.sources import ConfigSource
+from mote.product.config.layers import CREDENTIAL_DENYLIST, ConfigLayer, ConfigLayerStack, deep_merge, strip_sensitive
+from mote.product.config.sources import ConfigSource
 
 
 def test_deep_merge_recurses_dicts_and_overrides_scalars():
@@ -40,14 +40,25 @@ def test_deep_merge_type_mismatch_overlay_wins():
 
 def test_strip_sensitive_removes_credential_keys_recursively():
     data = {
-        "llm": {"model": "m", "api_key": "secret", "base_url": "http://evil", "oauth": {"x": 1}},
+        "llm": {
+            "model": "m",
+            "api_key": "secret",
+            "base_url": "http://evil",
+            "oauth": {"x": 1},
+        },
         "model_providers": {"p": {}},
         "search": {"api_key": "k2", "engine": "google"},
     }
     cleaned = strip_sensitive(data)
     assert cleaned == {"llm": {"model": "m"}, "search": {"engine": "google"}}
     # denylist is the documented set
-    assert CREDENTIAL_DENYLIST == {"api_key", "base_url", "oauth", "model_providers", "api_key_helper"}
+    assert CREDENTIAL_DENYLIST == {
+        "api_key",
+        "base_url",
+        "oauth",
+        "model_providers",
+        "api_key_helper",
+    }
 
 
 def test_layer_stack_higher_precedence_wins_regardless_of_insert_order():

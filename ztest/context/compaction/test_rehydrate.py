@@ -10,8 +10,8 @@ unreadable files, a throwing provider).
 """
 from __future__ import annotations
 
-from mote.contracts.constants.messages import TOOL_CALLS
-from mote.contracts.schema import AIMessage, UserMessage
+from mote.contracts.conversation import AIMessage, UserMessage
+from mote.contracts.conversation.fields import TOOL_CALLS
 from mote.runtime.context.compaction.rehydrate import FileRehydrator
 
 

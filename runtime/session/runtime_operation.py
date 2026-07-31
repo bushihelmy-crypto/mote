@@ -1,13 +1,13 @@
 """Rollout-backed local WAL for deterministic Runtime mutations."""
 from __future__ import annotations
 
-from mote.contracts.errors.runtimes import ManagedRuntimeStateError
-from mote.contracts.runtimes import (
+from mote.contracts.runtime import (
     RuntimeCheckpoint,
     RuntimeOperationIntent,
     RuntimeOperationReceipt,
     RuntimeOperationRecovery,
 )
+from mote.contracts.runtime.errors import ManagedRuntimeStateError
 from mote.runtime.session.events import (
     RuntimeOperationAbortedEvent,
     RuntimeOperationCompletedEvent,

@@ -18,11 +18,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from mote.contracts.config.llm import LLMConfig, LLMType
-from mote.product.integrations.bootstrap import builtin_provider_registry
-from mote.product.integrations.models.deepseek import DeepSeekLLM
+from mote.contracts.config.model.llm import LLMConfig, LLMType
+from mote.contracts.model.transport import resolve_api_type
+from mote.product.models.bootstrap import builtin_provider_registry
+from mote.product.models.providers.deepseek import DeepSeekLLM
 from mote.runtime.models.clients.dsml import contains_dsml, parse_dsml_tool_calls
-from mote.runtime.models.clients.registry import resolve_api_type
 
 # Fullwidth vertical line (U+FF5C), doubled — the real DSML separator.
 _BAR = "\uff5c\uff5c"

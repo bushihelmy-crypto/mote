@@ -9,11 +9,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
-from mote.contracts.leases import RunLease, RunLeasePolicy
-from mote.contracts.ports import LeaseEpoch, RunLeaseCoordinator
-from mote.runtime.disk import disk_io
+from mote.contracts.ports.session.run_lease import LeaseEpoch, RunLeaseCoordinator
+from mote.contracts.session.lease import RunLease, RunLeasePolicy
 from mote.runtime.errors import OutputCommitFencedError, RunLeaseCoordinatorUnavailableError, RunLeaseUnavailableError
 from mote.runtime.events import RunLeaseEvent, observe_event
+from mote.runtime.persistence import disk_io
 
 
 class RunLeaseStore:

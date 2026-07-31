@@ -44,10 +44,10 @@ place (the point: shrink what is kept) and reports the pooled freed-token count.
 
 from __future__ import annotations
 
-from mote.contracts.constants.context import FOLDED_WRITE_MARKER, TOOL_RESULT_CLEARED_MESSAGE
-from mote.contracts.constants.messages import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
-from mote.contracts.models.tokenization import count_string_tokens
-from mote.contracts.schema import ContextManagerConfig, Message
+from mote.contracts.conversation import ContextManagerConfig, Message
+from mote.contracts.conversation.constants import FOLDED_WRITE_MARKER, TOOL_RESULT_CLEARED_MESSAGE
+from mote.contracts.conversation.fields import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
+from mote.kernel.inference.tokenization import count_string_tokens
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Segment, SegmentKind, Transcript

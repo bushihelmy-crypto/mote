@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mote.runtime.logging import log_call
 from mote.runtime.projections.session import SessionProjectionState, reduce_session_envelope
 from mote.runtime.session.log import SessionLog
+from mote.runtime.telemetry.logging import log_call
 
 
 @dataclass

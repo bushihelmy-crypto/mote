@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from mote.contracts.schema import CauseBy
+from mote.contracts.conversation import CauseBy
 from mote.ztest.artifact_fakes import artifact_media
 
 from .conftest import FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
@@ -49,12 +49,12 @@ async def test_act_executes_in_order_and_passes_result_id(make_engine):
     assert executor.calls[1]["result_id"] == "t2"
 
     content, executed = channel.recorded_turns[0]
-    assert [e["name"] for e in executed] == ["Read", "Glob"]
-    assert all(e["success"] for e in executed)
+    assert [entry.name for entry in executed] == ["Read", "Glob"]
+    assert all(entry.success for entry in executed)
     assert "readout" in rsp.content and "globout" in rsp.content
     assert rsp.cause_by == CauseBy.RUN_COMMAND.value
     assert rsp.sent_from == b.ctx.name
-    assert b.think_engine.join_calls == 1
+    assert b.inference_engine.join_calls == 1
 
 
 async def test_act_first_failure_skips_remaining(make_engine):
@@ -72,11 +72,11 @@ async def test_act_first_failure_skips_remaining(make_engine):
     assert [c["name"] for c in executor.calls] == ["Read"]
 
     _, executed = channel.recorded_turns[0]
-    assert executed[0]["success"] is False
+    assert executed[0].success is False
     # Remaining are synthesized SKIPPED entries.
     for entry in executed[1:]:
-        assert entry["success"] is False
-        assert "[SKIPPED]" in entry["output"]
+        assert entry.success is False
+        assert "[SKIPPED]" in entry.output
 
 
 async def test_act_terminate_result_clears_active_signal(make_engine):
@@ -116,7 +116,7 @@ async def test_act_propagates_media(make_engine):
     await b.engine._actions.execute()
 
     _, executed = channel.recorded_turns[0]
-    assert executed[0]["media"] == [image, pdf]
+    assert executed[0].media == [image, pdf]
 
 
 async def test_act_keeps_structured_media_as_the_authoritative_entry(make_engine):
@@ -129,9 +129,9 @@ async def test_act_keeps_structured_media_as_the_authoritative_entry(make_engine
     await b.engine._actions.execute()
 
     _, executed = channel.recorded_turns[0]
-    assert executed[0]["media"] == [media]
-    assert "images" not in executed[0]
-    assert "pdfs" not in executed[0]
+    assert executed[0].media == [media]
+    assert not hasattr(executed[0], "images")
+    assert not hasattr(executed[0], "pdfs")
 
 
 async def test_act_no_commands_records_notice(make_engine):
@@ -144,13 +144,13 @@ async def test_act_no_commands_records_notice(make_engine):
     content, executed = channel.recorded_turns[0]
     assert executed == []
     assert "No valid commands found" in rsp.content
-    assert b.think_engine.join_calls == 1
+    assert b.inference_engine.join_calls == 1
 
 
 async def test_act_passes_think_content_to_record_turn(make_engine):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     engine = FakeThinkEngine(content="assistant reasoning")
-    b = make_engine(channel=channel, think_engine=engine)
+    b = make_engine(channel=channel, inference_engine=engine)
     b.engine._ctx = b.ctx
 
     await b.engine._actions.execute()
@@ -203,17 +203,16 @@ async def test_act_external_checkpoint_records_call_and_drains_before_execution(
     # the snapshot taken at record_call time still has an empty, un-run output.
     assert len(channel.recorded_calls) == 1
     _, snap = channel.recorded_calls[0]
-    assert snap[0]["output"] == ""
-    assert writer.drain_calls == 1
+    assert snap[0].output == ""
+    assert writer.drain_calls == 2
     # Results recorded after, with the real output; the single-shot path is skipped.
-    assert channel.recorded_results and channel.recorded_results[0][0]["output"] == "done"
+    assert channel.recorded_results and channel.recorded_results[0][0].output == "done"
     assert channel.recorded_turns == []
     assert executor.calls[0]["name"] == "Bash"
 
 
 async def test_act_non_external_turn_skips_checkpoint(make_engine):
-    # A turn with no ledgered tool takes the cheaper single-shot record_turn:
-    # no early assistant-message append, no drain.
+    # A turn with no ledgered tool is committed as one transaction after effects.
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     executor = FakeExecutor(results={"Read": FakeResult(output="ok")})  # nothing ledgered
     writer = _FakeWriter()
@@ -225,7 +224,7 @@ async def test_act_non_external_turn_skips_checkpoint(make_engine):
     assert channel.recorded_calls == []
     assert channel.recorded_results == []
     assert len(channel.recorded_turns) == 1
-    assert writer.drain_calls == 0
+    assert writer.drain_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -290,12 +289,12 @@ async def test_act_checkpoint_interrupt_closes_pairing_then_reraises(make_engine
     # interrupt, so EVERY emitted tool_call id now has a paired result.
     assert len(channel.recorded_results) == 1
     recorded = channel.recorded_results[0]
-    assert [e["id"] for e in recorded] == ["t1", "t2", "t3"]
+    assert [entry.action_id for entry in recorded] == ["t1", "t2", "t3"]
     # t1 ran to completion; t2 (interrupted) and t3 (never reached) are closed
     # with an INTERRUPTED marker and marked unsuccessful.
-    assert recorded[0]["output"] == "done" and recorded[0]["success"] is True
-    assert "[INTERRUPTED]" in recorded[1]["output"] and recorded[1]["success"] is False
-    assert "[INTERRUPTED]" in recorded[2]["output"] and recorded[2]["success"] is False
+    assert recorded[0].output == "done" and recorded[0].success is True
+    assert "[INTERRUPTED]" in recorded[1].output and recorded[1].success is False
+    assert "[INTERRUPTED]" in recorded[2].output and recorded[2].success is False
     # The single-shot record_turn was NOT used (checkpoint path re-raised).
     assert channel.recorded_turns == []
 

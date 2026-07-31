@@ -4,10 +4,15 @@ import asyncio
 
 import pytest
 
-from mote.contracts.canvas import CanvasDocument, CanvasElement
-from mote.contracts.ports.canvas_backend import CanvasBackendCapabilities
-from mote.contracts.surfaces import SurfaceDescriptor, SurfaceFrame, SurfacePresentationMode
-from mote.product.cli.surfaces.canvas import CanvasWindowPresenter
+from mote.contracts.ports.surface.canvas_backend import CanvasBackendCapabilities
+from mote.contracts.surface import (
+    CanvasDocument,
+    CanvasElement,
+    SurfaceDescriptor,
+    SurfaceFrame,
+    SurfacePresentationMode,
+)
+from mote.product.interfaces.textual.surfaces.canvas import CanvasWindowPresenter
 from mote.runtime.interactive.presentation import SurfacePresenterRegistry
 
 

@@ -1,0 +1,46 @@
+from datetime import datetime
+from typing import Protocol
+
+from mote.contracts.inference.governance import BudgetReservation, UsageSettlement
+
+
+class UsageLedger(Protocol):
+    async def reserve(
+        self,
+        *,
+        reservation_id: str,
+        attempt_id: str,
+        tenant_id: str,
+        project_id: str,
+        units: int,
+        ttl_seconds: float,
+    ) -> BudgetReservation:
+        ...
+
+    async def settle(
+        self,
+        reservation: BudgetReservation,
+        *,
+        settlement_id: str,
+        actual_units: int,
+    ) -> UsageSettlement:
+        ...
+
+    async def release(self, reservation: BudgetReservation, *, settlement_id: str) -> UsageSettlement:
+        ...
+
+    async def pending_reconciliation(self, reservation: BudgetReservation, *, settlement_id: str) -> UsageSettlement:
+        ...
+
+    async def reconcile(
+        self,
+        reservation: BudgetReservation,
+        *,
+        settlement_id: str,
+        actual_units: int,
+        fencing_token: int,
+    ) -> UsageSettlement:
+        ...
+
+    async def reclaim_expired(self, *, now: datetime, fencing_token: int) -> tuple[UsageSettlement, ...]:
+        ...

@@ -5,9 +5,12 @@ import asyncio
 import threading
 from collections.abc import Iterable
 
-from mote.contracts.ports import RunLeaseCoordinator
-from mote.runtime.lifecycle import LifecyclePhase, LifecycleResource, LifecycleStack
+from mote.contracts.ports.session.run_lease import RunLeaseCoordinator
+from mote.contracts.runtime.application import ApplicationCompositionPort, ApplicationReloadPort
+from mote.runtime.code_map.scan_gate import CodeMapScanGate
+from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource, LifecycleStack
 from mote.runtime.models.clients.context import Context
+from mote.runtime.session.workspace import WorkspaceCleanupGate
 
 ENGINE_CONTEXT_CLOSE_PHASE = LifecyclePhase.RELEASE_CONTAINER
 
@@ -23,7 +26,11 @@ class EngineServices:
 
     __slots__ = (
         "context",
+        "code_map_scan_gate",
         "run_lease_coordinator",
+        "workspace_cleanup_gate",
+        "application_composition",
+        "application_reloader",
         "_owner_count",
         "_owner_lock",
         "_owned_close_started",
@@ -35,10 +42,18 @@ class EngineServices:
         *,
         context: Context,
         run_lease_coordinator: RunLeaseCoordinator | None = None,
+        code_map_scan_gate: CodeMapScanGate | None = None,
+        workspace_cleanup_gate: WorkspaceCleanupGate | None = None,
         resources: Iterable[LifecycleResource] = (),
+        application_composition: ApplicationCompositionPort | None = None,
+        application_reloader: ApplicationReloadPort | None = None,
     ) -> None:
         self.context = context
+        self.application_composition = application_composition
+        self.application_reloader = application_reloader
         self.run_lease_coordinator = run_lease_coordinator
+        self.code_map_scan_gate = code_map_scan_gate or CodeMapScanGate()
+        self.workspace_cleanup_gate = workspace_cleanup_gate or WorkspaceCleanupGate()
         self._owner_count = 0
         self._owner_lock = threading.Lock()
         self._owned_close_started = False

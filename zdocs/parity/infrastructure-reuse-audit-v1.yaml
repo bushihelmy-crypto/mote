@@ -1,0 +1,51 @@
+schema_version: 1
+revision: infrastructure-reuse-audit-v1
+findings:
+  artifact_store:
+    decision: reuse
+    contracts: [contracts/ports/artifact/store.py]
+    implementations: [runtime/artifacts/store.py, runtime/artifacts/repository.py, runtime/artifacts/resolver.py]
+    publication: runtime/artifacts/publication.py
+    ownership_gc: [runtime/artifacts/ownership.py, runtime/artifacts/gc.py]
+    gap: remote blob backend through existing port
+    new_inference_store_approved: false
+  lifecycle:
+    decision: reuse
+    implementations: [runtime/control/lifecycle.py]
+    owner: LifecycleStack
+    gap: register gateway resources only
+    new_lifecycle_framework_approved: false
+  config:
+    decision: reuse
+    implementations: [product/config/loader.py, product/config/layers.py, product/config/watcher.py]
+    contracts: [contracts/config/inference/models.py]
+    gap: typed inference subtree composition
+    new_config_loader_approved: false
+  events:
+    decision: reuse
+    implementations: [runtime/events/fabric.py, runtime/events/dispatcher.py, runtime/events/journal.py]
+    contracts: [contracts/events]
+    gap: gateway tagged variants and subscribers
+    new_event_bus_approved: false
+  logical_model_gateway:
+    decision: extend
+    implementations: [runtime/models/model_gateway.py, runtime/models/failover/model_journal.py]
+    gap: explicit InferenceRuntime attempt lifecycle seam
+    second_model_gateway_approved: false
+  service_gateway:
+    decision: extend
+    implementations: [runtime/service_gateway/gateway.py, runtime/service_gateway/journal.py]
+    gap: ServiceCommandRuntime single-command seam
+    second_service_gateway_approved: false
+  admission:
+    decision: extract_authorities_preserving_tests
+    implementations: [runtime/resilience/admission.py, runtime/resilience/breaker.py]
+    gap: shared fair queue, quota, credential health and bulkhead ownership split
+    delete_before_conformance: false
+  journals:
+    decision: reuse_patterns_not_generic_framework
+    implementations: [runtime/persistence/journal_writer.py, runtime/events/journal.py]
+    domain_journals: [runtime/models/failover/model_journal.py, runtime/service_gateway/journal.py]
+    gap: tagged receipt/outbox records
+    new_generic_journal_framework_approved: false
+exceptions: []

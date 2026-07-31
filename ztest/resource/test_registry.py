@@ -1,7 +1,14 @@
 """ResourceRegistry: load/unload/get_all + budgeted most-recent-first projection."""
-from mote.contracts.constants.messages import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.contracts.schema import ResourceMessage
-from mote.runtime.context.sanitization import count_tokens
+from mote.contracts.conversation import ResourceMessage
+from mote.contracts.conversation.fields import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
+from mote.runtime.context.token_budget import count_tokens as _count_tokens
+from mote.runtime.context.tokenizer import DEFAULT_TEXT_TOKENIZER
+
+
+def count_tokens(text: str) -> int:
+    return _count_tokens(text, tokenizer=DEFAULT_TEXT_TOKENIZER)
+
+
 from mote.runtime.resources import (
     POST_COMPACT_MAX_ROUNDS,
     POST_COMPACT_MAX_TOKENS_PER_UNIT,
@@ -191,7 +198,12 @@ def test_round_reap_recycles_task_result_but_never_skill():
 
 def test_task_result_projection_carries_kind():
     r = ResourceRegistry()
-    r.load(id="bg_3", kind="task_result", content="<task-result>…</task-result>", sticky=True)
+    r.load(
+        id="bg_3",
+        kind="task_result",
+        content="<task-result>…</task-result>",
+        sticky=True,
+    )
     (m,) = r.project()
     assert m.resource_kind == "task_result"
     assert m.metadata[RESOURCE_KIND] == "task_result"

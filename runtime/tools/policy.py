@@ -13,26 +13,27 @@ import json
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 
-from mote.contracts.permissions import PermissionDecision, PermissionFacts
-from mote.contracts.policy.tool import (
+from mote.contracts.authorization import PermissionDecision, PermissionFacts
+from mote.contracts.config.tool import LoopGuardConfig
+from mote.contracts.ports.tool.policy import (
+    PermissionFactsResolver,
+    ToolCallPolicyExtension,
+    ToolCallPolicyExtensionSpec,
+)
+from mote.contracts.tool.policy import (
     ToolCallDecision,
     ToolCallIntent,
     ToolPolicyTraceEntry,
     ToolResultIntent,
     ToolResultPresentation,
 )
-from mote.contracts.ports.tool_policy import (
-    PermissionFactsResolver,
-    ToolCallPolicyExtension,
-    ToolCallPolicyExtensionSpec,
-)
-from mote.contracts.schema import LoopGuardConfig
-from mote.contracts.settings.permissions import PermissionConfig
-from mote.contracts.text.hashing import content_hash
+from mote.runtime.content_hashing import content_hash
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.secrets.policy import redact
 from mote.runtime.secrets.store import SecretStore
+from mote.runtime.tools.base_tool import ToolCapabilityProvider
 from mote.runtime.tools.loop_guard.detector import ThrashDetector, Verdict
+from mote.runtime.tools.permission.config import PermissionConfig
 from mote.runtime.tools.permission.engine import PermissionEngine
 from mote.runtime.tools.permission.rule_store import RuleStore
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
@@ -627,7 +628,7 @@ def build_tool_result_policy(
 def build_tool_call_policy(
     permission_config: Optional[PermissionConfig],
     *,
-    role=None,
+    role: ToolCapabilityProvider | None = None,
     hook_manager: Optional[HookManager] = None,
     extensions: tuple[ToolCallPolicyExtensionSpec, ...] = (),
     require_permission: bool = False,

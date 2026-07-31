@@ -1,0 +1,1 @@
+"""Agent messaging ownership."""

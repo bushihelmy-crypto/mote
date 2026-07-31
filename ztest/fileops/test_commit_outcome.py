@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.fileops import EditCommitChange, EditCommitOutcome, MutationResult, PathToken, TransactionStatus
+from mote.contracts.file import EditCommitChange, EditCommitOutcome, MutationResult, PathToken, TransactionStatus
 
 
 def test_edit_commit_outcome_rejects_changes_for_uncommitted_result() -> None:

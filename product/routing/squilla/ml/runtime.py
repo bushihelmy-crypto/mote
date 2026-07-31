@@ -13,7 +13,7 @@ from typing import Any
 from mote.product.routing.squilla.ml.config import MODEL_BUNDLE_NAME, default_model_dir
 from mote.product.routing.squilla.ml.engine import SquillaMLEngine
 from mote.product.routing.squilla.ml.inference.types import InferenceRequest, InferenceResult
-from mote.runtime.lifecycle import LifecyclePhase, LifecycleResource, LifecycleState
+from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource, LifecycleState
 
 ROUTING_MODEL_RESOURCE_NAME = "product-routing-model-runtime"
 

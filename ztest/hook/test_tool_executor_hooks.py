@@ -5,17 +5,27 @@ from typing import Any
 
 import pytest
 
-from mote.contracts.events.types import ToolCallFinishedEvent
-from mote.contracts.settings.permissions import PermissionConfig
+from mote.contracts.events.tool import ToolCallFinishedEvent
 from mote.runtime.hook.manager import HookManager
+from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.permission.config import PermissionConfig
 from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
 from mote.runtime.tools.tool_executor import ToolExecutor
 from mote.runtime.tools.tool_result import ToolError
 from mote.ztest.telemetry import InlineTelemetry
 
 pytestmark = pytest.mark.asyncio
+_workspace_store: SessionWorkspace | None = None
+
+
+@pytest.fixture(autouse=True)
+def _explicit_workspace(tmp_path):
+    global _workspace_store
+    _workspace_store = SessionWorkspace(tmp_path / "workspace")
+    yield
+    _workspace_store = None
 
 
 class SpyTool(BaseTool):
@@ -71,6 +81,7 @@ def build(
     config: PermissionConfig | None = None,
     telemetry: InlineTelemetry | None = None,
 ) -> ToolExecutor:
+    assert _workspace_store is not None
     executor = ToolExecutor(
         "sess",
         tools=None,
@@ -80,6 +91,7 @@ def build(
             hook_manager=hook_manager,
         ),
         tool_result_policy=build_tool_result_policy(hook_manager=hook_manager),
+        workspace_store=_workspace_store,
     )
     tool.bind("sess")
     executor.register_native_tool(native_definition(type(tool)), tool)
@@ -183,7 +195,8 @@ async def test_post_tool_use_hook_receives_structured_execution_fact():
     manager = HookManager()
     manager.register(
         "PostToolUse",
-        lambda hook_input: seen.append(hook_input.payload) or {},
+        lambda hook_input: seen.append({"success": hook_input.payload.success, "error": hook_input.payload.error})
+        or {},
     )
     result = await build(RaiseTool(), hook_manager=manager).run_command("Raise", {})
     assert not result.success
@@ -197,7 +210,7 @@ async def test_alias_is_canonicalized_before_both_policies():
     manager = HookManager()
     manager.register(
         "PostToolUse",
-        lambda hook_input: names.append(hook_input.payload["tool_name"]) or {},
+        lambda hook_input: names.append(hook_input.payload.tool_name) or {},
     )
     tool = AliasSpyTool()
     result = await build(tool, hook_manager=manager).run_command("bash", {})

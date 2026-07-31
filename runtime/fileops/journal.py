@@ -6,11 +6,11 @@ import hashlib
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Mapping, Optional
 
-from mote.contracts.fileops.errors import JournalDurabilityError, ReviewConflictError
-from mote.contracts.fileops.event_codec import event_from_line, event_to_line
-from mote.contracts.fileops.events import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
+from mote.contracts.events.file.facts import (
     FileEditPlanStoredEvent,
     FileOperationsEvent,
     FileTransactionAbortedEvent,
@@ -24,18 +24,14 @@ from mote.contracts.fileops.events import (
     RewindInDoubtEvent,
     RewindPreparedEvent,
 )
-from mote.contracts.fileops.models import (
-    BlobRef,
-    HunkRecord,
-    LockMode,
-    LockSpec,
-    ReviewStatus,
-    RewindRecord,
-    TransactionRecord,
-    TransactionStatus,
-)
-from mote.runtime.disk import disk_io
+from mote.contracts.file.errors import JournalDurabilityError, ReviewConflictError
+from mote.contracts.file.identity import LockMode, LockSpec
+from mote.contracts.file.recovery import RewindRecord
+from mote.contracts.file.transactions import HunkRecord, ReviewStatus, TransactionRecord, TransactionStatus
+from mote.runtime.events.journal import LocalEventJournal
 from mote.runtime.fileops.locking import JOURNAL_LOCK_LEVEL, HierarchicalLockManager
+from mote.runtime.session.codec import encode_session_event, iter_file_operations_events, session_stream_id
+from mote.runtime.session.events import SessionMetaEvent
 
 
 class DurableFileOperationsJournal:
@@ -59,6 +55,10 @@ class DurableFileOperationsJournal:
         self._flush_pending = flush_pending
         self._event_sink = event_sink
         self._event_source = event_source
+        self._stream_id = StreamId(session_stream_id(session_id))
+        self._event_journal = None if event_sink is not None else LocalEventJournal(self.path, self._stream_id)
+        self._schema_checked = False
+        self._version = 0
         self._key = hashlib.sha256(os.fsencode(self.path.absolute())).hexdigest()
 
     def append(self, event: FileOperationsEvent) -> None:
@@ -77,7 +77,7 @@ class DurableFileOperationsJournal:
                 cause=exc,
             ) from exc
 
-    def publish_edit_plan(self, plan_id: str, manifest: BlobRef) -> BlobRef:
+    def publish_edit_plan(self, plan_id: str, manifest: ContentIdentity) -> ContentIdentity:
         event = FileEditPlanStoredEvent(plan_id, manifest)
         try:
             self._flush()
@@ -156,10 +156,10 @@ class DurableFileOperationsJournal:
     def pending(self) -> tuple[TransactionRecord, ...]:
         return tuple(record for record in self.records() if record.status == TransactionStatus.PREPARED)
 
-    def edit_plan_manifest(self, plan_id: str) -> BlobRef | None:
+    def edit_plan_manifest(self, plan_id: str) -> ContentIdentity | None:
         return self._fold_edit_plan_manifest(plan_id, self.iter_events())
 
-    def _edit_plan_manifest_unlocked(self, plan_id: str) -> BlobRef | None:
+    def _edit_plan_manifest_unlocked(self, plan_id: str) -> ContentIdentity | None:
         return self._fold_edit_plan_manifest(
             plan_id,
             self._iter_events_unlocked(),
@@ -169,8 +169,8 @@ class DurableFileOperationsJournal:
     def _fold_edit_plan_manifest(
         plan_id: str,
         events: Iterable[FileOperationsEvent],
-    ) -> BlobRef | None:
-        manifest: BlobRef | None = None
+    ) -> ContentIdentity | None:
+        manifest: ContentIdentity | None = None
         for event in events:
             if not isinstance(event, FileEditPlanStoredEvent):
                 continue
@@ -315,31 +315,63 @@ class DurableFileOperationsJournal:
         if self._event_source is not None:
             yield from self._event_source()
             return
-        if not self.path.exists():
+        if self._event_journal is None:
             return
-        with self.path.open("r", encoding="utf-8") as stream:
-            for line_number, raw in enumerate(stream, start=1):
-                try:
-                    event = event_from_line(raw)
-                except ValueError as exc:
-                    raise JournalDurabilityError(
-                        "authoritative file operations journal is corrupt",
-                        path=str(self.path),
-                        line_number=line_number,
-                        cause=exc,
-                    ) from exc
-                if event is not None:
-                    yield event
+        self._ensure_current_schema()
+        envelopes: Iterable[EventEnvelope[Mapping[str, JsonValue]]] = self._event_journal.iter_committed(
+            self._stream_id
+        )
+        yield from iter_file_operations_events(envelopes)
 
     def _append_unlocked(self, event: FileOperationsEvent) -> None:
         if self._event_sink is not None:
             self._event_sink(event)
             return
-        existed = self.path.exists()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        disk_io.append_line(self.path, event_to_line(event), fsync=True)
-        if not existed:
-            self._fsync_parent()
+        if self._event_journal is None:
+            raise RuntimeError("file operations journal has no event sink")
+        self._refresh_current_schema()
+        if self._version == 0:
+            self._append_session_event_unlocked(
+                SessionMetaEvent(
+                    session_id=self.session_id,
+                    role_class="mote.file_operations.v1",
+                    toolset_manifest=(),
+                )
+            )
+        self._append_session_event_unlocked(event)
+
+    def _append_session_event_unlocked(
+        self,
+        event: SessionMetaEvent | FileOperationsEvent,
+    ) -> None:
+        if self._event_journal is None:
+            raise RuntimeError("file operations journal has no event journal")
+        fact = encode_session_event(event, session_id=self.session_id)
+        result = self._event_journal.append_committed(
+            self._stream_id,
+            (fact,),
+            expected_version=self._version,
+        )
+        self._version = result.current_version
+
+    def _ensure_current_schema(self) -> None:
+        if self._schema_checked:
+            return
+        self._refresh_current_schema()
+
+    def _refresh_current_schema(self) -> None:
+        if self._event_journal is None:
+            return
+        self._event_journal.writer.flush_inline()
+        report = self._event_journal.verify_committed(self._stream_id)
+        if not report.valid:
+            issue = report.issues[0]
+            raise JournalDurabilityError(
+                f"file operations journal integrity failure at line {issue.line}: {issue.detail}",
+                path=str(self.path),
+            )
+        self._version = report.current_version
+        self._schema_checked = True
 
     def _flush(self) -> None:
         if self._flush_pending is not None:
@@ -428,13 +460,6 @@ class DurableFileOperationsJournal:
             mode=mode,
             label=f"session journal {self.session_id}",
         )
-
-    def _fsync_parent(self) -> None:
-        fd = os.open(self.path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
 
 
 __all__ = ["DurableFileOperationsJournal"]

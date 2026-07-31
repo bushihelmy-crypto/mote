@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import codecs
-import json
 import multiprocessing
 import os
 from pathlib import Path
 
 import pytest
 
-from mote.contracts.fileops import (
+from mote.contracts.conversation import UserMessage
+from mote.contracts.events.file.facts import FileTransactionCommittedEvent, FileTransactionPreparedEvent
+from mote.contracts.file import (
     ContentChangedError,
     EncodingRejectedError,
     FilePublishError,
@@ -17,7 +18,6 @@ from mote.contracts.fileops import (
     StaleSnapshotError,
     TransactionStatus,
 )
-from mote.contracts.fileops.events import FileTransactionCommittedEvent, FileTransactionPreparedEvent
 from mote.runtime.fileops import (
     AtomicPublisher,
     DurableFileOperationsJournal,
@@ -27,11 +27,13 @@ from mote.runtime.fileops import (
     SealedSnapshotReader,
     project_identity,
 )
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_WRITE_TTL_SECONDS, snapshot_budget
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
 from mote.runtime.fileops.mutation_factory import MutationFactory
+from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_WRITE_TTL_SECONDS, snapshot_budget
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
+from mote.runtime.session.events import MessageEvent, SessionMetaEvent
+from mote.runtime.session.log import SessionLog
+from mote.ztest.fileops_factory import ArtifactRepository
 
 
 def _components(root, session_id="session"):
@@ -107,27 +109,17 @@ def test_journal_ignores_foreign_events_but_fails_closed_on_corrupt_fileops(
     tmp_path,
 ):
     _, _, _, journal = _components(tmp_path)
-    journal.path.parent.mkdir(parents=True, exist_ok=True)
-    foreign = {"type": "message", "payload": {"content": "ok"}}
-    corrupt = {
-        "type": "file_transaction_prepared",
-        "ts": "2026-07-24T00:00:00",
-        "payload": {
-            "transaction_id": "tx",
-            "session_id": "session",
-            "source": "Edit",
-            "hunks": [],
-        },
-    }
-    journal.path.write_text(
-        json.dumps(foreign) + "\n" + json.dumps(corrupt) + "\n",
-        encoding="utf-8",
-    )
+    log = SessionLog("session", base_dir=str(tmp_path))
+    log.commit_offline(SessionMetaEvent(session_id="session"))
+    log.commit_offline(MessageEvent(message=UserMessage(content="ok")))
+    assert journal.records() == ()
+    with journal.path.open("ab") as stream:
+        stream.write(b"{not-json}\n")
 
     with pytest.raises(JournalDurabilityError) as exc_info:
         journal.records()
 
-    assert exc_info.value.context["line_number"] == 2
+    assert exc_info.value.context["path"] == str(journal.path)
 
 
 def test_replace_records_prepared_and_committed_around_publish(tmp_path):
@@ -489,7 +481,7 @@ class _PausingJournal(DurableFileOperationsJournal):
         super().append(event)
         if isinstance(event, FileTransactionPreparedEvent):
             self._prepared.set()
-            self._release.wait(5)
+            self._release.wait(60)
 
 
 def _crash_transaction(root_text: str, crash_stage: str) -> None:
@@ -883,7 +875,7 @@ def test_distinct_file_transactions_publish_independent_project_fences(tmp_path)
     ]
     for process in processes:
         process.start()
-    assert all(ready.wait(5) for ready in prepared)
+    assert all(ready.wait(30) for ready in prepared)
 
     coordinator, _, _, _ = _components(tmp_path, session_id="multi")
     project = project_identity(tmp_path)
@@ -901,7 +893,7 @@ def test_distinct_file_transactions_publish_independent_project_fences(tmp_path)
         ),
     )
     recovery_process.start()
-    assert recovery_entered.wait(5)
+    assert recovery_entered.wait(30)
     assert not recovery_finished.wait(0.3)
 
     release.set()

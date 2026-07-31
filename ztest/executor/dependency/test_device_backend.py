@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.settings.device import DeviceConfig
-from mote.runtime.tools.dependency._device import android_adb
-from mote.runtime.tools.dependency._device.backend import DeviceError, NullDeviceBackend, select_device_backend
+from mote.runtime.config.device import DeviceConfig
+from mote.runtime.interactive.device import android_adb
+from mote.runtime.interactive.device.backend import DeviceError, NullDeviceBackend, select_device_backend
 
 
 def _run(coro):
@@ -62,4 +62,10 @@ def test_select_threads_adb_path_and_serial(monkeypatch):
     monkeypatch.setattr(android_adb.shutil, "which", lambda _: "/opt/adb")
     backend = select_device_backend(DeviceConfig(backend="android", adb_path="/opt/adb", serial="emulator-5554"))
     assert isinstance(backend, android_adb.AndroidAdbBackend)
-    assert backend._adb("shell", "x") == ["/opt/adb", "-s", "emulator-5554", "shell", "x"]
+    assert backend._adb("shell", "x") == [
+        "/opt/adb",
+        "-s",
+        "emulator-5554",
+        "shell",
+        "x",
+    ]

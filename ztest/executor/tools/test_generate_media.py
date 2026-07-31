@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from mote.contracts.tool.execution import ToolExecutionKind
 from mote.product.toolsets.builtin.generate_media.generate_media_tool import GenerateMedia, _compact
 from mote.runtime.errors import ToolNotConfiguredError
 
@@ -111,7 +112,7 @@ class TestFanOut:
     async def test_metadata(self):
         assert GenerateMedia.name == "GenerateMedia"
         assert "generate_media" in GenerateMedia.aliases
-        assert GenerateMedia.is_graph_tool is False
+        assert GenerateMedia.execution_kind is ToolExecutionKind.ATOMIC
         assert _tool().can_resume_started_call("call-id") is True
 
     async def test_empty_request(self):

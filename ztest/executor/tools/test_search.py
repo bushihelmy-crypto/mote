@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.tool.effects import ToolEffect
 from mote.product.toolsets.builtin.search import Search
 from mote.product.toolsets.constants import GLIMPSE_EXTENSIONS
 from mote.runtime.tools.definitions import native_definition

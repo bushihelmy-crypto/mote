@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Sequence
 
-from mote.contracts.fileops.errors import RewindFailedError
-from mote.runtime.logging import log_class
+from mote.contracts.file.errors import RewindFailedError
+from mote.runtime.telemetry.logging import log_class
 
 CHECKPOINT_REF_PREFIX = "refs/mote/checkpoints"
 _COMMIT_ENV = {

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from mote.contracts.resilience import BreakerConfig
+from mote.contracts.config.model.breaker import BreakerConfig
 
 from .breaker import CircuitBreaker, TransitionHook
 

@@ -1,0 +1,39 @@
+schema_version: 1
+revision: shared-sqlite-semantics-v1
+authority:
+  writer: advisory_lock_holding_shared_daemon
+  direct_caller_or_admin_access: forbidden
+filesystem:
+  local_only: true
+  forbidden: [nfs, smb, fuse_network_filesystem]
+  directory_mode: "0700"
+  file_mode: "0600"
+database:
+  journal_mode: WAL
+  foreign_keys: required
+  synchronous: FULL
+  busy_timeout: bounded_typed_config
+  network_wait_in_transaction: forbidden
+atomic_authority:
+  records: [receipt, permit_consumption, send_committed, ledger_reservation, ledger_settlement, outbox]
+  split_database_without_architecture_approval: forbidden
+disk_policy:
+  soft_watermark: stop_nonessential_spool_and_alert
+  hard_watermark: reject_new_wire_allow_bounded_reconciliation_cleanup
+integrity:
+  startup: quick_check
+  post_checkpoint: quick_check
+  maintenance: integrity_check
+  corruption: preserve_original_fail_readiness_restore_verified_backup_reconcile
+backup:
+  api: sqlite_online_backup
+  binds: [schema_revision, generation_digest, content_digest]
+  restore_drill: periodic_empty_directory
+migration:
+  exclusive_lock: required
+  preconditions: [free_space, verified_backup, schema_digest]
+  failure: preserve_active_old_generation
+conformance_tests:
+  - ztest/inference/test_sqlite_receipts.py
+  - ztest/inference/test_sqlite_usage_ledger.py
+  - ztest/inference/test_shared_daemon_lifecycle.py

@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import hashlib
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactPublishRequest,
     ArtifactRef,
     ArtifactRepresentationInput,
     ArtifactRetention,
     ArtifactSensitivity,
 )
-from mote.contracts.ports import ReliableArtifactPublisher
+from mote.contracts.ports.artifact.store import ReliableArtifactPublisher
 
 
 async def publish_media_artifact(

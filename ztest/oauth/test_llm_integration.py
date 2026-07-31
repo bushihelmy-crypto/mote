@@ -8,9 +8,9 @@ so no network/token-endpoint call happens.
 from __future__ import annotations
 
 import mote.runtime.models.clients.credentials as cred_mod
-from mote.contracts.config.llm import LLMConfig
-from mote.contracts.config.oauth import OAuthProviderConfig
-from mote.product.integrations.models.openai_chat import OpenAILLM
+from mote.contracts.config.model.llm import LLMConfig
+from mote.contracts.config.model.oauth import OAuthProviderConfig
+from mote.product.models.providers.openai_chat import OpenAILLM
 
 
 class FakeManager:

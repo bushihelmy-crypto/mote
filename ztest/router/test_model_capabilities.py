@@ -7,7 +7,7 @@ in ``_user_msg_with_media`` — previously each site re-ran the substring match.
 
 import pytest
 
-from mote.contracts.models.capabilities import (
+from mote.contracts.model.capabilities import (
     supports_native_tool_search,
     supports_pdf_input,
     supports_vision,

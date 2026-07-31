@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import pytest
 
-import mote.runtime.context.budget as token_budget
-from mote.contracts.schema import ContextManagerConfig, UserMessage
+import mote.runtime.context.history.budget as token_budget
+from mote.contracts.conversation import ContextManagerConfig, UserMessage
 from mote.runtime.context.compaction.policy import build_compaction_policy
-from mote.runtime.context.manager import ContextManager
+from mote.runtime.context.history.manager import ContextManager
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.hook.subscriber import HookSubscriber
+from mote.ztest.model_fakes import model_route
 from mote.ztest.telemetry import InlineTelemetry
 
 
@@ -59,7 +60,7 @@ async def test_precompact_enriches_custom_instructions():
     mgr = HookManager()
     mgr.register("PreCompact", lambda hi: {"additionalContext": "FOCUS ON API"})
     cm = ContextManager(
-        llm=_FakeLLM(),
+        model_route=model_route(_FakeLLM()),
         config=_summarizing_cfg(),
         model="m",
         telemetry=_telemetry_with_hooks(mgr),
@@ -77,7 +78,7 @@ async def test_precompact_veto_is_ignored():
     mgr = HookManager()
     mgr.register("PreCompact", lambda hi: {"continue": False, "stopReason": "not now"})
     cm = ContextManager(
-        llm=llm,
+        model_route=model_route(llm),
         config=_summarizing_cfg(),
         model="m",
         telemetry=_telemetry_with_hooks(mgr),
@@ -94,9 +95,9 @@ async def test_precompact_veto_is_ignored():
 async def test_postcompact_fires_after_compaction():
     fired = []
     mgr = HookManager()
-    mgr.register("PostCompact", lambda hi: fired.append(hi.payload.get("compact_summary")))
+    mgr.register("PostCompact", lambda hi: fired.append(hi.payload.compact_summary))
     cm = ContextManager(
-        llm=_FakeLLM(summary="my summary"),
+        model_route=model_route(_FakeLLM(summary="my summary")),
         config=_summarizing_cfg(),
         model="m",
         telemetry=_telemetry_with_hooks(mgr),

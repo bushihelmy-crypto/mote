@@ -2,7 +2,7 @@
 
 Every value that crosses a Temporal boundary (activity args/return, workflow
 args, signals) must be serializable by the client's data converter. mote's
-durable payloads are pydantic-friendly — :class:`ThinkResult` / :class:`Message`
+durable payloads are pydantic-friendly — :class:`InferenceResult` / :class:`Message`
 are ``BaseModel``\\s and :class:`ToolResult` is a stdlib ``@dataclass`` — all of
 which ``temporalio.contrib.pydantic.pydantic_data_converter`` already handles
 (it wraps pydantic's ``TypeAdapter`` machinery, covering ``BaseModel``,

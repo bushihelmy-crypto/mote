@@ -15,9 +15,9 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional
 
-from mote.contracts.ports import EphemeralContextSource
-from mote.runtime.agent.control import set_control
-from mote.runtime.context.turn_context import TeamContextSource
+from mote.contracts.ports.agent.team_roster import TeamRosterMember
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
+from mote.runtime.context.turn import TeamContextSource
 from mote.runtime.events import PostCompactEvent
 
 
@@ -87,16 +87,42 @@ class FakeControl:
     def get_status(self, agent_id):
         return FakeStatus(self._statuses.get(agent_id, "idle"))
 
-
-class FakeCtx:
-    """A Context stand-in carrying an explicit ``agent_control``."""
-
-    def __init__(self, control):
-        self.agent_control = control
+    def team_members(self, session_id):
+        own = self.registry.agent_metadata_for_id(session_id)
+        if own is None or own.agent_path is None:
+            return ()
+        own_path = own.agent_path
+        parent_path = own_path.parent()
+        members = []
+        candidates = []
+        if parent_path is not None:
+            parent_id = self.registry.agent_id_for_path(parent_path)
+            parent = self.registry.agent_metadata_for_id(parent_id) if parent_id else None
+            if parent is not None:
+                candidates.append(("parent", parent))
+        for metadata in self.registry.live_agents():
+            if metadata.agent_id == session_id or metadata.agent_path is None:
+                continue
+            metadata_parent = metadata.agent_path.parent()
+            if parent_path is not None and metadata_parent == parent_path:
+                candidates.append(("sibling", metadata))
+            elif metadata_parent == own_path:
+                candidates.append(("child", metadata))
+        for relation, metadata in candidates:
+            members.append(
+                TeamRosterMember(
+                    relation=relation,
+                    name=metadata.agent_nickname or metadata.agent_path.name(),
+                    role=metadata.agent_role or "",
+                    session_id=metadata.agent_id or "",
+                    status=self.get_status(metadata.agent_id).value,
+                )
+            )
+        return tuple(members)
 
 
 def _source(control, session_id="self", **kw):
-    return TeamContextSource(get_session_id=lambda: session_id, get_context=lambda: FakeCtx(control), **kw)
+    return TeamContextSource(get_session_id=lambda: session_id, get_provider=lambda: control, **kw)
 
 
 def _family():
@@ -138,11 +164,11 @@ class TestProtocol:
 class TestSilent:
     def test_no_plane_bound_returns_none(self):
         # No explicit ctx.agent_control and no ambient plane → nothing to report.
-        src = TeamContextSource(get_session_id=lambda: "self", get_context=lambda: FakeCtx(None))
+        src = TeamContextSource(get_session_id=lambda: "self", get_provider=lambda: None)
         assert run(src.render()) is None
 
     def test_no_session_id_returns_none(self):
-        src = TeamContextSource(get_session_id=lambda: None, get_context=lambda: FakeCtx(_family()))
+        src = TeamContextSource(get_session_id=lambda: None, get_provider=lambda: _family())
         assert run(src.render()) is None
 
     def test_unknown_self_returns_none(self):
@@ -262,14 +288,9 @@ class TestPostCompactReset:
 
 
 # --------------------------------------------------------------------------
-# Ambient-plane discovery (no explicit ctx)
+# Missing-provider behavior
 # --------------------------------------------------------------------------
-class TestAmbientPlane:
-    def test_resolves_ambient_control(self):
-        # No get_context provider → resolve_control falls back to the ambient
-        # plane bound by the scheduler around a turn.
+class TestMissingProvider:
+    def test_self_suppresses_without_provider(self):
         src = TeamContextSource(get_session_id=lambda: "self")
-        with set_control(_family()):
-            out = run(src.render())
-        assert out is not None
-        assert "session=p1" in out
+        assert run(src.render()) is None

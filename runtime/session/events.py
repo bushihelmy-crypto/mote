@@ -25,28 +25,9 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from mote.contracts.events.types import (
-    OUTPUT_ACCEPTED,
-    OUTPUT_CANDIDATE_RECEIVED,
-    OUTPUT_COMMIT_STARTED,
-    OUTPUT_COMMITTED,
-    OUTPUT_MIGRATED,
-    OUTPUT_PUBLICATION_QUEUED,
-    OUTPUT_PUBLISHED,
-    OUTPUT_VALIDATION_REJECTED,
-    PROMPT_REJECTED,
-    ROUTING_DECISION,
-    OutputAcceptedEvent,
-    OutputCandidateReceivedEvent,
-    OutputCommitStartedEvent,
-    OutputCommittedEvent,
-    OutputMigratedEvent,
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
-    OutputValidationRejectedEvent,
-    PromptRejectedEvent,
-)
-from mote.contracts.fileops.events import (
+from mote.contracts.conversation import Message
+from mote.contracts.events.conversation import PROMPT_REJECTED, PromptRejectedEvent
+from mote.contracts.events.file.facts import (
     FILE_EDIT_PLAN_STORED,
     FILE_HISTORY_IMPORTED,
     FILE_TRANSACTION_ABORTED,
@@ -72,9 +53,27 @@ from mote.contracts.fileops.events import (
     RewindInDoubtEvent,
     RewindPreparedEvent,
 )
-from mote.contracts.handoff import RuntimeHandoffIntent, RuntimeHandoffResolution
-from mote.contracts.models.failover import ModelCallSummary
-from mote.contracts.runtimes import (
+from mote.contracts.events.model import ROUTING_DECISION
+from mote.contracts.events.output import (
+    OUTPUT_ACCEPTED,
+    OUTPUT_CANDIDATE_RECEIVED,
+    OUTPUT_COMMIT_STARTED,
+    OUTPUT_COMMITTED,
+    OUTPUT_MIGRATED,
+    OUTPUT_PUBLICATION_QUEUED,
+    OUTPUT_PUBLISHED,
+    OUTPUT_VALIDATION_REJECTED,
+    OutputAcceptedEvent,
+    OutputCandidateReceivedEvent,
+    OutputCommitStartedEvent,
+    OutputCommittedEvent,
+    OutputMigratedEvent,
+    OutputPublicationQueuedEvent,
+    OutputPublishedEvent,
+    OutputValidationRejectedEvent,
+)
+from mote.contracts.model.failover import ModelCallSummary
+from mote.contracts.runtime import (
     CheckpointFidelity,
     RuntimeCheckpoint,
     RuntimeCommitFact,
@@ -83,18 +82,22 @@ from mote.contracts.runtimes import (
     RuntimeProjectionAck,
     RuntimeProjectionIntent,
 )
-from mote.contracts.schema import Message
-from mote.contracts.tools import ToolsetManifest, parse_toolset_manifest
+from mote.contracts.runtime.handoff import RuntimeHandoffIntent, RuntimeHandoffResolution
+from mote.contracts.tool import ToolsetManifest, parse_toolset_manifest
 
 
 def _dataclass_kwargs(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep only the keys of ``payload`` that name a field of ``cls``.
-
-    Lets a field-shaped event reconstruct via ``cls(**_dataclass_kwargs(...))``
-    while tolerating unknown/extra keys (forward-compatible reads).
-    """
+    """Validate that ``payload`` exactly matches fields owned by ``cls``."""
     names = {f.name for f in fields(cls)}
-    return {k: v for k, v in payload.items() if k in names}
+    if set(payload) != names:
+        raise ValueError(f"{cls.__name__} payload fields must be exactly {sorted(names)!r}")
+    return dict(payload)
+
+
+def _require_keys(payload: Dict[str, Any], names: set[str], owner: str) -> Dict[str, Any]:
+    if set(payload) != names:
+        raise ValueError(f"{owner} payload fields must be exactly {sorted(names)!r}")
+    return payload
 
 
 #: Bump when the persisted event shape changes incompatibly (drives migration).
@@ -115,12 +118,9 @@ def _message_to_payload(message: Message) -> Dict[str, Any]:
     return message.model_dump(mode="json", exclude_none=True, warnings=False)
 
 
-def _payload_to_message(payload: Dict[str, Any]) -> Optional[Message]:
-    """Reconstruct a Message from a payload dict (forgiving: None on failure)."""
-    try:
-        return Message.from_dict(payload)
-    except Exception:  # noqa: BLE001 — one bad payload must not abort a replay
-        return None
+def _payload_to_message(payload: Dict[str, Any]) -> Message:
+    """Reconstruct one current Message payload."""
+    return Message.from_dict(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +137,6 @@ META_UPDATE = "meta_update"
 CHECKPOINT = "checkpoint"
 LLM_CALL = "llm_call"
 ROUTING_DECISION_FACT = ROUTING_DECISION
-TERMINAL_STATE = "terminal_state"
-KERNEL_STATE = "kernel_state"
-BROWSER_STATE = "browser_state"
 RUNTIME_CHECKPOINT = "runtime_checkpoint"
 RUNTIME_COMMIT = "runtime_commit"
 RUNTIME_PROJECTION_ACKNOWLEDGED = "runtime_projection_acknowledged"
@@ -156,6 +153,8 @@ class SessionMetaEvent:
     """First-line metadata identifying the session (Codex ``SessionMeta``)."""
 
     session_id: str
+    role_class: str
+    toolset_manifest: ToolsetManifest
     schema_version: int = SCHEMA_VERSION
     parent_session_id: Optional[str] = None
     created_at: str = field(default_factory=_now_iso)
@@ -163,23 +162,18 @@ class SessionMetaEvent:
     original_working_dir: str = ""
     project_root: str = ""
     model: Optional[str] = None
-    role_class: Optional[str] = None
-    toolset_manifest: Optional[ToolsetManifest] = None
 
     type = SESSION_META
 
     def payload(self) -> Dict[str, Any]:
         payload = asdict(self)
-        if self.toolset_manifest is not None:
-            payload["toolset_manifest"] = [identity.to_payload() for identity in self.toolset_manifest]
+        payload["toolset_manifest"] = [identity.to_payload() for identity in self.toolset_manifest]
         return payload
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "SessionMetaEvent":
         values = _dataclass_kwargs(cls, payload)
-        manifest = values.get("toolset_manifest")
-        if manifest is not None:
-            values["toolset_manifest"] = parse_toolset_manifest(manifest)
+        values["toolset_manifest"] = parse_toolset_manifest(values["toolset_manifest"])
         return cls(**values)
 
 
@@ -196,8 +190,6 @@ class MessageEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "MessageEvent":
-        # ``message`` is None when the payload fails to reconstruct; callers
-        # treat a None message as a skipped (unloadable) record.
         return cls(message=_payload_to_message(payload))
 
 
@@ -224,17 +216,18 @@ class ContextCompactedFact:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "ContextCompactedFact":
-        messages = [
-            message
-            for message in (_payload_to_message(item) for item in payload.get("model_context", []))
-            if message is not None
-        ]
+        _require_keys(
+            payload,
+            {"model_context", "source_message_ids", "summary", "strategy", "trigger"},
+            cls.__name__,
+        )
+        messages = [_payload_to_message(item) for item in payload["model_context"]]
         return cls(
             model_context_messages=messages,
-            source_message_ids=[str(message_id) for message_id in payload.get("source_message_ids", []) if message_id],
-            summary=str(payload.get("summary", "")),
-            strategy=str(payload.get("strategy", "")),
-            trigger=str(payload.get("trigger", "auto")),
+            source_message_ids=[str(message_id) for message_id in payload["source_message_ids"]],
+            summary=str(payload["summary"]),
+            strategy=str(payload["strategy"]),
+            trigger=str(payload["trigger"]),
         )
 
 
@@ -257,12 +250,11 @@ class HistoryEditedFact:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "HistoryEditedFact":
+        _require_keys(payload, {"removed_message_ids", "clear_all", "reason"}, cls.__name__)
         return cls(
-            removed_message_ids=[
-                str(message_id) for message_id in payload.get("removed_message_ids", []) if message_id
-            ],
-            clear_all=payload.get("clear_all") is True,
-            reason=str(payload.get("reason", "delete")),
+            removed_message_ids=[str(message_id) for message_id in payload["removed_message_ids"]],
+            clear_all=payload["clear_all"],
+            reason=str(payload["reason"]),
         )
 
 
@@ -378,9 +370,8 @@ class LLMCallEvent:
             "usage": self.usage,
             "cost_usd": self.cost_usd,
             "latency_ms": self.latency_ms,
+            "summary": (self.summary.model_dump(mode="json") if self.summary is not None else None),
         }
-        if self.summary is not None:
-            payload["summary"] = self.summary.model_dump(mode="json")
         return payload
 
     @classmethod
@@ -398,131 +389,25 @@ class RoutingDecisionFact:
 
     decision: Dict[str, Any]
     state: Dict[str, Any]
+    route_schema_version: int = 2
 
     type = ROUTING_DECISION_FACT
 
     def payload(self) -> Dict[str, Any]:
-        return {"decision": dict(self.decision), "state": dict(self.state)}
+        return {
+            "decision": dict(self.decision),
+            "state": dict(self.state),
+            "route_schema_version": self.route_schema_version,
+        }
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RoutingDecisionFact":
+        _require_keys(payload, {"decision", "state", "route_schema_version"}, cls.__name__)
         return cls(
-            decision=dict(payload.get("decision", {})),
-            state=dict(payload.get("state", {})),
+            decision=dict(payload["decision"]),
+            state=dict(payload["state"]),
+            route_schema_version=int(payload["route_schema_version"]),
         )
-
-
-@dataclass
-class TerminalStateEvent:
-    """The persistent terminal's final environment state (resume restore point).
-
-    Captures the live PTY shell's cwd plus the env diff relative to the shell's
-    launch baseline (``env`` = added/changed vars, ``unset`` = vars present at
-    launch but removed since). On resume, the latest such event lets the freshly
-    started shell be re-seeded (``cd`` + ``export`` + ``unset``) to the saved
-    state — *without* re-running any of the original user commands. Last-write-
-    wins: replay keeps only the most recent one.
-    """
-
-    cwd: str = ""
-    env: Dict[str, str] = field(default_factory=dict)
-    unset: List[str] = field(default_factory=list)
-    tool: str = ""
-
-    type = TERMINAL_STATE
-
-    def payload(self) -> Dict[str, Any]:
-        return {
-            "cwd": self.cwd,
-            "env": self.env,
-            "unset": self.unset,
-            "tool": self.tool,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: Dict[str, Any]) -> "TerminalStateEvent":
-        return cls(**_dataclass_kwargs(cls, payload))
-
-
-@dataclass
-class KernelStateEvent:
-    """The persistent kernel's final environment state (resume restore point).
-
-    The Python sibling of :class:`TerminalStateEvent`. Captures the live Jupyter
-    kernel process's cwd plus the env diff relative to the kernel's launch
-    baseline (``env`` = added/changed vars, ``unset`` = vars present at launch
-    but removed since). On resume, the latest such event lets the freshly started
-    kernel be re-seeded (``os.chdir`` + ``os.environ.update`` + ``pop``) to the
-    saved state — *without* re-running any of the original user code. Only cwd +
-    env are restored; the Python namespace (variables/imports/functions) is not.
-    Last-write-wins: replay keeps only the most recent one.
-
-    Tracked as a distinct event from :class:`TerminalStateEvent` (not a shared
-    ``tool``-tagged record) so the kernel and terminal restores stay independent
-    on replay and never clobber each other.
-    """
-
-    cwd: str = ""
-    env: Dict[str, str] = field(default_factory=dict)
-    unset: List[str] = field(default_factory=list)
-    tool: str = ""
-
-    type = KERNEL_STATE
-
-    def payload(self) -> Dict[str, Any]:
-        return {
-            "cwd": self.cwd,
-            "env": self.env,
-            "unset": self.unset,
-            "tool": self.tool,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: Dict[str, Any]) -> "KernelStateEvent":
-        return cls(**_dataclass_kwargs(cls, payload))
-
-
-@dataclass
-class BrowserStateEvent:
-    """The persistent browser's final browsing state (resume restore point).
-
-    Captures the live Playwright session's open-tab URLs (in page order, plus
-    the active tab index) and an optional ``storage_state`` dict ({cookies,
-    origins}) carrying the logged-in session. On resume, the latest such event
-    lets a freshly launched browser re-open the same tabs (re-navigate to each
-    URL) seeded with the saved cookies / localStorage — *without* re-running any
-    of the original navigation/click actions. Only the page URLs + storage are
-    restored; live DOM state, scroll position, and in-flight JS are not. Last-
-    write-wins: replay keeps only the most recent one.
-
-    Tracked as a distinct event from the terminal/kernel state events (not a
-    shared ``tool``-tagged record) so the browser restore stays independent on
-    replay and never clobbers the others (a session may run a shell + kernel +
-    browser, each restored separately).
-
-    Privacy note: ``storage_state`` may include sensitive cookies. New logs use
-    managed Runtime checkpoints and keep profile-backed cookies encrypted; this
-    event remains readable only for migration of historic rollouts.
-    """
-
-    urls: List[str] = field(default_factory=list)
-    active: int = 0
-    storage_state: Optional[Dict[str, Any]] = None
-    tool: str = ""
-
-    type = BROWSER_STATE
-
-    def payload(self) -> Dict[str, Any]:
-        return {
-            "urls": self.urls,
-            "active": self.active,
-            "storage_state": self.storage_state,
-            "tool": self.tool,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: Dict[str, Any]) -> "BrowserStateEvent":
-        return cls(**_dataclass_kwargs(cls, payload))
 
 
 @dataclass
@@ -553,6 +438,24 @@ class RuntimeCheckpointEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeCheckpointEvent":
+        _require_keys(
+            payload,
+            {
+                "runtime_id",
+                "kind",
+                "epoch",
+                "revision",
+                "codec",
+                "schema_version",
+                "payload_ref",
+                "alias",
+                "digest",
+                "sensitivity",
+                "fidelity",
+                "reason",
+            },
+            cls.__name__,
+        )
         return cls(
             checkpoint=RuntimeCheckpoint(
                 runtime_id=str(payload["runtime_id"]),
@@ -562,12 +465,12 @@ class RuntimeCheckpointEvent:
                 codec=str(payload["codec"]),
                 schema_version=int(payload["schema_version"]),
                 payload_ref=str(payload["payload_ref"]),
-                alias=str(payload.get("alias", "default")),
-                digest=str(payload.get("digest", "")),
-                sensitivity=str(payload.get("sensitivity", "private")),
-                fidelity=CheckpointFidelity(payload.get("fidelity", "none")),
+                alias=str(payload["alias"]),
+                digest=str(payload["digest"]),
+                sensitivity=str(payload["sensitivity"]),
+                fidelity=CheckpointFidelity(payload["fidelity"]),
             ),
-            reason=str(payload.get("reason", "")),
+            reason=str(payload["reason"]),
         )
 
 
@@ -610,7 +513,31 @@ class RuntimeCommitEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeCommitEvent":
+        _require_keys(payload, {"commit_id", "checkpoint", "projections", "reason"}, cls.__name__)
         checkpoint = payload["checkpoint"]
+        _require_keys(
+            checkpoint,
+            {
+                "runtime_id",
+                "kind",
+                "epoch",
+                "revision",
+                "codec",
+                "schema_version",
+                "payload_ref",
+                "alias",
+                "digest",
+                "sensitivity",
+                "fidelity",
+            },
+            f"{cls.__name__}.checkpoint",
+        )
+        for item in payload["projections"]:
+            _require_keys(
+                item,
+                {"intent_id", "projector", "schema_version", "options"},
+                f"{cls.__name__}.projection",
+            )
         return cls(
             fact=RuntimeCommitFact(
                 commit_id=str(payload["commit_id"]),
@@ -622,21 +549,21 @@ class RuntimeCommitEvent:
                     codec=str(checkpoint["codec"]),
                     schema_version=int(checkpoint["schema_version"]),
                     payload_ref=str(checkpoint["payload_ref"]),
-                    alias=str(checkpoint.get("alias", "default")),
-                    digest=str(checkpoint.get("digest", "")),
-                    sensitivity=str(checkpoint.get("sensitivity", "private")),
-                    fidelity=CheckpointFidelity(checkpoint.get("fidelity", "none")),
+                    alias=str(checkpoint["alias"]),
+                    digest=str(checkpoint["digest"]),
+                    sensitivity=str(checkpoint["sensitivity"]),
+                    fidelity=CheckpointFidelity(checkpoint["fidelity"]),
                 ),
                 projections=tuple(
                     RuntimeProjectionIntent(
                         intent_id=str(item["intent_id"]),
                         projector=str(item["projector"]),
                         schema_version=int(item["schema_version"]),
-                        options=tuple((str(option[0]), str(option[1])) for option in item.get("options", ())),
+                        options=tuple((str(option[0]), str(option[1])) for option in item["options"]),
                     )
-                    for item in payload.get("projections", ())
+                    for item in payload["projections"]
                 ),
-                reason=str(payload.get("reason", "")),
+                reason=str(payload["reason"]),
             )
         )
 
@@ -660,13 +587,18 @@ class RuntimeProjectionAcknowledgedEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeProjectionAcknowledgedEvent":
+        _require_keys(
+            payload,
+            {"commit_id", "intent_id", "status", "error", "attempts"},
+            cls.__name__,
+        )
         return cls(
             ack=RuntimeProjectionAck(
                 commit_id=str(payload["commit_id"]),
                 intent_id=str(payload["intent_id"]),
-                status=str(payload.get("status", "completed")),
-                error=str(payload.get("error", "")),
-                attempts=int(payload.get("attempts", 0)),
+                status=str(payload["status"]),
+                error=str(payload["error"]),
+                attempts=int(payload["attempts"]),
             )
         )
 
@@ -719,13 +651,54 @@ class RuntimeOperationPreparedEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeOperationPreparedEvent":
+        _require_keys(
+            payload,
+            {
+                "operation_id",
+                "runtime_id",
+                "kind",
+                "alias",
+                "epoch",
+                "base_revision",
+                "target_revision",
+                "codec",
+                "schema_version",
+                "operation_payload",
+                "base_checkpoint",
+                "projections",
+            },
+            cls.__name__,
+        )
         checkpoint = payload["base_checkpoint"]
+        _require_keys(
+            checkpoint,
+            {
+                "runtime_id",
+                "kind",
+                "epoch",
+                "revision",
+                "codec",
+                "schema_version",
+                "payload_ref",
+                "alias",
+                "digest",
+                "sensitivity",
+                "fidelity",
+            },
+            f"{cls.__name__}.base_checkpoint",
+        )
+        for item in payload["projections"]:
+            _require_keys(
+                item,
+                {"intent_id", "projector", "schema_version", "options"},
+                f"{cls.__name__}.projection",
+            )
         return cls(
             intent=RuntimeOperationIntent(
                 operation_id=str(payload["operation_id"]),
                 runtime_id=str(payload["runtime_id"]),
                 kind=str(payload["kind"]),
-                alias=str(payload.get("alias", "default")),
+                alias=str(payload["alias"]),
                 epoch=int(payload["epoch"]),
                 base_revision=int(payload["base_revision"]),
                 target_revision=int(payload["target_revision"]),
@@ -740,19 +713,19 @@ class RuntimeOperationPreparedEvent:
                     codec=str(checkpoint["codec"]),
                     schema_version=int(checkpoint["schema_version"]),
                     payload_ref=str(checkpoint["payload_ref"]),
-                    alias=str(checkpoint.get("alias", "default")),
-                    digest=str(checkpoint.get("digest", "")),
-                    sensitivity=str(checkpoint.get("sensitivity", "private")),
-                    fidelity=CheckpointFidelity(checkpoint.get("fidelity", "none")),
+                    alias=str(checkpoint["alias"]),
+                    digest=str(checkpoint["digest"]),
+                    sensitivity=str(checkpoint["sensitivity"]),
+                    fidelity=CheckpointFidelity(checkpoint["fidelity"]),
                 ),
                 projections=tuple(
                     RuntimeProjectionIntent(
                         intent_id=str(item["intent_id"]),
                         projector=str(item["projector"]),
                         schema_version=int(item["schema_version"]),
-                        options=tuple((str(option[0]), str(option[1])) for option in item.get("options", ())),
+                        options=tuple((str(option[0]), str(option[1])) for option in item["options"]),
                     )
-                    for item in payload.get("projections", ())
+                    for item in payload["projections"]
                 ),
             )
         )
@@ -766,14 +739,15 @@ class RuntimeOperationCompletedEvent:
     type = RUNTIME_OPERATION_COMPLETED
 
     def payload(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"operation_id": self.operation_id}
-        if self.receipt is not None:
-            payload["receipt"] = asdict(self.receipt)
-        return payload
+        return {
+            "operation_id": self.operation_id,
+            "receipt": asdict(self.receipt) if self.receipt is not None else None,
+        }
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeOperationCompletedEvent":
-        raw_receipt = payload.get("receipt")
+        _require_keys(payload, {"operation_id", "receipt"}, cls.__name__)
+        raw_receipt = payload["receipt"]
         receipt = RuntimeOperationReceipt(**raw_receipt) if isinstance(raw_receipt, dict) else None
         return cls(operation_id=str(payload["operation_id"]), receipt=receipt)
 
@@ -789,6 +763,7 @@ class RuntimeOperationAbortedEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeOperationAbortedEvent":
+        _require_keys(payload, {"operation_id"}, cls.__name__)
         return cls(operation_id=str(payload["operation_id"]))
 
 
@@ -821,7 +796,26 @@ class RuntimeHandoffPreparedEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeHandoffPreparedEvent":
-        checkpoint_payload = payload.get("base_checkpoint")
+        _require_keys(
+            payload,
+            {
+                "handoff_id",
+                "runtime_id",
+                "kind",
+                "alias",
+                "epoch",
+                "base_revision",
+                "target_revision",
+                "owner_id",
+                "fencing_token",
+                "mode",
+                "message",
+                "selection",
+                "base_checkpoint",
+            },
+            cls.__name__,
+        )
+        checkpoint_payload = payload["base_checkpoint"]
         checkpoint = (
             RuntimeCheckpointEvent.from_payload(checkpoint_payload).checkpoint
             if isinstance(checkpoint_payload, dict)
@@ -832,15 +826,15 @@ class RuntimeHandoffPreparedEvent:
                 handoff_id=str(payload["handoff_id"]),
                 runtime_id=str(payload["runtime_id"]),
                 kind=str(payload["kind"]),
-                alias=str(payload.get("alias", "default")),
+                alias=str(payload["alias"]),
                 epoch=int(payload["epoch"]),
                 base_revision=int(payload["base_revision"]),
                 target_revision=int(payload["target_revision"]),
                 owner_id=str(payload["owner_id"]),
                 fencing_token=int(payload["fencing_token"]),
                 mode=str(payload["mode"]),
-                message=str(payload.get("message", "")),
-                selection=tuple(str(item) for item in payload.get("selection", ())),
+                message=str(payload["message"]),
+                selection=tuple(str(item) for item in payload["selection"]),
                 base_checkpoint=checkpoint,
             )
         )
@@ -859,6 +853,7 @@ class RuntimeHandoffActivatedEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeHandoffActivatedEvent":
+        _require_keys(payload, {"handoff_id"}, cls.__name__)
         return cls(handoff_id=str(payload["handoff_id"]))
 
 
@@ -887,14 +882,28 @@ class RuntimeHandoffResolvedEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeHandoffResolvedEvent":
-        checkpoint_payload = payload.get("checkpoint")
+        _require_keys(
+            payload,
+            {
+                "handoff_id",
+                "status",
+                "runtime_id",
+                "kind",
+                "alias",
+                "epoch",
+                "revision",
+                "checkpoint",
+            },
+            cls.__name__,
+        )
+        checkpoint_payload = payload["checkpoint"]
         return cls(
             resolution=RuntimeHandoffResolution(
                 handoff_id=str(payload["handoff_id"]),
                 status=str(payload["status"]),
                 runtime_id=str(payload["runtime_id"]),
                 kind=str(payload["kind"]),
-                alias=str(payload.get("alias", "default")),
+                alias=str(payload["alias"]),
                 epoch=int(payload["epoch"]),
                 revision=int(payload["revision"]),
                 checkpoint=(
@@ -921,9 +930,6 @@ SessionEvent = Union[
     CheckpointEvent,
     LLMCallEvent,
     RoutingDecisionFact,
-    TerminalStateEvent,
-    KernelStateEvent,
-    BrowserStateEvent,
     RuntimeCheckpointEvent,
     RuntimeCommitEvent,
     RuntimeProjectionAcknowledgedEvent,
@@ -968,9 +974,6 @@ SESSION_EVENT_CLASSES = {
     CHECKPOINT: CheckpointEvent,
     LLM_CALL: LLMCallEvent,
     ROUTING_DECISION_FACT: RoutingDecisionFact,
-    TERMINAL_STATE: TerminalStateEvent,
-    KERNEL_STATE: KernelStateEvent,
-    BROWSER_STATE: BrowserStateEvent,
     RUNTIME_CHECKPOINT: RuntimeCheckpointEvent,
     RUNTIME_COMMIT: RuntimeCommitEvent,
     RUNTIME_PROJECTION_ACKNOWLEDGED: RuntimeProjectionAcknowledgedEvent,
@@ -1015,9 +1018,6 @@ __all__ = [
     "CHECKPOINT",
     "LLM_CALL",
     "ROUTING_DECISION_FACT",
-    "TERMINAL_STATE",
-    "KERNEL_STATE",
-    "BROWSER_STATE",
     "RUNTIME_CHECKPOINT",
     "RUNTIME_COMMIT",
     "RUNTIME_PROJECTION_ACKNOWLEDGED",
@@ -1057,9 +1057,6 @@ __all__ = [
     "CheckpointEvent",
     "LLMCallEvent",
     "RoutingDecisionFact",
-    "TerminalStateEvent",
-    "KernelStateEvent",
-    "BrowserStateEvent",
     "RuntimeCheckpointEvent",
     "RuntimeCommitEvent",
     "RuntimeProjectionAcknowledgedEvent",

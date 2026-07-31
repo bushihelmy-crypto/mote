@@ -28,9 +28,9 @@ from __future__ import annotations
 
 import os
 import shlex
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
-from mote.runtime.logging import logger
 from mote.runtime.sandbox.backend import NullBackend, SandboxBackend, SandboxPolicy
 from mote.runtime.sandbox.bwrap import BwrapBackend
 from mote.runtime.sandbox.detect import detect_backend
@@ -55,6 +55,7 @@ from mote.runtime.sandbox.resources import (
 )
 from mote.runtime.sandbox.seccomp import build_hardening_filter, seccomp_available
 from mote.runtime.sandbox.violations import SandboxViolation, parse_violations
+from mote.runtime.telemetry.logging import logger
 
 if TYPE_CHECKING:
     from mote.runtime.sandbox.network.credentials import CredentialBroker
@@ -92,6 +93,7 @@ class SandboxRuntime:
         policy_provider: Optional[Callable[[], SandboxPolicy]] = None,
         limits_provider: Optional[Callable[[], ResourceLimits]] = None,
         credential_broker: Optional["CredentialBroker"] = None,
+        sandbox_ca_root: Path | None = None,
     ) -> None:
         self._requested_backend = backend
         self._fail_if_unavailable = fail_if_unavailable
@@ -105,6 +107,7 @@ class SandboxRuntime:
         # proxy for configured hosts). None => the proxy runs unchanged. When it
         # has intercept hosts, HTTPS MITM + trust-anchor env engage.
         self._credential_broker = credential_broker
+        self._sandbox_ca_root = sandbox_ca_root
         # Group-level (process-tree) resource caps applied via the outermost
         # ``systemd-run --user --scope`` wrapper. Orthogonal to the isolation
         # backend: even a NullBackend command gets the cgroup limits.
@@ -208,7 +211,9 @@ class SandboxRuntime:
             # can point tools at the combined bundle.
             if self._credential_broker is not None and self._credential_broker.intercept_hosts:
                 try:
-                    self._mitm_ca = MitmCa()
+                    if self._sandbox_ca_root is None:
+                        raise ValueError("HTTPS brokering requires a sandbox CA root")
+                    self._mitm_ca = MitmCa(self._sandbox_ca_root)
                 except Exception as exc:  # noqa: BLE001 — degrade to HTTP-only brokering
                     logger.warning(f"SandboxRuntime: MITM CA init failed ({exc}); HTTPS brokering disabled")
                     self._mitm_ca = None
@@ -326,7 +331,13 @@ class SandboxRuntime:
             logger.warning(f"SandboxRuntime: trust-anchor bundle unavailable ({exc}); skipping")
             return env
         out = dict(env)
-        for var in ("SSL_CERT_FILE", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"):
+        for var in (
+            "SSL_CERT_FILE",
+            "GIT_SSL_CAINFO",
+            "CURL_CA_BUNDLE",
+            "REQUESTS_CA_BUNDLE",
+            "NODE_EXTRA_CA_CERTS",
+        ):
             out[var] = bundle
         out.pop("SSL_CERT_DIR", None)
         return out

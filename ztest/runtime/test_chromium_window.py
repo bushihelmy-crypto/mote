@@ -5,9 +5,14 @@ import json
 
 import pytest
 
-from mote.contracts.notebook import NOTEBOOK_MEDIA_TYPE, NotebookCell, NotebookDocument
-from mote.contracts.surfaces import SurfaceDescriptor, SurfaceFrame
-from mote.contracts.terminal import TERMINAL_MEDIA_TYPE
+from mote.contracts.surface import (
+    NOTEBOOK_MEDIA_TYPE,
+    TERMINAL_MEDIA_TYPE,
+    NotebookCell,
+    NotebookDocument,
+    SurfaceDescriptor,
+    SurfaceFrame,
+)
 from mote.runtime.interactive import chromium_window as window_module
 from mote.runtime.interactive.chromium_window import ChromiumLiveWindowBackend
 

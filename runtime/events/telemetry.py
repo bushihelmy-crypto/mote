@@ -7,9 +7,11 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable
+from typing import Callable, Generic, TypeVar
 
-from mote.contracts.ports.telemetry import (
+from mote.contracts.ports.events.telemetry import (
+    EventNarrower,
+    SyncTelemetryHandler,
     TelemetryHandler,
     TelemetryIdentity,
     TelemetryOverflow,
@@ -34,7 +36,46 @@ class TelemetryPutResult(StrEnum):
 @dataclass(frozen=True)
 class TelemetryBinding:
     spec: TelemetrySubscriptionSpec
-    handler: TelemetryHandler
+    handler: TelemetryHandler[object]
+    sync_handler: SyncTelemetryHandler[object] | None = None
+
+
+EventT = TypeVar("EventT")
+
+
+@dataclass(frozen=True)
+class TypedTelemetryBinding(Generic[EventT]):
+    spec: TelemetrySubscriptionSpec
+    accepts: EventNarrower[EventT]
+    handler: TelemetryHandler[EventT]
+    sync_handler: SyncTelemetryHandler[EventT] | None = None
+
+    def erase(self) -> TelemetryBinding:
+        return TelemetryBinding(
+            self.spec,
+            _NarrowingAsyncHandler(self.accepts, self.handler),
+            (_NarrowingSyncHandler(self.accepts, self.sync_handler) if self.sync_handler is not None else None),
+        )
+
+
+class _NarrowingAsyncHandler(Generic[EventT]):
+    def __init__(self, accepts: EventNarrower[EventT], handler: TelemetryHandler[EventT]) -> None:
+        self._accepts = accepts
+        self._handler = handler
+
+    async def handle(self, event: object) -> None:
+        if self._accepts(event):
+            await self._handler.handle(event)
+
+
+class _NarrowingSyncHandler(Generic[EventT]):
+    def __init__(self, accepts: EventNarrower[EventT], handler: SyncTelemetryHandler[EventT]) -> None:
+        self._accepts = accepts
+        self._handler = handler
+
+    def handle_sync(self, event: object) -> None:
+        if self._accepts(event):
+            self._handler.handle_sync(event)
 
 
 @dataclass(frozen=True)
@@ -235,9 +276,8 @@ class _TelemetryWorker:
     async def _handle(self, item: _TelemetryItem) -> None:
         try:
             if item.synchronous:
-                handle_sync = getattr(self.binding.handler, "handle_sync", None)
-                if handle_sync is not None:
-                    handle_sync(item.event)
+                if self.binding.sync_handler is not None:
+                    self.binding.sync_handler.handle_sync(item.event)
             else:
                 await self.binding.handler.handle(item.event)
         except Exception as exc:
@@ -364,4 +404,5 @@ __all__ = [
     "TelemetryRuntime",
     "TelemetryState",
     "TelemetrySubscriptionSnapshot",
+    "TypedTelemetryBinding",
 ]

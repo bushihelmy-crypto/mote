@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.constants.messages import TOOL_CALL_ID, TOOL_CALLS
+from mote.contracts.conversation.fields import TOOL_CALL_ID, TOOL_CALLS
 from mote.runtime.context.compaction.recovery import RecoveryContextReducer, _message_to_wire, _wire_to_message
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.transcript import Transcript
@@ -177,8 +177,8 @@ def test_reduce_emits_wire_dicts_when_changed():
 # fold → summarize → drop escalation (the real reducers)
 # ---------------------------------------------------------------------------
 
-from mote.contracts.constants.context import HEAD_DROPPED_MESSAGE  # noqa: E402
-from mote.contracts.schema import ContextManagerConfig  # noqa: E402
+from mote.contracts.conversation import ContextManagerConfig  # noqa: E402
+from mote.contracts.conversation.constants import HEAD_DROPPED_MESSAGE  # noqa: E402
 from mote.runtime.context.compaction.reducers.drop import HeadDropReducer  # noqa: E402
 from mote.runtime.context.compaction.reducers.fold import FoldReducer  # noqa: E402
 from mote.runtime.context.compaction.reducers.summarize import SummarizeReducer  # noqa: E402

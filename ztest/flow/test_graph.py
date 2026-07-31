@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from mote.kernel.flow.graph import (
+from mote.kernel.execution.graph import (
     AgentGraph,
     EffectKind,
     End,

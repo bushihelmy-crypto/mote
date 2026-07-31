@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.schema import AIMessage, ToolMessage, UserMessage
+from mote.contracts.conversation import AIMessage, ToolMessage, UserMessage
 from mote.runtime.session.events import MessageEvent, SessionMetaEvent
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.recall import body_for_tool_call

@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.config.overrides`` — -c parsing + ConfigOverrides."""
+"""Tests for ``mote.product.config.overrides`` — -c parsing + ConfigOverrides."""
 from __future__ import annotations
 
 import pytest
 
-from mote.runtime.config.overrides import ConfigOverrides, parse_cli_overrides, parse_override_value, set_nested
+from mote.product.config.overrides import ConfigOverrides, parse_cli_overrides, parse_override_value, set_nested
 
 
 def test_parse_override_value_types():
@@ -53,7 +53,10 @@ def test_config_overrides_to_layer_dict_maps_known_fields():
 
 
 def test_config_overrides_extra_deep_merges_and_wins():
-    ov = ConfigOverrides(model="m", extra={"models": {"default": {"temperature": 0.2}}, "tools": {"proxy": "x"}})
+    ov = ConfigOverrides(
+        model="m",
+        extra={"models": {"default": {"temperature": 0.2}}, "tools": {"proxy": "x"}},
+    )
     out = ov.to_layer_dict()
     assert out["models"]["default"] == {"model": "m", "temperature": 0.2}
     assert out["tools"] == {"proxy": "x"}

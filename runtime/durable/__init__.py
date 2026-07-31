@@ -2,8 +2,8 @@
 
 from mote.runtime.durable.backend import DurableBackend, JsonlBackend
 from mote.runtime.durable.factory import make_durable_backend
-from mote.runtime.durable.think_journal import (
-    ThinkJournal,
+from mote.runtime.durable.inference_journal import (
+    InferenceJournal,
     assistant_message_present,
     begin_timer,
     complete_timer,
@@ -14,7 +14,7 @@ from mote.runtime.durable.think_journal import (
 __all__ = [
     "DurableBackend",
     "JsonlBackend",
-    "ThinkJournal",
+    "InferenceJournal",
     "assistant_message_present",
     "begin_timer",
     "complete_timer",

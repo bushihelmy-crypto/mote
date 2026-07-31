@@ -12,24 +12,34 @@ branches on. A tiny ``RecordingConsumer`` captures what reaches a consumer so th
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import pytest
 
-from mote.contracts.events.types import (
-    BUDGET,
+from mote.contracts.conversation import AIMessage, UserMessage
+from mote.contracts.events.agent import BudgetEvent
+from mote.contracts.events.conversation import (
     CONTEXT_COMPACTED,
+    MESSAGE_APPENDED,
+    ContextCompactedEvent,
+    MessageAppendedEvent,
+)
+from mote.contracts.events.model import (
     LLM_STREAM_DELTA,
     LLM_STREAM_END,
-    MESSAGE_APPENDED,
     MODEL_ATTEMPT_FINISHED,
-    TASK_PROGRESS,
+    LLMStreamDeltaEvent,
+    LLMStreamEndEvent,
+)
+from mote.contracts.events.task import TaskProgressEvent
+from mote.contracts.events.tool import (
     TOOL_CALL_FINISHED,
     TOOL_INVOCATION_STARTED,
+    ToolCallFinishedEvent,
+    ToolInvocationStartedEvent,
 )
-from mote.product.cli.contracts.base import BaseConsumer
-from mote.product.cli.contracts.view import Capabilities
+from mote.product.presentation.consumer import BaseConsumer
+from mote.product.presentation.events import Capabilities
 
 
 class AgentEvt:
@@ -41,35 +51,35 @@ class AgentEvt:
             setattr(self, key, value)
 
 
-def ev_delta(token: str) -> AgentEvt:
-    return AgentEvt(LLM_STREAM_DELTA, token=token)
+def ev_delta(token: str) -> LLMStreamDeltaEvent:
+    return LLMStreamDeltaEvent(token=token)
 
 
-def ev_stream_end() -> AgentEvt:
-    return AgentEvt(LLM_STREAM_END)
+def ev_stream_end() -> LLMStreamEndEvent:
+    return LLMStreamEndEvent()
 
 
-def ev_message(role: str, content: str) -> AgentEvt:
-    return AgentEvt(MESSAGE_APPENDED, message=SimpleNamespace(role=role, content=content))
+def ev_message(role: str, content: str) -> MessageAppendedEvent:
+    message = AIMessage(content=content) if role == "assistant" else UserMessage(content=content)
+    return MessageAppendedEvent(message=message)
 
 
-def ev_system_reminder(inner: str) -> AgentEvt:
+def ev_system_reminder(inner: str) -> MessageAppendedEvent:
     """A user MESSAGE_APPENDED whose content is a ``<system-reminder>`` envelope.
 
     Mirrors mote's turn-context bus output (the framework writes the merged
     per-turn block into history as a user message wrapped in these tags).
     """
     content = f"<system-reminder>\n{inner}\n</system-reminder>"
-    return AgentEvt(MESSAGE_APPENDED, message=SimpleNamespace(role="user", content=content))
+    return MessageAppendedEvent(message=UserMessage(content=content))
 
 
 def ev_tool_started(
     tool_name: str,
     tool_input: Optional[dict] = None,
     tool_use_id: str = "tu-1",
-) -> AgentEvt:
-    return AgentEvt(
-        TOOL_INVOCATION_STARTED,
+) -> ToolInvocationStartedEvent:
+    return ToolInvocationStartedEvent(
         tool_name=tool_name,
         tool_input=tool_input or {},
         tool_use_id=tool_use_id,
@@ -98,36 +108,35 @@ def ev_post_tool(
     / ``FileDiffBlock``\\s. ``error`` carries an optional structured ``ErrorReport``
     whose code/type/retryable/recovery the projector reads onto the completion.
     """
-    return AgentEvt(
-        TOOL_CALL_FINISHED,
+    return ToolCallFinishedEvent(
         tool_name=tool_name,
         tool_response=tool_response,
         tool_use_id=tool_use_id,
         tool_input=tool_input or {},
         outcome="succeeded" if success else "failed",
         media=media or [],
+        artifacts=[],
         file_changes=file_changes or [],
         error=error,
     )
 
 
-def ev_progress(stage: str = "", status: str = "", detail: str = "") -> AgentEvt:
-    return AgentEvt(TASK_PROGRESS, stage=stage, status=status, detail=detail)
+def ev_progress(stage: str = "", status: str = "", detail: str = "") -> TaskProgressEvent:
+    return TaskProgressEvent(stage=stage, status=status, detail=detail)
 
 
-def ev_budget(spend: float = 0.0, limit: float = 0.0, fraction: float = 0.0, stopped: bool = False) -> AgentEvt:
+def ev_budget(spend: float = 0.0, limit: float = 0.0, fraction: float = 0.0, stopped: bool = False) -> BudgetEvent:
     """A BUDGET event — soft warning (``stopped=False``) or hard stop (True)."""
-    return AgentEvt(BUDGET, spend=spend, limit=limit, fraction=fraction, stopped=stopped)
+    return BudgetEvent(spend=spend, limit=limit, fraction=fraction, stopped=stopped)
 
 
 def ev_compaction(
     summary: str = "",
     model_context_messages: Optional[list] = None,
-) -> AgentEvt:
+) -> ContextCompactedEvent:
     """A CONTEXT_COMPACTED event carrying the active model projection."""
 
-    return AgentEvt(
-        CONTEXT_COMPACTED,
+    return ContextCompactedEvent(
         model_context_messages=model_context_messages or [],
         summary=summary,
     )

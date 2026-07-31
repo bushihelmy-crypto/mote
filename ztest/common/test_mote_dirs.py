@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for the ``.mote`` project-dir discovery helpers (``common.const.paths``).
+"""Unit tests for Product ``.mote`` project-path discovery.
 
 These pin the upward walk: from *cwd* up to (and including)
 the git root, collect every existing ``<dir>/.mote/<subdir>`` (or file), returned
@@ -11,10 +11,9 @@ parent directory outside the repo never leak in.
 The git root is faked by monkeypatching ``find_git_root`` on the path module's
 call-time import target, so nothing depends on the test tree's real VCS layout.
 """
-import mote.runtime.paths as paths
-from mote.runtime.paths import (
-    CONFIG_ROOT,
+from mote.product.paths import (
     MOTE_DIR_NAME,
+    discovery,
     mote_project_dirs,
     mote_project_files,
     mote_source_dirs,
@@ -24,12 +23,12 @@ from mote.runtime.paths import (
 
 def _fake_git_root(monkeypatch, root):
     """Make ``find_git_root`` report *root* for every query (deferred-import safe)."""
-    monkeypatch.setattr(paths, "find_git_root", lambda cwd: str(root))
+    monkeypatch.setattr(discovery, "find_git_root", lambda cwd: str(root))
 
 
 class TestUserMoteDir:
-    def test_anchored_at_config_root(self):
-        assert user_mote_dir("skills") == CONFIG_ROOT / "skills"
+    def test_anchored_at_explicit_config_root(self, tmp_path):
+        assert user_mote_dir("skills", user_config_root=tmp_path) == tmp_path / "skills"
 
     def test_dir_name_constant(self):
         assert MOTE_DIR_NAME == ".mote"

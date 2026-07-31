@@ -3,7 +3,7 @@
 """Tests for mote.runtime.agent.role_state.RoleState (serializable runtime snapshot)."""
 from __future__ import annotations
 
-from mote.contracts.schema import LLMCallContext, Message, MessageQueue
+from mote.contracts.conversation import LLMCallContext, Message, MessageQueue
 from mote.runtime.agent.role_state import RoleState, RoleStateController
 
 

@@ -19,12 +19,12 @@ pytest.importorskip("textual")
 
 from textual.app import App
 
-from mote.contracts.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus
-from mote.contracts.permissions import ApprovalRequest
-from mote.contracts.runtimes import RuntimeRef
-from mote.contracts.surfaces import SurfaceDescriptor, SurfacePresentationMode
-from mote.product.cli.consumers.textual.screens import ApprovalScreen, HandoffScreen, QuestionScreen
-from mote.product.cli.consumers.textual.style import textual_css_vars
+from mote.contracts.interaction import ApprovalRequest
+from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus
+from mote.contracts.runtime import RuntimeRef
+from mote.contracts.surface import SurfaceDescriptor, SurfacePresentationMode
+from mote.product.interfaces.textual.screens import ApprovalScreen, HandoffScreen, QuestionScreen
+from mote.product.interfaces.textual.style import textual_css_vars
 
 
 class _ScreenHarness(App):

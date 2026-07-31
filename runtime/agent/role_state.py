@@ -6,22 +6,22 @@ RoleState — serializable runtime snapshot for checkpoint/recovery.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from mote.contracts.models.routing import RoutingSessionState
-from mote.contracts.schema import LLMCallContext, Message, MessageQueue, SerializationMixin
-from mote.contracts.think import ThinkResult
-from mote.kernel.run_state import AgentRunState
-from mote.runtime.paths import DEFAULT_WORKSPACE_ROOT
+from mote.contracts.conversation import LLMCallContext, Message, MessageQueue
+from mote.contracts.model.inference import InferenceResult
+from mote.contracts.model.routing import RoutingSessionState
+from mote.kernel.execution.run_state import AgentRunState
 from mote.runtime.session.ids import new_session_id
 
 
-class RoleState(SerializationMixin):
+class RoleState(BaseModel):
     """Serializable runtime snapshot, used for cross-machine restoration."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     # The message sequence fed to the LLM on the last think round — the `req`
     # ContextProvider assembles for aask (history + current user prompt). Kept
@@ -45,9 +45,9 @@ class RoleState(SerializationMixin):
     #                          but tools never call it automatically.
     #   original_working_dir — set at startup, session-listing/fallback; never moves
     #   project_root         — project identity anchor (skills/context-protocol/memory); never moves
-    working_dir: str = Field(default_factory=lambda: str(DEFAULT_WORKSPACE_ROOT.resolve()))
-    original_working_dir: str = Field(default_factory=lambda: str(DEFAULT_WORKSPACE_ROOT.resolve()))
-    project_root: str = Field(default_factory=lambda: str(DEFAULT_WORKSPACE_ROOT.resolve()))
+    working_dir: str = Field(default_factory=lambda: str(Path.cwd().resolve()))
+    original_working_dir: str = Field(default_factory=lambda: str(Path.cwd().resolve()))
+    project_root: str = Field(default_factory=lambda: str(Path.cwd().resolve()))
 
     # Execution tracking
     latest_observed_msg: Optional[Message] = None
@@ -224,13 +224,13 @@ class RoleStateController:
         self._state.msg_buffer.push(message)
 
     @property
-    def last_think_result(self) -> "ThinkResult":
+    def last_inference_result(self) -> "InferenceResult":
         """The most recent think round's transient Kernel output."""
-        return self._state.run_state.last_think_result
+        return self._state.run_state.last_inference_result
 
-    def set_last_think_result(self, result: "ThinkResult") -> None:
+    def set_last_think_result(self, result: "InferenceResult") -> None:
         """Publish this turn's think result (called by the flow when it drains)."""
-        self._state.run_state.last_think_result = result
+        self._state.run_state.last_inference_result = result
 
     @property
     def is_idle(self) -> bool:

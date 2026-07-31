@@ -33,15 +33,16 @@ import json
 import os
 from typing import Callable, Iterable, Optional
 
-from mote.contracts.constants.context import (
+from mote.contracts.conversation import Message, UserMessage
+from mote.contracts.conversation.constants import (
     POST_COMPACT_REHYDRATE_MAX_FILES,
     POST_COMPACT_REHYDRATE_MAX_TOKENS_PER_FILE,
     POST_COMPACT_REHYDRATE_TOKEN_BUDGET,
 )
-from mote.contracts.constants.messages import TOOL_CALLS
-from mote.contracts.schema import Message, UserMessage
-from mote.runtime.context.sanitization import count_tokens, truncate_to_tokens
-from mote.runtime.logging import logger
+from mote.contracts.conversation.fields import TOOL_CALLS
+from mote.runtime.context.token_budget import count_tokens, truncate_to_tokens
+from mote.runtime.context.tokenizer import DEFAULT_TEXT_TOKENIZER
+from mote.runtime.telemetry.logging import logger
 
 # The Read tool's file-path argument name (``executor/tools/read.py``); the tail
 # already surfaces the bytes of any file read through it, so dedup keys off this.
@@ -107,9 +108,13 @@ class FileRehydrator:
             body = self._read(path)
             if body is None:
                 continue
-            if count_tokens(body) > self._max_tokens_per_file:
-                body = truncate_to_tokens(body, self._max_tokens_per_file)
-            cost = count_tokens(body)
+            if count_tokens(body, tokenizer=DEFAULT_TEXT_TOKENIZER) > self._max_tokens_per_file:
+                body = truncate_to_tokens(
+                    body,
+                    self._max_tokens_per_file,
+                    tokenizer=DEFAULT_TEXT_TOKENIZER,
+                )
+            cost = count_tokens(body, tokenizer=DEFAULT_TEXT_TOKENIZER)
             if used + cost > self._token_budget:
                 # Over budget: stop (remaining files are older / lower priority).
                 break

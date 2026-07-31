@@ -48,7 +48,7 @@ class DurableBackend(Protocol):
     the JSONL tier writes step records there directly; the Temporal tier still
     uses the same journal-backed ledger for EXTERNAL-effect idempotency inside
     its activities (belt-and-suspenders). The loop's typed façades
-    (:class:`~mote.runtime.durable.think_journal.ThinkJournal`) reach the journal through
+    (:class:`~mote.runtime.durable.inference_journal.InferenceJournal`) reach the journal through
     this member, so they stay backend-agnostic.
     """
 

@@ -7,7 +7,7 @@ import os
 import stat
 from typing import Optional
 
-from mote.contracts.fileops.errors import MetadataPreservationError
+from mote.contracts.file.errors import MetadataPreservationError
 from mote.runtime.fileops.identity import PathLike, native_path
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata
 

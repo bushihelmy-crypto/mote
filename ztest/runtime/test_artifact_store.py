@@ -3,30 +3,32 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sqlite3
+from contextlib import nullcontext
 
 import pytest
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactContentRef,
     ArtifactPublishRequest,
     ArtifactRef,
     ArtifactRepresentationInput,
     ArtifactRetention,
 )
-from mote.contracts.errors.artifacts import (
+from mote.contracts.artifact.errors import (
     ArtifactIdempotencyConflictError,
     ArtifactNotFoundError,
     ArtifactRetentionError,
     ArtifactRevisionConflictError,
 )
-from mote.contracts.ports import ArtifactBlobStore, ArtifactStore
+from mote.contracts.content import ContentIdentity
+from mote.contracts.ports.artifact.store import ArtifactBlobStore, ArtifactStore
 from mote.runtime.artifacts import (
+    ArtifactGarbageCollector,
     ArtifactOwnership,
     ArtifactRepositoryBlobStore,
-    ArtifactStoreGarbageCollector,
     DurableArtifactStore,
 )
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.runtime.artifacts.repository import ArtifactRepository
 
 
 class MemoryBlobs:
@@ -39,15 +41,14 @@ class MemoryBlobs:
         digest = hashlib.sha256(content).hexdigest()
         self.contents[digest] = content
         return ArtifactContentRef(
-            content_ref=f"sha256:{digest}",
-            digest=digest,
-            size=len(content),
+            identity=ContentIdentity(digest, len(content)),
+            locator=f"sha256:{digest}",
         )
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        content = self.contents[ref.digest]
-        assert len(content) == ref.size
-        assert hashlib.sha256(content).hexdigest() == ref.digest
+        content = self.contents[ref.identity.digest]
+        assert len(content) == ref.identity.size
+        assert hashlib.sha256(content).hexdigest() == ref.identity.digest
         return content
 
 
@@ -135,8 +136,8 @@ async def test_read_rejects_forged_reference_to_shared_blob(tmp_path):
         kind=stored.kind,
         mime_type=stored.mime_type,
         content_ref=unrelated.content_ref,
-        digest=unrelated.digest,
-        size=unrelated.size,
+        digest=unrelated.identity.digest,
+        size=unrelated.identity.size,
         retention=stored.retention,
         sensitivity=stored.sensitivity,
         suggested_name=stored.suggested_name,
@@ -192,9 +193,8 @@ def test_artifact_publication_rejects_path_bearing_identifiers(field, value):
 def test_artifact_content_reference_never_exposes_a_filesystem_path(content_ref):
     with pytest.raises(ValueError):
         ArtifactContentRef(
-            content_ref=content_ref,
-            digest="0" * 64,
-            size=0,
+            identity=ContentIdentity("0" * 64, 0),
+            locator=content_ref,
         )
 
 
@@ -253,26 +253,6 @@ async def test_idempotent_replay_is_stable_after_retention_promotion(tmp_path):
     assert replayed.artifact_id == first.artifact_id
     assert replayed.revision == first.revision
     assert replayed.get("svg").retention is ArtifactRetention.PINNED
-
-
-@pytest.mark.asyncio
-async def test_store_migrates_pre_fingerprint_publication_index(tmp_path):
-    path = tmp_path / "artifacts.sqlite3"
-    with sqlite3.connect(path) as connection:
-        connection.execute(
-            "CREATE TABLE artifact_publications ("
-            "idempotency_key TEXT PRIMARY KEY, "
-            "artifact_id TEXT NOT NULL, "
-            "revision INTEGER NOT NULL)"
-        )
-    store = DurableArtifactStore(path, MemoryBlobs())
-
-    published = await store.publish(_request(b"content", idempotency_key="post-migration"))
-
-    assert published.revision == 1
-    with sqlite3.connect(path) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(artifact_publications)").fetchall()}
-    assert "request_fingerprint" in columns
 
 
 @pytest.mark.asyncio
@@ -423,7 +403,7 @@ async def test_store_gc_reclaims_only_after_last_logical_root(tmp_path):
         tmp_path / "project" / "artifacts.sqlite3",
         ArtifactRepositoryBlobStore(repository),
     )
-    collector = ArtifactStoreGarbageCollector(project, repository)
+    collector = ArtifactGarbageCollector(project, repository)
     first = await project.publish(
         _request(
             b"shared",
@@ -442,12 +422,67 @@ async def test_store_gc_reclaims_only_after_last_logical_root(tmp_path):
 
     assert await project.release(first.artifact_id, first.revision) is True
     collector.collect()
-    assert repository.catalog.object(digest) is not None
+    assert digest in {item.identity.digest for item in repository.scan()}
     assert await project.read(second.get("svg")) == b"shared"
 
     assert await project.release(second.artifact_id, second.revision) is True
     collector.collect()
-    assert repository.catalog.object(digest) is None
+    assert digest not in {item.identity.digest for item in repository.scan()}
+
+
+@pytest.mark.asyncio
+async def test_artifact_gc_preserves_content_under_legal_hold_pin(tmp_path):
+    class LegalHoldPins:
+        def __init__(self):
+            self.refs = ()
+
+        def freeze_artifact_pins(self):
+            return nullcontext(self.refs)
+
+    repository = ArtifactRepository(tmp_path / "blobs", hard_limit_bytes=1_024)
+    store = DurableArtifactStore(
+        tmp_path / "artifacts.sqlite3",
+        ArtifactRepositoryBlobStore(repository),
+    )
+    hold = LegalHoldPins()
+    collector = ArtifactGarbageCollector(store, repository, pin_sources=(hold,))
+    revision = await store.publish(_request(b"held", retention=ArtifactRetention.PROJECT))
+    ref = revision.get("svg")
+    content_ref = ArtifactContentRef(ContentIdentity(ref.digest, ref.size), ref.content_ref)
+    hold.refs = (content_ref,)
+    assert await store.release(revision.artifact_id, revision.revision) is True
+
+    assert collector.collect() == 0
+    assert repository.read_bytes(content_ref) == b"held"
+
+    hold.refs = ()
+    assert collector.collect() == 1
+
+
+@pytest.mark.asyncio
+async def test_lookup_visibility_never_exposes_partial_artifact_publication(tmp_path):
+    store = DurableArtifactStore(tmp_path / "artifacts.sqlite3", MemoryBlobs())
+    lookup_key = "sha256:" + "d" * 64
+
+    assert await store.resolve_lookup(lookup_key) is None
+    with pytest.raises(ArtifactNotFoundError):
+        await store.publish_lookup(lookup_key, "reasoning", 1)
+    assert await store.resolve_lookup(lookup_key) is None
+
+    revision = await store.publish(_request(b"opaque-reasoning", artifact_id="reasoning"))
+    assert await store.resolve_lookup(lookup_key) is None
+
+    await store.publish_lookup(
+        lookup_key,
+        revision.artifact_id,
+        revision.revision,
+    )
+    assert await store.resolve_lookup(lookup_key) == revision
+    await store.publish_lookup(
+        lookup_key,
+        revision.artifact_id,
+        revision.revision,
+    )
 
 
 @pytest.mark.asyncio

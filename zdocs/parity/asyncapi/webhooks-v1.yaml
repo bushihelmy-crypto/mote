@@ -1,0 +1,16 @@
+asyncapi: 3.0.0
+info: {title: Mote Provider Evidence Webhooks, version: 1.0.0}
+channels:
+  providerEvidence:
+    address: /v1/webhooks/provider/{provider}
+    parameters:
+      provider: {description: Registered provider profile, location: '$message.header#/provider'}
+    messages:
+      evidence: {$ref: '#/components/messages/ProviderEvidence'}
+operations:
+  webhookReceive: {action: receive, channel: {$ref: '#/channels/providerEvidence'}, messages: [{$ref: '#/channels/providerEvidence/messages/evidence'}]}
+components:
+  messages:
+    ProviderEvidence:
+      headers: {type: object, additionalProperties: false, required: [provider, signature, event_id], properties: {provider: {type: string}, signature: {type: string}, event_id: {type: string}}}
+      payload: {type: object, additionalProperties: false, required: [execution_id, event_type, occurred_at], properties: {execution_id: {type: string}, event_type: {type: string}, occurred_at: {type: string, format: date-time}, provider_resource_id: {type: string}}}

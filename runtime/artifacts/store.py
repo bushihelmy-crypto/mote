@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactContentRef,
     ArtifactPublication,
     ArtifactPublicationIntent,
@@ -22,15 +22,16 @@ from mote.contracts.artifacts import (
     ArtifactRevision,
     ArtifactSensitivity,
 )
-from mote.contracts.errors.artifacts import (
+from mote.contracts.artifact.errors import (
     ArtifactIdempotencyConflictError,
     ArtifactNotFoundError,
     ArtifactPublicationTerminalError,
     ArtifactRetentionError,
     ArtifactRevisionConflictError,
 )
-from mote.contracts.ports.artifact_store import ArtifactBlobStore
-from mote.runtime.disk.async_io import run_disk_io
+from mote.contracts.content import ContentIdentity
+from mote.contracts.ports.artifact.store import ArtifactBlobStore
+from mote.runtime.persistence.async_io import run_disk_io
 
 from .ownership import ArtifactOwnership
 from .transfer import ArtifactIdempotencyRecord, ArtifactRevisionTransfer
@@ -91,6 +92,22 @@ class DurableArtifactStore:
 
     async def release(self, artifact_id: str, revision: int) -> bool:
         return await run_disk_io(self._release, artifact_id, revision)
+
+    async def publish_lookup(
+        self,
+        lookup_key: str,
+        artifact_id: str,
+        revision: int,
+    ) -> None:
+        await run_disk_io(
+            self._publish_lookup,
+            lookup_key,
+            artifact_id,
+            revision,
+        )
+
+    async def resolve_lookup(self, lookup_key: str) -> ArtifactRevision | None:
+        return await run_disk_io(self._resolve_lookup, lookup_key)
 
     def release_session_scope(self) -> int:
         """Release expired EPHEMERAL/SESSION metadata during session cleanup."""
@@ -212,13 +229,7 @@ class DurableArtifactStore:
         exports = []
         for revision in revisions:
             contents = tuple(
-                self._blobs.read_bytes(
-                    ArtifactContentRef(
-                        content_ref=ref.content_ref,
-                        digest=ref.digest,
-                        size=ref.size,
-                    )
-                )
+                self._blobs.read_bytes(ArtifactContentRef(ContentIdentity(ref.digest, ref.size), ref.content_ref))
                 for ref in revision.representations
             )
             exports.append(
@@ -254,13 +265,7 @@ class DurableArtifactStore:
                 ).fetchall()
             )
         contents = tuple(
-            self._blobs.read_bytes(
-                ArtifactContentRef(
-                    content_ref=ref.content_ref,
-                    digest=ref.digest,
-                    size=ref.size,
-                )
-            )
+            self._blobs.read_bytes(ArtifactContentRef(ContentIdentity(ref.digest, ref.size), ref.content_ref))
             for ref in exported.representations
         )
         return ArtifactRevisionTransfer(exported, contents, records)
@@ -331,7 +336,7 @@ class DurableArtifactStore:
             raise ValueError("artifact import content arity does not match revision")
         prepared = tuple(self._blobs.put_bytes(content) for content in contents)
         for source, content in zip(revision.representations, prepared, strict=True):
-            if source.digest != content.digest or source.size != content.size:
+            if source.digest != content.identity.digest or source.size != content.identity.size:
                 raise ValueError("artifact import content does not match its source")
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -368,8 +373,8 @@ class DurableArtifactStore:
                     ref = replace(
                         source,
                         content_ref=content.content_ref,
-                        digest=content.digest,
-                        size=content.size,
+                        digest=content.identity.digest,
+                        size=content.identity.size,
                         retention=retention,
                     )
                     connection.execute(
@@ -441,16 +446,17 @@ class DurableArtifactStore:
             ).fetchall()
         roots: dict[str, ArtifactContentRef] = {}
         for row in rows:
-            ref = ArtifactContentRef(
-                content_ref=row["content_ref"],
-                digest=row["digest"],
-                size=row["size"],
-            )
-            prior = roots.get(ref.digest)
-            if prior is not None and prior.size != ref.size:
+            ref = ArtifactContentRef(ContentIdentity(row["digest"], row["size"]), row["content_ref"])
+            prior = roots.get(ref.identity.digest)
+            if prior is not None and prior.identity.size != ref.identity.size:
                 raise ValueError("artifact index digest resolves to conflicting content sizes")
-            roots[ref.digest] = ref
-        return tuple(sorted(roots.values(), key=lambda item: (item.digest, item.size)))
+            roots[ref.identity.digest] = ref
+        return tuple(
+            sorted(
+                roots.values(),
+                key=lambda item: (item.identity.digest, item.identity.size),
+            )
+        )
 
     async def stage(
         self,
@@ -643,7 +649,10 @@ class DurableArtifactStore:
         )
         for _representation, content_ref in prepared:
             content = self._blobs.read_bytes(content_ref)
-            if len(content) != content_ref.size or hashlib.sha256(content).hexdigest() != content_ref.digest:
+            if (
+                len(content) != content_ref.identity.size
+                or hashlib.sha256(content).hexdigest() != content_ref.identity.digest
+            ):
                 raise ValueError("artifact CAS content does not match its reference")
         return self._stage_prepared(
             intent.publication_id,
@@ -712,8 +721,8 @@ class DurableArtifactStore:
                             representation.kind,
                             representation.mime_type,
                             content.content_ref,
-                            content.digest,
-                            content.size,
+                            content.identity.digest,
+                            content.identity.size,
                             representation.suggested_name,
                         ),
                     )
@@ -938,22 +947,7 @@ class DurableArtifactStore:
                             require_visible=False,
                         )
                         fingerprint = self._request_fingerprint(request, prepared)
-                        recorded_fingerprint = existing["request_fingerprint"]
-                        if recorded_fingerprint:
-                            matches = recorded_fingerprint == fingerprint
-                        else:
-                            matches = self._legacy_publication_matches(
-                                request,
-                                prepared,
-                                revision,
-                            )
-                            if matches:
-                                connection.execute(
-                                    "UPDATE artifact_publications "
-                                    "SET request_fingerprint = ? "
-                                    "WHERE idempotency_key = ?",
-                                    (fingerprint, request.idempotency_key),
-                                )
+                        matches = existing["request_fingerprint"] == fingerprint
                         if not matches:
                             raise ArtifactIdempotencyConflictError(
                                 "artifact idempotency key was reused with different content",
@@ -1006,8 +1000,8 @@ class DurableArtifactStore:
                         kind=representation.kind,
                         mime_type=representation.mime_type,
                         content_ref=content.content_ref,
-                        digest=content.digest,
-                        size=content.size,
+                        digest=content.identity.digest,
+                        size=content.identity.size,
                         retention=request.retention,
                         sensitivity=request.sensitivity,
                         suggested_name=representation.suggested_name,
@@ -1076,11 +1070,7 @@ class DurableArtifactStore:
                     representation=ref.representation,
                 )
         return self._blobs.read_bytes(
-            ArtifactContentRef(
-                content_ref=stored.content_ref,
-                digest=stored.digest,
-                size=stored.size,
-            )
+            ArtifactContentRef(ContentIdentity(stored.digest, stored.size), stored.content_ref)
         )
 
     def _promote(
@@ -1266,6 +1256,11 @@ class DurableArtifactStore:
                 revision INTEGER NOT NULL,
                 request_fingerprint TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS artifact_lookup_keys (
+                lookup_key TEXT PRIMARY KEY,
+                artifact_id TEXT NOT NULL,
+                revision INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS artifact_owners (
                 artifact_id TEXT NOT NULL,
                 revision INTEGER NOT NULL,
@@ -1306,102 +1301,70 @@ class DurableArtifactStore:
             );
             """
         )
-        publication_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(artifact_publications)").fetchall()
-        }
-        if "request_fingerprint" not in publication_columns:
-            connection.execute(
-                "ALTER TABLE artifact_publications " "ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''"
-            )
-        representation_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(artifact_representations)").fetchall()
-        }
-        if "released" not in representation_columns:
-            connection.execute("ALTER TABLE artifact_representations " "ADD COLUMN released INTEGER NOT NULL DEFAULT 0")
-        outbox_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(artifact_publication_outbox)").fetchall()
-        }
-        if "owner_kind" not in outbox_columns:
-            connection.execute(
-                "ALTER TABLE artifact_publication_outbox " 'ADD COLUMN owner_kind TEXT NOT NULL DEFAULT "session"'
-            )
-        if "owner_id" not in outbox_columns:
-            connection.execute(
-                "ALTER TABLE artifact_publication_outbox " 'ADD COLUMN owner_id TEXT NOT NULL DEFAULT "standalone"'
-            )
-        self._backfill_ownership(connection)
         connection.commit()
         if os.name == "posix":
             os.chmod(self._index_path, 0o600)
         return connection
 
-    def _backfill_ownership(self, connection: sqlite3.Connection) -> None:
-        """Give pre-ownership rows one exact owner without changing identity."""
-        rows = connection.execute(
-            "SELECT artifact_id, revision, retention, MIN(released) AS released "
-            "FROM artifact_representations GROUP BY artifact_id, revision, retention"
-        ).fetchall()
-        for row in rows:
-            retention = ArtifactRetention(row["retention"])
-            owner_kind, owner_id = self._ownership.owner_for(retention)
-            owner_count = connection.execute(
-                "SELECT COUNT(*) FROM artifact_owners " "WHERE artifact_id = ? AND revision = ?",
-                (row["artifact_id"], row["revision"]),
-            ).fetchone()[0]
-            if owner_count == 0:
+    def _publish_lookup(
+        self,
+        lookup_key: str,
+        artifact_id: str,
+        revision: int,
+    ) -> None:
+        if not lookup_key or len(lookup_key) > 512 or not artifact_id or revision < 1:
+            raise ValueError("artifact lookup binding is invalid")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                visible = connection.execute(
+                    "SELECT 1 FROM artifact_representations "
+                    "WHERE artifact_id = ? AND revision = ? AND released = 0 "
+                    "LIMIT 1",
+                    (artifact_id, revision),
+                ).fetchone()
+                if visible is None:
+                    raise ArtifactNotFoundError("lookup target is not a committed Artifact revision")
+                existing = connection.execute(
+                    "SELECT artifact_id, revision FROM artifact_lookup_keys " "WHERE lookup_key = ?",
+                    (lookup_key,),
+                ).fetchone()
+                if existing is not None and (
+                    existing["artifact_id"] != artifact_id or existing["revision"] != revision
+                ):
+                    raise ArtifactIdempotencyConflictError("artifact lookup key is already bound")
                 connection.execute(
-                    "INSERT INTO artifact_owners "
-                    "(artifact_id, revision, owner_kind, owner_id, retention, released) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        row["artifact_id"],
-                        row["revision"],
-                        owner_kind,
-                        owner_id,
-                        retention.value,
-                        row["released"],
-                    ),
+                    "INSERT OR IGNORE INTO artifact_lookup_keys "
+                    "(lookup_key, artifact_id, revision) VALUES (?, ?, ?)",
+                    (lookup_key, artifact_id, revision),
                 )
-                continue
-            if owner_id == "standalone":
-                continue
-            standalone = connection.execute(
-                "SELECT retention, released FROM artifact_owners "
-                "WHERE artifact_id = ? AND revision = ? "
-                "AND owner_kind = ? AND owner_id = 'standalone'",
-                (row["artifact_id"], row["revision"], owner_kind),
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def _resolve_lookup(self, lookup_key: str) -> ArtifactRevision | None:
+        if not lookup_key or len(lookup_key) > 512:
+            raise ValueError("artifact lookup key is invalid")
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT artifact_id, revision FROM artifact_lookup_keys " "WHERE lookup_key = ?",
+                (lookup_key,),
             ).fetchone()
-            if standalone is None:
-                continue
-            connection.execute(
-                "INSERT OR IGNORE INTO artifact_owners "
-                "(artifact_id, revision, owner_kind, owner_id, retention, released) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    row["artifact_id"],
-                    row["revision"],
-                    owner_kind,
-                    owner_id,
-                    standalone["retention"],
-                    standalone["released"],
-                ),
-            )
-            connection.execute(
-                "DELETE FROM artifact_owners "
-                "WHERE artifact_id = ? AND revision = ? "
-                "AND owner_kind = ? AND owner_id = 'standalone'",
-                (row["artifact_id"], row["revision"], owner_kind),
-            )
-        outbox_rows = connection.execute(
-            "SELECT publication_id, retention, owner_kind, owner_id " "FROM artifact_publication_outbox"
-        ).fetchall()
-        for row in outbox_rows:
-            if row["owner_id"] != "standalone":
-                continue
-            owner_kind, owner_id = self._ownership.owner_for(ArtifactRetention(row["retention"]))
-            connection.execute(
-                "UPDATE artifact_publication_outbox SET owner_kind = ?, owner_id = ? " "WHERE publication_id = ?",
-                (owner_kind, owner_id, row["publication_id"]),
+            if row is None:
+                return None
+            visible = connection.execute(
+                "SELECT 1 FROM artifact_representations "
+                "WHERE artifact_id = ? AND revision = ? AND released = 0 "
+                "LIMIT 1",
+                (row["artifact_id"], row["revision"]),
+            ).fetchone()
+            if visible is None:
+                return None
+            return self._load_revision(
+                connection,
+                row["artifact_id"],
+                row["revision"],
             )
 
     @staticmethod
@@ -1559,8 +1522,8 @@ class DurableArtifactStore:
                     representation.representation,
                     representation.kind,
                     representation.mime_type,
-                    content.digest,
-                    content.size,
+                    content.identity.digest,
+                    content.identity.size,
                     representation.suggested_name,
                 )
                 for representation, content in prepared
@@ -1610,9 +1573,8 @@ class DurableArtifactStore:
                 mime_type=item["mime_type"],
                 content=self._blobs.read_bytes(
                     ArtifactContentRef(
-                        content_ref=item["content_ref"],
-                        digest=item["digest"],
-                        size=item["size"],
+                        ContentIdentity(item["digest"], item["size"]),
+                        item["content_ref"],
                     )
                 ),
                 suggested_name=item["suggested_name"],
@@ -1668,9 +1630,8 @@ class DurableArtifactStore:
             (
                 representation,
                 ArtifactContentRef(
-                    content_ref=item["content_ref"],
-                    digest=item["digest"],
-                    size=item["size"],
+                    ContentIdentity(item["digest"], item["size"]),
+                    item["content_ref"],
                 ),
             )
             for representation, item in zip(
@@ -1695,43 +1656,6 @@ class DurableArtifactStore:
     def _default_idempotency_key(publication_id: str) -> str:
         digest = hashlib.sha256(publication_id.encode("utf-8")).hexdigest()
         return f"artifact-publication:{digest}"
-
-    @staticmethod
-    def _legacy_publication_matches(
-        request: ArtifactPublishRequest,
-        prepared: tuple,
-        existing: ArtifactRevision,
-    ) -> bool:
-        if request.artifact_id and request.artifact_id != existing.artifact_id:
-            return False
-        actual = {
-            item.representation: (
-                item.kind,
-                item.mime_type,
-                item.digest,
-                item.size,
-                item.suggested_name,
-            )
-            for item in existing.representations
-        }
-        expected = {
-            representation.representation: (
-                representation.kind,
-                representation.mime_type,
-                content.digest,
-                content.size,
-                representation.suggested_name,
-            )
-            for representation, content in prepared
-        }
-        return (
-            actual == expected
-            and all(
-                _RETENTION_RANK[item.retention] >= _RETENTION_RANK[request.retention]
-                for item in existing.representations
-            )
-            and all(item.sensitivity is request.sensitivity for item in existing.representations)
-        )
 
 
 __all__ = ["ARTIFACT_INDEX_FILENAME", "DurableArtifactStore"]

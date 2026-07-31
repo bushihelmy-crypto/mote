@@ -35,14 +35,17 @@ from __future__ import annotations
 import asyncio
 from typing import Any, ClassVar
 
-from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
-from mote.contracts.models.capabilities import supports_vision
-from mote.contracts.permissions import PermissionDecision
-from mote.contracts.runtimes import RuntimeAccessMode
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.authorization import PermissionDecision
+from mote.contracts.model.capabilities import supports_vision
+from mote.contracts.runtime import RuntimeAccessMode
+from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
+from mote.contracts.tool.effects import ToolEffect
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
 from mote.runtime.artifacts.media import publish_media_artifact
-from mote.runtime.errors import ToolNotConfiguredError
+from mote.runtime.errors import ToolError, ToolNotConfiguredError
+from mote.runtime.interactive.device.backend import DeviceError, select_device_backend
+from mote.runtime.interactive.device.runtime import DeviceRuntimeDriver
+from mote.runtime.interactive.device.session import DeviceSession, Observation
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import (
     GetArtifactPublisher,
@@ -51,11 +54,8 @@ from mote.runtime.tools.capability_types import (
     GetRuntimeHost,
     HandoffRuntime,
 )
-from mote.runtime.tools.dependency._device.backend import DeviceError, select_device_backend
-from mote.runtime.tools.dependency._device.runtime import DeviceRuntimeDriver
-from mote.runtime.tools.dependency._device.session import DeviceSession, Observation
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError, ToolMedia, ToolResult
+from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 # Model-facing sentences, hoisted so the wording lives in one place.
 _MSG_DEVICE_FAILED = "Error running device: {error}"

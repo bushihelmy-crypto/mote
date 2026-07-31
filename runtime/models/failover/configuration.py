@@ -6,8 +6,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
-from mote.contracts.config.llm import LLMConfig
-from mote.contracts.config.model_failover import CredentialPoolConfig, ModelEndpointConfig
+from mote.contracts.config.model.failover import CredentialPoolConfig, ModelEndpointConfig
+from mote.contracts.config.model.llm import LLMConfig
 
 
 @dataclass(frozen=True)

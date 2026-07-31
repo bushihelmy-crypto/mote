@@ -7,7 +7,8 @@ rejects bloating "compression", and ANSI stripping is clean.
 """
 from __future__ import annotations
 
-from mote.runtime.tools.compress.base import CompressionResult, applied, safe_compress, strip_ansi, unchanged
+from mote.runtime.terminal_ansi import strip_ansi
+from mote.runtime.tools.compress.base import CompressionResult, applied, safe_compress, unchanged
 
 
 class TestStripAnsi:

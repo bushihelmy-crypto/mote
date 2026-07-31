@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Mapping
 
-from mote.contracts.events import EventEnvelope, JsonValue
-from mote.contracts.ports.event_subscription import OverflowPolicy
+from mote.contracts.events.envelope import EventEnvelope, JsonValue
+from mote.contracts.ports.events.subscription import OverflowPolicy
 
 
 class MailboxClosed(RuntimeError):

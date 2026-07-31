@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.tools.mcp.toolsets import NativeMcpToolset, XmlMcpToolset
 from mote.runtime.tools.mcp.universal import UniversalMCP
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 
 
 class XmlMcpRegistrar(Protocol):
@@ -26,9 +27,16 @@ class NativeMcpRegistrar(Protocol):
 class McpLifecycle:
     """Own a shared MCP manager and one protocol-explicit definition projection."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        servers: list[MCPServerConfig] | None = None,
+        oauth_root=None,
+    ) -> None:
         self._mcp: UniversalMCP | None = None
         self._toolset: XmlMcpToolset | NativeMcpToolset | None = None
+        self._servers = list(servers or [])
+        self._oauth_root = oauth_root
 
     @property
     def mcp(self) -> UniversalMCP | None:
@@ -66,9 +74,11 @@ class McpLifecycle:
         self._mcp = owner
         self._toolset = toolset
 
-    @staticmethod
-    async def _connect(mcps: list[str] | None) -> UniversalMCP:
-        owner = UniversalMCP()
+    async def _connect(self, mcps: list[str] | None) -> UniversalMCP:
+        owner = UniversalMCP(
+            servers=self._servers,
+            oauth_root=self._oauth_root,
+        )
         await owner.initialize(server_names=mcps)
         return owner
 

@@ -20,7 +20,7 @@ def test_output_facade_excludes_runtime_infrastructure() -> None:
     for name in (
         "CommitFence",
         "OutputEngine",
-        "OutputMigrationRegistry",
+        "OutputMigrationGraph",
         "RunJournal",
         "RunLeaseCoordinator",
     ):
@@ -72,7 +72,7 @@ def test_root_facade_excludes_internal_runtime_concepts() -> None:
         "RoleSchema",
         "RoleState",
         "RuntimeModules",
-        "ThinkEngine",
+        "InferenceEngine",
         "ToolExecutor",
     ):
         assert not hasattr(mote, name)

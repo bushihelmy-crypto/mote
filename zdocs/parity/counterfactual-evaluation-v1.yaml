@@ -1,0 +1,18 @@
+schema_version: 1
+revision: counterfactual-evaluation-v1
+dataset_policy:
+  allowlisted_sources_only: true
+  tenant_isolation: required
+  secret_and_full_reasoning_fields: forbidden
+activation_thresholds:
+  minimum_sample_size: 1000
+  cohort_balance_max_ratio: 2.0
+  confidence_level: 0.95
+  signed_approval: required
+latest_evaluation:
+  dataset_digest: null
+  sample_size: 0
+  cohort_balance_ratio: null
+  confidence_interval: null
+  approval: null
+gate_status: awaiting_allowlisted_dataset_and_approval

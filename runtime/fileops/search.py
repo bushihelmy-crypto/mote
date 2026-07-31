@@ -10,7 +10,18 @@ import time
 from collections.abc import Iterable
 from typing import Optional
 
-from mote.contracts.fileops.errors import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import (
+    blob_from_dict,
+    blob_to_dict,
+    search_row_from_dict,
+    search_row_to_dict,
+    search_skipped_from_dict,
+    search_skipped_to_dict,
+    search_summary_from_dict,
+    search_summary_to_dict,
+)
+from mote.contracts.file.errors import (
     ContentChangedError,
     DocumentExtractionError,
     DocumentExtractorUnavailableError,
@@ -24,10 +35,8 @@ from mote.contracts.fileops.errors import (
     SearchPatternError,
     SnapshotDurabilityError,
 )
-from mote.contracts.fileops.models import (
-    BlobRef,
-    PathToken,
-    PresentVersion,
+from mote.contracts.file.identity import PathToken, PresentVersion
+from mote.contracts.file.search import (
     SearchOutputMode,
     SearchResult,
     SearchRow,
@@ -36,28 +45,18 @@ from mote.contracts.fileops.models import (
     SearchStatus,
     SearchSummary,
 )
-from mote.contracts.fileops.serialization import (
-    blob_from_dict,
-    blob_to_dict,
-    search_row_from_dict,
-    search_row_to_dict,
-    search_skipped_from_dict,
-    search_skipped_to_dict,
-    search_summary_from_dict,
-    search_summary_to_dict,
-)
-from mote.runtime.fileops.artifact_budgets import (
+from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
+from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
+from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.query_semantics import CandidateDiscoveryRequest, RegexProgram, RegexProgramError
+from mote.runtime.fileops.reservation_owners import artifact_owner
+from mote.runtime.fileops.resource_limits import (
     ARTIFACT_WRITE_TTL_SECONDS,
     MAX_SEARCH_MANIFEST_BYTES,
     MAX_SEARCH_RESULT_BYTES,
     snapshot_budget,
 )
-from mote.runtime.fileops.artifact_owners import artifact_owner
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
-from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
-from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
-from mote.runtime.fileops.identity import path_token
-from mote.runtime.fileops.query_semantics import CandidateDiscoveryRequest, RegexProgram, RegexProgramError
 from mote.runtime.fileops.text_layout import line_number_at, text_layout
 from mote.runtime.fileops.text_sources import MaterializedText, TextSourceService
 
@@ -434,15 +433,15 @@ class SearchEngine:
     def _persist(
         self,
         scope: ArtifactWriteScope,
-        rows_artifact: BlobRef,
+        rows_artifact: ContentIdentity,
         row_count: int,
-        skipped_artifact: BlobRef,
+        skipped_artifact: ContentIdentity,
         summary: SearchSummary,
         skipped_preview: list[SearchSkippedFile],
         *,
         output_mode: SearchOutputMode,
         content_search: bool,
-    ) -> BlobRef:
+    ) -> ContentIdentity:
         payload = {
             "format_version": _RESULT_FORMAT,
             "rows_artifact": blob_to_dict(rows_artifact),
@@ -493,7 +492,7 @@ class SearchEngine:
 
     def _page(
         self,
-        artifact: BlobRef,
+        artifact: ContentIdentity,
         offset: int,
         limit: Optional[int],
         *,

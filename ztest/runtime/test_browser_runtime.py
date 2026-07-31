@@ -5,13 +5,13 @@ import json
 
 import pytest
 
-from mote.contracts.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint, RuntimeRef
-from mote.contracts.surfaces import SurfaceInput, SurfacePresentationMode
+from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint, RuntimeRef
+from mote.contracts.surface import SurfaceInput, SurfacePresentationMode
 from mote.product.toolsets.builtin.web_browser import WebBrowser
+from mote.runtime.interactive.browser import driver as browser_runtime_module
+from mote.runtime.interactive.browser.driver import BrowserRuntimeDriver
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
-from mote.runtime.tools.dependency import _browser_runtime as browser_runtime_module
-from mote.runtime.tools.dependency._browser_runtime import BrowserRuntimeDriver
 
 
 class _FakeBrowserSession:
@@ -118,7 +118,7 @@ async def test_browser_runtime_handoff_retains_observation_not_input(monkeypatch
     )
     try:
         assert driver.session.headless is False
-        assert handle.surface.presentation is SurfacePresentationMode.EMBEDDED
+        assert handle.surface.presentation is SurfacePresentationMode.WINDOW
         frame = await driver.snapshot_surface(handle)
         payload = json.loads(frame.content)
         assert payload["screenshot_b64"]

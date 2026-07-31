@@ -10,15 +10,15 @@ from __future__ import annotations
 
 import os
 
-from mote.contracts.fileops import CreateMutation, DeleteMutation, MutationSet, ReplaceMutation
-from mote.runtime.fileops import FileOperations
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
+from mote.contracts.file import CreateMutation, DeleteMutation, MutationSet, ReplaceMutation
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.codec import iter_file_operations_events
 from mote.runtime.session.events import SessionMetaEvent
 from mote.runtime.session.history import SnapshotEntry, diff_snapshot, file_history, restore
 from mote.runtime.session.log import SessionLog
+from mote.ztest.fileops_factory import FileOperations
 
 
 class _TransactionRecorder:
@@ -239,7 +239,7 @@ def test_restore_missing_blob_returns_false(tmp_path):
     target.write_text("data")
     rec.snapshot(str(target), tool="Edit")
     # Delete the underlying blob so restore can't find the content.
-    blobs_root = log.path.parent / "blobs"
+    blobs_root = log.workspace_root / ".artifacts" / "blobs"
     for p in blobs_root.rglob("*"):
         if p.is_file():
             os.remove(p)

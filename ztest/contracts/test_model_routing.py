@@ -5,13 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from mote.contracts.models.routing import (
-    RouteCandidate,
-    RoutingDecision,
-    RoutingHold,
-    RoutingInput,
-    RoutingSessionState,
-)
+from mote.contracts.model.routing import RouteCandidate, RoutingDecision, RoutingHold, RoutingInput, RoutingSessionState
 
 
 def test_routing_contracts_are_frozen_forbid_extras_and_round_trip():

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mote.contracts.artifacts import ArtifactRevision
+from mote.contracts.artifact import ArtifactRevision
 
 
 @dataclass(frozen=True, slots=True)

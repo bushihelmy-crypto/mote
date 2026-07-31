@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``ThinkService`` — the single think primitive.
+"""Tests for ``InferenceService`` — the single think primitive.
 
 Returns ``False`` immediately when the shared ``active`` signal is off (the
 ``End`` tool / ask_user "stop" path); otherwise it asks the context provider to
 ``prepare()`` the request, lazily ``resolve_llm()`` and hands everything to
-``think_engine.start()``, returning ``True``.
+``inference_engine.start()``, returning ``True``.
 """
 from __future__ import annotations
 
@@ -18,29 +18,29 @@ async def test_think_returns_false_when_inactive(make_engine):
     b = make_engine(active=False)
     b.engine._ctx = b.ctx
 
-    assert await b.engine._think.think() is False
+    assert await b.engine._inference.infer() is False
     # Nothing was prepared / started.
     assert b.provider.prepare_calls == 0
-    assert b.think_engine.start_calls == []
+    assert b.inference_engine.start_calls == []
 
 
 async def test_think_prepares_and_starts(make_engine):
     b = make_engine(active=True)
     b.engine._ctx = b.ctx
 
-    assert await b.engine._think.think() is True
+    assert await b.engine._inference.infer() is True
     assert b.provider.prepare_calls == 1
-    # The resolved LLM was driven off the prepared request's messages.
-    assert b.provider.resolve_calls == [b.provider._think_request.req]
+    # The resolved route is driven off the full prepared InferenceRequest so route
+    # selection can include model-call metadata as well as messages.
+    assert b.provider.resolve_calls == [b.provider._think_request]
 
-    call = b.think_engine.start_calls[0]
+    call = b.inference_engine.start_calls[0]
     tr = b.provider._think_request
     assert call["req"] is tr.req
     assert call["system_prompt"] == tr.system_prompt
     assert call["tool_specs"] == tr.tool_specs
-    assert call["model_route"] is b.provider.llm
+    assert call["target"] is b.provider.llm
     assert call["model_call_id"]
-    assert call["duplicate_route"] is b.provider.llm
     assert call["resume"] is False
 
 
@@ -52,14 +52,17 @@ async def test_interrupted_think_resumes_same_model_call_identity(make_engine):
         def resume_candidate(self):
             return "think:1", "durable-model-call"
 
+        def update_think(self, _step_id, state):
+            self.state = state
+
     b = make_engine(active=True, durable_runner=Runner())
 
-    assert await b.engine._think.think() is True
+    assert await b.engine._inference.infer() is True
 
-    call = b.think_engine.start_calls[0]
+    call = b.inference_engine.start_calls[0]
     assert call["model_call_id"] == "durable-model-call"
     assert call["resume"] is True
-    assert b.engine._think_checkpoint.step_id == "think:1"
+    assert b.engine._inference_checkpoint.step_id == "think:1"
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +93,7 @@ async def test_think_records_non_empty_turn_context_to_memory(make_engine):
     b = make_engine(active=True, turn_context_bus=bus)
     b.engine._ctx = b.ctx
 
-    await b.engine._think.think()
+    await b.engine._inference.infer()
 
     # The persisted block landed in history as a user message.
     added = [m for m in b.memory.messages if m.content == "<system-reminder>\ngit changed\n</system-reminder>"]
@@ -104,7 +107,7 @@ async def test_think_empty_turn_context_adds_nothing(make_engine):
     b.engine._ctx = b.ctx
     before = len(b.memory.messages)
 
-    await b.engine._think.think()
+    await b.engine._inference.infer()
 
     assert len(b.memory.messages) == before
 
@@ -114,7 +117,7 @@ async def test_think_passes_live_cwd_to_turn_context_bus(make_engine):
     b = make_engine(active=True, turn_context_bus=bus, get_cwd=lambda: "/some/dir")
     b.engine._ctx = b.ctx
 
-    await b.engine._think.think()
+    await b.engine._inference.infer()
 
     assert bus.seen_cwd == "/some/dir"
 
@@ -125,7 +128,7 @@ async def test_think_no_turn_context_bus_records_nothing(make_engine):
     b.engine._ctx = b.ctx
     before = len(b.memory.messages)
 
-    assert await b.engine._think.think() is True
+    assert await b.engine._inference.infer() is True
     assert len(b.memory.messages) == before
 
 
@@ -145,7 +148,7 @@ async def test_think_records_turn_context_before_prepare(make_engine):
 
     b.provider.prepare = spy_prepare
 
-    await b.engine._think.think()
+    await b.engine._inference.infer()
 
     # At least one message (the recorded block) was already committed when
     # prepare() ran.
@@ -158,6 +161,6 @@ async def test_think_inactive_skips_turn_context_recording(make_engine):
     b.engine._ctx = b.ctx
     before = len(b.memory.messages)
 
-    assert await b.engine._think.think() is False
+    assert await b.engine._inference.infer() is False
     # Inactive cycle returns before recording — nothing committed.
     assert len(b.memory.messages) == before

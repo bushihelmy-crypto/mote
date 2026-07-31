@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pyte
 
-from mote.contracts.terminal import (
+from mote.contracts.surface import (
     TERMINAL_FRAME_BASE_SEQUENCE,
     TERMINAL_FRAME_COLS,
     TERMINAL_FRAME_MODE,
@@ -10,7 +10,7 @@ from mote.contracts.terminal import (
     TERMINAL_FRAME_MODE_FULL,
     TERMINAL_FRAME_ROWS,
 )
-from mote.runtime.tools.dependency.terminal_vt import TerminalVTState
+from mote.runtime.interactive.terminal.vt import TerminalVTState
 
 
 def metadata(frame) -> dict[str, str]:

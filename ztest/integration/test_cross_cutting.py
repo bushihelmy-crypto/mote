@@ -18,7 +18,7 @@ import os
 
 import pytest
 
-from mote.contracts.settings.permissions import PermissionConfig
+from mote.runtime.tools.permission.config import PermissionConfig
 
 pytestmark = pytest.mark.asyncio
 
@@ -39,11 +39,11 @@ async def test_pre_and_post_tool_use_hooks_fire(make_role, tmp_path):
     seen: list[tuple[str, str]] = []
 
     async def pre(hook_input):
-        seen.append(("pre", hook_input.payload.get("tool_name", "")))
+        seen.append(("pre", hook_input.payload.tool_name))
         return None  # allow
 
     async def post(hook_input):
-        seen.append(("post", hook_input.payload.get("tool_name", "")))
+        seen.append(("post", hook_input.payload.tool_name))
         return None
 
     role.register_hook("PreToolUse", pre)
@@ -143,7 +143,7 @@ async def test_pre_tool_use_hook_rewrites_args(make_role, tmp_path):
     )
 
     async def rewrite(hook_input):
-        args = dict(hook_input.payload.get("tool_input") or {})
+        args = dict(hook_input.payload.tool_input)
         args["new_string"] = "REWRITTEN"
         return {
             "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"},

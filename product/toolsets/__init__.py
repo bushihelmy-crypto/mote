@@ -11,8 +11,9 @@ import pkgutil
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from mote.contracts.tools import CommandProtocol
-from mote.kernel.tools.toolset import AnyToolset
+from mote.contracts.tool import CommandProtocol
+from mote.product.workflows.run_graph.tool import RunGraph
+from mote.runtime.tools.provider import AnyToolset
 from mote.runtime.tools.tool_registry import NativeCatalogToolset, ToolCatalog, XmlCatalogToolset, declared_tool_catalog
 
 _BUILTIN_PACKAGE = ("mote.product.toolsets.builtin",)
@@ -36,6 +37,7 @@ def builtin_tool_catalog() -> ToolCatalog:
 
     discover_builtin_tools()
     declarations = declared_tool_catalog()
+    assert RunGraph.name == "RunGraph"
     builtin_names = set().union(*BUILTIN_TOOL_GROUPS.values())
     return ToolCatalog.from_types(
         tool_type for name, tool_type in declarations.all_tools().items() if name in builtin_names

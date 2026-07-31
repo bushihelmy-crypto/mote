@@ -7,7 +7,7 @@ Woven into LLM provider selection today; reusable for any failing-resource guard
 
 from __future__ import annotations
 
-from mote.contracts.resilience import BreakerConfig
+from mote.contracts.config.model.breaker import BreakerConfig
 
 from .breaker import MAX_WINDOW_ENTRIES, BreakerState, CircuitBreaker, TransitionHook
 from .registry import ResourceHealthRegistry

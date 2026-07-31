@@ -33,18 +33,42 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar, cast
 from uuid import uuid4
 
-from mote.contracts.artifacts import ArtifactRetention
-from mote.contracts.ports import ArtifactPublicationOutbox
-from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.artifact import ArtifactRetention
+from mote.contracts.ports.artifact.store import ArtifactPublicationOutbox
+from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.kernel.execution import ExecutionEngine
 from mote.runtime.agent.capabilities import RoleCapabilities
 from mote.runtime.agent.component_accessors import RoleComponentAccessors
-from mote.runtime.agent.component_graph import ComponentGraph, ComponentSpec
-from mote.runtime.agent.role_state import RoleStateController
-from mote.runtime.agent.runtime_maintenance import RuntimeMaintenance
-from mote.runtime.agent.runtime_modules import (
+from mote.runtime.agent.component_graph import ComponentGraph, ComponentKey, ComponentSpec
+from mote.runtime.agent.component_keys import (
+    ARTIFACT_REPOSITORY_BUNDLE,
+    BACKGROUND_POOL,
+    CAPABILITIES,
+    CHECKPOINT_PAYLOAD_STORE,
+    CHECKPOINT_SUBSCRIBER,
+    EXECUTOR,
+    HOOK_MANAGER,
+    INFERENCE_PORT,
+    LSP_SERVICE,
+    REPO_INDEX,
+    RUNTIME_CHECKPOINT_RECORDER,
+    RUNTIME_HANDOFF_JOURNAL,
+    RUNTIME_HOST,
+    RUNTIME_OPERATION_JOURNAL,
+    RUNTIME_PROJECTION_JOURNAL,
+    RUNTIME_PROJECTION_RECONCILER,
+    SESSION_MANAGER,
+    SKILL_MANAGER,
+    STATE_CTL,
+    TELEMETRY,
+    TITLE_SUBSCRIBER,
+    WORKSPACE_STORE,
+)
+from mote.runtime.agent.components import (
     WatchingCallbacks,
     action_component_specs,
     cognition_component_specs,
@@ -56,15 +80,18 @@ from mote.runtime.agent.runtime_modules import (
     session_event_subscribers,
     watching_component_specs,
 )
+from mote.runtime.agent.role_state import RoleStateController
+from mote.runtime.agent.runtime_maintenance import RuntimeMaintenance
 from mote.runtime.agent.session_manager import RoleSessionManager
-from mote.runtime.disk.async_io import run_disk_io
 from mote.runtime.events import LogSubscriber
 from mote.runtime.events.telemetry import TelemetryBinding, TelemetryManifest, TelemetryRuntime
 from mote.runtime.interactive import RuntimeHost
-from mote.runtime.reporting import MOTE_REPORTER_DEFAULT_URL, ReporterSubscriber
+from mote.runtime.models.composition_context import bind_runtime_composition, reset_runtime_composition
+from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
 from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
+from mote.runtime.telemetry.reporting import MOTE_REPORTER_DEFAULT_URL, ReporterSubscriber
 
 if TYPE_CHECKING:
     from mote.runtime.agent.role import Role
@@ -105,18 +132,30 @@ class ComponentsState:
         self.runtime_projections_reconciled = False
         self.artifact_reconciliation_lock = asyncio.Lock()
         self.runtime_projection_reconciliation_lock = asyncio.Lock()
+        self.application_lease = None
+        self.runtime_composition_lease = None
+        self.runtime_composition_token = None
 
 
-class RoleComponents(RoleComponentAccessors):
+OutputT = TypeVar("OutputT")
+
+
+class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
     """Owns and lazily builds the Role's collaborators (see module docstring)."""
 
     def __init__(self, role: "Role"):
         self._role = role
+        self._execution_engine_factory_key: ComponentKey[Callable[[], ExecutionEngine[OutputT]]] = ComponentKey(
+            "execution_engine_factory"
+        )
         self._state = ComponentsState()
         self._maintenance = RuntimeMaintenance(
             role,
-            get=lambda name: self._graph.get(name),
-            peek=lambda name: self._graph.peek(name),
+            get_repo_index=lambda: self._graph.get(REPO_INDEX),
+            get_workspace_store=lambda: self._graph.get(WORKSPACE_STORE),
+            get_artifact_repository_bundle=lambda: self._graph.get(ARTIFACT_REPOSITORY_BUNDLE),
+            peek_skill_manager=lambda: self._graph.peek(SKILL_MANAGER),
+            peek_executor=lambda: self._graph.peek(EXECUTOR),
         )
         self._graph = ComponentGraph(role, self._state, self._component_specs())
         # Telemetry is wired exactly once, as an explicit lifecycle step
@@ -141,6 +180,63 @@ class RoleComponents(RoleComponentAccessors):
         session_log.bind_async_sink(self.session_fact_committer.commit_event)
         self._event_fabric_started = True
 
+    async def begin_application_lease(self) -> None:
+        services = self._role.wiring.services
+        composition = services.application_composition if services is not None else None
+        if composition is None:
+            return
+        if self._state.application_lease is not None:
+            raise RuntimeError("an application lease is already active")
+        application_lease = await composition.acquire()
+        try:
+            runtime_lease = await application_lease.acquire_runtime()
+        except BaseException:
+            await application_lease.aclose()
+            raise
+        self._state.application_lease = application_lease
+        self._state.runtime_composition_lease = runtime_lease
+        self._state.runtime_composition_token = bind_runtime_composition(runtime_lease)
+
+    async def end_application_lease(self) -> None:
+        runtime_lease = self._state.runtime_composition_lease
+        application_lease = self._state.application_lease
+        token = self._state.runtime_composition_token
+        self._state.runtime_composition_lease = None
+        self._state.application_lease = None
+        self._state.runtime_composition_token = None
+        if token is not None:
+            reset_runtime_composition(token)
+        if runtime_lease is not None:
+            await runtime_lease.aclose()
+        if application_lease is not None:
+            await application_lease.aclose()
+
+    def current_runtime_composition(self):
+        lease = self._state.runtime_composition_lease
+        if lease is None:
+            raise RuntimeError("no Runtime composition lease is active")
+        return lease
+
+    async def acquire_runtime_composition(self):
+        lease = self._state.application_lease
+        if lease is None:
+            raise RuntimeError("no application lease is active")
+        return await lease.acquire_runtime()
+
+    def current_runtime_role_config(self):
+        lease = self._state.application_lease
+        if lease is None:
+            raise RuntimeError("no application lease is active")
+        return lease.runtime_role_config
+
+    @asynccontextmanager
+    async def application_scope(self):
+        await self.begin_application_lease()
+        try:
+            yield
+        finally:
+            await self.end_application_lease()
+
     @property
     def telemetry_wired(self) -> bool:
         return self._telemetry_wired
@@ -154,6 +250,7 @@ class RoleComponents(RoleComponentAccessors):
         path = (
             SessionLog(
                 self._role.session_id,
+                base_dir=str(self.workspace_store.sessions_root),
                 writer=self._role.context.disk_writer,
             ).path.parent
             / "run_leases.json"
@@ -187,6 +284,7 @@ class RoleComponents(RoleComponentAccessors):
         path = (
             SessionLog(
                 self._role.session_id,
+                base_dir=str(self.workspace_store.sessions_root),
                 writer=self._role.context.disk_writer,
             ).path.parent
             / "run_leases.json"
@@ -254,7 +352,7 @@ class RoleComponents(RoleComponentAccessors):
             try:
                 pending = replay(self.session_log).pending_runtime_projections
                 if pending:
-                    reconciler = self._graph.get("runtime_projection_reconciler")
+                    reconciler = self._graph.get(RUNTIME_PROJECTION_RECONCILER)
                     result = await reconciler.reconcile(pending.values())
                     if result.failed:
                         return False
@@ -273,7 +371,7 @@ class RoleComponents(RoleComponentAccessors):
         )
         if not released:
             return
-        await run_disk_io(self._graph.get("artifact_repository_bundle").collector.collect)
+        await run_disk_io(self._graph.get(ARTIFACT_REPOSITORY_BUNDLE).collector.collect)
 
     # =========================================================================
     # Declarative component registry
@@ -295,36 +393,36 @@ class RoleComponents(RoleComponentAccessors):
             # Registered as leaves so the Role's ``_state_ctl`` / ``_capabilities``
             # delegators resolve them through the one graph like every other
             # collaborator (Role.__init__ builds nothing but this holder).
-            ComponentSpec("state_ctl", lambda ctx: RoleStateController(ctx.role.state)),
-            ComponentSpec("capabilities", lambda ctx: RoleCapabilities(ctx.role)),
-            ComponentSpec("session_manager", lambda ctx: RoleSessionManager(ctx.role)),
+            ComponentSpec(STATE_CTL, lambda ctx: RoleStateController(ctx.role.state)),
+            ComponentSpec(CAPABILITIES, lambda ctx: RoleCapabilities(ctx.role)),
+            ComponentSpec(SESSION_MANAGER, lambda ctx: RoleSessionManager(ctx.role)),
             ComponentSpec(
-                "runtime_host",
+                RUNTIME_HOST,
                 lambda ctx: RuntimeHost(
-                    checkpoint_sink=ctx.dep("runtime_checkpoint_recorder"),
-                    projection_journal=ctx.dep("runtime_projection_journal"),
-                    operation_journal=ctx.dep("runtime_operation_journal"),
-                    handoff_journal=ctx.dep("runtime_handoff_journal"),
-                    checkpoint_payload_store=ctx.dep("checkpoint_payload_store"),
-                    durability_observer=ctx.dep("telemetry").emit_sync,
+                    checkpoint_sink=ctx.dep(RUNTIME_CHECKPOINT_RECORDER),
+                    projection_journal=ctx.dep(RUNTIME_PROJECTION_JOURNAL),
+                    operation_journal=ctx.dep(RUNTIME_OPERATION_JOURNAL),
+                    handoff_journal=ctx.dep(RUNTIME_HANDOFF_JOURNAL),
+                    checkpoint_payload_store=ctx.dep(CHECKPOINT_PAYLOAD_STORE),
+                    durability_observer=ctx.dep(TELEMETRY).emit_sync,
                 ),
             ),
             *action_component_specs(self._role.wiring.dependencies.background_task_pool_builder),
             *session_component_specs(),
             ComponentSpec(
-                "telemetry",
+                TELEMETRY,
                 lambda ctx: TelemetryRuntime(TelemetryManifest(())),
             ),
             *integration_component_specs(),
             *policy_component_specs(),
             *context_component_specs(),
-            *cognition_component_specs(),
+            *cognition_component_specs(self._execution_engine_factory_key),
             # --- per-turn factories (cached factory, fresh instance per turn) -
             # These resolve to a *callable* (not an instance): the factory reads
             # the ``*_kind`` schema knob at call-time and builds a fresh instance
             # each turn, so a strategy swapped mid-session is honoured next turn
             # while the graph still caches only the stateless factory (a pure
-            # DAG). ``think_engine`` is stateless machinery (its per-turn result
+            # DAG). ``inference_engine`` is stateless machinery (its per-turn result
             # now lives on RoleState), so a fresh one per run() is free.
             *watching_component_specs(
                 WatchingCallbacks(
@@ -411,8 +509,14 @@ class RoleComponents(RoleComponentAccessors):
         durable commit and never enter this lossy roster.
         """
         subs = [
-            *integration_event_subscribers(self._graph.get),
-            *session_event_subscribers(self._graph.get),
+            *integration_event_subscribers(
+                lambda: self._graph.get(HOOK_MANAGER),
+                lambda: self._graph.get(LSP_SERVICE),
+            ),
+            *session_event_subscribers(
+                lambda: self._graph.get(CHECKPOINT_SUBSCRIBER),
+                lambda: self._graph.get(TITLE_SUBSCRIBER),
+            ),
             LogSubscriber(),
             self._role.context.langfuse.subscriber(),
             ReporterSubscriber(MOTE_REPORTER_DEFAULT_URL) if MOTE_REPORTER_DEFAULT_URL else None,
@@ -444,7 +548,7 @@ class RoleComponents(RoleComponentAccessors):
         on creation, and rebinds a live pool.
         """
         self._state.pending_task_completion_wake = wake
-        pool = self._graph.peek("bg_pool")
+        pool = self._graph.peek(BACKGROUND_POOL)
         if pool is not None:
             pool.set_wake(wake)
 
@@ -458,7 +562,7 @@ class RoleComponents(RoleComponentAccessors):
         Engages the hook layer even with no ``HookConfig`` declared. Register
         before ``run()`` so the executor / context manager pick up the manager.
         """
-        manager = self._graph.peek("hook_manager")
+        manager = self._graph.peek(HOOK_MANAGER)
         if manager is not None:
             manager.register(event, fn, matcher)
         else:
@@ -475,3 +579,6 @@ class RoleComponents(RoleComponentAccessors):
 
     async def close_maintenance(self) -> None:
         await self._maintenance.close()
+
+    def peek_inference_port(self):
+        return self._graph.peek(INFERENCE_PORT)

@@ -1,0 +1,49 @@
+schema_version: 2
+revision: canonical-failure-v2
+owner: contracts.model.failover.FailureDisposition
+fields:
+  domain:
+    type: enum
+    values: [transport, provider, credential, quota, policy, budget, protocol, internal]
+  reason:
+    type: versioned_low_cardinality_enum
+  retryability:
+    type: enum
+    values: [never, new_attempt, after_hint, reconcile_only]
+  health_verdict:
+    type: enum
+    values: [neutral, success, degrade, open_breaker]
+  external_commit_state:
+    type: enum
+    values: [not_committed, committed, unknown]
+  credential_verdict:
+    type: enum
+    values: [neutral, refresh, quarantine, revoke]
+  quota_observation:
+    type: enum
+    values: [none, limits, retry_after, exhausted, malformed]
+  provider_code: {type: optional_string}
+  safe_message: {type: redacted_string}
+  reconcile_strategy:
+    type: enum
+    values: [none, provider_query, webhook, receipt_wait, manual]
+  usage_observation:
+    type: enum
+    values: [none, complete, partial, pending_reconciliation, malformed]
+  http_compatibility_class:
+    type: enum
+    values: [transport, authentication, permission, quota, invalid_request, conflict, unavailable, internal]
+invariants:
+  - retryability_is_advice_not_wire_authority
+  - unknown_commit_may_not_be_downgraded_by_provider_text
+  - safe_message_contains_no_secret_or_raw_body
+  - consumers_read_only_their_owned_verdict
+  - unknown_provider_errors_do_not_harm_credential_or_quota_health
+consumer_ownership:
+  RuntimeModelGateway: [retryability, external_commit_state, reconcile_strategy]
+  BulkheadController: [health_verdict]
+  CredentialHealthAuthority: [credential_verdict]
+  ProviderQuotaAuthority: [quota_observation]
+  UsageLedger: [usage_observation, external_commit_state]
+  CompatibilityHandlers: [http_compatibility_class, safe_message, provider_code]
+  ReceiptAuthority: [external_commit_state, reconcile_strategy]

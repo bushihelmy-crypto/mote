@@ -1,0 +1,32 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""``Projector`` — the pure ``AgentEvent → list[ViewEvent]`` fold contract.
+
+The narrow slice :class:`mote.product.presentation.projection.base.BaseProjector` relies
+on: anything with a ``project(event) -> list`` method conforms. This decouples
+the reusable fan-out plumbing (``BaseProjector``, in ``contracts``) from any
+*concrete* host fold (e.g. ``ViewProjector``, which stays host-side in
+:mod:`mote.product.presentation.projection`), so the base never imports upward.
+
+This is a LEAF interface module: it imports only ``typing``, so it can be
+imported from any host without risking a cycle.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol, Sequence, TypeVar, runtime_checkable
+
+InputEventT_contra = TypeVar("InputEventT_contra", contravariant=True)
+ViewEventT_co = TypeVar("ViewEventT_co", covariant=True)
+
+
+@runtime_checkable
+class Projector(Protocol[InputEventT_contra, ViewEventT_co]):
+    """Folds one ``AgentEvent`` into zero-or-more projected events (pure)."""
+
+    def project(self, event: InputEventT_contra) -> Sequence[ViewEventT_co]:
+        """Return the projected events for one spine event (no I/O)."""
+        ...
+
+
+__all__ = ["Projector"]

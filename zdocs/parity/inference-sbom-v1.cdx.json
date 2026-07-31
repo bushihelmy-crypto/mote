@@ -1,0 +1,305 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a3b6fb0c207cc661fa0bf8c66d8d9b657331ccc814f4719468af61034b478592"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "aiohttp",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.models.transports.connections"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/aiohttp@3.13.2",
+      "type": "library",
+      "version": "3.13.2"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "09e5e478b3d14afd23f12e49e8b44c8684ac3c5f08561c43a5b9691c54d136ab"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "grpcio",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.daemon"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/grpcio@1.80.0",
+      "type": "library",
+      "version": "1.80.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b6a0e535baec27b528cb07a119f321ac024592388c5681a5ced167ae98e9fff3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "cryptography",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.identity"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/cryptography@45.0.7",
+      "type": "library",
+      "version": "45.0.7"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1292b84ee06ac8a2ad8e51c7475aa309245874b61333d97411aab835c4a2f737"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "asyncpg",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.backends.postgres"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/asyncpg@0.30.0",
+      "type": "library",
+      "version": "0.30.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bc5a9dfeeb692877bb5c38439e11253d1553a9d2631e8421552f9bba04af6360"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "wasmtime",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.plugins.wasm"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/wasmtime@39.0.0",
+      "type": "library",
+      "version": "39.0.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f0544fa9604264e9464cdf4814e7d4830f74b165d52f2a330a760a88dd248b7f"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "redis",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.backends.redis"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/redis@6.4.0",
+      "type": "library",
+      "version": "6.4.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2b975099b378382f6ca1cfb43f0d59e541be6e16a5892f282a4b8de7eff5cb63"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "qdrant-client",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.backends.qdrant"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/qdrant-client@1.15.1",
+      "type": "library",
+      "version": "1.15.1"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3582f033543ee7671ae27b1df538f2095bcc91be4a3a78e7498b5ce6c654f26b"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "aioboto3",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.backends.s3"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/aioboto3@15.2.0",
+      "type": "library",
+      "version": "15.2.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "16eeca305e4747a6871f8f7627eef3b862fdd365b872ca74d4a89e9841d0f8e8"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "google-cloud-storage",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.inference.backends.gcs"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/google-cloud-storage@3.4.0",
+      "type": "library",
+      "version": "3.4.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9ccccec98796f6a96bd1c3dd437a06da7e0f57521c96bd56e4b965a91b03a0a0"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "aiortc",
+      "properties": [
+        {
+          "name": "mote:owner",
+          "value": "product.models.transports.connections.webrtc"
+        },
+        {
+          "name": "mote:release_scope",
+          "value": "current_embedded,current_shared"
+        }
+      ],
+      "purl": "pkg:pypi/aiortc@1.13.0",
+      "type": "library",
+      "version": "1.13.0"
+    }
+  ],
+  "metadata": {
+    "properties": [
+      {
+        "name": "mote:dependency-plan-digest",
+        "value": "sha256:f8dde0f60530ead44ec4b2dc64ab35283463135e2deee273b37b8072ac2c0457"
+      }
+    ]
+  },
+  "specVersion": "1.6",
+  "version": 1
+}

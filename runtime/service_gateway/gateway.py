@@ -9,13 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from mote.contracts.errors.services import (
-    ServiceCallDeadlineExceededError,
-    ServiceCallExhaustedError,
-    ServiceCallInDoubtError,
-    ServiceRouteUnavailableError,
-)
-from mote.contracts.models.failover import (
+from mote.contracts.model.failover import (
     AttemptState,
     DecisionKind,
     FailureDisposition,
@@ -25,23 +19,20 @@ from mote.contracts.models.failover import (
     ResourceIdentity,
     Retryability,
 )
-from mote.contracts.ports.service_call_journal import ServiceCallJournal
-from mote.contracts.ports.service_endpoint import ServiceEndpointAdapter, ServiceEndpointResolver
-from mote.contracts.service_journal import (
+from mote.contracts.ports.service.call_journal import ServiceCallJournal
+from mote.contracts.ports.service.endpoint import ServiceEndpointAdapter, ServiceEndpointResolver
+from mote.contracts.service import (
+    ResolvedServiceResponse,
+    ServiceAcceptance,
+    ServiceAccepted,
     ServiceAttemptFinishedRecord,
     ServiceAttemptStartedRecord,
     ServiceCallFinishedRecord,
     ServiceCallPlannedRecord,
     ServiceCallRecovery,
-    ServiceDecisionRecord,
-    ServiceReceiptAcceptedRecord,
-)
-from mote.contracts.services import (
-    ResolvedServiceResponse,
-    ServiceAcceptance,
-    ServiceAccepted,
     ServiceCallState,
     ServiceCompleted,
+    ServiceDecisionRecord,
     ServiceEndpointDescriptor,
     ServiceEndpointFailure,
     ServiceExecutionSemantics,
@@ -49,13 +40,19 @@ from mote.contracts.services import (
     ServiceInvocation,
     ServicePlan,
     ServiceReceipt,
+    ServiceReceiptAcceptedRecord,
     ServiceResponse,
 )
-from mote.runtime.logging import log_class
-from mote.runtime.models.failover.admission import AdmissionPermit, AdmissionRejectedError, ResourceAdmissionController
-from mote.runtime.models.failover.policy import DefaultFailoverPolicy, FailoverPolicy
-from mote.runtime.service_gateway.journal import LocalServiceCallJournal, default_service_call_journal_root
+from mote.contracts.service.errors import (
+    ServiceCallDeadlineExceededError,
+    ServiceCallExhaustedError,
+    ServiceCallInDoubtError,
+    ServiceRouteUnavailableError,
+)
+from mote.runtime.resilience.admission import AdmissionPermit, AdmissionRejectedError, ResourceAdmissionController
+from mote.runtime.resilience.failover.policy import DefaultFailoverPolicy, FailoverPolicy
 from mote.runtime.service_gateway.planner import ServiceFailoverPlanner
+from mote.runtime.telemetry.logging import log_class
 
 
 @dataclass(frozen=True)
@@ -81,7 +78,9 @@ class RuntimeServiceGateway:
     ) -> None:
         self._planner = planner
         self._resolver = endpoint_resolver
-        self._journal = service_call_journal or LocalServiceCallJournal(default_service_call_journal_root())
+        if service_call_journal is None:
+            raise ValueError("RuntimeServiceGateway requires a service call journal")
+        self._journal = service_call_journal
         self._admission = admission_controller or ResourceAdmissionController()
         self._policy = policy or DefaultFailoverPolicy()
         self._locks: dict[str, asyncio.Lock] = {}
@@ -282,7 +281,7 @@ class RuntimeServiceGateway:
                     break
                 target_index = next_index
                 await self._backoff(
-                    decision.delay_seconds or exc.disposition.retry_after_seconds or 1.0,
+                    decision.delay_seconds or 1.0,
                     plan,
                     started_at,
                 )
@@ -442,7 +441,7 @@ class RuntimeServiceGateway:
                         attempt_id=attempt.attempt_id,
                     ) from exc
                 await self._backoff(
-                    decision.delay_seconds or failure.disposition.retry_after_seconds or 1.0,
+                    decision.delay_seconds or 1.0,
                     plan,
                     started_at,
                 )
@@ -706,7 +705,7 @@ class RuntimeServiceGateway:
                 return self._acquire(target, plan, started_at)
             except AdmissionRejectedError as exc:
                 await self._backoff(
-                    exc.disposition.retry_after_seconds or 1.0,
+                    1.0,
                     plan,
                     started_at,
                 )
@@ -1062,10 +1061,10 @@ def _resource_identity(target: _Target) -> ResourceIdentity:
 def _unknown_failure(detail: str) -> FailureDisposition:
     return FailureDisposition(
         reason=FailureReason.UNKNOWN,
-        domain=FailureDomain.UNKNOWN,
+        domain=FailureDomain.INTERNAL,
         retryability=Retryability.NEVER,
         health_verdict=HealthVerdict.NEUTRAL,
-        safe_detail={"detail": detail},
+        safe_message="internal service failure",
     )
 
 

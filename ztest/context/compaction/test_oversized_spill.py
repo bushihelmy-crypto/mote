@@ -7,10 +7,10 @@ This reducer catches the two classes of oversized content that land straight in
 history — a runaway assistant/user body and a giant tool-call ``args`` blob — plus
 stray oversized results loaded from a resumed session. It reuses the tool path's
 ``enforce_tool_result_limit`` primitive (persist + ``<persisted-output>`` pointer,
-routed through the session's :class:`WorkspaceStore`), so it is lossless and FREE:
+routed through the session's :class:`SessionWorkspace`), so it is lossless and FREE:
 the full content lands on disk and the in-history part names the file.
 
-Disk writes are pointed at ``tmp_path`` via a ``WorkspaceStore`` rooted there, so a
+Disk writes are pointed at ``tmp_path`` via a ``SessionWorkspace`` rooted there, so a
 spilled part co-locates under the session directory
 (``.agent_sessions/{session}/tool_results/{id}.txt``).
 """
@@ -19,14 +19,15 @@ from __future__ import annotations
 import asyncio
 import json
 
-from mote.contracts.constants.messages import RETENTION, RETENTION_PIN, TOOL_CALLS
-from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ContextManagerConfig, Message, ToolResultLimitConfig
+from mote.contracts.config.tool import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+from mote.contracts.conversation import ContextManagerConfig, Message
+from mote.contracts.conversation.fields import RETENTION, RETENTION_PIN, TOOL_CALLS
 from mote.runtime.context.compaction.pipeline import ReductionPipeline
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.reducers.spill import OversizedSpillReducer
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Transcript
-from mote.runtime.workspace import ArtifactKind, WorkspaceStore
+from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
 
 from ..conftest import COMPACTABLE, text_msg, tool_call_msg, tool_result_msg
 
@@ -43,7 +44,7 @@ def _reducer(tmp_path, *, threshold: int = 200, persist: bool = True, enable: bo
         ContextManagerConfig(),
         model="gpt-4",
         session_id=SESSION,
-        store=WorkspaceStore(tmp_path),
+        store=SessionWorkspace(tmp_path),
         limit_config=ToolResultLimitConfig(
             enable_tool_result_limit=enable,
             persist_large_tool_results=persist,
@@ -53,7 +54,7 @@ def _reducer(tmp_path, *, threshold: int = 200, persist: bool = True, enable: bo
 
 
 def _spilled_path(tmp_path, result_id: str):
-    return WorkspaceStore(tmp_path).space(SESSION, ArtifactKind.TOOL_RESULTS) / f"{result_id}.txt"
+    return SessionWorkspace(tmp_path).space(SESSION, SessionSpace.TOOL_RESULTS) / f"{result_id}.txt"
 
 
 def _reduce(reducer, msgs, *, target=10_000_000):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mote.contracts.notebook import NotebookCell, NotebookDocument, NotebookOutput
+from mote.contracts.surface import NotebookCell, NotebookDocument, NotebookOutput
 
 
 def test_notebook_document_round_trip_preserves_typed_outputs():

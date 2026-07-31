@@ -47,7 +47,7 @@ def test_read_product_only_adapts_managed_read_views() -> None:
 
 
 def test_read_dispatch_uses_a_closed_typed_request_union() -> None:
-    models = (PACKAGE_ROOT / "contracts/fileops/models.py").read_text(encoding="utf-8")
+    models = (PACKAGE_ROOT / "contracts/file/views.py").read_text(encoding="utf-8")
     facade = (PACKAGE_ROOT / "runtime/fileops/facade.py").read_text(encoding="utf-8")
     assert "ReadRequest = Union[" in models
     assert "class ContinueReadRequest" in models

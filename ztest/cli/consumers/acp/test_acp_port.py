@@ -21,9 +21,9 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from mote.product.cli.consumers._wire import acp
-from mote.product.cli.consumers.acp.port import AcpPort
-from mote.product.cli.contracts.view.events import ApprovalRequested
+from mote.product.interfaces.acp import wire as acp
+from mote.product.interfaces.acp.port import AcpPort
+from mote.product.presentation.events.events import ApprovalRequested
 
 
 def _reply(option_id: Optional[str], *, cancelled: bool = False) -> Dict[str, Any]:

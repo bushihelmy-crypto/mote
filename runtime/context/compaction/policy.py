@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from mote.contracts.policy.compaction import (
+from mote.contracts.conversation.compaction_policy import (
     CompactionDecision,
     CompactionIntent,
     CompactionPolicyContribution,
     CompactionPolicyTraceEntry,
 )
-from mote.contracts.ports.compaction_policy import CompactionPolicyExtension, CompactionPolicyExtensionSpec
+from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtension, CompactionPolicyExtensionSpec
 from mote.runtime.hook.manager import HookManager
 
 DEFAULT_COMPACTION_POLICY_TIMEOUT = 120.0

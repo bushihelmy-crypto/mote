@@ -7,8 +7,8 @@ import threading
 from contextlib import suppress
 from typing import Callable, Sequence
 
-from mote.contracts.events import StreamId
-from mote.contracts.ports.event_journal import (
+from mote.contracts.events.envelope import StreamId
+from mote.contracts.ports.events.journal import (
     AppendResult,
     EventJournal,
     EventJournalError,
@@ -16,11 +16,11 @@ from mote.contracts.ports.event_journal import (
     StreamVersionConflict,
     UncommittedFact,
 )
-from mote.contracts.ports.event_subscription import ManagedSubscriptionStateStore
+from mote.contracts.ports.events.subscription import ManagedSubscriptionStateStore
 from mote.runtime.events.dispatcher import CommittedEventDispatcher, SubscriptionManifest
 from mote.runtime.events.health import FabricHealth, FabricHealthSnapshot, FabricHealthState, FabricState
 from mote.runtime.events.telemetry import TelemetryRuntime
-from mote.runtime.logging import log_class
+from mote.runtime.telemetry.logging import log_class
 
 
 class EventFabricUnavailable(RuntimeError):

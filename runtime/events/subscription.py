@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Mapping
 
-from mote.contracts.events import EventEnvelope, JsonValue, StreamId
-from mote.contracts.ports.event_subscription import (
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
+from mote.contracts.ports.events.subscription import (
     CommittedEventHandler,
     DeadLetterEntry,
     Reliability,

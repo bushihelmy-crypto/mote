@@ -48,7 +48,7 @@ try:
 except Exception:  # noqa: BLE001 — optional hardening dependency
     seccomp = None
 
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 # Address families we block when emulating a hard network-off via seccomp (the
 # fallback when --unshare-net is not usable). AF_UNIX (1) is deliberately left

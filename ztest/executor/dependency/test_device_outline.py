@@ -1,7 +1,7 @@
 """Tests for the backend-agnostic device outline (parse / stabilize / render / diff)."""
 from __future__ import annotations
 
-from mote.runtime.tools.dependency._device.outline import (
+from mote.runtime.interactive.device.outline import (
     RawNode,
     RawOutline,
     build_snapshot,
@@ -105,8 +105,18 @@ def test_diff_marks_only_newly_appeared_elements():
             role="FrameLayout",
             bounds=(0, 0, 1080, 2340),
             children=[
-                RawNode(role="Button", desc="Search", clickable=True, bounds=(900, 120, 1040, 180)),
-                RawNode(role="Button", text="Save", clickable=True, bounds=(40, 300, 400, 360)),
+                RawNode(
+                    role="Button",
+                    desc="Search",
+                    clickable=True,
+                    bounds=(900, 120, 1040, 180),
+                ),
+                RawNode(
+                    role="Button",
+                    text="Save",
+                    clickable=True,
+                    bounds=(40, 300, 400, 360),
+                ),
             ],
         ),
         width=1080,

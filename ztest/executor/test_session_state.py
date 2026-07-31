@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for the shared session env-state diff (kernel / terminal)."""
 
-from mote.runtime.tools.dependency._session_state import diff_env_state
+from mote.runtime.interactive.session_state import diff_env_state
 
 _NOISE = frozenset({"PWD", "SHLVL", "_"})
 

@@ -21,7 +21,7 @@ from typing import Iterator, List, Tuple
 
 import pytest
 
-from mote.runtime.paths import MOTE_PACKAGE_DIR
+from mote.product.paths import MOTE_PACKAGE_DIR
 
 # CJK Unified Ideographs + Extension-A + fullwidth/half-width forms: enough to
 # catch any hard-coded Chinese sentence or its fullwidth punctuation (（），。).
@@ -43,7 +43,7 @@ def _has_cjk(text: str) -> bool:
 
 def _display_modules() -> List[Path]:
     root = MOTE_PACKAGE_DIR
-    # MOTE_PACKAGE_DIR is the package dir itself; CLI is Product-owned.
+    # PACKAGE_DIR is the package dir itself; CLI is Product-owned.
     # Fall back to walking up from this test file if the layout differs so the
     # guardrail is robust to checkout naming.
     if not (root / "product/cli").exists():

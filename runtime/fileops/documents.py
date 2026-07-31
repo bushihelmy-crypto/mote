@@ -7,12 +7,12 @@ import tempfile
 from pathlib import Path
 from typing import Protocol
 
-from mote.contracts.fileops.errors import (
+from mote.contracts.file.errors import (
     DocumentExtractionError,
     DocumentExtractorUnavailableError,
     DocumentResourceLimitError,
 )
-from mote.contracts.fileops.models import ExtractionBudget
+from mote.contracts.file.views import ExtractionBudget
 from mote.runtime.fileops.document_budgets import BoundedTextSink, enforce_archive_budget
 
 try:

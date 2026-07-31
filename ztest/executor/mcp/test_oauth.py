@@ -14,8 +14,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from mote.contracts.config.mcp import MCPServerConfig, MCPTransportType
-from mote.contracts.config.oauth import OAuthProviderConfig
+from mote.contracts.config.model.oauth import OAuthProviderConfig
+from mote.contracts.tool.transport import MCPTransportType
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.tools.mcp import oauth as oauth_bridge
 from mote.runtime.tools.mcp.oauth import _OAuthManagerAuth, build_mcp_auth
 

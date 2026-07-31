@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mote://schemas/gateway-daemon-backup-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "backup_id", "backup_epoch", "admission_epoch", "generation_digests", "component_digests", "key_versions", "created_at", "signature"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "backup_id": {"type": "string", "minLength": 1},
+    "backup_epoch": {"type": "integer", "minimum": 1},
+    "admission_epoch": {"type": "integer", "minimum": 1},
+    "generation_digests": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+    "component_digests": {"type": "object", "required": ["sqlite_authority"], "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+    "key_versions": {"type": "object", "additionalProperties": {"type": "string"}},
+    "created_at": {"type": "string", "format": "date-time"},
+    "signature": {"type": "string", "minLength": 1}
+  }
+}

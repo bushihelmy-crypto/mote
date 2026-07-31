@@ -45,11 +45,11 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Mapping, Optional
 
-from mote.contracts.errors.base import MoteError
-from mote.contracts.errors.codes import RecoveryAction
+from mote.contracts.foundation.errors.base import MoteError
+from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.runtime.errors.classification import is_retryable
 from mote.runtime.events import RecoveryEvent, observe_event
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 # A no-arg coroutine factory: each invocation issues one attempt and returns its result.
 Call = Callable[[], Awaitable]

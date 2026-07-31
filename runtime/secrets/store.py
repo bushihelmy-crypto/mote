@@ -7,7 +7,7 @@ real value on write (so a later PreToolUse *restore* direction can reverse it):
 
 * **config section** (``<secret:llm.api_key>``) — secret string leaves harvested
   from a ``config.yaml`` by the config center's own
-  :func:`~mote.runtime.config.diagnostics._is_secret` rule (leaf ∈
+  :func:`~mote.product.config.diagnostics._is_secret` rule (leaf ∈
   ``CREDENTIAL_DENYLIST`` or contains key/secret/token/password/jwt), so there is
   **zero new detection logic**. Auto-synced into the vault and re-synced *hot*
   when the config file's mtime changes — editing ``config.yaml`` at runtime makes
@@ -44,12 +44,10 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import yaml
 
-from mote.runtime.config.diagnostics import _is_secret
-from mote.runtime.paths import CONFIG_ROOT
 from mote.runtime.secrets.cipher import VaultCipher
 
 # The user vault file, in the config path (~/.mote/), never in a project tree.
@@ -67,14 +65,14 @@ _SECRETS_SECTION = "secrets"
 _UNSET = object()
 
 
-def secrets_path() -> Path:
+def secrets_path(root: Path) -> Path:
     """The on-disk path of the encrypted vault file (``~/.mote/secrets.json``)."""
-    return CONFIG_ROOT / _SECRETS_FILE
+    return root / _SECRETS_FILE
 
 
-def secrets_config_path() -> Path:
+def secrets_config_path(root: Path) -> Path:
     """The plaintext, human-edited named-secret file (``~/.mote/secrets_config.json``)."""
-    return CONFIG_ROOT / _SECRETS_CONFIG_FILE
+    return root / _SECRETS_CONFIG_FILE
 
 
 class SecretStore:
@@ -84,20 +82,22 @@ class SecretStore:
         self,
         cipher: VaultCipher,
         *,
-        vault_path: Optional[Path] = None,
+        vault_path: Path,
         config_path: Optional[Path] = None,
         secrets_config_file: Optional[Path] = None,
+        is_secret: Callable[[str], bool] | None = None,
     ) -> None:
         self._cipher = cipher
-        self._vault_path = Path(vault_path) if vault_path is not None else secrets_path()
+        self._vault_path = Path(vault_path)
         #: The ``config.yaml`` whose secret leaves seed the config section. ``None``
         #: disables config auto-sync (unit tests that exercise only user/session).
         self._config_path = Path(config_path) if config_path is not None else None
+        if self._config_path is not None and is_secret is None:
+            raise ValueError("config secret harvesting requires an injected predicate")
+        self._is_secret = is_secret
         #: The plaintext human-edited named-secret file seeding the file section.
         #: Defaults to ``~/.mote/secrets_config.json``; pass a path to relocate.
-        self._secrets_config_path = (
-            Path(secrets_config_file) if secrets_config_file is not None else secrets_config_path()
-        )
+        self._secrets_config_path = Path(secrets_config_file) if secrets_config_file is not None else None
 
         # Disk-backed tiers (mirrors of three vault sections).
         self._config_section: Dict[str, str] = {}  # {dotted_path: value}
@@ -302,6 +302,8 @@ class SecretStore:
         first call, or a real mtime after the file is deleted) reconciles the
         section to empty, so removing the file clears its vault entries too.
         """
+        if self._secrets_config_path is None:
+            return
         mtime = _mtime(self._secrets_config_path)
         if mtime == self._file_mtime:
             return
@@ -338,7 +340,7 @@ class SecretStore:
         if data is not None and not isinstance(data, dict):
             raise ValueError("secret config must contain a mapping")
         harvested: Dict[str, str] = {}
-        _harvest(data, "", harvested)
+        _harvest(data, "", harvested, self._is_secret)
         return harvested
 
     def _harvest_secrets_config_file(self) -> Dict[str, str]:
@@ -350,6 +352,8 @@ class SecretStore:
         non-string content fails loud so a bad boundary value cannot silently
         remove known protection state.
         """
+        if self._secrets_config_path is None:
+            return {}
         try:
             raw = self._secrets_config_path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -439,7 +443,12 @@ def _string_map(node: Any) -> Dict[str, str]:
     return {str(k): v for k, v in node.items() if isinstance(v, str)}
 
 
-def _harvest(node: Any, prefix: str, out: Dict[str, str]) -> None:
+def _harvest(
+    node: Any,
+    prefix: str,
+    out: Dict[str, str],
+    is_secret: Callable[[str], bool] | None,
+) -> None:
     """Recursively collect secret string leaves keyed by dotted path.
 
     A leaf is secret iff :func:`_is_secret` says its dotted path is — the exact
@@ -450,13 +459,13 @@ def _harvest(node: Any, prefix: str, out: Dict[str, str]) -> None:
         for key, value in node.items():
             dotted = f"{prefix}.{key}" if prefix else str(key)
             if isinstance(value, (dict, list)):
-                _harvest(value, dotted, out)
-            elif isinstance(value, str) and _is_secret(dotted):
+                _harvest(value, dotted, out, is_secret)
+            elif isinstance(value, str) and is_secret is not None and is_secret(dotted):
                 out[dotted] = value
     elif isinstance(node, list):
         # List items keep the parent path, so leaf-based _is_secret still applies.
         for item in node:
-            _harvest(item, prefix, out)
+            _harvest(item, prefix, out, is_secret)
 
 
 __all__ = ["SecretStore", "secrets_path", "secrets_config_path"]

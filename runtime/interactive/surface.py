@@ -1,9 +1,9 @@
 """Runtime-side adapter exposing a driver's live surface to host ports."""
 from __future__ import annotations
 
-from mote.contracts.handoff import DriverHandoffHandle
-from mote.contracts.ports.runtime_driver import LiveSurfaceRuntimeDriver, ObservableSurfaceRuntimeDriver
-from mote.contracts.surfaces import SurfaceFrame, SurfaceInput
+from mote.contracts.interaction.handoff import DriverHandoffHandle
+from mote.contracts.ports.runtime.driver import LiveSurfaceRuntimeDriver, ObservableSurfaceRuntimeDriver
+from mote.contracts.surface import SurfaceFrame, SurfaceInput
 
 
 class RuntimeLiveSurfaceSession:

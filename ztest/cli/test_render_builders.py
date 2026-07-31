@@ -16,7 +16,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.product.cli.consumers.render.builders import (
+from mote.product.i18n import keys as K
+from mote.product.i18n import t as i18n_t
+from mote.product.presentation.rich_rendering.builders import (
     _HAS_RICH,
     FoldMode,
     compaction_summary_text,
@@ -33,9 +35,7 @@ from mote.product.cli.consumers.render.builders import (
     tool_group_summary_text,
     tool_started_text,
 )
-from mote.product.cli.consumers.render.palette import Palette
-from mote.product.i18n import keys as K
-from mote.product.i18n import t as i18n_t
+from mote.product.presentation.rich_rendering.palette import Palette
 
 pytestmark = pytest.mark.skipif(not _HAS_RICH, reason="rich required")
 
@@ -151,7 +151,7 @@ def test_half_block_image_caches_rendered_width():
     """Repeated Textual repaints at the same width reuse rendered segments."""
     pytest.importorskip("PIL")
 
-    from mote.product.cli.consumers.render.builders.image_adapter import HalfBlockImage
+    from mote.product.presentation.rich_rendering.builders.image_adapter import HalfBlockImage
 
     class Pixels:
         def __getitem__(self, xy):

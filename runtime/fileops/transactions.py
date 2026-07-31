@@ -5,45 +5,45 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from mote.contracts.fileops.errors import EncodingRejectedError, RecoveryInDoubtError, StaleSnapshotError
-from mote.contracts.fileops.events import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.file.facts import (
     FileTransactionAbortedEvent,
     FileTransactionCommittedEvent,
     FileTransactionInDoubtEvent,
     FileTransactionPreparedEvent,
 )
-from mote.contracts.fileops.models import (
+from mote.contracts.file.errors import EncodingRejectedError, RecoveryInDoubtError, StaleSnapshotError
+from mote.contracts.file.identity import (
     AbsentVersion,
-    BlobRef,
-    CreateMutation,
-    DeleteMutation,
-    FileOperationKind,
     FileSnapshot,
-    HunkRecord,
     LockMode,
     LockSpec,
-    Mutation,
-    MutationResult,
-    MutationSet,
     PresentVersion,
     ProjectIdentity,
-    ReplaceMutation,
+)
+from mote.contracts.file.mutations import CreateMutation, DeleteMutation, Mutation, MutationSet, ReplaceMutation
+from mote.contracts.file.transactions import (
+    FileOperationKind,
+    HunkRecord,
+    MutationResult,
     TransactionRecord,
     TransactionStatus,
 )
-from mote.contracts.text.hunks import split_hunks
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_HARD_LIMIT_BYTES
-from mote.runtime.fileops.artifact_reachability import ArtifactReachabilityProjector, ArtifactRoot, ArtifactRootKind
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
+from mote.runtime.artifacts.repository import ArtifactRepository as ContentRepository
 from mote.runtime.fileops.control import ProjectOperationControl
 from mote.runtime.fileops.encoding import decode_text, editable_text
 from mote.runtime.fileops.fences import RecoveryFence
+from mote.runtime.fileops.hunks import split_hunks
 from mote.runtime.fileops.identity import name_identity
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.locking import NAME_LOCK_LEVEL, PROJECT_LOCK_LEVEL, TARGET_LOCK_LEVEL, HierarchicalLockManager
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, decode_metadata_manifest
+from mote.runtime.fileops.mutation.artifact_roots import ArtifactReachabilityProjector, ArtifactRoot, ArtifactRootKind
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
 from mote.runtime.fileops.publisher import AtomicPublisher
+from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES
 from mote.runtime.fileops.snapshots import SealedSnapshotReader
 
 _DURABLE_PLAN_PROOF = object()
@@ -61,8 +61,8 @@ class ScopedMutationArtifacts:
 @dataclass(frozen=True, slots=True)
 class DurableEditPlanArtifacts:
     plan_id: str
-    manifest: BlobRef
-    closure: tuple[BlobRef, ...]
+    manifest: ContentIdentity
+    closure: tuple[ContentIdentity, ...]
     _proof: object = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -323,7 +323,8 @@ class MutationCoordinator:
         if journal is self.journal:
             return self
         artifacts = ArtifactRepository(
-            artifact_root,
+            ContentRepository(Path(artifact_root), hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES),
+            lifecycle_root=Path(journal.path).parent / "artifact-lifecycle",
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
         )
         return MutationCoordinator(
@@ -494,7 +495,7 @@ class MutationCoordinator:
     def _metadata_satisfies(
         self,
         actual_metadata: PreservedMetadata,
-        policy: BlobRef,
+        policy: ContentIdentity,
     ) -> bool:
         expected_metadata = decode_metadata_manifest(self.artifacts.read_bytes(policy))
         return (
@@ -562,7 +563,7 @@ class MutationCoordinator:
         closed = {(artifact.digest, artifact.size) for artifact in ownership.closure}
         if (ownership.manifest.digest, ownership.manifest.size) not in closed:
             raise ValueError("edit plan ownership closure omits its manifest root")
-        required_refs: list[BlobRef] = []
+        required_refs: list[ContentIdentity] = []
         required_digests: set[str] = set()
         for mutation in mutation_set.mutations:
             if isinstance(mutation, CreateMutation):

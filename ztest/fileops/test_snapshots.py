@@ -5,10 +5,10 @@ import os
 
 import pytest
 
-from mote.contracts.fileops import ContentChangedError, IdentityChangedError, SnapshotDurabilityError
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_HARD_LIMIT_BYTES, snapshot_budget
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.contracts.file import ContentChangedError, IdentityChangedError, SnapshotDurabilityError
+from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES, snapshot_budget
 from mote.runtime.fileops.snapshots import SealedSnapshotReader
+from mote.ztest.fileops_factory import ArtifactRepository
 
 
 def _reader(tmp_path):
@@ -44,7 +44,7 @@ def test_snapshot_is_sealed_and_content_addressed(tmp_path):
     assert snapshot.version.digest == hashlib.sha256(b"hello\n").hexdigest()
     assert snapshot.version.size == 6
     assert store.read_bytes(snapshot.artifact) == b"hello\n"
-    assert list((tmp_path / "artifacts" / ".incoming").iterdir()) == []
+    assert list((tmp_path / "artifacts-lifecycle" / ".incoming").iterdir()) == []
 
 
 def test_snapshot_follows_symlink_but_preserves_requested_path(tmp_path):

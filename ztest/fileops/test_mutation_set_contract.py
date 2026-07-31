@@ -5,22 +5,18 @@ from hashlib import sha256
 
 import pytest
 
-from mote.contracts.fileops.models import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.identity import (
     AbsentVersion,
-    BlobRef,
-    CreateMutation,
-    DeleteMutation,
     FileSnapshot,
-    MutationSet,
     NameIdentity,
     PathToken,
     PresentVersion,
     ProjectIdentity,
-    RecoveryPolicy,
-    ReplaceMutation,
     TargetIdentity,
-    validate_committed_versions,
 )
+from mote.contracts.file.mutations import CreateMutation, DeleteMutation, MutationSet, RecoveryPolicy, ReplaceMutation
+from mote.contracts.file.transactions import validate_committed_versions
 
 
 def _name(key: str) -> NameIdentity:
@@ -39,8 +35,8 @@ def _path(name: str) -> PathToken:
     return PathToken(display=f"/{name}", native=f"/{name}")
 
 
-def _blob(digest: str) -> BlobRef:
-    return BlobRef(digest=sha256(digest.encode("utf-8")).hexdigest(), size=1)
+def _blob(digest: str) -> ContentIdentity:
+    return ContentIdentity(digest=sha256(digest.encode("utf-8")).hexdigest(), size=1)
 
 
 def _present(

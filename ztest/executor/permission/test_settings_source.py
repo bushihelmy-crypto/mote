@@ -19,9 +19,9 @@ import json
 
 import pytest
 
-from mote.runtime import paths
-from mote.runtime.tools.permission import settings_source
-from mote.runtime.tools.permission.settings_source import SETTINGS_FILE_NAME, load_permission_rules, settings_paths
+from mote.product.config.adapters import permissions as settings_source
+from mote.product.config.adapters.permissions import SETTINGS_FILE_NAME, load_permission_rules, settings_paths
+from mote.product.paths import default_runtime_paths, mote_layered_files
 
 
 @pytest.fixture
@@ -33,7 +33,11 @@ def settings_file(tmp_path, monkeypatch):
     function to return ``[path]`` (only when it exists) redirects every read here.
     """
     path = tmp_path / SETTINGS_FILE_NAME
-    monkeypatch.setattr(settings_source, "settings_paths", lambda cwd=None: [path] if path.is_file() else [])
+    monkeypatch.setattr(
+        settings_source,
+        "settings_paths",
+        lambda provider=None: [path] if path.is_file() else [],
+    )
     return path
 
 
@@ -52,14 +56,17 @@ class TestSettingsPaths:
         # the names there.
         user_file = tmp_path / SETTINGS_FILE_NAME
         user_file.write_text("{}", encoding="utf-8")
-        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
-        monkeypatch.setattr(paths, "mote_project_files", lambda name, cwd=None: [])
-        assert settings_paths() == [user_file]
+        paths = default_runtime_paths(user_config_root=tmp_path)
+        assert settings_paths(
+            mote_layered_files("settings.local.json", tmp_path, user_config_root=paths.user_config_root)
+        ) == [user_file]
 
     def test_paths_empty_when_nothing_configured(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)  # no file inside
-        monkeypatch.setattr(paths, "mote_project_files", lambda name, cwd=None: [])
-        assert settings_paths() == []
+        paths = default_runtime_paths(user_config_root=tmp_path)
+        assert (
+            settings_paths(mote_layered_files("settings.local.json", tmp_path, user_config_root=paths.user_config_root))
+            == []
+        )
 
 
 class TestLoadMissingOrEmpty:

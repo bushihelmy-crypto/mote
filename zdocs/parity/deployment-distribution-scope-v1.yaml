@@ -1,0 +1,24 @@
+schema_version: 1
+revision: deployment-distribution-scope-v1
+current:
+  deployment_modes: [embedded, shared_process]
+  platforms: [linux_x86_64, linux_aarch64]
+  artifacts:
+    - python_package
+    - mote_cli
+    - shared_daemon_launcher
+    - single_host_docker_image
+    - local_config_migration_backup_tools
+    - ui_assets
+  shared_process:
+    topology: same_user_same_host_multiple_callers_one_daemon
+    transport: grpc_http2_over_owner_only_uds
+    persistence: [sqlite_wal, optional_postgresql]
+future_cluster:
+  activation: forbidden
+  reserved_only: [id_namespace, schema_version_envelope, receipt_id, generation_digest, artifact_digest, rpc_extension_names]
+  deferred: [cross_host_placement, distributed_fencing, quorum, cluster_mtls_lb, multi_active, kubernetes_ha, cluster_rolling_upgrade, ha_helm, cluster_terraform]
+invariants:
+  - future_cluster_does_not_block_current_release
+  - current_artifacts_do_not_claim_cluster_ha
+  - embedded_does_not_depend_on_grpcio

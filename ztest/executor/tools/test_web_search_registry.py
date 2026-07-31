@@ -10,11 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.product.toolsets.builtin.web_search_registry import (
-    ProviderSearchBackend,
-    SearchBackend,
-    builtin_search_backend_registry,
-)
+from mote.product.web_search.registry import ProviderSearchBackend, SearchBackend, builtin_search_backend_registry
 from mote.runtime.errors import ToolNotConfiguredError
 
 pytestmark = pytest.mark.asyncio

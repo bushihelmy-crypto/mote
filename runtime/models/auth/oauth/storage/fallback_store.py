@@ -9,19 +9,19 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.runtime.logging import logger
 from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.models.auth.oauth.storage.base import CredentialStore
 from mote.runtime.models.auth.oauth.storage.file_store import FileCredentialStore
 from mote.runtime.models.auth.oauth.storage.keyring_store import KeyringCredentialStore
+from mote.runtime.telemetry.logging import logger
 
 
 class FallbackCredentialStore(CredentialStore):
     """Try keyring first, then fall back to the file store on any failure."""
 
-    def __init__(self, provider: str) -> None:
+    def __init__(self, provider: str, base_dir) -> None:
         super().__init__(provider)
-        self._file = FileCredentialStore(provider)
+        self._file = FileCredentialStore(provider, base_dir)
         self._keyring: Optional[CredentialStore] = None
         try:
             self._keyring = KeyringCredentialStore(provider)

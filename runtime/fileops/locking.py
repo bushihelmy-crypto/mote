@@ -11,9 +11,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Optional, Sequence
 
-from mote.contracts.fileops.errors import FileLockCancelledError, FileLockTimeoutError
-from mote.contracts.fileops.models import LockMode, LockSpec
-from mote.runtime.paths import CONFIG_ROOT
+from mote.contracts.file.errors import FileLockCancelledError, FileLockTimeoutError
+from mote.contracts.file.identity import LockMode, LockSpec
 
 if os.name == "posix":
     from mote.runtime.fileops._posix_lock import try_os_lock as _try_os_lock
@@ -196,10 +195,10 @@ class _LockSetLease(AbstractContextManager[None]):
 class HierarchicalLockManager:
     """Acquires sorted project/name/target lock sets with one deadline."""
 
-    def __init__(self, root: Optional[Path] = None) -> None:
+    def __init__(self, root: Path) -> None:
         if os.name not in {"posix", "nt"}:
             raise OSError("platform has no supported cross-process file lock backend")
-        self._root = Path(root) if root is not None else CONFIG_ROOT / "runtime" / "file-locks"
+        self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
         if os.name == "posix":
             os.chmod(self._root, 0o700)

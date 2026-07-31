@@ -4,29 +4,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.agents import BaseAgent
-from mote.contracts.tools import CommandProtocol
+from mote.contracts.agent import BaseAgent
+from mote.contracts.tool import CommandProtocol
 from mote.kernel.output import text_output_contract
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
-from mote.product.cli.commands.core import Command
-from mote.product.cli.consumers.core import ConsumerSpec
-from mote.product.cli.contracts.view import Capabilities
-from mote.product.container import ProductContainer
-from mote.product.toolsets.builtin.generate_media.registry import MediaProvider
-from mote.product.toolsets.builtin.web_search_registry import SearchBackend
+from mote.product.composition.container import ProductContainer
+from mote.product.media_generation.registry import MediaProvider
+from mote.product.web_search.registry import SearchBackend
 from mote.runtime.agent import Role
+from mote.runtime.control.lifecycle import LifecycleState
 from mote.runtime.errors import ToolNotConfiguredError
-from mote.runtime.lifecycle import LifecycleState
 from mote.runtime.services import EngineServices
 from mote.runtime.tools.base_tool import BaseTool
-
-
-async def _command(_ctx, _arg: str) -> None:
-    return None
-
-
-def _consumer(_config):
-    return object()
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 
 
 def _config():
@@ -58,29 +47,16 @@ def test_standard_product_containers_are_fully_isolated() -> None:
     assert first is not second
     assert first.agent_factory is not second.agent_factory
     assert first.providers is not second.providers
-    assert first.commands is not second.commands
-    assert first.consumers is not second.consumers
     assert first.media_providers is not second.media_providers
     assert first.search_backends is not second.search_backends
     assert first.tools is not second.tools
     assert first.agents is not second.agents
     assert first.routing_models is not second.routing_models
 
-    first.commands.register(Command("tenant-only", _command))
-    first.consumers.register(ConsumerSpec("tenant-only", _consumer, Capabilities()))
-
-    assert first.commands.resolve("tenant-only") is not None
-    assert second.commands.resolve("tenant-only") is None
-    assert first.consumers.get("tenant-only") is not None
-    assert second.consumers.get("tenant-only") is None
-
 
 def test_builtin_catalogs_are_copied_into_each_container() -> None:
     container = ProductContainer.standard(_config())
 
-    assert container.commands.resolve("help") is not None
-    assert container.commands.resolve("quit") is container.commands.resolve("exit")
-    assert container.consumers.names() == ["structured", "terminal"]
     assert container.search_backends.get_backend("provider").name == "provider"
     assert sorted(container.media_providers.providers) == [
         ("audio", "openai"),
@@ -192,7 +168,9 @@ def test_plugin_catalog_generation_does_not_mutate_existing_sessions() -> None:
     assert original.tools.get("TenantTool") is None
     assert original.agents.get("TenantAgent") is None
     assert extended.tools.get("TenantTool") is TenantTool
-    assert extended.agents.get("TenantAgent") is TenantAgent
+    tenant_definition = extended.agents.get("TenantAgent")
+    assert tenant_definition is not None
+    assert tenant_definition.name == "TenantAgent"
     assert original.tools.version != extended.tools.version
     assert original.agents.version != extended.agents.version
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.kernel.prompt.refs import (
+from mote.kernel.commands.symbols import (
     CAP_READ,
     CTL_FINISH,
     Sym,

@@ -17,9 +17,9 @@ except Exception as _keyring_import_error:  # noqa: BLE001 — optional backend
 else:
     _keyring_import_error = None
 
-from mote.runtime.logging import logger
 from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.models.auth.oauth.storage.base import CredentialStore
+from mote.runtime.telemetry.logging import logger
 
 _SERVICE = "mote-oauth"
 

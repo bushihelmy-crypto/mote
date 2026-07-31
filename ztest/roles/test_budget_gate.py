@@ -14,7 +14,7 @@ import asyncio
 
 import pytest
 
-from mote.contracts.events.types import BUDGET
+from mote.contracts.events.agent import BUDGET
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ import functools
 import traceback
 from typing import Any, Callable, Optional, Tuple, Type, TypeVar, Union
 
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 ReturnType = TypeVar("ReturnType")
 

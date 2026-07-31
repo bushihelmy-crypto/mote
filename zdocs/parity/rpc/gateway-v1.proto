@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package mote.inference.gateway.v1;
+
+message Envelope {
+  uint32 schema_version = 1;
+  uint32 protocol_version = 2;
+  string generation_id = 3;
+  string generation_artifact_digest = 4;
+  string principal_proof = 5;
+  string deadline_utc = 6;
+  double remaining_seconds_at_send = 7;
+  string sent_at_utc = 8;
+  string traceparent = 9;
+  string idempotency_key = 10;
+  string future_cluster_extension = 100;
+}
+
+message StartRequest {
+  Envelope envelope = 1;
+  string execution_id = 2;
+  string operation = 3;
+  bytes canonical_request = 4;
+  string artifact_reference = 5;
+}
+
+message StartResponse { string execution_id = 1; uint64 receipt_revision = 2; }
+message AuthorizeRequest { Envelope envelope = 1; string execution_id = 2; bytes wire_permit = 3; }
+message CancelRequest { Envelope envelope = 1; string execution_id = 2; string reason = 3; }
+message CursorRequest { Envelope envelope = 1; string execution_id = 2; uint64 after_sequence = 3; uint64 receipt_revision = 4; }
+message ReceiptRequest { Envelope envelope = 1; string execution_id = 2; }
+message Receipt { string execution_id = 1; uint64 revision = 2; string state = 3; string terminal_artifact_reference = 4; }
+message LifecycleEvent { string execution_id = 1; uint64 sequence = 2; uint64 receipt_revision = 3; string event_type = 4; bytes payload = 5; }
+message Empty {}
+message SessionMessage { Envelope envelope = 1; string execution_id = 2; uint64 application_sequence = 3; bytes payload = 4; bytes wire_permit = 5; }
+message TransferPartRequest { StartRequest start = 1; uint64 part_number = 2; uint64 offset = 3; uint64 length = 4; string content_digest = 5; }
+message GenerationRequest { Envelope envelope = 1; bytes generation_artifact = 2; }
+message GenerationStatus { string generation_id = 1; string artifact_digest = 2; string state = 3; }
+message NegotiationRequest { repeated uint32 protocol_versions = 1; repeated string capabilities = 2; }
+message NegotiationResponse { uint32 protocol_version = 1; repeated string capabilities = 2; string daemon_socket_generation = 3; }
+message HandshakeRequest { bytes signed_handshake = 1; }
+message HandshakeResponse { bytes session_credential = 1; uint32 protocol_version = 2; string daemon_socket_generation = 3; }
+message Readiness { bool ready = 1; map<string, string> components = 2; }
+message BackupRequest { Envelope envelope = 1; string destination = 2; string consistency = 3; }
+message BackupResult { string destination = 1; string consistency = 2; string digest = 3; }
+message VerifyRestoreRequest { Envelope envelope = 1; string source = 2; }
+message VerifyRestoreResult { bool verified = 1; string digest = 2; }
+message DrainRequest { Envelope envelope = 1; double timeout_seconds = 2; }
+message ReconcileAllRequest { Envelope envelope = 1; }
+message ReconcileAllResult { uint64 attempts = 1; uint64 sessions = 2; }
+
+service GatewayExecutionService {
+  rpc StartUnary(StartRequest) returns (StartResponse);
+  rpc StartDurableCommand(StartRequest) returns (StartResponse);
+  rpc OpenSession(StartRequest) returns (StartResponse);
+  rpc ExecuteTransferPart(TransferPartRequest) returns (StartResponse);
+  rpc AuthorizeWire(AuthorizeRequest) returns (Empty);
+  rpc Cancel(CancelRequest) returns (Empty);
+  rpc StreamEvents(CursorRequest) returns (stream LifecycleEvent);
+  rpc Session(stream SessionMessage) returns (stream LifecycleEvent);
+  rpc QueryReceipt(ReceiptRequest) returns (Receipt);
+  rpc Reconcile(ReceiptRequest) returns (stream LifecycleEvent);
+}
+
+service GatewayControlService {
+  rpc Authenticate(HandshakeRequest) returns (HandshakeResponse);
+  rpc Negotiate(NegotiationRequest) returns (NegotiationResponse);
+  rpc StageGeneration(GenerationRequest) returns (GenerationStatus);
+  rpc ObserveGeneration(GenerationRequest) returns (GenerationStatus);
+  rpc GetReadiness(Empty) returns (Readiness);
+  rpc Backup(BackupRequest) returns (BackupResult);
+  rpc VerifyRestore(VerifyRestoreRequest) returns (VerifyRestoreResult);
+  rpc ReconcileAll(ReconcileAllRequest) returns (ReconcileAllResult);
+  rpc BeginDrain(DrainRequest) returns (Readiness);
+}

@@ -4,14 +4,18 @@
 
 import pytest
 
-from mote.orchestration.environment.scheduling.store import CronTaskStore
-from mote.product.cli import cron_cli
+from mote.orchestration.automation.cron.store import CronTaskStore
+from mote.product.entrypoints.cron import cli as cron_cli
 
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """Point the CLI's store at a temp dir (never touch the real ~/.mote)."""
-    monkeypatch.setattr(cron_cli, "CronTaskStore", lambda: CronTaskStore(base_dir=str(tmp_path)))
+    monkeypatch.setattr(
+        cron_cli,
+        "CronTaskStore",
+        lambda **_kwargs: CronTaskStore(base_dir=str(tmp_path)),
+    )
     return CronTaskStore(base_dir=str(tmp_path))
 
 

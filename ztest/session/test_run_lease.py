@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from mote.contracts.leases import RunLeasePolicy
+from mote.contracts.session.lease import RunLeasePolicy
 from mote.runtime.errors import OutputCommitFencedError, RunLeaseUnavailableError
 from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
 
@@ -43,7 +43,7 @@ class FailingRenewCoordinator:
 
 
 def test_takeover_increments_token_and_fences_stale_owner(tmp_path):
-    from mote.contracts.ports import RunLeaseCoordinator
+    from mote.contracts.ports.session.run_lease import RunLeaseCoordinator
 
     clock = Clock()
     store = RunLeaseStore(tmp_path / "leases.json", clock=clock)

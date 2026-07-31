@@ -5,14 +5,15 @@ import multiprocessing
 
 import pytest
 
-from mote.contracts.fileops.errors import SnapshotDurabilityError
-from mote.contracts.fileops.models import BlobRef
-from mote.runtime.fileops.artifact_lifecycle import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.errors import SnapshotDurabilityError
+from mote.runtime.fileops.mutation.artifact_catalog import (
     ArtifactLifecycleConflictError,
     ArtifactObjectState,
     ArtifactReservationState,
 )
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScopeState
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScopeState
+from mote.ztest.fileops_factory import ArtifactRepository
 
 
 def _repository(tmp_path, limit=1_024) -> ArtifactRepository:
@@ -94,13 +95,13 @@ def test_abandoned_capture_aborts_its_explicit_stage(tmp_path):
 
 def test_reads_reject_missing_and_staging_catalog_objects(tmp_path):
     repository = _repository(tmp_path)
-    missing = BlobRef(digest=hashlib.sha256(b"missing").hexdigest(), size=7)
+    missing = ContentIdentity(digest=hashlib.sha256(b"missing").hexdigest(), size=7)
     with pytest.raises(SnapshotDurabilityError, match="not registered"):
         repository.read_bytes(missing)
 
     reservation = repository.reserve(8, "staging", 60)
     stage = repository.stage(reservation, 8)
-    staging = BlobRef(digest=hashlib.sha256(b"staging").hexdigest(), size=7)
+    staging = ContentIdentity(digest=hashlib.sha256(b"staging").hexdigest(), size=7)
     repository.catalog.record_staged(stage, staging)
     with pytest.raises(SnapshotDurabilityError, match="not live"):
         repository.verify(staging)
@@ -156,7 +157,7 @@ def test_competing_stage_reconciles_a_durably_sealed_staging_owner(
     monkeypatch.setattr(repository.catalog, "mark_live", crash_after_record)
     with pytest.raises(SnapshotDurabilityError, match="publish staged"):
         repository.put(first_stage, (b"shared",))
-    artifact = BlobRef(digest=hashlib.sha256(b"shared").hexdigest(), size=6)
+    artifact = ContentIdentity(digest=hashlib.sha256(b"shared").hexdigest(), size=6)
     assert repository.catalog.object(artifact.digest).state == ArtifactObjectState.STAGING
 
     monkeypatch.setattr(repository.catalog, "mark_live", original_mark_live)
@@ -188,7 +189,7 @@ def test_cross_process_publication_converges_on_one_verified_payload(tmp_path):
         process.join(10)
         assert process.exitcode == 0
 
-    references = tuple(BlobRef(*outcomes.get(timeout=2)) for _ in processes)
+    references = tuple(ContentIdentity(*outcomes.get(timeout=2)) for _ in processes)
     assert references[0] == references[1]
     reopened = ArtifactRepository(root, hard_limit_bytes=64)
     assert reopened.read_bytes(references[0]) == b"shared-payload"
@@ -362,7 +363,7 @@ def test_write_scope_complete_fsyncs_business_root_before_release(
     with scope:
         scope.put_bytes(b"data")
         monkeypatch.setattr(
-            "mote.runtime.fileops.artifact_repository._fsync_directory",
+            "mote.runtime.fileops.mutation.artifacts._fsync_directory",
             record_fsync,
         )
         scope.complete(durability_root=business_root)

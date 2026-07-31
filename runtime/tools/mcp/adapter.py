@@ -11,10 +11,10 @@ import re
 from copy import deepcopy
 from typing import Any
 
-from mote.contracts.tools import NativeToolSchema, XmlToolSchema
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
+from mote.contracts.tool import NativeToolSchema, XmlToolSchema
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.mcp.types import DiscoveredMcpTool, McpToolCaller
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 
 
 class McpXmlSchemaError(ValueError):

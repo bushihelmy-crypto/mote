@@ -17,7 +17,7 @@ from typing import Optional
 
 import pytest
 
-from mote.contracts.events.types import TurnEndEvent
+from mote.contracts.events.session import TurnEndEvent
 from mote.runtime.events import UserPromptSubmitEvent
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MetaUpdateEvent, SessionMetaEvent

@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from mote.kernel.flow.graph import AgentGraph, EffectKind, End, NodeId
-from mote.kernel.flow.recovery import DurableFlowRunner, RecoveryDirective
+from mote.kernel.execution.graph import AgentGraph, EffectKind, End, NodeId
+from mote.kernel.execution.recovery import EffectAwareGraphRunner, RecoveryDirective
 
 
 class Node:
@@ -32,7 +32,7 @@ def graph(node):
 async def test_success_does_not_resolve_failure_hooks():
     cancelled = []
     failed = []
-    runner = DurableFlowRunner(
+    runner = EffectAwareGraphRunner(
         graph(Node("ok")),
         on_cancel=lambda: cancelled.append(True),
         on_failure=lambda: failed.append(True),
@@ -47,7 +47,7 @@ async def test_success_does_not_resolve_failure_hooks():
 async def test_cancellation_is_abandoned_not_failed():
     cancelled = []
     failed = []
-    runner = DurableFlowRunner(
+    runner = EffectAwareGraphRunner(
         graph(Node(error=asyncio.CancelledError())),
         on_cancel=lambda: cancelled.append(True),
         on_failure=lambda: failed.append(True),
@@ -63,7 +63,7 @@ async def test_cancellation_is_abandoned_not_failed():
 async def test_exception_is_failed_not_abandoned():
     cancelled = []
     failed = []
-    runner = DurableFlowRunner(
+    runner = EffectAwareGraphRunner(
         graph(Node(error=RuntimeError("boom"))),
         on_cancel=lambda: cancelled.append(True),
         on_failure=lambda: failed.append(True),
@@ -88,7 +88,7 @@ async def test_exception_is_failed_not_abandoned():
 )
 async def test_effect_kind_drives_node_recovery_contract(effect, directive):
     events = []
-    runner = DurableFlowRunner(
+    runner = EffectAwareGraphRunner(
         graph(Node("ok", effect=effect)),
         on_cancel=lambda: None,
         on_failure=lambda: None,
@@ -114,7 +114,7 @@ async def test_external_failure_requires_reconcile_and_is_never_retried():
         return await original_run(state)
 
     node.run = counted_run
-    runner = DurableFlowRunner(
+    runner = EffectAwareGraphRunner(
         graph(node),
         on_cancel=lambda: None,
         on_failure=lambda: None,
@@ -130,7 +130,7 @@ async def test_external_failure_requires_reconcile_and_is_never_retried():
 @pytest.mark.asyncio
 async def test_cancelled_wait_is_abandoned_with_resume_wait_contract():
     abandoned = []
-    runner = DurableFlowRunner(
+    runner = EffectAwareGraphRunner(
         graph(Node(error=asyncio.CancelledError(), effect=EffectKind.WAITABLE)),
         on_cancel=lambda: None,
         on_failure=lambda: None,

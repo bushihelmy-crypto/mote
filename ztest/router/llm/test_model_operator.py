@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from mote.contracts.models.failover import OperatorState, ResourceIdentity
-from mote.runtime.models.failover.admission import ResourceAdmissionController
-from mote.runtime.models.failover.operator import (
+from mote.contracts.model.failover import OperatorState, ResourceIdentity
+from mote.runtime.resilience.admission import ResourceAdmissionController
+from mote.runtime.resilience.failover.operator import (
     LocalModelOperatorAuditStore,
     OperatorAuditIntegrityError,
     OperatorAuditRequiredError,

@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from mote.contracts.events.types import PromptRejectedEvent, UserPromptSubmitEvent
+from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSubmitEvent
 from mote.contracts.output import RunRejected, RunRejectionKind
-from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.events.telemetry import TelemetryBinding
@@ -50,36 +50,56 @@ class _EventCapture:
 
 @pytest_asyncio.fixture
 async def role_in_tmp(tmp_path, monkeypatch):
+    from mote.kernel.output import text_output_contract
+    from mote.product.paths import default_runtime_paths
+    from mote.runtime.agent import AgentDependencies
     from mote.runtime.models.clients.context import Context
+    from mote.ztest.model_fakes import FakeModelGateway, offline_config
 
     monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
     # This suite exercises hook wiring, not the advisory whole-repo cold index.
-    monkeypatch.setattr("mote.runtime.context.code_map.indexer.RepoIndexer.scan_all", lambda self: None)
+    monkeypatch.setattr("mote.runtime.code_map.indexer.RepoIndexer.scan_all", lambda self: None)
 
     async def no_git_snapshot(_cwd):
         return None
 
     monkeypatch.setattr(
-        "mote.runtime.context.turn_context.sources.git.collect_git_state",
+        "mote.runtime.context.turn.sources.git.collect_git_state",
         no_git_snapshot,
     )
-    context = Context(provider_factory=lambda config: _OfflineLLM(config.model))
+    context = Context(
+        config=offline_config(),
+        provider_factory=lambda config: _OfflineLLM(config.model),
+    )
+    context.model_gateway = FakeModelGateway(_OfflineLLM("test"))
     original_vault_path = context.config.secrets.vault_path
     original_config_path = context.config.secrets.secrets_config_path
     context.config.secrets.vault_path = str(tmp_path / "vault.json")
     context.config.secrets.secrets_config_path = str(tmp_path / "secrets_config.json")
-    monkeypatch.setattr(
-        "mote.runtime.agent.runtime_modules.integrations._primary_config_path",
-        lambda _cwd: None,
+    paths = default_runtime_paths(
+        user_config_root=tmp_path / "config",
+        workspace_root=tmp_path / "workspace",
     )
     role = Role(
         role_schema=RoleSchema(name="Hooked", generate_title=False),
-        wiring=AgentWiring.for_context(context),
+        wiring=AgentWiring.for_context(
+            context,
+            dependencies=AgentDependencies(
+                deps=None,
+                output_contract=text_output_contract(),
+                user_config_root=paths.user_config_root,
+                session_workspace_root=paths.session_workspace_root,
+                browser_profiles_root=paths.browser_profiles_root,
+                sandbox_ca_root=paths.sandbox_ca_root,
+                secrets_root=paths.secrets_root,
+                oauth_root=paths.oauth_root,
+            ),
+        ),
     )
     # Replace the loop with a no-op stub so run() exercises only the hook seams.
     # run() builds its flow engine via the component graph; seed that slot with
     # a factory yielding the stub so the test stays independent of the engine.
-    role._components._graph.seed("flow_engine_factory", lambda: _StubFlowEngine())
+    role._components._graph.seed(role._components._execution_engine_factory_key, lambda: _StubFlowEngine())
     try:
         yield role
     finally:
@@ -100,7 +120,7 @@ async def test_no_hooks_is_zero_overhead(role_in_tmp):
 @pytest.mark.asyncio
 async def test_session_start_fired_once(role_in_tmp):
     events: list[str] = []
-    role_in_tmp.register_hook("SessionStart", lambda hi: events.append(hi.payload.get("source")))
+    role_in_tmp.register_hook("SessionStart", lambda hi: events.append(hi.payload.source))
     await role_in_tmp.run(with_message="one")
     await role_in_tmp.run(with_message="two")
     # SessionStart fires exactly once across multiple run() calls.
@@ -149,7 +169,7 @@ async def test_prompt_rejection_never_enters_history_or_starts_flow(role_in_tmp)
     def forbidden_flow():
         pytest.fail("PromptPolicy rejection must not construct a flow engine")
 
-    role_in_tmp._components._graph.seed("flow_engine_factory", forbidden_flow)
+    role_in_tmp._components._graph.seed(role_in_tmp._components._execution_engine_factory_key, forbidden_flow)
     history_before = role_in_tmp.context_manager.get()
 
     result = await role_in_tmp.run(with_message=(f'use <secret name="denied_token">{raw_secret}</secret> now'))
@@ -191,7 +211,7 @@ async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_
         pytest.fail("secret-policy failure must not construct a flow engine")
 
     monkeypatch.setattr(store, "add_session_secret", fail_capture)
-    role_in_tmp._components._graph.seed("flow_engine_factory", forbidden_flow)
+    role_in_tmp._components._graph.seed(role_in_tmp._components._execution_engine_factory_key, forbidden_flow)
     history_before = role_in_tmp.context_manager.get()
 
     result = await role_in_tmp.run(with_message=f"use <secret>{raw_secret}</secret> now")
@@ -212,14 +232,14 @@ async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_
 @pytest.mark.asyncio
 async def test_stop_fired_in_finally(role_in_tmp):
     fired: list[str] = []
-    role_in_tmp.register_hook("Stop", lambda hi: fired.append(hi.hook_event_name))
+    role_in_tmp.register_hook("Stop", lambda _hi: fired.append("Stop"))
     await role_in_tmp.run(with_message="x")
     assert fired == ["Stop"]
 
 
 @pytest.mark.asyncio
 async def test_hook_config_engages_manager(tmp_path, monkeypatch):
-    from mote.contracts.settings.hooks import HookConfig
+    from mote.runtime.config.hook import HookConfig
     from mote.runtime.models.clients.context import Context
 
     monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
@@ -236,8 +256,10 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
     """A global ``~/.mote/hooks.json`` engages the hook layer for a Role that
     declares no per-Role ``HookConfig`` and registers no callbacks."""
     import json
+    from dataclasses import replace
 
-    import mote.runtime.paths as paths
+    from mote.product.config.adapters.hooks import load_global_hooks
+    from mote.product.paths import default_runtime_paths, mote_layered_files
     from mote.runtime.models.clients.context import Context
 
     monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
@@ -258,9 +280,18 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(paths, "CONFIG_ROOT", home)
+    paths = default_runtime_paths(user_config_root=home)
+    dependencies = replace(
+        AgentWiring.defaults().dependencies,
+        hook_config=load_global_hooks(
+            mote_layered_files("hooks.json", tmp_path, user_config_root=paths.user_config_root)
+        ),
+    )
 
-    role = Role(role_schema=RoleSchema(name="Global"), wiring=AgentWiring.for_context(Context()))
+    role = Role(
+        role_schema=RoleSchema(name="Global"),
+        wiring=AgentWiring.for_context(Context(), dependencies=dependencies),
+    )
     # hooks=None + no callbacks, yet the global file engages the layer.
     assert role.role_schema.hooks is None
     assert role.hook_manager is not None

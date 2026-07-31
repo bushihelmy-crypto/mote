@@ -10,11 +10,12 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mote.contracts.settings.hooks import HookConfig
-from mote.contracts.settings.lsp import LspConfig
-from mote.contracts.settings.permissions import PermissionConfig
-from mote.contracts.settings.watching import FileWatchConfig
-from mote.kernel.agent_spec import AgentSpec
+from mote.contracts.model.topology import DefaultRoute, RouteId
+from mote.kernel.inference.prompts import CMD_PROMPT, ROLE_INFO, SYSTEM_PROMPT
+from mote.runtime.config.hook import HookConfig
+from mote.runtime.config.lsp import LspConfig
+from mote.runtime.file_watch.config import FileWatchConfig
+from mote.runtime.tools.permission.config import PermissionConfig
 
 
 class BrowserClientCert(BaseModel):
@@ -41,10 +42,32 @@ class BrowserClientCert(BaseModel):
     passphrase: str = ""
 
 
-class RoleSchema(AgentSpec):
+class RoleSchema(BaseModel):
     """Agent definition plus Runtime deployment and reliability policy."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    name: str = "Zero"
+    profile: str = "Role"
+    system_prompt: str = SYSTEM_PROMPT
+    cmd_prompt: str = CMD_PROMPT
+    role_info: str = ROLE_INFO
+    command_protocol: Literal["xml", "native"] = "native"
+    max_cost: float = 0.0
+    inference_kind: str = "default"
+    model_route: RouteId = Field(default_factory=DefaultRoute)
+    max_auto_continue: int = 0
+    deferred_tools: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    mcps: list[str] = Field(default_factory=list)
+    agents: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    enable_memory: bool = True
+    observe_all_msg_from_buffer: bool = True
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.name}({self.profile})" if self.profile else self.name
 
     # --- Permissions ---
     # Tool-approval policy. The default engages the PermissionEngine in

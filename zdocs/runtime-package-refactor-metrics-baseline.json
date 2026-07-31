@@ -1,0 +1,10 @@
+{
+  "captured_on": "2026-07-28",
+  "command": "python -B ztest/architecture/runtime_dependency_metrics.py",
+  "illegal_edge_count": 12,
+  "init_package_count": 66,
+  "init_reexport_count": 728,
+  "max_nontrivial_scc_size": 10,
+  "nontrivial_scc_count": 4,
+  "nontrivial_scc_nodes": 19
+}

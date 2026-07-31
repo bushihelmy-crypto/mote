@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.contracts.text.humanize`."""
+"""Behavioral tests for :mod:`mote.product.presentation.humanize`."""
 from __future__ import annotations
 
 import pytest
 
-from mote.contracts.text import format_elapsed, format_file_size, format_token_count
+from mote.orchestration.background_tasks.results.formatting import format_elapsed
+from mote.product.presentation.humanize import format_token_count
+from mote.runtime.resources.formatting import format_file_size
 
 
 class TestFormatFileSize:

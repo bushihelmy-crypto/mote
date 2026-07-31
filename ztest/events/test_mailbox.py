@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mote.contracts.events import EventEnvelope, EventId, EventType, StreamId
-from mote.contracts.ports.event_subscription import (
+from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, StreamId
+from mote.contracts.ports.events.subscription import (
     EventFilter,
     Ordering,
     OverflowPolicy,

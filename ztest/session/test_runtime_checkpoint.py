@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.ports import RuntimeCheckpointSink
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint
+from mote.contracts.ports.runtime.checkpoint import RuntimeCheckpointSink
+from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint
 from mote.runtime.session import RuntimeCheckpointRecorder, SessionLog, SessionMetaEvent
 from mote.runtime.session.replay import replay
 

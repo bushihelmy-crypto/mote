@@ -5,13 +5,18 @@ import json
 
 import pytest
 
-from mote.contracts.notebook import NOTEBOOK_MEDIA_TYPE
-from mote.contracts.surfaces import SurfaceDescriptor, SurfaceFrame, SurfaceInput, SurfacePresentationMode
-from mote.product.cli.surfaces.browser import BrowserWindowPresenter
-from mote.product.cli.surfaces.device import DeviceWindowPresenter
-from mote.product.cli.surfaces.jupyter import JupyterWindowPresenter
-from mote.product.cli.surfaces.live_window import LiveWindowPresentationSession
-from mote.product.cli.surfaces.terminal import TerminalWindowPresenter
+from mote.contracts.surface import (
+    NOTEBOOK_MEDIA_TYPE,
+    SurfaceDescriptor,
+    SurfaceFrame,
+    SurfaceInput,
+    SurfacePresentationMode,
+)
+from mote.product.interfaces.textual.surfaces.browser import BrowserWindowPresenter
+from mote.product.interfaces.textual.surfaces.device import DeviceWindowPresenter
+from mote.product.interfaces.textual.surfaces.jupyter import JupyterWindowPresenter
+from mote.product.interfaces.textual.surfaces.live_window import LiveWindowPresentationSession
+from mote.product.interfaces.textual.surfaces.terminal import TerminalWindowPresenter
 from mote.runtime.interactive.presentation import SurfacePresenterRegistry
 
 

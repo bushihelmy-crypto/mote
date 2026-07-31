@@ -12,8 +12,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Optional
 
-from mote.contracts.fileops.errors import SnapshotDurabilityError
-from mote.contracts.fileops.events import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.file.facts import (
     FileHistoryImportedEvent,
     FileTransactionAbortedEvent,
     FileTransactionCommittedEvent,
@@ -22,17 +22,20 @@ from mote.contracts.fileops.events import (
     HunkDetectedEvent,
     HunkReviewTransitionedEvent,
 )
-from mote.contracts.fileops.models import BlobRef, CreateMutation, DeleteMutation, HunkRecord, ReplaceMutation
-from mote.contracts.tools import parse_toolset_manifest
-from mote.runtime.disk import DiskWriter
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_WRITE_TTL_SECONDS
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
-from mote.runtime.logging import log_call
+from mote.contracts.file.errors import SnapshotDurabilityError
+from mote.contracts.file.mutations import CreateMutation, DeleteMutation, ReplaceMutation
+from mote.contracts.file.transactions import HunkRecord
+from mote.contracts.tool import parse_toolset_manifest
+from mote.runtime.artifacts import ArtifactRepositoryLayout
+from mote.runtime.fileops.mutation import ArtifactRepository
+from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_WRITE_TTL_SECONDS
+from mote.runtime.persistence import DiskWriter
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import ContextCompactedFact, MessageEvent, SessionEvent, SessionMetaEvent
 from mote.runtime.session.ids import new_session_id as mint_session_id
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
+from mote.runtime.telemetry.logging import log_call
 
 
 @log_call(level="DEBUG")
@@ -56,7 +59,7 @@ async def fork(
 
     result = replay(source)
     meta = result.meta or {}
-    toolset_manifest = meta["toolset_manifest"] if "toolset_manifest" in meta else None
+    toolset_manifest = meta["toolset_manifest"]
     await child.append(
         SessionMetaEvent(
             session_id=child_id,
@@ -65,8 +68,8 @@ async def fork(
             original_working_dir=(meta["original_working_dir"] if "original_working_dir" in meta else ""),
             project_root=meta["project_root"] if "project_root" in meta else "",
             model=meta["model"] if "model" in meta else None,
-            role_class=meta["role_class"] if "role_class" in meta else None,
-            toolset_manifest=(parse_toolset_manifest(toolset_manifest) if toolset_manifest is not None else None),
+            role_class=meta["role_class"],
+            toolset_manifest=parse_toolset_manifest(toolset_manifest),
         )
     )
     for message in result.transcript_messages:
@@ -88,12 +91,18 @@ async def fork(
 
 async def _inherit_file_history(source: SessionLog, child: SessionLog) -> None:
     """Copy committed transactions and review facts into the child."""
+    layout = ArtifactRepositoryLayout(source.workspace_root)
+    content_repository = layout.open(
+        layout.ownership(session_id=source.session_id, project_root=source.path.parent)
+    ).repository
     source_repository = ArtifactRepository(
-        source.path.parent / "blobs",
+        content_repository,
+        lifecycle_root=source.path.parent / "artifact-lifecycle",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )
     child_repository = ArtifactRepository(
-        child.path.parent / "blobs",
+        content_repository,
+        lifecycle_root=child.path.parent / "artifact-lifecycle",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )
     prepared: dict[str, FileTransactionPreparedEvent] = {}
@@ -211,8 +220,8 @@ async def _inherit_file_history(source: SessionLog, child: SessionLog) -> None:
             )
 
 
-def _mutation_refs(event: FileTransactionPreparedEvent) -> tuple[BlobRef, ...]:
-    refs: list[BlobRef] = []
+def _mutation_refs(event: FileTransactionPreparedEvent) -> tuple[ContentIdentity, ...]:
+    refs: list[ContentIdentity] = []
     for mutation in event.mutation_set.mutations:
         if isinstance(mutation, CreateMutation):
             refs.extend((mutation.after, mutation.metadata))
@@ -237,7 +246,7 @@ async def _append_with_artifacts(
     child_repository: ArtifactRepository,
     source_repository: ArtifactRepository,
     event: SessionEvent,
-    refs: Iterable[BlobRef | str],
+    refs: Iterable[ContentIdentity | str],
     *,
     owner: str,
 ) -> None:
@@ -263,13 +272,13 @@ async def _append_with_artifacts(
 
 def _resolve_unique_refs(
     repository: ArtifactRepository,
-    refs: Iterable[BlobRef | str],
-) -> tuple[BlobRef, ...]:
-    unique: dict[str, BlobRef] = {}
+    refs: Iterable[ContentIdentity | str],
+) -> tuple[ContentIdentity, ...]:
+    unique: dict[str, ContentIdentity] = {}
     for ref in refs:
-        digest = ref.digest if isinstance(ref, BlobRef) else ref
+        digest = ref.digest if isinstance(ref, ContentIdentity) else ref
         live = repository.resolve_live(digest)
-        if isinstance(ref, BlobRef) and live != ref:
+        if isinstance(ref, ContentIdentity) and live != ref:
             raise SnapshotDurabilityError(
                 "source artifact reference conflicts with its live object",
                 digest=ref.digest,

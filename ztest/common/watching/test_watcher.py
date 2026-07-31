@@ -13,11 +13,11 @@ import threading
 
 import pytest
 
-from mote.contracts.events.types import FileChangedEvent
-from mote.contracts.fileops.models import FileChangeKind, PresentVersion
-from mote.runtime.fileops.facade import FileOperations
+from mote.contracts.events.file.observation import FileChangedEvent
+from mote.contracts.file.identity import FileChangeKind, PresentVersion
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.watching.watcher import FileWatcher
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _collect():

@@ -10,7 +10,7 @@ Anthropic).
 """
 from __future__ import annotations
 
-from mote.contracts.schema import Message
+from mote.contracts.conversation import Message
 from mote.runtime.context.compaction.transcript import SegmentKind, Transcript
 
 from ..conftest import COMPACTABLE, make_pairs, text_msg, tool_call_msg, tool_pair, tool_result_msg
@@ -71,7 +71,7 @@ def test_retention_pin_makes_a_tool_group_pinned():
     # A tool result tagged RETENTION_PIN promotes its whole group to pinned, so
     # summarize / head-drop (which key off Segment.pinned) leave it verbatim —
     # the same protection a SYSTEM_ANCHOR gets, granted per-result via metadata.
-    from mote.contracts.constants.messages import RETENTION, RETENTION_PIN
+    from mote.contracts.conversation.fields import RETENTION, RETENTION_PIN
 
     call, result = tool_pair("id-0", "Read", "precious")
     result.add_metadata(RETENTION, RETENTION_PIN)

@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Generic, TypeVar
+from types import TracebackType
+from typing import Callable, Generic, Protocol, TypeVar
 
-from mote.runtime.logging import logger
 from mote.runtime.services import EngineServices
+from mote.runtime.telemetry.logging import logger
 
-AgentT = TypeVar("AgentT")
+
+class ClosableAgent(Protocol):
+    async def cleanup(self) -> None:
+        ...
+
+
+AgentT = TypeVar("AgentT", bound=ClosableAgent)
+RequestT = TypeVar("RequestT")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineAgentRequest:
+    name: str
+    session_id: str | None = None
+    agent_type: str | None = None
 
 
 class EngineState(str, Enum):
@@ -27,7 +43,7 @@ class EngineShutdownError(RuntimeError):
         super().__init__(f"Engine shutdown completed with {len(failures)} failure(s): {details}")
 
 
-class Engine(Generic[AgentT]):
+class Engine(Generic[RequestT, AgentT]):
     """Own one shared Context and every Agent minted from its composition root.
 
     Shutdown is cancellation-safe and idempotent: the first caller starts one
@@ -35,7 +51,12 @@ class Engine(Generic[AgentT]):
     individual waiter cannot cancel resource cleanup.
     """
 
-    def __init__(self, *, services: EngineServices, agent_factory: Callable[..., AgentT]) -> None:
+    def __init__(
+        self,
+        *,
+        services: EngineServices,
+        agent_factory: Callable[[RequestT], AgentT],
+    ) -> None:
         self.services = services
         self._agent_factory = agent_factory
         self._agents: dict[int, AgentT] = {}
@@ -51,14 +72,12 @@ class Engine(Generic[AgentT]):
     def state(self) -> EngineState:
         return self._state
 
-    def agent(self, **kwargs: Any) -> AgentT:
+    def agent(self, request: RequestT) -> AgentT:
         """Mint and register an Agent while the Engine is open."""
 
         if self._state is not EngineState.OPEN:
             raise RuntimeError(f"Engine is {self._state.value}; new Agents are not accepted.")
-        agent = self._agent_factory(**kwargs)
-        if agent is None:
-            return agent
+        agent = self._agent_factory(request)
         self._agents[id(agent)] = agent
         return agent
 
@@ -68,17 +87,20 @@ class Engine(Generic[AgentT]):
         async with self._ownership_lock:
             if id(agent) not in self._agents:
                 return
-            cleanup = getattr(agent, "cleanup", None)
-            if cleanup is not None:
-                await cleanup()
+            await agent.cleanup()
             self._agents.pop(id(agent), None)
 
-    async def __aenter__(self) -> "Engine[AgentT]":
+    async def __aenter__(self) -> "Engine[RequestT, AgentT]":
         if self._state is not EngineState.OPEN:
             raise RuntimeError(f"Engine cannot be entered while {self._state.value}.")
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool:
         if exc is None:
             await self.aclose()
         else:
@@ -103,11 +125,8 @@ class Engine(Generic[AgentT]):
         async with self._ownership_lock:
             failed_agents: dict[int, AgentT] = {}
             for agent in reversed(self._agents.values()):
-                cleanup = getattr(agent, "cleanup", None)
-                if cleanup is None:
-                    continue
                 try:
-                    await cleanup()
+                    await agent.cleanup()
                 except Exception as exc:  # retain failed owners for a later retry
                     failed_agents[id(agent)] = agent
                     failures.append(exc)
@@ -122,4 +141,10 @@ class Engine(Generic[AgentT]):
         self._state = EngineState.CLOSED
 
 
-__all__ = ["Engine", "EngineShutdownError", "EngineState"]
+__all__ = [
+    "ClosableAgent",
+    "Engine",
+    "EngineAgentRequest",
+    "EngineShutdownError",
+    "EngineState",
+]

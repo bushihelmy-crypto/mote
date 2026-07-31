@@ -23,14 +23,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from mote.contracts.constants.messages import TOOL_CALL_ID
-from mote.contracts.schema import AIMessage, ToolMessage, UserMessage
+from mote.contracts.conversation import AIMessage, ToolMessage, UserMessage
+from mote.contracts.conversation.fields import TOOL_CALL_ID
 from mote.runtime.session.reconcile import reconcile_tool_calls
 
 
 @dataclass
 class _Rec:
-    """Duck-typed EffectRecord slice the reconciler reads.
+    """Duck-typed StepRecord slice the reconciler reads.
 
     ``effect`` defaults to EXTERNAL — the only class the ledger historically
     recorded — so a ``started`` record with no explicit effect is still flagged
@@ -38,7 +38,7 @@ class _Rec:
     """
 
     status: str
-    result: Optional[str] = None
+    payload: Optional[str] = None
     effect: str = "external"
 
 
@@ -49,7 +49,7 @@ class _FakeLedger:
         self._records = records or {}
         self.reaped: set = set()
 
-    def status(self, tool_call_id: str):
+    def replay(self, tool_call_id: str):
         return self._records.get(tool_call_id)
 
     def reap(self, ids) -> None:
@@ -65,7 +65,7 @@ def _tool_id(m) -> Optional[str]:
 
 
 def test_completed_dangling_is_healed_from_ledger():
-    ledger = _FakeLedger({"t1": _Rec(status="completed", result="the real output")})
+    ledger = _FakeLedger({"t1": _Rec(status="completed", payload="the real output")})
     msgs = [_assistant("t1")]  # dangling: no tool_result present
 
     out = reconcile_tool_calls(msgs, ledger)
@@ -85,7 +85,7 @@ def test_completed_dangling_is_healed_from_ledger():
 
 
 def test_failed_dangling_heals_from_recorded_error():
-    ledger = _FakeLedger({"t1": _Rec(status="failed", result="boom trace")})
+    ledger = _FakeLedger({"t1": _Rec(status="failed", payload="boom trace")})
     out = reconcile_tool_calls([_assistant("t1")], ledger)
     assert out.messages[1].content == "boom trace"
     assert out.healed == 1
@@ -143,7 +143,7 @@ def test_started_unknown_effect_fails_closed_to_unknown():
 def test_completed_local_heals_verbatim():
     # A completed LOCAL step heals from its recorded result (no re-run of the
     # possibly-expensive local write) — status terminal wins over effect.
-    ledger = _FakeLedger({"t1": _Rec(status="completed", result="wrote 3 files", effect="local")})
+    ledger = _FakeLedger({"t1": _Rec(status="completed", payload="wrote 3 files", effect="local")})
     out = reconcile_tool_calls([_assistant("t1", name="Write")], ledger)
     assert out.messages[1].content == "wrote 3 files"
     assert out.healed == 1
@@ -165,7 +165,7 @@ def test_no_ledger_record_is_safe_replay():
 def test_already_paired_call_is_untouched():
     # The result is present in history -> not dangling -> no injection, but a
     # ledger record still marks the id resolved so it gets reaped.
-    ledger = _FakeLedger({"t1": _Rec(status="completed", result="x")})
+    ledger = _FakeLedger({"t1": _Rec(status="completed", payload="x")})
     msgs = [_assistant("t1"), ToolMessage(content="already here", tool_call_id="t1")]
 
     out = reconcile_tool_calls(msgs, ledger)
@@ -214,7 +214,7 @@ def test_plain_history_without_tool_calls_is_a_noop():
 def test_synthetic_result_precedes_later_messages():
     # The synthetic result is spliced immediately after its owning assistant
     # message, keeping provider pairing order even when more turns follow.
-    ledger = _FakeLedger({"t1": _Rec(status="completed", result="R")})
+    ledger = _FakeLedger({"t1": _Rec(status="completed", payload="R")})
     msgs = [_assistant("t1"), UserMessage(content="next turn")]
 
     out = reconcile_tool_calls(msgs, ledger)
@@ -273,8 +273,8 @@ def test_manager_reconciles_and_reaps_when_ledger_present():
     # the manager reconciles AND reaps only the durable-result record.
     ledger = _FakeLedger(
         {
-            "t1": _Rec(status="completed", result="healed"),
-            "t2": _Rec(status="completed", result="stale"),
+            "t1": _Rec(status="completed", payload="healed"),
+            "t2": _Rec(status="completed", payload="stale"),
         }
     )
     mgr = RoleSessionManager(_FakeRole(ledger))  # type: ignore[arg-type]
@@ -318,21 +318,21 @@ def test_manager_no_reap_when_nothing_resolved():
 
 
 # ---------------------------------------------------------------------------
-# Real EffectLedger — the structural LedgerView protocol matches the real class
+# Real RunJournal integration
 # ---------------------------------------------------------------------------
 
 
 def test_real_ledger_heals_dangling_but_keeps_record(tmp_path):
-    # Prove reconcile composes with the REAL EffectLedger (not the fake): a
+    # Prove reconcile composes with the real RunJournal:
     # completed record on disk heals a dangling call, but the record is KEPT
     # (result not yet in the rollout) so a later resume can re-heal it.
-    from mote.runtime.tools.effect_ledger import EffectLedger
-    from mote.runtime.workspace import WorkspaceStore
+    from mote.runtime.ledger import KIND_TOOL, RunJournal
+    from mote.runtime.session.workspace import SessionWorkspace
 
-    store = WorkspaceStore(root=str(tmp_path))
-    ledger = EffectLedger("sess_real", store=store)
-    ledger.mark_started("t1", "Curl")
-    ledger.mark_completed("t1", "Curl", result="real network output")
+    store = SessionWorkspace(root=str(tmp_path))
+    ledger = RunJournal("sess_real", store=store)
+    ledger.record_started("t1", KIND_TOOL, "external", name="Curl", tool_call_id="t1")
+    ledger.record_completed("t1", payload="real network output")
 
     out = reconcile_tool_calls([_assistant("t1", name="Curl")], ledger)
 
@@ -341,35 +341,35 @@ def test_real_ledger_heals_dangling_but_keeps_record(tmp_path):
     # Dangling heal -> not reaped; a fresh ledger still sees the record.
     assert out.resolved_ids == set()
     ledger.reap(out.resolved_ids)  # no-op
-    assert EffectLedger("sess_real", store=store).status("t1") is not None
+    assert RunJournal("sess_real", store=store).replay("t1") is not None
 
 
 def test_real_ledger_reaps_paired_stale_record(tmp_path):
     # The reap path with the real ledger: a call already paired in the rollout
     # has a stale record -> reconcile marks it resolved and reap() clears it.
-    from mote.runtime.tools.effect_ledger import EffectLedger
-    from mote.runtime.workspace import WorkspaceStore
+    from mote.runtime.ledger import KIND_TOOL, RunJournal
+    from mote.runtime.session.workspace import SessionWorkspace
 
-    store = WorkspaceStore(root=str(tmp_path))
-    ledger = EffectLedger("sess_paired", store=store)
-    ledger.mark_started("t1", "Curl")
-    ledger.mark_completed("t1", "Curl", result="real network output")
+    store = SessionWorkspace(root=str(tmp_path))
+    ledger = RunJournal("sess_paired", store=store)
+    ledger.record_started("t1", KIND_TOOL, "external", name="Curl", tool_call_id="t1")
+    ledger.record_completed("t1", payload="real network output")
 
     msgs = [_assistant("t1", name="Curl"), ToolMessage(content="paired", tool_call_id="t1")]
     out = reconcile_tool_calls(msgs, ledger)
 
     assert out.resolved_ids == {"t1"}
     ledger.reap(out.resolved_ids)
-    assert EffectLedger("sess_paired", store=store).status("t1") is None
+    assert RunJournal("sess_paired", store=store).replay("t1") is None
 
 
 def test_real_ledger_started_no_key_flags_unknown(tmp_path):
-    from mote.runtime.tools.effect_ledger import EffectLedger
-    from mote.runtime.workspace import WorkspaceStore
+    from mote.runtime.ledger import KIND_TOOL, RunJournal
+    from mote.runtime.session.workspace import SessionWorkspace
 
-    store = WorkspaceStore(root=str(tmp_path))
-    ledger = EffectLedger("sess_started", store=store)
-    ledger.mark_started("t1", "Curl")  # crash before terminal -> stays 'started'
+    store = SessionWorkspace(root=str(tmp_path))
+    ledger = RunJournal("sess_started", store=store)
+    ledger.record_started("t1", KIND_TOOL, "external", name="Curl", tool_call_id="t1")
 
     out = reconcile_tool_calls([_assistant("t1", name="Curl")], ledger)
 
@@ -382,15 +382,15 @@ def test_real_ledger_started_no_key_flags_unknown(tmp_path):
 def test_real_ledger_started_local_is_safe_replay(tmp_path):
     # The real ledger persists ``effect`` — a started LOCAL record survives a
     # rebuild and reconcile reads it back as replay-safe (not unknown).
-    from mote.runtime.tools.effect_ledger import EffectLedger
-    from mote.runtime.workspace import WorkspaceStore
+    from mote.runtime.ledger import KIND_TOOL, RunJournal
+    from mote.runtime.session.workspace import SessionWorkspace
 
-    store = WorkspaceStore(root=str(tmp_path))
-    ledger = EffectLedger("sess_local", store=store)
-    ledger.mark_started("t1", "Write", effect="local")
+    store = SessionWorkspace(root=str(tmp_path))
+    ledger = RunJournal("sess_local", store=store)
+    ledger.record_started("t1", KIND_TOOL, "local", name="Write", tool_call_id="t1")
 
     # Rebuild in a fresh instance (post-crash) then reconcile.
-    rebuilt = EffectLedger("sess_local", store=store)
+    rebuilt = RunJournal("sess_local", store=store)
     out = reconcile_tool_calls([_assistant("t1", name="Write")], rebuilt)
 
     assert "<not-executed>" in out.messages[1].content

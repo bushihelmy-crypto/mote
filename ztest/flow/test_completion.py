@@ -1,8 +1,8 @@
 import pytest
 
-from mote.contracts.completion import CompletionKind
-from mote.contracts.model_actions import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
-from mote.kernel.flow.services.completion import TextCompletionPolicy
+from mote.contracts.model.turn import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
+from mote.contracts.output.completion import CompletionKind
+from mote.kernel.execution.operations.completion import TextCompletionPolicy
 
 pytestmark = pytest.mark.asyncio
 

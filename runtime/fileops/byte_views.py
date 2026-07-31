@@ -4,19 +4,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.fileops.errors import FileReadRangeError, ReadCursorError
-from mote.contracts.fileops.models import (
-    BlobRef,
-    ByteViewMode,
-    FileByteView,
-    FileSnapshot,
-    ReadCursorKind,
-    ReadViewStatus,
-)
-from mote.contracts.fileops.serialization import snapshot_from_dict, snapshot_to_dict
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import snapshot_from_dict, snapshot_to_dict
+from mote.contracts.file.errors import FileReadRangeError, ReadCursorError
+from mote.contracts.file.identity import FileSnapshot
+from mote.contracts.file.views import ByteViewMode, FileByteView, ReadCursorKind, ReadViewStatus
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 from mote.runtime.fileops.read_cursors import OpenReadCursor, ReadCursorStore
 
 _DEFAULT_RAW_BYTES = 4 * 1_024
@@ -124,7 +119,7 @@ class ByteViewService:
         path: str,
         mode: ByteViewMode,
         opened: OpenReadCursor,
-    ) -> tuple[FileSnapshot, BlobRef, int]:
+    ) -> tuple[FileSnapshot, ContentIdentity, int]:
         try:
             if opened.kind != self._kind(mode):
                 raise ValueError("cursor byte mode does not match the request")

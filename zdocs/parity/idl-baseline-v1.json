@@ -1,0 +1,11 @@
+{
+  "artifacts": {
+    "zdocs/parity/api/admin-v1.openapi.yaml": "sha256:a2981de113621959ef5aded73c937c659d1c5f0f0ea2a928d3681f040d15b9b3",
+    "zdocs/parity/api/inference-v1.openapi.yaml": "sha256:7f661ed2503340de81824685dcab9e196c9f87dd0c8e7c9537a7c7e284e3b11f",
+    "zdocs/parity/api/realtime-webhook-v1.asyncapi.yaml": "sha256:76174081e4d2e52dca2f0d0d2cd67055bd5241b0ca14df9cfbe49db0966c1d0e",
+    "zdocs/parity/rpc/gateway-v1.proto": "sha256:945743854e2e7aa8c659d23586b2a14a73c5b7c9015802d9d115b0cb6cf13c47"
+  },
+  "compatibility_policy": "exact_until_versioned_change_request",
+  "revision": "idl-baseline-v1",
+  "schema_version": 1
+}

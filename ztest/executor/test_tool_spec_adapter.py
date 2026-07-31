@@ -181,41 +181,32 @@ class TestJsonSchemaTransformer:
 
     def test_no_model_is_identity(self):
         # model=None → no transformer resolved → wire shape unchanged.
-        specs = to_native_tool_specs(self._schemas(), provider="anthropic", model=None)
+        specs = to_native_tool_specs(self._schemas(), provider="anthropic")
         assert specs[0]["input_schema"] == {"type": "object", "properties": {"x": {"type": "string"}}}
 
     def test_model_without_transformer_is_identity(self):
-        specs = to_native_tool_specs(self._schemas(), provider="anthropic", model="claude-opus-4-8")
+        specs = to_native_tool_specs(self._schemas(), provider="anthropic")
         assert specs[0]["input_schema"] == {"type": "object", "properties": {"x": {"type": "string"}}}
 
     def test_transformer_applied_before_envelope(self, monkeypatch):
-        from mote.contracts.models import profile as model_profile
-
         def _strip_additional(schema: dict) -> dict:
             out = {k: v for k, v in schema.items()}
             out["additionalProperties"] = False
             return out
 
-        fragment = model_profile.ModelProfile(json_schema_transformer=_strip_additional)
-        monkeypatch.setattr(
-            model_profile,
-            "_PROFILE_REGISTRY",
-            [*model_profile._PROFILE_REGISTRY, ("quirkmodel", fragment)],
+        specs = to_native_tool_specs(
+            self._schemas(),
+            provider="anthropic",
+            schema_transformer=_strip_additional,
         )
-
-        specs = to_native_tool_specs(self._schemas(), provider="anthropic", model="quirkmodel-1")
         # Transformer ran, and its output landed inside the anthropic envelope.
         assert specs[0]["input_schema"]["additionalProperties"] is False
         assert specs[0]["input_schema"]["properties"] == {"x": {"type": "string"}}
 
     def test_transformer_applied_for_openai_envelope(self, monkeypatch):
-        from mote.contracts.models import profile as model_profile
-
-        fragment = model_profile.ModelProfile(json_schema_transformer=lambda s: {**s, "marked": True})
-        monkeypatch.setattr(
-            model_profile,
-            "_PROFILE_REGISTRY",
-            [*model_profile._PROFILE_REGISTRY, ("quirkmodel", fragment)],
+        specs = to_native_tool_specs(
+            self._schemas(),
+            provider="openai",
+            schema_transformer=lambda schema: {**schema, "marked": True},
         )
-        specs = to_native_tool_specs(self._schemas(), provider="openai", model="quirkmodel-1")
         assert specs[0]["function"]["parameters"]["marked"] is True

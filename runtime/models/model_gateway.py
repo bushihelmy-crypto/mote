@@ -6,18 +6,21 @@ import asyncio
 import hashlib
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from mote.contracts.artifacts import ArtifactResolutionPolicy, ResolvedArtifact
-from mote.contracts.errors.base import MoteError
-from mote.contracts.errors.models import (
+from mote.contracts.artifact import ArtifactResolutionPolicy, ResolvedArtifact
+from mote.contracts.foundation.errors.base import MoteError
+from mote.contracts.inference.attempt import InferenceAttemptRequest
+from mote.contracts.inference.deadline import CrossProcessDeadline
+from mote.contracts.model.endpoint_binding import ResolvedEndpointBinding
+from mote.contracts.model.errors import (
     ModelCallDeadlineExceededError,
     ModelCallExhaustedError,
     ModelCallInDoubtError,
     ModelRouteUnavailableError,
 )
-from mote.contracts.models.failover import (
+from mote.contracts.model.failover import (
     AttemptState,
     AttemptSummary,
     DecisionKind,
@@ -34,14 +37,14 @@ from mote.contracts.models.failover import (
     ResourceIdentity,
     Retryability,
 )
-from mote.contracts.models.invocation import (
+from mote.contracts.model.invocation import (
     CanonicalModelResponse,
     ImageDescriptionInput,
     ModelInvocation,
     ModelUsage,
     ResolvedModelResponse,
 )
-from mote.contracts.models.model_journal import (
+from mote.contracts.model.model_journal import (
     ModelAttemptFinishedRecord,
     ModelAttemptStartedRecord,
     ModelCallFinishedRecord,
@@ -50,11 +53,11 @@ from mote.contracts.models.model_journal import (
     ModelCallRecovery,
     ModelDecisionRecord,
 )
-from mote.contracts.ports.artifact_store import ArtifactResolver
-from mote.contracts.ports.model_call_journal import ModelCallJournal
-from mote.contracts.ports.model_endpoint import ModelEndpointAdapter, ModelEndpointResolver
-from mote.contracts.ports.model_request_transformer import ModelRequestTransformer
-from mote.contracts.ports.session_facts import SessionFactSink
+from mote.contracts.model.topology_codec import encode_route_id
+from mote.contracts.ports.artifact.store import ArtifactResolver
+from mote.contracts.ports.model.call_journal import ModelCallJournal
+from mote.contracts.ports.model.request_transformer import ModelRequestTransformer
+from mote.contracts.ports.session.facts import SessionFactSink
 from mote.runtime.events import (
     ModelAttemptAdmissionRejectedEvent,
     ModelAttemptFinishedEvent,
@@ -72,20 +75,22 @@ from mote.runtime.events.stream import (
     interrupt_attempt_stream,
 )
 from mote.runtime.models.cost import CostTracker, TokenUsage
-from mote.runtime.models.failover.admission import AdmissionRejectedError, AdmissionResult, ResourceAdmissionController
 from mote.runtime.models.failover.model_journal import ModelCallJournalError
 from mote.runtime.models.failover.orchestrator import AttemptOrchestrator, AttemptResumeSeed
 from mote.runtime.models.failover.planner import FailoverPlanner
-from mote.runtime.models.failover.policy import classify_failure
-from mote.runtime.models.failover.runtime_state import AtomicModelRuntime, ModelRuntimeGeneration
+from mote.runtime.models.failover.runtime_state import ModelRuntimeGeneration
+from mote.runtime.models.inference_attempt_executor import RuntimeAttemptFailure
+from mote.runtime.resilience.admission import AdmissionRejectedError, AdmissionResult, ResourceAdmissionController
+from mote.runtime.resilience.failover.classification import classify_failure
 
 
 @dataclass(frozen=True)
 class _AttemptTarget:
     endpoint: EndpointDescriptor
     credential_slot_id: str
-    adapter: ModelEndpointAdapter
+    tenant_fingerprint: str
     resource: ResourceIdentity
+    binding: ResolvedEndpointBinding
 
 
 @dataclass
@@ -117,85 +122,60 @@ class RuntimeModelGateway:
     def __init__(
         self,
         planner: FailoverPlanner,
-        endpoint_resolver: ModelEndpointResolver,
         cost_tracker: CostTracker | None = None,
         admission_controller: ResourceAdmissionController | None = None,
         model_call_journal: ModelCallJournal | None = None,
     ) -> None:
-        self._runtime = AtomicModelRuntime(planner, endpoint_resolver)
         self._cost_tracker = cost_tracker
         self._admission_controller = admission_controller or ResourceAdmissionController()
         self._model_call_journal = model_call_journal
 
-    def supports_route(self, route_id: str) -> bool:
-        return self._runtime.current.planner.snapshot.group_for_route(route_id) is not None
-
-    def route_profile(self, route_id: str) -> EndpointDescriptor | None:
-        snapshot = self._runtime.current.planner.snapshot
-        group = snapshot.group_for_route(route_id)
-        if group is None or not group.endpoint_ids:
-            return None
-        return snapshot.endpoint(group.endpoint_ids[0])
-
-    def route_profiles(self, route_id: str) -> tuple[EndpointDescriptor, ...]:
-        snapshot = self._runtime.current.planner.snapshot
-        group = snapshot.group_for_route(route_id)
-        if group is None:
-            group = snapshot.group(route_id)
-        if group is None:
-            return ()
-        return tuple(
-            endpoint for endpoint_id in group.endpoint_ids if (endpoint := snapshot.endpoint(endpoint_id)) is not None
-        )
-
-    async def reload(
+    async def execute_generation(
         self,
-        planner: FailoverPlanner,
-        endpoint_resolver: ModelEndpointResolver,
-    ) -> str:
-        """Atomically activate a new generation and drain the previous resolver."""
-
-        return await self._runtime.activate(planner, endpoint_resolver)
-
-    async def execute(
-        self,
+        generation: ModelRuntimeGeneration,
         invocation: ModelInvocation,
         *,
         request_transformer: ModelRequestTransformer | None = None,
         stream: bool = False,
         session_fact_sink: SessionFactSink | None = None,
         artifact_resolver: ArtifactResolver | None = None,
+        runtime_generation_id: str,
     ) -> ResolvedModelResponse:
-        lease = self._runtime.acquire()
-        try:
-            plan = lease.generation.planner.plan(invocation)
-            state = _CallExecutionState()
-            await self._append_record(
-                state,
-                self._plan_record(invocation, plan, generation=0),
-            )
-            return await self._run_generation(
+        plan = generation.planner.plan(invocation)
+        state = _CallExecutionState()
+        await self._append_record(
+            state,
+            self._plan_record(
                 invocation,
                 plan,
-                state,
-                runtime_generation=lease.generation,
-                request_transformer=request_transformer,
-                stream=stream,
-                session_fact_sink=session_fact_sink,
-                resume_seed=None,
-                artifact_resolver=artifact_resolver,
-            )
-        finally:
-            await lease.release()
+                generation=0,
+                runtime_generation_id=runtime_generation_id,
+                topology_revision=generation.revision,
+            ),
+        )
+        return await self._run_generation(
+            invocation,
+            plan,
+            state,
+            runtime_generation=generation,
+            request_transformer=request_transformer,
+            stream=stream,
+            session_fact_sink=session_fact_sink,
+            resume_seed=None,
+            artifact_resolver=artifact_resolver,
+            runtime_generation_id=runtime_generation_id,
+        )
 
-    async def resume(
+    async def resume_generation(
         self,
+        generation: ModelRuntimeGeneration,
         invocation: ModelInvocation,
         *,
         request_transformer: ModelRequestTransformer | None = None,
         stream: bool = False,
         session_fact_sink: SessionFactSink | None = None,
         artifact_resolver: ArtifactResolver | None = None,
+        runtime_generation_id: str,
     ) -> ResolvedModelResponse:
         if self._model_call_journal is None:
             raise ModelCallInDoubtError(
@@ -203,69 +183,70 @@ class RuntimeModelGateway:
                 model_call_id=invocation.model_call_id,
             )
         if not self._model_call_journal.records(invocation.model_call_id):
-            return await self.execute(
+            return await self.execute_generation(
+                generation,
                 invocation,
                 request_transformer=request_transformer,
                 stream=stream,
                 session_fact_sink=session_fact_sink,
                 artifact_resolver=artifact_resolver,
+                runtime_generation_id=runtime_generation_id,
             )
-        lease = self._runtime.acquire()
-        try:
-            recovery = self._model_call_journal.recover(invocation.model_call_id)
-            if recovery.state is ModelCallState.SUCCEEDED:
-                return self._reinstate(recovery)
-            if recovery.terminal is not None:
-                raise ModelCallInDoubtError(
-                    "terminal model call cannot start another resume generation",
-                    model_call_id=invocation.model_call_id,
-                    state=recovery.state.value,
-                )
+        recovery = self._model_call_journal.recover(invocation.model_call_id)
+        if recovery.state is ModelCallState.SUCCEEDED:
+            return self._reinstate(recovery)
+        if recovery.terminal is not None:
+            raise ModelCallInDoubtError(
+                "terminal model call cannot start another resume generation",
+                model_call_id=invocation.model_call_id,
+                state=recovery.state.value,
+            )
 
-            state = _CallExecutionState(
-                wire_attempts=recovery.attempts_started,
-                resume_generation=recovery.plan.resume_generation + 1,
-                records=list(self._model_call_journal.records(invocation.model_call_id)),
-            )
-            finished_ids = {record.attempt_id for record in recovery.attempt_finishes}
-            for start in recovery.attempt_starts:
-                if start.attempt_id in finished_ids:
-                    continue
-                await self._append_record(
-                    state,
-                    ModelAttemptFinishedRecord(
-                        model_call_id=invocation.model_call_id,
-                        attempt_id=start.attempt_id,
-                        ordinal=start.ordinal,
-                        resume_generation=start.resume_generation,
-                        state=AttemptState.IN_DOUBT,
-                    ),
-                )
-            recovery = self._model_call_journal.recover(invocation.model_call_id)
-            candidate = lease.generation.planner.plan(invocation)
-            plan, seed = self._resume_plan(candidate, recovery)
+        state = _CallExecutionState(
+            wire_attempts=recovery.attempts_started,
+            resume_generation=recovery.plan.resume_generation + 1,
+            records=list(self._model_call_journal.records(invocation.model_call_id)),
+        )
+        finished_ids = {record.attempt_id for record in recovery.attempt_finishes}
+        for start in recovery.attempt_starts:
+            if start.attempt_id in finished_ids:
+                continue
             await self._append_record(
                 state,
-                self._plan_record(
-                    invocation,
-                    plan,
-                    generation=state.resume_generation,
-                    root_started_at=recovery.original_plan.root_started_at or recovery.original_plan.occurred_at,
+                ModelAttemptFinishedRecord(
+                    model_call_id=invocation.model_call_id,
+                    attempt_id=start.attempt_id,
+                    ordinal=start.ordinal,
+                    resume_generation=start.resume_generation,
+                    state=AttemptState.IN_DOUBT,
                 ),
             )
-            return await self._run_generation(
+        recovery = self._model_call_journal.recover(invocation.model_call_id)
+        candidate = generation.planner.plan(invocation)
+        plan, seed = self._resume_plan(candidate, recovery)
+        await self._append_record(
+            state,
+            self._plan_record(
                 invocation,
                 plan,
-                state,
-                runtime_generation=lease.generation,
-                request_transformer=request_transformer,
-                stream=stream,
-                session_fact_sink=session_fact_sink,
-                resume_seed=seed,
-                artifact_resolver=artifact_resolver,
-            )
-        finally:
-            await lease.release()
+                generation=state.resume_generation,
+                root_started_at=recovery.original_plan.root_started_at or recovery.original_plan.occurred_at,
+                runtime_generation_id=runtime_generation_id,
+                topology_revision=generation.revision,
+            ),
+        )
+        return await self._run_generation(
+            invocation,
+            plan,
+            state,
+            runtime_generation=generation,
+            request_transformer=request_transformer,
+            stream=stream,
+            session_fact_sink=session_fact_sink,
+            resume_seed=seed,
+            artifact_resolver=artifact_resolver,
+            runtime_generation_id=runtime_generation_id,
+        )
 
     async def _run_generation(
         self,
@@ -279,8 +260,8 @@ class RuntimeModelGateway:
         session_fact_sink: SessionFactSink | None,
         resume_seed: AttemptResumeSeed | None,
         artifact_resolver: ArtifactResolver | None,
+        runtime_generation_id: str,
     ) -> ResolvedModelResponse:
-        resolved_adapters: list[ModelEndpointAdapter] = []
         call_terminal = False
 
         async def commit_terminal(record: ModelCallFinishedRecord) -> None:
@@ -294,13 +275,18 @@ class RuntimeModelGateway:
                 raise
             call_terminal = True
 
-        self._observe_planned(invocation, plan, execution_state.resume_generation)
+        self._observe_planned(
+            invocation,
+            plan,
+            execution_state.resume_generation,
+            runtime_generation_id=runtime_generation_id,
+            topology_revision=runtime_generation.revision,
+        )
         try:
             result = await self._execute_unclosed(
                 invocation,
                 plan,
                 execution_state,
-                resolved_adapters,
                 request_transformer,
                 stream,
                 resume_seed,
@@ -374,15 +360,12 @@ class RuntimeModelGateway:
                     exc.context["summary"] = summary.model_dump(mode="json")
                 await self._publish_finished(terminal, session_fact_sink)
             raise
-        finally:
-            await self._close_adapters(resolved_adapters)
 
     async def _execute_unclosed(
         self,
         invocation: ModelInvocation,
         plan: FailoverPlan,
         execution_state: _CallExecutionState,
-        resolved_adapters: list[ModelEndpointAdapter],
         request_transformer: ModelRequestTransformer | None,
         stream: bool,
         resume_seed: AttemptResumeSeed | None,
@@ -402,7 +385,6 @@ class RuntimeModelGateway:
         )
         targets = self._resolve_targets(
             plan.endpoints,
-            resolved_adapters,
             runtime_generation=runtime_generation,
         )
         primary = targets[plan.endpoints[0].endpoint_id][0]
@@ -470,17 +452,52 @@ class RuntimeModelGateway:
                     attempt_id=attempt_id,
                 ) as stream_buffer:
                     async with asyncio.timeout(timeout_seconds):
-                        kwargs = {
-                            "timeout_seconds": timeout_seconds,
-                            "stream": stream,
-                        }
-                        if resolved_artifact is not None:
-                            kwargs["artifact"] = resolved_artifact
-                        response = await target.adapter.execute_once(
-                            current_invocation,
-                            target.endpoint,
-                            **kwargs,
+                        attempt_executor = runtime_generation.attempt_executor
+                        principal = runtime_generation.principal
+                        scheduling = runtime_generation.scheduling
+                        if (
+                            attempt_executor is None
+                            or principal is None
+                            or scheduling is None
+                            or not runtime_generation.generation_id
+                            or not runtime_generation.generation_artifact_digest
+                        ):
+                            raise RuntimeError("model runtime generation is not executable")
+                        now = datetime.now(timezone.utc)
+                        request = InferenceAttemptRequest(
+                            model_call_id=invocation.model_call_id,
+                            owner_journal_id=invocation.model_call_id,
+                            attempt_id=attempt_id,
+                            generation_id=runtime_generation.generation_id,
+                            generation_artifact_digest=(runtime_generation.generation_artifact_digest),
+                            endpoint=target.endpoint,
+                            credential_slot_id=target.credential_slot_id,
+                            credential_version=target.binding.credential_version,
+                            invocation=current_invocation.model_dump(mode="json"),
+                            deadline=CrossProcessDeadline(
+                                deadline_utc=now + timedelta(seconds=timeout_seconds),
+                                remaining_seconds_at_send=timeout_seconds,
+                                sent_at_utc=now,
+                            ),
+                            stream=stream,
+                            artifact_reference=(
+                                resolved_artifact.ref.content_ref if resolved_artifact is not None else None
+                            ),
+                            principal=principal,
+                            scheduling=scheduling,
                         )
+
+                        async def append_authorization(record):
+                            await self._append_record(execution_state, record)
+
+                        runtime_result = await attempt_executor.execute(
+                            request,
+                            ordinal=ordinal,
+                            resume_generation=execution_state.resume_generation,
+                            issued_journal_revision=len(execution_state.records) + 1,
+                            append_authorization=append_authorization,
+                        )
+                        response = runtime_result.response
                 if response.quota is not None:
                     self._admission_controller.observe_quota(
                         target.resource,
@@ -497,8 +514,8 @@ class RuntimeModelGateway:
                     raise _ClassifiedEndpointFailure(
                         FailureDisposition(
                             reason=FailureReason.PROTOCOL_INCOMPATIBLE,
-                            domain=FailureDomain.RESPONSE,
-                            retryability=Retryability.AFTER_CHANGE,
+                            domain=FailureDomain.PROTOCOL,
+                            retryability=Retryability.NEW_ATTEMPT,
                             health_verdict=HealthVerdict.NEUTRAL,
                             provider_code="OUTPUT_KIND_MISMATCH",
                         ),
@@ -538,8 +555,16 @@ class RuntimeModelGateway:
                 await self._append_record(execution_state, finished)
                 await self._observe_attempt_finished(invocation, target, finished, started_at)
                 raise
-            except Exception as exc:  # noqa: BLE001 — adapter classification boundary
-                disposition = target.adapter.classify(exc)
+            except Exception as exc:  # noqa: BLE001 — transport classification boundary
+                if isinstance(exc, RuntimeAttemptFailure):
+                    raw_disposition = exc.terminal.payload.get("disposition")
+                    disposition = (
+                        FailureDisposition.model_validate(raw_disposition)
+                        if isinstance(raw_disposition, dict)
+                        else self._classify(exc)
+                    )
+                else:
+                    disposition = self._classify(exc)
                 discard_attempt_stream(
                     stream_buffer,
                     model_call_id=invocation.model_call_id,
@@ -741,6 +766,7 @@ class RuntimeModelGateway:
                 ),
                 target.endpoint.model,
                 float(response.cost_usd),
+                context_window=target.endpoint.capabilities.context_tokens,
             )
         return ResolvedModelResponse(
             output=response.output,
@@ -749,7 +775,7 @@ class RuntimeModelGateway:
             endpoint_id=target.endpoint.endpoint_id,
             endpoint_fingerprint=self._endpoint_fingerprint(target.endpoint),
             model_or_deployment=target.endpoint.model,
-            tenant_fingerprint=target.adapter.tenant_fingerprint,
+            tenant_fingerprint=target.tenant_fingerprint,
             credential_slot_id=target.credential_slot_id,
             provider=target.endpoint.provider,
             transport=target.endpoint.transport,
@@ -760,7 +786,6 @@ class RuntimeModelGateway:
     def _resolve_targets(
         self,
         endpoints: tuple[EndpointDescriptor, ...],
-        resolved_adapters: list[ModelEndpointAdapter] | None = None,
         *,
         runtime_generation: ModelRuntimeGeneration,
     ) -> dict[str, tuple[_AttemptTarget, ...]]:
@@ -776,23 +801,26 @@ class RuntimeModelGateway:
                 )
             pool: list[_AttemptTarget] = []
             for slot_id in slot_ids:
-                adapter = runtime_generation.endpoint_resolver.resolve(endpoint, slot_id)
-                if adapter is None:
+                if runtime_generation.binding_resolver is None:
                     raise ModelRouteUnavailableError(
-                        f"endpoint {endpoint.endpoint_id!r} slot {slot_id!r} has no adapter",
+                        "model runtime generation has no binding resolver",
+                        endpoint_id=endpoint.endpoint_id,
+                        config_revision=snapshot.revision,
+                    )
+                binding = runtime_generation.binding_resolver.resolve(endpoint, slot_id)
+                if binding is None:
+                    raise ModelRouteUnavailableError(
+                        f"endpoint {endpoint.endpoint_id!r} slot {slot_id!r} has no binding",
                         endpoint_id=endpoint.endpoint_id,
                         credential_slot_id=slot_id,
                         config_revision=snapshot.revision,
                     )
-                if resolved_adapters is not None:
-                    resolved_adapters.append(adapter)
-                if (
-                    adapter.endpoint_id != endpoint.endpoint_id
-                    or adapter.credential_slot_id != slot_id
-                    or not adapter.tenant_fingerprint
-                ):
+                resolved_endpoint = binding.endpoint.endpoint_id
+                resolved_slot = binding.credential_slot_id
+                tenant_fingerprint = binding.tenant_fingerprint
+                if resolved_endpoint != endpoint.endpoint_id or resolved_slot != slot_id or not tenant_fingerprint:
                     raise ModelRouteUnavailableError(
-                        "resolved adapter identity does not match endpoint binding",
+                        "resolved endpoint identity does not match endpoint binding",
                         endpoint_id=endpoint.endpoint_id,
                         credential_slot_id=slot_id,
                         config_revision=snapshot.revision,
@@ -801,13 +829,14 @@ class RuntimeModelGateway:
                     _AttemptTarget(
                         endpoint=endpoint,
                         credential_slot_id=slot_id,
-                        adapter=adapter,
+                        tenant_fingerprint=tenant_fingerprint,
+                        binding=binding,
                         resource=ResourceIdentity(
                             endpoint_id=endpoint.endpoint_id,
                             transport=endpoint.transport,
                             endpoint_fingerprint=self._endpoint_fingerprint(endpoint),
                             model_or_deployment=endpoint.model,
-                            tenant_fingerprint=adapter.tenant_fingerprint,
+                            tenant_fingerprint=tenant_fingerprint,
                             credential_slot_id=slot_id,
                         ),
                     )
@@ -816,25 +845,11 @@ class RuntimeModelGateway:
         return resolved
 
     @staticmethod
-    async def _close_adapters(adapters: list[ModelEndpointAdapter]) -> None:
-        unique: list[ModelEndpointAdapter] = []
-        seen: set[int] = set()
-        for adapter in adapters:
-            if id(adapter) in seen:
-                continue
-            seen.add(id(adapter))
-            unique.append(adapter)
-        await asyncio.gather(
-            *(adapter.aclose() for adapter in unique),
-            return_exceptions=True,
-        )
-
-    @staticmethod
     def _classify(exc: Exception) -> FailureDisposition:
         if isinstance(exc, ModelCallJournalError):
             return FailureDisposition(
                 reason=FailureReason.UNKNOWN,
-                domain=FailureDomain.UNKNOWN,
+                domain=FailureDomain.INTERNAL,
                 retryability=Retryability.NEVER,
                 health_verdict=HealthVerdict.NEUTRAL,
                 provider_code="MODEL_CALL_JOURNAL_UNAVAILABLE",
@@ -894,13 +909,17 @@ class RuntimeModelGateway:
         *,
         generation: int,
         root_started_at: datetime | None = None,
+        runtime_generation_id: str,
+        topology_revision: str,
     ) -> ModelCallPlannedRecord:
         occurred_at = datetime.now(timezone.utc)
         return ModelCallPlannedRecord(
             model_call_id=invocation.model_call_id,
             routing_decision_id=invocation.routing_decision_id,
             plan_id=plan.plan_id,
-            route_id=invocation.route_id,
+            route_id=encode_route_id(invocation.route_id),
+            runtime_generation_id=runtime_generation_id,
+            topology_revision=topology_revision,
             config_revision=plan.config_revision,
             endpoint_ids=tuple(endpoint.endpoint_id for endpoint in plan.endpoints),
             budget=plan.budget,
@@ -915,13 +934,18 @@ class RuntimeModelGateway:
         invocation: ModelInvocation,
         plan: FailoverPlan,
         generation: int,
+        *,
+        runtime_generation_id: str,
+        topology_revision: str,
     ) -> None:
         observe_event_sync(
             ModelCallPlannedEvent(
                 model_call_id=invocation.model_call_id,
                 routing_decision_id=invocation.routing_decision_id or "",
                 plan_id=plan.plan_id,
-                route_id=invocation.route_id,
+                route_id=encode_route_id(invocation.route_id),
+                runtime_generation_id=runtime_generation_id,
+                topology_revision=topology_revision,
                 config_revision=plan.config_revision,
                 policy_id=plan.policy_id,
                 resume_generation=generation,
@@ -1191,4 +1215,57 @@ class RuntimeModelGateway:
         return hashlib.sha256(physical_identity.encode("utf-8")).hexdigest()[:24]
 
 
-__all__ = ["RuntimeModelGateway"]
+class GenerationBoundRuntimeModelGateway:
+    """Gateway view fenced to one immutable model Runtime generation."""
+
+    def __init__(
+        self,
+        executor: RuntimeModelGateway,
+        generation: ModelRuntimeGeneration,
+        runtime_generation_id: str,
+    ) -> None:
+        self._executor = executor
+        self._generation = generation
+        self._runtime_generation_id = runtime_generation_id
+
+    @property
+    def topology_revision(self) -> str:
+        return self._generation.revision
+
+    def supports_route(self, route_id) -> bool:
+        return self._generation.planner.snapshot.group_for_route(route_id) is not None
+
+    def route_profile(self, route_id) -> EndpointDescriptor | None:
+        snapshot = self._generation.planner.snapshot
+        group = snapshot.group_for_route(route_id)
+        if group is None or not group.endpoint_ids:
+            return None
+        return snapshot.endpoint(group.endpoint_ids[0])
+
+    def route_profiles(self, route_id) -> tuple[EndpointDescriptor, ...]:
+        snapshot = self._generation.planner.snapshot
+        group = snapshot.group_for_route(route_id)
+        if group is None:
+            return ()
+        return tuple(
+            endpoint for endpoint_id in group.endpoint_ids if (endpoint := snapshot.endpoint(endpoint_id)) is not None
+        )
+
+    async def execute(self, invocation: ModelInvocation, **kwargs) -> ResolvedModelResponse:
+        return await self._executor.execute_generation(
+            self._generation,
+            invocation,
+            runtime_generation_id=self._runtime_generation_id,
+            **kwargs,
+        )
+
+    async def resume(self, invocation: ModelInvocation, **kwargs) -> ResolvedModelResponse:
+        return await self._executor.resume_generation(
+            self._generation,
+            invocation,
+            runtime_generation_id=self._runtime_generation_id,
+            **kwargs,
+        )
+
+
+__all__ = ["GenerationBoundRuntimeModelGateway", "RuntimeModelGateway"]

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.schema import UserMessage
-from mote.kernel.flow.graph import NodeId, build_react_graph, build_review_refine_graph
-from mote.kernel.flow.graph.nodes import (
+from mote.contracts.conversation import UserMessage
+from mote.kernel.execution.graph import NodeId, build_react_graph, build_review_refine_graph
+from mote.kernel.execution.graph.nodes import (
     BudgetNode,
+    InferenceNode,
     ObserveNode,
     RestoreNode,
-    ThinkNode,
     ValidateOutputNode,
     WaitBackgroundNode,
 )
@@ -27,7 +27,7 @@ def _news(bundle):
 async def test_review_refine_runs_on_the_same_engine_without_tools(make_engine):
     executor = FakeExecutor()
     bundle = make_engine(
-        think_engine=FakeThinkEngine(content="reviewed answer"),
+        inference_engine=FakeThinkEngine(content="reviewed answer"),
         channel=FakeChannel(terminal=True),
         executor=executor,
         graph_builder=build_review_refine_graph,
@@ -56,14 +56,14 @@ async def test_review_refine_rejects_tool_actions_at_the_topology_boundary(make_
 
 async def test_built_in_graphs_share_domain_nodes_and_runner_contract(make_engine):
     bundle = make_engine()
-    services = bundle.engine._services
-    react = build_react_graph(services)
-    review = build_review_refine_graph(services)
+    inputs = bundle.engine._graph_inputs
+    react = build_react_graph(inputs)
+    review = build_review_refine_graph(inputs)
     shared = {
         NodeId.RESTORE: RestoreNode,
         NodeId.OBSERVE: ObserveNode,
         NodeId.BUDGET: BudgetNode,
-        NodeId.THINK: ThinkNode,
+        NodeId.THINK: InferenceNode,
         NodeId.VALIDATE_OUTPUT: ValidateOutputNode,
         NodeId.WAIT_BACKGROUND: WaitBackgroundNode,
     }

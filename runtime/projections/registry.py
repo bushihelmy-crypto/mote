@@ -4,19 +4,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import replace
 
-from mote.contracts.ports import (
-    ReliableArtifactPublisher,
-    RuntimeCheckpointPayloadStore,
-    RuntimeProjectionJournal,
-    RuntimeProjector,
-)
-from mote.contracts.runtimes import (
+from mote.contracts.ports.artifact.store import ReliableArtifactPublisher
+from mote.contracts.ports.runtime.checkpoint import RuntimeCheckpointPayloadStore
+from mote.contracts.ports.runtime.projection import RuntimeProjectionJournal, RuntimeProjector
+from mote.contracts.runtime import (
     RuntimeProjectionAck,
     RuntimeProjectionFailure,
     RuntimeProjectionReconcileResult,
     RuntimeProjectionRequest,
 )
-from mote.runtime.reconciliation import MAX_RECONCILIATION_ATTEMPTS, is_retryable_reconciliation_error
+from mote.runtime.resilience.reconciliation import MAX_RECONCILIATION_ATTEMPTS, is_retryable_reconciliation_error
 
 
 class RuntimeProjectionRegistry:

@@ -1,0 +1,31 @@
+schema_version: 1
+revision: fault-matrix-v1
+oracle: every_side_effecting_wire_unit_has_zero_or_one_provider_request_or_frame
+cases:
+  - {id: permit.after_intent_crash, expected_wire: 0, expected_state: SEND_INTENT_DURABLE, test: ztest/inference/test_reference_fault_model.py, status: passed}
+  - {id: permit.after_commit_crash, expected_wire: 0, expected_state: IN_DOUBT, test: ztest/inference/test_reference_fault_model.py, status: passed}
+  - {id: permit.after_wire_crash, expected_wire: 1, expected_state: IN_DOUBT, test: ztest/inference/test_reference_fault_model.py, status: passed}
+  - {id: permit.hedge_isolation, expected_wire: one_per_distinct_ordinal, test: ztest/inference/test_reference_fault_model.py, status: passed}
+  - {id: permit.session_credential_revoke_replay, expected_wire: 0, test: ztest/inference/test_shared_daemon_security.py, status: passed}
+  - {id: generation.unknown_rejected, expected_wire: 0, test: ztest/inference/test_generation.py, status: passed}
+  - {id: generation.digest_mismatch, expected_wire: 0, test: ztest/inference/test_generation.py, status: passed}
+  - {id: negotiation.n_n_minus_1, expected_wire: 0, test: ztest/inference/test_shared_daemon_security.py, status: passed}
+  - {id: daemon.cold_start_race, expected_active_daemons: 1, test: ztest/inference/test_shared_daemon_supervisor.py, status: passed}
+  - {id: daemon.stale_socket, expected_active_daemons: 1, test: ztest/inference/test_shared_daemon_supervisor.py, status: passed}
+  - {id: daemon.upgrade_drain, expected_generation_tear: 0, test: ztest/inference/test_generation.py, status: passed}
+  - {id: sqlite.busy, expected_behavior: bounded_wait_then_structured_failure, test: ztest/inference/test_sqlite_receipts.py, status: passed}
+  - {id: sqlite.corrupt, expected_behavior: readiness_false_preserve_original, test: ztest/inference/test_sqlite_receipts.py, status: passed}
+  - {id: rpc.event_loss_duplicate_reorder, expected_behavior: cursor_deduplicate_and_receipt_reconcile, test: ztest/inference/test_shared_grpc.py, status: passed}
+  - {id: artifact.finalize_crash, expected_behavior: unreferenced_orphan_only, test: ztest/runtime/test_artifact_publication.py, status: passed}
+  - {id: artifact.publication_crash, expected_behavior: no_terminal_receipt_reference, test: ztest/runtime/test_artifact_publication.py, status: passed}
+  - {id: artifact.gc_legal_hold, expected_behavior: no_delete, test: ztest/runtime/test_artifact_store.py, status: passed}
+  - {id: backup.missing_caller, expected_behavior: not_application_consistent, test: ztest/inference/test_backup_barrier.py, status: passed}
+  - {id: backup.stale_permit_epoch, expected_wire: 0, test: ztest/inference/test_embedded_runtime.py, status: passed}
+  - {id: reconciliation.proposal_replay, expected_behavior: idempotent_owner_ack, test: ztest/inference/test_reconciliation.py, status: passed}
+  - {id: reconciliation.permanently_offline_owner, expected_behavior: unresolved, test: ztest/inference/test_reconciliation.py, status: passed}
+  - {id: replay.publish_crash_points, expected_behavior: no_partial_lookup_visibility, test: ztest/runtime/test_artifact_store.py, status: passed}
+  - {id: routing.authority_revision_change, expected_wire: 0, test: ztest/router/test_routing_service.py, status: passed}
+  - {id: profile.retire_during_resume, expected_behavior: pinned_decoder_retained, test: ztest/inference/test_generation.py, status: passed}
+  - {id: validator.byte_frame_time_limits, expected_behavior: reject_precommit, test: ztest/inference/test_response_validator_limits.py, status: passed}
+  - {id: migration.failure_rollback, expected_behavior: old_generation_active, test: ztest/inference/test_generation.py, status: passed}
+gate_status: passed

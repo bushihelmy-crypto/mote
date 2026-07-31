@@ -8,7 +8,10 @@ def test_per_model_and_session_aggregation():
     t = CostTracker()
     t.add(TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500), "gpt-4o")
     t.add(TokenUsage(input_tokens=2000, output_tokens=100, total_tokens=2100), "gpt-4o")
-    t.add(TokenUsage(input_tokens=300, output_tokens=50, total_tokens=350), "claude-opus-4")
+    t.add(
+        TokenUsage(input_tokens=300, output_tokens=50, total_tokens=350),
+        "claude-opus-4",
+    )
 
     assert set(t.model_usage) == {"gpt-4o", "claude-opus-4"}
     gpt = t.model_usage["gpt-4o"]
@@ -47,7 +50,10 @@ def test_unknown_model_flag():
     t = CostTracker()
     t.add(TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110), "gpt-4o")
     assert not t.has_unknown_model_cost
-    t.add(TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110), "no-such-model")
+    t.add(
+        TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110),
+        "no-such-model",
+    )
     assert t.has_unknown_model_cost
 
 
@@ -76,7 +82,12 @@ def test_gateway_settlement_records_authoritative_cost_without_repricing():
 
 def test_context_remaining():
     t = CostTracker()
-    t.add(TokenUsage(input_tokens=60000, output_tokens=2000, total_tokens=62000), "gpt-4o")
+    t.record_settled(
+        TokenUsage(input_tokens=60000, output_tokens=2000, total_tokens=62000),
+        "gpt-4o",
+        0.0,
+        context_window=128000,
+    )
     ctx = t.context_remaining()
     assert ctx["window"] == 128000
     assert ctx["used"] == 62000

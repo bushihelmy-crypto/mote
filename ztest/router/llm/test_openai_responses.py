@@ -22,8 +22,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.config.llm import LLMConfig
-from mote.product.integrations.models.openai_responses import OpenAIResponsesLLM
+from mote.contracts.config.model.llm import LLMConfig
+from mote.product.models.providers.openai_responses import OpenAIResponsesLLM
 
 
 def _make_llm(**overrides):

@@ -6,9 +6,30 @@ import types
 
 import pytest
 
-from mote.contracts.spawn import Lifecycle, SpawnContext, SpawnSpec
+from mote.contracts.agent import AgentConstructionRequest, Lifecycle, SpawnableAgentDefinition, SpawnContext, SpawnPlan
 from mote.runtime.agent.control import current_control, resolve_control, set_control, spawn_and_run
 from mote.runtime.errors import AgentLimitReached
+
+
+class _TestBuilder:
+    def __init__(self, factory):
+        self._factory = factory
+
+    def build(self, request: AgentConstructionRequest):
+        return self._factory(request.spawn_context)
+
+
+def spawn_plan(*, role_factory, **kwargs):
+    return SpawnPlan(
+        definition=SpawnableAgentDefinition(
+            name=kwargs.get("agent_role") or kwargs.get("nickname") or "test",
+            aliases=(),
+            description="test agent",
+            version="1",
+            builder=_TestBuilder(role_factory),
+        ),
+        **kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +71,8 @@ def test_resolve_control_none_when_unbound():
 # ---------------------------------------------------------------------------
 # Spec / Lifecycle shape
 # ---------------------------------------------------------------------------
-def test_spawn_spec_defaults():
-    spec = SpawnSpec(role_factory=lambda ctx: None)
+def test_spawn_plan_defaults():
+    spec = spawn_plan(role_factory=lambda ctx: None)
     assert spec.lifecycle is Lifecycle.EPHEMERAL
     assert spec.cost_rollup is True
     assert spec.watch_completion is True
@@ -75,7 +96,7 @@ async def test_spawn_and_run_no_plane_raises():
     def factory(spawn_ctx):
         raise AssertionError("factory must not run without a plane")
 
-    spec = SpawnSpec(role_factory=factory, nickname="x")
+    spec = spawn_plan(role_factory=factory, nickname="x")
     with pytest.raises(RuntimeError, match="requires an active control plane"):
         await spawn_and_run(spec, "msg")
 
@@ -119,7 +140,7 @@ class _FakeControl:
 @pytest.mark.asyncio
 async def test_spawn_and_run_with_ambient_plane():
     control = _FakeControl(summary="from-plane")
-    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    spec = spawn_plan(role_factory=lambda c: None, nickname="x")
     with set_control(control):
         out = await spawn_and_run(spec, "msg")
     assert out == "from-plane"
@@ -130,7 +151,7 @@ async def test_spawn_and_run_with_ambient_plane():
 async def test_spawn_and_run_with_explicit_ctx_plane():
     control = _FakeControl(summary="explicit")
     ctx = types.SimpleNamespace(agent_control=control)
-    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    spec = spawn_plan(role_factory=lambda c: None, nickname="x")
     out = await spawn_and_run(spec, "msg", ctx=ctx)
     assert out == "explicit"
 
@@ -138,7 +159,7 @@ async def test_spawn_and_run_with_explicit_ctx_plane():
 @pytest.mark.asyncio
 async def test_spawn_and_run_cap_returns_none():
     control = _FakeControl(raise_limit=True)
-    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    spec = spawn_plan(role_factory=lambda c: None, nickname="x")
     with set_control(control):
         out = await spawn_and_run(spec, "msg")
     assert out is None
@@ -159,7 +180,7 @@ async def test_on_spawn_runs_on_role_before_first_turn():
         events.append("seed")
         seen["role"] = r
 
-    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    spec = spawn_plan(role_factory=lambda c: None, nickname="x")
     with set_control(control):
         await spawn_and_run(spec, "msg", on_spawn=on_spawn)
     assert seen["role"] is role
@@ -170,7 +191,7 @@ async def test_on_spawn_runs_on_role_before_first_turn():
 async def test_no_on_spawn_is_noop():
     # Absent hook: spawn_and_run behaves exactly as before.
     control = _FakeControl(summary="ok", role=object())
-    spec = SpawnSpec(role_factory=lambda c: None, nickname="x")
+    spec = spawn_plan(role_factory=lambda c: None, nickname="x")
     with set_control(control):
         out = await spawn_and_run(spec, "msg")
     assert out == "ok"

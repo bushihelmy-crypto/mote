@@ -5,14 +5,15 @@ from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable, Optional
 
-from mote.contracts.events.types import TurnEndEvent, UserPromptSubmitEvent
-from mote.contracts.fileops import RewindFailedError
-from mote.runtime.disk.async_io import run_disk_io
-from mote.runtime.logging import log_class, logger
+from mote.contracts.events.conversation import UserPromptSubmitEvent
+from mote.contracts.events.session import TurnEndEvent
+from mote.contracts.file import RewindFailedError
+from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.checkpoint import list_checkpoints
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import CheckpointEvent, MetaUpdateEvent
 from mote.runtime.session.log import SessionLog
+from mote.runtime.telemetry.logging import log_class, logger
 
 #: How many leading chars of the user prompt to stash for the /rewind listing.
 _PREVIEW_LEN = 200

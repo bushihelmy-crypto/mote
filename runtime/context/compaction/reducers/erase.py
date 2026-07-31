@@ -19,9 +19,9 @@ erase: the tag, not the tool's re-derivability, is the authority for deletion.
 
 from __future__ import annotations
 
-from mote.contracts.constants.messages import RETENTION, RETENTION_ERASABLE, TOOL_CALL_ID
-from mote.contracts.models.tokenization import count_string_tokens
-from mote.contracts.schema import ContextManagerConfig, Message
+from mote.contracts.conversation import ContextManagerConfig, Message
+from mote.contracts.conversation.fields import RETENTION, RETENTION_ERASABLE, TOOL_CALL_ID
+from mote.kernel.inference.tokenization import count_string_tokens
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import SegmentKind, Transcript

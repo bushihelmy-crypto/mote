@@ -17,9 +17,11 @@ import json
 import os
 from typing import Any
 
+from mote.contracts.hook import HookInvocation
 from mote.runtime.hook.parser import parse_command_output
-from mote.runtime.hook.types import EMPTY, HookInput, HookOutcome
-from mote.runtime.logging import logger
+from mote.runtime.hook.types import EMPTY, HookOutcome
+from mote.runtime.hook.wire import HookWireSerializer
+from mote.runtime.telemetry.logging import logger
 
 # Fallback timeout (seconds) when neither the handler nor the caller specifies
 # one — a 60s default hook budget.
@@ -28,7 +30,7 @@ DEFAULT_TIMEOUT = 60.0
 
 async def run_command_handler(
     cfg: Any,
-    hook_input: HookInput,
+    hook_input: HookInvocation,
     *,
     timeout: float | None = None,
 ) -> HookOutcome:
@@ -54,13 +56,13 @@ async def run_command_handler(
     if effective_timeout is None:
         effective_timeout = DEFAULT_TIMEOUT
 
-    payload = json.dumps(hook_input.to_json_dict()) + "\n"
+    payload = json.dumps(HookWireSerializer().to_json_dict(hook_input)) + "\n"
 
     env = dict(os.environ)
-    if hook_input.cwd:
-        env["AGENT_PROJECT_DIR"] = hook_input.cwd
-    if hook_input.session_id:
-        env["AGENT_SESSION_ID"] = hook_input.session_id
+    if hook_input.identity.cwd:
+        env["AGENT_PROJECT_DIR"] = hook_input.identity.cwd
+    if hook_input.identity.session_id:
+        env["AGENT_SESSION_ID"] = hook_input.identity.session_id
 
     proc: asyncio.subprocess.Process | None = None
     try:
@@ -70,7 +72,7 @@ async def run_command_handler(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
-            cwd=hook_input.cwd or None,
+            cwd=hook_input.identity.cwd or None,
         )
         stdout_b, stderr_b = await asyncio.wait_for(
             proc.communicate(input=payload.encode("utf-8")),

@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from mote.product.cli.serving import PromptBroker
+from mote.product.session_hosting import PromptBroker
 
 
 def test_new_id_is_unique_and_prefixed():

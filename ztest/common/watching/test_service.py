@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.fileops.errors import ReadCursorError
-from mote.contracts.fileops.models import ContinueReadRequest, FileChangeKind, TextReadRequest
+from mote.contracts.file.errors import ReadCursorError
+from mote.contracts.file.identity import FileChangeKind
+from mote.contracts.file.views import ContinueReadRequest, TextReadRequest
+from mote.contracts.hook import FileChangedInvocation
 from mote.runtime.events import FileMutatedEvent
-from mote.runtime.fileops.facade import FileOperations
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.hook.subscriber import HookSubscriber
-from mote.runtime.hook.types import HookInput, HookOutcome
+from mote.runtime.hook.types import HookOutcome
 from mote.runtime.watching.service import FILE_CHANGED_EVENT, FileWatchService
+from mote.ztest.fileops_factory import FileOperations
 from mote.ztest.telemetry import InlineTelemetry
 
 
@@ -124,8 +126,8 @@ async def test_real_hookmanager_matches_on_path(tmp_path):
     # A FileChanged hook with a matcher selecting only *.py files.
     fired: list[str] = []
 
-    def on_py_change(hook_input: HookInput) -> None:
-        fired.append(hook_input.payload["path"])
+    def on_py_change(hook_input: FileChangedInvocation) -> None:
+        fired.append(hook_input.payload.path)
 
     mgr = HookManager(session_id="s")
     mgr.register("FileChanged", on_py_change, matcher=r".*\.py$")

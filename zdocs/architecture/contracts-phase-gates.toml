@@ -1,0 +1,93 @@
+schema_version = 1
+baseline_id = "sha256:2553d30ee82ebd16ed0f64499c01e88399be2ac0200475856dc4bb643d8b7404"
+generated_by = "manual:contracts-governance-v10"
+generated_at = "2026-07-29T00:00:00Z"
+canonicalization_version = 1
+
+[[phase]]
+id = "0A"
+status = "verified"
+depends_on = []
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = ["facts_complete", "baseline_reproducible"]
+
+[[phase]]
+id = "0B"
+status = "in_progress"
+depends_on = ["0A"]
+expected_cutover_ids = []
+entry_checks = ["phase_0a_verified"]
+exit_checks = ["all_symbols_decided", "migration_dag_valid"]
+
+[[phase]]
+id = "0C"
+status = "planned"
+depends_on = ["0B"]
+expected_cutover_ids = ["governance-bootstrap"]
+entry_checks = ["phase_0b_verified"]
+exit_checks = ["governance_bootstrap_verified"]
+
+[[phase]]
+id = "1"
+status = "planned"
+depends_on = ["0C"]
+expected_cutover_ids = []
+entry_checks = ["governance_bootstrap_verified"]
+exit_checks = []
+
+[[phase]]
+id = "2"
+status = "planned"
+depends_on = ["1"]
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = []
+
+[[phase]]
+id = "3"
+status = "planned"
+depends_on = ["2"]
+expected_cutover_ids = ["3a-authorization", "3b-interaction-approval", "3c-artifact", "3d-agent-identity"]
+entry_checks = []
+exit_checks = []
+
+[[phase]]
+id = "4"
+status = "planned"
+depends_on = ["3"]
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = []
+
+[[phase]]
+id = "5"
+status = "planned"
+depends_on = ["4"]
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = []
+
+[[phase]]
+id = "6"
+status = "planned"
+depends_on = ["5"]
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = []
+
+[[phase]]
+id = "7"
+status = "planned"
+depends_on = ["6"]
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = []
+
+[[phase]]
+id = "8"
+status = "planned"
+depends_on = ["7"]
+expected_cutover_ids = []
+entry_checks = []
+exit_checks = []

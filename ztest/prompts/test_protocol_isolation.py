@@ -26,21 +26,24 @@ from string import Template
 
 import pytest
 
-from mote.kernel import prompt as R
-from mote.kernel.parser.native_channel import NativeToolChannel
-from mote.kernel.parser.xml_channel import XmlCommandChannel
-from mote.kernel.prompt.refs import Sym, UnknownSymbolError, find_symbols
+from mote.kernel.commands.native import NativeToolChannel
+from mote.kernel.commands.symbols import Sym, UnknownSymbolError, find_symbols
+from mote.kernel.commands.xml.channel import XmlCommandChannel
+from mote.kernel.inference import prompts as inference_prompts
+from mote.product.toolsets.builtin import agent_prompts
 
 # The shared prose templates that flow to BOTH protocols. Each is reduced to a
 # concrete string (placeholders filled with dummies) so only protocol symbols,
 # not ${...} template holes, remain to inspect.
 _SHARED_PROMPTS = {
-    "SYSTEM_PROMPT": R.SYSTEM_PROMPT,
+    "SYSTEM_PROMPT": inference_prompts.SYSTEM_PROMPT,
     # The read-before-edit mechanic (⟦cap:read⟧ ⟦ctl:separate_steps⟧) lives in the
     # role charter now (extracted out of SYSTEM_PROMPT), so ROLE_INFO is shared
     # prose too — it must pass the same protocol-isolation matrix.
-    "ROLE_INFO": R.ROLE_INFO,
-    "AGENT_TASK_PROMPT": Template(R.AGENT_TASK_PROMPT).safe_substitute(parent_name="P", context="C", task="T"),
+    "ROLE_INFO": inference_prompts.ROLE_INFO,
+    "AGENT_TASK_PROMPT": Template(agent_prompts.AGENT_TASK_PROMPT).safe_substitute(
+        parent_name="P", context="C", task="T"
+    ),
 }
 
 # Raw protocol-mechanic literals that must NOT appear in shared prose — the

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.context.prompt`` — the compaction prompt builders.
+"""Tests for kernel compaction prompt builders.
 
 Covers the two summarization prompts (full vs partial/up_to, plus custom-
 instruction appending and the no-tools preamble/trailer), ``format_compact_summary``
@@ -11,7 +11,7 @@ branches).
 """
 from __future__ import annotations
 
-from mote.runtime.context import prompt
+from mote.runtime.context.compaction import format as prompt
 
 
 def test_compact_prompt_has_preamble_body_trailer():

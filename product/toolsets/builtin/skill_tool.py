@@ -21,10 +21,10 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from mote.runtime.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetSkillPool, RegisterResource, RunSkillFork
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise/return site).

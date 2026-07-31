@@ -1,0 +1,29 @@
+[symbols."mote.kernel.commands.CommandChannel"]
+stability = "provisional"
+expires = "2027.01"
+
+[symbols."mote.kernel.commands.make_command_channel"]
+stability = "provisional"
+expires = "2027.01"
+
+[symbols."mote.kernel.execution.ExecutionEngine"]
+stability = "provisional"
+expires = "2027.01"
+
+[symbols."mote.kernel.inference.InferenceEngine"]
+stability = "provisional"
+expires = "2027.01"
+
+[symbols."mote.kernel.output.OutputContract"]
+stability = "stable"
+
+[symbols."mote.kernel.output.text_output_contract"]
+stability = "stable"
+
+[symbols."mote.kernel.tools.ToolCatalog"]
+stability = "provisional"
+expires = "2027.01"
+
+[symbols."mote.kernel.tools.ToolDefinition"]
+stability = "provisional"
+expires = "2027.01"

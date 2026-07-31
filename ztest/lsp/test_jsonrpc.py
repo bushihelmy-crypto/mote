@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.agent.lsp.jsonrpc`` — Content-Length framing + correlation.
+"""Tests for ``mote.runtime.lsp.jsonrpc`` — Content-Length framing + correlation.
 
 Drives a JsonRpcEndpoint over an in-process subprocess running a tiny echo
 responder, so request/response correlation, notification dispatch, and
@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from mote.runtime.agent.lsp.jsonrpc import JsonRpcEndpoint, _parse_content_length
+from mote.runtime.lsp.jsonrpc import JsonRpcEndpoint, _parse_content_length
 
 aio = pytest.mark.asyncio
 

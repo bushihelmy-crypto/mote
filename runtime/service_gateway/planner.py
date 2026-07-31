@@ -6,8 +6,8 @@ import hashlib
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from mote.contracts.errors.services import ServiceRouteUnavailableError
-from mote.contracts.services import ServiceInvocation, ServicePlan
+from mote.contracts.service import ServiceInvocation, ServicePlan
+from mote.contracts.service.errors import ServiceRouteUnavailableError
 from mote.runtime.service_gateway.snapshot import ServiceFailoverGroup, ServiceRuntimeSnapshot
 
 

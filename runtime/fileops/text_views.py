@@ -5,18 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from mote.contracts.fileops.errors import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import blob_from_dict, blob_to_dict, snapshot_from_dict, snapshot_to_dict
+from mote.contracts.file.errors import (
     EncodingRejectedError,
     FileReadRangeError,
     ReadCursorError,
     SnapshotDurabilityError,
 )
-from mote.contracts.fileops.models import BlobRef, FileTextView, ReadCursorKind, ReadViewStatus, TextViewMode
-from mote.contracts.fileops.serialization import blob_from_dict, blob_to_dict, snapshot_from_dict, snapshot_to_dict
-from mote.runtime.fileops.artifact_budgets import MAX_MATERIALIZED_TEXT_BYTES
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.file.views import FileTextView, ReadCursorKind, ReadViewStatus, TextViewMode
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 from mote.runtime.fileops.read_cursors import OpenReadCursor, ReadCursorStore
+from mote.runtime.fileops.resource_limits import MAX_MATERIALIZED_TEXT_BYTES
 from mote.runtime.fileops.text_layout import text_page
 from mote.runtime.fileops.text_sources import MaterializedText, TextSourceService
 
@@ -27,7 +28,7 @@ _MAX_TEXT_LINES = 10_000
 @dataclass(frozen=True)
 class _CursorSource:
     source: MaterializedText
-    manifest: BlobRef
+    manifest: ContentIdentity
     offset: int
 
 
@@ -144,7 +145,7 @@ class TextViewService:
         self,
         source: MaterializedText,
         scope: ArtifactWriteScope,
-    ) -> BlobRef:
+    ) -> ContentIdentity:
         text_bytes = source.text.encode("utf-8", errors="strict")
         if len(text_bytes) > MAX_MATERIALIZED_TEXT_BYTES:
             raise FileReadRangeError(

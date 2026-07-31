@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel
 
-from mote.contracts.model_actions import FinalCandidateAction
+from mote.contracts.model.turn import FinalCandidateAction
 from mote.contracts.output import OutputContractId
 from mote.kernel.output import (
     JsonSchemaOutputDecoder,
@@ -10,7 +10,7 @@ from mote.kernel.output import (
     TypeAdapterOutputDecoder,
     text_output_contract,
 )
-from mote.runtime.agent.output_engine import OutputEngine
+from mote.runtime.output.engine import OutputEngine
 
 
 class Report(BaseModel):

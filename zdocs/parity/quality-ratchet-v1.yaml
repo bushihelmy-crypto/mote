@@ -1,0 +1,42 @@
+schema_version: 1
+revision: quality-ratchet-v1
+ratchets:
+  translation_mutation:
+    target: field_and_stream_event_mappings
+    minimum_score: 0.90
+    blocking: true
+  response_validator_mutation:
+    target: automata_transitions_and_limits
+    minimum_score: 0.95
+    blocking: true
+  failure_mapping_mutation:
+    target: provider_fixture_to_canonical_disposition
+    minimum_score: 0.95
+    blocking: true
+  manifest_completeness:
+    target: provider_operation_cartesian_product_and_ecosystem_items
+    minimum_score: 1.0
+    blocking: true
+  idl_breaking_change:
+    formats: [OpenAPI, AsyncAPI, protobuf]
+    allowed_breaking_changes: 0
+    blocking: true
+  routing_decision_matrix:
+    required_branches: [hard_filter, reasoning_budget, empty_candidates, stale_telemetry, dry_run]
+    coverage: 1.0
+    blocking: true
+  fixture_freshness:
+    maximum_age_days: 30
+    expired_allowed: 0
+    blocking: true
+  counterfactual_activation:
+    requirements: [sample_size, cohort_balance, confidence_interval, signed_approval]
+    blocking: true
+  performance_regression:
+    baseline: mote_inference_slo_v1
+    external_comparison: forbidden
+    thresholds_frozen: false
+    blocking_when_frozen: true
+coverage_policy: auxiliary_only
+result: zdocs/parity/quality-ratchet-result-v1.json
+gate_status: pending_mutation_fixture_and_performance_runs

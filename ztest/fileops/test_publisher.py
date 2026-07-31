@@ -6,13 +6,13 @@ import stat
 
 import pytest
 
-from mote.contracts.fileops import AbsentVersion, MetadataPreservationError, SnapshotDurabilityError
-from mote.contracts.fileops.errors import UnsupportedFilesystemSemanticsError
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.contracts.file import AbsentVersion, MetadataPreservationError, SnapshotDurabilityError
+from mote.contracts.file.errors import UnsupportedFilesystemSemanticsError
 from mote.runtime.fileops.identity import name_identity, present_version
 from mote.runtime.fileops.metadata import capture_metadata
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
 from mote.runtime.fileops.publisher import AtomicPublisher
+from mote.ztest.fileops_factory import ArtifactRepository
 
 
 def _publisher(tmp_path):

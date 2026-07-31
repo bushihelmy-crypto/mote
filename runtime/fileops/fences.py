@@ -9,8 +9,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from mote.contracts.fileops.errors import RecoveryFenceError, RecoveryInDoubtError
-from mote.contracts.fileops.models import FileOperationKind, LockMode, ProjectIdentity
+from mote.contracts.file.errors import RecoveryFenceError, RecoveryInDoubtError
+from mote.contracts.file.identity import LockMode, ProjectIdentity
+from mote.contracts.file.transactions import FileOperationKind
 
 _FORMAT_VERSION = 2
 _FENCE_KEYS = frozenset(

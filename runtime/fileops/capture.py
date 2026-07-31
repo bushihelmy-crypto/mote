@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from mote.contracts.fileops.models import FileSnapshot, PathToken
-from mote.runtime.fileops.artifact_repository import ArtifactWriteScope
+from mote.contracts.file.identity import FileSnapshot, PathToken
 from mote.runtime.fileops.control import ProjectOperationControl
 from mote.runtime.fileops.identity import PathLike, project_identity
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope
 from mote.runtime.fileops.snapshots import ObservedFileVersion, SealedSnapshotReader
 
 

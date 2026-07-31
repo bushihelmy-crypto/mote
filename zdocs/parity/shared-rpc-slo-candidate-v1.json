@@ -1,0 +1,17 @@
+{
+  "environment": {
+    "machine": "x86_64",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+    "python": "3.11.7"
+  },
+  "revision": "shared-rpc-slo-candidate-v1",
+  "schema_version": 1,
+  "shared_rpc_hop_ms": {
+    "p50": 0.879527,
+    "p99": 1.689344,
+    "p99_9": 2.324192,
+    "samples": 1000,
+    "unit": "ms"
+  },
+  "status": "candidate_not_frozen"
+}

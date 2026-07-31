@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 from typing import Optional, Union
 
-from mote.contracts.fileops.models import (
+from mote.contracts.file.identity import (
     NameIdentity,
     NativePath,
     PathToken,

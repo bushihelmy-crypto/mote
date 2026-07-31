@@ -1,0 +1,17 @@
+schema_version: 1
+revision: traffic-inspector-v1
+mode: read_only_projection
+sources: [redacted_event_projection, redacted_receipt_projection, redacted_audit_projection]
+default_redaction: strict
+permissions: [traffic_inspector.read_metadata, traffic_inspector.read_redacted_payload]
+forbidden_capabilities:
+  - replay_wire_request
+  - mutate_request_or_response
+  - issue_wire_permit
+  - access_credential_secret
+  - install_mitm_ca
+  - decrypt_system_proxy_tls
+  - spoof_tls_or_browser_fingerprint
+  - bypass_rbac
+retention: inherited_from_source_authority
+export: signed_redacted_diagnostic_bundle

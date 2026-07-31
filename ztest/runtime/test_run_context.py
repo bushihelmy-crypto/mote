@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.run_context import RunContext
+from mote.kernel.execution.run_context import RunContext
 from mote.runtime.run_context import bind_run_context, current_run_context
 
 

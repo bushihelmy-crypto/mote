@@ -1,0 +1,21 @@
+asyncapi: 3.0.0
+info: {title: Mote Realtime and Webhook API, version: 1.0.0}
+channels:
+  realtime:
+    address: /v1/realtime
+    messages:
+      clientEvent: {$ref: '#/components/messages/ClientEvent'}
+      serverEvent: {$ref: '#/components/messages/ServerEvent'}
+  webhook:
+    address: '{$request.body#/callback_url}'
+    messages:
+      providerEvidence: {$ref: '#/components/messages/ProviderEvidence'}
+operations:
+  realtimeReceive: {action: receive, channel: {$ref: '#/channels/realtime'}, messages: [{$ref: '#/channels/realtime/messages/clientEvent'}]}
+  realtimeSend: {action: send, channel: {$ref: '#/channels/realtime'}, messages: [{$ref: '#/channels/realtime/messages/serverEvent'}]}
+  webhookSend: {action: send, channel: {$ref: '#/channels/webhook'}, messages: [{$ref: '#/channels/webhook/messages/providerEvidence'}]}
+components:
+  messages:
+    ClientEvent: {payload: {type: object, required: [type], properties: {type: {type: string}, sequence: {type: integer, minimum: 1}}}}
+    ServerEvent: {payload: {type: object, required: [type, sequence], properties: {type: {type: string}, sequence: {type: integer, minimum: 1}, receipt_revision: {type: integer}}}}
+    ProviderEvidence: {payload: {type: object, required: [event_id, execution_id, signature], properties: {event_id: {type: string}, execution_id: {type: string}, signature: {type: string}}}}

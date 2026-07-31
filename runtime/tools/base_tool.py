@@ -13,11 +13,17 @@ Instance management: ToolExecutor creates and caches instances per-Role.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
-from mote.contracts.permissions import PermissionDecision
-from mote.contracts.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.authorization import PermissionDecision
+from mote.contracts.config.tool import DEFAULT_MAX_RESULT_SIZE_CHARS
+from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.execution import ToolExecutionKind
+
+
+class ToolCapabilityProvider(Protocol):
+    def tool_capabilities(self) -> dict[str, Any]:
+        ...
 
 
 class BaseTool(ABC):
@@ -94,7 +100,7 @@ class BaseTool(ABC):
     # Cap on this tool's result size, in characters. When a single call's text
     # output exceeds this, the framework persists the full result to disk and
     # replaces the inline content with a <persisted-output> preview (see
-    # mote.runtime.tools.tool_result_limit). The effective threshold is
+    # mote.runtime.resources.spill). The effective threshold is
     # this value clamped by the system-wide default; override per tool to allow
     # larger (e.g. Read) or smaller (e.g. Sleep) results.
     max_result_size_chars: ClassVar[int] = DEFAULT_MAX_RESULT_SIZE_CHARS
@@ -116,18 +122,10 @@ class BaseTool(ABC):
     # the per-Role compactable set the ContextManager threads into the Transcript.
     reconstructable: ClassVar[bool] = False
 
-    # Whether this tool is itself a *graph orchestrator* — it drives a bggraph
-    # internally. RunGraph refuses to
-    # reference any such tool from a node, so a declarative graph can never nest
-    # another graph (including RunGraph recursion). Tools that merely *call*
-    # other tools are fine; this marks
-    # only tools whose body is a compiled bggraph. Consumed by the ToolExecutor
-    # to expose the graph-tool name set to the run_graph orchestrator.
-    is_graph_tool: ClassVar[bool] = False
+    execution_kind: ClassVar[ToolExecutionKind] = ToolExecutionKind.ATOMIC
 
-    # Whether this tool must NOT appear as a node inside a declarative graph
-    # (run_graph). Distinct from ``is_graph_tool`` (which blocks graph-in-graph
-    # nesting): this marks tools whose behaviour is meaningless — or actively
+    # Whether this tool must NOT appear as a node inside a declarative graph.
+    # Distinct from execution_kind: this marks tools whose behaviour is meaningless — or actively
     # harmful — inside a non-interactive batch orchestration. Sleep is the case:
     # it blocks the coroutine until an *external* wake event (a new message or a
     # background-task completion), and a foreground graph run delivers neither,
@@ -138,7 +136,7 @@ class BaseTool(ABC):
 
     # --- Permission metadata (consumed by the PermissionEngine) ---
     # Coarse risk label a tool self-declares (advisory in phase 1). See
-    # mote.contracts.permissions.RiskLevel.
+    # mote.contracts.authorization.RiskLevel.
     risk_level: ClassVar[str] = "low"
     # Whether this tool mutates the filesystem. Drives the ``acceptEdits``
     # permission mode (auto-approve edits). Set True on file-writing tools.
@@ -173,7 +171,7 @@ class BaseTool(ABC):
             )
         object.__setattr__(self, name, value)
 
-    def bind(self, session_id: str, role=None) -> "BaseTool":
+    def bind(self, session_id: str, role: ToolCapabilityProvider | None = None) -> "BaseTool":
         """Bind context to this tool instance. Returns self for chaining.
 
         Called by the framework (ToolExecutor) at tool creation time.

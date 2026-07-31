@@ -5,8 +5,8 @@ import asyncio
 
 import pytest
 
-from mote.contracts.permissions import PermissionDecision, PermissionFacts
-from mote.contracts.policy.tool import ToolCallIntent
+from mote.contracts.authorization import PermissionDecision, PermissionFacts
+from mote.contracts.tool.policy import ToolCallIntent
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.tools.permission.engine import PermissionEngine
 from mote.runtime.tools.permission.rule_store import RuleStore

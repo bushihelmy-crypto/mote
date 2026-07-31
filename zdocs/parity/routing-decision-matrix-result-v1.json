@@ -1,0 +1,19 @@
+{
+  "gate_status": "passed",
+  "policy_digest": "sha256:fc22ff4fd2281a181dfeda0b84e55001346c82831b452f41f346a310361c46b5",
+  "results": {
+    "dry_run": {
+      "permit_signatures": 0,
+      "selected_route_id": "standard",
+      "state_commits": 0,
+      "wire_requests": 0
+    },
+    "empty_candidates": true,
+    "hard_filter": true,
+    "missing_by_candidate": {},
+    "reasoning_budget": true,
+    "stale_telemetry": "telemetry_not_an_authority_input"
+  },
+  "revision": "routing-decision-matrix-result-v1",
+  "schema_version": 1
+}

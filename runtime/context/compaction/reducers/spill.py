@@ -1,6 +1,6 @@
 """OversizedSpillReducer (FREE) — lossless spill of runaway single parts.
 
-The per-tool size cap (:func:`mote.runtime.tools.tool_result_limit.enforce_tool_result_limit`)
+The per-tool size cap (:func:`mote.runtime.resources.spill.enforce_tool_result_limit`)
 runs only at the ``ToolExecutor.run_command`` chokepoint, so it caps *a tool's
 output* and nothing else. Two classes of oversized content slip past it straight
 into stored history, and no other reducer can surgically reach them:
@@ -20,7 +20,7 @@ marked calls, ``summarize`` is an LLM pass, ``drop`` discards whole turns — a
 single pathological *part* is invisible to all four. This reducer fills that gap.
 
 It is **lossless**: the full content is written to disk (session-scoped, via the
-same :class:`WorkspaceStore`-routed primitive the tool path uses) and the
+same :class:`SessionWorkspace`-routed primitive the tool path uses) and the
 in-history part is replaced by the existing ``<persisted-output>`` envelope that
 *names the on-disk file*, so the model can re-read it. That is why the cost is
 ``FREE`` (like fold, no information loss beyond a retrievable pointer).
@@ -42,15 +42,16 @@ that matches the executor's own default.
 
 from __future__ import annotations
 
-from mote.contracts.constants.messages import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
-from mote.contracts.models.tokenization import count_string_tokens
-from mote.contracts.schema import ContextManagerConfig, ToolResultLimitConfig
-from mote.contracts.tools import serialize_tool_call_args
+from mote.contracts.config.tool import ToolResultLimitConfig
+from mote.contracts.conversation import ContextManagerConfig
+from mote.contracts.conversation.fields import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
+from mote.contracts.tool import serialize_tool_call_args
+from mote.kernel.inference.tokenization import count_string_tokens
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import PINNED_KINDS, Transcript
-from mote.runtime.tools.tool_result_limit import enforce_tool_result_limit
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.resources.spill import enforce_tool_result_limit
+from mote.runtime.session.workspace import SessionWorkspace
 
 _TOOL_NAME = "compaction"
 
@@ -66,7 +67,7 @@ class OversizedSpillReducer:
         *,
         model: str = "gpt-4",
         session_id: str = "",
-        store: WorkspaceStore | None = None,
+        store: SessionWorkspace | None = None,
         limit_config: ToolResultLimitConfig | None = None,
     ) -> None:
         # ``config`` is kept for wiring parity with the sibling reducers (the

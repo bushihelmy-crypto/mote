@@ -16,8 +16,8 @@ from typing import Any, ClassVar, Optional
 
 import aiohttp
 
-from mote.contracts.services import ServiceExecutionSemantics
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.service import ServiceExecutionSemantics
+from mote.contracts.tool.effects import ToolEffect
 from mote.runtime.errors import ToolNotConfiguredError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import InvokeService

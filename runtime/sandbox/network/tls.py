@@ -55,8 +55,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from mote.runtime.logging import logger
-from mote.runtime.paths import CONFIG_ROOT
+from mote.runtime.telemetry.logging import logger
 
 #: Directory holding the CA material + the combined bundle (sibling of the vault).
 _CA_DIRNAME = "sandbox_ca"
@@ -75,11 +74,6 @@ _BACKDATE = datetime.timedelta(minutes=5)
 _RSA_BITS = 2048
 
 
-def _ca_dir() -> Path:
-    """The ``~/.mote/sandbox_ca/`` directory (not created here)."""
-    return CONFIG_ROOT / _CA_DIRNAME
-
-
 def _utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
@@ -92,8 +86,8 @@ class MitmCa:
     cache are guarded by a lock so the asyncio proxy can call from any task.
     """
 
-    def __init__(self, ca_dir: Optional[Path] = None) -> None:
-        self._dir = Path(ca_dir) if ca_dir is not None else _ca_dir()
+    def __init__(self, ca_dir: Path) -> None:
+        self._dir = Path(ca_dir)
         self._key_path = self._dir / _CA_KEY_FILE
         self._cert_path = self._dir / _CA_CERT_FILE
         self._bundle_path = self._dir / _BUNDLE_FILE

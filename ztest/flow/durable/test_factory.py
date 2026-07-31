@@ -11,14 +11,14 @@ durable backend.
 """
 from __future__ import annotations
 
-from mote.contracts.schema import DurableConfig
+from mote.contracts.config.tool import DurableConfig
 from mote.runtime.durable import DurableBackend, JsonlBackend, make_durable_backend
 from mote.runtime.ledger import RunJournal
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.session.workspace import SessionWorkspace
 
 
 def _journal(tmp_path, session_id="sess") -> RunJournal:
-    return RunJournal(session_id, store=WorkspaceStore(root=str(tmp_path)))
+    return RunJournal(session_id, store=SessionWorkspace(root=str(tmp_path)))
 
 
 def test_durable_config_defaults_are_zero_dependency():
@@ -33,7 +33,7 @@ def test_durable_config_defaults_are_zero_dependency():
 
 
 def test_temporal_config_has_per_seam_activity_policy():
-    from mote.contracts.schema import ActivityConfig, TemporalConfig
+    from mote.contracts.config.tool import ActivityConfig, TemporalConfig
 
     tc = TemporalConfig()
     for seam in (tc.tool_activity, tc.think_activity, tc.timer_activity):

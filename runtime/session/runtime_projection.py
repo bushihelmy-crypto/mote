@@ -1,7 +1,7 @@
 """Session-log journal for durable Runtime projection work."""
 from __future__ import annotations
 
-from mote.contracts.runtimes import RuntimeCommitFact, RuntimeProjectionAck
+from mote.contracts.runtime import RuntimeCommitFact, RuntimeProjectionAck
 from mote.runtime.session.events import RuntimeCommitEvent, RuntimeProjectionAcknowledgedEvent
 from mote.runtime.session.log import SessionLog
 

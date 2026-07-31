@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.config.env`` — env var -> nested layer mapping."""
+"""Tests for ``mote.product.config.env`` — env var -> nested layer mapping."""
 from __future__ import annotations
 
-from mote.runtime.config.env import build_env_layer
+from mote.product.config.env import build_env_layer
 
 
 def test_double_underscore_nests_single_underscore_stays_in_segment():

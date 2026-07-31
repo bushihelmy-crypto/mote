@@ -6,12 +6,14 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from mote.contracts.fileops.errors import ReadCursorError, SnapshotDurabilityError
-from mote.contracts.fileops.models import BlobRef, FileSnapshot, ReadCursorKind
-from mote.contracts.fileops.serialization import blob_from_dict, snapshot_from_dict
-from mote.runtime.fileops.artifact_budgets import MAX_READ_MANIFEST_BYTES
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import blob_from_dict, snapshot_from_dict
+from mote.contracts.file.errors import ReadCursorError, SnapshotDurabilityError
+from mote.contracts.file.identity import FileSnapshot
+from mote.contracts.file.views import ReadCursorKind
 from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.resource_limits import MAX_READ_MANIFEST_BYTES
 
 _MANIFEST_FORMAT = 1
 _MANIFEST_KEYS = frozenset({"format_version", "kind", "payload"})
@@ -28,7 +30,7 @@ _PAYLOAD_KEYS = {
 class OpenReadCursor:
     kind: ReadCursorKind
     payload: dict[str, Any]
-    manifest: BlobRef
+    manifest: ContentIdentity
     position: int
     token: str
 
@@ -49,7 +51,7 @@ class ReadCursorStore:
         scope: ArtifactWriteScope,
         kind: ReadCursorKind,
         payload: dict[str, Any],
-    ) -> BlobRef:
+    ) -> ContentIdentity:
         self._validate_payload(kind, payload)
         raw = json.dumps(
             {
@@ -76,7 +78,7 @@ class ReadCursorStore:
 
     def issue(
         self,
-        manifest: BlobRef,
+        manifest: ContentIdentity,
         position: int,
         *,
         expected_epoch: int,
@@ -122,7 +124,7 @@ class ReadCursorStore:
 
     def _load_manifest(
         self,
-        manifest: BlobRef,
+        manifest: ContentIdentity,
     ) -> tuple[ReadCursorKind, dict[str, Any]]:
         data = json.loads(
             self.artifacts.read_bounded(
@@ -146,7 +148,7 @@ class ReadCursorStore:
         return kind, payload
 
     @staticmethod
-    def _pinned_artifacts(payload: dict[str, Any]) -> tuple[BlobRef, ...]:
+    def _pinned_artifacts(payload: dict[str, Any]) -> tuple[ContentIdentity, ...]:
         snapshot = snapshot_from_dict(payload["snapshot"])
         pins = [snapshot.artifact, snapshot.metadata]
         if "text_artifact" in payload:

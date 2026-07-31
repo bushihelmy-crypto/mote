@@ -5,37 +5,41 @@ from __future__ import annotations
 import asyncio
 import inspect
 from contextlib import AsyncExitStack
-from typing import Any, cast
+from typing import Any, Generic, TypeAlias, TypeVar, cast
 
-from mote.contracts.run_context import RunContext
-from mote.contracts.tools import CommandProtocol
-from mote.kernel.tools.toolset import (
-    AnyToolset,
+from mote.contracts.tool import CommandProtocol
+from mote.kernel.execution.run_context import RunContext
+from mote.runtime.events import ToolsChangedEvent
+from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
+from mote.runtime.tools.mcp.lifecycle import McpLifecycle, NativeMcpRegistrar, XmlMcpRegistrar
+from mote.runtime.tools.provider import (
+    NativeToolset,
     ToolsetCompositionError,
+    XmlToolset,
     materialize_toolset_index,
     validate_toolset_protocols,
 )
-from mote.runtime.events import ToolsChangedEvent
-from mote.runtime.logging import logger
-from mote.runtime.tools.mcp.lifecycle import McpLifecycle, NativeMcpRegistrar, XmlMcpRegistrar
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_binding import BoundTool
 from mote.runtime.tools.tool_catalog import BoundToolCatalog
-from mote.runtime.tools.tool_classification import is_pipeline_tool
 from mote.runtime.tools.tool_settlement import ToolSettlement
 
+AgentDepsT = TypeVar("AgentDepsT")
+TypedToolset: TypeAlias = XmlToolset[AgentDepsT] | NativeToolset[AgentDepsT]
 
-class ToolLifecycle:
+
+class ToolLifecycle(Generic[AgentDepsT]):
     def __init__(
         self,
         *,
         session_id: str,
         declared_tools: tuple[str, ...],
-        role,
+        role: ToolCapabilityProvider | None,
         pipelines_enabled: bool,
         catalog: BoundToolCatalog,
         mcp_lifecycle: McpLifecycle,
         settlement: ToolSettlement,
-        toolsets: tuple[AnyToolset, ...],
+        toolsets: tuple[TypedToolset[AgentDepsT], ...],
         command_protocol: CommandProtocol,
     ) -> None:
         self._session_id = session_id
@@ -78,7 +82,7 @@ class ToolLifecycle:
                     if factory not in bound:
                         instance = factory()
                         instance.bind(self._session_id, role=self._role)
-                        if not self._pipelines_enabled and is_pipeline_tool(instance):
+                        if not self._pipelines_enabled and definition.execution_kind.is_workflow:
                             skipped.add(factory)
                             continue
                         bound[factory] = instance
@@ -87,21 +91,22 @@ class ToolLifecycle:
                         continue
                     presentation_key = (id(toolset), factory, definition.name)
                     if presentation_key not in presented:
-                        presented[presentation_key] = BoundTool(definition, bound[factory])
+                        presented[presentation_key] = BoundTool(
+                            definition,
+                            bound[factory],
+                            toolset.bind_approval(definition),
+                        )
                     self._catalog.register(presented[presentation_key], names)
             self._prepared = True
         finally:
             self._preparing = False
 
-    async def start_run(self, ctx: RunContext[Any]) -> None:
+    async def start_run(self, ctx: RunContext[AgentDepsT]) -> None:
         """Activate per-run Toolset views and enter their owned resources."""
 
         if self._run_active:
             raise RuntimeError("Toolset run lifecycle is already active")
-        active = tuple(
-            cast(AnyToolset, toolset)
-            for toolset in await asyncio.gather(*(toolset.for_run(ctx) for toolset in self._configured_toolsets))
-        )
+        active = tuple(await asyncio.gather(*(toolset.for_run(ctx) for toolset in self._configured_toolsets)))
         validate_toolset_protocols(self._command_protocol, active)
         changed = any(current is not configured for current, configured in zip(active, self._configured_toolsets))
         scoped = any(toolset.run_scoped_lifecycle for toolset in active)
@@ -111,7 +116,7 @@ class ToolLifecycle:
             for toolset in active:
                 if toolset.run_scoped_lifecycle:
                     await stack.enter_async_context(toolset)
-            if changed or scoped:
+            if changed or scoped or any(toolset.requires_permission_gate for toolset in active):
                 await self._replace_declared_toolsets(active)
         except BaseException:
             await stack.aclose()
@@ -119,20 +124,17 @@ class ToolLifecycle:
             raise
         self._toolsets = active
         self._run_active = True
-        self._run_requires_reset = changed or scoped
+        self._run_requires_reset = changed or scoped or any(toolset.requires_permission_gate for toolset in active)
         self._run_exit_stack = stack
 
-    async def prepare_run_step(self, ctx: RunContext[Any]) -> None:
+    async def prepare_run_step(self, ctx: RunContext[AgentDepsT]) -> None:
         """Refresh per-step dynamic Toolsets before prompt/spec projection."""
 
         if not self._run_active:
             return
         if not any(toolset.changes_per_run_step for toolset in self._toolsets):
             return
-        refreshed = tuple(
-            cast(AnyToolset, toolset)
-            for toolset in await asyncio.gather(*(toolset.for_run_step(ctx) for toolset in self._toolsets))
-        )
+        refreshed = tuple(await asyncio.gather(*(toolset.for_run_step(ctx) for toolset in self._toolsets)))
         validate_toolset_protocols(self._command_protocol, refreshed)
         if any(current is not previous for current, previous in zip(refreshed, self._toolsets)):
             raise ToolsetCompositionError("per-step Toolset refresh must update its run-owned instance in place")
@@ -156,7 +158,7 @@ class ToolLifecycle:
             if stack is not None:
                 await stack.aclose()
 
-    async def _replace_declared_toolsets(self, toolsets: tuple[AnyToolset, ...]) -> None:
+    async def _replace_declared_toolsets(self, toolsets: tuple[TypedToolset[AgentDepsT], ...]) -> None:
         await self._clear_declared_tools()
         self._toolsets = toolsets
         self._prepared = False
@@ -168,8 +170,8 @@ class ToolLifecycle:
             self._toolsets = self._configured_toolsets
             self._prepared = False
             self.prepare()
-        except Exception as exc:
-            logger.warning(f"ToolLifecycle: failed to restore configured Toolsets: {exc}")
+        except Exception:
+            return
 
     async def _clear_declared_tools(self) -> None:
         names: list[str] = []
@@ -188,7 +190,7 @@ class ToolLifecycle:
         if names:
             self._catalog.remove(names)
 
-    def register_native(self, definition, capability: Any) -> None:
+    def register_native(self, definition: NativeToolDefinition[Any], capability: BaseTool) -> None:
         self.prepare()
         capability.bind(self._session_id, role=self._role)
         bound = BoundTool(definition, capability)
@@ -202,7 +204,7 @@ class ToolLifecycle:
     def dynamic_toolset_instructions(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(block for toolset in self._toolsets for block in toolset.dynamic_instruction_blocks))
 
-    def register_xml(self, definition, capability: Any) -> None:
+    def register_xml(self, definition: XmlToolDefinition[Any], capability: BaseTool) -> None:
         self.prepare()
         capability.bind(self._session_id, role=self._role)
         bound = BoundTool(definition, capability)
@@ -219,11 +221,11 @@ class ToolLifecycle:
         await self._announce(removed, f"ToolsChangedEvent for {name} not delivered")
         return True
 
-    async def init_mcp(self, executor, mcps: list[str] | None, *, enabled: bool) -> None:
+    async def init_mcp(self, executor: object, mcps: list[str] | None, *, enabled: bool) -> None:
         if enabled and not self._mcp_lifecycle.active:
             await self._bind_mcp(executor, mcps or None)
 
-    async def reload_mcp(self, executor, mcps: list[str] | None, *, enabled: bool) -> bool:
+    async def reload_mcp(self, executor: object, mcps: list[str] | None, *, enabled: bool) -> bool:
         if not enabled:
             return False
         self.prepare()

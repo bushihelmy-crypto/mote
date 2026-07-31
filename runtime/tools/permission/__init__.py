@@ -3,7 +3,7 @@
 Public surface:
   * :class:`PermissionEngine` — the runtime decision pipeline.
   * :class:`RuleStore` — parsed rules + behavior resolution.
-  * Core data types from :mod:`mote.contracts.permissions`
+  * Core data types from :mod:`mote.contracts.authorization`
     (re-exported here for convenience).
 
 No module in this package imports tools or the executor, so it can be imported
@@ -11,7 +11,7 @@ from ``base_tool``/``tool_executor`` without circular dependencies.
 """
 from __future__ import annotations
 
-from mote.contracts.permissions import (
+from mote.contracts.authorization import (
     DecisionReason,
     GrantScope,
     PermissionBehavior,

@@ -6,15 +6,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 
-from mote.contracts.fileops import MutationSet, RecoveryPolicy, ReplaceMutation
+from mote.contracts.file import MutationSet, RecoveryPolicy, ReplaceMutation
 from mote.product.toolsets.builtin.edit import Edit
-from mote.runtime.fileops import FileOperations
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.codec import iter_file_operations_events
 from mote.runtime.session.events import SessionMetaEvent
 from mote.runtime.session.history import file_history
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
+from mote.ztest.fileops_factory import FileOperations
 
 # ---------------------------------------------------------------------------
 # replay ignores snapshot events
@@ -22,7 +22,7 @@ from mote.runtime.session.replay import replay
 
 
 def test_replay_ignores_file_transaction_events(tmp_path):
-    from mote.contracts.schema import UserMessage
+    from mote.contracts.conversation import UserMessage
     from mote.runtime.session.events import MessageEvent
 
     log = SessionLog("mix", base_dir=str(tmp_path))

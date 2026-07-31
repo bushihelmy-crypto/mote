@@ -27,8 +27,8 @@ from typing import Optional
 
 import pytest
 
-from mote.contracts.constants.messages import TOOL_CALL_ID, TOOL_CALLS
-from mote.contracts.schema import AIMessage, Message, UserMessage
+from mote.contracts.conversation import AIMessage, Message, UserMessage
+from mote.contracts.conversation.fields import TOOL_CALL_ID, TOOL_CALLS
 
 # Tool names the compaction tests treat as reconstructable (fold/clear-safe).
 # Production derives this from the live executor (each tool self-declares via its
@@ -112,7 +112,7 @@ def force_autocompact_threshold(monkeypatch):
     time, so patching it here forces ``should_autocompact`` True for any
     non-trivial history while leaving the rest of the real math intact.
     """
-    from mote.runtime.context import budget
+    from mote.runtime.context.history import budget
 
     monkeypatch.setattr(budget, "autocompact_threshold", lambda model: 1)
     return budget

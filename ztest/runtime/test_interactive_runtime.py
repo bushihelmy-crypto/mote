@@ -4,18 +4,8 @@ import asyncio
 
 import pytest
 
-from mote.contracts.errors.runtimes import (
-    LeaseFencedError,
-    LeaseUnavailableError,
-    ManagedRuntimeAliasConflictError,
-    ManagedRuntimeDurabilityError,
-    ManagedRuntimeNotFoundError,
-    ManagedRuntimeRevisionConflictError,
-    ManagedRuntimeStateError,
-)
-from mote.contracts.leases import LeasePolicy
-from mote.contracts.ports import LiveSurfaceRuntimeDriver, ManagedRuntimeDriver
-from mote.contracts.runtimes import (
+from mote.contracts.ports.runtime.driver import LiveSurfaceRuntimeDriver, ManagedRuntimeDriver
+from mote.contracts.runtime import (
     CheckpointFidelity,
     DriverCheckpoint,
     DriverStartResult,
@@ -27,11 +17,21 @@ from mote.contracts.runtimes import (
     RuntimeProjectionIntent,
     RuntimeState,
 )
+from mote.contracts.runtime.errors import (
+    LeaseFencedError,
+    LeaseUnavailableError,
+    ManagedRuntimeAliasConflictError,
+    ManagedRuntimeDurabilityError,
+    ManagedRuntimeNotFoundError,
+    ManagedRuntimeRevisionConflictError,
+    ManagedRuntimeStateError,
+)
+from mote.contracts.runtime.lease import RuntimeLeasePolicy
+from mote.runtime.control.leases import FileLeaseCoordinator, InMemoryLeaseCoordinator
 from mote.runtime.interactive import RuntimeHost
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
-from mote.runtime.leases import FileLeaseCoordinator, InMemoryLeaseCoordinator
-from mote.runtime.tools.dependency._kernel import KernelRuntimeDriver
-from mote.runtime.tools.dependency._terminal import TerminalRuntimeDriver
+from mote.runtime.interactive.kernel.driver import KernelRuntimeDriver
+from mote.runtime.interactive.terminal.driver import TerminalRuntimeDriver
 
 
 class FakeDriver:
@@ -600,7 +600,7 @@ def test_generic_lease_takeover_and_fencing(tmp_path, coordinator_factory):
 
 def test_lease_policy_rejects_unsafe_heartbeat_window():
     with pytest.raises(ValueError):
-        LeasePolicy(ttl_seconds=5, renew_interval_seconds=5)
+        RuntimeLeasePolicy(ttl_seconds=5, renew_interval_seconds=5)
 
 
 def test_inline_checkpoint_codec_round_trip_and_digest_guard():

@@ -1,0 +1,35 @@
+schema_version: 1
+revision: inference-slo-v1
+comparison_policy: mote_only_no_bifrost_or_go_baseline
+quantile_method: nearest_rank
+measurement_protocol:
+  runner: zdocs/parity/measure_inference_slo.py
+  warmup_iterations: 100
+  measured_iterations: 2000
+  repetitions: 5
+  required_percentiles: [p50, p99, p99_9]
+  environment_fields: [platform, machine, processor, python, implementation, cpu_count]
+dimensions:
+  generation_acquire_release_us: {budget_p99: 100, status: unmeasured}
+  queue_enqueue_dequeue_us: {budget_p99: 5000, status: unmeasured}
+  permit_canonicalize_us: {budget_p99: null, status: unmeasured}
+  permit_sign_verify_us: {budget_p99: null, status: unmeasured}
+  receipt_transaction_ms: {budget_p99: 20, status: unmeasured}
+  shared_rpc_hop_ms: {budget_p99: 10, status: unmeasured}
+  event_persistence_ms: {budget_p99: null, status: unmeasured}
+  backup_rpo_seconds: {budget_p99: 900, status: unmeasured}
+  restore_rto_seconds: {budget_p99: null, status: unmeasured}
+  reconciliation_oldest_age_seconds: {budget_p99: 3600, status: unmeasured}
+candidate_result:
+  status: candidate_not_frozen
+  local_execution: inference-slo-candidate-v1.json
+  shared_rpc: shared-rpc-slo-candidate-v1.json
+freeze_requirements:
+  fixed_hardware_profile: required
+  resource_limits: required
+  fake_provider_latency_distribution: required
+  payload_and_stream_distribution: required
+  real_provider_sample: required
+  all_dimensions_measured: required
+  architecture_approval: required
+gate_status: candidate_protocol_only

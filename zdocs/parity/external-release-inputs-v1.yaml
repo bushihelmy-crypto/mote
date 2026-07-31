@@ -1,0 +1,34 @@
+schema_version: 1
+revision: external-release-inputs-v1
+policy:
+  fabricated_evidence: forbidden
+  unavailable_optional_provider: record_unavailable_with_reason_and_owner_approval
+  unavailable_required_provider: release_blocking
+inputs:
+  provider_certification:
+    required_from_user: [provider_account_or_project_identifier, credential_secret_reference, approved_test_region, test_model_or_deployment, monthly_test_budget_usd, resource_owner]
+    credential_secret_in_repository: forbidden
+    current_cells: 381
+    current_ready_cells: 0
+    accepted_unavailable_evidence: [provider_not_owned, region_not_available, operation_not_enabled, budget_not_approved]
+  recorded_wire_fixtures:
+    required_from_user: [provider_credentials, permission_to_store_redacted_encrypted_fixture_artifacts]
+    forbidden_content: [credential_secret, authorization_header, raw_personal_data]
+  fixed_hardware_slo:
+    required_from_user: [dedicated_linux_host_or_ci_runner_label, cpu_model, memory_limit, cpu_limit, filesystem_type]
+    minimum_runs: 5
+    soak_hours: [24, 72]
+  supply_chain_review:
+    required_from_user: [approved_cve_scanner_or_report, license_reviewer_identity]
+  approvals:
+    required_signers: [contract_owner, architecture_owner, security_owner, release_owner]
+    required_record: GATE_0_APPROVED
+availability_record:
+  recorded_at: '2026-07-30'
+  provider_accounts: unavailable
+  encrypted_fixture_location: unavailable
+  fixed_linux_runner: unavailable
+  cve_report_or_scanner: unavailable
+  independent_release_signers: unavailable
+  effect: external_certification_and_approval_checks_remain_blocked
+current_status: inputs_unavailable_continue_offline_implementation

@@ -1,0 +1,6 @@
+schema_version = 1
+baseline_id = "sha256:2553d30ee82ebd16ed0f64499c01e88399be2ac0200475856dc4bb643d8b7404"
+generated_by = "manual:contracts-governance-v10"
+generated_at = "2026-07-29T00:00:00Z"
+canonicalization_version = 1
+cutover = []

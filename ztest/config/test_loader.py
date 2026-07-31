@@ -1,36 +1,37 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.config.loader`` — orchestration + config.yaml wiring.
+"""Tests for ``mote.product.config.loader`` — orchestration + config.yaml wiring.
 
-These exercise the real on-disk PROJECT layers (the repo's ``config/config2.yaml``
-+ ``mote/config.yaml``), so they assume the repo ships a usable base config.
+These exercise the real on-disk PROJECT ``config.yaml`` layer.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from mote.runtime.config.loader import build_layer_stack, get_provenance, load_config, load_config_with_stack
-from mote.runtime.config.overrides import ConfigOverrides
-from mote.runtime.config.sources import ConfigSource, discover_source_files
+from mote.product.config.loader import build_layer_stack, get_provenance, load_config, load_config_with_stack
+from mote.product.config.overrides import ConfigOverrides
+from mote.product.config.sources import ConfigSource, discover_source_files
 
 
-def test_mote_config_yaml_is_the_top_project_layer():
+def test_mote_config_yaml_is_the_top_project_layer(_explicit_product_config_root):
     """The user file mote/config.yaml is the sole trusted PROJECT layer."""
-    files = discover_source_files()
+    files = discover_source_files(source_root=_explicit_product_config_root)
     project_files = [f for f in files if f.source is ConfigSource.PROJECT]
     names = [f.path.name for f in project_files]
     assert "config.yaml" in names
-    # The legacy config/config2.yaml is no longer wired into PROJECT.
     assert "config2.yaml" not in names
 
 
-def test_load_config_builds_typed_config():
-    cfg = load_config(reload=True)
+def test_load_config_builds_typed_config(_explicit_product_config_root):
+    cfg = load_config(reload=True, source_root=_explicit_product_config_root)
     assert cfg.models.default.model  # base config provides an llm
 
 
-def test_programmatic_override_deep_merges_over_disk():
-    cfg = load_config(programmatic={"models": {"default": {"model": "test-override-xyz"}}})
+def test_programmatic_override_deep_merges_over_disk(_explicit_product_config_root):
+    cfg = load_config(
+        programmatic={"models": {"default": {"model": "test-override-xyz"}}},
+        source_root=_explicit_product_config_root,
+    )
     assert cfg.models.default.model == "test-override-xyz"
     # credentials from the base llm survive the deep-merge (not clobbered)
     assert cfg.models.default.api_key not in ("", None)
@@ -49,34 +50,44 @@ def test_untrusted_workdir_layer_is_credential_stripped(tmp_path):
     assert "base_url" not in workdir_layer.data["models"]["default"]
 
 
-def test_get_provenance_reports_sources():
-    prov = get_provenance(reload=True)
+def test_get_provenance_reports_sources(_explicit_product_config_root):
+    prov = get_provenance(reload=True, source_root=_explicit_product_config_root)
     assert prov.get("models.default.model") in {s.name for s in ConfigSource}
 
 
-def test_cache_returns_same_instance_without_reload():
-    a, _ = load_config_with_stack()
-    b, _ = load_config_with_stack()
+def test_cache_returns_same_instance_without_reload(_explicit_product_config_root):
+    a, _ = load_config_with_stack(source_root=_explicit_product_config_root)
+    b, _ = load_config_with_stack(source_root=_explicit_product_config_root)
     assert a is b
-    c, _ = load_config_with_stack(reload=True)
+    c, _ = load_config_with_stack(reload=True, source_root=_explicit_product_config_root)
     assert c is not a
 
 
-def test_programmatic_path_is_uncached_and_isolated(tmp_path: Path):
-    cfg = load_config(programmatic={"models": {"default": {"model": "ephemeral"}}})
+def test_programmatic_path_is_uncached_and_isolated(tmp_path: Path, _explicit_product_config_root):
+    cfg = load_config(
+        programmatic={"models": {"default": {"model": "ephemeral"}}}, source_root=_explicit_product_config_root
+    )
     assert cfg.models.default.model == "ephemeral"
     # the cached default is unaffected by the programmatic call
-    assert load_config().models.default.model != "ephemeral"
+    assert load_config(source_root=_explicit_product_config_root).models.default.model != "ephemeral"
 
 
 def test_env_layer_overrides_disk():
-    cfg = load_config(env={"MOTE_MODELS__DEFAULT__MODEL": "from-env"})
+    cfg = load_config(
+        env={
+            "MOTE_MODELS__MODE": "shortcut",
+            "MOTE_MODELS__DEFAULT__MODEL": "from-env",
+        }
+    )
     assert cfg.models.default.model == "from-env"
 
 
 def test_cli_overrides_beat_env():
     cfg = load_config(
-        env={"MOTE_MODELS__DEFAULT__MODEL": "from-env"},
+        env={
+            "MOTE_MODELS__MODE": "shortcut",
+            "MOTE_MODELS__DEFAULT__MODEL": "from-env",
+        },
         cli_overrides=["models.default.model=from-cli"],
     )
     assert cfg.models.default.model == "from-cli"
@@ -84,18 +95,22 @@ def test_cli_overrides_beat_env():
 
 def test_programmatic_beats_cli_and_env():
     cfg = load_config(
-        env={"MOTE_MODELS__DEFAULT__MODEL": "from-env"},
+        env={
+            "MOTE_MODELS__MODE": "shortcut",
+            "MOTE_MODELS__DEFAULT__MODEL": "from-env",
+        },
         cli_overrides=["models.default.model=from-cli"],
         programmatic=ConfigOverrides(model="from-prog"),
     )
     assert cfg.models.default.model == "from-prog"
 
 
-def test_layer_precedence_ordering_in_stack():
+def test_layer_precedence_ordering_in_stack(_explicit_product_config_root):
     _, stack = load_config_with_stack(
         env={"MOTE_TOOLS__PROXY": "e"},
         cli_overrides=["tools.proxy=c"],
         programmatic={"tools": {"proxy": "p"}},
+        source_root=_explicit_product_config_root,
     )
     by_source = {layer.source: layer for layer in stack.layers}
     assert ConfigSource.ENV in by_source
@@ -105,7 +120,7 @@ def test_layer_precedence_ordering_in_stack():
     assert int(ConfigSource.ENV) < int(ConfigSource.CLI_FLAG) < int(ConfigSource.PROGRAMMATIC)
 
 
-def test_explicit_env_bypasses_cache():
-    a, _ = load_config_with_stack()
-    b, _ = load_config_with_stack(env={"MOTE_TOOLS__PROXY": "x"})
+def test_explicit_env_bypasses_cache(_explicit_product_config_root):
+    a, _ = load_config_with_stack(source_root=_explicit_product_config_root)
+    b, _ = load_config_with_stack(env={"MOTE_TOOLS__PROXY": "x"}, source_root=_explicit_product_config_root)
     assert a is not b

@@ -5,7 +5,7 @@ import hashlib
 
 import pytest
 
-from mote.contracts.fileops import (
+from mote.contracts.file import (
     ContinueReadRequest,
     EncodingRejectedError,
     EncodingSource,
@@ -16,8 +16,8 @@ from mote.contracts.fileops import (
     TextReadRequest,
     TextViewMode,
 )
-from mote.runtime.fileops import FileOperations
 from mote.runtime.fileops import text_sources as text_sources_module
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path):

@@ -10,21 +10,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Callable, ClassVar
 
-from mote.contracts.fileops.errors import EncodingRejectedError, StaleSnapshotError
-from mote.contracts.fileops.models import (
-    AbsentVersion,
-    BlobRef,
-    CreateMutation,
-    EncodingDecision,
-    FileSnapshot,
-    MutationSet,
-    NewlineProfile,
-    PathToken,
-    ProjectIdentity,
-    ReplaceMutation,
-    TextViewMode,
-)
-from mote.contracts.fileops.serialization import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import (
     blob_from_dict,
     blob_to_dict,
     encoding_from_dict,
@@ -39,23 +26,34 @@ from mote.contracts.fileops.serialization import (
     version_from_dict,
     version_to_dict,
 )
-from mote.runtime.fileops.artifact_budgets import (
-    ARTIFACT_WRITE_TTL_SECONDS,
-    MAX_EDIT_PLAN_ARTIFACT_BYTES,
-    MAX_EDIT_PLAN_REVIEW_FACT_BYTES,
+from mote.contracts.file.errors import EncodingRejectedError, StaleSnapshotError
+from mote.contracts.file.identity import (
+    AbsentVersion,
+    EncodingDecision,
+    FileSnapshot,
+    NewlineProfile,
+    PathToken,
+    ProjectIdentity,
 )
-from mote.runtime.fileops.artifact_owners import artifact_owner
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.file.mutations import CreateMutation, MutationSet, ReplaceMutation
+from mote.contracts.file.views import TextViewMode
 from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
 from mote.runtime.fileops.encoding import decode_text, editable_text
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.metadata_manifest import MAX_METADATA_MANIFEST_BYTES
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 from mote.runtime.fileops.mutation_factory import MutationFactory
 from mote.runtime.fileops.query_semantics import (
     CandidateDiscovery,
     CandidateDiscoveryRequest,
     RegexProgram,
     RegexProgramError,
+)
+from mote.runtime.fileops.reservation_owners import artifact_owner
+from mote.runtime.fileops.resource_limits import (
+    ARTIFACT_WRITE_TTL_SECONDS,
+    MAX_EDIT_PLAN_ARTIFACT_BYTES,
+    MAX_EDIT_PLAN_REVIEW_FACT_BYTES,
 )
 from mote.runtime.fileops.text_sources import TextSourceService
 
@@ -219,7 +217,7 @@ class AbsentEditPlanSource:
     target_path: PathToken
     project_identity: ProjectIdentity
     expected_version: AbsentVersion
-    metadata: BlobRef
+    metadata: ContentIdentity
     encoding: EncodingDecision
     newline_profile: NewlineProfile
     replacement_count: int
@@ -255,16 +253,16 @@ class EditPlanPreview:
 @dataclass(frozen=True, slots=True)
 class EditPlanReviewFact:
     path: PathToken
-    before_utf8: BlobRef
-    after_utf8: BlobRef
+    before_utf8: ContentIdentity
+    after_utf8: ContentIdentity
 
 
 @dataclass(frozen=True, slots=True)
 class EditPlan:
     plan_id: str
     transaction_id: str
-    manifest_artifact: BlobRef
-    request_artifact: BlobRef
+    manifest_artifact: ContentIdentity
+    request_artifact: ContentIdentity
     request: EditPlanRequest
     discovery: CandidateDiscovery
     sources: tuple[EditPlanSource, ...]
@@ -334,7 +332,7 @@ class EditPlanStore:
             raise EditPlanManifestError("edit plan id does not match its manifest")
         return plan
 
-    def load_manifest(self, manifest: BlobRef) -> EditPlan:
+    def load_manifest(self, manifest: ContentIdentity) -> EditPlan:
         if manifest.size > MAX_EDIT_PLAN_MANIFEST_BYTES:
             raise EditPlanManifestError("edit plan manifest exceeds the size limit")
         try:
@@ -870,7 +868,7 @@ def _plan_payload(**values) -> dict[str, Any]:
 
 def _plan_from_payload(
     payload: Any,
-    manifest: BlobRef,
+    manifest: ContentIdentity,
     artifacts: ArtifactRepository,
 ) -> EditPlan:
     if type(payload) is not dict or set(payload) != _MANIFEST_KEYS:

@@ -23,10 +23,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator, Optional
 
-from mote.kernel.diagnostics import bind_trace_id_provider
-from mote.kernel.telemetry import bind_observers
+from mote.kernel.telemetry.context import bind_trace_id_provider
+from mote.kernel.telemetry.events import bind_observers
 from mote.runtime.events.telemetry import TelemetryRuntime
-from mote.runtime.logging import current_trace_id
+from mote.runtime.telemetry.logging import current_trace_id
 
 _ACTIVE_TELEMETRY: ContextVar[Optional[TelemetryRuntime]] = ContextVar(
     "mote_telemetry_runtime",

@@ -1,0 +1,4525 @@
+schema_version = 1
+baseline_id = "sha256:2553d30ee82ebd16ed0f64499c01e88399be2ac0200475856dc4bb643d8b7404"
+generated_by = "ztest.architecture.contracts_governance@1"
+generated_at = "2026-07-29T15:56:04.706518Z"
+canonicalization_version = 1
+
+[[symbol]]
+stable_symbol_id = "sha256:4d4927a81662d2a9a11e14321af48113c00684e83c5050be2eb38f7a30685ca1"
+canonical_import = "mote.contracts.agents.BaseAgent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6801025ec23b5303f573f8a6c70fdd6b6588a04b426dbc23c4a20d19de85d37e"
+canonical_import = "mote.contracts.artifacts.ArtifactContentRef"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4212a00e0cc51af44ca6a688596544fb0e1f285297482ef3c90caaa593789e82"
+canonical_import = "mote.contracts.artifacts.ArtifactPublication"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b5e80c15585e8d358564db1d309d93600f0a5b71132b184251a3eb844844f8dd"
+canonical_import = "mote.contracts.artifacts.ArtifactPublicationFailure"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ddadcb9642d58c845a1e9839fb50952609a1a2a8af07515d997e35594ba938fd"
+canonical_import = "mote.contracts.artifacts.ArtifactPublicationIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:619ac5c2af4e6ab7952b447f0d88ee0a7f5cfaf93f5d0b5374ee3be9a3bd991f"
+canonical_import = "mote.contracts.artifacts.ArtifactPublicationReconcileResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:860d4e8e34fbcab6653ea53f5faa48e957bd43ab772638512ac23025594a20d7"
+canonical_import = "mote.contracts.artifacts.ArtifactPublicationResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:71162a83dbe91140dafd1251214457559835eae094b05145f657b576a1b495ab"
+canonical_import = "mote.contracts.artifacts.ArtifactPublicationState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dc3146c6c1fad839a5a97228ca5407fd88e6b79b59435dd1ce466c850b4f43be"
+canonical_import = "mote.contracts.artifacts.ArtifactPublishRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cb7d58f8d16746c33cc8c57e30debec2d8e3bb46bc46bc4a6ec746f1b787268a"
+canonical_import = "mote.contracts.artifacts.ArtifactRef"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1c30ded5387aca0dc999b1873b9ab3c17c2ff24f9a1c725d61dfbc213348c3e0"
+canonical_import = "mote.contracts.artifacts.ArtifactRepresentationInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:532aa4041588470f5dd825efa961f2b2488514e373f127820cbf5f0a7ff94cb4"
+canonical_import = "mote.contracts.artifacts.ArtifactRepresentationIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7b2b4d15f7175ba51701e1db65370b1c914bb64c39233fad0bb8fe9d1c1e1be9"
+canonical_import = "mote.contracts.artifacts.ArtifactResolutionPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:39510f5beb800cc1a371594b506fddea9cd536cbbb4f99992b29c43a126131c0"
+canonical_import = "mote.contracts.artifacts.ArtifactRetention"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4fcb37591170c5986ff9d17315d7ce4cdf45b35d8b8671a80452c20933496537"
+canonical_import = "mote.contracts.artifacts.ArtifactRevision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:40e733cfe3ad304637b11d2693d0357ef9acfe1151ffdc2cb379699b0810601b"
+canonical_import = "mote.contracts.artifacts.ArtifactSensitivity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:41c5bde48ea37a45ff8bbe30235302085b0ba434085f4963357a6d8efea4c180"
+canonical_import = "mote.contracts.artifacts.ContentLocator"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:44b8f13dbabad7a8b65f1e033822662c80df749502ef3c064e7ad8eed12cce3f"
+canonical_import = "mote.contracts.artifacts.ResolvedArtifact"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9c47d92256e10f833a93119248bcbd2b9ac9c602d5a3c4d48c29bb30a63cfd6b"
+canonical_import = "mote.contracts.background_tasks.BackgroundTaskBuildContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:51ca8fd46aff537d60a673eba613de530ae9429e58725ab16b831a3eb049f324"
+canonical_import = "mote.contracts.background_tasks.BackgroundTaskService"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:02fbdbdd23f849014975d2711b370e7a681b61dbd0ba58a18caecc936e0e1a89"
+canonical_import = "mote.contracts.background_tasks.BackgroundTaskServiceFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d9b83bcfa3914776973484f9ef28292f8fc175c91b96578cdccb77275aabea9c"
+canonical_import = "mote.contracts.background_tasks.CommandName"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7416828ab8235321390a97354e3bdd3f5a69c48c006015c8349408964e44f241"
+canonical_import = "mote.contracts.background_tasks.CompletedInlineTaskResultPointer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:84bb8f222eb0dead819f9f8dfbbdd01a158c305536ad603f0bfbea0a354601dd"
+canonical_import = "mote.contracts.background_tasks.CompletedStoredTaskResultPointer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:79cc3a25fbaa5c7a6b2d8607aa17a4d759a3d87e921499205d035d5ddceeec69"
+canonical_import = "mote.contracts.background_tasks.FailedTaskResultPointer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:41f9b629cd1196ced64ec96fd343d5f56a35902648f9c10dd80551ca571a14f0"
+canonical_import = "mote.contracts.background_tasks.InlineTaskOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e96fc2ca14ab057d376f85467b408eddd476530408d152480c39f23bf2b008e8"
+canonical_import = "mote.contracts.background_tasks.PauseReason"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8aff2fe5a59d5f3bdd87624ca58f229e566f788d7f388aeec1a418aa885ea6e1"
+canonical_import = "mote.contracts.background_tasks.PausedTaskResultPointer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bbf8ea3d92f80c34f554d68eda03951cf21126746ee7cdac4fb0c870de2efcee"
+canonical_import = "mote.contracts.background_tasks.SessionId"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2c98416d07953e2c826ebb0ade4c61a71c692a46f5756df8607c771e57d69c6b"
+canonical_import = "mote.contracts.background_tasks.TaskFailure"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8c09e94981caae5fbbabf884a104c9be9dff4c55d502a1bbd3267e7dcdaf238f"
+canonical_import = "mote.contracts.background_tasks.TaskId"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0b8df8a3bcb06d8194140d787b80e550d910a619f78b6dbbc3ad40b256769471"
+canonical_import = "mote.contracts.background_tasks.TaskOutputLocationPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1cd5615c29f44b06ab37238289fff3b4dc1608360dc9b522aa422544174b9e5f"
+canonical_import = "mote.contracts.background_tasks.TaskResultPointer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fedb890092222f2e61bec4bbaac78b983531dcb128f27929770a6e375ac1d0a9"
+canonical_import = "mote.contracts.background_tasks.TaskResultRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:65443dd1e401f2bfc58622a5ee3277addf082bb798b80fde538e8a6c8f9ddbea"
+canonical_import = "mote.contracts.background_tasks.TaskResultRegistry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8533b148fffd3800c6e4e2b36d2ef2f65dde561f247ff6b655cf1695b37fd505"
+canonical_import = "mote.contracts.canvas.CanvasDocument"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2b31841c2864371333aab1302c052cdf1ee55a66920730b871d4f24964c7d7e4"
+canonical_import = "mote.contracts.canvas.CanvasElement"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5b82501614e4d9751ddcb4f0b285f72275b3b87d110408c8501f4df5b7bf1ce8"
+canonical_import = "mote.contracts.canvas.CanvasExportRepresentation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6c4c8b34d6a4f80c61f46f16261809b6d610ab41dbfcd8e959316ca1c4fdf887"
+canonical_import = "mote.contracts.canvas.CanvasOperation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:32b80c0c8d4234b951e3b02e7f6f38154977cde3f9e0d0dfca22775ee1166778"
+canonical_import = "mote.contracts.canvas.CanvasStyle"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ac5f44c7f46b33e160ca8d7527c1733002acbbb427a004ba2409288877041d06"
+canonical_import = "mote.contracts.completion.CompletionDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:213484b444b13976bd2792c4cc981c014d911d7fe0aff989f80240760a34438e"
+canonical_import = "mote.contracts.completion.CompletionKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0dc509c7de5b465bae9d38c3c6cd2aa003439d9be5f3ed91a7fc581377156763"
+canonical_import = "mote.contracts.config.base.ConfigModel"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6af015e287d1353459917360bf65e3ecac808756f357da8671aed95d15eb1afe"
+canonical_import = "mote.contracts.config.context.ContextConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4b962ee7676bc8807327709826db6349ba8ec96230494cd939ecb3b3eb7fdb87"
+canonical_import = "mote.contracts.config.langfuse.LangfuseConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7ea857f77335f5038b3b5b4d40674e25bfeef78156d97e41501d8564a621aa07"
+canonical_import = "mote.contracts.config.llm.LLMConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:076edcd914182597b36a2379296a03b6d6ed98d79cdf40a802807ff1d7c5fe57"
+canonical_import = "mote.contracts.config.llm.LLMType"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1b1a3cfba0793fdf98912f28dd585d11121e8eec4e5ead07055dda70ae6c706f"
+canonical_import = "mote.contracts.config.llm.PROVIDER_CATALOG"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fd5faec474b41cf5b73b60ff42b5385acdfae851befaf27978318296a06e8b33"
+canonical_import = "mote.contracts.config.llm.ProviderPreset"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:99a14de2f94e62ec56e5f8412b875bd62df55d9f44964dc4e15476d1ce4e7c3d"
+canonical_import = "mote.contracts.config.llm.apply_provider_preset"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1bd55537853d478c886e955e21beb98b0f9a8d3c0ba0e71413f39c70e484425c"
+canonical_import = "mote.contracts.config.llm.detect_provider"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3bc837fdfa4623e049f0cc5b9d15641ffdae29b0a2f90fbd2032b111bd4869c9"
+canonical_import = "mote.contracts.config.llm.find_env_keys"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5980e5dbe9b053714a3d413dcda05beff74d99ed266319576e5f23b47e1b4b0b"
+canonical_import = "mote.contracts.config.llm.get_env_api_key"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6264267eb4b72b6d9069af670fc967db8b8eba985796f07ffa3aea694e41e663"
+canonical_import = "mote.contracts.config.llm.get_provider_preset"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3f44a5ccf58732835cb996deade3700c2c110de44b6182b9556ca8a3d88d5ffe"
+canonical_import = "mote.contracts.config.llm.list_providers"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:abe8f929855629b099ff1b37c6a98ae39bc79756140ff98eb7acc3964a0657dc"
+canonical_import = "mote.contracts.config.llm.resolve_provider_name"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4f8a4680ed818d44da6af6dc3638125da93bd248c715dd77ec554a874742f785"
+canonical_import = "mote.contracts.config.mcp.MCPConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a64293bc7f0d84eba394be04dc911e962ae7943f62df95a82428b09f4dff14ef"
+canonical_import = "mote.contracts.config.mcp.MCPServerConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a6b70bf3ce07aa9c28c97f466f68b0e249e5d74e8672c27a04d3f481cf93d6d1"
+canonical_import = "mote.contracts.config.mcp.MCPTransportType"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:678ba8247297dbe45fce72da5a7e451e5dc86e79932ab26def97c3b07b13d2b7"
+canonical_import = "mote.contracts.config.model_failover.CredentialPoolConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:462ba953c1e1dab38490bfc1c2a39e18c75bc316869c211b96b2e203581e14fe"
+canonical_import = "mote.contracts.config.model_failover.FailoverGroupConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f1ec0c495478a513f64e486e491558858d48fb75a2a1ceaedd414cdf1d425a53"
+canonical_import = "mote.contracts.config.model_failover.ModelEndpointConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:67b536ca6164a382588979155c7395a439e298d31c6775cb5279a6cf0b1fcc63"
+canonical_import = "mote.contracts.config.model_failover.ModelRoutesConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f6920ca10edd4be9e558baa511e581ee939b9812ef211ebb4e358eaaab50ecb8"
+canonical_import = "mote.contracts.config.model_failover.RecoveryProfileConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:66b9394df72cc776d93210496fa76fc7b53b45cef35632ecb999f29212640e2e"
+canonical_import = "mote.contracts.config.model_failover.default_recovery_profiles"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:173c7e68f24c485d07c345932265028015f4e1f47ec204ae114724f987cb04c9"
+canonical_import = "mote.contracts.config.model_failover.ensure_default_recovery_profile"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d50ca01aeafade9e8b4f71f43569b4ecfb65b72659f48f0e4c90278fd279a413"
+canonical_import = "mote.contracts.config.models.ModelsConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ec6a42b19e5f159c2b617c97a3406bfd9f73dbfccb4decac0c21f12392601324"
+canonical_import = "mote.contracts.config.multimodal.MultimodalConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ad08c2e701b8292ffc1eec744a923a839968b4909e0a4825efb8ea379dc496e6"
+canonical_import = "mote.contracts.config.oauth.GrantType"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1bc12ed0e66a3774b26bff98e68e64f706870e76bdd6361b85727d62cac512f3"
+canonical_import = "mote.contracts.config.oauth.OAuthProviderConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:615e07a62832fda2033eee559f4989358b95e93ab8a10f9efb35becb7781e48e"
+canonical_import = "mote.contracts.config.oauth.PROVIDER_PRESETS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:27d3df3972a78b7bc53f5cacd21de4b8611f2192c4e720133dd8878a86edc781"
+canonical_import = "mote.contracts.config.oauth.StoreBackend"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:14560378042f4f771ce7467e72d35c997ae488742176589ca16f085b4c24ea84"
+canonical_import = "mote.contracts.config.oauth.apply_preset"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2fed49fe8a635c6d4516fb5652ffbe2f21c2b775e8aaea1bd8d1c8360f353687"
+canonical_import = "mote.contracts.config.oauth.get_preset"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6ba00a26bc1cb059888c11e34b9704f485b6efff88df2010bc2a6d40999e4cd0"
+canonical_import = "mote.contracts.config.oauth.list_presets"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:03de740a0ae0226be9cb4316f802fb2e5a69385823700b01b23eec4960188fe5"
+canonical_import = "mote.contracts.config.observability.ObservabilityConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e9c923d002bb1bd59d025a922b147d2aa1b2377ad1fef6ac62194590771f8115"
+canonical_import = "mote.contracts.config.resilience.ResilienceConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:65342b705b573f9a28ab759f462c074fde53dbacbfd8ae1a98b6a6313b4ba93a"
+canonical_import = "mote.contracts.config.routing.AgentRouterConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9ee3f3cbb42b36ed439d31981e449c6b6ba6ea674e817b5d1f9928403b590170"
+canonical_import = "mote.contracts.config.routing.RouterConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:72ad7d8b44ada0965b949393e5c76d4761d13b26e96e6afed739a458986123d4"
+canonical_import = "mote.contracts.config.secrets.SecretsConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8205b2e71012042521a721cedf131efbeef002dcbbc41e746d8ba2961085618c"
+canonical_import = "mote.contracts.config.sentry.SentryConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c6a7a713b3b2d5d9ea8ad75148fb9140cfd349a507d6b188025f74975da4bc7b"
+canonical_import = "mote.contracts.config.tools.ToolsConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5537393b751d689378aa43ea5bf672c253f570b1d4a0461961ddd0f60b3caefb"
+canonical_import = "mote.contracts.config.ui.UIConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bd99d3ed80deee9f7420848a4633016b619f48d413df33feb0401fea20f59cf7"
+canonical_import = "mote.contracts.config.workspace.WorkspaceConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3aa42fd052d708865e7cb0d46b375923413c724e5b7b0be58ab916f228adb092"
+canonical_import = "mote.contracts.constants.context.AUTOCOMPACT_BUFFER_TOKENS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c17af27eba8418a4a1d09a7fe3c0e3158c8923994780368860075a98aa143d41"
+canonical_import = "mote.contracts.constants.context.AUTOCOMPACT_KEEP_TAIL_MESSAGES"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:600fe40658497aa00bf9a767d051cc71d03790a31a85b6a47977874395e5b753"
+canonical_import = "mote.contracts.constants.context.AUTOCOMPACT_KEEP_TAIL_TOKENS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:164c123788fb017e73c3b95e8347cde412bce0c4a49c85284453d4368c0dd8cf"
+canonical_import = "mote.contracts.constants.context.ERROR_THRESHOLD_BUFFER_TOKENS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1bcff694c7a76dfc925e2d4f172634acd7fc44ef467e842d4e942cafa24dfd3c"
+canonical_import = "mote.contracts.constants.context.FOLDED_WRITE_MARKER"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:257eaa52a2f98d1a95c7feaca5c24445a924bc4130bc9bf5b1879067b63437ad"
+canonical_import = "mote.contracts.constants.context.HEAD_DROPPED_MESSAGE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:417fe8d74021614c13d2de1cd9e1afee8554c8bd66ba9d6c2996b9c841a43cc7"
+canonical_import = "mote.contracts.constants.context.MANUAL_COMPACT_BUFFER_TOKENS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:29dfdb783a7f7f55659836346de27237e8af478751ed7d12ad1cf78c6cb430ac"
+canonical_import = "mote.contracts.constants.context.MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:04aa5fedefbc3bfe1913247b5bf160e65c3b1ea95985b104ff64719f031eb5f8"
+canonical_import = "mote.contracts.constants.context.MAX_OUTPUT_TOKENS_FOR_SUMMARY"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c9d4182e3229f3916bf014b753bcad49461886fde5f4b47f1a19f7cacd4aefd3"
+canonical_import = "mote.contracts.constants.context.MICROCOMPACT_CLEAR_AT_LEAST_TOKENS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:92ce50167d33340b7a5972f7c0072422d2a90435b644f87eb9231e6583f71570"
+canonical_import = "mote.contracts.constants.context.MICROCOMPACT_KEEP_RECENT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0bdade7424dcfeb51b56781c51b76a27efb0830c48166a7256ff4bc65d4adb26"
+canonical_import = "mote.contracts.constants.context.MICROCOMPACT_TRIGGER_THRESHOLD"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8ea628b91f06a275f0c1c3b23f6bff6cfe83479e776e48af935afb1c91217469"
+canonical_import = "mote.contracts.constants.context.MODEL_CONTEXT_WINDOW_DEFAULT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:167dd7cb2f97553f76e0da094ad5e3688c712bb30aaa27600037d3920400983b"
+canonical_import = "mote.contracts.constants.context.POST_COMPACT_REHYDRATE_MAX_FILES"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f968f8b5efa67d7760e31945522ba4dcf3ff3a99b9b6518af4a7268011f9ce56"
+canonical_import = "mote.contracts.constants.context.POST_COMPACT_REHYDRATE_MAX_TOKENS_PER_FILE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:226b165d6eff4de3b91ff0846e174ad319e06c134edbbe2e8fa0c245d3f4cc0b"
+canonical_import = "mote.contracts.constants.context.POST_COMPACT_REHYDRATE_TOKEN_BUDGET"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:83a320ccab29dd672714d06dead2a8dd17185b8f1672d456cc21f6c5f735fbf7"
+canonical_import = "mote.contracts.constants.context.TOOL_RESULT_CLEARED_MESSAGE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a54919cbac08b1f133e94f7403b3d993273e5c4e47523cd60d5b9381830f4818"
+canonical_import = "mote.contracts.constants.context.WARNING_THRESHOLD_BUFFER_TOKENS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e3cf7c01b81ef9f62c92f27aa33196a7d7ad0a88ab202072bd2eb6cc84ba174c"
+canonical_import = "mote.contracts.constants.messages.AGENT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7c23df2d4ae2aeca6be4dbbe4f9bdb95fc3d381d31ce05f9e7023b25a7d6bbce"
+canonical_import = "mote.contracts.constants.messages.CACHE_INTENT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:470338e253013ec48dcd239564c4725d1159b875fa101f07300a415e391fad4c"
+canonical_import = "mote.contracts.constants.messages.CACHE_INTENT_EPHEMERAL_TAIL"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4f4fc14dc5d1d9a2d8a67315df66191cfa5234f5abd25a038d18e023dfb69cac"
+canonical_import = "mote.contracts.constants.messages.IMAGES"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:df5d86837bb0d9649314c102cd86c844405ae1c57e047b0244b0c34f9e414e35"
+canonical_import = "mote.contracts.constants.messages.INTERJECTION"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:04054877ab55c991975abfad154a9aac68a208616c8ecb22a68c7f6c9b1e87e2"
+canonical_import = "mote.contracts.constants.messages.MESSAGE_ROUTE_CAUSE_BY"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4c62fc5b9d7ea171dd59b11fe268fc2a6d36211930a5226ae9ea7128f81c5ade"
+canonical_import = "mote.contracts.constants.messages.MESSAGE_ROUTE_FROM"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2e3627bd9af0e3a6342b03d46542842ab065f3059b39fae8d61a062409e1755a"
+canonical_import = "mote.contracts.constants.messages.MESSAGE_ROUTE_TO"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ca809fe80bce79c5b27584f9a4d8a18cbf2ccc5b8aa0ac9726de4c120b112244"
+canonical_import = "mote.contracts.constants.messages.MESSAGE_ROUTE_TO_ALL"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0aaa7aa6140db8632695cc4325a63ff4688c117056dd606ac761f435979eaeb7"
+canonical_import = "mote.contracts.constants.messages.MESSAGE_ROUTE_TO_SELF"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:34cad0eff942ab31248453267a45219bb5463f11ab2b553cce27ce41da68469a"
+canonical_import = "mote.contracts.constants.messages.PDFS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:795f91d9ac0801e60477124cba6cc450250ece1701f514d2e5672b2fd2099c23"
+canonical_import = "mote.contracts.constants.messages.RESOURCE_ID"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1e9c7a4d8e7c97c564a4ee5ba6eedfa82d1a36dc75acba88f8df7d5c496c5322"
+canonical_import = "mote.contracts.constants.messages.RESOURCE_KIND"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:80682472f47a277cf515e18064fe448c32ca964072269f0f2d8ed2ecdf103920"
+canonical_import = "mote.contracts.constants.messages.RESOURCE_STICKY"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:da0c5e4140c287a9d53ccdc27f3e7620ee50bdf2fc4711264d5e5961dfbed301"
+canonical_import = "mote.contracts.constants.messages.RETENTION"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:29083dafb5ad02b9eb8d42da6781beef9359e6ad499e11dc75157d5dfe9efb67"
+canonical_import = "mote.contracts.constants.messages.RETENTION_ERASABLE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7ec88725968ebd972fb7433b0038a372aebf0ca74f3cd3651591bd2b9d05cea5"
+canonical_import = "mote.contracts.constants.messages.RETENTION_PIN"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:752f566f8926a4f784a274c2dfd1f2cca8dbfbf93fdef79d20c58e3ead0fc709"
+canonical_import = "mote.contracts.constants.messages.TOOL_CALLS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5a0eb5905f21dfe5c4ccd999cfc42cea20359d2cbeef05c6349a764c629e11a7"
+canonical_import = "mote.contracts.constants.messages.TOOL_CALL_ID"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b7b31a139218887e3cc64902a9d2ddc2d876ba47dc5b311b4f956cc0f4b0a347"
+canonical_import = "mote.contracts.constants.messages.TOOL_REFERENCES"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5c757d75f70cdeccc9e5b8a0aa840021dd0045cad67e2ee9f31e37541d1c555d"
+canonical_import = "mote.contracts.constants.messages.TOOL_RESULT_RESOURCE_PATH"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:26d41ba15062589556fe0ce20a27437005feae947294d82c99d860ab70ee3bda"
+canonical_import = "mote.contracts.constants.tool_output.PERSISTED_OUTPUT_CLOSE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3df0ba51bf6f1a683a56b016e276ad4c5e1a0139b3333cd41a5df9f5414a4394"
+canonical_import = "mote.contracts.constants.tool_output.PERSISTED_OUTPUT_OPEN"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c373f25c7e4c4272f63dbdcc8a8561dcc20fa0736491cdc6443e5b89f0f682b3"
+canonical_import = "mote.contracts.content.ContentDigest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4c47da540ff2565e1e07e7a8e44d67f0d2871391c39c638382769428835f46fc"
+canonical_import = "mote.contracts.content.ContentIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8e30b864e22a61db91add7415ff45e5e34e6eac1b883fda89ac12f40636ba08b"
+canonical_import = "mote.contracts.errors.artifacts.ArtifactIdempotencyConflictError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8a61769e1e2fb8700ea1aefa9ffb765c98cd99136da35d94703d4bacf957d209"
+canonical_import = "mote.contracts.errors.artifacts.ArtifactNotFoundError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:376c8d6c87fa8b64083b2f97117472e3b09523acbe9d7f78d92e575b83d4bd27"
+canonical_import = "mote.contracts.errors.artifacts.ArtifactPublicationTerminalError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4c365a4c8f17af3a954d8909880004f7121825d1c58982933d8faa71c5ee69dd"
+canonical_import = "mote.contracts.errors.artifacts.ArtifactRetentionError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:69e96d755238003006bb3b36e2132f27560e22b09de50e121d6dec180b873c7b"
+canonical_import = "mote.contracts.errors.artifacts.ArtifactRevisionConflictError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5daeda44ede539624dc6801b21e1992cb629798af4c143f151db4385f157779c"
+canonical_import = "mote.contracts.errors.base.MoteError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4ee3627290ef00d7bd46787f3ecf6b54aa9fc4445cd8baecc5fbff1f9fbe2da7"
+canonical_import = "mote.contracts.errors.base.NonRetryableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c50fa059d6b082be9c39f2c65bc0a36fd1bfead9e10c1f665322e9ddd51d1802"
+canonical_import = "mote.contracts.errors.base.RetryableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:44e5e3644038d07e627e289f65d3ac56929fc534e6bc46612396f3e0680c1a9e"
+canonical_import = "mote.contracts.errors.codes.ErrorCode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3ad139439ec2348c91e7f6ee1a570cb7f3cd7dc8a0833f2a0429b6f7af5e53c6"
+canonical_import = "mote.contracts.errors.codes.RecoveryAction"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c7597b04a3db297873ce2dcc01037b6a0660eb87ce423ccea5196d1591d661e4"
+canonical_import = "mote.contracts.errors.config.ConfigError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5ba8b9a37b30066515a572808f3609c3a3b26d42294a01b71d42efbbde774e57"
+canonical_import = "mote.contracts.errors.config.ConfigValidationError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2c7347c42e5dbf50a76695d50172ae81da9d3f997de203536579c4400571c0c5"
+canonical_import = "mote.contracts.errors.config.EnvKeyNotFoundError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0eff8b81b3fc0c45b9d462212273c6f2f82e64ad088e6630f584a2c842c614f7"
+canonical_import = "mote.contracts.errors.config.MissingAPIKeyError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1e70e2e1893bf0fe32b380798903d2a9b887df5086421442141e6e05fbea6ab7"
+canonical_import = "mote.contracts.errors.config.UnknownConfigKeysError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:930f19fd7f1054f8eccfd880df80b632216f4ac29dc44add0da933b4cc2f2b38"
+canonical_import = "mote.contracts.errors.environment.AgentControlError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c0b9209d9a1c2a03dd7d5ac99f4b8fcbaae75b0321238876ac808277cf947557"
+canonical_import = "mote.contracts.errors.environment.AgentLimitReached"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9b741acb60838b28fea7403dcf2322f84e9c35deb2c384d65d42f306073c8288"
+canonical_import = "mote.contracts.errors.environment.AgentNotFound"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7a4024cb99117b3667b592f078c759e1bb4875b71c6a08647faf53c9d1b2e9c7"
+canonical_import = "mote.contracts.errors.environment.AgentNotKnown"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4c4133e63470436aaa79cb23501773171a23649347f6ed835b49c2671c40e6c9"
+canonical_import = "mote.contracts.errors.environment.AgentPathExists"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5380edc845587c810e05592ef6a772595c4046cbe7cf8e9bd01380c4af52986f"
+canonical_import = "mote.contracts.errors.graph.GraphBatchFailureError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8b6654549827adfef80f0db2a8973edb3d8837e83bea6bd13f7ea1b7c1828b0f"
+canonical_import = "mote.contracts.errors.graph.GraphError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e57bf31d6cf621b29a44f2919f5138b08c36fc7b5d466cc64ebc76ef7d95f22f"
+canonical_import = "mote.contracts.errors.graph.GraphNodeRetryExhaustedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ad67de17284489c6722d3537a1a66092fd3d93dcd19cb5d30ed3835ba7ae67d3"
+canonical_import = "mote.contracts.errors.graph.GraphNodeTimeoutError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4d220a8c12b5df0d11766813132cf165844ee4f16fb925a5d258ed1c65887380"
+canonical_import = "mote.contracts.errors.graph.GraphParamTypeError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cf6f952100b968025ba645410ca1fca45b1936c819fb713c62862ce37a72029f"
+canonical_import = "mote.contracts.errors.graph.GraphRecursionError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f5f7103b1efecf01698783290f28e64c50f4e8d5f62ef9e1b5047e0be51b2700"
+canonical_import = "mote.contracts.errors.graph.GraphRouterError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:36f9b8c97c08a3f6182a84a7483a1523630bb0d962c9322feed70f1e248aa7c0"
+canonical_import = "mote.contracts.errors.models.ModelCallBudgetExceededError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:05b3ba9515788f8a976d28b9349d500198c4ff38e708cceb7708dfcdbac7205c"
+canonical_import = "mote.contracts.errors.models.ModelCallDeadlineExceededError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:632c59979fc3ca126a979d9ff4881ab1da8c32fd4d370334b49b19c906d605c3"
+canonical_import = "mote.contracts.errors.models.ModelCallError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:28822f8d44761d002b2e08c588d2e98885d695f65e991092182d95b6bf155dbe"
+canonical_import = "mote.contracts.errors.models.ModelCallExhaustedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8b5872ae6aaebcffb793e90277d2b35df17c04f60b161e70cf223c67a7435e62"
+canonical_import = "mote.contracts.errors.models.ModelCallInDoubtError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5aeb6af2c5d89c67e809d63002c46c74507ab570f48ab0a291ddce14c44ffb7f"
+canonical_import = "mote.contracts.errors.models.ModelCapabilityUnsatisfiedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bdb28411f1bb221bba7c62a4c464ae5ef247824ef4bf0a868b32aaeaaa640bd2"
+canonical_import = "mote.contracts.errors.models.ModelGovernanceViolationError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:60ac22afdb801a236d7c98073fad58413bdf81d4c1d05ba010d3a07424e52fee"
+canonical_import = "mote.contracts.errors.models.ModelRouteUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e78a54ef00403156521e8212dadfd645771902d7565d3950ddfa342af4eaef4a"
+canonical_import = "mote.contracts.errors.output.OutputCommitFencedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d9c9f21e0dbf08d61f8ee690b0bb55b1542df237b88a1b8c91a1dcfab581be79"
+canonical_import = "mote.contracts.errors.output.OutputCommitStateError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b59236af807f0ab7eca17573613252a137278bd4a46a812ea673036a9527c7fd"
+canonical_import = "mote.contracts.errors.output.OutputCorrectionExhaustedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:11d226eb4af67e863b7742e73c2645f87009214c6242dd6d60f402b939f4fd3f"
+canonical_import = "mote.contracts.errors.output.OutputResumeContractMismatchError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aa90391e91d6e6f4fcad82326bc9b1962ccc7eb46bdb6927120aa24d25cf5800"
+canonical_import = "mote.contracts.errors.output.OutputValidatorError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ae7ced1ee8212ddb12e74c4b5220e45691e46e1fa8c615653a94cd54218c741c"
+canonical_import = "mote.contracts.errors.output.OutputValidatorUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6a8181b58abf39cc2a968512338cbabec6e935282ab3a3ac6138121c6db36abf"
+canonical_import = "mote.contracts.errors.output.RunLeaseCoordinatorUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c1e9875b5aeec8b24cb3baacd96fc5135e4c26b75ce84cd29f48117972dd4b0f"
+canonical_import = "mote.contracts.errors.output.RunLeaseUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6a85e10d456230b8d213fcd90b7abf73ad1c6c67039473e5fd7338e8229abb12"
+canonical_import = "mote.contracts.errors.report.ErrorReport"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ac01899250cbb49b81a1fa85062c24a5933138c7cc166cc46c4c221a851dbc87"
+canonical_import = "mote.contracts.errors.report.render_error_block"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e890651e7e68cdf7582ded71b1f74a99a337ad39b9801ca330a7ef4c33b301ef"
+canonical_import = "mote.contracts.errors.routing.RoutingError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:835991ace52646fbd76707461079426e896b519e86f322095114dccfa9340a44"
+canonical_import = "mote.contracts.errors.routing.RoutingPolicyTimeoutError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:da2fb09ca3143a45db6f8e13ae88beed280a6d710f1ffe77132e3f2bac680dd8"
+canonical_import = "mote.contracts.errors.routing.RoutingProposalInvalidError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:258c6d0fc84eefcdcc30b23f666523101cc8d84ebf800c90acadfab5de821f5b"
+canonical_import = "mote.contracts.errors.routing.RoutingUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aada7ba4a4c75367afa1971b5197ceb470c8cc4dc35ba64b71b79d8e62324072"
+canonical_import = "mote.contracts.errors.runtimes.LeaseCoordinatorUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8a778f40e917c57e59aec6b349824f3f3ae5c6b76fbfd5f80a13129135e8e461"
+canonical_import = "mote.contracts.errors.runtimes.LeaseFencedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9f5188ae240db58fadbcc9c3ae26c1ccb8c9857fa83e0c8bba19297d377aeea3"
+canonical_import = "mote.contracts.errors.runtimes.LeaseUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cd7f0bb9bca6acb899b579fb5a73cab63d79ffee353bc01412dbb2bc99c5e8e3"
+canonical_import = "mote.contracts.errors.runtimes.ManagedRuntimeAliasConflictError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d704f6c687b79dd01d7c5a91e87a4f146c281070f9958e0722bfbb5b1164bb99"
+canonical_import = "mote.contracts.errors.runtimes.ManagedRuntimeDurabilityError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:010961500905c1c38038c330bdccf08042daa773834e58c1c071859e560d15d5"
+canonical_import = "mote.contracts.errors.runtimes.ManagedRuntimeNotFoundError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7cdf47843a8be778654270e18345eb8aa365facfdd4ecd186bae9d4a97f73fe0"
+canonical_import = "mote.contracts.errors.runtimes.ManagedRuntimeRevisionConflictError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:89a31082c18227b966a61eea11e2dc73c73f694f53ce64700e7445da84ed5f56"
+canonical_import = "mote.contracts.errors.runtimes.ManagedRuntimeStateError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a571d821b4083d774f20462f71bcc8f9b4d99dcf4b8236d84d27b22cf31b9ee1"
+canonical_import = "mote.contracts.errors.services.ServiceCallDeadlineExceededError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:43a2059bb9f6acc5afbac39e5011243d8f4f84ae0d6159d0a99d9e9ec292fd0d"
+canonical_import = "mote.contracts.errors.services.ServiceCallError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:64fa69f66bc432f0b131149351bc040149241cc95f38d42ffccb02cb31f7112b"
+canonical_import = "mote.contracts.errors.services.ServiceCallExhaustedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4751b4f8698002c626bf76239a676dec73df47ff27e06f27f4947781a2f685ff"
+canonical_import = "mote.contracts.errors.services.ServiceCallInDoubtError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:060130e7b837392491f597c4106e40b1422ab70382b36dc2b9fbdf468dccacb1"
+canonical_import = "mote.contracts.errors.services.ServiceRouteUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c9b367ec78d5c3b014f286b38831dcb79fe3c466ebeea83a650bbc9e0aa80a0f"
+canonical_import = "mote.contracts.errors.tasks.BackgroundTaskCancelledError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7f7b53f78976e95bf9bfdb5939110e5a095fcf98885275da98283cc576610aeb"
+canonical_import = "mote.contracts.errors.tasks.BackgroundTaskError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bca217aae6808305922b1c50df03fe67aaa7628c99582250157f50f9c81e5527"
+canonical_import = "mote.contracts.errors.tasks.BackgroundTaskTimeoutError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:283f904b1dfb045bde8051260a24d1b8c62c9350b05255788b698d031c5cac3a"
+canonical_import = "mote.contracts.errors.tools.NonRetryableToolError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e03f585d14290de92cbda5931be47f6d08f2c2769b11a65add7358459df105f6"
+canonical_import = "mote.contracts.errors.tools.RetryableToolError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9018508c1c5e22ee27ee9a670dd3ea11206265596032bc64ef55a468b64e7778"
+canonical_import = "mote.contracts.errors.tools.ToolError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8c5ae60c3503770afb86cd50cca92aaa0854e7a49e3f1dc41f39b13093d9a7d9"
+canonical_import = "mote.contracts.errors.tools.ToolNotConfiguredError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1d7ab6d792aaf1ad94f5b7e130fc1238768569d7bce82de72dafd6d788a3a0c0"
+canonical_import = "mote.contracts.errors.tools.ToolNotFoundError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:64e2e781132a88ad7e97b1fb4685721af2edbee26968d37c0b9261bab5741e65"
+canonical_import = "mote.contracts.errors.tools.ToolPermissionDeniedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3ac73760713b32ad90237a890b5711851acdc343ff29acc5c50581883f85840a"
+canonical_import = "mote.contracts.errors.tools.ToolValidationError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:165dcf0a68e10ce34412e6edad62336c01caee054e130dbc952e6f9b58d7d26c"
+canonical_import = "mote.contracts.events.envelope.CorrelationId"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e1c8991fcef472b8b1a96a544a33071db5f8e4b72c3f77b1ffc325d2ee54e4e0"
+canonical_import = "mote.contracts.events.envelope.EventEnvelope"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b4505ed2b7367e1d83240a002575c7cad8bb5de7c1e0b614c38ef4d67cc1b3ec"
+canonical_import = "mote.contracts.events.envelope.EventId"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:995c464c29d8bb54da2a0431a13922189c3a48fcc8e3d11cac4644e2b48f30bc"
+canonical_import = "mote.contracts.events.envelope.EventType"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fbe9cad103f04f3bedb9dc91f07328f08e1d6b23455fe5e27c63f60cc8988f35"
+canonical_import = "mote.contracts.events.envelope.JsonScalar"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f5e484c26c0b51378c622fad7e46b8ddd636d0829d7952146163e5d6ee3761fa"
+canonical_import = "mote.contracts.events.envelope.JsonValue"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:83f8cf183f01388e5678849c52f1a75d0398f50cea171a3324a78c32c5c72a7b"
+canonical_import = "mote.contracts.events.envelope.StreamId"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:68fe716a5937c95d7eee818c1cbcea405540caaa58cf960699b01d8a1a00331e"
+canonical_import = "mote.contracts.events.envelope.thaw_json"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0bc550cf3c669dca2aa67e853d31bfd5eccc3428f01d31b82d31614c0cc9ee06"
+canonical_import = "mote.contracts.events.types.ACTIVITY_COMPLETED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:490e31d7feff309b40146077a728d0f4153b827647f35fe354509b5c568d4b66"
+canonical_import = "mote.contracts.events.types.ACTIVITY_STARTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e81a610b88499cc8a9ed2b3704ae2a012e570b603569b0d11d87e1192dfb00ff"
+canonical_import = "mote.contracts.events.types.AGENT_LIFECYCLE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d1c837ea90db959d9247d5bf3aec4779c5364bdf69601fd733e36e17745c4568"
+canonical_import = "mote.contracts.events.types.ActivityCompletedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f717b640d644a32dc0e60b04dbc9d384d69111229c26e6567beaf0a8d7b1c2e8"
+canonical_import = "mote.contracts.events.types.ActivityStartedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:18ea29a9958cae0fe7344104348e4ad8a1ff27b66311b81f4012695ff826824d"
+canonical_import = "mote.contracts.events.types.AgentEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0373d0843a274e21ce35aef3c4c5ae008a68762408b1ba7e8e8a18eeb0c45ca2"
+canonical_import = "mote.contracts.events.types.AgentLifecycleEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9f625659f43359c139ee141a6350c5d169e0f837a576c60bd1e850165f8a3ba9"
+canonical_import = "mote.contracts.events.types.BREAKER_STATE_CHANGE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:178660d5a09faa8f94673a52ae837df96b58e41b08224e876ced855192343942"
+canonical_import = "mote.contracts.events.types.BUDGET"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:114522700e247c70d120594f86b5b369ffec7260108416b6b5984f89f5da4eb7"
+canonical_import = "mote.contracts.events.types.BreakerStateChangeEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e7ef41ceb9ce7e8bafeedb040e79030c23ec9fe4015bb54af676184fcb07279c"
+canonical_import = "mote.contracts.events.types.BudgetEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8c046a5a4eeebe789c2c15094d3826c691d048247af45f4e5585934e235468b2"
+canonical_import = "mote.contracts.events.types.CONTEXT_COMPACTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d9b5d29e8e5292c9249f4dfca62b17802de2638f06ddda9edb2d6e079d8ec8e2"
+canonical_import = "mote.contracts.events.types.ContextCompactedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4f72c3238d78709362d330d9309447635cc547bebd1e65584baf776f2bcdb1a9"
+canonical_import = "mote.contracts.events.types.DIAGNOSTICS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0c9f5334570f8e522f2ffa730006a1ef3e820eaee8c9e92f09c72fa1ef8dbce2"
+canonical_import = "mote.contracts.events.types.DiagnosticsEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:070fe7c5e5627b3ed9ce10f9ff2e79ce877c382fed05232e25c79e5920a3f66d"
+canonical_import = "mote.contracts.events.types.FILE_CHANGED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8275337f5405abc1ed816170fdc0694dac7e0fc34260f72f739944204c32fc8f"
+canonical_import = "mote.contracts.events.types.FILE_MUTATED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:44c2e5ea9edbdee737c345de87b5a52fafc3b97c474622501c74a294b289874a"
+canonical_import = "mote.contracts.events.types.FileChangedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f68e33fb50cb6d9065cc145ba5e258d50dd272709e9e02431d4552050279a8e0"
+canonical_import = "mote.contracts.events.types.FileMutatedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ad43b684d54add9bc6ed3b8df665bc6b90134654e44738f52188cf0453d4b7e1"
+canonical_import = "mote.contracts.events.types.HISTORY_EDITED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:384094c6fb58e629ef8730c4733d47f5a3b73a78757736f3ab99beec375cf54c"
+canonical_import = "mote.contracts.events.types.HistoryEditedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6fb43ef415d7e2bc498160f2cc3a6d40be1ce9ae605283c04dd3809f60df5baa"
+canonical_import = "mote.contracts.events.types.JOURNAL"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:99ec3dc3e49a6828e5b46887103586d94106c3a11290726b101f7f5c1e530ba7"
+canonical_import = "mote.contracts.events.types.JournalEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:16e02028c8436ae41be860ce070a540332c3a57cf87060f45cc20d74512821df"
+canonical_import = "mote.contracts.events.types.LLMStreamCommittedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c6b0e1da16b3828ed4f296e7ed867dd4b9a82f4760aab6276b7fc7971f3726f3"
+canonical_import = "mote.contracts.events.types.LLMStreamDeltaEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:63249a379db49a7988c58fe73dbcc4005ba2c548c2c95bc54f27f191533f85d8"
+canonical_import = "mote.contracts.events.types.LLMStreamDiscardedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ac5ee43c258f9c65df132de600e50e349733774e4f2f9d6aff9231217702cd45"
+canonical_import = "mote.contracts.events.types.LLMStreamEndEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e9ca5493a9d501affb30132898556f58f3f4f6f07be15f1e68b468ed8ec5a6f9"
+canonical_import = "mote.contracts.events.types.LLMStreamInterruptedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:63faebaa181c7f9fe6ef35d24409c487f5a3a3536861affaf3aad79c880cebfa"
+canonical_import = "mote.contracts.events.types.LLM_STREAM_COMMITTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b6716b034f670c27102ae8fc1979b6ce37018eeecbb207b9246b86cf8df53a34"
+canonical_import = "mote.contracts.events.types.LLM_STREAM_DELTA"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:115e8ac0c225838a8601e661723c3af6e78489a7cce32f0f0f2a7637a235ea8f"
+canonical_import = "mote.contracts.events.types.LLM_STREAM_DISCARDED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9cb80277b4fa97088d2b58562fbb80c43636b6d02f3f80c2c064f52ab20e15c7"
+canonical_import = "mote.contracts.events.types.LLM_STREAM_END"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c3e76889f7ec08dfc5805cb6b6e4684115685e69392050306a52e19752e14720"
+canonical_import = "mote.contracts.events.types.LLM_STREAM_INTERRUPTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:88902d5e95b2fe527643dc8c28c8860d01fab762b5427c15aa35e7f2e5f12cb2"
+canonical_import = "mote.contracts.events.types.MESSAGE_APPENDED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:98745634e56a67c9fe379cbe0730c5ebfa5c140d7a5e149ab2383af66b9d441d"
+canonical_import = "mote.contracts.events.types.MODEL_ATTEMPT_ADMISSION_REJECTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:880606a01e4db1a46dcc855008cee2b4f9cfedaafa1165161c13b5cb4f45e382"
+canonical_import = "mote.contracts.events.types.MODEL_ATTEMPT_FINISHED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ac54e3eefe2181b83860ba30a10bb23842949aeba0725955267b0e07e048bcc2"
+canonical_import = "mote.contracts.events.types.MODEL_ATTEMPT_STARTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:55c481fa7007cf0f5a9bd6ecdabb17261fc7f51723c3f590390b5eea87cbd2ff"
+canonical_import = "mote.contracts.events.types.MODEL_CALL_FINISHED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fa9c71bfcd00fb0fb93d9d69bc0289f745b53ed8af5d34b3ce1965aab75c2347"
+canonical_import = "mote.contracts.events.types.MODEL_CALL_PLANNED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e5e03cf115894a01f0f7bc1130a17d43956da19390935da381c8ca686c4816e4"
+canonical_import = "mote.contracts.events.types.MODEL_CONTEXT_REBUILT_EVENTS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:13b804c400e5237e938133aaca8251a23584e5e5b792091bdb1c606d13839864"
+canonical_import = "mote.contracts.events.types.MODEL_FALLBACK_SELECTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:02f81ee93bc780ad5e967166a4f1d8987eb4695625d2322d9cd073034e495f0c"
+canonical_import = "mote.contracts.events.types.MessageAppendedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bda18da4a36f842c474159b92003d5543c36f63ef1e3178105494f059ada579c"
+canonical_import = "mote.contracts.events.types.ModelAttemptAdmissionRejectedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8640e9ec9ebe30e5569a1981c872412810a21c197801e400dd5caad577772be9"
+canonical_import = "mote.contracts.events.types.ModelAttemptFinishedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ff7237dd69f00b7d95385438c0c5534799afdf12e2141c8c40475296a3faf089"
+canonical_import = "mote.contracts.events.types.ModelAttemptStartedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1b9db8f5bfda569c95971db76fd4f47f8082eab26cc97fa72710fb9a5a365dd4"
+canonical_import = "mote.contracts.events.types.ModelCallFinishedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:051c2dbb0a5313cdd73e009b54b2ea5306e799bc4155f062b6baba406d66de3e"
+canonical_import = "mote.contracts.events.types.ModelCallPlannedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b1e614ab14e076d4b007c6e2315a9f8a16396e7c3b8b30dc3f43c1a72b40811e"
+canonical_import = "mote.contracts.events.types.ModelFallbackSelectedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:300383a4d58bafcba5651d08efe9ff6914b899f2574187c60b3f3e8677887b34"
+canonical_import = "mote.contracts.events.types.OUTPUT_ACCEPTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fb5c2b2293b1c50db01cc6741645115d918e4b9aaf98eb4f11bf6b71557a9f6b"
+canonical_import = "mote.contracts.events.types.OUTPUT_CANDIDATE_RECEIVED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:904e57c654f869ffc62abb6c78b023e324cdc54846e9f19110310ec866b3a178"
+canonical_import = "mote.contracts.events.types.OUTPUT_COMMITTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e0d5c8977bb28db55ccd28c67049a87af7612001311f74f8e1dfb7ec1ee2f005"
+canonical_import = "mote.contracts.events.types.OUTPUT_COMMIT_STARTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:39ca9117c5572396c21e14e9ac02c9068afe4c40f0ccec451579b34abc5366ec"
+canonical_import = "mote.contracts.events.types.OUTPUT_MIGRATED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:030a5401ea92515ed6de2b6827392126bddd1fd8ddd14596b6866679a498d3d3"
+canonical_import = "mote.contracts.events.types.OUTPUT_PUBLICATION_QUEUED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:59f080ee7a6c2925550b577edf09249aab7a0672d21cbf957425bde9421d10b0"
+canonical_import = "mote.contracts.events.types.OUTPUT_PUBLISHED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4924ae3cf79ec50e7e76d6a5e4aa84d92369b99e2cbcdb726ae638c5275810ca"
+canonical_import = "mote.contracts.events.types.OUTPUT_SNAPSHOT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8b0242b2dd50dc8f75b30617a7a0569da3b2306fba524ec585a99b365897bcf8"
+canonical_import = "mote.contracts.events.types.OUTPUT_SNAPSHOT_INVALIDATED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:462b8ec9dfd69b77593677d685b06c527ad9c2c1895d853bf28e58cc5a86aebc"
+canonical_import = "mote.contracts.events.types.OUTPUT_VALIDATION_REJECTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:231bff567673ebdd1f64534242a640a7c3dbd443202a278ccce7b1a454a7a24e"
+canonical_import = "mote.contracts.events.types.OutputAcceptedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0b71e904ec6456eb77a596f4af4d8b871d8c86a54be10f4efbd92262ae1a06bf"
+canonical_import = "mote.contracts.events.types.OutputCandidateReceivedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5fbad3730e1e74d17749bfc91f759b518bfb5dbb064b6b3f4dd4501ade47b949"
+canonical_import = "mote.contracts.events.types.OutputCommitStartedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c457f180016612c4c825e803b5582627fb82c655b6c10c46a9ce3f8771bc2c2c"
+canonical_import = "mote.contracts.events.types.OutputCommittedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:19bc6ee00b83c8f9f9ea656dfc006bd43439cfb60d549cdf1738bc1cf812731a"
+canonical_import = "mote.contracts.events.types.OutputMigratedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:423da369d8c8e94a24c0913ae0d5e8e1d861741411d61b6e248a62251cefed94"
+canonical_import = "mote.contracts.events.types.OutputPublicationQueuedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:eb206354af704923e207d23c11324f3f5a00072cf3f7475730cb39e435eac951"
+canonical_import = "mote.contracts.events.types.OutputPublishedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4dadc259bfae1784fc54b8370b85eca44db36f6908ead13893b690534c4051dd"
+canonical_import = "mote.contracts.events.types.OutputSnapshotEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:263d81822e1b6635edc921548d99a8bccc484142a6d4bef4a62296c107eb70de"
+canonical_import = "mote.contracts.events.types.OutputSnapshotInvalidatedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3175343a04a67db99a31a0306fed1bfbd1a303d603329362fff009b4ea2e73a3"
+canonical_import = "mote.contracts.events.types.OutputValidationRejectedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a689e55abe213a24e2d2ea818fe5fea0fbdd44868b4857c19b17d1a0015f7b60"
+canonical_import = "mote.contracts.events.types.POST_COMPACT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f7463546122bb55e09db07a6938cc2798b47ba9de3fe37a731bfb5b7f6b4c066"
+canonical_import = "mote.contracts.events.types.PROMPT_REJECTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:811ce22871608d941be787c07bd1150bc8c177cdce74eb4ad66e958372d08a7e"
+canonical_import = "mote.contracts.events.types.PostCompactEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cd329461ae70d3a1c0bbd5b33312acc4e7df66009f92c64c9b55d79d454e3a56"
+canonical_import = "mote.contracts.events.types.PromptRejectedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9f560f6e3703aa6fcbce8ded9d73901a5a4f4d549edd1260fc86aee868eb46af"
+canonical_import = "mote.contracts.events.types.RECOVERY"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6430226280fa8e3b87efc82e6e516a869b91eb3c5df257caac36ffc37458a5e5"
+canonical_import = "mote.contracts.events.types.RESOURCE_REPORT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:051e8cdac030c33354abd4dbea7765bc830f90fb4d272d3cf35ac0b45730b65a"
+canonical_import = "mote.contracts.events.types.ROUTING_DECISION"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4974d5d7ec93ffe027b67c879da12d7ff2eabcc02087212f68f9535692200c9c"
+canonical_import = "mote.contracts.events.types.RUNTIME_DURABILITY_CHANGED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:06e1e4aef7d8505aa14646fef5434b4a29fefa0079c59243022702c0b0dbd8a6"
+canonical_import = "mote.contracts.events.types.RUN_LEASE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:11bd902b24f60d001e27e4e2f1905a0280a9b25c6452c61320c247d56bb51d83"
+canonical_import = "mote.contracts.events.types.RecoveryEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e1911f2e5860bd3d717c357bed64f6e7783a26846bc929251e5cf974f8d4380c"
+canonical_import = "mote.contracts.events.types.ResourceReportEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0958fff19aedbe8920ab2addd3156e8d8838f065172dbcbefdfe41ac76a7f555"
+canonical_import = "mote.contracts.events.types.RoutingDecisionEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:166cc5ead784dc1f4e7287c678dbcc13efe7bfcfa704e8844827232fd0d544b2"
+canonical_import = "mote.contracts.events.types.RunLeaseEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e2cb8d83e3f64c0fc00f85935e9e8ece2a0d5af4ec14c1e11ab8d2553bb23544"
+canonical_import = "mote.contracts.events.types.RuntimeDurabilityChangedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:81add2ea926a8d9ee932533658219551c4ad35f2051acb750c66d6eb1d4270ce"
+canonical_import = "mote.contracts.events.types.SESSION_END"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a95b32578a85f46d62b3cac6f163b9ebf3d10dfafebda78f0aea83049cbe14c9"
+canonical_import = "mote.contracts.events.types.SESSION_START"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:74f0299de9f783fcb6c1cccb265a3969d62a5fbe1db50af25e24955c88b3b459"
+canonical_import = "mote.contracts.events.types.SPAN_END"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8abe72357fd06fd5e6406a55b00643bf08f0bd2ffb677d01eb78b251ea51825d"
+canonical_import = "mote.contracts.events.types.SPAN_START"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d96cd933ff4bcab19bf22b2785e0c8f104ed7e5849389a97d1ab9c3ed41bd521"
+canonical_import = "mote.contracts.events.types.SessionEndEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:52200e640b202263edb82e204be27bf8d893c33f259a655c59821aca0ce9f31b"
+canonical_import = "mote.contracts.events.types.SessionStartEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2f929d54bc021c4b5186c963ea764c4434ade279d934e05d3f8be9bed186bcc5"
+canonical_import = "mote.contracts.events.types.SpanEndEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8ee125bd8539e472646ca6876361aba152737c5b8b7b66b1dc5e06067255a9d6"
+canonical_import = "mote.contracts.events.types.SpanStartEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a3dc3c8ad1ea084a70fec030ebdd9b6c65e2b5ad2c37b4b181a5a180bc0989bc"
+canonical_import = "mote.contracts.events.types.TASK_PROGRESS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:75ed89eb46d5ba6710895eaf0290194e75d20d1286c10c6bfd85b97de197aa25"
+canonical_import = "mote.contracts.events.types.TOOLS_CHANGED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b4438444a5103503031df9e957030522bc27620fbe28dd33dce536274c1ea886"
+canonical_import = "mote.contracts.events.types.TOOL_CALL_FINISHED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:30259afa3067bb42902cd2cb8fd6e21a486b04307f88e6865d49a826a506e988"
+canonical_import = "mote.contracts.events.types.TOOL_INVOCATION_STARTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:df3ed2642c172ad79e2b9c986c8463ac21ae809bcf04aff340afb07c85bfc991"
+canonical_import = "mote.contracts.events.types.TURN_END"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ce87c5b15667d28750c370c6e5812a6310a2088e998c6614f309acb8648ed871"
+canonical_import = "mote.contracts.events.types.TURN_START"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:064304ad6da6fc1f00d587825a4d4d9c2c8f83c5594ab6202d7bc25eb456faff"
+canonical_import = "mote.contracts.events.types.TaskProgressEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0caf9e17d28bb757b228ec5943f456e66d6a053704360c9744762d567c37803e"
+canonical_import = "mote.contracts.events.types.ToolCallFinishedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:35671ac224bc4be0008c893385b42d25a1e41bffbdda231fba693ba7549fa66e"
+canonical_import = "mote.contracts.events.types.ToolInvocationStartedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:50c6487a83006612008e744e9128fb3e6c5086cef520da64ebb8e3cdc56d2973"
+canonical_import = "mote.contracts.events.types.ToolsChangedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:686d999b0a5e62fb58ed0eedaef1768767d8b654ca96308d109c7197e1136d28"
+canonical_import = "mote.contracts.events.types.TurnEndEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3db507f49487c9723bcb4d0298ab9d1bca3f2638f93bc152166663bac734c2a8"
+canonical_import = "mote.contracts.events.types.TurnStartEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d677b56e9be1984921c8e065686ca587cfe1fdb7973741ffd9c93925ecdc0a5d"
+canonical_import = "mote.contracts.events.types.USER_PROMPT_SUBMIT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:da38bc935c89b77027d94214a8ef8f44bdec024d61a872395da4f8235943d5b7"
+canonical_import = "mote.contracts.events.types.UserPromptSubmitEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:97970432b03fbfa184f12d64c2e3a8dea6e4149fe7df16b141a25d60cfba4c59"
+canonical_import = "mote.contracts.execution.ExecutionOperationContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:205509f05f9c0762318a7bebd20e2e54788dc6c610eef31aad1cc7ec9e24b7db"
+canonical_import = "mote.contracts.execution.ExecutionRecoveryFrontier"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ae0b92fe238126395e98ee7eb18c175c8e1091e5955cf98aec09fed6cb8161c7"
+canonical_import = "mote.contracts.execution.ExecutionTransactionPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2eb5d14b009bce43703be025440db0a7fa1c4b4306ba88b61fd4b4fdfea2e1a9"
+canonical_import = "mote.contracts.execution.InferenceCheckpointPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1a7a7ff00712c816ee14fce433f3ddc5041de3253f0000455442c906ac91c695"
+canonical_import = "mote.contracts.execution.InferenceCheckpointState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e827a817e7520d17e520c3a4bb8e7601214c110ca86fa0a18c29a56c1f8fae95"
+canonical_import = "mote.contracts.execution.MutationResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a77a1c454cdf4250700ebc045399d688099420fb585d76034aeafc467bcc472d"
+canonical_import = "mote.contracts.execution.MutationStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:33e208e8ee39fc1deb45f97e63c963002c36f1e580f859cdea01c63c72ebf7a1"
+canonical_import = "mote.contracts.fileops.errors.ContentChangedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b02ef126636a5e8b3907cd49d787a2cf264dfd53a33cc1af42f8823e8634d187"
+canonical_import = "mote.contracts.fileops.errors.DocumentExtractionError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cb9d51c3ae5161cf903eba8226e8a3dc3a4b6eb40578644461fcd85467ba1a5e"
+canonical_import = "mote.contracts.fileops.errors.DocumentExtractorUnavailableError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c1a7f1d4b574070cb81c84ae49917112a643e3228959551a633ef40d462d5bc4"
+canonical_import = "mote.contracts.fileops.errors.DocumentResourceLimitError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:69caecdb15d1d99276fb6dac72767e54322ee58691d68cd35418a75a72f27544"
+canonical_import = "mote.contracts.fileops.errors.EncodingRejectedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9ec7dace4795631ee8029526fa175dab109e55fcdfb47ee6d4cd73ffe9bf1c7e"
+canonical_import = "mote.contracts.fileops.errors.FileBinaryContentError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3c6dc5d56ad77c4db10f38abb515017b8918c80edd4cf1c7b2586f37624f5a7b"
+canonical_import = "mote.contracts.fileops.errors.FileLockCancelledError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:52614deec192624bc3932b2f124630f7a9e53708aa45d8e8c097f9cd688410ce"
+canonical_import = "mote.contracts.fileops.errors.FileLockTimeoutError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:45017789040ad3ac835a7048e0dc9e1d8b40a96929f451c1b3f610d67936bb9f"
+canonical_import = "mote.contracts.fileops.errors.FileOperationError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:651da1c35c82743591a63082031527c42e66d42a15dc4de3c218db3e625cb1c6"
+canonical_import = "mote.contracts.fileops.errors.FilePublishError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b217ab8d490c4358cb2bfd0fdb708887d8196fe6322b7d80571b46bddea9dc52"
+canonical_import = "mote.contracts.fileops.errors.FileReadRangeError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:996376c23838c0e1405addea5670f1c5443482cc135dedb8001ee12d340aedf1"
+canonical_import = "mote.contracts.fileops.errors.IdentityChangedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0c3dd7b58975944a228179e37809a312993e1cba41fcf5aaacf7b4235fb8dcd1"
+canonical_import = "mote.contracts.fileops.errors.JournalDurabilityError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f90ba420af13cad995f1db3b10bcd4e34763508f5d48cc86821139315b57bb91"
+canonical_import = "mote.contracts.fileops.errors.MetadataPreservationError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:14b08f337d38864bb670a5865ca1f8bcf2a346170e6683c478ab6fa1ea290bce"
+canonical_import = "mote.contracts.fileops.errors.PdfProcessingError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:572669a3a665addea23c70599b07e065daca4bc5a12a01de5197c254f5f1e9a3"
+canonical_import = "mote.contracts.fileops.errors.ReadCursorError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fd181adad812127a0fcc600934889a2759101504c50653daa2b16bdd27f8d206"
+canonical_import = "mote.contracts.fileops.errors.RecoveryFenceError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ca7f09fa94961f6c2fbc4e88b13e37318d7c5dc56620ffa0910acd134159acba"
+canonical_import = "mote.contracts.fileops.errors.RecoveryInDoubtError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:86fd2689c7679f272119c3dacf902fbb402383f60991ce05a7db9c07e72cef79"
+canonical_import = "mote.contracts.fileops.errors.ReviewConflictError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8746a66687a02093fd74b0d85b1f5e853e31f2d6a0d80aad58c8d36036eb9e30"
+canonical_import = "mote.contracts.fileops.errors.RewindFailedError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a3719605ce3d7f9eed9a25ff18c145d29f060150bbb94927ce83d37f2ae1b0df"
+canonical_import = "mote.contracts.fileops.errors.SearchCursorError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:79974dc3d38ccae0c44e5729936d33ee2556a68d779f00ba9981dce21383bd31"
+canonical_import = "mote.contracts.fileops.errors.SearchDiscoveryError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a047a68906ee6867866cd850bb55e20ae34994422a22b34c5629151ada394006"
+canonical_import = "mote.contracts.fileops.errors.SearchPatternError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:62e2013dc87fe3f4d986937a87d54b12cba9a3b300c9657a302b4d7d0771f1e6"
+canonical_import = "mote.contracts.fileops.errors.SnapshotDurabilityError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:62e753500bce0e918d3f9d4738a7a541b94f45f65927d60c936fff8d32b8b20b"
+canonical_import = "mote.contracts.fileops.errors.StaleSnapshotError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2076af97dfa2a698e5dc60af4a100b72ab95d1adf4d9204f47704e230c8ddcde"
+canonical_import = "mote.contracts.fileops.errors.UnsupportedFilesystemSemanticsError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f128b4f5185f7e35f7ca837e6857451cb586b2a17af6a0e0c57c24470c3749da"
+canonical_import = "mote.contracts.fileops.events.FILE_EDIT_PLAN_STORED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fe48cc9a8f3e11a821206ac35d1fe34809ef60cc5cf19652be3891e359afc0e7"
+canonical_import = "mote.contracts.fileops.events.FILE_HISTORY_IMPORTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e5cdc4a8e5012b3aaf787b60c637a06394e71c90f4a9b38309f3c2c732ed9e10"
+canonical_import = "mote.contracts.fileops.events.FILE_TRANSACTION_ABORTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:16a24a33143edb2b6412b5ebf24525bda4affff54f902979a454976f28fc2061"
+canonical_import = "mote.contracts.fileops.events.FILE_TRANSACTION_COMMITTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:84129ca25366ffa04a708c4f21324352e7870bfd5d53c64985a7d77f729b89ba"
+canonical_import = "mote.contracts.fileops.events.FILE_TRANSACTION_IN_DOUBT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bb518c4aa73336298e55d52391ba6e7b4ec3a38138eb085522cc5362bdfd58ed"
+canonical_import = "mote.contracts.fileops.events.FILE_TRANSACTION_PREPARED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4dd6f61f6c9c89be6abf520eb3bf12671765444f592b6a7e46dd7cd0dfcb115a"
+canonical_import = "mote.contracts.fileops.events.FileEditPlanStoredEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3eadf854dcea40b45513b468c2e7b0379c826c23c8a7c560636a9d6576bb99a6"
+canonical_import = "mote.contracts.fileops.events.FileHistoryImportedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e7584fc7b919c1619039c87fa86bc73b1f6294bd1f498d049ba5afb4117bbd00"
+canonical_import = "mote.contracts.fileops.events.FileOperationsEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:955ad67ad34e1eb5c02592b3a39f3fd109d4ab13ee468296c7b098ca8e6887ad"
+canonical_import = "mote.contracts.fileops.events.FileTransactionAbortedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9c19a3b3468edb0677a6bb1f59a0d0a20eec918ae5cd517f8e439b0cbff1c329"
+canonical_import = "mote.contracts.fileops.events.FileTransactionCommittedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ba858607f784dad47add9c230d4157a10e0911a559117414cafe75dd2b561722"
+canonical_import = "mote.contracts.fileops.events.FileTransactionInDoubtEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3021a829e5633729460870cda98f5d421dbe5d1a5b76296119092b5a53083612"
+canonical_import = "mote.contracts.fileops.events.FileTransactionPreparedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7390640912ccffa6e645f9d5e9bf0f75df7248650d9f7f70a4bc6acb91d8a6ba"
+canonical_import = "mote.contracts.fileops.events.HUNK_DETECTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5aba8b1c36853f480909174ed32c47023bf3d8f59d044e041f7d0fb36174dc32"
+canonical_import = "mote.contracts.fileops.events.HUNK_REVIEW_TRANSITIONED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e4919df7d7c38251a27048dc6bd4d3c4a884d16c20ebdfb1f2ece7da5c26fdab"
+canonical_import = "mote.contracts.fileops.events.HunkDetectedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b23215d47f5f6c30d2c3f79abe7dd46972050bf8ae1e0a1e0c72d1abdd3fcdfa"
+canonical_import = "mote.contracts.fileops.events.HunkReviewTransitionedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:18396bd5d921fa57dc1d814ffc7ba5a6c23d6e899e2efd79d4a2e7246167a34b"
+canonical_import = "mote.contracts.fileops.events.REWIND_ABORTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bec42a25b09d653a453ca1b1c7cadbf7c4f883f7c741e848e66821307d500e79"
+canonical_import = "mote.contracts.fileops.events.REWIND_COMMITTED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:43b70d60d102fa1a9defb273ba90710dec6a8876e8fff317297f6b66646f2032"
+canonical_import = "mote.contracts.fileops.events.REWIND_IN_DOUBT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:15da1727b8f5ccc37f332025ebd54911352954c5ef13cd96795dc07a831815e2"
+canonical_import = "mote.contracts.fileops.events.REWIND_PREPARED"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f7e98ce6293a69ef0e9df56d5764e496cd865ec09143c3beaf3e56b70a352cc3"
+canonical_import = "mote.contracts.fileops.events.RewindAbortedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e0e196c9e70a4e2ac050ce3120510305299d16ec66e65d191722b763ae59254e"
+canonical_import = "mote.contracts.fileops.events.RewindCommittedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6c361bbefe1963b9c833abe61877c8f23244e5e802d3336a33ee26be41db7e4c"
+canonical_import = "mote.contracts.fileops.events.RewindInDoubtEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:747b6ed83f18acf9eb95f39d8e72535bffd4a1c7d205b1080c09d6cf1eaf0563"
+canonical_import = "mote.contracts.fileops.events.RewindPreparedEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bcda4eb1a515be9a0d1d4368b307355cac05c55e64701ce788e2be38ea69129a"
+canonical_import = "mote.contracts.fileops.models.AbsentVersion"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f5f62ecdd41a3b2edf1b15936f6617c77ab8c4f87437aa1d9433d91df9f2a0af"
+canonical_import = "mote.contracts.fileops.models.ByteReadRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bd6eced66d351bb68364216b16af9af84e6577fb7b0e8fd48c5b0e0d57a6f572"
+canonical_import = "mote.contracts.fileops.models.ByteViewMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f7d80ec75b750a7380cedc211172ce22f1887da1a154e6540169c7ac0e67f210"
+canonical_import = "mote.contracts.fileops.models.ContinueReadRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0ef4a7a99f626891347635e233815b5a1deaaaa8b71a641d4aaac10576ac0803"
+canonical_import = "mote.contracts.fileops.models.CreateMutation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:98fff2aa9831ad158c546554ad86abbde14d31740a926d2f8f4279c65d709282"
+canonical_import = "mote.contracts.fileops.models.DeleteMutation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:489c5bec9e915d78ab28736c06a328f37fa4c437552cec169191e2ac4fa72cfd"
+canonical_import = "mote.contracts.fileops.models.EditCommitChange"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3bcfada2e49788fb7a649cf5d685155b2c8daa4ad619184e6518d1c9c2b9ee6c"
+canonical_import = "mote.contracts.fileops.models.EditCommitOutcome"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:277b7b9af59d3ba133438b7161f8794df77caf1328454e09a3a9a48a3549d752"
+canonical_import = "mote.contracts.fileops.models.EditableTextSnapshot"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:327c50762e3582c61765c1c2a1564b354a6716f9867ee89165b706dbe5e32b1d"
+canonical_import = "mote.contracts.fileops.models.EncodingDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:509c4e5b3839827760caeabcc05dcf190db8d37978a653a83947a84f3fd5bd05"
+canonical_import = "mote.contracts.fileops.models.EncodingSource"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5f97cf8778349ce14824d3e638de4209284204590241412dd08a6cd4b84c680b"
+canonical_import = "mote.contracts.fileops.models.ExtractionBudget"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:92354ae3e6692fb30e8f98c318f7a18a9b48a7986fd50065b6ba867b2edbb927"
+canonical_import = "mote.contracts.fileops.models.FileByteView"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:71fa77e36be5aae70d09c29a120d92d620252b7b6e75c4d40972f73b3f1f862f"
+canonical_import = "mote.contracts.fileops.models.FileChangeAttribution"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:977b2813c19026371358ddb4607e1823774039161ee618fad610268e94ec35a1"
+canonical_import = "mote.contracts.fileops.models.FileChangeKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:26b6c5bb0f26bff5562446b84e0627633d574971f744686005515cb833d96f6d"
+canonical_import = "mote.contracts.fileops.models.FileOperationKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f9ab84e80e9d1e16bed8c9ef0d189597a030e6d47a89302e31db7695a88aa726"
+canonical_import = "mote.contracts.fileops.models.FileOperationsHealth"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:22488ab338449b9b1e2863f080c512d99f2419f812e2cb3e4dba2c498bb4724d"
+canonical_import = "mote.contracts.fileops.models.FileSnapshot"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ef9f6cea1448f61445023cb34ac5d1de4a4fe994c178a70fe43e43dcc6f88de6"
+canonical_import = "mote.contracts.fileops.models.FileTextView"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3f444a1699efd66f876414e9c9de67a2496c76b926eb01dc175a8891ebb45fcf"
+canonical_import = "mote.contracts.fileops.models.FileVersion"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:872e2eb521d08bb586677ec395ec78b79f84006be716ef7ceab7833f152e6115"
+canonical_import = "mote.contracts.fileops.models.FileVersionTransition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9e1b010ff2844d6d671f4bdcdac3ce8eea1f77edbbe7226fe9476899acf362ae"
+canonical_import = "mote.contracts.fileops.models.HunkRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1c92a8f87044271949ec59b5f23a3c9adaecf7676d47d4caad473db997b1b67c"
+canonical_import = "mote.contracts.fileops.models.LockMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cab71e91431b944f44bb0958acd9b3edb60c83f2889b9000cc657f5a611c1f28"
+canonical_import = "mote.contracts.fileops.models.LockSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4ab0dc725f4a8c20401a9d5eef1c0ec0b5654c6730465539e9421fc718ce4191"
+canonical_import = "mote.contracts.fileops.models.Mutation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ae734fbafeaa7df4f51e123809c0ea8e2b71eb163bf490c10be703443d5b9dc8"
+canonical_import = "mote.contracts.fileops.models.MutationKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:69ed3be7bab5beb96676773500e7b8221f3179720a0bbf0f041c8d2925658bea"
+canonical_import = "mote.contracts.fileops.models.MutationResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3308e77952134e86a7b40e665fcee35784e3f5689ee90e65ac0794b0c587977f"
+canonical_import = "mote.contracts.fileops.models.MutationSet"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7dfd136dfdaa989c25f894e8de3fd7bd80226833c37a0dca301d5549e7eda9c8"
+canonical_import = "mote.contracts.fileops.models.NameIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:54273e783393a3c508cb9a622192ef1119cfcf1feab4250895d483e5f9c81a2a"
+canonical_import = "mote.contracts.fileops.models.NativePath"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b176c5aca9681879f364e6ebc618e22f40fc7f73288de36dba5b10c6aec685e1"
+canonical_import = "mote.contracts.fileops.models.NewlineProfile"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a88686d2189c4026c1824ae8ec6b0f2a692551c869d97dbcd45fd0bbb855abf1"
+canonical_import = "mote.contracts.fileops.models.PathToken"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:30d13996da0f8a1b5e49eb25a40adf725d56e2aa469eb6faa5bc516b46e080f1"
+canonical_import = "mote.contracts.fileops.models.PdfPageView"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:611f0ae30776768b18ffe2928f7bc90e336dae8f0e6383a43183c58ccce70e1d"
+canonical_import = "mote.contracts.fileops.models.PdfReadRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0df07a435dcd1df32b7471ddefa1ad3cb03879c2068d62bcedaacb9504732150"
+canonical_import = "mote.contracts.fileops.models.PdfView"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c5d2f12763d33069b2e594ba19a5ae2d6af07afb9a2afb761969d38351717bf3"
+canonical_import = "mote.contracts.fileops.models.PdfViewMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9af6b7b5370a20d4c01a385e1a63b0132c70003a9cbb0375bc4791037c23f825"
+canonical_import = "mote.contracts.fileops.models.PresentVersion"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ddda5f0f6fd8d7e0dad30143cc284af1c33f5e2bade40e1804dcc4d40c140cfc"
+canonical_import = "mote.contracts.fileops.models.ProjectIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a94af603b067080369e20e0891c7e6481c79ae45095169000bc6f3adc461d0cc"
+canonical_import = "mote.contracts.fileops.models.ReadCursorKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:de4489bf085e1756acac4eefb684dcb51a41c4bbe2c090269c09caf4adc574c0"
+canonical_import = "mote.contracts.fileops.models.ReadRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3ae2f0faba0251026ab61059b1af730301a2b38090efa96da904ac09fb5324bb"
+canonical_import = "mote.contracts.fileops.models.ReadViewStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1ccad75a80b41ddc800583a16a2882ce53f82d2ee7ba94a25597b3b98c5cdb64"
+canonical_import = "mote.contracts.fileops.models.RecoveryPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:17fe59d68418a93b2c3a1b7ee2c79aa29ac0931e504fddc5f3434d79616a2e9c"
+canonical_import = "mote.contracts.fileops.models.ReplaceMutation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:48af7cb3fc973b35eaa01abc197c1211941f5120a16a177edacdf415ea4337c6"
+canonical_import = "mote.contracts.fileops.models.ReviewStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4b2d51b6b093928b7c6519f023179777de71d04b5e0351e91479b7febd1aa450"
+canonical_import = "mote.contracts.fileops.models.RewindRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d4af7a9f93b9492f40998b8d312380b029cee842df879c8b84e74196c0a3aa2b"
+canonical_import = "mote.contracts.fileops.models.RewindResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:03a8da47dd33416d68a67b0c59b0fd0995bd17c3c91708cca3adab18921e9a81"
+canonical_import = "mote.contracts.fileops.models.SearchOutputMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:af1f3ef127195f6f7c62841259800a8abf0f08e98d4b376e0c8dd58864442b63"
+canonical_import = "mote.contracts.fileops.models.SearchResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d29acb97701e8fae30734810f15217c7dea407b0292f324f1fa4744ea3acab44"
+canonical_import = "mote.contracts.fileops.models.SearchRow"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:17171b7384ac81cff82bdd958cf339b22b6a753cf0c77930e7c422aa83353236"
+canonical_import = "mote.contracts.fileops.models.SearchSkipReason"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:68ef137d1b03a4c419ab25d9f8ddaa6bc89c402ed447f00504f20a834f39f5b2"
+canonical_import = "mote.contracts.fileops.models.SearchSkippedFile"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:38bd6658fbba6f8c005fcbdb05ef1c0ae034041f726caaae5fc357e079593a0c"
+canonical_import = "mote.contracts.fileops.models.SearchStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:24fcf5ee8bdd7f6052c2aaaf40a26d2ec3f55707303978fd1fb5e5d47fb2fea3"
+canonical_import = "mote.contracts.fileops.models.SearchSummary"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bc748f8a67ceb68b87bd934e471dbd647994b570d1cd6231c9edcda80bf01bd8"
+canonical_import = "mote.contracts.fileops.models.TargetIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:21ded0d493eb5d4915233024aef3da683a40e762ff008c50527de4f8eabb765e"
+canonical_import = "mote.contracts.fileops.models.TextReadRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b1acaedd0aefd92f9ad787e42bd658f65bbf7e843161ad5a87acd1331b6b634f"
+canonical_import = "mote.contracts.fileops.models.TextViewMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:568531a061661951415b58e48badef2aa3bed7b3bb5066b78352130a27372813"
+canonical_import = "mote.contracts.fileops.models.TransactionRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:003e6e83c626a6ae894da106a45156b85cb90a10681f1c4b19a32c6b736944c3"
+canonical_import = "mote.contracts.fileops.models.TransactionStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:304890be43b4625a590588283dc32f735f768c7dd1f1578549ca5a5824aa175f"
+canonical_import = "mote.contracts.fileops.models.validate_committed_versions"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:be1dc8af865ebcb4b0ea097be7aa84fb0da44f651eb4f180417a2d467aa0c93c"
+canonical_import = "mote.contracts.fileops.ports.ArtifactStorePort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:456bab0bce10c4c2bad7392763eb717d5616eb8ea65862eba2b99dd27d73c96c"
+canonical_import = "mote.contracts.fileops.ports.AtomicPublisherPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e34b636e3a5fd4dad439bcbd57d8daa4d4ce1dbc2219412b52d0b189a6b57526"
+canonical_import = "mote.contracts.fileops.ports.LockManagerPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d03dc7a8afc9d4aed3e80eebccca94bac759543a9d68d33326fd168c6cdb5ebb"
+canonical_import = "mote.contracts.fileops.ports.SnapshotReaderPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:957727d28c85ca6c1544c270f0f502f28bed65c192d93b8f52948570ee9b27f6"
+canonical_import = "mote.contracts.fileops.serialization.blob_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fe1df78ac9db2fad167967766d25e1c5cad232a85f91d4a5d3b8fa53cc23664e"
+canonical_import = "mote.contracts.fileops.serialization.blob_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:451b46a80fef7badd4ecb6a67ae067564cbc0b44a11bad83efef4fa51654d9f1"
+canonical_import = "mote.contracts.fileops.serialization.encoding_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3142924a35cbbb367526d7fe67d6909a7f333031265f30dd37fad6d5d985abcb"
+canonical_import = "mote.contracts.fileops.serialization.encoding_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:23c1b94cc60ffac1de154022b61a7d1770b0bb893626d43c2dbd257139dd6937"
+canonical_import = "mote.contracts.fileops.serialization.mutation_set_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:41e8125d7a6f895231927f0a7d7a9e167d9f65ec3affbcdb1f9ef63a76b4127b"
+canonical_import = "mote.contracts.fileops.serialization.mutation_set_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:750dcf37c28d8a3ff6c8e71831981844baca1f1e37bc7b470f4887079369740f"
+canonical_import = "mote.contracts.fileops.serialization.mutation_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d95797f37b4eb9797427cb1d97eacb923005187ef8ca176108b14845070b176d"
+canonical_import = "mote.contracts.fileops.serialization.path_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:259144be7c7b661be8190be2986c56237994819af9c9296957950ed663458b9a"
+canonical_import = "mote.contracts.fileops.serialization.path_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e3735a5805f9bd0ad2ba87ac78b98d15151e9f5a1476f0af335a558bcbe297f9"
+canonical_import = "mote.contracts.fileops.serialization.search_row_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b5c30e00a548dc5c4bb82551ea2a485fd215d85276d3f40cd119b96dd6443a09"
+canonical_import = "mote.contracts.fileops.serialization.search_row_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1e68d76a08806e33ed0a8a3e34bb605117d90d11f98d84405bc68579c3190595"
+canonical_import = "mote.contracts.fileops.serialization.search_skipped_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8f5382d35f0015370878e22576cbc3d436fbe1f7d8384df9d7a33904de66a5a7"
+canonical_import = "mote.contracts.fileops.serialization.search_skipped_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:57249649dae4adcb40e3a19c40c38ef05fcca9e8bff15b2ef58ccd6cbb3eb232"
+canonical_import = "mote.contracts.fileops.serialization.search_summary_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:431f408c66c2c34c9ac1fceb918083064d55693c7d6b4afa1df0e0f389235b2b"
+canonical_import = "mote.contracts.fileops.serialization.search_summary_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:beb1927bea0f6d61c9e4b4a92b90075c1b232eb7fecec7b352ddb34e8c69d49e"
+canonical_import = "mote.contracts.fileops.serialization.snapshot_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c273ae489f63b2b41f20e693bd47c58e2d7d4540394a78f3592b639b938b7d83"
+canonical_import = "mote.contracts.fileops.serialization.snapshot_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:181f780ecc340f09660672b24a89d26e30c1b85d750a8721e595d13910370f20"
+canonical_import = "mote.contracts.fileops.serialization.version_from_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:32757490634f03c4883b4ac4791481c70ffc34e179a5bd7fe3cdad5b82c7b85c"
+canonical_import = "mote.contracts.fileops.serialization.version_to_dict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:db11c7025fc0abfc9d9da32d7359f7030c431a3d71580e1b7683b57f85fd9a83"
+canonical_import = "mote.contracts.handoff.DriverHandoffHandle"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1494355622cd2dc825029cccf300bab1a2d38b449c767a96314605258292a071"
+canonical_import = "mote.contracts.handoff.DriverHandoffResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cc463b42aba32f1453d5f2322da6f55ed4aa721314e58718a4e756ea7558ea24"
+canonical_import = "mote.contracts.handoff.HandoffOutcome"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e604edfe5a66d46d30061ef6fb3d1f56193a97f734b7391548a07f956701e001"
+canonical_import = "mote.contracts.handoff.HandoffRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7682bdc711f844381a450c299eecb53ac31a5d51619e52b2a3d522527c135378"
+canonical_import = "mote.contracts.handoff.HandoffStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c62b0e202966d646232e77ec324df70ef3312333ef4529883e37d1aaeedd491f"
+canonical_import = "mote.contracts.handoff.HumanHandoffOutcome"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:db9f8864f635cfbec770a9090120a1dffb2f784dc80a8ecad42a801ce2220856"
+canonical_import = "mote.contracts.handoff.PendingRuntimeHandoff"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d96a0a8fca87e2c73e4e26f0fb46e2d93727234a492f806436adbe1efe904ccf"
+canonical_import = "mote.contracts.handoff.RuntimeHandoffIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2e960dd3ad857fae6a08cda4fb8d8d8b89f628d1c0c4a38586df75e84e45af26"
+canonical_import = "mote.contracts.handoff.RuntimeHandoffRecovery"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aefff6e1edd0070bb014643c8b7771984502d49010d542c41d3693e031860e43"
+canonical_import = "mote.contracts.handoff.RuntimeHandoffResolution"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ae3ddcd278108644daf6aaae1cf01645e6d240efe4797acecbb3116bc808c68a"
+canonical_import = "mote.contracts.hooks.types.HookBehavior"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d3c3d467e7f1f79be777587f0f0a5fe8a9a655606d086af842a227f7865b3da7"
+canonical_import = "mote.contracts.hooks.types.HookEvent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:002740899478ad1d17734352a3fad2e4e8e1d2555b5d007116cbc53d33cebfff"
+canonical_import = "mote.contracts.hooks.types.HookOutcome"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b3cf823192510322191b06bcc9706a463ef9585b9f409a30caa1e10209e6d860"
+canonical_import = "mote.contracts.inference.EndpointCapabilitySnapshot"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c1e4e9ab660d008ee961cd6430a0366bf184dbb37f8fd39f0d48b12a47f80ced"
+canonical_import = "mote.contracts.inference.FinalizedInferenceRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d9e16f43d7cf68da229a799ebeaa6cd0d0445f28bd8f21b2876fe4f068589b2b"
+canonical_import = "mote.contracts.inference.InferenceAttemptFence"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f692c64006e4de38c7cd6bfe0eb6f3458a43004ca1f6e97185ab7009eb4da6e7"
+canonical_import = "mote.contracts.inference.InferenceIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:13701fbce0119de1de7311e5858019378ba9c6afd6bc2a68a026e3b5c7b7dc76"
+canonical_import = "mote.contracts.inference.InferenceRequirements"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:080ca05c764c3a12fa418e2c8b172d053759ca94aa653973287dffa098543463"
+canonical_import = "mote.contracts.inference.InferenceResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bcc8fe56976e3b399dcee147e5de734c287820a6595a9122f53d0ce6cdbf6a8e"
+canonical_import = "mote.contracts.inference.InferenceTargetLease"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aa85bd54a249c99b25c99acb5a1666f3ec86caba6dc589b11bbedb888e8cb693"
+canonical_import = "mote.contracts.inference.ModelInferencePort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a75345f1bb0cc57ad6526392fa15f036ce9cb0909608e58d31ca802c9505058a"
+canonical_import = "mote.contracts.inference.ResolvedInferenceTarget"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2216af3d2c05ae24a167ea56c0ecc514c2348d04bd2b6f68792ee32722d2caa4"
+canonical_import = "mote.contracts.inference.TargetInvalidated"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aac540cfbfdbf3fbbf671d1a06b59a782ff4210a567e4b3f5c3c98f64918d31c"
+canonical_import = "mote.contracts.interaction.AskUserQuestionAnswer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:47943afaa147ead3385656f989d12e6e832f3a6722270577f2ad099ac2a284bf"
+canonical_import = "mote.contracts.interaction.AskUserQuestionAnswers"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1696f4e8906f876f21201db14e074169f20452f856bdf3fefc62abcacc969c2d"
+canonical_import = "mote.contracts.interaction.AskUserQuestionInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b17915d404a2380773a17ce6e3f8077ff1efd8bdeebdb864e41b3a33bc040284"
+canonical_import = "mote.contracts.interaction.AskUserQuestionItem"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3c5fc4e733022e8c3133a1d6141eea97bb0ff3cdd37aff2fb42ae6db345a04a4"
+canonical_import = "mote.contracts.introspection.docstrings.description_body"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:042fb00e2bddb108c80a4a18a26a5359159aad1cc1b8db895a79ef8b8d741d8c"
+canonical_import = "mote.contracts.introspection.docstrings.first_line"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:51673b0dd8c3efe613e4abc121b26f0f7e5f64826b973f8230e1f57d46ee7d05"
+canonical_import = "mote.contracts.introspection.docstrings.parse_section"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1736120890b91ecfa6a90712df19cd0ef255fa3d8655bdeb4c280f6ac7a8fcff"
+canonical_import = "mote.contracts.leases.Lease"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ef25ee24f0b96034128ae20defe15b187ce96f53fcd35c41c9f6d52adf9137f9"
+canonical_import = "mote.contracts.leases.LeasePolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cd2f08c8718bf37d25c843609a64a2ecbe10157f9fb656bc241129c8aba6dd80"
+canonical_import = "mote.contracts.leases.RunLease"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:326a18f2d06c00222a90d2aa727bbb1cc460b02400ecc08f609e51604d87d0cf"
+canonical_import = "mote.contracts.leases.RunLeasePolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:533ba0c113fe6f0eb899a17c120accfc0ff68e6b3633dba8ab052bbe0ecbc92d"
+canonical_import = "mote.contracts.model_actions.AgentAction"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4f8e5ea0291be69941d32ba38f1b75b51d9e12bc234d6d0e10809a86db9e882e"
+canonical_import = "mote.contracts.model_actions.FinalCandidateAction"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6bcea557ec9ab99966afa37351201eb8b29407321721ee555a67981a3d46d0ec"
+canonical_import = "mote.contracts.model_actions.ModelTurn"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1319789608307a8bb2875a38d04abb4fe8fbd2b65d33f5351e20bb027a2908a4"
+canonical_import = "mote.contracts.model_actions.TextAction"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:95ccabf522859b192a7781d3d9a168b732c9bc53c62655fd287028fb126ece27"
+canonical_import = "mote.contracts.model_actions.ToolCallAction"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aa236399a72471e9415c27531a47a57548149e0f68ff639622bf1875352b1e47"
+canonical_import = "mote.contracts.models.capabilities.supports_native_tool_search"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:899e089002717480fbf69942d4b1546badeed5e604cb055238b63ab17b0ad8b6"
+canonical_import = "mote.contracts.models.capabilities.supports_pdf_input"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c53bfb29a236cd09538c49cca8007b0a1a13bcdd51f57640ad12fb82e138617a"
+canonical_import = "mote.contracts.models.capabilities.supports_vision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4440c13b2e123117adbfdfa09b56330dfde940bfe7b8526213faa50536cdafc3"
+canonical_import = "mote.contracts.models.capabilities.supports_web_search"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:654b9cccb19de0f22dece7751265294362cc98b3a634239b328509ecf9fe297a"
+canonical_import = "mote.contracts.models.constants.LLM_API_TIMEOUT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:32034ae3b77d811ec3dba8a420c519c45802af3d66e75d0bdb0eec5bdc9feb3b"
+canonical_import = "mote.contracts.models.constants.USE_CONFIG_TIMEOUT"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7e531128a30e795851cd77dabb4e453287deceac6faed97e7e280074d1328124"
+canonical_import = "mote.contracts.models.failover.AdmissionGate"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a7b6d60e54fc10280e6048d7799ba42faa0f74a656bd65307eb5273e87d3f37d"
+canonical_import = "mote.contracts.models.failover.AdmissionVerdict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7fe932436a40872bf7ebd3fa6676c074ec2d3283bf45fd9a039fc8d4b6d7d6f6"
+canonical_import = "mote.contracts.models.failover.AttemptBudget"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0b155cd765076be262f463decbcf2ad3d834929b0762bd1f5fa967fdbf2c3711"
+canonical_import = "mote.contracts.models.failover.AttemptState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d70a178d738a0d91ca79c759364303aba2c76fd9c65161bd2b9659e203543487"
+canonical_import = "mote.contracts.models.failover.AttemptSummary"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e9eb1fb967a6bcd81c92f796235522d75d35caffab4caec705d0ad3068b5d147"
+canonical_import = "mote.contracts.models.failover.DecisionKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d3b8ed9ed6dc7fc109701e1d21fdc2820abdd2d365b48ff73caab54ee40959c4"
+canonical_import = "mote.contracts.models.failover.EndpointCapabilities"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cfe29aae05daf091411b52c0d5e9e9aee45062de6e41d2acb73b9e2fd967b51c"
+canonical_import = "mote.contracts.models.failover.EndpointDescriptor"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8f54f1285fa638f32584e2937f7c45d44338c377e2db0d01321d20dffd894ee0"
+canonical_import = "mote.contracts.models.failover.FailoverDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:132e63dbb7a24d7d0ead50aeb475b926881858d03149436f3421b35b867c6ae3"
+canonical_import = "mote.contracts.models.failover.FailoverPlan"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:39e6cec73efa0f18e5e02223a1400a7f628808382dd63d37085ee3f261ad4e19"
+canonical_import = "mote.contracts.models.failover.FailureDisposition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:019f2e62a34682e900529f851618ea1863aca4a54605fcecc73f333e26a765c3"
+canonical_import = "mote.contracts.models.failover.FailureDomain"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2e4130834018f21cf663923fd584e78a7c115d536157623540cfb690bf41e95b"
+canonical_import = "mote.contracts.models.failover.FailureReason"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8ae8cb73f026acbab982ca25c77257f73c6dff0490fd9ed432ceb7932156bc60"
+canonical_import = "mote.contracts.models.failover.HealthVerdict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ebdc35608323f491a2c6aea171dad5a47898da4f48cba78646f1643cd96edf6d"
+canonical_import = "mote.contracts.models.failover.ModelCallState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0b7ed4b2a0b8506618109c7b4b661d791773c4b42cface52aa6d996ac7cc71ed"
+canonical_import = "mote.contracts.models.failover.ModelCallSummary"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fd3d4400075c70dbe3b6d8a3cc416090afa9d02c7805b71aa38bf9c47a3de9d2"
+canonical_import = "mote.contracts.models.failover.OperatorState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7ad394cf0d24366c618a64b615adf1c7632e9cea98e23f44a9a6c926e08a0207"
+canonical_import = "mote.contracts.models.failover.OperatorStatus"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e80478f0afe20f095ae195128d1f2d42a0f8a77d2ffa7e5a6731d93f402d6d85"
+canonical_import = "mote.contracts.models.failover.OperatorTransition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ccdd73e3f2b46ec754ca7659eccd960c8b5aec712cc13462b24547c46d5b0333"
+canonical_import = "mote.contracts.models.failover.RequestTransform"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7dc346da8a915a0ff21740ec5ce58975ff72c869828347e7dd3d7cff5b81e079"
+canonical_import = "mote.contracts.models.failover.ResourceIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c6e6be68992e5451323a25152e65e958c4a8f6cb516d95e0ddeecc06e38ece9b"
+canonical_import = "mote.contracts.models.failover.Retryability"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1a6542bc9e8831f90cb2c6e298f028066de5f39bec98fe6eb4eaa57ab7c84259"
+canonical_import = "mote.contracts.models.invocation.CanonicalMessage"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:92f03136caf95d3c99ed605802d86af63c590ba900be76fc19ee8d6b2ade521c"
+canonical_import = "mote.contracts.models.invocation.CanonicalModelResponse"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8422280e8f472160774b0fd2b8926b5381cc532d4d15dcf98c915138a85f4ae5"
+canonical_import = "mote.contracts.models.invocation.CanonicalToolCall"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6827b2beb355ee2db6ffbcfb24da5d76e6e21bdaad626309438c96be904ce10f"
+canonical_import = "mote.contracts.models.invocation.CanonicalToolDefinition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6ae66e67d25bb7e63f0dde31fe7b905982453b82431c063702a91b145ae43876"
+canonical_import = "mote.contracts.models.invocation.GenerateInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1a8119b9269c92e4e213f2f93ea67e8a4f74a8e52631a4839165b67bdf7be2cd"
+canonical_import = "mote.contracts.models.invocation.GenerateOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c4a4dedcf376d12d0bcb438f82eae124dc2a3f7bb4b9c49f4f455de3b09644ce"
+canonical_import = "mote.contracts.models.invocation.ImageDescriptionInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cad081d19984128c70525683d4ec6ab1fa55837eae4952eb9c02410b080af11a"
+canonical_import = "mote.contracts.models.invocation.ImageDescriptionOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1d8a8a2004005fb67a668d642c1e896ba1f0e9e76a39852b6586eb20b59a59c5"
+canonical_import = "mote.contracts.models.invocation.ModelInvocation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:af66977f03dfbc4df405cbc8fad3c69e3e574cbe38fdf5a6fd0498241be2d124"
+canonical_import = "mote.contracts.models.invocation.ModelOperation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bd2f25e6b4882ab5e523a3b15c7a6c6073af4504fec4f312c7ad2d95397808be"
+canonical_import = "mote.contracts.models.invocation.ModelQuotaObservation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f3e993d5a084e755af45c7c52baedd6451bd98439c5c3b9982d4164a4a4f9da4"
+canonical_import = "mote.contracts.models.invocation.ModelUsage"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:928664b4dbcf9a5827184319a280a0ac31213f535b8c5d6eb07b197f6128f7cd"
+canonical_import = "mote.contracts.models.invocation.RequestRequirements"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:71e1fb9282c45ecf6b85dec0629befbae8903cf1b179994bc91796c5def2e8cf"
+canonical_import = "mote.contracts.models.invocation.ResolvedModelResponse"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3a5e872b0c645bbe86bb6162742310bb716d37d0e3a3ce0e62175b5b8bd695cd"
+canonical_import = "mote.contracts.models.invocation.ResponseMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:15f08daf8f2a96d2993d85c922060a43d304249ca15f2c394f6bfc71d664ea25"
+canonical_import = "mote.contracts.models.invocation.TraceContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:815798fde83933a4807663259398666bf9ea488463b04665fee284b986339b4f"
+canonical_import = "mote.contracts.models.invocation.WebSearchHitOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:66be9a7a186afd5fc92b7c2e720bb815b5a473573cbb1de825c0754639a26338"
+canonical_import = "mote.contracts.models.invocation.WebSearchInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e6492d249f67e7e80319e920439b68f218702ef6ff37785c642a629f2cb44928"
+canonical_import = "mote.contracts.models.invocation.WebSearchOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8fa8aff7a0ab3fc2655b2752c4540f397879d0d10086240767f49d9433c0b066"
+canonical_import = "mote.contracts.models.model_journal.ModelAttemptFinishedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d890c9fa82486da5a9445869b66b75a1c13c6501608106ebe4cea732d6e46875"
+canonical_import = "mote.contracts.models.model_journal.ModelAttemptStartedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a683102f33525a52d0e8dde9cb1838117267ddd3b8f6e8ccfd296847948bde2a"
+canonical_import = "mote.contracts.models.model_journal.ModelCallFinishedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:eaef8b5092f123792b7850d9b984cdcfa9a6b12aaa9889ef3b9969291dc7e085"
+canonical_import = "mote.contracts.models.model_journal.ModelCallJournalRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5e7475d790dd1de04643276d610dabe8e4137a54e9dc3f34d30aed92bc9c813a"
+canonical_import = "mote.contracts.models.model_journal.ModelCallPlannedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:898afc917f8008918b373dace0e6379f19d46858e69e01f43d881809c675e9b8"
+canonical_import = "mote.contracts.models.model_journal.ModelCallRecovery"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f62226c8e65c0c660e49f01ac7828d11ffd3fcc94e4e8b36cdb3d416ef98ac48"
+canonical_import = "mote.contracts.models.model_journal.ModelDecisionRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:23f6e4289cd66307ae42cf58cf01132a4aeb134730edb7bb07e5e12c2200c788"
+canonical_import = "mote.contracts.models.profile.profile_for"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dbe446a2549062c9269e6af507922bdd2923b0d1caf45fcc2d126a71a222047e"
+canonical_import = "mote.contracts.models.responses.LLMResponse"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c36b9ae2d5676dd7f10db87113dc8fb8f8bf8bb5cbd632f506c7e4080e217627"
+canonical_import = "mote.contracts.models.responses.LLMToolCall"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3592e070680ca5fe75c7d088f0e5064fa7db00bc116a9e109b33f7efb8b9f153"
+canonical_import = "mote.contracts.models.responses.WebSearchHit"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0836f6b1ce54bf9bafcdfc33a070637b785d2e0235abbfc137586a646e57f220"
+canonical_import = "mote.contracts.models.routing.CandidateScore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3440e03cf87a26eb545e4e5c276b168a27dcf228900800cda7f2fc5106702f48"
+canonical_import = "mote.contracts.models.routing.RecentRoutingDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7b3212d5afb89c2baea287fc6d512055d0ff709b4415a814838bc0da2c5685dc"
+canonical_import = "mote.contracts.models.routing.RouteAdmissionProfile"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:000d8e05ab5dddde731644f2835ae8a6ce6f2d2a9d5120e75e5d9395f17245f3"
+canonical_import = "mote.contracts.models.routing.RouteCandidate"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ba2f4ff07e7dbcfbdac5036f76a0cc2d77bdbfb7691346b90184d6433f1e3936"
+canonical_import = "mote.contracts.models.routing.RouteCapabilities"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bbe79d6d4fda5ef89491a406ea5aab4675026582110b8d683d29dacd7bd1ce2f"
+canonical_import = "mote.contracts.models.routing.RoutingDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e82c3ef2ebcdb14efc152d7600850124cb271dc55012a7afc48db2dc89286776"
+canonical_import = "mote.contracts.models.routing.RoutingDegradedReason"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3d28d303d4409c700fdb908b9ba64672b5e7729209b164488e898fe06aac310b"
+canonical_import = "mote.contracts.models.routing.RoutingHints"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1d1c54bfe534bae39fd2b0bb600bed500aef47982889a375e0fda6c5467ac295"
+canonical_import = "mote.contracts.models.routing.RoutingHold"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5b88341615479381503af8b4e7ec0b02a66e465be7e2acc0f226bc0f03bf7720"
+canonical_import = "mote.contracts.models.routing.RoutingInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d5844343184199dfd34db61352feb2ebbe142c46c75ccb1112f43f437a7f3930"
+canonical_import = "mote.contracts.models.routing.RoutingMessage"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e143a54897525b56979a99e4da24547737728740e74465ffa95a5aeec9f2d1ff"
+canonical_import = "mote.contracts.models.routing.RoutingProposal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:085570941c6b852d1e583df72d922e113e2d118359e9c3157896d751a2c62cde"
+canonical_import = "mote.contracts.models.routing.RoutingSessionState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a6e51078ca4f34097671d8b022919968c414f0fd7052f31dc2816efb6944b3e4"
+canonical_import = "mote.contracts.models.routing.RoutingSignals"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2031775b5a769b0a68da0c208425f188577f360900d01d8a023269eb909b7936"
+canonical_import = "mote.contracts.models.routing.RoutingStateTransition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:af25fa0a6736a43700d160fadb6fdafd7e4ae097726aef6eca1a779a21a5c396"
+canonical_import = "mote.contracts.models.routing.SeedFloor"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c34bd2db6b2b90748773c305e7c6296b39ba0b1eb221f1b8fbec4e678bc42576"
+canonical_import = "mote.contracts.models.tokenization.FIREWORKS_GRADE_TOKEN_COSTS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b03bf4464edb64dc2e744738af4539b48f63fbe0f7af4a75223b10a11a8a3923"
+canonical_import = "mote.contracts.models.tokenization.TOKEN_COSTS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:499b749131e60674ba5bd0675c98114e5201039044527e2998e911389a97b848"
+canonical_import = "mote.contracts.models.tokenization.TOKEN_MAX"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ad1969c5c38d81ccfb39ee8f35d4527a9582b37ede168c219eede565614988bb"
+canonical_import = "mote.contracts.models.tokenization.count_message_tokens"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:77e671076362a118b567cef47994035309574e901c3d9cabf6c64c58f65a54a3"
+canonical_import = "mote.contracts.models.tokenization.count_string_tokens"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b5adf159906094f64f746ee8d02a284f7f71fd6f8751029b1052c00fdf1d0d19"
+canonical_import = "mote.contracts.models.tokenization.get_max_completion_tokens"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4ce6316eeeeb9fcde8d0ebf4c5739d1ee9d42813300365be2adcff4b1ab12a07"
+canonical_import = "mote.contracts.models.transport.resolve_api_type"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ca784d36da40337c0a9d042864f7de9aad00d4a46682b164727167cae80dcf92"
+canonical_import = "mote.contracts.net.matches_pattern"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ccd364eb47f67249cafd87fb1a34cabba072f245149c97869e00dac4c5fba1d8"
+canonical_import = "mote.contracts.net.normalize_host"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d95b88fdce7ad57f051a1b231a8dc35e4526430311fd918714f81263a7ecce4e"
+canonical_import = "mote.contracts.notebook.NOTEBOOK_EXPORT_MIME_TYPE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bdacc2dacc8b258251e80fd553b38fb97965978775e20576e2856c8edad1c110"
+canonical_import = "mote.contracts.notebook.NOTEBOOK_MEDIA_TYPE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c67e2fa9de96d1aef5adc5efe904d081000f410f6f666d0bd4e68b330e0fa038"
+canonical_import = "mote.contracts.notebook.NotebookCell"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a5031782468ed775be78d27e9783e41277bc11fc135d53f4b3242d0c41dcaf39"
+canonical_import = "mote.contracts.notebook.NotebookDocument"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9d76669dba76bfd167226b043b5e5f272cb836198fe5a1f483916cb0cb4d4e68"
+canonical_import = "mote.contracts.notebook.NotebookExecuteInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:84f7766df3aa42b1156c5d1ae125ea2e3be3171db20b849a5124f84839f91f09"
+canonical_import = "mote.contracts.notebook.NotebookExportRepresentation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2a8c427f4c4443a1cf2e6319c3a520dbbbc7b9c6059b0a6b473ec09894db6a33"
+canonical_import = "mote.contracts.notebook.NotebookInputReply"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:faec4b3ff6a74793f4e9c75bda0641d3c66141e120f48b80a010f44343c79955"
+canonical_import = "mote.contracts.notebook.NotebookInputRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2ca8e716a31d0554462a32f9b32f6a298708855fd455daf7d7ad2b22f55cd845"
+canonical_import = "mote.contracts.notebook.NotebookOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:51fc7c785f3377985af1f8ac455dda1a04544aa2f32052ffed3623d814291086"
+canonical_import = "mote.contracts.output.Accept"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:71a36edbec52b9a31ed5c38b5b1b07efd27ed0b406c152b7f505a456c088c6eb"
+canonical_import = "mote.contracts.output.AcceptedOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:72d34505058a9755a97dd6643b90788104985fc8adc65c3726b5102f76ed32ec"
+canonical_import = "mote.contracts.output.CommittedOutput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1b0d6e6c7f683f4270a49a03d52c09b6af95ddc40c808ce7854575ca3fcb20e6"
+canonical_import = "mote.contracts.output.Corrected"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bca02bd118d940b8014cbd1acc6e816c9d8bfe38317a7f40a8da56b7697dde72"
+canonical_import = "mote.contracts.output.Determinism"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:83d8b3040cfc19c57c8d3808088a282d45627365ef08cc291a8b9f4675f24145"
+canonical_import = "mote.contracts.output.OutputBinding"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:469d566076a44c36a62c7d990e48fd8134457f3ac15b411608fc158c57efa5d1"
+canonical_import = "mote.contracts.output.OutputBindingDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a636438c0b6daa11cbc47ec3f95f3f8015ae5773a317d6feb6dfb4920f79c8d6"
+canonical_import = "mote.contracts.output.OutputBindingKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4251be3b053132a29c4800c992f37fbd630249d71b3f967aabdf54cd8d9d5d96"
+canonical_import = "mote.contracts.output.OutputContractId"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ffb9d4d72f0dfe588deddd0e27ebd288f9162032b2b522632c32031d1eee6ba6"
+canonical_import = "mote.contracts.output.OutputDecodeError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8426bd9c18a0488591bca889f51794753634c889746dbaa606c425301da667de"
+canonical_import = "mote.contracts.output.OutputEvaluation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f93ff3dd7e108688df8955d3ea4ca1b1fd6684d90f3be93457b4d05b6868b323"
+canonical_import = "mote.contracts.output.OutputRepresentationCapabilities"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a500e85e1204f6546a2c849b6e8849e7845351366241478e87077dd8040e2eae"
+canonical_import = "mote.contracts.output.Reject"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a5bdf4cda78e1a77e307f66d83965e9b79eaec3d6d25e7c8b4c45b95532e7bf0"
+canonical_import = "mote.contracts.output.RetryLater"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ad8f7281410a86c3725e753549aacd2f83e52fb17a3edcceb2a27a2b2e672898"
+canonical_import = "mote.contracts.output.RunKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:117611a7c0441a75001c6a7399ace9e2b05b93110b5817893cf99952640cfc8c"
+canonical_import = "mote.contracts.output.RunOutcome"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:16eb9aa55a9e459dc4a42c923164612bff7d151da13674732dfebaacae15f9a6"
+canonical_import = "mote.contracts.output.RunRejected"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f6f10d3f62a543a1b23682fc0f5f8ca4cd0c4ad117110606ad1fb93f9bd44215"
+canonical_import = "mote.contracts.output.RunRejectionKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:47ffa2347a81c8797673f3d6981d38542a0271d46715c09bd26c4d36013a6cc0"
+canonical_import = "mote.contracts.output.RunResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:df07850cd278aeb237d29e2599e3beaccedd98d17bf11cffe7eef08278881aef"
+canonical_import = "mote.contracts.output.SchemaDocument"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:201866a31aca5db6153e1abe1bdd305fe2a7c0ebc23b4527888efc96600cd972"
+canonical_import = "mote.contracts.output.TranscriptRef"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a8834ef9d50e684e8a3463d41ebb61108e695b33024a4f795bf17ad627616400"
+canonical_import = "mote.contracts.output.ValidationContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:765eb722bdcb14d35a338d48feb148cd0f9f375753f673aa7ea4643ce85c2f12"
+canonical_import = "mote.contracts.output.ValidationIssue"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f0c6b16100adce94639e9b4a98ebf432eb3990f4e1ceee2e9d7788543e4d3418"
+canonical_import = "mote.contracts.output.ValidationStage"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4fddd4efd367d3b4fa32d9eb7479a15bffab9216f2793a3686f941ab68df31bf"
+canonical_import = "mote.contracts.output.ValidatorDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f8daed05e407c946af9297d1bbd6e701e74dad0aa9f5c9fce7894e033153bdd4"
+canonical_import = "mote.contracts.output.ValidatorEffect"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f3d428668149c72f5ffada2b9e3ddf99a1b10993bf17f6c71e65710a1d2c53e3"
+canonical_import = "mote.contracts.output.ValidatorProvenance"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f118a0702aa00a4faa53b9f568e6b298075991e9b2d9cc272305c4e037db1688"
+canonical_import = "mote.contracts.permissions.ApprovalChoice"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:60d7df43563eb570c1ee626a169e3a6ff123da6171fdcac838d41dd70b07c155"
+canonical_import = "mote.contracts.permissions.ApprovalReasonCode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:37f695b95c45977664500b72c0dc564153b34f6608a6a5e63e06c176da4fba6a"
+canonical_import = "mote.contracts.permissions.ApprovalRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2456b1d1b18cca839e1c7961490d66e64442a0c0c56c8749944fe39b9e2f466d"
+canonical_import = "mote.contracts.permissions.DecisionReason"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:262ea49ecc58633bd37c2ce25f7e4aed9819a5c0d90105d2a2ad75f3cdba7df2"
+canonical_import = "mote.contracts.permissions.GrantScope"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:303d903b5b455563f575221c4628849aefec1a2eaa995bbb047b9f3445fa316d"
+canonical_import = "mote.contracts.permissions.PermissionBehavior"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f8e0f7bc19a304dba792e2c1f0d5fec9ba10b4917c9b3124a975b3e39344c4c0"
+canonical_import = "mote.contracts.permissions.PermissionDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f27b3fcc6ae94b1a2cb40cd6f2fa1ed10b92cc8762ba9fee7b5eab312274e8bb"
+canonical_import = "mote.contracts.permissions.PermissionFacts"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ac85c5f2e047e6c0dff5c49b2731a95a03897767dbd59ad79c8a96d78cc4df4d"
+canonical_import = "mote.contracts.permissions.PermissionMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:51a3a6d9258325c6195dd0effec052410f37130bb3a72f39ff6e7f8070d311e7"
+canonical_import = "mote.contracts.permissions.PermissionRule"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:714071a762eff32c0f47176b1f2a4b831c1a54d9d1020827bb64f3be936d1b73"
+canonical_import = "mote.contracts.permissions.RiskLevel"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c76be46e197f1de8ca21d4522ec8aa8115c8d3e953ed6cc322f33d8d9b1060bd"
+canonical_import = "mote.contracts.permissions.RuleSource"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e41e1fa1ba2565e8002f20390828c5e1d9f650be4f00fc22ee47cf7a2f7691f1"
+canonical_import = "mote.contracts.policy.compaction.CompactionDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8cce9f84b171fcda8a20087b10e19bcb1600d3f39c6f2ed22fdd5fb6f05cf852"
+canonical_import = "mote.contracts.policy.compaction.CompactionIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d04a878a2f4f10a46c2326375423e15abe8bd1349e624e4674ed863119e4f95b"
+canonical_import = "mote.contracts.policy.compaction.CompactionPolicyContribution"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2a213c3e8437c05b27b2ecce9f09a346c8eb2cd4ef400dc130b5f1542b60b6d1"
+canonical_import = "mote.contracts.policy.compaction.CompactionPolicyTraceEntry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:00869e573748a478a2888743f2c05628e3a8eb076d05a063785b6d60a14c9ecd"
+canonical_import = "mote.contracts.policy.compaction.CompactionProfile"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c40be9ff061f45f057e8a84d8a7e4511cb44ba7f758828a915afb4840c1b8320"
+canonical_import = "mote.contracts.policy.prompt.PromptDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7b0ae8cf4069cb95a196f888e5ebf01341040d128318ee4401325b3b48e58ab6"
+canonical_import = "mote.contracts.policy.prompt.PromptIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0bb293935bfb76d7338ff5c93013516ed062aa3451ebaaf947f440cf1619f8a2"
+canonical_import = "mote.contracts.policy.prompt.PromptPolicyContribution"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:77b8b89d83908fe13ec58d1721f9af9a6112afb3d778574f136ac6d0cf60f7ac"
+canonical_import = "mote.contracts.policy.prompt.PromptPolicyDisposition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:37beee37dc9886ba7e4607c8f0872ad4ea6acd954fcb4942eee9d30eab366265"
+canonical_import = "mote.contracts.policy.prompt.PromptPolicyTraceEntry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:abe3e4ac43da6b2937ee5dc758658841e74ab1d3d4e8212adea793c104d1ed63"
+canonical_import = "mote.contracts.policy.run_completion.RunCompletionDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ec383cf2054f98c0c7505b69572dd82b537eccb3cdec87aab6ad068bfc449560"
+canonical_import = "mote.contracts.policy.run_completion.RunCompletionIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:64aad26d2700ae177e96034a0525cec5d9118615b74d1fd693fb2e6de71e4038"
+canonical_import = "mote.contracts.policy.run_completion.RunCompletionPolicyContribution"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6a4f6cb4cc1989cf47054af8dcb6a999857862320ef31b109cfdaa17f0da8e35"
+canonical_import = "mote.contracts.policy.run_completion.RunCompletionPolicyTraceEntry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:673c2faba37c2cd2b43fa55bbb60a8f2b34016a2ef5d66ae1802c9a3b2bbd2ce"
+canonical_import = "mote.contracts.policy.spawn.SpawnDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9fecf93f50eb0982b4a56bc937798a6bf98cb833adc5c8522627c47ba898999f"
+canonical_import = "mote.contracts.policy.spawn.SpawnIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9dd2bab98e7ead16dda38134d1b9b4fc098cc2916fa4586aa78dca46bd2d1baf"
+canonical_import = "mote.contracts.policy.spawn.SpawnPolicyContribution"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:37ccbc6c3b4f4a6a91ffdda709241037c5aad88d342ff42b74a17171efe7268e"
+canonical_import = "mote.contracts.policy.spawn.SpawnPolicyTraceEntry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:62f005ae89490db4f738db9475f6909c02708a454570b79f0991dbb6abf1763b"
+canonical_import = "mote.contracts.policy.tool.ToolCallDecision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:efa9a1ef7d393eee0d6573c60768315e2ed2bfd973c6c697f772399847bcb4ab"
+canonical_import = "mote.contracts.policy.tool.ToolCallInspection"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cce45fbc43d280179ba71510bccf923ec891e3371d044827230cf7356b0243e9"
+canonical_import = "mote.contracts.policy.tool.ToolCallIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:738108066164dc34224851e1c5a8c4db04dec236c287a5c4537f9c2b25824d08"
+canonical_import = "mote.contracts.policy.tool.ToolPolicyDisposition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3c5bcb29d1fa83e3583f6f3ab9342b11888ec047b522572494e8fce63d015e54"
+canonical_import = "mote.contracts.policy.tool.ToolPolicyTraceEntry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8061b93b2bc9d854b0f6208d4bfa26970d16ce332db2bd6eaed40aeb73302eba"
+canonical_import = "mote.contracts.policy.tool.ToolResultIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c9eb5692021598ed9efb6dac234504d6f4f7703cbb1aeaec52f308bd361ef1ac"
+canonical_import = "mote.contracts.policy.tool.ToolResultPresentation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:aa53107b3a47014e77f2d98e13a9c3cd03bf0222a696795a447fefe325045fb6"
+canonical_import = "mote.contracts.ports.agent_catalog.SpawnableAgentCatalog"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8520e6f112b76ed22d257b103827b0bcd08a6e570641f27161d4d8a35d0b1e74"
+canonical_import = "mote.contracts.ports.agent_factory.AgentFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b3a2ff19ae30cf89f3c946fbcb88ec1933ff00d5741e1a51f69981f7191be6f2"
+canonical_import = "mote.contracts.ports.artifact_store.ArtifactBlobStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6af73114f06e59b04d986ae37101b1b812fd44afa22b00d97e89eaf9a6179e74"
+canonical_import = "mote.contracts.ports.artifact_store.ArtifactPublicationOutbox"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9379aff59cdf6fab229b355595cb39bb52c1a58a296d009a56c8e1e2bcd44870"
+canonical_import = "mote.contracts.ports.artifact_store.ArtifactResolver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bf8fe441ed0799c3a65fd17105f9fdf4f91548f172bc1e3fbac72b99e6bcba69"
+canonical_import = "mote.contracts.ports.artifact_store.ArtifactStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:51dead51682629d42f24e4a6fc847e2d289f02266c61ec38a64c4df96f3f9dfb"
+canonical_import = "mote.contracts.ports.artifact_store.ReliableArtifactPublisher"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9c3b170542de6472635c5a1e46c283e403e029a5b87c27d70ed20998433236c8"
+canonical_import = "mote.contracts.ports.canvas_backend.CanvasBackend"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c830b768365387c86af186388d0e181457f395c2be05a0dfa7c2470e9d23a96d"
+canonical_import = "mote.contracts.ports.canvas_backend.CanvasBackendCapabilities"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0bf5066d6ebda80efbf7ec3bb905346b27cc6c793e38b9561d102f9a95deb21c"
+canonical_import = "mote.contracts.ports.canvas_backend.CanvasBackendRender"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d758612d91242e55f2d016b688a90c18121412bcb94756b036f54afa4e7e441e"
+canonical_import = "mote.contracts.ports.canvas_backend.CanvasBackendSession"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:80874dbf6885be2a1b95fb1f3f08e9aabe3351562d842e155b7feec19665fc8f"
+canonical_import = "mote.contracts.ports.canvas_backend.CanvasExportPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e5ffeecfbb45a4e40c51e971e515b522497d520c47f157164e714dc0cbe301c9"
+canonical_import = "mote.contracts.ports.code_map.CodeMapIndexer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ee85ccb3cb2ce3d360454bd4697f4474e9215708344558f4c06f930ab2d44743"
+canonical_import = "mote.contracts.ports.code_map.CodeMapIndexerFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7587b24347db4c1dd7233aa6993ba423dd39bd3340ee0f8a5f5a80615b1c382a"
+canonical_import = "mote.contracts.ports.commit_fence.CommitFence"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4758d5a54e5f9b9d353012316eaf180118edd1a00c8032595f09d89cbecc5c54"
+canonical_import = "mote.contracts.ports.compaction_policy.CompactionPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5f2f546a8099edb1d61c474c3623c9ff35d60fd851c909467cb6accc8e42bfce"
+canonical_import = "mote.contracts.ports.compaction_policy.CompactionPolicyExtension"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4497e04f578e25098fd5e60f7327c049116800956499baa2680a5725e5491d48"
+canonical_import = "mote.contracts.ports.compaction_policy.CompactionPolicyExtensionFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:92596c67f0c0d9ae3b2e0aa03eafebeada036e4ada877d4662fa5556aaeb7880"
+canonical_import = "mote.contracts.ports.compaction_policy.CompactionPolicyExtensionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2834d53ce9934a8bb9022f2e9988947f41a920be88db3c8d513b0b9b4e4e2d3c"
+canonical_import = "mote.contracts.ports.completion_policy.CompletionPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c149ba22873de41815d2b86dc68aff0042fb05ae57d2a61850efd6e931c6b5e9"
+canonical_import = "mote.contracts.ports.context_reducer.ContextReducer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:162ba5f83e2a365274e972f571e2f98fa04f94916fbf168f953f0282cc45aa5b"
+canonical_import = "mote.contracts.ports.event_journal.AppendResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4a525a94923f5a66e19895f6fcf40a8460dae38e51b07053e6e54340f69a8962"
+canonical_import = "mote.contracts.ports.event_journal.EventJournal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:11379fec89d1645e6ed3366c536fdd239172cfb45c0a384353074b921222a1fe"
+canonical_import = "mote.contracts.ports.event_journal.EventJournalError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:34d6395cf1d96bf3f49509818992a1b15d2b869e2eb64844cd131fbc8b7f34e7"
+canonical_import = "mote.contracts.ports.event_journal.JournalIntegrityError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:599847c90c04e7f647cadc09b2cc871eefe6af791e8a9ccb28fec752264b234d"
+canonical_import = "mote.contracts.ports.event_journal.StreamVersionConflict"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:468119d65d5dd44d95eb1f38f23e3fa596784ba8cdd122678daa87650bcf43b7"
+canonical_import = "mote.contracts.ports.event_journal.UncommittedFact"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3c12efcc89906fe65d0d31c7014709eccaeffe406cccb9f3ad3b703dc4de2b2e"
+canonical_import = "mote.contracts.ports.event_journal.VerificationIssue"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b3bb9abfde3c0cd129b3ab8725d92d4fd2250196d644617fdaf756ad66a41615"
+canonical_import = "mote.contracts.ports.event_journal.VerificationReport"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8a1cb7e98616d6564f61ffe51d4dd758f6a8dbcde5e049a4717182db85fb1d80"
+canonical_import = "mote.contracts.ports.event_subscription.CheckpointPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:64a091f98c131d71fe05388194adc831dc34458a009c0232c31bba502d84860b"
+canonical_import = "mote.contracts.ports.event_subscription.CommittedEventHandler"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e0b66d8011d2be0b5efe0a45377593e688b2edc58bf0407de35bfc11c3f5b7ce"
+canonical_import = "mote.contracts.ports.event_subscription.DeadLetterEntry"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2d253b5d3692f6b76b574099d259547931dc8c3e5079d6d3d2a8342980e26e16"
+canonical_import = "mote.contracts.ports.event_subscription.EventFilter"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fd677793d12e0a654ed90e0fcb4240c077043ac1f5f6c204b37d63042a80fc71"
+canonical_import = "mote.contracts.ports.event_subscription.ManagedSubscriptionStateStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2b4a41630cbeb49be1ddaa51a1cf21fd26488c8692f7c2a9630fda47e38a340a"
+canonical_import = "mote.contracts.ports.event_subscription.Ordering"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:86bba83d354f9139f68b9b6d9b5fac5efe78ca0a16263797d9f9b7940d7b3761"
+canonical_import = "mote.contracts.ports.event_subscription.OverflowPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e3ec9e5a78bd8baabca39a62a629e0e67467ba1b47c4dd59a7a1d02fca73fda7"
+canonical_import = "mote.contracts.ports.event_subscription.Reliability"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d511fd8188ff083edb39ddca820e754a75b87b4d59d48482000452abb86dfdd4"
+canonical_import = "mote.contracts.ports.event_subscription.RetryPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:77fbe8b4fe17846bf6c795662a4554b77cb245f6b4f86f4fcab9ffb7c8daf4b7"
+canonical_import = "mote.contracts.ports.event_subscription.SubscriptionCheckpoint"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:db5c2ef9f0574a701fb105af5a3470acc4b6c7ff44dd74e8583af6b58157bd56"
+canonical_import = "mote.contracts.ports.event_subscription.SubscriptionIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9496760debced7598b074f5a9f9212679cf2f4e82e9dcf71666b5e678f13f8e6"
+canonical_import = "mote.contracts.ports.event_subscription.SubscriptionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c2a1672a44fae32cb1f1b2af5acecdfd463bf69d585ff1eadd5cc89d3a098112"
+canonical_import = "mote.contracts.ports.event_subscription.SubscriptionStateStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4b8f651173c9c03ab28c43ffbce6a7dab216fcd4331f22cdd187374c8c8a08c3"
+canonical_import = "mote.contracts.ports.file_changes.FileChangePort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:767b82fa023f0bb8b46e27707937fe794d96d36772d39c53e2563ebd072f09f5"
+canonical_import = "mote.contracts.ports.hook_runner.HookRunner"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f2a3d131e5472925736a5541cb4488b57823d4435adab39663c686c2e1b3caa9"
+canonical_import = "mote.contracts.ports.human_interaction.HumanInteractionPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:459043d4f42dc21bbdff5309fa033a8e6bd4f02000ee276a81eb292bd74eb90c"
+canonical_import = "mote.contracts.ports.lease.LeaseCoordinator"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d051c7fd455e077903b2adb4aaa7beb7b2c3bd4ddf747392c49697fd90864441"
+canonical_import = "mote.contracts.ports.lease.LeaseEpoch"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e1d9fcbcd189c6081aef964068048710b39675c8943882b0b57122e8b7f7e288"
+canonical_import = "mote.contracts.ports.llm_client.LLMClient"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e0dd36db493d40e448272efd237f1c93eb44acee5e5848687f29abb8c5a07ef0"
+canonical_import = "mote.contracts.ports.lsp.DiagnosticsProvider"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f038d7fdd1d0b7982aa038b6c5c3710cafef010010bca9d60eac1fc1b4bc8f93"
+canonical_import = "mote.contracts.ports.lsp.LspServiceFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:56d87de9fa7d178cd2b57f8e91585cee21ecce99f51c2a806463bd402ba3cd89"
+canonical_import = "mote.contracts.ports.message_activity.MessageActivity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:460b2cf8ad6c60d275f787f372c8de741d4d1927a26c05da114993aabea0e5b3"
+canonical_import = "mote.contracts.ports.message_sink.MessageSink"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b01ba586b829a3efed5e5b342f9ab357be093e3b7ea6283dbb1afd7d9252ae57"
+canonical_import = "mote.contracts.ports.message_store.MessageStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3a5844ce46ea1df316a0519f8978ffaef6c8f782abccf91d539082c62e311bc8"
+canonical_import = "mote.contracts.ports.model_call_journal.ModelCallJournal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d0509ede3c8fd333890d75605927262ffe1aacd8c7d518c45ae464e382333871"
+canonical_import = "mote.contracts.ports.model_endpoint.ModelEndpointAdapter"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:58da230ac67bc82642063371b58a765c87d7d4839396510bcc75a648af7bfa25"
+canonical_import = "mote.contracts.ports.model_endpoint.ModelEndpointResolver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9e104075d433528b5df8a9ab5832ca71146cb3579fab529a0a51be2426adc24d"
+canonical_import = "mote.contracts.ports.model_gateway.ModelGateway"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9c3513297ac25c5527a85e5beb5c3de69a7ccd5c5a6b5fb61d27fdfea05700f5"
+canonical_import = "mote.contracts.ports.model_gateway.ModelRoute"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:af4bbf2599d52578822aa2569ba1c11f1da32f4656ae2773e4228a9f9f331ff3"
+canonical_import = "mote.contracts.ports.model_operator.ModelOperatorAuditStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8c90d719846538d9d1f4747c76daf4bebdbdaf6b340f6e64ca80c40772d293c9"
+canonical_import = "mote.contracts.ports.model_operator.ModelOperatorControl"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3b138c11bd5ba014b85f6cd9742130a698ff35101c0461a90dd7810ecceece18"
+canonical_import = "mote.contracts.ports.model_request_transformer.ModelRequestTransformer"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:022d934571614912b60ebf426b88250967ae4d58b6ce45200335dfc03f0736ef"
+canonical_import = "mote.contracts.ports.output.OutputDecoder"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1f1766aa8db4656850f44982dad9b14344812a09f1b33fbe0e02e88f2b3cf32f"
+canonical_import = "mote.contracts.ports.output.OutputEngine"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d10896302ddf3ddb933c3c0315a446fb61884a7bb4261610b7fa6b3f3325098c"
+canonical_import = "mote.contracts.ports.output.OutputValidator"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:39fc23b4621375fbe2c923ab7a714c04f4cd043467b04ffdab5acedadc3d142d"
+canonical_import = "mote.contracts.ports.output_migration.OutputMigration"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c5c11430adaf7eb3df1f8b31a5b3673bdb0ed2fa3abe0f34d23318ec6a5351b2"
+canonical_import = "mote.contracts.ports.prompt_policy.PromptPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:685ff1ada15f5f87b92a00ca9fd9f3e78ec32b8ff660674ceb8a7460c18cef48"
+canonical_import = "mote.contracts.ports.prompt_policy.PromptPolicyExtension"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:96d95ba4dbe6a05962a883821ba92c0a29a91da1a5102d901c7db17510095826"
+canonical_import = "mote.contracts.ports.prompt_policy.PromptPolicyExtensionFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5fdcfa8e243a31f75b817f220188e6897ef1ab1c6d078af4d780ab3aa134d34a"
+canonical_import = "mote.contracts.ports.prompt_policy.PromptPolicyExtensionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6de1f3c362ba45a5c3286bd19c596f0427a432849c434c58290c9391be2d73fe"
+canonical_import = "mote.contracts.ports.request_assembler.RequestAssembler"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9be46edb5a74645f9a8b3d3d32422123f76b68a524aa64c129f4abee90a729a4"
+canonical_import = "mote.contracts.ports.resource_loader.ResourceProvider"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2844a7fcdcd08854a7e9bad3d8cef58e491a32c4f736d340af122b85ea42ccc6"
+canonical_import = "mote.contracts.ports.routing.RoutingPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6fca621614761b8947a671f78f7514410b56da26405e1446252b1e509867514d"
+canonical_import = "mote.contracts.ports.routing.RoutingStateStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:84bd03ad067c0d9824c20e48a659c705ee8703d1a0204c901876503066ef06ac"
+canonical_import = "mote.contracts.ports.run_completion_policy.RunCompletionPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9fe869b2ee157a8d6ac198431035bb865a2f85e6152c971b6e017ce6f9763188"
+canonical_import = "mote.contracts.ports.run_completion_policy.RunCompletionPolicyExtension"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:848ffbf8bc8c6eb64c02baeace3cd641cd28cc0994f7725b83691be1a6c7fb12"
+canonical_import = "mote.contracts.ports.run_completion_policy.RunCompletionPolicyExtensionFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:60574961a581f3853e6014ad9f9e45e96735961457542f8c452bf34f566045e0"
+canonical_import = "mote.contracts.ports.run_completion_policy.RunCompletionPolicyExtensionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1f3a9fbce67fc65854c2d79487af9ba377b7b0325b0bc62cbbb9279a6cd3c380"
+canonical_import = "mote.contracts.ports.run_lease.LeaseEpoch"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dcb6cb18d3b31092ef9369b337868fb55bf288d37a5c82df4eece64249a2f555"
+canonical_import = "mote.contracts.ports.run_lease.RunLeaseCoordinator"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:86ccdfd52e2e7d9cb3dc711ecef0ecabfee4b1015456e7d0621a32239a217de2"
+canonical_import = "mote.contracts.ports.runtime_checkpoint.RuntimeCheckpointPayloadStore"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ab500cf685faa38843aa183b328d8c1d0d42bf9dd1a7bc3fcbdd6404f039fa0c"
+canonical_import = "mote.contracts.ports.runtime_checkpoint.RuntimeCheckpointSink"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:25ade48727b9113d9783fdb42a947dadb1b896e1292bb16994aa2f1107070a51"
+canonical_import = "mote.contracts.ports.runtime_driver.HandoffRuntimeDriver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ac31edb331e97a4535142e5c09bea6c74dace941a14f7503055276ce891e2050"
+canonical_import = "mote.contracts.ports.runtime_driver.JournaledRuntimeDriver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:144791af4ff1a1eaaf2994f0bdf99327821b870f00198ffb5a73ab2d45907fe0"
+canonical_import = "mote.contracts.ports.runtime_driver.LiveSurfaceRuntimeDriver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0fd22e95945865d4d239f8a59271a63ce00f709960f79934829187f1e0a55f6b"
+canonical_import = "mote.contracts.ports.runtime_driver.ManagedRuntimeDriver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cf6363494ca077151ee2f473e61837d35132d45a0a040e306adc91159fb01b6f"
+canonical_import = "mote.contracts.ports.runtime_driver.ObservableSurfaceRuntimeDriver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5d3cebb76c4a8918bf3d8ba3b16ceba9046ea388ca283b5519e0e4b7f7e1d8c9"
+canonical_import = "mote.contracts.ports.runtime_handoff.RuntimeHandoffJournal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:036e617cdc72dd347250bb25fa46ea0569c247caa587a79e0a41d233f179b8d3"
+canonical_import = "mote.contracts.ports.runtime_operation.RuntimeOperationJournal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:176f1df54992ddf654e63f7ab0b4146d190bb308564b2901464e40ca6e25ae7e"
+canonical_import = "mote.contracts.ports.runtime_projection.RuntimeProjectionJournal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:024367146e83c03ad0ec7329129a95f29d1b606233bc3b108a8c487899ddd6da"
+canonical_import = "mote.contracts.ports.runtime_projection.RuntimeProjector"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:67badb080a6ae1ce00ee15c141c7d7f0c41aeacdf57b8f0598dbd060acf0d6db"
+canonical_import = "mote.contracts.ports.service_call_journal.ServiceCallJournal"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b03bbcab165a9d7cb0cd4dd04de8da2a60f5057bc01aaefc53310ec4228058f5"
+canonical_import = "mote.contracts.ports.service_endpoint.ServiceEndpointAdapter"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e66a273339f102673e1bc100d32e8f3f7f3b656ea89a28d59893e0f7b29f377c"
+canonical_import = "mote.contracts.ports.service_endpoint.ServiceEndpointResolver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b609aa6511e84b3cb3133e55bf51fd8bdfddb6ed11462baecc141526ca42c9d2"
+canonical_import = "mote.contracts.ports.service_gateway.ServiceGateway"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:421c3cc7bb86f476c55b47db004fe706029b746de43a00520a2511c9fb1bd727"
+canonical_import = "mote.contracts.ports.session_facts.SessionFactSink"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:58d9184da1cc0fb20add0409a4d0c6edb4b412422b14811fbf780aad8ac47f25"
+canonical_import = "mote.contracts.ports.skills.SkillCatalog"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:feadd4b7381276ccab1943c489d27dfaa4142a0846265578758cd9581d542f64"
+canonical_import = "mote.contracts.ports.skills.SkillPromptProvider"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2e81b386477556217e48c13b22a293c6baaa7a15dc0d689f29d507ed3c0e1e10"
+canonical_import = "mote.contracts.ports.skills.SkillService"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:17bfba2c83b7c9f82e27f03cebd69be3ca47ddf98d2b6bf4159ade8f87551a06"
+canonical_import = "mote.contracts.ports.skills.SkillServiceFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7efef54acf9693c704dc8f79cf0d8407f2da5653a7a91cc3dddf512c1d4325b1"
+canonical_import = "mote.contracts.ports.spawn_policy.SpawnAdmissionPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c01f1c931835f1f794ba6bba4018f9f97b026b9958cfcb3f11774d5641230fd3"
+canonical_import = "mote.contracts.ports.spawn_policy.SpawnPolicyExtension"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:268eca3b28a0d029880c5c977107dd2da20aa502894eec07b059badb6cee100a"
+canonical_import = "mote.contracts.ports.spawn_policy.SpawnPolicyExtensionFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:99d0289eca775c6e294cf86ab7f2c8b8348115079215e9408dff0c13872bdd84"
+canonical_import = "mote.contracts.ports.spawn_policy.SpawnPolicyExtensionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f8b647e54336747f97bd74a4ab6a927de0445e03a16564e54ade288307d3f1d3"
+canonical_import = "mote.contracts.ports.surface_presenter.LiveSurfacePresenter"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5a6031f8d22427b877e2f6afb8ba5531be7acceb15a17d2a66c9b95fdabfa6b4"
+canonical_import = "mote.contracts.ports.surface_presenter.SurfacePresentationSession"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:149d8a557a8f478e833b14cba7ff581993c9b666b2ef3aa1d7aae18f04033a52"
+canonical_import = "mote.contracts.ports.team_roster.TeamRosterMember"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3565f739463a59cc1d17b6ba86b5a126c90a48e31bd9882df611e831a23293f4"
+canonical_import = "mote.contracts.ports.team_roster.TeamRosterProvider"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:485cbfff947b0db588857fdb8d08c345ea0e7e7b969c1fa265c4df0353e0b04f"
+canonical_import = "mote.contracts.ports.telemetry.TelemetryHandler"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:63564940475d035563ac0153cce2fe718c202261143389743bb56754b045d18d"
+canonical_import = "mote.contracts.ports.telemetry.TelemetryIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a8ac018290daae6050d3998959111e11474c40585797fc21eff4b49dabcefe27"
+canonical_import = "mote.contracts.ports.telemetry.TelemetryOverflow"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8af25eb1958561cba6f13e33bc87b910592040f7ea813265fccf085f2d3282a7"
+canonical_import = "mote.contracts.ports.telemetry.TelemetrySubscriptionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d1d9795ef452d0a463a149ff262d3c39ff40fda39ee33ed85dcf055605eb5c6e"
+canonical_import = "mote.contracts.ports.tool_policy.PermissionFactsResolver"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cdbd63e8fc0ea22528d854d46d7c71f450526c9f6471c2d2a9c03f8fa485dcae"
+canonical_import = "mote.contracts.ports.tool_policy.ToolCallPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d4acabbf58af018614284d58705942768e4f80433c3640c203931d1f616790d3"
+canonical_import = "mote.contracts.ports.tool_policy.ToolCallPolicyExtension"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2a417e10925215876da7f081e466d680a8d68b5ace02b286125ff1a16c72050c"
+canonical_import = "mote.contracts.ports.tool_policy.ToolCallPolicyExtensionFactory"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:326ae88357378381af67512aa627cb3f2d0a27e94783763bc818a98258de1e52"
+canonical_import = "mote.contracts.ports.tool_policy.ToolCallPolicyExtensionSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6e819cadbad61b736b23ff1e9c8e7dff1f8be73716e9695d064b50190151f327"
+canonical_import = "mote.contracts.ports.tool_policy.ToolResultPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0b300fff22591e535c7db0b7eee6d69bb628c4e4c8f6c9b9f199fd30ca37c3a8"
+canonical_import = "mote.contracts.ports.turn_context.DEFAULT_TURN_CONTEXT_PRIORITY"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2b0b54bd449f59ec25e096ac7377b66736d26174a2572da16a7d8a8168e82b00"
+canonical_import = "mote.contracts.ports.turn_context.EphemeralContextSource"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:06cccb5b683849e183ef20be1c5674e82e15bb56f9f99feb99c7a33c4f0db3e6"
+canonical_import = "mote.contracts.ports.turn_context.TurnContextPriority"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e1ec04cf08b0ae5b8cb4ee2fe578eb788084313b6e1ede50388afadfa251bf40"
+canonical_import = "mote.contracts.ports.window_surface.LiveWindowBackend"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6662cb3de7d29c396d51bbc4c88b3824f7cce5be8e66108f0369a963f55669a7"
+canonical_import = "mote.contracts.ports.window_surface.LiveWindowBackendSession"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bcdca863be3d2db5b28182f39f2cb5a71b9efce58944192d55f7d35a66aaa6b1"
+canonical_import = "mote.contracts.ports.window_surface.SurfaceInputHandler"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fa81bfe17dc91fca112fdf3be49ede64f826f3652a700ef60bd2eb25d53db0e2"
+canonical_import = "mote.contracts.prompt.PromptRegion"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8982932c2b54080c6ecaada6fdad92891ebe2f0c3f9b7676e6e609a9cf86ddb9"
+canonical_import = "mote.contracts.prompt.PromptSection"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c45264147e69c6c0c9d81b2f0fbd03d4bae0c4df7ed913643f6c51b7d9bbe2fa"
+canonical_import = "mote.contracts.prompt.PromptSectionIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6f81dd8e00c91f3719f04d9862792a6920222f82c5f6d062637309683ba3131c"
+canonical_import = "mote.contracts.prompt.ProtocolVocabulary"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ae151f42e170192efa75ce5cf578311cf1b25672e7e731958fbd603e2c5c12ef"
+canonical_import = "mote.contracts.resilience.BreakerConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b7ddfa255d36ad4bd3026f3936b0acac18efebb0f96363907d338267cd2d366f"
+canonical_import = "mote.contracts.run_context.RunContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c48cbc008cfe4acb1e975b11fa893a4abefa25919d1858ad5f0ede07fc9b93b3"
+canonical_import = "mote.contracts.run_context.ToolContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:738e638b5b02e76cf726522ad63d33bded4cffb0ebcc3573281bfa687a88d892"
+canonical_import = "mote.contracts.runtimes.CheckpointFidelity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:453684503469139af37cead1aaac89626006872a248ae14b2aa9526c303ead93"
+canonical_import = "mote.contracts.runtimes.DriverCheckpoint"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2f7c0062f20cc52c36bddaa6e724ef675fdddd0a06d9b667237fdcade89ce5f7"
+canonical_import = "mote.contracts.runtimes.DriverStartResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:68fb749fb8b442dfb3d729f4072b8dc2e3947b7d4daa54ee705672f0a67e9844"
+canonical_import = "mote.contracts.runtimes.RuntimeAccessMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9ce7cc099973bf0ad1e4337e4e545fa14814ddfcdb18244e189a76d113aee2bd"
+canonical_import = "mote.contracts.runtimes.RuntimeCapabilities"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d4296eb5d0791b27df57a9e000289feb6eda6185186d108d6ec5ce83ab045720"
+canonical_import = "mote.contracts.runtimes.RuntimeCheckpoint"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dfa56ba5178b5c7183b480eed1da1a39e28bde28fe50e62b1229029f190e197b"
+canonical_import = "mote.contracts.runtimes.RuntimeCommitFact"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7cfb99e0f4d3de16ddb4a37128233fe75cd9ee44844250076ce59ab4eaa6fa75"
+canonical_import = "mote.contracts.runtimes.RuntimeDescriptor"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1b3e3ce380dba10b74a9894187adda0a23c9d2d7920fb388295ca6eaee438b97"
+canonical_import = "mote.contracts.runtimes.RuntimeDurabilityState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:0371b495b99a0c61bad9e8d5e48dc25726c6ec646ea2bdc0682bfc2769e53536"
+canonical_import = "mote.contracts.runtimes.RuntimeHealth"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:83f1637b0a48de0ecf39ecdd851eb43abd2d16a84b0bd93c3094fd087a7ebed0"
+canonical_import = "mote.contracts.runtimes.RuntimeOperationIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e6de957450c9030da13606262182f5b82ec3c465f0616f0bd5e9d33424a44b79"
+canonical_import = "mote.contracts.runtimes.RuntimeOperationReceipt"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5bcfe1d621ce92258909c151fbc487b6fbfef7835dfd87c318df48f73b5ca040"
+canonical_import = "mote.contracts.runtimes.RuntimeOperationRecovery"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d699fce442c892aff2cdb888f7ad75186dd51354a8e9c8e1848355bcc20f4b6c"
+canonical_import = "mote.contracts.runtimes.RuntimeProjectionAck"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:19bf2bc7a661edfa0e13a18cb3d8b6cb612c5825393811f123a7935fab003004"
+canonical_import = "mote.contracts.runtimes.RuntimeProjectionFailure"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a02d69903551ed7f9a9057f723ed595a341126c5c858489cccd6782d2b7c6859"
+canonical_import = "mote.contracts.runtimes.RuntimeProjectionIntent"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:996d0780c95065ed6e1156426f7b129e7559490a8856c609506bd7430e4681a1"
+canonical_import = "mote.contracts.runtimes.RuntimeProjectionReconcileResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dabf23f010a55f71d11f370f7d4729009e2912d915b6b0fdab62f8ba617f024f"
+canonical_import = "mote.contracts.runtimes.RuntimeProjectionRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4da497b79488340aade3fd96793d6ab11f14736f90667537b810b7ded41aa7dd"
+canonical_import = "mote.contracts.runtimes.RuntimeRef"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:714b736fc31fb99d8cf9c09ebca27badd74e4d2ce151dbed80672745ce7c0221"
+canonical_import = "mote.contracts.runtimes.RuntimeState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a30534f81169b47035cb5b1e05cb14b954f8aec9a1bbe706b4660d895dbb02b7"
+canonical_import = "mote.contracts.schema.document.CauseBy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5b81c09f869a006efc3cab83b42a7fd547363ee5de493a242b63610680744ba1"
+canonical_import = "mote.contracts.schema.env.BaseEnvironment"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:84e8383c83bf7673a8501c151a4941b685e723af146fa405d1399eea209746ca"
+canonical_import = "mote.contracts.schema.messages.Message"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a6f649780a794e1a2959932b78b40e5c8043608fcde8d9271433c24daa07c236"
+canonical_import = "mote.contracts.schema.messages.UserMessage"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:174e4d903d1cd9bfdf4fbffb13c81db5ea479bce6261e6357a7f83f255cb7852"
+canonical_import = "mote.contracts.schema.messages.to_role_content_dicts"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e3cf09edc8b919feaa9b1482f88316566d8a7281eb45214aeb76c1ed8974a5ef"
+canonical_import = "mote.contracts.serialization.BaseSerialization"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3dc7f0b564097d05d488a78c8be635b4e1b4c76e7fb1db5f1e92568668a27a80"
+canonical_import = "mote.contracts.service_journal.ServiceAttemptFinishedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ff52fecbdf2feb4858ba5e5189161190d97a3d0c3b62cc591fd28dbb3792371d"
+canonical_import = "mote.contracts.service_journal.ServiceAttemptStartedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3bd24ea1d1c7d9ca0bd3b02764ef1ed8a38bed12e7085157265b4f19f1d97908"
+canonical_import = "mote.contracts.service_journal.ServiceCallFinishedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1dbe6a99ef7e424691df0d561d52d5bd3ad47d3d47697d1c698a97f88a9d1880"
+canonical_import = "mote.contracts.service_journal.ServiceCallJournalRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e2e8ae3f446dedcf20a7548935b64b6e3c42f5b8bfccbcbd78e53e746dcd1952"
+canonical_import = "mote.contracts.service_journal.ServiceCallPlannedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:eb19dd3e6050b1040883572f630252ebe5967d8fe287ecfb88f819b270b12291"
+canonical_import = "mote.contracts.service_journal.ServiceCallRecovery"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:19c80de4e9d68ba8c8796270eef615058d655aba6510424996bff3e973b04c82"
+canonical_import = "mote.contracts.service_journal.ServiceDecisionRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:734189000e9c47ad7f669acdd91f45b38a3e850dfbe6b1e744d8b972d4d4c898"
+canonical_import = "mote.contracts.service_journal.ServiceReceiptAcceptedRecord"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:88217c8703d38b1e7c2c517ad90305751c3f222cf7c773fa43446bd48332a95d"
+canonical_import = "mote.contracts.services.ResolvedServiceResponse"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f76740b7b02f3a4653aae54f5dd41cda5ea9de7769c1be4c0189e79f2bc50cf9"
+canonical_import = "mote.contracts.services.ServiceAcceptance"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f0f269fbf758f0aee3688a57363ef4e09879a741000a920b1cbfe768d94fbca7"
+canonical_import = "mote.contracts.services.ServiceAccepted"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fb7c4b6ab71c7d9df45ad5d8683fca9aeb9830c45d50174bda198d582dedacf2"
+canonical_import = "mote.contracts.services.ServiceCallState"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:138ebcc9872043c4331d4d7bbdfd23e06cfe6e9b00a86949af7c60bbbb1dbf06"
+canonical_import = "mote.contracts.services.ServiceCompleted"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:20bf12336bd302610537731e29b15e9578eaf0ed723513b4abd0676aecf62441"
+canonical_import = "mote.contracts.services.ServiceEndpointDescriptor"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7a87a7c216a3a09314fff990c31bd5c1f72ebca4336add26f98519859c52c9c4"
+canonical_import = "mote.contracts.services.ServiceEndpointFailure"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8e62caeb5d4aac4afa9024122ba4eaceb71d19857b417d1c999d6cd36f608d67"
+canonical_import = "mote.contracts.services.ServiceEndpointOutcome"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:34f2e89922b823abc74ddec8416e135b1d5b7f2aaa2547a811b59caacd2f3c8b"
+canonical_import = "mote.contracts.services.ServiceExecutionSemantics"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f54008d74ed18973aeb3f5c3f3b32c1da1928eeea38ca725fbc3f2dcfdfaade4"
+canonical_import = "mote.contracts.services.ServiceFailed"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c122591f7a05acff55c8af94381c42dc162da2a81828835cc092acba3101e8c9"
+canonical_import = "mote.contracts.services.ServiceInvocation"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f69a6cda662dd186899a66c88bba4c831a2a392f8a374c81be3af87c887d996d"
+canonical_import = "mote.contracts.services.ServicePlan"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a01ed9c3fa18bcfa7afe4c2530cc2cbdc61ef21d85d1ccbbcb27aef6b7010386"
+canonical_import = "mote.contracts.services.ServiceReceipt"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:98712d67459115c8473b96ae19683cb23727220e0d88d960a11351ef5a581c79"
+canonical_import = "mote.contracts.services.ServiceResponse"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fc62ba50682319cfcf1dc706dece14e9439298f8db382d7a57cbbb367d2dddd1"
+canonical_import = "mote.contracts.settings.device.DeviceConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:60d21f7012d36626105963dc999ac28a8d103726b0172ab0d679d7a9a9565bbd"
+canonical_import = "mote.contracts.settings.hooks.HookConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:5a42bb87bda319c37094cc601ae48bcdc030ea655334e5255f9a567015badae5"
+canonical_import = "mote.contracts.settings.lsp.LspConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:37e8afad872a7ff2f37f364abaa00d9b8569887dfc613519584368a8be0f7917"
+canonical_import = "mote.contracts.settings.lsp.LspServerConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:889a75e05b7282a74aaf525a61dfd57560a302232d59cf619a302af6d2745f77"
+canonical_import = "mote.contracts.settings.permissions.PermissionConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:18c26aa6fd9af4e111a60882f7af8fb1bca6cebce5ffe5de9cd6b0f1c82dd30f"
+canonical_import = "mote.contracts.settings.permissions.SandboxConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:93817d34db9ebde12de56a5eab7c75e62d575eb1bf20432c58dfc5f32e030e90"
+canonical_import = "mote.contracts.settings.sandbox.SandboxRuntimeConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7192eda00b195704311a1ac468d2ecdf10490b071a2c121799aa72a177fa84a7"
+canonical_import = "mote.contracts.settings.watching.FileWatchConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ced11dfefcdeab80dbcbb1c1a244c8a21618f2996875731e1015693ed1bf8bfd"
+canonical_import = "mote.contracts.settings.web_search.WebSearchConfig"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4643c8558773ac77e3c71f4dd488aeb2312fd5a9b102d76a18973fe66aa1506f"
+canonical_import = "mote.contracts.spawn.ContextPolicy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d1428097bc62f920b1296078248f675bfbf4c39dac60ac9435b13784118cc263"
+canonical_import = "mote.contracts.spawn.Lifecycle"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:daf7eedbdf0f8dc38bd9d03445ddc3e3b1d5f843fbdcfdaf64aecf004fcc1aa6"
+canonical_import = "mote.contracts.spawn.SpawnContext"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dd6ccbbac1e96a105eb46184a82bdd5ec440702399fd562cbadeb32dfe33bdd7"
+canonical_import = "mote.contracts.spawn.SpawnSpec"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2da3b8b08c63370fc7ee66dec5c566f0cc889f4acc07d1167d55fa8ddf88fc6a"
+canonical_import = "mote.contracts.surfaces.LiveSurfaceSession"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ba7a1b8bec91e74ef4aa2f41158b4da43ebdd252264ab97d49441733e937ca1a"
+canonical_import = "mote.contracts.surfaces.SurfaceDescriptor"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ff28fe8e85af2ea6f14ad91fd6c2ee56d5b10b8d1493507e2740b70a12b3ae43"
+canonical_import = "mote.contracts.surfaces.SurfaceFrame"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9741df789cd57d3983b5b9fdd328cf50817b97c2ab07518472ecdc9318b4a82f"
+canonical_import = "mote.contracts.surfaces.SurfaceInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:05ef5c1f3cf6fd82f576bd670420f3a1a3a3b90e2a1a7119f870876667f0f799"
+canonical_import = "mote.contracts.surfaces.SurfacePresentationMode"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b01f6df74e548376cc856197d4bf0c9b907af66201fed94a66653fcfe6b88b51"
+canonical_import = "mote.contracts.terminal.TERMINAL_FRAME_BASE_SEQUENCE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:99395cb97eb548a18383e25aeae462fee997f24122ceef39b37c56b9b4577a0c"
+canonical_import = "mote.contracts.terminal.TERMINAL_FRAME_COLS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fdb247c04e74acc534c5443f081c848d094478e5fd5dd67c449d1488252fb7f9"
+canonical_import = "mote.contracts.terminal.TERMINAL_FRAME_MODE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:70b4454fec2bbece4a85f545a0303a327b38d099c73b453ebeee9218b228fe75"
+canonical_import = "mote.contracts.terminal.TERMINAL_FRAME_MODE_DELTA"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4ef3040fb26c5aa73acfb19926ab1c414332a9e861918df427ef390f7cfaa69d"
+canonical_import = "mote.contracts.terminal.TERMINAL_FRAME_MODE_FULL"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b9e3f0ee40fbc237d4a7fc7f61c64f96f4531d23121bf113adda799cf90d59e5"
+canonical_import = "mote.contracts.terminal.TERMINAL_FRAME_ROWS"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f75e5867478ec8844293f9c27e5d7d806b3a7cc1b2f39e7656dd50ceba4b90f4"
+canonical_import = "mote.contracts.terminal.TERMINAL_MEDIA_TYPE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cb9b916d2734f8d09d5a713de50792b403b40c1d5150723849c84154f2f9d459"
+canonical_import = "mote.contracts.terminal.TerminalResizeInput"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:03e02e956f78d22d65e674d20963acb47fdc8a17c664e86e15456d0a30f8db29"
+canonical_import = "mote.contracts.text.ansi.strip_ansi"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b31dea9a5197382709738abcd5d69d1458589640bf364a33d3062663e24035c0"
+canonical_import = "mote.contracts.text.elision.Elision"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:dd7b6e20a90beb662341eec98b3abcb166f50c81deb18c525e3c7b7d027feb9a"
+canonical_import = "mote.contracts.text.elision.ElisionStrategy"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:169243f48f513fb5ff6857f47e9f818005c51cbaee2eb2777076477b869036ef"
+canonical_import = "mote.contracts.text.elision.ElisionUnit"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:79f4915df0f2957f9a914a65c08d47556ac0ca7a639ffba2fdfa9152bf783829"
+canonical_import = "mote.contracts.text.elision.cap_head"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:01f2b9f63af58b58ba69324f3f2f368cbdf9e0c1e4e9766b363fa5570f8deebb"
+canonical_import = "mote.contracts.text.elision.cap_head_tail"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:467671ba2f8247a57783637d869d58ec1d737eda5d02d688afaadf5e53f2194a"
+canonical_import = "mote.contracts.text.hashing.content_hash"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6b44869f0311b661012347607dcfe02726981387ad210d6add60dd2eef2747a7"
+canonical_import = "mote.contracts.text.html.html_to_markdown"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a5b54ed46664e34a351ab544de11db4c1b28e2682bfae098c77a7cbf83f6f337"
+canonical_import = "mote.contracts.text.humanize.format_elapsed"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a3bb983318ae955eac7a365d361baefe4c72c13fd34b00a6a16b5387bf9ec63e"
+canonical_import = "mote.contracts.text.humanize.format_file_size"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d0bf5c3e3441f2de6c0f04bcf570d7a38e2e108ee3d1ac2feb35a107184a9dbc"
+canonical_import = "mote.contracts.text.humanize.format_token_count"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1286d6698d9f3d6439b65dc7755a98c4787c1dbee5ae314db60d612e9e812381"
+canonical_import = "mote.contracts.text.hunks.Hunk"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:7ba5bfd502a0dd0291b257250212be5f77b882fefec09d1fd9f6f1aaf02e8317"
+canonical_import = "mote.contracts.text.hunks.HunkApplyError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:41c62b9da35fd7e2e971b007842546d0e320051302243ff851f9c34195b7ec9e"
+canonical_import = "mote.contracts.text.hunks.MAX_DIFF_SIZE_BYTES"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:c29a85c4463d68515bd803bd56b61d5330a6c434e83cefdfc3b9f4e349af2097"
+canonical_import = "mote.contracts.text.hunks.apply_hunk"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:4eacbc294f939f7e52e8f6633a107b8d64f9609588ecd8ce9b2975b073413d78"
+canonical_import = "mote.contracts.text.hunks.apply_hunks"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f07d04174df80fbbb01554b0dbfeca88883346a08f1937640da68ec724a40805"
+canonical_import = "mote.contracts.text.hunks.patch_lines"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:901adddfec84c80cc590753604c434b635257387236f8e05e99210b623d8f61e"
+canonical_import = "mote.contracts.text.hunks.revert_hunk"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ab7613fc30c227453f784a1d3a22202116e904b70e03a7e5abb5c59886d78162"
+canonical_import = "mote.contracts.text.hunks.revert_hunks"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9c7a2b862bd10d33945b68e099681586c665c6c945ce2e3a05e3df69b66b44cf"
+canonical_import = "mote.contracts.text.hunks.slice_lines"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:8abce61e2762a781ea66e19dbdbeda95bed47f27a0e3e3887aa378090f855672"
+canonical_import = "mote.contracts.text.hunks.split_hunks"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6154ab497ec83a786a9a43c6a7f3c747a075697ac69468a9cb79589c4d1194a2"
+canonical_import = "mote.contracts.text.markers.SYSTEM_REMINDER_CLOSE"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:2159d2f090377d469f4ab13fda075be22be6748e972fffa58fb7a075c2dd9ca1"
+canonical_import = "mote.contracts.text.markers.SYSTEM_REMINDER_OPEN"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:39786a4b5241264996c4d1a02e44d96b5ff8e3420d541ff67b9453270841c79b"
+canonical_import = "mote.contracts.text.markers.is_system_reminder"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:454db720eb0f51f8f48bcf6c6d85dde01c72e4ed9cae331fbe40561cd0fdc547"
+canonical_import = "mote.contracts.text.markers.strip_system_reminder"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3a99d34da064727158285fb9047c4451945b992d2731c468ebd833b53d3f72dc"
+canonical_import = "mote.contracts.text.markers.system_reminder"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:fc421e39bbd95090aeb6635bc294dd2149083f47f73c8db1e8fedb6113b639d7"
+canonical_import = "mote.contracts.text.markers.wrap_system_reminder"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:1c74221cd2b79fa9f95e79f1a62e995b20fb3346e69b023941c374b3294e8142"
+canonical_import = "mote.contracts.text.paths.display_path"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:d08d5f88acda9c87bd6e6a11153480d48e4ba421681eaa304ac4b8c10c4acd82"
+canonical_import = "mote.contracts.text.paths.path_to_uri"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bd8cb3e4f0c0a5a2a4c3d4143662f1214de7964cd0d22eff76fa5445e1edf281"
+canonical_import = "mote.contracts.text.paths.uri_to_path"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:6912750facb5bdc53b88433a26979352714752ab2b75a42f16196185f1688484"
+canonical_import = "mote.contracts.text.plural.count_noun"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:71e7c54b06e587bd982ecc48b88d00436e3cf878e0cd28cc53ff898a7adbdb06"
+canonical_import = "mote.contracts.text.plural.plural"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f205008e9b2acfc56955094da32a1fe4904339274c64c55f2551aef11664b1cb"
+canonical_import = "mote.contracts.text.plural.verb_agree"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e32bb3e7f28ae8cf9a062c8db99cc78a849fe9a3c030bf37c085a550c95e7492"
+canonical_import = "mote.contracts.text.whitespace.collapse_whitespace"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:17650917c199c8c93da43b1b2a68e1fcf7b6f32f1d8a458931c76237b04b0127"
+canonical_import = "mote.contracts.tools.calls.serialize_tool_call_args"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3a7fa26c1ea59b669c3ce32f92ef88806056adc4bf556ddfc48261a73139d935"
+canonical_import = "mote.contracts.tools.catalog.MaterializedToolCatalog"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3aabde2bbf0f6dacef5f648d65ba065197243bc75006085ef11ea51844d43209"
+canonical_import = "mote.contracts.tools.catalog.MaterializedToolDefinition"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:cd9ab503115702ce6eb72aa437887ffb527f4a177f9f217ea90d5a9dd4e7f739"
+canonical_import = "mote.contracts.tools.catalog.ToolBindingSnapshot"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:b825474b21666deca9ffd3d93a93f9fe4a81dbe7c3de7a0fc2823836941c0f3e"
+canonical_import = "mote.contracts.tools.catalog.ToolCatalogIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:75f7e2eb8132955f57e3c02d6df25c262925d1ce464fccaaa3ea2d16258b07a6"
+canonical_import = "mote.contracts.tools.catalog.ToolDispatchRequest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a8182c804b63306995441822252cafdc60261f07f47830255bbfd89e8e6cb488"
+canonical_import = "mote.contracts.tools.catalog.ToolDispatchResult"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3f0ada98eb97bf5ae393075e9c9d2b00ab14dce19afa94e3053188050956e3a0"
+canonical_import = "mote.contracts.tools.catalog.ToolExecutionPort"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:79d302964b4e2a8c40a161f95b593c1c0195f8f6682588ecf08d34011f13ff5d"
+canonical_import = "mote.contracts.tools.constants.ERROR_PREFIX"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ed480e1a130f271adf091803094efb8a03dc9bb6fdbd687f68c03cc57b52ac62"
+canonical_import = "mote.contracts.tools.effects.ToolEffect"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:ff296f5768b773f5abad48bc5c7df4d7e7872c9a879706f953bddd4e38e5c367"
+canonical_import = "mote.contracts.tools.execution.ToolExecutionKind"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9cf2804e2acecf6d8440ec757f25a74e2f2fe1668cfd30cb01145ffe4383d7fc"
+canonical_import = "mote.contracts.tools.identity.ToolsetIdentity"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:f53658aabe20fb894db33dbe77e0b5840a4082d33d41235038ddebf3fd5e18c4"
+canonical_import = "mote.contracts.tools.identity.ToolsetManifest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:e1c34b2f901ef2c876746673db7be8073511d83f29bf6f1e8a37cd35fde64a89"
+canonical_import = "mote.contracts.tools.identity.parse_toolset_manifest"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:3715a3232f43c234792df9ed2b65a080727fc7057448302948b4faa5233b8914"
+canonical_import = "mote.contracts.tools.protocol.CommandProtocol"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:a40435067fd997741e57e643036bb3d34f8c6476da40c0cde7d430a59e00b672"
+canonical_import = "mote.contracts.tools.protocol.NativeToolSchema"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:bbd2e03fc665579f71849884970eab3f8dba1af276ecb18f28d2436fa0c56afc"
+canonical_import = "mote.contracts.tools.protocol.ToolsetProtocolError"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9cf91a27571f33834352fe9e60e20532c2efccfe36ac9e5d33e4b1e3aaf4fec0"
+canonical_import = "mote.contracts.tools.protocol.XmlToolSchema"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:9ec3e2b1911a2966be313fdf3366c434b1dea177037ff49b77fd110c5c239d2d"
+canonical_import = "mote.contracts.workflow_control.PauseReason"
+status = "unknown"
+
+[[symbol]]
+stable_symbol_id = "sha256:79b1e3ba031a2e53bd7ad859764d80f763c06a5a9254fdaec94e5a7c46c66c57"
+canonical_import = "mote.contracts.workflow_control.WorkflowPause"
+status = "unknown"

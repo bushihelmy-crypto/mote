@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import ClassVar, Optional
 
-from mote.contracts.errors.base import MoteError, NonRetryableError
-from mote.contracts.errors.codes import ErrorCode
+from mote.contracts.foundation.errors.base import MoteError, NonRetryableError
+from mote.contracts.foundation.errors.codes import ErrorCode
 
 
 class OAuthError(MoteError):

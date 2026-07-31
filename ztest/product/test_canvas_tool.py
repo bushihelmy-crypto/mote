@@ -4,16 +4,17 @@ import hashlib
 
 import pytest
 
-from mote.contracts.artifacts import ArtifactContentRef
-from mote.contracts.canvas import CanvasDocument, CanvasElement, CanvasExportRepresentation, CanvasOperation
-from mote.contracts.handoff import HandoffOutcome, HandoffStatus
-from mote.contracts.runtimes import RuntimeAccessMode, RuntimeRef, RuntimeState
+from mote.contracts.artifact import ArtifactContentRef
+from mote.contracts.content import ContentIdentity
+from mote.contracts.interaction.handoff import HandoffOutcome, HandoffStatus
+from mote.contracts.runtime import RuntimeAccessMode, RuntimeRef, RuntimeState
+from mote.contracts.surface import CanvasDocument, CanvasElement, CanvasExportRepresentation, CanvasOperation
 from mote.product.toolsets.builtin.canvas import Canvas
 from mote.runtime.artifacts import DurableArtifactStore, ReliableArtifactPublisher
-from mote.runtime.fileops import FileOperations
 from mote.runtime.interactive import RuntimeHost
-from mote.runtime.tools.dependency._canvas import CanvasRuntimeDriver
+from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 from mote.runtime.tools.tool_result import ToolError
+from mote.ztest.fileops_factory import FileOperations
 
 
 class MemoryBlobs:
@@ -24,13 +25,12 @@ class MemoryBlobs:
         digest = hashlib.sha256(content).hexdigest()
         self.contents[digest] = content
         return ArtifactContentRef(
-            content_ref=f"sha256:{digest}",
-            digest=digest,
-            size=len(content),
+            identity=ContentIdentity(digest, len(content)),
+            locator=f"sha256:{digest}",
         )
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        return self.contents[ref.digest]
+        return self.contents[ref.identity.digest]
 
 
 class FailingArtifactPublisher:

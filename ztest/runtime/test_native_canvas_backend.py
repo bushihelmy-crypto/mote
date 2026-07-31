@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.canvas import CanvasDocument, CanvasElement
-from mote.contracts.ports.canvas_backend import CanvasBackendSession
-from mote.runtime.tools.dependency.canvas_backends.native import NativeCanvasBackend
+from mote.contracts.ports.surface.canvas_backend import CanvasBackendSession
+from mote.contracts.surface import CanvasDocument, CanvasElement
+from mote.runtime.interactive.canvas.backends.native import NativeCanvasBackend
 
 
 @pytest.mark.asyncio

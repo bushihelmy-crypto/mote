@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.models.routing import (
+from mote.contracts.model.routing import (
     RecentRoutingDecision,
     RouteCandidate,
     RoutingDegradedReason,
@@ -13,6 +13,7 @@ from mote.contracts.models.routing import (
     RoutingSignals,
     SeedFloor,
 )
+from mote.contracts.model.topology import SemanticRoute
 from mote.product.routing.squilla.ml.runtime import RoutingModelRuntime
 from mote.product.routing.squilla.strategy import (
     SquillaStrategy,
@@ -38,7 +39,7 @@ def squilla(tmp_path):
 def candidates():
     return tuple(
         RouteCandidate(
-            route_id=f"route-{rank}",
+            route_id=SemanticRoute(name=f"route-{rank}"),
             quality_class=f"R{rank}",
             quality_rank=rank,
             context_tokens=200_000,
@@ -108,7 +109,10 @@ class TestSquillaPolicy:
         assert proposal.degraded_reason is RoutingDegradedReason.ML_UNAVAILABLE
         assert proposal.policy_revision.endswith("@v4.2_phase3_inference")
         assert proposal.final_class in {"R0", "R1"}
-        assert proposal.selected_route_id in {"route-0", "route-1"}
+        assert proposal.selected_route_id in {
+            SemanticRoute(name="route-0"),
+            SemanticRoute(name="route-1"),
+        }
 
     @pytest.mark.asyncio
     async def test_complex_prompt_and_risk_flag_escalate(self, squilla, candidates):
@@ -135,7 +139,7 @@ class TestSquillaPolicy:
             recent_decisions=(
                 RecentRoutingDecision(
                     decision_id="previous",
-                    selected_route_id="route-3",
+                    selected_route_id=SemanticRoute(name="route-3"),
                     final_class="R3",
                     turn_id=1,
                 ),

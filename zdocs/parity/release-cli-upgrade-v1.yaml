@@ -1,0 +1,42 @@
+schema_version: 1
+revision: release-cli-upgrade-v1
+commands:
+  validate: {mutation: false, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  migrate: {mutation: true, required_mode: dry_run_or_approved_apply, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  backup: {mutation: true, required_scope: daemon_only_or_application_consistent, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  restore: {mutation: true, verify_only_supported: true, approval_required_for_apply: true, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  doctor: {mutation: false, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  reconcile: {mutation: true, owner_authority_required: true, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  drain: {mutation: true, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+  upgrade_status: {mutation: false, json_revision: gateway-command-result-v1, stable_exit_codes: true}
+output:
+  human_rendering: required
+  machine_json: required
+  audit_for_mutations: immutable
+  secret_redaction: mandatory
+noninteractive:
+  security_approval_downgrade: forbidden
+upgrade:
+  order: [validate, backup, expand_schema, shadow_validate, start_new_socket, verify_readiness, atomic_discovery_switch, drain_old_generation, contract_old_schema]
+rollback:
+  target: last_verified_compatible_generation
+  rewrite_activation_history: forbidden
+uninstall:
+  preserve_data_backup_key_references: default
+  complete_delete: separate_dangerous_command_with_exact_scope_double_confirmation_and_audit
+implementation_status:
+  validate: implemented
+  migrate: dry_run_only
+  backup: daemon_consistent_implemented
+  restore: verify_and_approved_isolated_apply
+  doctor: implemented
+  reconcile: implemented
+  drain: implemented
+  upgrade_status: implemented
+  mutation_audit: shared_daemon_hash_chained_event_journal
+  pending: [approved_migration_apply, application_consistent_backup, complete_delete]
+  deferred_by_scope:
+    approved_migration_apply: requires_signed_migration_set_and_release_approval
+    application_consistent_backup: requires_declared_external_caller_participants
+    complete_delete: requires_separate_dangerous_scope_and_double_confirmation
+gate_status: partial_implementation_external_release_evidence_pending

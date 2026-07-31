@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.tools.constants import ERROR_PREFIX
+from mote.contracts.tool.constants import ERROR_PREFIX
 from mote.runtime.errors import ToolError as ExceptionToolError
 from mote.runtime.tools.tool_result import ERROR_PREFIX as RESULT_ERROR_PREFIX
 from mote.runtime.tools.tool_result import FileChange, ToolError, ToolMedia, ToolResult

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from mote.runtime.lifecycle import LifecycleCloseError, LifecycleStack, LifecycleState
+from mote.runtime.control.lifecycle import LifecycleCloseError, LifecycleStack, LifecycleState
 
 
 @pytest.mark.asyncio

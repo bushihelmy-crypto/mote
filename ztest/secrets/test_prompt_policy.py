@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.policy.prompt import PromptIntent, PromptPolicyContribution
-from mote.contracts.ports.prompt_policy import PromptPolicyExtensionSpec
+from mote.contracts.conversation.prompt_policy import PromptIntent, PromptPolicyContribution
+from mote.contracts.ports.conversation.prompt_policy import PromptPolicyExtensionSpec
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.prompt import DefaultPromptPolicy, build_prompt_policy
 from mote.runtime.secrets.cipher import AesGcmCipher
@@ -30,7 +30,7 @@ async def test_hook_receives_only_safe_view_and_final_gate_redacts_enrichment(
     seen: list[str] = []
 
     def enrich(hook_input):
-        seen.append(hook_input.payload["prompt"])
+        seen.append(hook_input.payload.prompt)
         return {"additionalContext": _RAW_SECRET}
 
     manager.register("UserPromptSubmit", enrich)

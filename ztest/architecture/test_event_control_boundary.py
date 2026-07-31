@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mote.contracts.events.types import TurnEndEvent
+from mote.contracts.events.session import TurnEndEvent
+from mote.product.code_map.turn_context import CodeMapContextSource
 from mote.runtime.context import ContextManager
-from mote.runtime.context.turn_context.sources.code_map import CodeMapContextSource
-from mote.runtime.context.turn_context.sources.compaction import CompactionNoticeContextSource
-from mote.runtime.context.turn_context.sources.git import GitContextSource
-from mote.runtime.context.turn_context.sources.skill_listing import SkillListingContextSource
-from mote.runtime.context.turn_context.sources.team import TeamContextSource
-from mote.runtime.context.turn_context.sources.tool_catalog import ToolCatalogContextSource
+from mote.runtime.context.turn.sources.compaction import CompactionNoticeContextSource
+from mote.runtime.context.turn.sources.git import GitContextSource
+from mote.runtime.context.turn.sources.skill_listing import SkillListingContextSource
+from mote.runtime.context.turn.sources.team import TeamContextSource
+from mote.runtime.context.turn.sources.tool_catalog import ToolCatalogContextSource
 from mote.runtime.hook.subscriber import HookSubscriber
 from mote.runtime.session.log import SessionLog
 
@@ -62,9 +62,7 @@ def test_turn_end_and_hook_adapter_are_observation_only():
 
 def test_live_session_mutations_have_no_direct_journal_bypass():
     assert not hasattr(SessionLog, "append_sync")
-    production_wiring = (PACKAGE_ROOT / "runtime" / "agent" / "runtime_modules" / "session.py").read_text(
-        encoding="utf-8"
-    )
+    production_wiring = (PACKAGE_ROOT / "runtime" / "agent" / "components" / "session.py").read_text(encoding="utf-8")
     assert "commit_offline" not in production_wiring
 
 

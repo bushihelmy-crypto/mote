@@ -4,7 +4,7 @@ Lives in ``common/net`` (leaf layer) so both the sandbox egress proxy and the
 ``SandboxRuntimeConfig`` config-time subset check import the *same* matcher.
 """
 
-from mote.contracts.net import matches_pattern, normalize_host
+from mote.runtime.sandbox.network.patterns import matches_pattern, normalize_host
 
 
 class TestNormalizeHost:

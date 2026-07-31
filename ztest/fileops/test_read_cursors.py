@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from mote.contracts.fileops import (
+from mote.contracts.file import (
     ByteReadRequest,
     ByteViewMode,
     ContinueReadRequest,
@@ -13,7 +13,7 @@ from mote.contracts.fileops import (
     PdfViewMode,
     ReadCursorError,
 )
-from mote.runtime.fileops import FileOperations
+from mote.ztest.fileops_factory import FileOperations
 
 try:
     import fitz
@@ -174,7 +174,11 @@ def test_pdf_cursor_survives_source_replacement_and_deletion(tmp_path):
         ContinueReadRequest(cursor=second.next_cursor),
     )
 
-    assert [first.pages[0].page_number, second.pages[0].page_number, third.pages[0].page_number] == [1, 2, 3]
+    assert [
+        first.pages[0].page_number,
+        second.pages[0].page_number,
+        third.pages[0].page_number,
+    ] == [1, 2, 3]
     assert second.snapshot == first.snapshot
     assert third.snapshot == first.snapshot
     assert first.pages[0].png != second.pages[0].png

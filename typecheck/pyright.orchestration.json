@@ -1,0 +1,14 @@
+{
+  "extends": "../pyrightconfig.json",
+  "include": [
+    "../orchestration/agents/lifecycle/spawn.py",
+    "../orchestration/agents/lifecycle/runtime.py",
+    "../orchestration/agents/lifecycle/handle.py",
+    "../orchestration/agents/control.py"
+  ],
+  "exclude": ["../ztest"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none"
+}

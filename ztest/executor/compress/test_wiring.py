@@ -5,12 +5,12 @@
 
 Exercises the tool-side glue: shell-tool routing, the marker line + raw
 persistence, and the skip paths (media, already-persisted, config-off, non
-shell tools). ``tool_result_limit.persist_result`` is redirected to ``tmp_path``.
+shell tools). ``spill.persist_result`` is redirected to ``tmp_path``.
 """
 from __future__ import annotations
 
-from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
-from mote.runtime.tools import tool_result_limit
+from mote.contracts.config.tool import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+from mote.runtime.resources import spill
 from mote.runtime.tools.compress.tool_output import _command_for_compression, compress_tool_result
 from mote.runtime.tools.tool_result import ToolResult
 from mote.ztest.artifact_fakes import artifact_media
@@ -52,7 +52,7 @@ def _persist_to_tmp(monkeypatch, tmp_path):
         written["result_id"] = result_id
         return str(path)
 
-    monkeypatch.setattr(tool_result_limit, "persist_result", fake_persist)
+    monkeypatch.setattr(spill, "persist_result", fake_persist)
     return written
 
 

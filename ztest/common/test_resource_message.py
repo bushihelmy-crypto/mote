@@ -1,6 +1,6 @@
 """ResourceMessage: type-as-shell + metadata-as-truth round-trip."""
-from mote.contracts.constants.messages import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.contracts.schema import Message, ResourceMessage
+from mote.contracts.conversation import Message, ResourceMessage
+from mote.contracts.conversation.fields import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
 
 
 def test_resource_message_is_user_role_with_metadata_truth():

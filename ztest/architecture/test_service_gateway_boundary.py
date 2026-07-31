@@ -21,11 +21,11 @@ def _imports(path: Path) -> tuple[str, ...]:
 
 def test_service_contracts_only_depend_on_contracts() -> None:
     paths = (
-        ROOT / "contracts/services.py",
-        ROOT / "contracts/service_journal.py",
-        ROOT / "contracts/ports/service_endpoint.py",
-        ROOT / "contracts/ports/service_gateway.py",
-        ROOT / "contracts/ports/service_call_journal.py",
+        ROOT / "contracts/service/models.py",
+        ROOT / "contracts/service/journal.py",
+        ROOT / "contracts/ports/service/endpoint.py",
+        ROOT / "contracts/ports/service/gateway.py",
+        ROOT / "contracts/ports/service/call_journal.py",
     )
     violations = [
         f"{path.relative_to(ROOT)}: {module}"
@@ -78,7 +78,7 @@ def test_web_search_uses_only_the_service_capability() -> None:
 
 
 def test_web_search_adapter_does_not_own_retry_loops() -> None:
-    path = ROOT / "product/integrations/services/web_search.py"
+    path = ROOT / "product/web_search/service.py"
     source = path.read_text(encoding="utf-8")
     forbidden = ("RecoveryRunner", "while True", "for attempt in", "tenacity")
     assert [token for token in forbidden if token in source] == []

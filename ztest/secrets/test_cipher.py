@@ -14,7 +14,7 @@ import stat
 
 import pytest
 
-from mote.contracts.config.secrets import SecretsConfig
+from mote.product.config.secrets import SecretsConfig
 from mote.runtime.secrets.cipher import AesGcmCipher, KeyFileProvider, build_cipher
 
 

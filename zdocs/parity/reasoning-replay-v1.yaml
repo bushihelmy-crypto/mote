@@ -1,0 +1,30 @@
+schema_version: 1
+revision: reasoning-replay-v1
+owners:
+  blob_and_metadata: existing_artifact_services
+  lookup: ArtifactLookupIndex_if_reuse_audit_approved
+  publication: ReliableArtifactPublisher
+  retention_and_erasure: existing_artifact_ownership_and_gc
+identity_key:
+  fields: [tenant_id, session_id, provider, model, generation_id, conversation_digest, turn_ordinal]
+  cross_tenant: forbidden
+  cross_session: forbidden
+  cross_model: forbidden
+publication:
+  order: [write_staging, finalize_immutable, verify_digest, commit_publication, publish_lookup]
+  partial_visibility: forbidden
+replay:
+  full_reasoning_exposure: forbidden
+  accepted_material: [provider_opaque_signature, encrypted_reasoning_item, safe_summary]
+  expired: reject_and_restart_explicitly
+  tampered: security_failure
+  missing: explicit_continuity_miss
+retention:
+  lower_bound: max_resume_receipt_provider_async_and_audit_window
+  legal_hold: existing_artifact_legal_hold
+  tenant_erasure: tombstone_then_crypto_shred_and_object_delete
+invariants:
+  - no_private_reasoning_database
+  - no_private_gc_or_cleanup_worker
+  - no_silent_truncation
+  - no_reasoning_in_log_trace_or_diagnostic

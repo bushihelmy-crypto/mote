@@ -1,0 +1,14 @@
+schema_version: 1
+roles:
+  viewer: [providers.read, generations.read, operations.read]
+  operator: [providers.read, generations.read, generations.stage, generations.activate, operations.read, receipts.read, reconciliation.read]
+  auditor: [operations.read, receipts.read, reconciliation.read, audit.read]
+  credential_admin: [providers.read, credentials.read_metadata, credentials.rotate, credentials.revoke]
+  administrator: ['*']
+constraints:
+  deny_by_default: true
+  tenant_scope_required: true
+  credential_secret_read_scope_exists: false
+  dual_approval: [credentials.revoke, reconciliation.force_terminal, migrations.contract]
+  audit_all_mutations: true
+  session_ttl_seconds: 900

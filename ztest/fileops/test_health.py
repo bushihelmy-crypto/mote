@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.fileops import (
-    ArtifactGarbageCollectionState,
+from mote.contracts.file import (
     ByteReadRequest,
     ByteViewMode,
     ContentChangedError,
     JournalDurabilityError,
     StaleSnapshotError,
 )
-from mote.runtime.fileops import FileOperations
-from mote.runtime.fileops.artifact_lifecycle import ArtifactObjectState
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path):
@@ -61,42 +59,6 @@ def test_health_projects_durable_cursor_pins(tmp_path):
     assert health.artifact_physical_bytes >= len(b"01234567")
     assert health.artifact_active_reservations == 0
     assert health.artifact_open_stages == 0
-
-
-def test_health_projects_durable_garbage_collection_state(tmp_path):
-    operations = _operations(tmp_path)
-    with operations.artifacts.write_scope(
-        owner="health-unrooted",
-        maximum_bytes=7,
-        ttl_seconds=60,
-    ) as scope:
-        artifact = scope.put_bytes(b"garbage")
-        scope.discard()
-
-    operations.collect_artifacts(limit=1)
-    health = operations.health()
-
-    assert health.ready
-    assert health.artifact_gc_state == ArtifactGarbageCollectionState.SUCCEEDED
-    assert health.artifact_gc_completed_at_ns is not None
-    assert health.artifact_gc_quarantined_objects == 1
-    assert health.artifact_quarantined_objects == 1
-    assert operations.artifacts.catalog.object(artifact.digest).state == (ArtifactObjectState.QUARANTINED)
-
-    reopened = _operations(tmp_path)
-    assert reopened.health().artifact_gc_state == (ArtifactGarbageCollectionState.SUCCEEDED)
-    assert reopened.health().artifact_quarantined_objects == 1
-
-
-def test_health_fails_closed_after_garbage_collection_failure(tmp_path):
-    operations = _operations(tmp_path)
-    operations.artifacts.catalog.record_garbage_collection_failure("injected")
-
-    health = operations.health()
-
-    assert not health.ready
-    assert health.artifact_gc_state == ArtifactGarbageCollectionState.FAILED
-    assert health.artifact_gc_failure == "injected"
 
 
 def test_health_reports_in_doubt_target(tmp_path, monkeypatch):

@@ -4,14 +4,14 @@ import asyncio
 
 import pytest
 
-from mote.contracts.handoff import (
+from mote.contracts.interaction.handoff import (
     DriverHandoffHandle,
     DriverHandoffResult,
     HandoffRequest,
     HandoffStatus,
     HumanHandoffOutcome,
 )
-from mote.contracts.runtimes import (
+from mote.contracts.runtime import (
     CheckpointFidelity,
     DriverCheckpoint,
     DriverStartResult,
@@ -20,13 +20,18 @@ from mote.contracts.runtimes import (
     RuntimeRef,
     RuntimeState,
 )
-from mote.contracts.surfaces import SurfaceDescriptor, SurfaceFrame, SurfaceInput, SurfacePresentationMode
-from mote.contracts.terminal import TERMINAL_MEDIA_TYPE
+from mote.contracts.surface import (
+    TERMINAL_MEDIA_TYPE,
+    SurfaceDescriptor,
+    SurfaceFrame,
+    SurfaceInput,
+    SurfacePresentationMode,
+)
 from mote.runtime.interactive import HandoffCoordinator, RuntimeHost
+from mote.runtime.interactive.terminal.driver import TerminalRuntimeDriver
 from mote.runtime.session import SessionLog, SessionMetaEvent
 from mote.runtime.session.replay import replay
 from mote.runtime.session.runtime_handoff import SessionRuntimeHandoffJournal
-from mote.runtime.tools.dependency._terminal import TerminalRuntimeDriver
 
 
 class HandoffDriver:

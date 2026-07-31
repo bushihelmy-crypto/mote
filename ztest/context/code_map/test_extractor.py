@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 
-import mote.runtime.context.code_map.extractor as extractor_module
-from mote.runtime.context.code_map.extractor import CodeMapExtractor
-from mote.runtime.context.code_map.model import SUMMARY_MAX_CHARS
+import mote.runtime.code_map.extractor as extractor_module
+from mote.runtime.code_map.extractor import CodeMapExtractor
+from mote.runtime.code_map.model import SUMMARY_MAX_CHARS
 
 
 def _write(tmp_path, name: str, source: str) -> str:

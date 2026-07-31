@@ -14,10 +14,10 @@ import sys
 
 import pytest
 
-from mote.contracts.settings.lsp import LspConfig, LspServerConfig
-from mote.runtime.agent.lsp.buffer import DiagnosticsBuffer
-from mote.runtime.agent.lsp.service import LspService
+from mote.runtime.config.lsp import LspConfig, LspServerConfig
 from mote.runtime.events import DiagnosticsEvent, FileMutatedEvent
+from mote.runtime.lsp.buffer import DiagnosticsBuffer
+from mote.runtime.lsp.service import LspService
 from mote.ztest.telemetry import InlineTelemetry
 
 aio = pytest.mark.asyncio
@@ -282,7 +282,7 @@ def test_buffer_is_structural_handler_and_context_source():
     # The buffer plays both sides of the push->pull bridge in one object: it is
     # a telemetry handler AND the turn-context EphemeralContextSource
     # (so the thin LspContextSource wrapper is no longer needed).
-    from mote.contracts.ports import EphemeralContextSource
+    from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
 
     buffer = DiagnosticsBuffer()
     assert hasattr(buffer, "handle")

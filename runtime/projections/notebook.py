@@ -1,13 +1,13 @@
 """Artifact projection reconstructed from a Notebook-bearing checkpoint."""
 from __future__ import annotations
 
-from mote.contracts.artifacts import ArtifactPublicationIntent, ArtifactRepresentationInput
-from mote.contracts.notebook import NotebookDocument
-from mote.contracts.ports import ArtifactBlobStore
-from mote.contracts.runtimes import RuntimeProjectionRequest
+from mote.contracts.artifact import ArtifactPublicationIntent, ArtifactRepresentationInput
+from mote.contracts.ports.artifact.store import ArtifactBlobStore
+from mote.contracts.runtime import RuntimeProjectionRequest
+from mote.contracts.surface import NotebookDocument
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json
+from mote.runtime.interactive.kernel.notebook_export import export_notebook_ipynb
 from mote.runtime.projections.artifacts import artifact_projection_policy, materialize_artifact_projection
-from mote.runtime.tools.dependency.notebook_export import export_notebook_ipynb
 
 
 class NotebookArtifactProjector:

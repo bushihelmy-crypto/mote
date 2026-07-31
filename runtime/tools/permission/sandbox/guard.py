@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from mote.contracts.settings.permissions import SandboxConfig
+from mote.runtime.tools.permission.config import SandboxConfig
 
 
 @dataclass

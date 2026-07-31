@@ -1,6 +1,5 @@
 """Runtime implementation of Mote's File Operations bounded context."""
 
-from mote.runtime.fileops.artifact_lifecycle import ArtifactLifecycleCatalog
 from mote.runtime.fileops.byte_views import ByteViewService
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
 from mote.runtime.fileops.checkpoints import WorktreeCheckpointStore
@@ -38,7 +37,6 @@ from mote.runtime.fileops.transactions import MutationCoordinator
 
 __all__ = [
     "ARTIFACT_LOCK_LEVEL",
-    "ArtifactLifecycleCatalog",
     "AtomicPublisher",
     "ByteViewService",
     "DurableFileOperationsJournal",

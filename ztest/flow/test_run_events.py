@@ -6,9 +6,9 @@ from dataclasses import asdict
 
 import pytest
 
-from mote.contracts.schema import UserMessage
-from mote.kernel.flow import RunFailed, RunPhase, RunPhaseStarted, RunStarted, RunSucceeded
-from mote.kernel.flow.graph import build_review_refine_graph
+from mote.contracts.conversation import UserMessage
+from mote.kernel.execution import RunFailed, RunPhase, RunPhaseStarted, RunStarted, RunSucceeded
+from mote.kernel.execution.graph import build_review_refine_graph
 
 from .conftest import FakeChannel, FakeThinkEngine
 
@@ -19,9 +19,9 @@ def _news(bundle):
     bundle.buffer.push(UserMessage("go", send_to={"Alice"}))
 
 
-async def test_run_events_are_typed_ordered_and_carry_the_result(make_engine):
+async def test_run_events_are_typed_ordered_and_carry_stable_summary(make_engine):
     bundle = make_engine(
-        think_engine=FakeThinkEngine(content="done"),
+        inference_engine=FakeThinkEngine(content="done"),
         channel=FakeChannel(terminal=True),
     )
     _news(bundle)
@@ -30,7 +30,9 @@ async def test_run_events_are_typed_ordered_and_carry_the_result(make_engine):
 
     assert isinstance(events[0], RunStarted)
     assert isinstance(events[-1], RunSucceeded)
-    assert events[-1].result.presentation.content == "done"
+    assert events[-1].summary.committed is True
+    assert events[-1].summary.candidate_id
+    assert events[-1].summary.presentation_kind == "AIMessage"
     assert {event.run_id for event in events} == {events[0].run_id}
     phases = [event.phase for event in events if isinstance(event, RunPhaseStarted)]
     assert phases == [
@@ -45,7 +47,7 @@ async def test_run_events_are_typed_ordered_and_carry_the_result(make_engine):
 
 async def test_run_events_do_not_expose_graph_or_node_identifiers(make_engine):
     bundle = make_engine(
-        think_engine=FakeThinkEngine(content="done"),
+        inference_engine=FakeThinkEngine(content="done"),
         channel=FakeChannel(terminal=True),
         graph_builder=build_review_refine_graph,
     )

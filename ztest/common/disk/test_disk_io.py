@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from mote.runtime.disk.disk_io import atomic_write, file_size, mtime_ns, mtime_seconds, write_bytes
+from mote.runtime.persistence.atomic import atomic_write, file_size, mtime_ns, mtime_seconds, write_bytes
 
 
 def test_atomic_write_creates_file_with_contents(tmp_path):

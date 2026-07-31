@@ -5,9 +5,9 @@ import json
 import nbformat
 import pytest
 
-from mote.contracts.notebook import NOTEBOOK_EXPORT_MIME_TYPE, NotebookCell, NotebookDocument, NotebookOutput
-from mote.runtime.tools.dependency._kernel import KernelRuntimeDriver
-from mote.runtime.tools.dependency.notebook_export import export_notebook_ipynb
+from mote.contracts.surface import NOTEBOOK_EXPORT_MIME_TYPE, NotebookCell, NotebookDocument, NotebookOutput
+from mote.runtime.interactive.kernel.driver import KernelRuntimeDriver
+from mote.runtime.interactive.kernel.notebook_export import export_notebook_ipynb
 
 _PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 

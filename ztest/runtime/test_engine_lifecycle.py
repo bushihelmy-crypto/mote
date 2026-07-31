@@ -6,10 +6,10 @@ import pytest
 
 from mote.kernel.output import text_output_contract
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
-from mote.runtime.disk import DiskWriter
-from mote.runtime.engine import Engine, EngineState
-from mote.runtime.lifecycle import LifecycleResource
+from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource
+from mote.runtime.engine import Engine, EngineAgentRequest, EngineState
 from mote.runtime.models.clients.context import EXPORTER_CLOSE_PHASE, Context
+from mote.runtime.persistence import DiskWriter
 from mote.runtime.services import EngineServices
 
 
@@ -45,17 +45,16 @@ class _Agent:
 @pytest.mark.asyncio
 async def test_engine_closes_agents_then_providers_then_writer() -> None:
     events: list[str] = []
-    context = Context(
-        disk_writer=_Writer(events),
-        provider_factory=lambda _config: _Provider(events),
+    context = Context(disk_writer=_Writer(events))
+    context.register_resource(
+        LifecycleResource("provider:test", LifecyclePhase.CLOSE_RESOURCES, _Provider(events).aclose)
     )
-    context.llm()
     engine = Engine(
         services=EngineServices(context=context),
-        agent_factory=lambda name: _Agent(name, events),
+        agent_factory=lambda request: _Agent(request.name, events),
     )
-    engine.agent(name="one")
-    engine.agent(name="two")
+    engine.agent(EngineAgentRequest(name="one"))
+    engine.agent(EngineAgentRequest(name="two"))
 
     await engine.aclose()
     await engine.aclose()
@@ -63,7 +62,7 @@ async def test_engine_closes_agents_then_providers_then_writer() -> None:
     assert events == ["agent:two", "agent:one", "provider", "writer"]
     assert engine.state is EngineState.CLOSED
     with pytest.raises(RuntimeError, match="new Agents are not accepted"):
-        engine.agent(name="late")
+        engine.agent(EngineAgentRequest(name="late"))
 
 
 @pytest.mark.asyncio
@@ -76,9 +75,12 @@ async def test_engine_shutdown_survives_waiter_cancellation() -> None:
             entered.set()
             await release.wait()
 
-    context = Context(provider_factory=lambda _config: _Provider([]))
-    engine = Engine(services=EngineServices(context=context), agent_factory=lambda: SlowAgent())
-    engine.agent()
+    context = Context()
+    engine = Engine(
+        services=EngineServices(context=context),
+        agent_factory=lambda _request: SlowAgent(),
+    )
+    engine.agent(EngineAgentRequest(name="slow"))
 
     waiter = asyncio.create_task(engine.aclose())
     await entered.wait()
@@ -94,9 +96,12 @@ async def test_engine_shutdown_survives_waiter_cancellation() -> None:
 @pytest.mark.asyncio
 async def test_release_drops_agent_ownership_and_prevents_double_cleanup() -> None:
     events: list[str] = []
-    context = Context(disk_writer=_Writer(events), provider_factory=lambda _config: _Provider(events))
-    engine = Engine(services=EngineServices(context=context), agent_factory=lambda name: _Agent(name, events))
-    agent = engine.agent(name="released")
+    context = Context(disk_writer=_Writer(events))
+    engine = Engine(
+        services=EngineServices(context=context),
+        agent_factory=lambda request: _Agent(request.name, events),
+    )
+    agent = engine.agent(EngineAgentRequest(name="released"))
 
     await engine.release(agent)
     await engine.release(agent)
@@ -120,10 +125,15 @@ async def test_engine_retries_failed_agent_before_closing_context() -> None:
             if self.attempts == 1:
                 raise RuntimeError("transient close failure")
 
-    context = Context(disk_writer=_Writer(events), provider_factory=lambda _config: _Provider(events))
-    context.llm()
-    engine = Engine(services=EngineServices(context=context), agent_factory=RetryAgent)
-    engine.agent()
+    context = Context(disk_writer=_Writer(events))
+    context.register_resource(
+        LifecycleResource("provider:test", LifecyclePhase.CLOSE_RESOURCES, _Provider(events).aclose)
+    )
+    engine = Engine(
+        services=EngineServices(context=context),
+        agent_factory=lambda _request: RetryAgent(),
+    )
+    engine.agent(EngineAgentRequest(name="retry"))
 
     with pytest.raises(Exception, match="transient close failure"):
         await engine.aclose()
@@ -150,8 +160,9 @@ async def test_context_retries_provider_before_closing_writer() -> None:
             if self.attempts == 1:
                 raise RuntimeError("provider close failed")
 
-    context = Context(disk_writer=_Writer(events), provider_factory=lambda _config: RetryProvider())
-    context.llm()
+    provider = RetryProvider()
+    context = Context(disk_writer=_Writer(events))
+    context.register_resource(LifecycleResource("provider:test", LifecyclePhase.CLOSE_RESOURCES, provider.aclose))
 
     with pytest.raises(RuntimeError, match="provider close failed"):
         await context.aclose()
@@ -164,9 +175,9 @@ async def test_context_retries_provider_before_closing_writer() -> None:
 @pytest.mark.asyncio
 async def test_context_closes_provider_then_exporter_then_durability() -> None:
     events: list[str] = []
-    context = Context(
-        disk_writer=_Writer(events),
-        provider_factory=lambda _config: _Provider(events),
+    context = Context(disk_writer=_Writer(events))
+    context.register_resource(
+        LifecycleResource("provider:test", LifecyclePhase.CLOSE_RESOURCES, _Provider(events).aclose)
     )
     context.register_resource(
         LifecycleResource(
@@ -175,8 +186,6 @@ async def test_context_closes_provider_then_exporter_then_durability() -> None:
             close=lambda: events.append("exporter"),
         )
     )
-    context.llm()
-
     await context.aclose()
 
     assert events == ["provider", "exporter", "writer"]

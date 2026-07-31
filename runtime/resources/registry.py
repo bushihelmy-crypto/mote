@@ -15,8 +15,9 @@ replayed history for RESOURCE_STICKY messages (see Role.resume_session).
 """
 from __future__ import annotations
 
-from mote.contracts.schema import ResourceMessage
-from mote.runtime.context.sanitization import count_tokens, truncate_to_tokens
+from mote.contracts.conversation import ResourceMessage
+from mote.runtime.context.token_budget import count_tokens, truncate_to_tokens
+from mote.runtime.context.tokenizer import DEFAULT_TEXT_TOKENIZER
 from mote.runtime.resources.unit import ResourceUnit
 
 # budget constants: each re-projected unit
@@ -80,6 +81,10 @@ class ResourceRegistry:
         """
         return self._units.pop(id, None) is not None
 
+    def unload_content(self, id: str) -> str | None:
+        unit = self._units.pop(id, None)
+        return unit.content if unit is not None else None
+
     def reset(self) -> None:
         """Drop every loaded unit — the whole side-store goes empty.
 
@@ -126,9 +131,13 @@ class ResourceRegistry:
             if not unit.sticky:
                 continue
             body = unit.content
-            if count_tokens(body) > POST_COMPACT_MAX_TOKENS_PER_UNIT:
-                body = truncate_to_tokens(body, POST_COMPACT_MAX_TOKENS_PER_UNIT)
-            cost = count_tokens(body)
+            if count_tokens(body, tokenizer=DEFAULT_TEXT_TOKENIZER) > POST_COMPACT_MAX_TOKENS_PER_UNIT:
+                body = truncate_to_tokens(
+                    body,
+                    POST_COMPACT_MAX_TOKENS_PER_UNIT,
+                    tokenizer=DEFAULT_TEXT_TOKENIZER,
+                )
+            cost = count_tokens(body, tokenizer=DEFAULT_TEXT_TOKENIZER)
             sub_cap = POST_COMPACT_PER_KIND_BUDGET.get(unit.kind)
             if sub_cap is not None and per_kind_used.get(unit.kind, 0) + cost > sub_cap:
                 # This kind is over its own sub-budget: skip THIS unit but keep

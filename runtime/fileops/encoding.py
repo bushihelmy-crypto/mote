@@ -7,8 +7,8 @@ from typing import Optional
 
 import chardet
 
-from mote.contracts.fileops.errors import EncodingRejectedError
-from mote.contracts.fileops.models import EditableTextSnapshot, EncodingDecision, EncodingSource, NewlineProfile
+from mote.contracts.file.errors import EncodingRejectedError
+from mote.contracts.file.identity import EditableTextSnapshot, EncodingDecision, EncodingSource, NewlineProfile
 
 _MIN_DETECTION_CONFIDENCE = 0.90
 _BOMS = (

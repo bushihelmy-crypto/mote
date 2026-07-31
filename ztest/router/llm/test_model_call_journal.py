@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from mote.contracts.models import (
+from mote.contracts.model import (
     AttemptBudget,
     AttemptState,
     ModelAttemptFinishedRecord,
@@ -12,6 +12,7 @@ from mote.contracts.models import (
     ModelCallFinishedRecord,
     ModelCallPlannedRecord,
     ModelCallState,
+    ModelWireAuthorizedRecord,
 )
 from mote.runtime.models.failover import LocalModelCallJournal, ModelCallJournalIntegrityError
 
@@ -21,10 +22,20 @@ def _planned(call_id: str) -> ModelCallPlannedRecord:
         model_call_id=call_id,
         plan_id=f"plan:{call_id}",
         route_id="default",
+        runtime_generation_id="runtime-test",
+        topology_revision="topology-test",
         config_revision="revision-1",
         endpoint_ids=("primary",),
         budget=AttemptBudget(),
     )
+
+
+@pytest.mark.parametrize("route_id", ["strong", "unknown:strong", "task:"])
+def test_planned_record_rejects_noncanonical_route_id(route_id: str) -> None:
+    with pytest.raises(ValueError, match="route id"):
+        payload = _planned("call-legacy").model_dump()
+        payload["route_id"] = route_id
+        ModelCallPlannedRecord.model_validate(payload)
 
 
 def _started(call_id: str, ordinal: int = 1) -> ModelAttemptStartedRecord:
@@ -50,6 +61,25 @@ def _finished(
         ordinal=ordinal,
         state=state,
     )
+
+
+def _authorized(call_id: str, ordinal: int = 1) -> ModelWireAuthorizedRecord:
+    return ModelWireAuthorizedRecord(
+        model_call_id=call_id,
+        attempt_id=f"{call_id}:{ordinal}",
+        ordinal=ordinal,
+        issued_journal_revision=3,
+        permit_digest="sha256:" + "a" * 64,
+    )
+
+
+def test_wire_authorization_is_single_and_matches_open_attempt(tmp_path):
+    journal = LocalModelCallJournal(tmp_path)
+    journal.append_committed(_planned("call"))
+    journal.append_committed(_started("call"))
+    journal.append_committed(_authorized("call"))
+    with pytest.raises(ModelCallJournalIntegrityError, match="authorization"):
+        journal.append_committed(_authorized("call"))
 
 
 def test_journal_requires_plan_as_first_record(tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 """Session-log sink for managed Runtime checkpoints."""
 from __future__ import annotations
 
-from mote.contracts.runtimes import RuntimeCheckpoint
+from mote.contracts.runtime import RuntimeCheckpoint
 from mote.runtime.session.events import RuntimeCheckpointEvent
 from mote.runtime.session.log import SessionLog
 

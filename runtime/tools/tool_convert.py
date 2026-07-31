@@ -1,13 +1,14 @@
 import inspect
+from collections.abc import Callable
+from typing import Any
 
 from mote.runtime.tools.docstring_parser import GoogleDocstringParser, remove_spaces
 
 PARSER = GoogleDocstringParser
 
 
-def function_docstring_to_schema(fn_obj, docstring="") -> dict:
-    """
-    Converts a function's docstring into a schema dictionary.
+def function_docstring_to_schema(fn_obj: Callable[..., Any], docstring: str = "") -> dict[str, Any]:
+    """Convert a function signature and argument docs into an XML schema.
 
     Args:
         fn_obj: The function object.
@@ -15,18 +16,10 @@ def function_docstring_to_schema(fn_obj, docstring="") -> dict:
 
     Returns:
         A dictionary representing the schema of the function's docstring.
-        The dictionary contains the following keys:
-        - 'type': The type of the function ('function' or 'async_function').
-        - 'description': The first section of the docstring describing the function overall. Provided to LLMs for both recommending and using the function.
-        - 'signature': The signature of the function, which helps LLMs understand how to call the function.
-        - 'parameters': Docstring section describing parameters including args and returns, served as extra details for LLM perception.
+        The model-facing call signature and ``Args:`` documentation. The
+        overall description is intentionally omitted because the enclosing XML
+        tool schema already carries it.
     """
-    signature = inspect.signature(fn_obj)
-
     docstring = remove_spaces(docstring)
-
-    overall_desc, param_desc = PARSER.parse(docstring)
-
-    function_type = "function" if not inspect.iscoroutinefunction(fn_obj) else "async_function"
-
-    return {"type": function_type, "description": overall_desc, "signature": str(signature), "parameters": param_desc}
+    _, param_desc = PARSER.parse(docstring)
+    return {"signature": str(inspect.signature(fn_obj)), "parameters": param_desc}

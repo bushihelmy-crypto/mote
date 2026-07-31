@@ -5,8 +5,8 @@ import asyncio
 
 import pytest
 
-from mote.runtime.tools.dependency._device.backend import DeviceError
-from mote.runtime.tools.dependency._device.session import DeviceSession
+from mote.runtime.interactive.device.backend import DeviceError
+from mote.runtime.interactive.device.session import DeviceSession
 from mote.ztest.executor.dependency.device_fakes import FAKE_PNG, FakeDeviceBackend
 
 

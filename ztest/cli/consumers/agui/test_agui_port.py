@@ -24,10 +24,10 @@ from typing import Any, Dict, List
 import pytest
 
 from mote.contracts.interaction import AskUserQuestionInput
-from mote.product.cli.consumers._wire import agui
-from mote.product.cli.consumers.agui.port import AguiPort
-from mote.product.cli.contracts.view.events import ApprovalRequested
-from mote.product.cli.serving import PromptBroker
+from mote.product.interfaces.agui import wire as agui
+from mote.product.interfaces.agui.port import AguiPort
+from mote.product.presentation.events.events import ApprovalRequested
+from mote.product.session_hosting import PromptBroker
 
 
 # ── helpers ────────────────────────────────────────────────────────────────

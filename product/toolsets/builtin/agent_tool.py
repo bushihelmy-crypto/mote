@@ -9,15 +9,14 @@ from typing import ClassVar
 
 from pydantic import TypeAdapter
 
-from mote.contracts.introspection.docstrings import description_body
-from mote.contracts.schema import UserMessage
-from mote.contracts.spawn import Lifecycle, SpawnContext, SpawnSpec
-from mote.kernel.prompt.agent import AGENT_TASK_PROMPT
+from mote.contracts.agent import Lifecycle, SpawnPlan
+from mote.contracts.conversation import UserMessage
+from mote.contracts.ports.agent.catalog import SpawnableAgentCatalog
+from mote.kernel.tools.docstrings import description_body
+from mote.product.toolsets.builtin.agent_prompts import AGENT_TASK_PROMPT
 from mote.runtime.agent.control import spawn_and_run
-from mote.runtime.logging import logger
-from mote.runtime.tools.agent_registry import AgentCatalog
+from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.base_tool import BaseTool
-from mote.runtime.tools.capability_types import BuildChildAgent
 from mote.runtime.tools.tool_registry import register_tool
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
@@ -38,8 +37,7 @@ class Agent(BaseTool):
 
     name = "Agent"
     aliases = ["run_agent"]
-    requires = ("build_child_agent",)
-    build_child_agent: BuildChildAgent
+    requires = ()
     # Recall synonyms for tool-search: ways a model expresses "hand this off"
     # that the summary ("spawn a typed child agent") does not literally contain.
     keywords: ClassVar[list[str]] = [
@@ -56,7 +54,7 @@ class Agent(BaseTool):
         "并发",
     ]
 
-    def __init__(self, agent_catalog: AgentCatalog) -> None:
+    def __init__(self, agent_catalog: SpawnableAgentCatalog[str]) -> None:
         super().__init__()
         self._agent_catalog = agent_catalog
 
@@ -80,8 +78,8 @@ class Agent(BaseTool):
         if not prompt:
             return _MSG_PROMPT_EMPTY
 
-        agent_cls = self._agent_catalog.get(agent_type)
-        if agent_cls is None:
+        definition = self._agent_catalog.get(agent_type)
+        if definition is None:
             available = ", ".join(sorted(self._agent_catalog.all_agents()))
             return _MSG_UNKNOWN_AGENT.format(agent_type=agent_type, available=available)
 
@@ -91,12 +89,6 @@ class Agent(BaseTool):
         # rolls its cost up to the parent. The handle always tears the child down
         # (its own terminal/kernel PTY, LSP servers, file-watch loop — all
         # session-scoped OS resources that leak if dropped without cleanup()).
-        def role_factory(spawn_ctx: SpawnContext):
-            return self.build_child_agent(
-                agent_cls,
-                parent_session_id=spawn_ctx.parent_id or self.session_id,
-            )
-
         def build_message(agent):
             task_brief = Template(AGENT_TASK_PROMPT).safe_substitute(
                 parent_name=self.session_id,
@@ -109,8 +101,8 @@ class Agent(BaseTool):
             # the lowerer fails loudly on any unlowered symbol.
             return UserMessage(content=agent.command_channel.lower(task_brief))
 
-        spec = SpawnSpec(
-            role_factory=role_factory,
+        spec = SpawnPlan(
+            definition=definition,
             nickname=agent_type,
             agent_role=agent_type,
             parent_id=self.session_id,
@@ -148,14 +140,12 @@ class Agent(BaseTool):
         return json.dumps(encoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     @classmethod
-    def description_for(cls, catalog: AgentCatalog) -> str:
+    def description_for(cls, catalog: SpawnableAgentCatalog[str]) -> str:
         """Render the immutable Agent roster owned by one Application."""
 
         lines = []
-        for name, agent_cls in catalog.all_agents().items():
-            desc = agent_cls.get_schema()["description"]
-            tools = ", ".join(getattr(agent_cls, "tools", None) or [])
-            lines.append(f"- {name}: {desc} (tools: {tools})")
+        for name, definition in catalog.all_agents().items():
+            lines.append(f"- {name}: {definition.description}")
         agent_types_desc = "\n".join(lines) if lines else "No agent types registered."
 
         # Base description comes from the call() docstring body (docstring-native

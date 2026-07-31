@@ -1,7 +1,7 @@
 """Reliable publication of staged Artifacts."""
 from __future__ import annotations
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactPublication,
     ArtifactPublicationFailure,
     ArtifactPublicationIntent,
@@ -10,8 +10,8 @@ from mote.contracts.artifacts import (
     ArtifactPublishRequest,
     ArtifactRevision,
 )
-from mote.contracts.ports import ArtifactPublicationOutbox, ArtifactStore
-from mote.runtime.reconciliation import MAX_RECONCILIATION_ATTEMPTS, is_retryable_reconciliation_error
+from mote.contracts.ports.artifact.store import ArtifactPublicationOutbox, ArtifactStore
+from mote.runtime.resilience.reconciliation import MAX_RECONCILIATION_ATTEMPTS, is_retryable_reconciliation_error
 
 
 class ReliableArtifactPublisher:

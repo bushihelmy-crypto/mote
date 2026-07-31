@@ -5,10 +5,10 @@ from typing import Any, Dict, List
 
 from fastmcp import Client  # type: ignore[reportMissingImports]
 
-from mote.contracts.config.mcp import MCPServerConfig, MCPTransportType
+from mote.contracts.tool.transport import MCPTransportType
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.errors import ToolNotFoundError
-from mote.runtime.logging import logger
-from mote.runtime.tools.mcp.config_source import load_mcp_servers
+from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.mcp.oauth import build_mcp_auth
 from mote.runtime.tools.mcp.types import DiscoveredMcpTool
 
@@ -34,15 +34,24 @@ class _McpToolEntry:
 class UniversalMCP:
     """Universal MCP manager that discovers tools from configured MCP servers."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        servers: List[MCPServerConfig] | None = None,
+        oauth_root=None,
+    ):
         self._tool_registry: dict[str, _McpToolEntry] = {}
         self.clients: Dict[str, Client] = {}
         self.initialized_servers: Dict[str, Dict[str, Any]] = {}
         self.initialization_errors: Dict[str, str] = {}
         self.state: MCPInitState = MCPInitState.UNCONFIGURED
+        self._servers = list(servers or [])
+        self._oauth_root = oauth_root
 
     async def initialize(
-        self, server_names: List[str] | None = None, servers: List[MCPServerConfig] | None = None
+        self,
+        server_names: List[str] | None = None,
+        servers: List[MCPServerConfig] | None = None,
     ) -> None:
         """Connect to configured MCP servers and discover tools.
 
@@ -60,11 +69,12 @@ class UniversalMCP:
             # MCP servers are defined in their own ``mcp_config.json`` (the
             # de-facto MCP shape), not the layered ``config.yaml``. Every
             # entry present there is enabled (presence == enabled).
-            all_servers = load_mcp_servers()
+            servers = list(self._servers)
             if server_names is not None:
-                servers = [s for s in all_servers if s.name in server_names]
-            else:
-                servers = all_servers
+                servers = [server for server in servers if server.name in server_names]
+            for server in servers:
+                if server.oauth is not None:
+                    server.oauth.storage_root = self._oauth_root
 
         if not servers:
             self.state = MCPInitState.UNCONFIGURED

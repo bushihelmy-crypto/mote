@@ -15,14 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.product.cli.consumers.render.builders.core import (
+from mote.product.i18n import use_locale
+from mote.product.presentation.projection.summaries import _summary_edit, _summary_read, _summary_search
+from mote.product.presentation.rich_rendering.builders import (
     compaction_summary_text,
     conversation_compacted_text,
     fold_note_str,
     tool_group_summary_text,
 )
-from mote.product.cli.view.summaries import _summary_edit, _summary_read, _summary_search
-from mote.product.i18n import use_locale
 
 # A minimal Read body: right-justified ``N→`` numbered lines the summary counts.
 _READ_1 = "     1\u2192only line\n"
@@ -129,7 +129,10 @@ def test_fold_hidden_lines_singular(code: str, expected: str) -> None:
 @pytest.mark.parametrize(
     "code, expected_tail",
     [
-        ("zh", "\u641c\u7d22 2 \u4e2a\u6a21\u5f0f\uff0c\u8bfb\u53d6 1 \u4e2a\u6587\u4ef6"),
+        (
+            "zh",
+            "\u641c\u7d22 2 \u4e2a\u6a21\u5f0f\uff0c\u8bfb\u53d6 1 \u4e2a\u6587\u4ef6",
+        ),
         ("en", "searched 2 patterns, read 1 file"),
     ],
 )

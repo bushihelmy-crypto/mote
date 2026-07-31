@@ -16,17 +16,16 @@ Two independent checks compose into the proxy's allow/deny decision:
 Ported from Codex ``network-proxy/src/policy.rs``; our blocked-range table is a
 touch more conservative.
 
-``normalize_host`` and the glob matcher live in :mod:`mote.contracts.net`
+``normalize_host`` and the glob matcher live in :mod:`mote.runtime.sandbox.network.patterns`
 (a pure leaf module) so the config layer can validate against the exact same
-matcher without reaching up into this runtime package; they are re-exported here
-for the proxy's own use and backward compatibility.
+matcher without reaching up into this runtime package.
 """
 from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
 
-from mote.contracts.net import matches_pattern, normalize_host
+from mote.runtime.sandbox.network.patterns import matches_pattern, normalize_host
 
 
 def is_blocked_host(host: str) -> bool:
@@ -84,4 +83,4 @@ class NetworkPolicy:
         return any(matches_pattern(h, p) for p in self.allowed_domains)
 
 
-__all__ = ["NetworkPolicy", "is_blocked_host", "normalize_host", "matches_pattern"]
+__all__ = ["NetworkPolicy", "is_blocked_host"]

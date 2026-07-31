@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from mote.contracts.fileops import (
+from mote.contracts.file import (
     ByteReadRequest,
     ByteViewMode,
     ContinueReadRequest,
@@ -12,7 +12,7 @@ from mote.contracts.fileops import (
     ReadCursorKind,
     ReadViewStatus,
 )
-from mote.runtime.fileops import FileOperations
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path):

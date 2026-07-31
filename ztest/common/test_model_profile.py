@@ -9,13 +9,13 @@ model id.
 
 import pytest
 
-from mote.contracts.models.capabilities import (
+from mote.contracts.model.capabilities import (
     supports_native_tool_search,
     supports_pdf_input,
     supports_vision,
     supports_web_search,
 )
-from mote.contracts.models.profile import DEFAULT_PROFILE, ModelProfile, merge_profile, profile_for
+from mote.contracts.model.profile import DEFAULT_PROFILE, ModelProfile, merge_profile, profile_for
 
 # The FOUR original substring lists, reproduced verbatim as the parity oracle.
 _OLD_MULTI_MODAL = [

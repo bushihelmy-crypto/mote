@@ -1,6 +1,6 @@
 from typing import Tuple
 
-from mote.contracts.text import collapse_whitespace
+from mote.runtime.tools.text_normalization import collapse_whitespace
 
 
 def remove_spaces(text):

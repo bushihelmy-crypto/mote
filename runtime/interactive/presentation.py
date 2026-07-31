@@ -1,8 +1,8 @@
 """Capability-based dispatch for host live-surface presenters."""
 from __future__ import annotations
 
-from mote.contracts.ports.surface_presenter import LiveSurfacePresenter, SurfacePresentationSession
-from mote.contracts.surfaces import LiveSurfaceSession, SurfacePresentationMode
+from mote.contracts.ports.surface.presenter import LiveSurfacePresenter, SurfacePresentationSession
+from mote.contracts.surface import LiveSurfaceSession, SurfacePresentationMode
 
 
 class SurfacePresenterUnavailableError(RuntimeError):

@@ -6,18 +6,25 @@ import json
 
 import pytest
 
-from mote.contracts.artifacts import ArtifactContentRef
-from mote.contracts.canvas import CanvasDocument, CanvasElement, CanvasOperation, CanvasStyle
-from mote.contracts.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
-from mote.contracts.runtimes import RuntimeCheckpoint, RuntimeOperationIntent, RuntimeProjectionIntent, RuntimeRef
-from mote.contracts.surfaces import SurfaceInput, SurfacePresentationMode
+from mote.contracts.artifact import ArtifactContentRef
+from mote.contracts.content import ContentIdentity
+from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import RuntimeCheckpoint, RuntimeOperationIntent, RuntimeProjectionIntent, RuntimeRef
+from mote.contracts.surface import (
+    CanvasDocument,
+    CanvasElement,
+    CanvasOperation,
+    CanvasStyle,
+    SurfaceInput,
+    SurfacePresentationMode,
+)
 from mote.runtime.artifacts import DurableArtifactStore
 from mote.runtime.interactive import ArtifactCheckpointPayloadStore, HandoffCoordinator, RuntimeHost
+from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 from mote.runtime.secrets.cipher import AesGcmCipher
 from mote.runtime.session import SessionLog, SessionMetaEvent, SessionRuntimeProjectionJournal
 from mote.runtime.session.replay import replay
 from mote.runtime.session.runtime_operation import SessionRuntimeOperationJournal
-from mote.runtime.tools.dependency._canvas import CanvasRuntimeDriver
 
 
 class _MemoryBlobs:
@@ -27,10 +34,10 @@ class _MemoryBlobs:
     def put_bytes(self, content: bytes) -> ArtifactContentRef:
         digest = hashlib.sha256(content).hexdigest()
         self.contents[digest] = content
-        return ArtifactContentRef(content_ref=f"sha256:{digest}", digest=digest, size=len(content))
+        return ArtifactContentRef(ContentIdentity(digest, len(content)), f"sha256:{digest}")
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        return self.contents[ref.digest]
+        return self.contents[ref.identity.digest]
 
 
 @pytest.mark.asyncio

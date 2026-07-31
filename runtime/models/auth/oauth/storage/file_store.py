@@ -8,12 +8,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from mote.runtime.disk import mtime_seconds
 from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.models.auth.oauth.storage.base import CredentialStore
-from mote.runtime.paths import CONFIG_ROOT
-
-OAUTH_DIR = CONFIG_ROOT / "oauth"
+from mote.runtime.persistence import mtime_seconds
 
 
 class FileCredentialStore(CredentialStore):
@@ -23,9 +20,9 @@ class FileCredentialStore(CredentialStore):
     bearer/refresh tokens are not world-readable.
     """
 
-    def __init__(self, provider: str, base_dir: Optional[Path] = None) -> None:
+    def __init__(self, provider: str, base_dir: Path) -> None:
         super().__init__(provider)
-        self._dir = Path(base_dir) if base_dir is not None else OAUTH_DIR
+        self._dir = Path(base_dir)
         self._path = self._dir / f"{provider}.json"
 
     @property

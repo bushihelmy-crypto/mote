@@ -12,7 +12,7 @@ import fitz
 import requests
 from PIL import Image
 
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 
 def decode_image(value: str) -> Image.Image:

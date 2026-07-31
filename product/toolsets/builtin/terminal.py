@@ -25,17 +25,18 @@ from __future__ import annotations
 import os
 from typing import ClassVar, Optional
 
-from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
-from mote.contracts.permissions import PermissionDecision
-from mote.contracts.runtimes import RuntimeAccessMode
+from mote.contracts.authorization import PermissionDecision
+from mote.contracts.runtime import RuntimeAccessMode
+from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
+from mote.runtime.errors import ToolError
+from mote.runtime.interactive.terminal.driver import DEFAULT_YIELD_MS, TerminalRuntimeDriver
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetRuntimeHost, GetSandboxRuntime, HandoffRuntime
-from mote.runtime.tools.dependency._terminal import DEFAULT_YIELD_MS, TerminalRuntimeDriver
 from mote.runtime.tools.permission.classifier import classify_command
 from mote.runtime.tools.permission.command_parse import segment_strings
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).

@@ -13,8 +13,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from mote.contracts.config.llm import LLMConfig
-from mote.product.integrations.models.openai_chat import OpenAILLM
+from mote.contracts.config.model.llm import LLMConfig
+from mote.product.models.providers.openai_chat import OpenAILLM
 from mote.runtime.events import LLMStreamDeltaEvent, bind_telemetry
 from mote.runtime.models.cost import CostTracker
 from mote.ztest.telemetry import InlineTelemetry

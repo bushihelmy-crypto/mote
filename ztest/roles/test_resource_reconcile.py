@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.constants.messages import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.contracts.schema import LLMCallContext, Message
+from mote.contracts.conversation import LLMCallContext, Message
+from mote.contracts.conversation.fields import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
 from mote.runtime.agent.session_manager import RoleSessionManager
 from mote.runtime.context import ContextManager
 from mote.runtime.resources.registry import ResourceRegistry

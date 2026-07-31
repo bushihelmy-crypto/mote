@@ -6,26 +6,23 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from typing import Iterable, Mapping, Optional
 
-from mote.contracts.events import EventEnvelope, JsonValue, StreamId
-from mote.contracts.handoff import PendingRuntimeHandoff, RuntimeHandoffResolution
-from mote.contracts.models.failover import ModelCallSummary
-from mote.contracts.models.routing import RoutingSessionState
-from mote.contracts.ports.event_subscription import SubscriptionIdentity
-from mote.contracts.runtimes import (
+from mote.contracts.conversation import Message
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
+from mote.contracts.model.failover import ModelCallSummary
+from mote.contracts.model.routing import RoutingSessionState
+from mote.contracts.ports.events.subscription import SubscriptionIdentity
+from mote.contracts.runtime import (
     RuntimeCheckpoint,
     RuntimeOperationIntent,
     RuntimeOperationReceipt,
     RuntimeProjectionAck,
     RuntimeProjectionRequest,
 )
-from mote.contracts.schema import Message
-from mote.runtime.logging import log_class
+from mote.contracts.runtime.handoff import PendingRuntimeHandoff, RuntimeHandoffResolution
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import (
-    BrowserStateEvent,
     ContextCompactedFact,
     HistoryEditedFact,
-    KernelStateEvent,
     LLMCallEvent,
     MessageEvent,
     OutputAcceptedEvent,
@@ -48,8 +45,8 @@ from mote.runtime.session.events import (
     RuntimeProjectionAcknowledgedEvent,
     SessionEvent,
     SessionMetaEvent,
-    TerminalStateEvent,
 )
+from mote.runtime.telemetry.logging import log_class
 
 SESSION_PROJECTION_SUBSCRIPTION = SubscriptionIdentity("mote.session.projection")
 
@@ -75,11 +72,7 @@ class SessionProjectionState:
     model_calls: dict[str, ModelCallSummary] = field(default_factory=dict)
     routing_state: RoutingSessionState = field(default_factory=RoutingSessionState)
     routing_decisions: dict[str, dict] = field(default_factory=dict)
-    skipped: int = 0
     latest_compaction: Optional[ContextCompactedFact] = None
-    terminal_state: Optional[dict] = None
-    kernel_state: Optional[dict] = None
-    browser_state: Optional[dict] = None
     runtime_checkpoints: dict[str, RuntimeCheckpoint] = field(default_factory=dict)
     pending_runtime_projections: dict[tuple[str, str], RuntimeProjectionRequest] = field(default_factory=dict)
     runtime_projection_dead_letters: dict[tuple[str, str], RuntimeProjectionAck] = field(default_factory=dict)
@@ -170,8 +163,7 @@ def reduce_session_envelope(
             f"session projection expected sequence {expected}, got {envelope.sequence}"
         )
     event = decode_session_event(envelope)
-    if event is not None:
-        reduce_session_event(state, event)
+    reduce_session_event(state, event)
     state.through_sequence = envelope.sequence
     return True
 
@@ -186,11 +178,8 @@ def reduce_session_event(state: SessionProjectionState, event: SessionEvent) -> 
         state.meta = asdict(event)
     elif isinstance(event, MessageEvent):
         state.message_events += 1
-        if event.message is None:
-            state.skipped += 1
-        else:
-            state.transcript_messages.append(event.message)
-            state.model_context_messages.append(event.message)
+        state.transcript_messages.append(event.message)
+        state.model_context_messages.append(event.message)
     elif isinstance(event, ContextCompactedFact):
         current_ids = [str(message.id) for message in state.model_context_messages]
         if event.source_message_ids != current_ids:
@@ -220,24 +209,6 @@ def reduce_session_event(state: SessionProjectionState, event: SessionEvent) -> 
             state.routing_decisions[decision_id] = dict(decision)
         if event.state:
             state.routing_state = RoutingSessionState.model_validate(event.state)
-    elif isinstance(event, TerminalStateEvent):
-        state.terminal_state = {
-            "cwd": event.cwd,
-            "env": dict(event.env),
-            "unset": list(event.unset),
-        }
-    elif isinstance(event, KernelStateEvent):
-        state.kernel_state = {
-            "cwd": event.cwd,
-            "env": dict(event.env),
-            "unset": list(event.unset),
-        }
-    elif isinstance(event, BrowserStateEvent):
-        state.browser_state = {
-            "urls": list(event.urls),
-            "active": event.active,
-            "storage_state": event.storage_state,
-        }
     elif isinstance(event, RuntimeCheckpointEvent):
         checkpoint = event.checkpoint
         state.runtime_checkpoints[_runtime_key(checkpoint)] = checkpoint

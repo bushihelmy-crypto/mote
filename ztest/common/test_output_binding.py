@@ -1,7 +1,7 @@
 import pytest
 
 from mote.contracts.output import OutputBindingKind, OutputRepresentationCapabilities
-from mote.kernel.output_binding import FINAL_OUTPUT_TOOL_NAME, negotiate_output_binding
+from mote.kernel.output.binding import FINAL_OUTPUT_TOOL_NAME, negotiate_output_binding
 
 
 def test_text_contract_uses_text_without_downgrade():

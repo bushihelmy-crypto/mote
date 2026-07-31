@@ -14,32 +14,24 @@ A single, extensible hierarchy rooted at :class:`MoteError`:
 
 from __future__ import annotations
 
-from mote.contracts.errors.base import MoteError, NonRetryableError, RetryableError
-from mote.contracts.errors.codes import ErrorCode, RecoveryAction
-from mote.contracts.errors.config import (
-    ConfigError,
-    ConfigValidationError,
-    EnvKeyNotFoundError,
-    MissingAPIKeyError,
-    UnknownConfigKeysError,
-)
-from mote.contracts.errors.environment import (
+from mote.contracts.agent.errors import (
     AgentControlError,
     AgentLimitReached,
     AgentNotFound,
     AgentNotKnown,
     AgentPathExists,
 )
-from mote.contracts.errors.graph import (
-    GraphBatchFailureError,
-    GraphError,
-    GraphNodeRetryExhaustedError,
-    GraphNodeTimeoutError,
-    GraphParamTypeError,
-    GraphRecursionError,
-    GraphRouterError,
+from mote.contracts.config.errors import (
+    ConfigError,
+    ConfigValidationError,
+    EnvKeyNotFoundError,
+    MissingAPIKeyError,
+    UnknownConfigKeysError,
 )
-from mote.contracts.errors.models import (
+from mote.contracts.foundation.errors.base import MoteError, NonRetryableError, RetryableError
+from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
+from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
+from mote.contracts.model.errors import (
     ModelCallBudgetExceededError,
     ModelCallDeadlineExceededError,
     ModelCallError,
@@ -49,7 +41,7 @@ from mote.contracts.errors.models import (
     ModelGovernanceViolationError,
     ModelRouteUnavailableError,
 )
-from mote.contracts.errors.output import (
+from mote.contracts.output.errors import (
     OutputCommitFencedError,
     OutputCommitStateError,
     OutputCorrectionExhaustedError,
@@ -59,8 +51,7 @@ from mote.contracts.errors.output import (
     RunLeaseCoordinatorUnavailableError,
     RunLeaseUnavailableError,
 )
-from mote.contracts.errors.report import ErrorReport, render_error_block
-from mote.contracts.errors.runtimes import (
+from mote.contracts.runtime.errors import (
     LeaseCoordinatorUnavailableError,
     LeaseFencedError,
     LeaseUnavailableError,
@@ -69,8 +60,17 @@ from mote.contracts.errors.runtimes import (
     ManagedRuntimeRevisionConflictError,
     ManagedRuntimeStateError,
 )
-from mote.contracts.errors.tasks import BackgroundTaskCancelledError, BackgroundTaskError, BackgroundTaskTimeoutError
-from mote.contracts.errors.tools import (
+from mote.contracts.task.errors import BackgroundTaskCancelledError, BackgroundTaskError, BackgroundTaskTimeoutError
+from mote.contracts.task.graph_errors import (
+    GraphBatchFailureError,
+    GraphError,
+    GraphNodeRetryExhaustedError,
+    GraphNodeTimeoutError,
+    GraphParamTypeError,
+    GraphRecursionError,
+    GraphRouterError,
+)
+from mote.contracts.tool.errors import (
     NonRetryableToolError,
     RetryableToolError,
     ToolError,

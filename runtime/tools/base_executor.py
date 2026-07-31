@@ -1,6 +1,6 @@
 """BaseToolExecutor — the act-side orchestration interface.
 
-The Act counterpart to ``BaseThinkEngine`` on the Think side. A tool executor
+The Act counterpart to ``BaseInferenceEngine`` on the Think side. A tool executor
 dispatches one LLM-named command to a bound tool and returns a ``ToolResult``,
 and exposes the schema views the prompt builder + native channel consume.
 Making it an ABC lets the Role assemble an alternative executor (e.g. a remote

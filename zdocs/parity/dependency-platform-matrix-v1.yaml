@@ -1,0 +1,494 @@
+schema_version: 1
+revision: dependency-platform-matrix-v1
+python_versions:
+- 3.9.2
+- '3.10'
+- '3.11'
+- '3.12'
+platforms:
+- linux_x86_64
+- linux_aarch64
+policy:
+  pure_python_any_wheel_satisfies_all: true
+  native_component_requires_every_declared_platform: true
+  source_build_does_not_satisfy_wheel_availability: true
+components:
+  aiohttp:
+    status: passed
+    verified_cells:
+    - python: '3.9'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.9'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.9'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.9'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.9'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.10'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.10'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.10'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.10'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.10'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.11'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.11'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.11'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.11'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.11'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.12'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.12'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.12'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.12'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiohttp
+    - python: '3.12'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiohttp
+  grpcio:
+    status: passed
+    verified_cells:
+    - python: 3.9.2
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: 3.9.2
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: '3.10'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: '3.10'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: '3.11'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: '3.11'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: '3.12'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded grpcio
+    - python: '3.12'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded grpcio
+  cryptography:
+    status: passed
+    verified_cells:
+    - python: 3.9.2
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: 3.9.2
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: 3.9.2
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: 3.9.2
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: 3.9.2
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.10'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.10'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.10'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.10'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.10'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.11'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.11'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.11'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.11'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.11'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.12'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.12'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.12'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.12'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded cryptography
+    - python: '3.12'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded cryptography
+  asyncpg:
+    status: passed
+    verified_cells:
+    - python: 3.9.2
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: 3.9.2
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: '3.10'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: '3.10'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: '3.11'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: '3.11'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: '3.12'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded asyncpg
+    - python: '3.12'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded asyncpg
+  wasmtime:
+    status: passed
+    verified_cells:
+    - python: '3.9'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.9'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.9'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.9'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.9'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.10'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.10'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.10'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.10'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.10'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.11'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.11'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.11'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.11'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.11'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.12'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.12'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.12'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.12'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded wasmtime
+    - python: '3.12'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded wasmtime
+  redis:
+    status: passed
+    verified_cells:
+    - python: '3.9'
+      platform: any
+      available: true
+      detail: Successfully downloaded redis
+    - python: '3.10'
+      platform: any
+      available: true
+      detail: Successfully downloaded redis
+    - python: '3.11'
+      platform: any
+      available: true
+      detail: Successfully downloaded redis
+    - python: '3.12'
+      platform: any
+      available: true
+      detail: Successfully downloaded redis
+  qdrant-client:
+    status: passed
+    verified_cells:
+    - python: '3.9'
+      platform: any
+      available: true
+      detail: Successfully downloaded qdrant-client
+    - python: '3.10'
+      platform: any
+      available: true
+      detail: Successfully downloaded qdrant-client
+    - python: '3.11'
+      platform: any
+      available: true
+      detail: Successfully downloaded qdrant-client
+    - python: '3.12'
+      platform: any
+      available: true
+      detail: Successfully downloaded qdrant-client
+  aioboto3:
+    status: passed
+    verified_cells:
+    - python: '3.9'
+      platform: any
+      available: true
+      detail: Successfully downloaded aioboto3
+    - python: '3.10'
+      platform: any
+      available: true
+      detail: Successfully downloaded aioboto3
+    - python: '3.11'
+      platform: any
+      available: true
+      detail: Successfully downloaded aioboto3
+    - python: '3.12'
+      platform: any
+      available: true
+      detail: Successfully downloaded aioboto3
+  google-cloud-storage:
+    status: passed
+    verified_cells:
+    - python: '3.9'
+      platform: any
+      available: true
+      detail: Successfully downloaded google-cloud-storage
+    - python: '3.10'
+      platform: any
+      available: true
+      detail: Successfully downloaded google-cloud-storage
+    - python: '3.11'
+      platform: any
+      available: true
+      detail: Successfully downloaded google-cloud-storage
+    - python: '3.12'
+      platform: any
+      available: true
+      detail: Successfully downloaded google-cloud-storage
+  aiortc:
+    status: passed
+    verified_cells:
+    - python: 3.9.2
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: 3.9.2
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: 3.9.2
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: 3.9.2
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: 3.9.2
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.10'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.10'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.10'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.10'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.10'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.11'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.11'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.11'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.11'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.11'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.12'
+      platform: linux_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.12'
+      platform: linux_aarch64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.12'
+      platform: macos_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.12'
+      platform: macos_arm64
+      available: true
+      detail: Successfully downloaded aiortc
+    - python: '3.12'
+      platform: windows_x86_64
+      available: true
+      detail: Successfully downloaded aiortc
+gate_status: passed

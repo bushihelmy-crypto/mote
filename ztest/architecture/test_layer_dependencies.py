@@ -33,35 +33,20 @@ LAYER_RANK = {
 # that implementation is moved behind a lower-layer Protocol/module boundary.
 MIGRATION_BASELINE: set[tuple[str, str]] = set()
 
-
-def _is_type_checking_guard(node: ast.expr) -> bool:
-    if isinstance(node, ast.Name):
-        return node.id == "TYPE_CHECKING"
-    return isinstance(node, ast.Attribute) and node.attr == "TYPE_CHECKING"
+# Runtime-internal dependency violations frozen at exact import sites.  These
+# are removed phase-by-phase by runtime-package-refactor-plan.md.
+RUNTIME_BOUNDARY_BASELINE: set[tuple[str, str]] = set()
 
 
 class _RuntimeImports(ast.NodeVisitor):
     def __init__(self) -> None:
         self.imports: list[tuple[int, str]] = []
-        self._type_only = 0
-
-    def visit_If(self, node: ast.If) -> None:
-        guarded = _is_type_checking_guard(node.test)
-        if guarded:
-            self._type_only += 1
-        for child in node.body:
-            self.visit(child)
-        if guarded:
-            self._type_only -= 1
-        for child in node.orelse:
-            self.visit(child)
 
     def visit_Import(self, node: ast.Import) -> None:
-        if not self._type_only:
-            self.imports.extend((node.lineno, alias.name) for alias in node.names)
+        self.imports.extend((node.lineno, alias.name) for alias in node.names)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if not self._type_only and node.module:
+        if node.module:
             self.imports.append((node.lineno, node.module))
 
 
@@ -96,8 +81,133 @@ def test_runtime_imports_follow_layer_direction() -> None:
     assert not violations, "Upward runtime imports are forbidden:\n" + "\n".join(violations)
 
 
+def _forbidden_runtime_import(source: str, module: str) -> bool:
+    if source.startswith("runtime/tools/"):
+        return module.startswith(("mote.runtime.agent", "mote.runtime.context"))
+    if source.startswith("runtime/context/"):
+        return module.startswith(("mote.runtime.agent", "mote.runtime.tools"))
+    if source.startswith("runtime/artifacts/"):
+        return module.startswith("mote.runtime.fileops.artifact_")
+    if source.startswith("runtime/interactive/"):
+        return module.startswith(("mote.runtime.tools", "mote.product"))
+    if source.startswith("runtime/code_map/"):
+        return module.startswith(
+            (
+                "mote.runtime.agent",
+                "mote.runtime.tools",
+                "mote.product",
+            )
+        )
+    if source.startswith("runtime/resilience/"):
+        return module.startswith("mote.runtime.models")
+    if source.startswith("runtime/service_gateway/"):
+        return module.startswith("mote.runtime.models.failover")
+    return False
+
+
+def test_runtime_internal_boundaries() -> None:
+    violations: list[str] = []
+    seen_baseline: set[tuple[str, str]] = set()
+
+    for package in (
+        "tools",
+        "context",
+        "artifacts",
+        "interactive",
+        "code_map",
+        "resilience",
+        "service_gateway",
+    ):
+        for path in (PACKAGE_ROOT / "runtime" / package).rglob("*.py"):
+            visitor = _RuntimeImports()
+            visitor.visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+            relative = path.relative_to(PACKAGE_ROOT).as_posix()
+            for lineno, module in visitor.imports:
+                if not _forbidden_runtime_import(relative, module):
+                    continue
+                edge = (relative, module)
+                if edge in RUNTIME_BOUNDARY_BASELINE:
+                    seen_baseline.add(edge)
+                    continue
+                violations.append(f"{relative}:{lineno}: imports {module}")
+
+    stale = RUNTIME_BOUNDARY_BASELINE - seen_baseline
+    assert not stale, "Remove resolved entries from RUNTIME_BOUNDARY_BASELINE:\n" + "\n".join(sorted(map(str, stale)))
+    assert not violations, "Forbidden runtime-internal imports:\n" + "\n".join(violations)
+
+
+def test_legacy_tool_dependency_package_is_deleted() -> None:
+    dependency = PACKAGE_ROOT / "runtime" / "tools" / "dependency"
+    assert not any(dependency.glob("*.py")), "interactive drivers must not live under runtime.tools"
+
+
+def test_context_excludes_product_subsystems() -> None:
+    context = PACKAGE_ROOT / "runtime" / "context"
+    assert not any((context / "skills").glob("*.py")), "Skills are Product-owned"
+    assert not any((context / "code_map").glob("*.py")), "Code Map execution belongs in runtime.code_map"
+
+
 def test_legacy_common_package_is_deleted() -> None:
     assert not (PACKAGE_ROOT / "common").exists(), "common is forbidden; assign code to one of the five layers"
+
+
+def test_consolidated_runtime_entries_have_no_legacy_package() -> None:
+    legacy = {
+        "completion",
+        "disk",
+        "leases.py",
+        "lifecycle.py",
+        "logging",
+        "maintenance.py",
+        "paths.py",
+        "observability",
+        "reconciliation.py",
+        "scheduling",
+        "workspace",
+    }
+    present = sorted(name for name in legacy if (PACKAGE_ROOT / "runtime" / name).exists())
+    assert not present, f"legacy runtime entries remain: {present}"
+
+
+def test_control_contains_only_runtime_control_primitives() -> None:
+    control = PACKAGE_ROOT / "runtime" / "control"
+    assert {path.name for path in control.iterdir() if path.name != "__pycache__"} <= {
+        "__init__.py",
+        "leases.py",
+        "lifecycle.py",
+        "scheduling",
+    }
+
+
+def test_consolidated_runtime_substrates_keep_narrow_boundaries() -> None:
+    forbidden_persistence = (
+        "mote.runtime.session",
+        "mote.runtime.tools",
+        "mote.runtime.artifacts",
+        "mote.runtime.fileops",
+        "mote.orchestration",
+    )
+    violations: list[str] = []
+    for path in (PACKAGE_ROOT / "runtime" / "persistence").rglob("*.py"):
+        visitor = _RuntimeImports()
+        visitor.visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        for lineno, module in visitor.imports:
+            if module.startswith(forbidden_persistence):
+                violations.append(f"{path.name}:{lineno}: {module}")
+    assert not violations, "persistence imports domain owners:\n" + "\n".join(violations)
+
+    telemetry = PACKAGE_ROOT / "runtime" / "telemetry"
+    assert not (telemetry / "events").exists(), "event fabric must remain runtime.events"
+
+
+def test_code_map_has_no_product_path_discovery() -> None:
+    forbidden = ("CONFIG_ROOT", "mote_project_", "mote_layered_")
+    violations = []
+    for path in (PACKAGE_ROOT / "runtime" / "code_map").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if any(token in source for token in forbidden):
+            violations.append(path.relative_to(PACKAGE_ROOT).as_posix())
+    assert not violations, f"CodeMap owns product path policy: {violations}"
 
 
 def test_disk_writer_has_no_process_global_access_api() -> None:

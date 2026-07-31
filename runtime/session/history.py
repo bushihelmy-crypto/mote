@@ -9,19 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from mote.contracts.fileops.errors import SnapshotDurabilityError
-from mote.contracts.fileops.events import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.file.facts import (
     FileHistoryImportedEvent,
     FileTransactionAbortedEvent,
     FileTransactionCommittedEvent,
     FileTransactionInDoubtEvent,
     FileTransactionPreparedEvent,
 )
-from mote.contracts.fileops.models import BlobRef, CreateMutation, Mutation, MutationSet
-from mote.contracts.fileops.serialization import mutation_to_dict
+from mote.contracts.file.codec import mutation_to_dict
+from mote.contracts.file.errors import SnapshotDurabilityError
+from mote.contracts.file.mutations import CreateMutation, Mutation, MutationSet
+from mote.runtime.artifacts import ArtifactRepositoryLayout
 from mote.runtime.fileops import FileOperations
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.codec import decode_session_event, iter_file_operations_events
 from mote.runtime.session.log import SessionLog
@@ -37,7 +39,7 @@ class SnapshotEntry:
 
     path: str
     operation: str  # create | update
-    before: Optional[BlobRef]
+    before: Optional[ContentIdentity]
     display_path: str
     tool: str
     ts: str
@@ -260,10 +262,16 @@ def _restore_set(
 
 def _file_operations(log: SessionLog, path: str) -> FileOperations:
     log.exists()
+    layout = ArtifactRepositoryLayout(log.workspace_root)
+    repository = layout.open(
+        layout.ownership(session_id=log.session_id, project_root=Path(path).resolve().parent)
+    ).repository
     return FileOperations(
         session_id=log.session_id,
         journal_path=log.path,
         get_project_root=lambda: str(Path(path).resolve().parent),
+        artifact_repository=repository,
+        artifact_lifecycle_root=log.path.parent / "artifact-lifecycle",
         flush_pending=log.writer.flush_inline,
         lock_root=log.runtime_root / "file-locks",
         event_sink=log.commit_offline,

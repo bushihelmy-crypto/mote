@@ -13,8 +13,8 @@ import os
 
 import pytest
 
-from mote.contracts.permissions import PermissionDecision
-from mote.contracts.settings.permissions import PermissionConfig, SandboxConfig
+from mote.contracts.authorization import PermissionDecision
+from mote.runtime.tools.permission.config import PermissionConfig, SandboxConfig
 from mote.runtime.tools.permission.engine import PermissionEngine
 from mote.runtime.tools.permission.rule_store import RuleStore
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard

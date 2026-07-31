@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import TypeGuard
 
 import pytest
 
-from mote.contracts.ports.telemetry import (
+from mote.contracts.ports.events.telemetry import (
     MAX_TELEMETRY_IDENTITY_BYTES,
     TelemetryIdentity,
     TelemetryOverflow,
     TelemetrySubscriptionSpec,
 )
-from mote.runtime.events.telemetry import TelemetryBinding, TelemetryManifest, TelemetryRuntime, TelemetryState
+from mote.runtime.events.telemetry import (
+    TelemetryBinding,
+    TelemetryManifest,
+    TelemetryRuntime,
+    TelemetryState,
+    TypedTelemetryBinding,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,10 @@ def _binding(
         ),
         handler,
     )
+
+
+def _accepts_event(event: object) -> TypeGuard[_Event]:
+    return isinstance(event, _Event)
 
 
 class _Handler:
@@ -133,11 +144,45 @@ async def test_coalesce_keeps_latest_pending_observation() -> None:
 @pytest.mark.asyncio
 async def test_sync_emit_is_enqueued_and_processed_by_owner_task() -> None:
     handler = _SyncHandler()
-    runtime = TelemetryRuntime(TelemetryManifest((_binding("mote.test.sync", handler),)))
+    typed = TypedTelemetryBinding(
+        TelemetrySubscriptionSpec(
+            TelemetryIdentity("mote.test.sync"),
+            4,
+            TelemetryOverflow.DROP_NEWEST,
+        ),
+        _accepts_event,
+        handler,
+        handler,
+    )
+    runtime = TelemetryRuntime(TelemetryManifest((typed.erase(),)))
     runtime.start()
 
     runtime.emit_sync(_Event(1))
     assert handler.values == []
+    await runtime.drain()
+
+    assert handler.values == [1]
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_typed_binding_filters_both_paths_and_skips_missing_sync_handler() -> None:
+    handler = _Handler()
+    typed = TypedTelemetryBinding(
+        TelemetrySubscriptionSpec(
+            TelemetryIdentity("mote.test.typed"),
+            4,
+            TelemetryOverflow.DROP_NEWEST,
+        ),
+        _accepts_event,
+        handler,
+    )
+    runtime = TelemetryRuntime(TelemetryManifest((typed.erase(),)))
+    runtime.start()
+
+    await runtime.emit(object())
+    await runtime.emit(_Event(1))
+    runtime.emit_sync(_Event(2))
     await runtime.drain()
 
     assert handler.values == [1]

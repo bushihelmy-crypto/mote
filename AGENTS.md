@@ -125,11 +125,12 @@ python -m pytest mote/ztest/{roles,flow,executor,think,context,skills,router,tas
 | Think / Parser | `kernel/think/`、`kernel/parser/` |
 | 工具执行 / 内置工具 | `runtime/tools/`、`product/toolsets/builtin/` |
 | 权限与沙箱 | `runtime/tools/permission/`、`runtime/sandbox/` |
-| 后台任务 / DAG | `orchestration/tasks/` |
+| 后台任务 | `orchestration/background_tasks/` |
+| Workflow / DAG | `orchestration/workflows/` |
 | 模型路由与客户端 | `runtime/models/`、`product/integrations/models/` |
 | 上下文 / Skills | `runtime/context/` |
 | 会话持久化 | `runtime/session/` |
-| 多 Agent | `orchestration/environment/` |
+| 多 Agent | `orchestration/agents/` |
 | 事件契约 / 总线 | `contracts/events/`、`runtime/events/` |
 | 跨层 Protocol | `contracts/ports/` |
 | 配置 | `contracts/config/`、`runtime/config/` |

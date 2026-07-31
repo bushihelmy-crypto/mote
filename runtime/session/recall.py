@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.constants.messages import TOOL_CALL_ID
-from mote.contracts.schema import Message
+from mote.contracts.conversation import Message
+from mote.contracts.conversation.fields import TOOL_CALL_ID
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MessageEvent
 from mote.runtime.session.log import SessionLog
@@ -36,9 +36,8 @@ def body_for_tool_call(log: SessionLog, tool_call_id: str) -> Optional[Message]:
     tool-result answering ``tool_call_id`` (its ``metadata[TOOL_CALL_ID]``), and
     returns that reconstructed :class:`Message` — the full body as first
     appended, before any in-place fold or pair-delete touched the live history.
-    Returns ``None`` when no such record exists (unknown id, or the row was
-    unloadable). The last match wins, so a re-added id resolves to its most
-    recent recording.
+    Returns ``None`` when no such record exists. The last match wins, so a
+    re-added id resolves to its most recent recording.
     """
     if not tool_call_id:
         return None
@@ -49,8 +48,6 @@ def body_for_tool_call(log: SessionLog, tool_call_id: str) -> Optional[Message]:
         if not isinstance(event, MessageEvent):
             continue
         message = event.message
-        if message is None:
-            continue
         if message.metadata.get(TOOL_CALL_ID) == tool_call_id:
             found = message
     return found

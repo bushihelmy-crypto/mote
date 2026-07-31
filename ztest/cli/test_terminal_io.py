@@ -17,10 +17,10 @@ import io
 
 import pytest
 
-from mote.product.cli.io.terminal_io import TerminalPort
-from mote.product.cli.io.terminal_menu import _menu_lines, _option_lines
-from mote.product.cli.view.approval import approval_options
 from mote.product.i18n import use_locale
+from mote.product.interfaces.terminal.menu import _menu_lines, _option_lines
+from mote.product.interfaces.terminal.port import TerminalPort
+from mote.product.presentation.projection.approval import approval_options
 
 
 @pytest.fixture(autouse=True)

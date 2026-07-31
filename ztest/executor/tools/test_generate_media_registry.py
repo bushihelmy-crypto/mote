@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.product.toolsets.builtin.generate_media.bootstrap import builtin_media_provider_registry
-from mote.product.toolsets.builtin.generate_media.registry import MediaProvider, MediaProviderRegistry, media_provider
+from mote.product.media_generation.catalog import builtin_media_provider_registry
+from mote.product.media_generation.registry import MediaProvider, MediaProviderRegistry, media_provider
 from mote.runtime.errors import ToolNotConfiguredError
 
 pytestmark = pytest.mark.asyncio

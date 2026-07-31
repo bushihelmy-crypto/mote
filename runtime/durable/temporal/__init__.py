@@ -15,7 +15,7 @@ never loses durability just because no worker is attached.
 
 from __future__ import annotations
 
-from mote.contracts.schema import TemporalConfig
+from mote.contracts.config.tool import TemporalConfig
 from mote.runtime.durable.backend import DurableBackend
 from mote.runtime.durable.temporal._activities import RUN_STEP_ACTIVITY, StepActivities, StepHandlerRegistry, StepInput
 from mote.runtime.durable.temporal._backend import TemporalBackend

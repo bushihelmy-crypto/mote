@@ -1,0 +1,75 @@
+openapi: 3.1.0
+info: {title: Mote Inference Compatibility API, version: 1.0.0}
+servers: [{url: /}]
+security: [{BearerAuth: []}]
+paths:
+  /v1/models:
+    get: {operationId: listModels, responses: {'200': {description: Model catalog snapshot}}}
+  /v1/chat/completions:
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/responses:
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/responses/{response_id}:
+    parameters: [{$ref: '#/components/parameters/ResponseId'}]
+    get: {operationId: retrieveResponse, responses: {'200': {description: Stored response}}}
+    delete: {operationId: deleteResponse, responses: {'200': {description: Deletion receipt}}}
+  /v1/responses/{response_id}/cancel:
+    parameters: [{$ref: '#/components/parameters/ResponseId'}]
+    post: {operationId: cancelResponse, responses: {'200': {description: Cancellation receipt}}}
+  /v1/embeddings:
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/images/generations:
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/audio/speech:
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/audio/transcriptions:
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/files:
+    get: {operationId: listFiles, responses: {'200': {description: Provider files}}}
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/batches:
+    get: {operationId: listBatches, responses: {'200': {description: Provider batches}}}
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/videos:
+    get: {operationId: listVideos, responses: {'200': {description: Provider videos}}}
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/videos/{resource_id}:
+    parameters: [{$ref: '#/components/parameters/ResourceId'}]
+    get: {operationId: retrieveVideo, responses: {'200': {description: Provider video}}}
+    delete: {operationId: deleteVideo, responses: {'200': {description: Video deletion receipt}}}
+  /v1/videos/{resource_id}/remix:
+    parameters: [{$ref: '#/components/parameters/ResourceId'}]
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/containers:
+    get: {operationId: listContainers, responses: {'200': {description: Provider containers}}}
+    post: {$ref: '#/components/pathItems/InferencePost'}
+  /v1/containers/{resource_id}:
+    parameters: [{$ref: '#/components/parameters/ResourceId'}]
+    get: {operationId: retrieveContainer, responses: {'200': {description: Provider container}}}
+    delete: {operationId: deleteContainer, responses: {'200': {description: Container deletion receipt}}}
+components:
+  securitySchemes:
+    BearerAuth: {type: http, scheme: bearer}
+  parameters:
+    ResponseId: {name: response_id, in: path, required: true, schema: {type: string, minLength: 1}}
+    ResourceId: {name: resource_id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 256}}
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties: {type: {type: string}, code: {type: [string, 'null']}, message: {type: string}}
+  pathItems:
+    InferencePost:
+      operationId: canonicalInferencePost
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object}}}
+      responses:
+        '200': {description: Unary JSON or committed SSE stream}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Admission or quota rejection, headers: {Retry-After: {schema: {type: integer}}}}

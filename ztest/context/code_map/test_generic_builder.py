@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("tree_sitter_language_pack")
 
-from mote.runtime.context.code_map.languages import provider_for  # noqa: E402
+from mote.runtime.code_map.languages import provider_for  # noqa: E402
 
 
 def _extract(source: str, abspath: str = "/repo/src/main.js"):
@@ -211,9 +211,19 @@ _RET_SIG = [
         "(a: number, b = 3) -> Promise<number>",
     ),
     ("/r/v.ts", "function noret(x: number) { }\n", "noret", "(x: number)"),
-    ("/r/X.java", "class C { public int foo(int a, String b) { return 0; } }\n", "C.foo", "(int a, String b) -> int"),
+    (
+        "/r/X.java",
+        "class C { public int foo(int a, String b) { return 0; } }\n",
+        "C.foo",
+        "(int a, String b) -> int",
+    ),
     ("/r/V.java", "class C { void bar(int a) {} }\n", "C.bar", "(int a) -> void"),
-    ("/r/X.cs", "class C { public int Foo(int a, string b) { return 0; } }\n", "C.Foo", "(int a, string b) -> int"),
+    (
+        "/r/X.cs",
+        "class C { public int Foo(int a, string b) { return 0; } }\n",
+        "C.Foo",
+        "(int a, string b) -> int",
+    ),
     ("/r/x.js", "function foo(a, b = 3) { return 1; }\n", "foo", "(a, b = 3)"),
 ]
 

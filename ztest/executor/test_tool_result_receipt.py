@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mote.contracts.artifacts import ArtifactRetention, ArtifactSensitivity
+from mote.contracts.artifact import ArtifactRetention, ArtifactSensitivity
 from mote.runtime.errors import ErrorReport, ToolError
 from mote.runtime.tools.tool_result import FileChange, ToolResult
 from mote.runtime.tools.tool_result_receipt import decode_tool_result_receipt, encode_tool_result_receipt

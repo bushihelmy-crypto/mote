@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.kernel.parser.xml_recovery import loads_xml, parse_commands
+from mote.kernel.commands.xml.recovery import loads_xml, parse_commands
 
 parse_commands2 = parse_commands
 

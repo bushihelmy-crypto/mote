@@ -7,19 +7,22 @@ import os
 from typing import ClassVar, Literal
 from uuid import uuid4
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactPublishRequest,
     ArtifactRepresentationInput,
     ArtifactRetention,
     ArtifactSensitivity,
 )
-from mote.contracts.canvas import CanvasDocument, CanvasOperation
-from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
-from mote.contracts.fileops import TransactionStatus
-from mote.contracts.permissions import PermissionDecision
-from mote.contracts.runtimes import RuntimeAccessMode, RuntimeProjectionIntent
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.authorization import PermissionDecision
+from mote.contracts.file import TransactionStatus
+from mote.contracts.runtime import RuntimeAccessMode, RuntimeProjectionIntent
+from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
+from mote.contracts.surface import CanvasDocument, CanvasOperation
+from mote.contracts.tool.effects import ToolEffect
+from mote.product.toolsets.builtin._paths import resolve_path
 from mote.product.toolsets.builtin.runtime_action import is_handoff_action, run_handoff_action
+from mote.runtime.errors import ToolError
+from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 from mote.runtime.projections import artifact_representation_set_digest
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import (
@@ -29,11 +32,9 @@ from mote.runtime.tools.capability_types import (
     GetRuntimeHost,
     HandoffRuntime,
 )
-from mote.runtime.tools.dependency._canvas import CanvasRuntimeDriver
-from mote.runtime.tools.dependency._paths import resolve_path
 from mote.runtime.tools.execution_context import current_tool_call_id
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError, ToolMedia, ToolResult
+from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 
 _RUNTIME = "canvas:default"
 _MSG_INVALID_OPERATIONS = "Error: invalid canvas operations — {error}"

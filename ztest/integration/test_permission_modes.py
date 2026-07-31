@@ -20,8 +20,9 @@ import os
 
 import pytest
 
-from mote.contracts.settings.permissions import PermissionConfig
-from mote.orchestration.environment.mote.mote_env import MoteEnv
+from mote.product.interaction.approvals import parse_approval_response, render_approval_prompt
+from mote.product.interaction.mote_env import MoteEnv
+from mote.runtime.tools.permission.config import PermissionConfig
 
 pytestmark = pytest.mark.asyncio
 
@@ -123,18 +124,17 @@ async def test_allow_rule_overrides_plan(make_role, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _patch_human_input(monkeypatch, reply: str) -> None:
+def _human_input(reply: str):
     """Make ``MoteEnv.ask_user`` resolve to a fixed human reply."""
-    import mote.orchestration.environment.mote.mote_env as mote_env
 
     async def _fake(question):  # signature matches get_human_input(question)
         return reply
 
-    monkeypatch.setattr(mote_env, "get_human_input", _fake)
+    return _fake
 
 
 async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
-    _patch_human_input(monkeypatch, "yes")
+    human_input = _human_input("yes")
     target = os.path.join(str(tmp_path), "ask.txt")
     role = make_role(
         working_dir=str(tmp_path),
@@ -143,7 +143,13 @@ async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "approved"})], "done"],
     )
     # request_approval needs an env channel.
-    env = MoteEnv()
+    env = MoteEnv(
+        residency_dir=tmp_path / "residency",
+        sessions_dir=tmp_path / "sessions",
+        human_input=human_input,
+        approval_prompt=render_approval_prompt,
+        approval_parser=parse_approval_response,
+    )
     env.add_role(role)
 
     await role.run(with_message="write with approval")
@@ -154,7 +160,7 @@ async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
 
 
 async def test_ask_rule_denied_blocks_tool(make_role, tmp_path, monkeypatch):
-    _patch_human_input(monkeypatch, "no")
+    human_input = _human_input("no")
     target = os.path.join(str(tmp_path), "ask.txt")
     role = make_role(
         working_dir=str(tmp_path),
@@ -162,7 +168,13 @@ async def test_ask_rule_denied_blocks_tool(make_role, tmp_path, monkeypatch):
         permissions=PermissionConfig(mode="default", ask=["Edit"]),
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "rejected"})], "done"],
     )
-    env = MoteEnv()
+    env = MoteEnv(
+        residency_dir=tmp_path / "residency",
+        sessions_dir=tmp_path / "sessions",
+        human_input=human_input,
+        approval_prompt=render_approval_prompt,
+        approval_parser=parse_approval_response,
+    )
     env.add_role(role)
 
     await role.run(with_message="write but get denied")

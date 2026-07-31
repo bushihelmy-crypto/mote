@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from mote.contracts.policy.run_completion import RunCompletionPolicyContribution
-from mote.contracts.ports.run_completion_policy import RunCompletionPolicyExtensionSpec
+from mote.contracts.output.policy import RunCompletionPolicyContribution
+from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
 from mote.kernel.output import text_output_contract
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.models.clients.context import Context

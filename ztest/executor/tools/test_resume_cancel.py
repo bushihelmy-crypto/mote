@@ -1,6 +1,6 @@
 """Unit tests for resume_tasks and cancel_tasks tools.
 
-Uses real BackgroundTaskPool + BgGraph to verify the tools interact correctly
+Uses real BackgroundTaskPool + WorkflowBuilder to verify the tools interact correctly
 with the pool's resubmit/cancel/get_task_info and graph's resume methods.
 """
 from __future__ import annotations
@@ -9,12 +9,14 @@ import asyncio
 
 import pytest
 
-from mote.contracts.schema import MessageQueue
-from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphState, Stage
-from mote.orchestration.tasks.pool import BackgroundTaskPool
-from mote.orchestration.tasks.types import BgStatus, BgTaskResult, GraphMeta
+from mote.contracts.conversation import MessageQueue
+from mote.orchestration.background_tasks.model import BgStatus, BgTaskResult
+from mote.orchestration.background_tasks.pool import BackgroundTaskPool
+from mote.orchestration.workflows import END, START, GraphState, Stage, WorkflowBuilder
+from mote.orchestration.workflows.deferred import GraphMeta
+from mote.product.agents.background_tasks import AgentBackgroundTasks
 from mote.product.toolsets.builtin.cancel_tasks import CancelTasks
-from mote.product.toolsets.builtin.resume_tasks import ResumeTasks
+from mote.product.workflows.run_graph.resume_tasks import ResumeTasks
 from mote.runtime.tools.tool_result import ToolError
 
 pytestmark = pytest.mark.asyncio
@@ -53,12 +55,12 @@ def boom_node():
 @pytest.fixture
 def pool():
     buf = MessageQueue()
-    return BackgroundTaskPool(buf, max_concurrency=10)
+    return AgentBackgroundTasks(BackgroundTaskPool(buf, max_concurrency=10), "test-resume")
 
 
 def _build_linear_graph():
     """a → b → END. a doubles x, b adds 10."""
-    g = BgGraph("linear", state_schema=SimpleState, recursion_limit=10)
+    g = WorkflowBuilder("linear", state_schema=SimpleState, recursion_limit=10)
     g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node("b", sync_node(lambda s: s.a + 10, field="b"))
     g.add_edge(START, "a")
@@ -69,7 +71,7 @@ def _build_linear_graph():
 
 def _build_failing_graph():
     """a succeeds, b always fails."""
-    g = BgGraph("failing", state_schema=SimpleState, recursion_limit=10)
+    g = WorkflowBuilder("failing", state_schema=SimpleState, recursion_limit=10)
     g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node("b", boom_node())
     g.add_edge(START, "a")
@@ -238,7 +240,7 @@ class TestResumeTasks:
         b, so b never completes. Resuming from c alone (without re-running or
         skipping b) would run c with a missing input, so the tool rejects it.
         """
-        g = BgGraph("chain", state_schema=SimpleState, recursion_limit=10)
+        g = WorkflowBuilder("chain", state_schema=SimpleState, recursion_limit=10)
         g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
         g.add_node("b", boom_node())
         g.add_node("c", sync_node(lambda s: 1, field="c"), params={"in": {"from": "b"}})

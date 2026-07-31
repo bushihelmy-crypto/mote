@@ -241,7 +241,7 @@ class TestReadVideo:
     """
 
     def _fake_result(self, **kw):
-        from mote.runtime.tools.dependency._video import VideoFrame, VideoResult
+        from mote.runtime.media.video import VideoFrame, VideoResult
 
         frames = kw.pop(
             "frames",
@@ -256,8 +256,8 @@ class TestReadVideo:
         )
 
     def test_frames_become_image_media(self, workspace, monkeypatch):
-        import mote.product.toolsets.builtin.read as rd
-        from mote.runtime.tools.dependency._video import VideoFrame
+        import mote.product.toolsets.builtin.read_adapters.video as video_adapter
+        from mote.runtime.media.video import VideoFrame
 
         frames = [
             VideoFrame(timestamp=0.0, jpeg=b"\xff\xd8a", reason="first-frame"),
@@ -267,7 +267,7 @@ class TestReadVideo:
         async def fake(*a, **k):
             return self._fake_result(frames=frames)
 
-        monkeypatch.setattr(rd, "decompose_video", fake)
+        monkeypatch.setattr(video_adapter, "decompose_video", fake)
         p = write_file(workspace / "clip.mp4", "not really a video")
         r = _read_result(Read(), file_path=p)
         assert r.success is True
@@ -280,7 +280,7 @@ class TestReadVideo:
         assert r.resource_path == p
 
     def test_summary_carries_metadata_and_transcript(self, workspace, monkeypatch):
-        import mote.product.toolsets.builtin.read as rd
+        import mote.product.toolsets.builtin.read_adapters.video as video_adapter
 
         async def fake(*a, **k):
             return self._fake_result(
@@ -293,7 +293,7 @@ class TestReadVideo:
                 },
             )
 
-        monkeypatch.setattr(rd, "decompose_video", fake)
+        monkeypatch.setattr(video_adapter, "decompose_video", fake)
         p = write_file(workspace / "clip.mp4", "not really a video")
         r = _read_result(Read(), file_path=p)
         assert "My Clip" in r.output
@@ -301,25 +301,25 @@ class TestReadVideo:
         assert r.data["has_transcript"] is True
 
     def test_no_frames_fails(self, workspace, monkeypatch):
-        import mote.product.toolsets.builtin.read as rd
+        import mote.product.toolsets.builtin.read_adapters.video as video_adapter
 
         async def fake(*a, **k):
             return self._fake_result(frames=[])
 
-        monkeypatch.setattr(rd, "decompose_video", fake)
+        monkeypatch.setattr(video_adapter, "decompose_video", fake)
         p = write_file(workspace / "clip.mp4", "not really a video")
         with pytest.raises(ToolError, match="[Nn]o frames"):
             _read_result(Read(), file_path=p)
 
     def test_unavailable_raises_not_configured(self, workspace, monkeypatch):
-        import mote.product.toolsets.builtin.read as rd
+        import mote.product.toolsets.builtin.read_adapters.video as video_adapter
         from mote.runtime.errors import ToolNotConfiguredError
-        from mote.runtime.tools.dependency._video import VideoUnavailable
+        from mote.runtime.media.video import VideoUnavailable
 
         async def fake(*a, **k):
             raise VideoUnavailable("ffmpeg is not installed. install it")
 
-        monkeypatch.setattr(rd, "decompose_video", fake)
+        monkeypatch.setattr(video_adapter, "decompose_video", fake)
         p = write_file(workspace / "clip.mp4", "not really a video")
         # A missing decode kernel is a configuration gap → ToolNotConfiguredError,
         # not a plain-text notice that the model would mistake for content.
@@ -327,13 +327,13 @@ class TestReadVideo:
             _read_result(Read(), file_path=p)
 
     def test_decode_error_fails(self, workspace, monkeypatch):
-        import mote.product.toolsets.builtin.read as rd
-        from mote.runtime.tools.dependency._video import VideoError
+        import mote.product.toolsets.builtin.read_adapters.video as video_adapter
+        from mote.runtime.media.video import VideoError
 
         async def fake(*a, **k):
             raise VideoError("corrupt file")
 
-        monkeypatch.setattr(rd, "decompose_video", fake)
+        monkeypatch.setattr(video_adapter, "decompose_video", fake)
         p = write_file(workspace / "broken.mp4", "not really a video")
         with pytest.raises(ToolError, match="broken.mp4"):
             _read_result(Read(), file_path=p)
@@ -454,6 +454,12 @@ class TestReadNotebook:
         p = write_file(workspace / "bad.ipynb", "{not json")
         with pytest.raises(ToolError, match="not a valid notebook"):
             _read(Read(), file_path=p)
+
+    def test_non_utf8_notebook_raises_read_error(self, workspace):
+        path = workspace / "encoded.ipynb"
+        path.write_bytes(b"\xff\xfe")
+        with pytest.raises(ToolError, match="cannot read"):
+            _read(Read(), file_path=str(path))
 
 
 class TestReadImage:

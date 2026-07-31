@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from mote.contracts.permissions import PermissionFacts
-from mote.contracts.policy.tool import ToolCallInspection, ToolCallIntent
+from mote.contracts.authorization import PermissionFacts
+from mote.contracts.tool.policy import ToolCallInspection, ToolCallIntent
 
 
 class ToolCallInspector(ABC):

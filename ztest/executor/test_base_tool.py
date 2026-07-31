@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.schema import DEFAULT_MAX_RESULT_SIZE_CHARS
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.config.tool import DEFAULT_MAX_RESULT_SIZE_CHARS
+from mote.contracts.tool.effects import ToolEffect
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition, xml_definition
 
@@ -59,8 +59,10 @@ class TestSchema:
         assert schema["name"] == "Echo"
         # description falls back to the call() docstring (not the class docstring).
         assert "Return" in schema["description"]
-        # parameters is the full docstring-derived sub-schema (type/signature/parameters).
-        assert schema["parameters"]["type"] == "async_function"
+        # The call contract does not duplicate the top-level description or
+        # expose Python's sync/async implementation detail.
+        assert "description" not in schema["parameters"]
+        assert "type" not in schema["parameters"]
         assert "text" in schema["parameters"]["parameters"]
         assert "text" in schema["parameters"]["signature"]
 

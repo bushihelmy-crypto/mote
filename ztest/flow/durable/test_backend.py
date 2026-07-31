@@ -14,11 +14,11 @@ import pytest
 
 from mote.runtime.durable import DurableBackend, JsonlBackend
 from mote.runtime.ledger import COMPLETED, FAILED, KIND_THINK, STARTED, RunJournal
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.session.workspace import SessionWorkspace
 
 
 def _journal(tmp_path, session_id="sess") -> RunJournal:
-    return RunJournal(session_id, store=WorkspaceStore(root=str(tmp_path)))
+    return RunJournal(session_id, store=SessionWorkspace(root=str(tmp_path)))
 
 
 def test_backend_satisfies_protocol(tmp_path):

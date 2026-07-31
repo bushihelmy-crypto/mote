@@ -108,7 +108,7 @@ async def test_invoke_binds_and_restores_ambient_tool_call_id():
 def test_started_external_call_reenters_only_for_explicit_reconciliation():
     from types import SimpleNamespace
 
-    from mote.contracts.tools.effects import ToolEffect
+    from mote.contracts.tool.effects import ToolEffect
 
     class Ledger:
         def __init__(self):

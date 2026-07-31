@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 class AuthMode(str, Enum):
     """How the LLM client is authenticating."""
 
-    STATIC_KEY = "static_key"  # legacy: LLMConfig.api_key bearer
+    STATIC_KEY = "static_key"
     OAUTH = "oauth"  # token obtained/refreshed via OAuth runtime
 
 

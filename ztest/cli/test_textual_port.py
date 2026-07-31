@@ -16,13 +16,13 @@ import pytest
 
 pytest.importorskip("textual")
 
-from mote.contracts.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
 from mote.contracts.interaction import AskUserQuestionInput
-from mote.contracts.runtimes import RuntimeRef
-from mote.contracts.surfaces import SurfaceDescriptor, SurfacePresentationMode
-from mote.product.cli.consumers.textual.screens import HandoffScreen
-from mote.product.cli.contracts.view.events import ApprovalDecision
-from mote.product.cli.io.textual_io import TextualPort
+from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import RuntimeRef
+from mote.contracts.surface import SurfaceDescriptor, SurfacePresentationMode
+from mote.product.interfaces.textual.port import TextualPort
+from mote.product.interfaces.textual.screens import HandoffScreen
+from mote.product.presentation.events.events import ApprovalDecision
 from mote.runtime.interactive.presentation import SurfacePresenterRegistry
 
 

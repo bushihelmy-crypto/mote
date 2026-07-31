@@ -14,8 +14,8 @@ import asyncio
 
 import pytest
 
+from mote.product.skills.skill_pool import SkillPool
 from mote.product.toolsets.builtin.skill_tool import Skill
-from mote.runtime.context.skills.skill_pool import SkillPool
 from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import write_skill

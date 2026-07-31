@@ -12,11 +12,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from mote.contracts.permissions import PermissionFacts
-from mote.contracts.policy.tool import ToolCallIntent
-from mote.contracts.ports.tool_policy import ToolCallPolicy
-from mote.contracts.text import plural
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.authorization import PermissionFacts
+from mote.contracts.ports.tool.policy import ToolCallPolicy
+from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.execution import ToolExecutionKind
+from mote.contracts.tool.policy import ToolCallIntent
 from mote.runtime.errors import (
     ErrorReport,
     RecoveryRunner,
@@ -27,7 +27,8 @@ from mote.runtime.errors import (
 )
 from mote.runtime.events import span
 from mote.runtime.events.scope import current_scope
-from mote.runtime.tools.effect_ledger import COMPLETED, FAILED, EffectLedger
+from mote.runtime.ledger import COMPLETED, FAILED, KIND_TOOL, RunJournal
+from mote.runtime.presentation import plural
 from mote.runtime.tools.execution_context import bind_tool_call_id
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_result_receipt import decode_tool_result_receipt
@@ -144,24 +145,24 @@ class AuthorizeStage:
 
 
 class LedgerStage:
-    def __init__(self, ledger: EffectLedger | None) -> None:
-        self._ledger = ledger
+    def __init__(self, journal: RunJournal | None) -> None:
+        self._journal = journal
 
     def run(self, execution: ToolExecution) -> LedgerReplay | ToolResult | None:
         effect = execution.tool.resolve_effect_for(execution.args)
         execution.ledgered = (
-            self._ledger is not None and execution.result_id is not None and effect is not ToolEffect.PURE
+            self._journal is not None and execution.result_id is not None and effect is not ToolEffect.PURE
         )
         if not execution.ledgered:
             return None
-        ledger = cast(EffectLedger, self._ledger)
+        journal = cast(RunJournal, self._journal)
         call_id = cast(str, execution.result_id)
-        prior = ledger.status(call_id)
+        prior = journal.replay(call_id)
         if prior is not None:
             if prior.status in {COMPLETED, FAILED}:
                 return LedgerReplay(
                     decode_tool_result_receipt(
-                        prior.result,
+                        prior.payload,
                         success=prior.success,
                     )
                 )
@@ -170,10 +171,12 @@ class LedgerStage:
                     ToolPermissionDeniedError(_UNKNOWN_AFTER_CRASH.format(name=execution.name, call_id=call_id))
                 )
         if prior is None:
-            ledger.mark_started(
+            journal.record_started(
                 call_id,
-                execution.name,
-                effect=effect.value,
+                KIND_TOOL,
+                effect.value,
+                name=execution.name,
+                tool_call_id=call_id,
             )
         return None
 
@@ -195,6 +198,14 @@ class InvokeStage:
         except Exception as exc:  # normalized at the executor boundary
             return failed_result(exc)
         if bool(getattr(raw, "is_background_result", False)):
+            definition = getattr(execution.tool, "definition", None)
+            kind = getattr(
+                definition,
+                "execution_kind",
+                ToolExecutionKind.ATOMIC,
+            )
+            if kind is ToolExecutionKind.ATOMIC:
+                return failed_result(TypeError(f"atomic tool '{execution.name}' returned deferred work"))
             pool = self._get_bg_pool() if self._get_bg_pool is not None else None
             return raw.to_tool_result(pool, execution.name)
         return ToolResult.from_tool_return(raw)
@@ -209,14 +220,14 @@ class ToolExecutionPipeline:
         get_tool: Callable[[str], Any],
         available_names: Callable[[], list[str]],
         policy: ToolCallPolicy,
-        ledger: EffectLedger | None,
+        journal: RunJournal | None,
         recovery_runner: RecoveryRunner,
         get_bg_pool: Callable[[], Any] | None,
         settlement: ToolSettlement,
     ) -> None:
         self._resolve = ResolveStage(get_tool, available_names)
         self._authorize = AuthorizeStage(policy)
-        self._ledger = LedgerStage(ledger)
+        self._ledger = LedgerStage(journal)
         self._invoke = InvokeStage(recovery_runner, get_bg_pool)
         self._settlement = settlement
 

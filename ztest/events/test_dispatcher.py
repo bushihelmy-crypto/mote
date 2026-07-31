@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mote.contracts.events import EventId, EventType, StreamId
-from mote.contracts.ports.event_journal import AppendResult, UncommittedFact
-from mote.contracts.ports.event_subscription import (
+from mote.contracts.events.envelope import EventId, EventType, StreamId
+from mote.contracts.ports.events.journal import AppendResult, UncommittedFact
+from mote.contracts.ports.events.subscription import (
     CheckpointPolicy,
     DeadLetterEntry,
     EventFilter,

@@ -18,21 +18,39 @@ servers. The building blocks are:
 """
 from __future__ import annotations
 
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from mote.contracts.schema import DurableConfig, EffectLedgerConfig, ToolResultLimitConfig
-from mote.kernel.tools.toolset import NativeToolset
-from mote.orchestration.tasks.types import BgTaskResult
+from mote.contracts.config.tool import DurableConfig, RunJournalConfig, ToolResultLimitConfig
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.execution import ToolExecutionKind
+from mote.orchestration.background_tasks.model import BgTaskResult
+from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition
+from mote.runtime.tools.provider import NativeToolset
 from mote.runtime.tools.tool_executor import ToolExecutor
 from mote.runtime.tools.tool_registry import ToolRegistry
 from mote.runtime.tools.tool_registry import registry as global_registry
-from mote.runtime.tools.tool_result import ToolError, ToolMedia, ToolResult
+from mote.runtime.tools.tool_result import ToolMedia, ToolResult
 from mote.ztest.artifact_fakes import artifact_media
+
+
+@pytest.fixture(autouse=True)
+def _inject_executor_workspace(tmp_path, monkeypatch):
+    original_init = ToolExecutor.__init__
+    workspace = SessionWorkspace(tmp_path / "workspace")
+
+    def init_with_workspace(self, *args, **kwargs):
+        kwargs.setdefault("workspace_store", workspace)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(ToolExecutor, "__init__", init_with_workspace)
+
 
 # ---------------------------------------------------------------------------
 # Plain (unregistered) tools
@@ -91,6 +109,7 @@ class BgTool(BaseTool):
     """Returns a BgTaskResult (background-capable tool)."""
 
     name = "Bg"
+    execution_kind = ToolExecutionKind.WORKFLOW_DEFERRED
 
     async def call(self, *, label: str = "task") -> BgTaskResult:
         return BgTaskResult.foreground("started", command_name=label)
@@ -174,7 +193,7 @@ def make_executor(
     session_id: str = "sess",
     role: FakeRole | None = None,
     limit_config: ToolResultLimitConfig | None = None,
-    ledger_config: EffectLedgerConfig | None = None,
+    journal_config: RunJournalConfig | None = None,
     durable_config: DurableConfig | None = None,
     recovery_strategies: dict | None = None,
     workspace_store=None,
@@ -196,10 +215,10 @@ def make_executor(
         tools=declared,
         role=role,
         limit_config=limit_config,
-        ledger_config=ledger_config,
+        journal_config=journal_config,
         durable_config=durable_config,
         recovery_strategies=recovery_strategies,
-        workspace_store=workspace_store,
+        workspace_store=workspace_store or SessionWorkspace(Path(tempfile.mkdtemp(prefix="mote-tool-test-"))),
         toolsets=(NativeToolset("test.native", definitions),),
         command_protocol="native",
     )

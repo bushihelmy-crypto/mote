@@ -6,13 +6,14 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_HARD_LIMIT_BYTES
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.runtime.artifacts.budgets import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_MINIMUM_GC_AGE_NS
+from mote.runtime.artifacts.repository import ArtifactRepository
 
+from .gc import ArtifactGarbageCollector
 from .ownership import ArtifactOwnership
+from .ports import ArtifactMetadataSource, ArtifactPinSource, ArtifactRootSource
 from .repository_blobs import ArtifactRepositoryBlobStore
 from .store import ARTIFACT_INDEX_FILENAME, DurableArtifactStore
-from .store_gc import ArtifactStoreGarbageCollector
 
 ARTIFACT_REPOSITORY_DIRNAME = ".artifacts"
 
@@ -26,7 +27,7 @@ def project_artifact_identity(project_root: str | Path) -> str:
 class ArtifactRepositoryBundle:
     store: DurableArtifactStore
     repository: ArtifactRepository
-    collector: ArtifactStoreGarbageCollector
+    collector: ArtifactGarbageCollector
 
 
 class ArtifactRepositoryLayout:
@@ -44,10 +45,6 @@ class ArtifactRepositoryLayout:
     def blobs_path(self) -> Path:
         return self.root / "blobs"
 
-    @property
-    def migration_index_path(self) -> Path:
-        return self.root / "migrations.sqlite3"
-
     def ownership(
         self,
         *,
@@ -59,7 +56,15 @@ class ArtifactRepositoryLayout:
             project_id=project_artifact_identity(project_root),
         )
 
-    def open(self, ownership: ArtifactOwnership) -> ArtifactRepositoryBundle:
+    def open(
+        self,
+        ownership: ArtifactOwnership,
+        *,
+        root_sources: tuple[ArtifactRootSource, ...] = (),
+        pin_sources: tuple[ArtifactPinSource, ...] = (),
+        metadata_sources: tuple[ArtifactMetadataSource, ...] = (),
+        minimum_gc_age_ns: int = ARTIFACT_MINIMUM_GC_AGE_NS,
+    ) -> ArtifactRepositoryBundle:
         repository = ArtifactRepository(
             self.blobs_path,
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
@@ -72,7 +77,14 @@ class ArtifactRepositoryLayout:
         return ArtifactRepositoryBundle(
             store=store,
             repository=repository,
-            collector=ArtifactStoreGarbageCollector(store, repository),
+            collector=ArtifactGarbageCollector(
+                store,
+                repository,
+                root_sources=root_sources,
+                pin_sources=pin_sources,
+                metadata_sources=metadata_sources,
+                minimum_age_ns=minimum_gc_age_ns,
+            ),
         )
 
 

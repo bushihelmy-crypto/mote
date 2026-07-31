@@ -1,0 +1,153 @@
+"""Render the Product-owned Skills index for model context.
+
+The steady index lists *model-invocable, non-conditional* skills only (so the
+cacheable system-prompt prefix stays stable): ``disable_model_invocation``
+skills are hidden, and skills gated behind ``paths``/``globs`` are surfaced
+per-turn by the conditional-activation source (see ``turn_context``) instead of
+here. Skill bodies are never inlined into the prompt — they load on demand via
+the ``Skill`` tool.
+
+When the index would blow the token budget it degrades in three tiers
+(full description → half description → name only).
+"""
+
+from typing import Optional
+
+from mote.product.skills.reserved_tokens import escape_reserved_model_tokens
+from mote.product.skills.skill_pool import SkillPool
+from mote.runtime.context.token_budget import count_tokens
+from mote.runtime.context.tokenizer import DEFAULT_TEXT_TOKENIZER
+
+
+class SkillInjector:
+    """Inject the Skills index into system prompts."""
+
+    def __init__(self, pool: SkillPool):
+        self._pool = pool
+
+    def _index_skills(self, only_names: Optional[set] = None) -> list:
+        """Skills eligible for the steady, model-facing index.
+
+        Excludes conditional (path/glob-gated, surfaced per-turn) and
+        human-only skills. When ``only_names`` is given, the result is further
+        restricted to skills whose name is in that set (order preserved) — used
+        by the per-turn listing source to render only the newly-added skills.
+        """
+        skills = [s for s in self._pool.get_all() if not s.is_conditional and not s.disable_model_invocation]
+        if only_names is not None:
+            skills = [s for s in skills if s.name in only_names]
+        return skills
+
+    def build_index(self, max_tokens: int = 2000, only_names: Optional[set] = None) -> str:
+        """The volatile ``## Available Skills`` index block (no loading guide).
+
+        Delivered per-turn by :class:`SkillListingContextSource` (never the
+        cacheable prompt) because skills hot-reload. Degrades across three tiers
+        to fit ``max_tokens``.
+
+        Args:
+            max_tokens: Max tokens for the index (degrades to fit).
+            only_names: When given, render only skills whose name is in this set
+                (incremental delta rendering for the listing source).
+
+        Returns:
+            The index block, or empty string when there is nothing to show.
+        """
+        if self._pool.get_skill_count() == 0:
+            return ""
+
+        index_skills = self._index_skills(only_names)
+        if not index_skills:
+            return ""
+        index_block = self._build_index_within_budget(index_skills, max_tokens)
+        if not index_block:
+            return ""
+        return f"## Available Skills\n{escape_reserved_model_tokens(index_block)}"
+
+    def build_content(self, max_tokens: int = 2000) -> str:
+        """The full injectable block — the ``## Available Skills`` index.
+
+        Kept for :meth:`inject` and standalone rendering. The steady runtime
+        delivers this index per-turn via the reminder source; the ``Skill`` tool
+        schema itself teaches invocation, so no separate loading guide is added.
+        """
+        return self.build_index(max_tokens)
+
+    def inject(self, system_prompt: str, max_tokens: int = 2000) -> str:
+        """Append Skills information to the system prompt.
+
+        Args:
+            system_prompt: The base system prompt.
+            max_tokens: Max tokens for injected content.
+
+        Returns:
+            Enhanced system prompt with Skills content appended.
+        """
+        injection = self.build_content(max_tokens)
+        if not injection:
+            return system_prompt
+        return f"{system_prompt}\n\n{injection}"
+
+    def _build_index_within_budget(self, skills: list, budget: int) -> str:
+        """Build the index, degrading description detail to fit ``budget``.
+
+        Tier 0: full description; Tier 1: half description; Tier 2: name only.
+        The lowest tier is emitted unconditionally even if it overflows (an
+        index of names is always more useful than nothing).
+        """
+        if not skills:
+            return ""
+        # Try richer tiers first; tier 2 (name-only) is the floor and is emitted
+        # unconditionally — an index of names is always more useful than nothing.
+        for tier in (0, 1):
+            block = self._build_index(skills, tier)
+            if count_tokens(block, tokenizer=DEFAULT_TEXT_TOKENIZER) <= budget:
+                return block
+        return self._build_index(skills, 2)
+
+    def _build_index(self, skills: Optional[list] = None, tier: int = 0) -> str:
+        """Build the Skills index in-memory from the pool.
+
+        ``tier`` controls verbosity: 0 = full description (+ argument hint),
+        1 = half description, 2 = name only. Skills are loaded on-demand via the
+        ``Skill`` tool, so no source path is shown.
+        """
+        if skills is None:
+            skills = self._index_skills()
+        if not skills:
+            return ""
+
+        if tier >= 2:
+            lines = [
+                "The following Skills are available (invoke via the `Skill` tool):",
+                "",
+            ]
+            lines.extend(f"- {s.name}" for s in skills)
+            return "\n".join(lines)
+
+        lines = [
+            "The following Skills are available. Invoke one with",
+            '`Skill(name="<skill>", arguments="...")` when relevant.',
+            "",
+            "| Skill | Description | Arguments |",
+            "|-------|-------------|-----------|",
+        ]
+        for s in skills:
+            desc = self._describe(s, tier)
+            safe_desc = desc.replace("\n", " ").replace("|", r"\|")
+            args = (s.argument_hint or "").replace("\n", " ").replace("|", r"\|")
+            lines.append(f"| {s.name} | {safe_desc} | {args} |")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _describe(skill, tier: int) -> str:
+        """Compose a skill's index description (merging when_to_use) per tier."""
+        desc = skill.description or ""
+        if skill.when_to_use:
+            desc = f"{desc} (use when: {skill.when_to_use})" if desc else skill.when_to_use
+        if tier >= 1 and len(desc) > 0:
+            half = max(1, len(desc) // 2)
+            desc = desc[:half].rstrip() + "…"
+        return desc
+
+    # Sanitization and token counting are supplied by their owning runtime domains.

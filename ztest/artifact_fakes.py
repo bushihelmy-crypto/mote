@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 
-from mote.contracts.artifacts import ArtifactRef, ResolvedArtifact
+from mote.contracts.artifact import ArtifactRef, ResolvedArtifact
 from mote.runtime.tools.tool_result import ToolMedia
 
 _CONTENT_BY_DIGEST: dict[str, bytes] = {}

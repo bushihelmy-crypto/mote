@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.settings.sandbox import SandboxRuntimeConfig
+from mote.runtime.sandbox.config import SandboxRuntimeConfig
 from mote.runtime.sandbox.resources import ResourceLimits
 
 

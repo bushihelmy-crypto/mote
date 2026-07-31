@@ -33,8 +33,6 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from mote.runtime.paths import CONFIG_ROOT
-
 #: AES-256 key length in bytes.
 _KEY_BYTES = 32
 #: GCM nonce length in bytes (96 bits — the AES-GCM standard nonce size).
@@ -59,6 +57,11 @@ class VaultCipher(Protocol):
         bricks a turn; it just means fewer known secrets.
         """
         ...
+
+
+class SecretsCipherConfig(Protocol):
+    cipher: str
+    key_path: str | None
 
 
 class AesGcmCipher:
@@ -112,8 +115,8 @@ class DeferredVaultCipher:
 class KeyFileProvider:
     """A 32-byte key persisted at ``~/.mote/vault.key``, auto-generated + 0600."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
-        self._path = Path(path) if path is not None else CONFIG_ROOT / _KEY_FILE
+    def __init__(self, path: Path) -> None:
+        self._path = Path(path)
 
     @property
     def path(self) -> Path:
@@ -148,7 +151,7 @@ class KeyFileProvider:
         return key
 
 
-def build_cipher(config) -> VaultCipher:
+def build_cipher(config: SecretsCipherConfig, *, default_key_path: Path | None = None) -> VaultCipher:
     """Resolve a :class:`VaultCipher` from a ``SecretsConfig``-shaped object.
 
     Reads ``config.cipher`` (the strategy name) and dispatches through the
@@ -159,12 +162,15 @@ def build_cipher(config) -> VaultCipher:
     builder = _REGISTRY.get(name)
     if builder is None:
         raise ValueError(f"unknown vault cipher strategy {name!r}; known: {sorted(_REGISTRY)}")
-    return builder(config)
+    return builder(config, default_key_path)
 
 
-def _build_aes(config) -> VaultCipher:
+def _build_aes(config: SecretsCipherConfig, default_key_path: Path | None) -> VaultCipher:
     key_path = getattr(config, "key_path", None)
-    provider = KeyFileProvider(Path(key_path) if key_path else None)
+    resolved = Path(key_path) if key_path else default_key_path
+    if resolved is None:
+        raise ValueError("AES vault cipher requires an explicit key path")
+    provider = KeyFileProvider(resolved)
     return DeferredVaultCipher(lambda: AesGcmCipher(provider.key()))
 
 
@@ -173,4 +179,10 @@ def _build_aes(config) -> VaultCipher:
 _REGISTRY = {"aes": _build_aes}
 
 
-__all__ = ["VaultCipher", "AesGcmCipher", "DeferredVaultCipher", "KeyFileProvider", "build_cipher"]
+__all__ = [
+    "VaultCipher",
+    "AesGcmCipher",
+    "DeferredVaultCipher",
+    "KeyFileProvider",
+    "build_cipher",
+]

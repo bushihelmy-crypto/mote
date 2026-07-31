@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.errors.runtimes import ManagedRuntimeNotFoundError
-from mote.contracts.runtimes import CheckpointFidelity, DriverStartResult, RuntimeCapabilities, RuntimeHealth
+from mote.contracts.runtime import CheckpointFidelity, DriverStartResult, RuntimeCapabilities, RuntimeHealth
+from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
 from mote.product.toolsets.builtin import web_browser as web_browser_module
 from mote.product.toolsets.builtin.web_browser import WebBrowser
 from mote.ztest.executor.tools.conftest import CapRole, bind

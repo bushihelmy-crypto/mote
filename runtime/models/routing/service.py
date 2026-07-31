@@ -7,10 +7,9 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from mote.contracts.errors.routing import RoutingProposalInvalidError, RoutingUnavailableError
-from mote.contracts.events.types import RoutingDecisionEvent
-from mote.contracts.models.invocation import ModelOperation, ResponseMode
-from mote.contracts.models.routing import (
+from mote.contracts.events.model import RoutingDecisionEvent
+from mote.contracts.model.invocation import ModelOperation, ResponseMode
+from mote.contracts.model.routing import (
     RecentRoutingDecision,
     RouteCandidate,
     RoutingDecision,
@@ -21,9 +20,11 @@ from mote.contracts.models.routing import (
     RoutingStateTransition,
     SeedFloor,
 )
-from mote.contracts.ports import RoutingPolicy, RoutingStateStore, SessionFactSink
-from mote.runtime.logging import log_class
+from mote.contracts.model.routing_errors import RoutingProposalInvalidError, RoutingUnavailableError
+from mote.contracts.ports.model.routing import RoutingPolicy, RoutingStateStore
+from mote.contracts.ports.session.facts import SessionFactSink
 from mote.runtime.models.routing.catalog import RouteCatalogSnapshot
+from mote.runtime.telemetry.logging import log_class
 
 _RECENT_DECISION_LIMIT = 5
 
@@ -57,6 +58,7 @@ class RoutingService:
         deadline_ms: float,
         session_fact_sink: SessionFactSink | None = None,
         utc_now: Callable[[], datetime] = _utc_now,
+        authority_revision: Callable[[], str] | None = None,
     ) -> None:
         self.catalog = catalog
         self.policy = policy
@@ -65,6 +67,7 @@ class RoutingService:
         self.deadline_seconds = deadline_ms / 1_000.0
         self.session_fact_sink = session_fact_sink
         self._utc_now = utc_now
+        self._authority_revision = authority_revision
         self._decision_lock = asyncio.Lock()
 
     async def decide(self, routing_input: RoutingInput) -> RoutingDecision:
@@ -73,6 +76,7 @@ class RoutingService:
 
     async def _decide(self, routing_input: RoutingInput) -> RoutingDecision:
         started = time.monotonic()
+        self._validate_authority_revision(routing_input)
         state = await self.state_store.read(routing_input.session_id)
         policy_state, hold_expired, seed_expired = self._state_for_decision(state)
         candidates, missing = self._admissible_candidates(routing_input)
@@ -126,6 +130,7 @@ class RoutingService:
                 status = "fallback"
 
         self._validate_proposal(proposal, candidates)
+        self._validate_authority_revision(routing_input)
         transition = proposal.state_transition
         if hold_expired:
             transition = transition.model_copy(update={"clear_hold": True})
@@ -174,6 +179,17 @@ class RoutingService:
             await asyncio.shield(commit_task)
             raise
         return decision
+
+    def _validate_authority_revision(self, routing_input: RoutingInput) -> None:
+        if self._authority_revision is None or not routing_input.authority_revision:
+            return
+        current = self._authority_revision()
+        if current != routing_input.authority_revision:
+            raise RoutingUnavailableError(
+                "routing authority changed while the decision was being planned",
+                expected_authority_revision=routing_input.authority_revision,
+                current_authority_revision=current,
+            )
 
     def _state_for_decision(self, state: RoutingSessionState) -> tuple[RoutingSessionState, bool, bool]:
         now = self._utc_now()

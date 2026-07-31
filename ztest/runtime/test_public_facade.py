@@ -59,9 +59,18 @@ async def test_public_agent_surfaces_typed_admission_rejection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_engine_mints_typed_handle_and_owns_its_lifecycle(
-    tmp_path,
-) -> None:
+async def test_public_engine_mints_typed_handle_and_owns_its_lifecycle(tmp_path, monkeypatch) -> None:
+    from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
+    from mote.product.config.schema import Config
+
+    monkeypatch.setattr(
+        "mote.engine.load_config",
+        lambda *_args, **_kwargs: Config(
+            models=ShortcutModelsConfig(
+                default=ProductEndpointInput(model="gpt-4o", provider="openai", api_key="test-secret")
+            )
+        ),
+    )
     dependencies = object()
 
     async with Engine(Model("gpt-4o", provider="openai"), cwd=tmp_path) as engine:

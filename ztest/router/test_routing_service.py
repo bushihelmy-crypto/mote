@@ -5,9 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from mote.contracts.errors.routing import RoutingUnavailableError
-from mote.contracts.models.invocation import RequestRequirements
-from mote.contracts.models.routing import (
+from mote.contracts.model.invocation import RequestRequirements
+from mote.contracts.model.routing import (
     RouteAdmissionProfile,
     RouteCandidate,
     RouteCapabilities,
@@ -19,6 +18,8 @@ from mote.contracts.models.routing import (
     RoutingSessionState,
     SeedFloor,
 )
+from mote.contracts.model.routing_errors import RoutingUnavailableError
+from mote.contracts.model.topology import SemanticRoute
 from mote.runtime.models.routing.catalog import RouteCatalogSnapshot
 from mote.runtime.models.routing.policy import DeterministicRoutingPolicy
 from mote.runtime.models.routing.service import RoutingService
@@ -62,7 +63,7 @@ class InvalidPolicy:
 
     async def propose(self, routing_input, candidates, state):
         return RoutingProposal(
-            selected_route_id="outside-scope",
+            selected_route_id=SemanticRoute(name="outside-scope"),
             policy_id=self.policy_id,
             policy_revision=self.policy_revision,
             feature_schema_revision="1",
@@ -95,7 +96,7 @@ def candidate(
     context_tokens=100_000,
 ):
     return RouteCandidate(
-        route_id=route_id,
+        route_id=SemanticRoute(name=route_id),
         quality_class=f"R{rank}",
         quality_rank=rank,
         context_tokens=context_tokens,
@@ -123,14 +124,15 @@ def service(
     sink=None,
     deadline_ms=50,
     utc_now=None,
+    authority_revision=None,
 ):
     store = StateStore(state)
-    fallback = DeterministicRoutingPolicy("standard")
+    fallback = DeterministicRoutingPolicy(SemanticRoute(name="standard"))
     router = RoutingService(
         RouteCatalogSnapshot(
             revision="catalog-1",
             candidates=tuple(candidates),
-            default_route_id="standard",
+            default_route_id=SemanticRoute(name="standard"),
             class_routes=(),
         ),
         policy,
@@ -139,8 +141,33 @@ def service(
         deadline_ms=deadline_ms,
         session_fact_sink=sink,
         **({"utc_now": utc_now} if utc_now is not None else {}),
+        **({"authority_revision": authority_revision} if authority_revision is not None else {}),
     )
     return router, store
+
+
+@pytest.mark.asyncio
+async def test_authority_revision_change_rejects_before_decision_commit():
+    revision = ["authority-1"]
+
+    class RevisionChangingPolicy:
+        async def propose(self, routing_input, candidates, state):
+            revision[0] = "authority-2"
+            return RoutingProposal(
+                selected_route_id=SemanticRoute(name="standard"),
+                policy_id="revision-changing",
+                policy_revision="1",
+                feature_schema_revision="1",
+            )
+
+    router, store = service(
+        RevisionChangingPolicy(),
+        [candidate("standard", 1)],
+        authority_revision=lambda: revision[0],
+    )
+    with pytest.raises(RoutingUnavailableError, match="authority changed"):
+        await router.decide(routing_input(authority_revision="authority-1"))
+    assert store.state.generation == 0
 
 
 @pytest.mark.asyncio
@@ -149,8 +176,10 @@ async def test_invalid_policy_output_falls_back_without_expanding_candidates():
         InvalidPolicy(),
         [candidate("standard", 1), candidate("strong", 3)],
     )
-    decision = await router.decide(routing_input(caller_hints=RoutingHints(candidate_scope=("strong",))))
-    assert decision.selected_route_id == "strong"
+    decision = await router.decide(
+        routing_input(caller_hints=RoutingHints(candidate_scope=(SemanticRoute(name="strong"),)))
+    )
+    assert decision.selected_route_id == SemanticRoute(name="strong")
     assert decision.status == "fallback"
     assert decision.degraded_reason is RoutingDegradedReason.INVALID_PROPOSAL
     assert store.state.generation == 1
@@ -159,7 +188,7 @@ async def test_invalid_policy_output_falls_back_without_expanding_candidates():
 @pytest.mark.asyncio
 async def test_explicit_empty_scope_fails_closed():
     router, _store = service(
-        DeterministicRoutingPolicy("standard"),
+        DeterministicRoutingPolicy(SemanticRoute(name="standard")),
         [candidate("standard", 1)],
     )
     with pytest.raises(RoutingUnavailableError):
@@ -170,9 +199,11 @@ async def test_explicit_empty_scope_fails_closed():
 async def test_pdf_is_not_satisfied_by_vision_and_hold_cannot_bypass_constraints():
     vision = RouteCapabilities(supports_vision=True)
     pdf = RouteCapabilities(supports_pdf=True)
-    state = RoutingSessionState(control_hold=RoutingHold(target_route_id="vision", turns_remaining=2))
+    state = RoutingSessionState(
+        control_hold=RoutingHold(target_route_id=SemanticRoute(name="vision"), turns_remaining=2)
+    )
     router, store = service(
-        DeterministicRoutingPolicy("vision"),
+        DeterministicRoutingPolicy(SemanticRoute(name="vision")),
         [
             candidate("vision", 1, capabilities=vision),
             candidate("pdf", 2, capabilities=pdf),
@@ -180,7 +211,7 @@ async def test_pdf_is_not_satisfied_by_vision_and_hold_cannot_bypass_constraints
         state=state,
     )
     decision = await router.decide(routing_input(requirements=RequestRequirements(needs_pdf=True)))
-    assert decision.selected_route_id == "pdf"
+    assert decision.selected_route_id == SemanticRoute(name="pdf")
     assert decision.degraded_reason is RoutingDegradedReason.HOLD_INADMISSIBLE
     assert store.state.control_hold is None
 
@@ -190,7 +221,7 @@ async def test_expired_hold_and_seed_are_ignored_and_cleared_replayably():
     now = datetime(2026, 7, 25, tzinfo=timezone.utc)
     state = RoutingSessionState(
         control_hold=RoutingHold(
-            target_route_id="strong",
+            target_route_id=SemanticRoute(name="strong"),
             expires_at_utc=now - timedelta(seconds=1),
         ),
         seed_floor=SeedFloor(
@@ -199,7 +230,7 @@ async def test_expired_hold_and_seed_are_ignored_and_cleared_replayably():
         ),
     )
     router, store = service(
-        DeterministicRoutingPolicy("standard"),
+        DeterministicRoutingPolicy(SemanticRoute(name="standard")),
         [candidate("standard", 1), candidate("strong", 3)],
         state=state,
         utc_now=lambda: now,
@@ -207,7 +238,7 @@ async def test_expired_hold_and_seed_are_ignored_and_cleared_replayably():
 
     decision = await router.decide(routing_input())
 
-    assert decision.selected_route_id == "standard"
+    assert decision.selected_route_id == SemanticRoute(name="standard")
     assert decision.degraded_reason is RoutingDegradedReason.HOLD_EXPIRED
     assert store.state.control_hold is None
     assert store.state.seed_floor is None
@@ -221,7 +252,7 @@ async def test_policy_deadline_uses_deterministic_local_fallback():
         deadline_ms=1,
     )
     decision = await router.decide(routing_input())
-    assert decision.selected_route_id == "standard"
+    assert decision.selected_route_id == SemanticRoute(name="standard")
     assert decision.degraded_reason is RoutingDegradedReason.POLICY_TIMEOUT
 
 
@@ -237,7 +268,7 @@ async def test_cancellation_does_not_commit_partial_state():
 async def test_cancellation_during_commit_finishes_the_atomic_state_unit():
     sink = BlockingFactSink()
     router, store = service(
-        DeterministicRoutingPolicy("standard"),
+        DeterministicRoutingPolicy(SemanticRoute(name="standard")),
         [candidate("standard", 1)],
         sink=sink,
     )
@@ -258,7 +289,7 @@ async def test_cancellation_during_commit_finishes_the_atomic_state_unit():
 async def test_decision_fact_contains_complete_recoverable_next_state():
     sink = FactSink()
     router, store = service(
-        DeterministicRoutingPolicy("standard"),
+        DeterministicRoutingPolicy(SemanticRoute(name="standard")),
         [candidate("standard", 1)],
         sink=sink,
     )
@@ -284,6 +315,6 @@ async def test_route_variant_must_satisfy_all_constraints_coherently():
             ),
         ),
     )
-    router, _store = service(DeterministicRoutingPolicy("mixed"), [route])
+    router, _store = service(DeterministicRoutingPolicy(SemanticRoute(name="mixed")), [route])
     with pytest.raises(RoutingUnavailableError):
         await router.decide(routing_input(requirements=RequestRequirements(needs_tools=True, needs_vision=True)))

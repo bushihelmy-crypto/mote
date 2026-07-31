@@ -7,8 +7,13 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from mote.contracts.policy.prompt import PromptDecision, PromptIntent, PromptPolicyContribution, PromptPolicyTraceEntry
-from mote.contracts.ports.prompt_policy import PromptPolicyExtension, PromptPolicyExtensionSpec
+from mote.contracts.conversation.prompt_policy import (
+    PromptDecision,
+    PromptIntent,
+    PromptPolicyContribution,
+    PromptPolicyTraceEntry,
+)
+from mote.contracts.ports.conversation.prompt_policy import PromptPolicyExtension, PromptPolicyExtensionSpec
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.secrets.policy import redact
 from mote.runtime.secrets.store import SecretStore

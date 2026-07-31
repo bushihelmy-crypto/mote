@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.ports import EphemeralContextSource
-from mote.contracts.schema import FoldState
-from mote.runtime.context.turn_context import (
+from mote.contracts.conversation import FoldState
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
+from mote.runtime.context.turn import (
     CompactionNoticeContextSource,
     FoldPressureContextSource,
     GitContextSource,
@@ -47,7 +47,7 @@ class TestProtocolConformance:
 # --------------------------------------------------------------------------
 def _stub_git(monkeypatch, *, state, section=" - Git branch: main"):
     """Stub collect_git_state -> *state* and render_git_section -> *section*."""
-    import mote.runtime.context.turn_context.sources.git as gitmod
+    import mote.runtime.context.turn.sources.git as gitmod
 
     async def fake_collect(cwd):
         return state
@@ -99,7 +99,7 @@ class TestGitContextSource:
         assert run(src.render(cwd="/x")) is None
 
     def test_recapture_between_renders_shows_latest(self, monkeypatch):
-        import mote.runtime.context.turn_context.sources.git as gitmod
+        import mote.runtime.context.turn.sources.git as gitmod
 
         sections = iter([" - Git branch: main", " - Git branch: feature"])
 
@@ -125,7 +125,7 @@ class TestGitContextSource:
         assert run(src.render(cwd="/x")) is None
 
     def test_capture_failure_is_swallowed(self, monkeypatch):
-        import mote.runtime.context.turn_context.sources.git as gitmod
+        import mote.runtime.context.turn.sources.git as gitmod
 
         async def boom(cwd):
             raise RuntimeError("git blew up")

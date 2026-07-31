@@ -7,7 +7,7 @@ a direct search API while Runtime owns journaling and bounded failover.
 
 Degradation (option 1A — NO third-party scraper fallback): when the routed
 model/provider has no server-side search (``NotImplementedError``) the tool
-raises :class:`ToolNotConfiguredError` naming the ``models.tasks.web_search``
+raises :class:`ToolNotConfiguredError` naming the ``task:web_search`` model route
 config path the user must point at a search-capable model, and steering the
 model to the WebBrowser tool as an immediate fallback.
 
@@ -21,10 +21,10 @@ from __future__ import annotations
 from typing import Any, ClassVar, Optional
 from urllib.parse import quote_plus
 
-from mote.contracts.errors.services import ServiceCallExhaustedError
-from mote.contracts.models import WebSearchHit
-from mote.contracts.services import ServiceExecutionSemantics
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.model import WebSearchHit
+from mote.contracts.service import ServiceExecutionSemantics
+from mote.contracts.service.errors import ServiceCallExhaustedError
+from mote.contracts.tool.effects import ToolEffect
 from mote.runtime.errors import ToolNotConfiguredError, ToolValidationError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import InvokeService
@@ -43,7 +43,7 @@ def _unavailable_msg(query: str) -> str:
     return (
         "Server-side web search is unavailable: the model routed for the "
         "'web_search' task does not support provider-native web search. Configure "
-        "models.tasks.web_search with a search-capable model (e.g. "
+        "task:web_search route with a search-capable model (e.g. "
         "claude-haiku-4-5-20251001, or a gpt-4o/gpt-5 model on the OpenAI "
         "Responses API). In the meantime, use the WebBrowser tool to navigate to "
         f"a search engine (e.g. https://duckduckgo.com/?q={quote_plus(query)}) and "
@@ -140,7 +140,7 @@ class WebSearch(BaseTool):
             num_results: Cap on how many result links to return (default: 8).
 
         Returns the results as ``Links:`` markdown. Raises
-        :class:`ToolNotConfiguredError` (naming the ``models.tasks.web_search``
+        :class:`ToolNotConfiguredError` (naming the ``task:web_search`` route
         config path, steering you to WebBrowser) when the routed model has no
         server-side web search.
         """

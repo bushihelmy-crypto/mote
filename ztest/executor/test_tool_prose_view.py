@@ -26,7 +26,7 @@ import inspect
 
 import pytest
 
-from mote.contracts.introspection.docstrings import first_line
+from mote.kernel.tools.docstrings import first_line
 from mote.runtime.tools.definitions import native_definition
 from mote.runtime.tools.tool_registry import registry
 

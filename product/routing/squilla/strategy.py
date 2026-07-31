@@ -33,7 +33,7 @@ from typing import Awaitable, Callable, Optional
 
 import numpy as np
 
-from mote.contracts.models.routing import (
+from mote.contracts.model.routing import (
     CandidateScore,
     RouteCandidate,
     RoutingDegradedReason,
@@ -42,7 +42,7 @@ from mote.contracts.models.routing import (
     RoutingSessionState,
     RoutingStateTransition,
 )
-from mote.kernel.models.complexity import (
+from mote.product.routing.squilla.complexity import (
     TIER_THRESHOLDS,
     complexity_score,
     decide_tier,

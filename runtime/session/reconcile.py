@@ -4,7 +4,7 @@ The gap it closes: :func:`replay` rebuilds history from the rollout, but a crash
 mid-turn can leave an assistant ``tool_calls`` message on disk with NO paired
 ``tool_result`` for one or more of its calls (the results were never flushed).
 That broken pairing 400s the very next provider request. The
-:class:`~mote.runtime.tools.effect_ledger.EffectLedger` remembers what actually ran,
+The RunJournal remembers what actually ran,
 so this reconciler is the bridge: for every *dangling* call (requested but with
 no result in the replayed history) it injects a synthetic ``tool_result`` right
 after its owning assistant message, choosing the content from the ledger:
@@ -36,11 +36,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol, Set, runtime_checkable
 
-from mote.contracts.constants.messages import TOOL_CALL_ID, TOOL_CALLS
-from mote.contracts.schema import Message, ToolMessage
+from mote.contracts.conversation import Message, ToolMessage
+from mote.contracts.conversation.fields import TOOL_CALL_ID, TOOL_CALLS
 
 #: The one ledger state that means "in flight when the crash hit"; mirrors the
-#: stable wire value in :mod:`mote.runtime.tools.effect_ledger` (kept local so the
+#: stable RunJournal wire value (kept local so the
 #: ``session`` package needs no import of ``executor``). Any other non-None
 #: status is terminal (``completed``/``failed``) and carries a result to heal.
 _STARTED = "started"
@@ -71,10 +71,10 @@ _SAFE_RETRY = (
 
 
 @runtime_checkable
-class EffectRecordView(Protocol):
+class StepRecordView(Protocol):
     """The slice of a ledger record the reconciler reads (structural).
 
-    Declared as read-only properties so a frozen ``EffectRecord`` (whose fields
+    Declared as read-only properties so a frozen ``StepRecord`` (whose fields
     are immutable) satisfies the protocol — a read-write attribute declaration
     would reject the frozen dataclass on variance grounds.
     """
@@ -84,7 +84,7 @@ class EffectRecordView(Protocol):
         ...
 
     @property
-    def result(self) -> Optional[str]:
+    def payload(self) -> Optional[str]:
         ...
 
     @property
@@ -94,10 +94,9 @@ class EffectRecordView(Protocol):
 
 @runtime_checkable
 class LedgerView(Protocol):
-    """The slice of :class:`EffectLedger` the reconciler needs — a read of one
-    call's latest record. Duck-typed so ``session`` stays free of ``executor``."""
+    """The RunJournal slice needed to read one call's latest record."""
 
-    def status(self, tool_call_id: str) -> Optional[EffectRecordView]:
+    def replay(self, tool_call_id: str) -> Optional[StepRecordView]:
         ...
 
 
@@ -131,7 +130,7 @@ def _iter_calls(message: Message) -> List[dict]:
     return calls if isinstance(calls, list) else []
 
 
-def _is_replay_safe(record: EffectRecordView) -> bool:
+def _is_replay_safe(record: StepRecordView) -> bool:
     """Whether a dangling ``started`` *record* is safe to re-run.
 
     True only for a recorded PURE/LOCAL effect (re-running leaves no
@@ -141,7 +140,7 @@ def _is_replay_safe(record: EffectRecordView) -> bool:
     return getattr(record, "effect", "external") in _REPLAY_SAFE_EFFECTS
 
 
-def _classify(record: Optional[EffectRecordView]) -> str:
+def _classify(record: Optional[StepRecordView]) -> str:
     """The dangling-call outcome: ``"replay"`` / ``"unknown"`` / ``"heal"``.
 
     - no record → ``replay`` (never ledgered / never started: safe to reissue).
@@ -159,7 +158,7 @@ def _classify(record: Optional[EffectRecordView]) -> str:
     return "heal"
 
 
-def _synthetic_result(call: dict, record: Optional[EffectRecordView]) -> ToolMessage:
+def _synthetic_result(call: dict, record: Optional[StepRecordView]) -> ToolMessage:
     """Build the tool_result to pair a dangling *call*, per its ledger *record*."""
     call_id = call.get("id", "")
     name = call.get("name", "?")
@@ -170,7 +169,7 @@ def _synthetic_result(call: dict, record: Optional[EffectRecordView]) -> ToolMes
         content = _UNKNOWN_AFTER_CRASH.format(name=name, call_id=call_id)
     else:
         # Terminal record (completed/failed): heal from the stored result.
-        content = (record.result if record is not None else "") or ""
+        content = (record.payload if record is not None else "") or ""
     return ToolMessage(content=content, tool_call_id=call_id)
 
 
@@ -215,7 +214,7 @@ def reconcile_tool_calls(messages: List[Message], ledger: LedgerView) -> Reconci
             cid = call.get("id")
             if not cid:
                 continue
-            record = ledger.status(cid)
+            record = ledger.replay(cid)
             if cid in resolved:
                 # Already paired IN THE ROLLOUT: its result is a durable part of
                 # the truth source, so any ledger record for it is genuinely stale
@@ -244,4 +243,4 @@ def reconcile_tool_calls(messages: List[Message], ledger: LedgerView) -> Reconci
     return result
 
 
-__all__ = ["reconcile_tool_calls", "ReconcileResult", "LedgerView", "EffectRecordView"]
+__all__ = ["reconcile_tool_calls", "ReconcileResult", "LedgerView", "StepRecordView"]

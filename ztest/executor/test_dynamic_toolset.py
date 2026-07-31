@@ -4,12 +4,12 @@ from dataclasses import dataclass, replace
 
 import pytest
 
-from mote.contracts.run_context import RunContext
-from mote.contracts.tools import ToolsetProtocolError
-from mote.kernel.tools.toolset import NativeToolset, XmlToolset
+from mote.contracts.tool import ToolsetProtocolError
+from mote.kernel.execution.run_context import RunContext
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition, xml_definition
 from mote.runtime.tools.dynamic_toolset import NativeDynamicToolset, XmlDynamicToolset
+from mote.runtime.tools.provider import NativeToolset, XmlToolset
 from mote.runtime.tools.tool_executor import ToolExecutor
 
 

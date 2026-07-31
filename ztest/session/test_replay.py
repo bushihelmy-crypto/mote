@@ -7,9 +7,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mote.contracts.events import EventId, EventType, StreamId
-from mote.contracts.ports.event_journal import UncommittedFact
-from mote.contracts.runtimes import (
+from mote.contracts.conversation import AIMessage, UserMessage
+from mote.contracts.events.envelope import EventId, EventType, StreamId
+from mote.contracts.ports.events.journal import UncommittedFact
+from mote.contracts.runtime import (
     CheckpointFidelity,
     RuntimeCheckpoint,
     RuntimeCommitFact,
@@ -17,13 +18,11 @@ from mote.contracts.runtimes import (
     RuntimeProjectionIntent,
     RuntimeProjectionRequest,
 )
-from mote.contracts.schema import AIMessage, UserMessage
 from mote.runtime.events.journal import LocalEventJournal
-from mote.runtime.session.codec import session_stream_id
+from mote.runtime.session.codec import UnsupportedSessionEventError, session_stream_id
 from mote.runtime.session.events import (
     ContextCompactedFact,
     HistoryEditedFact,
-    KernelStateEvent,
     MessageEvent,
     OutputAcceptedEvent,
     OutputCandidateReceivedEvent,
@@ -37,7 +36,6 @@ from mote.runtime.session.events import (
     RuntimeCommitEvent,
     RuntimeProjectionAcknowledgedEvent,
     SessionMetaEvent,
-    TerminalStateEvent,
     TurnContextEvent,
 )
 from mote.runtime.session.log import SessionLog
@@ -46,7 +44,15 @@ from mote.runtime.session.replay import replay
 
 def _fresh_log(tmp_path, sid="r"):
     log = SessionLog(sid, base_dir=str(tmp_path))
-    log.commit_offline(SessionMetaEvent(session_id=sid, working_dir="/w", project_root="/p"))
+    log.commit_offline(
+        SessionMetaEvent(
+            session_id=sid,
+            role_class="mote.agent.role.v1",
+            toolset_manifest=(),
+            working_dir="/w",
+            project_root="/p",
+        )
+    )
     return log
 
 
@@ -270,7 +276,7 @@ def test_output_state_survives_message_compaction(tmp_path):
     }
 
 
-def test_unknown_event_is_ignored_without_hiding_later_facts(tmp_path):
+def test_unknown_event_rejects_replay(tmp_path):
     log = _fresh_log(tmp_path)
     stream_id = StreamId(session_stream_id(log.session_id))
     occurred_at = datetime.now(timezone.utc)
@@ -287,12 +293,8 @@ def test_unknown_event_is_ignored_without_hiding_later_facts(tmp_path):
         ),
         expected_version=1,
     )
-    log = SessionLog(log.session_id, base_dir=str(tmp_path))
-    log.commit_offline(MessageEvent(message=UserMessage(content="after-unknown")))
-
-    result = replay(log)
-
-    assert [message.content for message in result.model_context_messages] == ["after-unknown"]
+    with pytest.raises(UnsupportedSessionEventError):
+        replay(SessionLog(log.session_id, base_dir=str(tmp_path)))
 
 
 def test_duplicate_output_fact_is_idempotent(tmp_path):
@@ -563,75 +565,3 @@ def test_replay_missing_log_is_empty(tmp_path):
     assert result.transcript_messages == []
     assert result.model_context_messages == []
     assert result.meta is None
-
-
-def test_terminal_state_none_by_default(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
-    result = replay(log)
-    assert result.terminal_state is None
-
-
-def test_terminal_state_captured(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
-    log.commit_offline(TerminalStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Terminal"))
-    result = replay(log)
-    # Terminal state is not part of the message-history rebuild.
-    assert [m.content for m in result.model_context_messages] == ["hi"]
-    assert result.terminal_state == {
-        "cwd": "/tmp",
-        "env": {"FOO": "bar"},
-        "unset": ["OLD"],
-    }
-
-
-def test_terminal_state_last_write_wins(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(TerminalStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
-    log.commit_offline(TerminalStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
-    result = replay(log)
-    assert result.terminal_state == {
-        "cwd": "/second",
-        "env": {"B": "2"},
-        "unset": ["A"],
-    }
-
-
-def test_kernel_state_none_by_default(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
-    result = replay(log)
-    assert result.kernel_state is None
-
-
-def test_kernel_state_captured(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(MessageEvent(message=UserMessage(content="hi")))
-    log.commit_offline(KernelStateEvent(cwd="/tmp", env={"FOO": "bar"}, unset=["OLD"], tool="Jupyter"))
-    result = replay(log)
-    # Kernel state is not part of the message-history rebuild.
-    assert [m.content for m in result.model_context_messages] == ["hi"]
-    assert result.kernel_state == {
-        "cwd": "/tmp",
-        "env": {"FOO": "bar"},
-        "unset": ["OLD"],
-    }
-
-
-def test_kernel_state_last_write_wins(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(KernelStateEvent(cwd="/first", env={"A": "1"}, unset=[]))
-    log.commit_offline(KernelStateEvent(cwd="/second", env={"B": "2"}, unset=["A"]))
-    result = replay(log)
-    assert result.kernel_state == {"cwd": "/second", "env": {"B": "2"}, "unset": ["A"]}
-
-
-def test_terminal_and_kernel_states_are_independent(tmp_path):
-    """Both restore on resume without clobbering each other (the split's point)."""
-    log = _fresh_log(tmp_path)
-    log.commit_offline(TerminalStateEvent(cwd="/shell", env={"SH": "1"}, unset=[]))
-    log.commit_offline(KernelStateEvent(cwd="/kernel", env={"KE": "2"}, unset=[]))
-    result = replay(log)
-    assert result.terminal_state == {"cwd": "/shell", "env": {"SH": "1"}, "unset": []}
-    assert result.kernel_state == {"cwd": "/kernel", "env": {"KE": "2"}, "unset": []}

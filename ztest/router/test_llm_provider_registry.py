@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
+from mote.product.models.registry import LLMProviderRegistry
 from mote.runtime.errors import ProviderNotFoundError
-from mote.runtime.models.clients.registry import LLMProviderRegistry
 
 
 class TestLLMProviderRegistry:
@@ -45,7 +45,7 @@ class TestRegistryIsolation:
             def __init__(self, config):
                 self.config = config
 
-        from mote.contracts.config.llm import LLMConfig, LLMType
+        from mote.contracts.config.model.llm import LLMConfig, LLMType
 
         reg = LLMProviderRegistry()
         reg.register(LLMType.OPENAI, Provider)
@@ -54,17 +54,15 @@ class TestRegistryIsolation:
 
 
 def test_bare_runtime_context_fails_with_explicit_composition_error():
-    from mote.contracts.config.llm import LLMConfig
-    from mote.contracts.config.models import ModelsConfig
-    from mote.runtime.config.schema import Config
+    from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
+    from mote.product.config.schema import Config
     from mote.runtime.models.clients.context import Context
 
-    with pytest.raises(ProviderNotFoundError, match="Product composition root"):
-        Context(
-            config=Config(
-                models=ModelsConfig(
-                    default=LLMConfig(model="test"),
-                    tasks={},
-                )
+    context = Context(
+        config=Config(
+            models=ShortcutModelsConfig(
+                default=ProductEndpointInput(model="test"),
             )
-        ).llm()
+        )
+    )
+    assert not hasattr(context, "llm")

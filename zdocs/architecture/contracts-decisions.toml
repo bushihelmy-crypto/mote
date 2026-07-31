@@ -1,0 +1,354 @@
+schema_version = 1
+baseline_id = "sha256:2553d30ee82ebd16ed0f64499c01e88399be2ac0200475856dc4bb643d8b7404"
+generated_by = "manual:contracts-governance-v10"
+generated_at = "2026-07-29T00:00:00Z"
+canonicalization_version = 1
+[policy]
+domain_set = ["foundation", "content", "authorization", "interaction", "agent", "artifact", "file", "tool", "conversation", "model", "service", "output", "surface", "session", "runtime", "task", "observability"]
+generated_optional_domains = ["observability"]
+rejected_optional_domains = ["execution", "hook", "code_intelligence"]
+evidence = "contracts-governance-v10 sections 4.1 and 5; Phase 0A production consumer scan"
+
+[[module_decision]]
+decision_id = "retain-surface-modules"
+modules = ["mote.contracts.canvas", "mote.contracts.notebook", "mote.contracts.terminal", "mote.contracts.ports.canvas_backend", "mote.contracts.ports.surface_presenter", "mote.contracts.ports.window_surface"]
+semantic_owner = "surface"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}surface.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Cross-layer stable surface DTO or Protocol consumers"]
+
+[[module_decision]]
+decision_id = "retain-content-modules"
+modules = ["mote.contracts.content"]
+semantic_owner = "content"
+target_layer = "contracts"
+target_module_template = "mote.contracts.content.identity"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Frozen Content pilot identity"]
+
+[[module_decision]]
+decision_id = "retain-service-modules"
+modules = ["mote.contracts.service_journal", "mote.contracts.errors.services", "mote.contracts.ports.service_call_journal", "mote.contracts.ports.service_endpoint", "mote.contracts.ports.service_gateway"]
+semantic_owner = "service"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}service.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Stable provider-neutral service boundary"]
+
+[[module_decision]]
+decision_id = "retain-model-modules"
+modules = ["mote.contracts.config.model_failover", "mote.contracts.config.models", "mote.contracts.config.routing", "mote.contracts.errors.models", "mote.contracts.errors.routing", "mote.contracts.models.capabilities", "mote.contracts.models.model_journal", "mote.contracts.models.responses", "mote.contracts.models.transport", "mote.contracts.ports.llm_client", "mote.contracts.ports.model_call_journal", "mote.contracts.ports.model_endpoint", "mote.contracts.ports.model_operator", "mote.contracts.ports.routing"]
+semantic_owner = "model"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}model.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Stable model wire/config/port semantics"]
+
+[[module_decision]]
+decision_id = "retain-conversation-modules"
+modules = ["mote.contracts.config.context", "mote.contracts.policy.compaction", "mote.contracts.ports.compaction_policy", "mote.contracts.ports.context_reducer", "mote.contracts.ports.message_activity", "mote.contracts.ports.message_sink", "mote.contracts.ports.message_store", "mote.contracts.ports.request_assembler", "mote.contracts.ports.turn_context"]
+semantic_owner = "conversation"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}conversation.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Shared conversation DTO/policy/port semantics"]
+
+[[module_decision]]
+decision_id = "retain-output-modules"
+modules = ["mote.contracts.errors.output", "mote.contracts.policy.run_completion", "mote.contracts.ports.completion_policy", "mote.contracts.ports.output_migration", "mote.contracts.ports.run_completion_policy"]
+semantic_owner = "output"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}output.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Stable output policy/error/migration semantics"]
+
+[[module_decision]]
+decision_id = "retain-agent-modules"
+modules = ["mote.contracts.policy.spawn", "mote.contracts.ports.agent_catalog", "mote.contracts.ports.agent_factory", "mote.contracts.ports.spawn_policy", "mote.contracts.ports.team_roster"]
+semantic_owner = "agent"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}agent.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Stable Agent identity/policy/port semantics"]
+
+[[module_decision]]
+decision_id = "retain-session-modules"
+modules = ["mote.contracts.events.envelope", "mote.contracts.ports.run_lease", "mote.contracts.ports.session_facts"]
+semantic_owner = "session"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}session.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Durable Session identity/envelope boundary"]
+
+[[module_decision]]
+decision_id = "retain-runtime-modules"
+modules = ["mote.contracts.errors.runtimes", "mote.contracts.ports.runtime_checkpoint", "mote.contracts.ports.runtime_handoff", "mote.contracts.ports.runtime_operation", "mote.contracts.ports.runtime_projection"]
+semantic_owner = "runtime"
+target_layer = "contracts"
+target_module_template = "mote.contracts.{index}runtime.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Stable Runtime identity/checkpoint/operation boundary"]
+
+[[module_decision]]
+decision_id = "retain-tool-modules"
+modules = ["mote.contracts.constants.tool_output", "mote.contracts.tools.constants", "mote.contracts.tools.effects", "mote.contracts.tools.execution"]
+semantic_owner = "tool"
+target_layer = "contracts"
+target_module_template = "mote.contracts.tool.{source_basename}"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Inventory retain-contract decision", "Stable Tool identity/effect/wire constants"]
+
+[[module_decision]]
+decision_id = "retain-artifact-modules"
+modules = ["mote.contracts.errors.artifacts"]
+semantic_owner = "artifact"
+target_layer = "contracts"
+target_module_template = "mote.contracts.artifact.errors"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Stable Artifact error identity"]
+
+[[module_decision]]
+decision_id = "retain-task-modules"
+modules = ["mote.contracts.errors.tasks"]
+semantic_owner = "task"
+target_layer = "contracts"
+target_module_template = "mote.contracts.task.errors"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Stable Task error identity"]
+
+[[module_decision]]
+decision_id = "retain-file-modules"
+modules = ["mote.contracts.ports.file_changes"]
+semantic_owner = "file"
+target_layer = "contracts"
+target_module_template = "mote.contracts.ports.file.changes"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Stable File change port"]
+
+[[module_decision]]
+decision_id = "retain-interaction-modules"
+modules = ["mote.contracts.ports.human_interaction"]
+semantic_owner = "interaction"
+target_layer = "contracts"
+target_module_template = "mote.contracts.ports.interaction.human"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Stable human interaction port"]
+
+[[decision]]
+decision_id = "ports-code-map-move-up"
+symbols = ["mote.contracts.ports.code_map.CodeMapIndexer", "mote.contracts.ports.code_map.CodeMapIndexerFactory"]
+semantic_owner = "code-map-runtime"
+target_layer = "runtime"
+target_module = "mote.runtime.code_map.ports"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["No Kernel production consumer in Phase 0A facts", "Runtime wiring is the only non-facade production consumer"]
+consumer_migration_closure = ["mote.contracts.ports", "mote.runtime.agent.wiring"]
+required_tests = ["ztest/context/code_map", "ztest/turn_context/test_code_map.py", "ztest/roles", "ztest/architecture"]
+
+[[decision]]
+decision_id = "ports-lsp-move-up"
+symbols = ["mote.contracts.ports.lsp.DiagnosticsProvider", "mote.contracts.ports.lsp.LspServiceFactory"]
+semantic_owner = "lsp-runtime"
+target_layer = "runtime"
+target_module = "mote.runtime.lsp.ports"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["No Kernel production consumer in Phase 0A facts", "Runtime wiring is the only non-facade production consumer"]
+consumer_migration_closure = ["mote.contracts.ports", "mote.runtime.agent.wiring"]
+required_tests = ["ztest/lsp", "ztest/roles", "ztest/architecture"]
+
+[[decision]]
+decision_id = "model-request-transformer-move-up"
+symbols = ["mote.contracts.ports.model_request_transformer.ModelRequestTransformer"]
+semantic_owner = "model-runtime"
+target_layer = "runtime"
+target_module = "mote.runtime.models.request_transformer"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["No Kernel production consumer in Phase 0A facts", "Transformer participates only in Runtime ModelGateway composition"]
+consumer_migration_closure = ["mote.contracts.ports", "mote.contracts.ports.model_gateway", "mote.runtime.models.model_gateway"]
+required_tests = ["ztest/router", "ztest/architecture"]
+
+[[decision]]
+decision_id = "hook-runner-move-up"
+symbols = ["mote.contracts.ports.hook_runner.HookRunner"]
+semantic_owner = "hook-runtime"
+target_layer = "runtime"
+target_module = "mote.runtime.hook.runner"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Only the legacy contracts.ports aggregate imports the Protocol", "Runner lifecycle is Runtime-owned"]
+consumer_migration_closure = ["mote.contracts.ports"]
+required_tests = ["ztest/hook", "ztest/architecture"]
+
+[[decision]]
+decision_id = "observability-domain-generation"
+symbols = ["mote.contracts.ports.telemetry.TelemetryIdentity", "mote.contracts.ports.telemetry.TelemetryOverflow", "mote.contracts.ports.telemetry.TelemetrySubscriptionSpec"]
+semantic_owner = "observability"
+target_layer = "contracts"
+target_module = "mote.contracts.observability"
+disposition = "retain-contract"
+decision_status = "approved"
+decision_evidence = ["Typed bounded DTOs are consumed by Runtime, Orchestration, and Product", "No backend lifecycle is included"]
+consumer_migration_closure = []
+required_tests = ["ztest/events", "ztest/architecture"]
+
+[[decision]]
+decision_id = "telemetry-handler-move-up"
+symbols = ["mote.contracts.ports.telemetry.TelemetryHandler"]
+semantic_owner = "telemetry-runtime"
+target_layer = "runtime"
+target_module = "mote.runtime.telemetry.ports"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Only Runtime consumes the handler Protocol", "Backend/subscription lifecycle is not a cross-layer contract"]
+consumer_migration_closure = ["mote.runtime.events.telemetry"]
+required_tests = ["ztest/events", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-network-patterns-runtime"
+modules = ["mote.contracts.net"]
+semantic_owner = "sandbox-runtime"
+target_layer = "runtime"
+target_module_template = "mote.runtime.sandbox.network.patterns"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Runtime sandbox policy is the lowest non-Contracts consumer"]
+consumer_migration_closure = ["mote.contracts.settings.sandbox"]
+required_tests = ["ztest/sandbox", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-polymorphic-serialization-runtime"
+modules = ["mote.contracts.serialization"]
+semantic_owner = "serialization-runtime"
+target_layer = "runtime"
+target_module_template = "mote.runtime.serialization.polymorphic"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Codec registry is executable Runtime machinery", "Schema consumers move in the same Phase 7E closure"]
+consumer_migration_closure = ["mote.contracts.schema.document", "mote.contracts.schema.env"]
+required_tests = ["ztest/contracts", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-workflow-control-orchestration"
+modules = ["mote.contracts.workflow_control"]
+semantic_owner = "workflow-orchestration"
+target_layer = "orchestration"
+target_module_template = "mote.orchestration.workflows.control"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Orchestration is the lowest production consumer", "No cross-layer durable DTO evidence"]
+consumer_migration_closure = []
+required_tests = ["ztest/workflows", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-observability-adapter-config-runtime"
+modules = ["mote.contracts.config.langfuse"]
+semantic_owner = "telemetry-runtime"
+target_layer = "runtime"
+target_module_template = "mote.runtime.telemetry.observability.langfuse_config"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Runtime Langfuse integration is the lowest implementation consumer"]
+consumer_migration_closure = ["mote.contracts.config.observability"]
+required_tests = ["ztest/observability", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-oauth-config-runtime"
+modules = ["mote.contracts.config.oauth"]
+semantic_owner = "model-auth-runtime"
+target_layer = "runtime"
+target_module_template = "mote.runtime.models.auth.oauth.config"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Runtime OAuth clients and stores are the lowest production consumers"]
+consumer_migration_closure = ["mote.contracts.config.llm", "mote.contracts.config.mcp"]
+required_tests = ["ztest/oauth", "ztest/router", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-product-only-config"
+modules = ["mote.contracts.config.secrets", "mote.contracts.config.sentry", "mote.contracts.config.ui", "mote.contracts.config.workspace"]
+semantic_owner = "product-config"
+target_layer = "product"
+target_module_template = "mote.product.config.{source_basename}"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["No production consumer below Product after declared config closure"]
+consumer_migration_closure = ["mote.contracts.config.observability"]
+required_tests = ["ztest/config", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-config-errors-runtime"
+modules = ["mote.contracts.errors.config"]
+semantic_owner = "config-runtime"
+target_layer = "runtime"
+target_module_template = "mote.runtime.errors.config"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Runtime is the lowest implementation consumer; Product may depend downward"]
+consumer_migration_closure = ["mote.contracts.config.llm"]
+required_tests = ["ztest/config", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-runtime-settings"
+modules = ["mote.contracts.settings.device", "mote.contracts.settings.hooks", "mote.contracts.settings.lsp"]
+semantic_owner = "runtime-settings"
+target_layer = "runtime"
+target_module_template = "mote.runtime.config.{source_basename}"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Runtime is the lowest non-Contracts production consumer"]
+consumer_migration_closure = ["mote.contracts.config.tools"]
+required_tests = ["ztest/config", "ztest/lsp", "ztest/hook", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-web-search-config-product"
+modules = ["mote.contracts.settings.web_search"]
+semantic_owner = "web-search-product"
+target_layer = "product"
+target_module_template = "mote.product.web_search.config"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["All non-Contracts production consumers are Product-owned"]
+consumer_migration_closure = ["mote.contracts.config.tools"]
+required_tests = ["ztest/config", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-product-presentation-text"
+modules = ["mote.contracts.text.humanize"]
+semantic_owner = "product-presentation"
+target_layer = "product"
+target_module_template = "mote.product.presentation.humanize"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Presentation text has no cross-layer contract semantics"]
+consumer_migration_closure = ["mote.contracts.text"]
+required_tests = ["ztest/common/text/test_humanize.py", "ztest/architecture"]
+
+[[module_decision]]
+decision_id = "move-runtime-message-text"
+modules = ["mote.contracts.text.plural"]
+semantic_owner = "runtime-text"
+target_layer = "runtime"
+target_module_template = "mote.runtime.tools.plural"
+disposition = "move-up"
+decision_status = "approved"
+decision_evidence = ["Runtime tool pipeline is the lowest production consumer; Product may depend downward"]
+consumer_migration_closure = ["mote.contracts.text"]
+required_tests = ["ztest/common/text/test_plural.py", "ztest/architecture"]

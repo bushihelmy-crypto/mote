@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from mote.contracts.text import Elision, ElisionStrategy, ElisionUnit
+from mote.runtime.text.elision import Elision, ElisionStrategy, ElisionUnit
 from mote.runtime.tools.compress.base import CompressionResult, applied, unchanged
 
 # A ``git log --oneline`` row: ``<sha> <subject>`` — already compact, kept as-is.

@@ -12,9 +12,9 @@ content-versioned Application catalog.
 Discovery is redirected at a tmp tree by monkeypatching the discovery helpers the
 loader funnels through, so nothing touches the real ``.mote/agents`` on disk.
 """
-import mote.runtime.agent.agents.markdown_loader as loader
-from mote.runtime.agent.agents.markdown_loader import _normalize_tools, discover_md_agents
-from mote.runtime.tools.agent_registry import AgentCatalog
+import mote.product.agents.markdown_loader as loader
+from mote.product.agents.catalog import AgentCatalog
+from mote.product.agents.markdown_loader import _normalize_tools, discover_md_agents
 
 
 def _write_agent(dir_path, stem, body):

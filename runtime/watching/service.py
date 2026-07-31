@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Iterable, Optional, Protocol
 
-from mote.contracts.events.types import FileChangedEvent
-from mote.contracts.ports import FileChangePort
-from mote.runtime.logging import log_class
+from mote.contracts.events.file.observation import FileChangedEvent
+from mote.contracts.ports.file.changes import FileChangePort
+from mote.runtime.telemetry.logging import log_class
 from mote.runtime.watching.watcher import FileWatcher
 
 FILE_CHANGED_EVENT = "FileChanged"

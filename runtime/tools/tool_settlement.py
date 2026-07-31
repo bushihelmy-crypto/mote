@@ -6,20 +6,20 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Literal
 
-from mote.contracts.policy.tool import ToolResultIntent
-from mote.contracts.ports.tool_policy import ToolResultPolicy
-from mote.contracts.schema import DEFAULT_MAX_RESULT_SIZE_CHARS, ToolResultLimitConfig
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.config.tool import DEFAULT_MAX_RESULT_SIZE_CHARS, ToolResultLimitConfig
+from mote.contracts.ports.tool.policy import ToolResultPolicy
+from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.policy import ToolResultIntent
 from mote.runtime.events import FileMutatedEvent, ToolCallFinishedEvent, ToolInvocationStartedEvent
 from mote.runtime.events.scope import current_scope
 from mote.runtime.events.telemetry import TelemetryRuntime
-from mote.runtime.logging import logger
-from mote.runtime.tools import tool_result_limit
+from mote.runtime.ledger import RunJournal
+from mote.runtime.resources import spill as tool_result_limit
+from mote.runtime.session.workspace import SessionWorkspace
+from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.compress.tool_output import compress_tool_result
-from mote.runtime.tools.effect_ledger import EffectLedger
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_result_receipt import encode_tool_result_receipt
-from mote.runtime.workspace import WorkspaceStore
 
 
 class ToolSettlement:
@@ -31,20 +31,20 @@ class ToolSettlement:
         session_id: str,
         telemetry: TelemetryRuntime,
         get_tool: Callable[[str], Any],
-        ledger: EffectLedger | None,
+        journal: RunJournal | None,
         limit_config: ToolResultLimitConfig,
-        workspace_store: WorkspaceStore,
+        workspace_store: SessionWorkspace,
         policy: ToolResultPolicy,
     ) -> None:
         self._session_id = session_id
         self._telemetry = telemetry
         self._get_tool = get_tool
-        self._ledger = ledger
+        self._journal = journal
         self._limit_config = limit_config
         self._workspace_store = workspace_store
         self._policy = policy
 
-    async def observe(self, event, *, context: str) -> None:
+    async def observe(self, event: object, *, context: str) -> None:
         try:
             await self._telemetry.emit(event)
         except Exception as exc:  # observation must never mask the operation
@@ -155,12 +155,12 @@ class ToolSettlement:
             config=self._limit_config,
         )
         result = self._limit_result(result, name, result_id)
-        if ledgered and result_id is not None and self._ledger is not None:
+        if ledgered and result_id is not None and self._journal is not None:
             receipt = encode_tool_result_receipt(result)
             if execution_success:
-                self._ledger.mark_completed(result_id, name, result=receipt)
+                self._journal.record_completed(result_id, payload=receipt)
             else:
-                self._ledger.mark_failed(result_id, name, result=receipt)
+                self._journal.record_failed(result_id, payload=receipt)
         return result
 
     async def _present(

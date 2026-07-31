@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from mote.contracts.fileops import FileOperationKind, LockMode, RecoveryFenceError, RecoveryInDoubtError
+from mote.contracts.file import FileOperationKind, LockMode, RecoveryFenceError, RecoveryInDoubtError
 from mote.runtime.fileops.fences import ProjectRecoveryFenceStore, RecoveryFence
 from mote.runtime.fileops.identity import project_identity
 

@@ -51,9 +51,9 @@ try:
 except Exception:  # noqa: BLE001 — optional HTML cleanup dependency
     BeautifulSoup = None
 
-from mote.contracts.text import html_to_markdown
+from mote.runtime.media.html import html_to_markdown
+from mote.runtime.media.video import is_url, looks_like_video_path
 from mote.runtime.tools.compress.base import CompressionResult, applied, unchanged
-from mote.runtime.tools.dependency._video import is_url, looks_like_video_path
 
 # Tags whose entire subtree is noise for a text reading. Mirrors the browser's
 # ``_CLEAN_HTML_JS`` SKIP_TAGS — minus the visibility check (``getComputedStyle``

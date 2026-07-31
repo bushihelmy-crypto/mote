@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.agent.lsp.format`` — diagnostics -> context block."""
+"""Tests for ``mote.runtime.lsp.format`` — diagnostics -> context block."""
 from __future__ import annotations
 
-from mote.runtime.agent.lsp.format import format_diagnostics
-from mote.runtime.agent.lsp.registry import Diagnostic
+from mote.runtime.lsp.format import format_diagnostics
+from mote.runtime.lsp.registry import Diagnostic
 
 
 def test_empty_is_blank():
@@ -15,7 +15,12 @@ def test_renders_diagnostics():
     changed = {
         "a.py": [
             Diagnostic(
-                severity=1, line=11, character=4, message="Undefined name 'foo'", source="pyflakes", code="F821"
+                severity=1,
+                line=11,
+                character=4,
+                message="Undefined name 'foo'",
+                source="pyflakes",
+                code="F821",
             ),
         ]
     }

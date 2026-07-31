@@ -20,7 +20,7 @@ from mote.contracts.events.envelope import (
     StreamId,
     thaw_json,
 )
-from mote.contracts.ports.event_journal import (
+from mote.contracts.ports.events.journal import (
     AppendResult,
     JournalIntegrityError,
     StreamVersionConflict,
@@ -28,9 +28,9 @@ from mote.contracts.ports.event_journal import (
     VerificationIssue,
     VerificationReport,
 )
-from mote.runtime.disk.async_io import run_disk_io
-from mote.runtime.disk.writer import DiskWriter
-from mote.runtime.logging import log_class
+from mote.runtime.persistence.async_io import run_disk_io
+from mote.runtime.persistence.writer import DiskWriter
+from mote.runtime.telemetry.logging import log_class
 
 _STORAGE_FORMAT_VERSION = 1
 _MAX_RECORD_BYTES = 64 * 1024 * 1024

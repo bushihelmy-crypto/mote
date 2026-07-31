@@ -24,8 +24,8 @@ from typing import Any, List, Optional
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from mote.contracts.events.types import MESSAGE_APPENDED
-from mote.product.cli.consumers.agui.server import create_app
+from mote.contracts.events.conversation import MESSAGE_APPENDED
+from mote.product.interfaces.agui.server import create_app
 from mote.ztest.telemetry import InlineTelemetry
 
 
@@ -87,25 +87,14 @@ def make_factory():
 @pytest.fixture
 def patched_backend(monkeypatch):
     """Patch ``backend`` at BOTH modules the serving layer imports it through."""
-    from mote.product.cli.consumers.agui import server as srv
-    from mote.product.cli.serving import session_registry as sr
+    from mote.product.session_hosting import registry as sr
 
     def build_control(role: FakeRole):
         return FakeControl(role), SimpleNamespace(role=role)
 
-    monkeypatch.setattr(sr.backend, "build_control", build_control)
-    monkeypatch.setattr(sr.backend, "resume_role", lambda role: False)
-    monkeypatch.setattr(sr.backend, "role_session_id", lambda role: role.session_id)
-    monkeypatch.setattr(sr.backend, "role_cleanup", lambda role: getattr(role, "cleanup", None))
-    # The scope + server read the bus / build the turn message via backend too.
-    monkeypatch.setattr(srv.backend, "role_telemetry", lambda role: role.telemetry, raising=False)
-    monkeypatch.setattr(
-        srv.backend, "turn_message", lambda text, image_b64s=None: SimpleNamespace(content=text, id="m-1")
-    )
-    # connection_scope reads the bus through its own backend import.
-    from mote.product.cli.serving import connection_scope as cs
-
-    monkeypatch.setattr(cs.backend, "role_telemetry", lambda role: role.telemetry)
+    monkeypatch.setattr(sr, "_build_control", build_control)
+    monkeypatch.setattr(sr, "_resume_role", lambda role: False)
+    monkeypatch.setattr(sr, "_role_cleanup", lambda role: getattr(role, "cleanup", None))
 
 
 def _parse_sse(text: str) -> List[dict]:
@@ -143,12 +132,12 @@ class EmittingControl(FakeControl):
 
 @pytest.fixture
 def emitting_backend(monkeypatch, patched_backend):
-    from mote.product.cli.serving import session_registry as sr
+    from mote.product.session_hosting import registry as sr
 
     def build_control(role: FakeRole):
         return EmittingControl(role), SimpleNamespace(role=role)
 
-    monkeypatch.setattr(sr.backend, "build_control", build_control)
+    monkeypatch.setattr(sr, "_build_control", build_control)
 
 
 @asynccontextmanager
@@ -292,7 +281,7 @@ class ApprovalControl(FakeControl):
         asyncio.ensure_future(self._raise_approval())
 
     async def _raise_approval(self) -> None:
-        from mote.contracts.permissions import ApprovalRequest
+        from mote.contracts.interaction import ApprovalRequest
 
         req = ApprovalRequest(tool_name="Bash", target="rm -rf /", risk="high")
         try:
@@ -306,7 +295,7 @@ class ApprovalControl(FakeControl):
 
 @pytest.fixture
 def approval_backend(monkeypatch, patched_backend):
-    from mote.product.cli.serving import session_registry as sr
+    from mote.product.session_hosting import registry as sr
 
     # Stash the live control so the test can read its recorded choice.
     controls: List[ApprovalControl] = []
@@ -316,7 +305,7 @@ def approval_backend(monkeypatch, patched_backend):
         controls.append(ctrl)
         return ctrl, SimpleNamespace(role=role)
 
-    monkeypatch.setattr(sr.backend, "build_control", build_control)
+    monkeypatch.setattr(sr, "_build_control", build_control)
     return controls
 
 

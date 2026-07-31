@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 # ============================================================================
 
 _ROLE_REGISTRY: dict[str, type["BaseRole"]] = {}
-_LEGACY_ROLE_REGISTRY: dict[str, type["BaseRole"]] = {}
 
 
 def _qualified_name(cls: type) -> str:
@@ -34,7 +33,6 @@ class BaseRole:
     """
 
     role_type_id: ClassVar[str | None] = None
-    legacy_role_type_ids: ClassVar[tuple[str, ...]] = ()
     replace_role_type_registration: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs):
@@ -49,8 +47,6 @@ class BaseRole:
             if existing is not None and existing is not cls and not replace:
                 raise TypeError(f"duplicate role type id {type_id!r}: {existing} and {cls}")
             _ROLE_REGISTRY[type_id] = cls
-        for legacy_id in cls.__dict__.get("legacy_role_type_ids", ()):
-            _LEGACY_ROLE_REGISTRY[legacy_id] = cls
 
     # =========================================================================
     # Serialization protocol
@@ -83,14 +79,14 @@ class BaseRole:
     @classmethod
     def load(cls, data: dict[str, Any]) -> "BaseRole":
         """Deserialize a role from a dict. Uses the polymorphic registry."""
-        type_id = data.get("type_id")
-        legacy_id = data.get("__module_class_name") if type_id is None else None
-        if type_id is None and legacy_id is None:
+        if "type_id" not in data:
             raise ValueError("Missing type_id in serialized role data")
-        klass = _ROLE_REGISTRY.get(type_id) if type_id is not None else _LEGACY_ROLE_REGISTRY.get(legacy_id)
+        type_id = data["type_id"]
+        if type(type_id) is not str or not type_id:
+            raise ValueError("Serialized role type_id must be a non-empty string")
+        klass = _ROLE_REGISTRY.get(type_id)
         if klass is None:
-            unknown = type_id if type_id is not None else legacy_id
-            raise TypeError(f"Unknown role type: {unknown}. Has it been registered?")
+            raise TypeError(f"Unknown role type: {type_id}. Has it been registered?")
         return klass._from_dict(data)
 
     @classmethod

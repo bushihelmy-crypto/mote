@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.ports import EphemeralContextSource
-from mote.runtime.context.turn_context import ToolsetInstructionsContextSource
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
+from mote.runtime.context.turn import ToolsetInstructionsContextSource
 
 
 class _Executor:

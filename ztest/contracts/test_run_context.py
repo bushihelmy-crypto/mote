@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from mote.contracts.run_context import RunContext, ToolContext
+from mote.kernel.execution.run_context import RunContext, ToolContext
 
 
 @dataclass(frozen=True)

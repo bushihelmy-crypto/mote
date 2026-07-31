@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mote.contracts.config.oauth import GrantType, OAuthProviderConfig
+from mote.contracts.config.model.oauth import GrantType, OAuthProviderConfig
 from mote.runtime.models.auth.oauth.registry import apply_preset, get_preset, list_presets
 
 

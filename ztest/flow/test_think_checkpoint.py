@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for AgentFlowEngine durable-think wiring (G1 re-pay guard).
+"""Tests for ExecutionEngine durable-think wiring (G1 re-pay guard).
 
 The loop memoizes each think round in the shared run journal via a
-:class:`ThinkJournal`, so a resume can reinstate a completed think (skip the
+:class:`InferenceJournal`, so a resume can reinstate a completed think (skip the
 model) instead of re-paying it. These tests drive flow services against a real
 journal and assert the
 journal lifecycle: begin (started) → complete (payload) → reap (gone), plus the
@@ -17,21 +17,21 @@ import asyncio
 
 import pytest
 
-from mote.contracts.schema import AIMessage, UserMessage
-from mote.contracts.think import ThinkResult
-from mote.runtime.durable import ThinkJournal
+from mote.contracts.conversation import AIMessage, UserMessage
+from mote.contracts.model.inference import InferenceResult
+from mote.runtime.durable import InferenceJournal
 from mote.runtime.durable.backend import JsonlBackend
 from mote.runtime.ledger import COMPLETED, STARTED, RunJournal
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.session.workspace import SessionWorkspace
 
 from .conftest import FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
 
 pytestmark = pytest.mark.asyncio
 
 
-def _runner(tmp_path, session_id="sess") -> ThinkJournal:
-    journal = RunJournal(session_id, store=WorkspaceStore(root=str(tmp_path)))
-    return ThinkJournal(JsonlBackend(journal))
+def _runner(tmp_path, session_id="sess") -> InferenceJournal:
+    journal = RunJournal(session_id, store=SessionWorkspace(root=str(tmp_path)))
+    return InferenceJournal(JsonlBackend(journal))
 
 
 def _cmd(name, *, id=None, args=None) -> dict:
@@ -40,7 +40,7 @@ def _cmd(name, *, id=None, args=None) -> dict:
 
 def _engine(content: str = "the thought", tool_calls=None) -> FakeThinkEngine:
     eng = FakeThinkEngine()
-    eng.result = ThinkResult(content=content, tool_calls=tool_calls)
+    eng.result = InferenceResult(content=content, tool_calls=tool_calls)
     return eng
 
 
@@ -50,29 +50,38 @@ def _engine(content: str = "the thought", tool_calls=None) -> FakeThinkEngine:
 
 
 async def test_think_begins_journal_record(make_engine, tmp_path):
+    import json
+
     runner = _runner(tmp_path)
-    b = make_engine(think_engine=_engine(), durable_runner=runner)
+    b = make_engine(inference_engine=_engine(), durable_runner=runner)
     b.engine._ctx = b.ctx
 
-    ran = await b.engine._think.think()
+    ran = await b.engine._inference.infer()
 
     assert ran is True
-    assert b.engine._think_checkpoint.step_id == "think:1"
+    assert b.engine._inference_checkpoint.step_id == "think:1"
     rec = runner.journal.replay("think:1")
     assert rec is not None and rec.status == STARTED
+    checkpoint = json.loads(rec.payload)["checkpoint"]
+    assert checkpoint["model_call_id"]
+    assert checkpoint["target_lease_id"] == "fake-lease"
+    assert checkpoint["capability_fingerprint"] == "fake-capabilities"
+    assert checkpoint["tool_snapshot_id"] == "fake-snapshot"
+    assert checkpoint["tool_registry_revision"] == 1
+    assert checkpoint["request_fingerprint"]
     # A normal (non-reinstate) think still launches the model.
-    assert b.think_engine.start_calls and b.think_engine.reinstated == []
+    assert b.inference_engine.start_calls and b.inference_engine.reinstated == []
 
 
 async def test_no_runner_leaves_journal_untouched(make_engine):
     # Without a durable runner every hook is a no-op — the pre-A3 path.
-    b = make_engine(think_engine=_engine())
+    b = make_engine(inference_engine=_engine())
     b.engine._ctx = b.ctx
 
-    await b.engine._think.think()
+    await b.engine._inference.infer()
 
-    assert b.engine._think_checkpoint.step_id is None
-    assert b.think_engine.start_calls  # still thinks normally
+    assert b.engine._inference_checkpoint.step_id is None
+    assert b.inference_engine.start_calls  # still thinks normally
 
 
 # ----------------------------------------------------------------------
@@ -83,33 +92,38 @@ async def test_no_runner_leaves_journal_untouched(make_engine):
 async def test_act_completes_then_reaps_record(make_engine, tmp_path):
     runner = _runner(tmp_path)
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
-    b = make_engine(think_engine=_engine("thought"), channel=channel, durable_runner=runner)
+    b = make_engine(inference_engine=_engine("thought"), channel=channel, durable_runner=runner)
     b.engine._ctx = b.ctx
 
     # Simulate the think round that _step_think would have allocated.
-    b.engine._think_checkpoint.adopt_started(runner.begin_think())
+    b.engine._inference_checkpoint.adopt_started(runner.begin_think())
 
     await b.engine._actions.execute()
 
     # After the assistant message is recorded, the think record is reaped and the
     # per-round durable state cleared.
     assert runner.journal.replay("think:1") is None
-    assert b.engine._think_checkpoint.step_id is None
-    assert b.engine._think_checkpoint.reinstated is False
+    assert b.engine._inference_checkpoint.step_id is None
+    assert b.engine._inference_checkpoint.reinstated is False
 
 
-async def test_finish_completes_then_reaps_record(make_engine, tmp_path):
-    from mote.contracts.model_actions import FinalCandidateAction
+async def test_finish_stages_then_terminal_commit_reaps_record(make_engine, tmp_path):
+    from mote.contracts.model.turn import FinalCandidateAction
 
     runner = _runner(tmp_path)
-    b = make_engine(think_engine=_engine("final answer"), durable_runner=runner)
+    b = make_engine(inference_engine=_engine("final answer"), durable_runner=runner)
     b.engine._ctx = b.ctx
-    b.engine._think_checkpoint.adopt_started(runner.begin_think())
+    b.engine._inference_checkpoint.adopt_started(runner.begin_think())
 
-    await b.engine._outputs.accept(FinalCandidateAction(raw="final answer", representation="native_text"))
+    candidate = FinalCandidateAction(raw="final answer", representation="native_text")
+    await b.engine._outputs.evaluate(candidate)
+    await b.engine._outputs.accept(candidate)
+
+    assert runner.journal.replay("think:1") is not None
+    await b.engine._outputs.commit()
 
     assert runner.journal.replay("think:1") is None
-    assert b.engine._think_checkpoint.step_id is None
+    assert b.engine._inference_checkpoint.step_id is None
 
 
 # ----------------------------------------------------------------------
@@ -121,31 +135,31 @@ async def test_think_reinstates_completed_candidate(make_engine, tmp_path):
     runner = _runner(tmp_path)
     # Pre-seed a completed think whose assistant message never reached history.
     step_id = runner.begin_think()
-    runner.complete_think(step_id, ThinkResult(content="recovered", tool_calls=None))
+    runner.complete_think(step_id, InferenceResult(content="recovered", tool_calls=None))
 
-    b = make_engine(think_engine=_engine("stale"), durable_runner=runner)
+    b = make_engine(inference_engine=_engine("stale"), durable_runner=runner)
     b.engine._ctx = b.ctx
 
-    ran = await b.engine._think.think()
+    ran = await b.engine._inference.infer()
 
     assert ran is True
     # The LLM was NOT launched; the engine adopted the recovered result.
-    assert b.think_engine.start_calls == []
-    assert b.think_engine.reinstated and b.think_engine.reinstated[0].content == "recovered"
-    assert b.engine._think_checkpoint.step_id == step_id
-    assert b.engine._think_checkpoint.reinstated is True
+    assert b.inference_engine.start_calls == []
+    assert b.inference_engine.reinstated and b.inference_engine.reinstated[0].content == "recovered"
+    assert b.engine._inference_checkpoint.step_id == step_id
+    assert b.engine._inference_checkpoint.reinstated is True
 
 
 async def test_reinstated_round_is_not_recompleted_then_reaped(make_engine, tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    runner.complete_think(step_id, ThinkResult(content="recovered", tool_calls=None))
+    runner.complete_think(step_id, InferenceResult(content="recovered", tool_calls=None))
 
     channel = FakeChannel(commands=[])  # terminal-style: no commands
-    b = make_engine(think_engine=_engine("recovered"), channel=channel, durable_runner=runner)
+    b = make_engine(inference_engine=_engine("recovered"), channel=channel, durable_runner=runner)
     b.engine._ctx = b.ctx
 
-    await b.engine._think.think()  # reinstate
+    await b.engine._inference.infer()  # reinstate
     # complete_think must be SKIPPED for a reinstated round (record already
     # completed) — assert by ensuring the record still exists as completed
     # right up until _step_act reaps it.
@@ -160,9 +174,9 @@ async def test_reinstate_skipped_when_no_candidate(make_engine, tmp_path):
     runner = _runner(tmp_path)
     # Completed think whose assistant message IS already in history → no candidate.
     step_id = runner.begin_think()
-    runner.complete_think(step_id, ThinkResult(content="done", tool_calls=None))
+    runner.complete_think(step_id, InferenceResult(content="done", tool_calls=None))
     b = make_engine(
-        think_engine=_engine("done"),
+        inference_engine=_engine("done"),
         durable_runner=runner,
         memory=None,
     )
@@ -170,13 +184,13 @@ async def test_reinstate_skipped_when_no_candidate(make_engine, tmp_path):
     await b.memory.add(AIMessage(content="done"))
     b.engine._ctx = b.ctx
 
-    ran = await b.engine._think.think()
+    ran = await b.engine._inference.infer()
 
     assert ran is True
     # No reinstate → a fresh think began (new seq) and the LLM launched.
-    assert b.think_engine.reinstated == []
-    assert b.think_engine.start_calls
-    assert b.engine._think_checkpoint.step_id == "think:2"
+    assert b.inference_engine.reinstated == []
+    assert b.inference_engine.start_calls
+    assert b.engine._inference_checkpoint.step_id == "think:2"
 
 
 # ----------------------------------------------------------------------
@@ -191,13 +205,13 @@ async def test_checkpoint_path_reaps_after_results(make_engine, tmp_path):
     channel = FakeChannel(commands=[_cmd("Bash", id="t1", args={"cmd": "echo hi"})])
     executor = FakeExecutor(results={"Bash": FakeResult(output="hi")}, ledgered={"Bash"})
     b = make_engine(
-        think_engine=_engine("thought"),
+        inference_engine=_engine("thought"),
         channel=channel,
         executor=executor,
         durable_runner=runner,
     )
     b.engine._ctx = b.ctx
-    b.engine._think_checkpoint.adopt_started(runner.begin_think())
+    b.engine._inference_checkpoint.adopt_started(runner.begin_think())
 
     await b.engine._actions.execute()
 
@@ -252,7 +266,7 @@ async def test_run_non_checkpoint_interrupt_reaps_think(make_engine, tmp_path):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     executor = _RaisingExecutor(raise_on="Read", exc=asyncio.CancelledError())  # nothing ledgered
     b = make_engine(
-        think_engine=_engine("plan", tool_calls=None),
+        inference_engine=_engine("plan", tool_calls=None),
         channel=channel,
         executor=executor,
         durable_runner=runner,
@@ -276,7 +290,7 @@ async def test_run_checkpoint_interrupt_reaps_think(make_engine, tmp_path):
     channel = FakeChannel(commands=[_cmd("Bash", id="t1")])
     executor = _RaisingExecutor(raise_on="Bash", exc=asyncio.CancelledError(), ledgered={"Bash"})
     b = make_engine(
-        think_engine=_engine("plan"),
+        inference_engine=_engine("plan"),
         channel=channel,
         executor=executor,
         durable_runner=runner,
@@ -304,7 +318,7 @@ async def test_run_think_phase_interrupt_reaps_started_record(make_engine, tmp_p
         raise asyncio.CancelledError()
 
     engine.start = _cancel_start  # type: ignore[assignment]
-    b = make_engine(think_engine=engine, durable_runner=runner)
+    b = make_engine(inference_engine=engine, durable_runner=runner)
     _news(b)
 
     with pytest.raises(asyncio.CancelledError):
@@ -323,7 +337,7 @@ async def test_run_failure_still_fails_think(make_engine, tmp_path):
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
     executor = _RaisingExecutor(raise_on="Read", exc=RuntimeError("boom"))
     b = make_engine(
-        think_engine=_engine("plan"),
+        inference_engine=_engine("plan"),
         channel=channel,
         executor=executor,
         durable_runner=runner,

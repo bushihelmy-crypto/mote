@@ -2,12 +2,8 @@ import pytest
 from pydantic import BaseModel
 
 from mote.contracts.output import OutputContractId
-from mote.kernel.output import (
-    OutputContract,
-    OutputContractContextSource,
-    TypeAdapterOutputDecoder,
-    text_output_contract,
-)
+from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder, text_output_contract
+from mote.runtime.agent.components.output_context import OutputContractContextSource
 
 
 class Report(BaseModel):

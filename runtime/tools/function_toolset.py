@@ -5,21 +5,43 @@ from __future__ import annotations
 import inspect
 import types
 from collections.abc import Callable, Mapping
-from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
+from typing import Any, Generic, Protocol, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
-from mote.contracts.introspection.docstrings import description_body, first_line
-from mote.contracts.tools import NativeToolSchema, XmlToolSchema
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
+from mote.contracts.tool import NativeToolSchema, XmlToolSchema
+from mote.kernel.execution.run_context import RunContext, ToolContext
+from mote.kernel.tools.docstrings import description_body, first_line
 from mote.kernel.tools.spec_adapter import build_json_schema
-from mote.kernel.tools.toolset import NativeToolset, XmlToolset
-from mote.runtime.run_context import current_run_context
 from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.provider import NativeToolset, XmlToolset
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_convert import function_docstring_to_schema
 
 AgentDepsT = TypeVar("AgentDepsT")
 ToolDepsT = TypeVar("ToolDepsT")
-ToolFuncT = TypeVar("ToolFuncT", bound=Callable[..., Any])
+ToolReturnT = TypeVar("ToolReturnT")
 DepsProjector = Callable[[AgentDepsT], ToolDepsT]
+
+
+class _FunctionInvocation(Protocol):
+    async def __call__(self, arguments: dict[str, Any]) -> Any:
+        ...
+
+
+class _TypedFunctionInvocation(Generic[AgentDepsT, ToolDepsT]):
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        project: DepsProjector[AgentDepsT, ToolDepsT],
+        context: Callable[[], RunContext[AgentDepsT]],
+    ) -> None:
+        self._function = function
+        self._project = project
+        self._context = context
+
+    async def __call__(self, arguments: dict[str, Any]) -> Any:
+        tool_context = self._context().for_tool(self._project)
+        result = self._function(tool_context, **arguments)
+        return await result if inspect.isawaitable(result) else result
 
 
 def _model_callable(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -71,21 +93,15 @@ def _validate_xml_signature(function: Callable[..., Any]) -> None:
 
 
 class _FunctionCapability(BaseTool):
-    _function: Callable[..., Any]
-    _project: Callable[[Any], Any]
+    _invoke: _FunctionInvocation
 
     async def call(self, **kwargs: Any) -> Any:
-        run_context = current_run_context()
-        if run_context is None:
-            raise RuntimeError(f"function tool '{self.name}' called outside an Agent run")
-        tool_context = run_context.for_tool(self._project)
-        result = self._function(tool_context, **kwargs)
-        return await result if inspect.isawaitable(result) else result
+        return await self._invoke(kwargs)
 
 
 def _capability_type(
     function: Callable[..., Any],
-    project: Callable[[Any], Any],
+    invoke: _FunctionInvocation,
     name: str,
 ) -> type[_FunctionCapability]:
     adapter_name = f"{function.__name__.title().replace('_', '')}FunctionCapability"
@@ -96,8 +112,7 @@ def _capability_type(
             (_FunctionCapability,),
             {
                 "name": name,
-                "_function": staticmethod(function),
-                "_project": staticmethod(project),
+                "_invoke": staticmethod(invoke),
             },
         ),
     )
@@ -105,13 +120,13 @@ def _capability_type(
 
 def _xml_function_definition(
     function: Callable[..., Any],
-    project: Callable[[Any], Any],
+    invoke: _FunctionInvocation,
     name: str,
 ) -> XmlToolDefinition[Any]:
     _validate_xml_signature(function)
     model_function = _model_callable(function)
     docstring = inspect.getdoc(model_function) or ""
-    capability_type = _capability_type(function, project, name)
+    capability_type = _capability_type(function, invoke, name)
 
     def render(_capability: Any) -> XmlToolSchema:
         return {
@@ -134,12 +149,12 @@ def _xml_function_definition(
 
 def _native_function_definition(
     function: Callable[..., Any],
-    project: Callable[[Any], Any],
+    invoke: _FunctionInvocation,
     name: str,
 ) -> NativeToolDefinition[Any]:
     model_function = _model_callable(function)
     docstring = inspect.getdoc(model_function) or ""
-    capability_type = _capability_type(function, project, name)
+    capability_type = _capability_type(function, invoke, name)
 
     def render(_capability: Any) -> NativeToolSchema:
         return {
@@ -165,17 +180,30 @@ class XmlFunctionToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
 
     def __init__(self, id: str, *, version: str = "1") -> None:
         self._registered: dict[str, XmlToolDefinition[Any]] = {}
+        self._function_context: RunContext[AgentDepsT] | None = None
         super().__init__(id, lambda: self._registered.values(), version=version)
+
+    def _bind_run_context(self, context: RunContext[AgentDepsT]) -> None:
+        super()._bind_run_context(context)
+        self._function_context = context
+
+    def _require_function_context(self) -> RunContext[AgentDepsT]:
+        if self._function_context is None:
+            raise RuntimeError(f"function Toolset '{self.id}' called outside an Agent run")
+        return self._function_context
 
     def tool(
         self,
         *,
         project: DepsProjector[AgentDepsT, ToolDepsT],
         name: str | None = None,
-    ) -> Callable[[ToolFuncT], ToolFuncT]:
-        def register(function: ToolFuncT) -> ToolFuncT:
+    ) -> Callable[[Callable[[ToolContext[ToolDepsT]], ToolReturnT]], Callable[[ToolContext[ToolDepsT]], ToolReturnT],]:
+        def register(
+            function: Callable[[ToolContext[ToolDepsT]], ToolReturnT],
+        ) -> Callable[[ToolContext[ToolDepsT]], ToolReturnT]:
             tool_name = _validated_name(name or function.__name__, self._registered)
-            self._registered[tool_name] = _xml_function_definition(function, project, tool_name)
+            invocation = _TypedFunctionInvocation(function, project, self._require_function_context)
+            self._registered[tool_name] = _xml_function_definition(function, invocation, tool_name)
             return function
 
         return register
@@ -186,17 +214,30 @@ class NativeFunctionToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
 
     def __init__(self, id: str, *, version: str = "1") -> None:
         self._registered: dict[str, NativeToolDefinition[Any]] = {}
+        self._function_context: RunContext[AgentDepsT] | None = None
         super().__init__(id, lambda: self._registered.values(), version=version)
+
+    def _bind_run_context(self, context: RunContext[AgentDepsT]) -> None:
+        super()._bind_run_context(context)
+        self._function_context = context
+
+    def _require_function_context(self) -> RunContext[AgentDepsT]:
+        if self._function_context is None:
+            raise RuntimeError(f"function Toolset '{self.id}' called outside an Agent run")
+        return self._function_context
 
     def tool(
         self,
         *,
         project: DepsProjector[AgentDepsT, ToolDepsT],
         name: str | None = None,
-    ) -> Callable[[ToolFuncT], ToolFuncT]:
-        def register(function: ToolFuncT) -> ToolFuncT:
+    ) -> Callable[[Callable[[ToolContext[ToolDepsT]], ToolReturnT]], Callable[[ToolContext[ToolDepsT]], ToolReturnT],]:
+        def register(
+            function: Callable[[ToolContext[ToolDepsT]], ToolReturnT],
+        ) -> Callable[[ToolContext[ToolDepsT]], ToolReturnT]:
             tool_name = _validated_name(name or function.__name__, self._registered)
-            self._registered[tool_name] = _native_function_definition(function, project, tool_name)
+            invocation = _TypedFunctionInvocation(function, project, self._require_function_context)
+            self._registered[tool_name] = _native_function_definition(function, invocation, tool_name)
             return function
 
         return register

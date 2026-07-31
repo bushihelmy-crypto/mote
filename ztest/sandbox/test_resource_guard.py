@@ -8,7 +8,7 @@ take effect on the next read (the dynamic-cap contract the runtime relies on).
 """
 from __future__ import annotations
 
-from mote.contracts.settings.sandbox import SandboxRuntimeConfig
+from mote.runtime.sandbox.config import SandboxRuntimeConfig
 from mote.runtime.tools.permission.sandbox.resource_guard import ResourceGuard
 
 

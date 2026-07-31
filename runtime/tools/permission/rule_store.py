@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.permissions import PermissionBehavior, PermissionRule
-from mote.contracts.settings.permissions import PermissionConfig
+from mote.contracts.authorization import PermissionBehavior, PermissionRule
+from mote.runtime.tools.permission.config import PermissionConfig
 from mote.runtime.tools.permission.rule_matcher import parse_rule, rule_matches
 
 

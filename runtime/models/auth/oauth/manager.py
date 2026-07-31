@@ -10,22 +10,20 @@ did.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from filelock import FileLock
 
-from mote.contracts.config.oauth import GrantType, OAuthProviderConfig
-from mote.runtime.logging import log_class
+from mote.contracts.config.model.oauth import GrantType, OAuthProviderConfig
 from mote.runtime.models.auth.oauth.client import OAuthClient
 from mote.runtime.models.auth.oauth.errors import OAuthConfigError, OAuthRefreshError
 from mote.runtime.models.auth.oauth.flows import LoginCallbacks, run_auth_code_flow, run_device_code_flow
 from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.models.auth.oauth.storage import CredentialStore, get_store
-from mote.runtime.paths import CONFIG_ROOT
+from mote.runtime.telemetry.logging import log_class
 
 _INTERACTIVE_GRANTS = (GrantType.AUTHORIZATION_CODE, GrantType.DEVICE_CODE)
-
-_LOCK_DIR = CONFIG_ROOT / "oauth"
 
 
 @log_class(level="DEBUG")
@@ -43,10 +41,21 @@ class OAuthManager:
         self.config = config
         # A stable provider key derives the store filename + lock path.
         self.provider = provider or (config.client_id or "default")
-        self._store = store if store is not None else get_store(self.provider, config.store_backend)
+        storage_root = config.storage_root
+        if store is None and storage_root is None:
+            raise ValueError("OAuthManager requires an explicit credential storage root")
+        if store is None:
+            assert storage_root is not None
+            store = get_store(
+                self.provider,
+                config.store_backend,
+                base_dir=storage_root,
+            )
+        self._store = store
         self._client = client if client is not None else OAuthClient(config)
         self._cached: Optional[OAuthToken] = None
-        self._lock_path = _LOCK_DIR / f"{self.provider}.lock"
+        lock_root = storage_root or getattr(self._store, "path", Path(".")).parent
+        self._lock_path = lock_root / f"{self.provider}.lock"
 
     # --- public API --------------------------------------------------------
 

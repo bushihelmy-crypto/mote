@@ -4,25 +4,47 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.schema import UserMessage
+from mote.contracts.conversation import UserMessage
 from mote.kernel.output import text_output_contract
-from mote.kernel.tools.toolset import NativeToolset
-from mote.orchestration.environment.control import AgentControl
-from mote.orchestration.environment.runtime import AgentRuntime, AgentStatus
-from mote.orchestration.environment.store import ResidencyStore
+from mote.orchestration.agents.control import AgentControl
+from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus
+from mote.orchestration.agents.residency.store import ResidencyStore
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.agent.incarnation import AgentIncarnationError, AgentIncarnationFactory
+from mote.runtime.tools.provider import NativeToolset
 
 
-def _role(*, version: str = "1") -> Role:
+def _role(*, version: str = "1", runtime_root=None) -> Role:
     dependencies = AgentDependencies(
         deps={"tenant": "acme"},
         output_contract=text_output_contract(),
         toolsets=(NativeToolset("workspace", (), version=version),),
     )
+    wiring = AgentWiring.for_dependencies(dependencies)
+    if runtime_root is not None:
+        from mote.product.paths import default_runtime_paths
+        from mote.runtime.models.clients.context import Context
+        from mote.ztest.model_fakes import offline_config
+
+        paths = default_runtime_paths(
+            user_config_root=runtime_root / "config",
+            workspace_root=runtime_root / "workspace",
+        )
+        dependencies = AgentDependencies(
+            deps={"tenant": "acme"},
+            output_contract=text_output_contract(),
+            toolsets=(NativeToolset("workspace", (), version=version),),
+            user_config_root=paths.user_config_root,
+            session_workspace_root=paths.session_workspace_root,
+            browser_profiles_root=paths.browser_profiles_root,
+            sandbox_ca_root=paths.sandbox_ca_root,
+            secrets_root=paths.secrets_root,
+            oauth_root=paths.oauth_root,
+        )
+        wiring = AgentWiring.for_context(Context(config=offline_config()), dependencies=dependencies)
     return Role(
         name="Worker",
-        wiring=AgentWiring.for_dependencies(dependencies),
+        wiring=wiring,
     )
 
 
@@ -87,10 +109,16 @@ def test_unregister_removes_construction_authority() -> None:
         factory.restore(original.session_id, original.dump())
 
 
-def test_control_owns_blueprint_for_registered_agent_lifetime() -> None:
-    original = _role()
+def test_control_owns_blueprint_for_registered_agent_lifetime(tmp_path) -> None:
+    original = _role(runtime_root=tmp_path)
     factory = AgentIncarnationFactory()
-    control = AgentControl(incarnation_factory=factory)
+    control = AgentControl(
+        store=ResidencyStore(
+            base_dir=str(tmp_path / "residency"),
+            sessions_base_dir=str(tmp_path / "sessions"),
+        ),
+        incarnation_factory=factory,
+    )
 
     control.add_agent(AgentRuntime(original), root=True)
 
@@ -101,7 +129,7 @@ def test_control_owns_blueprint_for_registered_agent_lifetime() -> None:
 
 @pytest.mark.asyncio
 async def test_residency_replacement_keeps_wiring_and_control(tmp_path) -> None:
-    original = _role()
+    original = _role(runtime_root=tmp_path)
     runtime = AgentRuntime(original)
     runtime.status = AgentStatus.COMPLETED
     factory = AgentIncarnationFactory()

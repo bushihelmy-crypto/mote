@@ -1,0 +1,17 @@
+{
+  "extends": "../pyrightconfig.json",
+  "include": [
+    "../contracts/agent/spawn.py",
+    "../contracts/ports/agent/catalog.py",
+    "../contracts/ports/agent/factory.py",
+    "../contracts/execution",
+    "../contracts/ports/events/telemetry.py",
+    "../contracts/ports/output",
+    "../contracts/output"
+  ],
+  "exclude": ["../ztest"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none"
+}

@@ -1,0 +1,50 @@
+{
+  "counterfactual_contract_digest": "sha256:0e0bc6ae2b61817f5125792ed70ec25433ec123d29573699ad929e800f7556ea",
+  "gate_status": "pending",
+  "idl_baseline_digest": "sha256:bb0fc324255064405be27580801ac121ae1c2f1bb50bf5b2b22b28e620637705",
+  "manifest_digest": "sha256:8a12236a2557dd288b9bca1419d1ee7243bff8ac6b3717ff45c801916d36648b",
+  "mutation_result_digest": "sha256:91ceab02c44b7511712d69a0cbe6a42747827fd97c45c769f52ef6d638f43cf6",
+  "quality_policy_digest": "sha256:742b6d62cc2f762c340af39c1ca4c932e0bb0de238f06aa4fdab890ff69d6433",
+  "results": {
+    "counterfactual_activation": {
+      "status": "blocked"
+    },
+    "failure_mapping_mutation": {
+      "score": 1.0,
+      "status": "passed"
+    },
+    "fixture_freshness": {
+      "expired": null,
+      "status": "blocked"
+    },
+    "idl_breaking_change": {
+      "baseline_revision": "idl-baseline-v1",
+      "breaking_changes": 0,
+      "status": "passed"
+    },
+    "manifest_completeness": {
+      "score": 1.0,
+      "status": "passed"
+    },
+    "performance_regression": {
+      "status": "blocked"
+    },
+    "response_validator_mutation": {
+      "score": 1.0,
+      "status": "passed"
+    },
+    "routing_decision_matrix": {
+      "score": 1.0,
+      "status": "passed"
+    },
+    "translation_mutation": {
+      "score": 1.0,
+      "status": "passed"
+    }
+  },
+  "revision": "quality-ratchet-result-v1",
+  "routing_matrix_digest": "sha256:dc8b11d6620dce25aacdd4a072c22376acf53080b21609b50144ec52ee8e5af9",
+  "schema_version": 1,
+  "slo_digest": "sha256:3e1ac536c1651c477460e09811ef60ce361a3f86b5507585d98b8de5b724db3b",
+  "wire_fixture_index_digest": "sha256:b2352505de82db85f2a4237259b3aba778e7d434d9292b55977b98527e89a88a"
+}

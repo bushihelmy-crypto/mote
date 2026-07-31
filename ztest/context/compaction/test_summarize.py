@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.schema import ContextManagerConfig, UserMessage
+from mote.contracts.conversation import ContextManagerConfig, UserMessage
 from mote.runtime.context.compaction.reducers.summarize import SummarizeReducer
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Transcript
@@ -145,15 +145,18 @@ def test_task_result_pointer_reprojected_after_summary():
     # sticky_provider seam: a ResourceRegistry.project projects the registered
     # task_result unit, which must land after the summary (so the model is
     # re-reminded of a result the discarded notification once carried).
-    from mote.runtime.resources import ResourceRegistry, build_task_result_pointer
+    from mote.contracts.task.models import CommandName, CompletedInlineTaskResultPointer, InlineTaskOutput, TaskId
+    from mote.orchestration.background_tasks.result_pointer import render_task_result_pointer
+    from mote.runtime.resources import ResourceRegistry
 
     registry = ResourceRegistry()
-    pointer = build_task_result_pointer(
-        task_id="bg_3",
-        command_name="code review",
-        status="success",
-        summary="code review finished (success).",
-        result="found 2 issues",
+    pointer = render_task_result_pointer(
+        CompletedInlineTaskResultPointer(
+            task_id=TaskId("bg_3"),
+            command_name=CommandName("code review"),
+            summary="code review finished (success).",
+            output=InlineTaskOutput("found 2 issues"),
+        )
     )
     registry.load(id="bg_3", kind="task_result", content=pointer, sticky=True)
 

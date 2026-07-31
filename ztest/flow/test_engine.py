@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``AgentFlowEngine.run`` — the full graph orchestration.
+"""Tests for ``ExecutionEngine.run`` — the full graph orchestration.
 
 Covers: the no-news short-circuit, the ``set_active(True)`` gate, the terminal
 (native plain-text) finish path, a single act-then-stop (terminate result), the
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.schema import CauseBy, UserMessage
-from mote.kernel.flow import BudgetVerdict
+from mote.contracts.conversation import CauseBy, UserMessage
+from mote.kernel.execution import BudgetVerdict
 
 from .conftest import FakeBgPool, FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
 
@@ -54,18 +54,18 @@ class _SeqTerminalChannel(FakeChannel):
         self._seq = list(terminal_seq)
         self.is_terminal_calls = 0
 
-    async def model_turn(self, think_engine):
-        from mote.contracts.model_actions import FinalCandidateAction, ModelTurn
+    async def model_turn(self, result):
+        from mote.contracts.model.turn import FinalCandidateAction, ModelTurn
 
         self.is_terminal_calls += 1
         terminal = self._seq.pop(0) if self._seq else True
-        content = think_engine.result.content or ""
+        content = result.content or ""
         if terminal:
             return ModelTurn(
                 content=content,
                 actions=[FinalCandidateAction(raw=content, representation="test")],
             )
-        return await super().model_turn(think_engine)
+        return await super().model_turn(result)
 
 
 async def test_run_returns_none_without_news(make_engine):
@@ -76,7 +76,7 @@ async def test_run_returns_none_without_news(make_engine):
 
 async def test_resume_accepted_output_commits_without_news_or_model_call(make_engine):
     from mote.kernel.output import text_output_contract
-    from mote.runtime.agent.output_engine import OutputEngine
+    from mote.runtime.output.engine import OutputEngine
 
     contract = text_output_contract()
     engine = OutputEngine(
@@ -91,7 +91,7 @@ async def test_resume_accepted_output_commits_without_news_or_model_call(make_en
         },
     )
     think = FakeThinkEngine(content="must not run")
-    b = make_engine(think_engine=think, output_engine=engine)
+    b = make_engine(inference_engine=think, output_engine=engine)
 
     result = await b.engine.run()
 
@@ -101,7 +101,7 @@ async def test_resume_accepted_output_commits_without_news_or_model_call(make_en
     assert result.presentation.content == "recovered"
     assert think.start_calls == []
     # Never thought, never activated past its initial value.
-    assert b.think_engine.start_calls == []
+    assert b.inference_engine.start_calls == []
 
 
 async def test_run_activates_even_if_starting_inactive(make_engine):
@@ -109,7 +109,7 @@ async def test_run_activates_even_if_starting_inactive(make_engine):
     # first think proceeds. Terminal channel -> _finish path.
     engine = FakeThinkEngine(content="final answer")
     channel = FakeChannel(terminal=True)
-    b = make_engine(active=False, think_engine=engine, channel=channel)
+    b = make_engine(active=False, inference_engine=engine, channel=channel)
     _news(b)
 
     rsp = await b.engine.run()
@@ -119,14 +119,14 @@ async def test_run_activates_even_if_starting_inactive(make_engine):
     assert rsp.presentation.cause_by == CauseBy.RUN_COMMAND.value
     # _finish records an empty-command turn and joins.
     assert channel.recorded_turns == [("final answer", [])]
-    assert b.think_engine.join_calls == 1
+    assert b.inference_engine.join_calls == 1
 
 
 async def test_run_terminal_skips_act(make_engine):
     engine = FakeThinkEngine(content="done")
     channel = FakeChannel(terminal=True)
     executor = FakeExecutor()
-    b = make_engine(think_engine=engine, channel=channel, executor=executor)
+    b = make_engine(inference_engine=engine, channel=channel, executor=executor)
     _news(b)
 
     await b.engine.run()
@@ -135,11 +135,14 @@ async def test_run_terminal_skips_act(make_engine):
     assert executor.calls == []
 
 
-async def test_rejected_output_records_feedback_then_accepts_next_candidate(make_engine):
+async def test_rejected_output_records_feedback_then_accepts_next_candidate(
+    make_engine,
+):
     from mote.contracts.output import OutputEvaluation, ValidationIssue
 
     class RejectOnce:
         run_id = "reject-once-run"
+        staged_output = None
 
         def __init__(self):
             self.calls = 0
@@ -149,6 +152,8 @@ async def test_rejected_output_records_feedback_then_accepts_next_candidate(make
             return False
 
         async def evaluate(self, candidate):
+            from mote.contracts.output import AcceptedOutput
+
             self.calls += 1
             if self.calls == 1:
                 return OutputEvaluation(
@@ -156,17 +161,24 @@ async def test_rejected_output_records_feedback_then_accepts_next_candidate(make
                     correction_allowed=True,
                     issues=(ValidationIssue(("count",), "int_parsing", "Expected an integer"),),
                 )
-            return OutputEvaluation(accepted=True, value=candidate.raw)
+            candidate_id = candidate.candidate_id or "fake"
+            self.staged_output = AcceptedOutput(candidate_id, "test.output@1", "1", "sha", candidate.raw)
+            return OutputEvaluation(accepted=True, candidate_id=candidate_id, value=candidate.raw)
 
         async def commit(self):
             from mote.contracts.output import CommittedOutput
 
-            return CommittedOutput("fake", "test.output@1", "sha", None)
+            return CommittedOutput(
+                self.staged_output.candidate_id,
+                "test.output@1",
+                "sha",
+                self.staged_output.value,
+            )
 
     engine = RejectOnce()
     channel = FakeChannel(terminal=True)
     b = make_engine(
-        think_engine=FakeThinkEngine(content="candidate"),
+        inference_engine=FakeThinkEngine(content="candidate"),
         channel=channel,
         output_engine=engine,
     )
@@ -185,8 +197,8 @@ async def test_output_correction_budget_bounds_model_turns(make_engine):
 
     from mote.contracts.output import OutputContractId
     from mote.kernel.output import OutputContract, OutputRetryPolicy, TypeAdapterOutputDecoder
-    from mote.runtime.agent.output_engine import OutputEngine
     from mote.runtime.errors import OutputCorrectionExhaustedError
+    from mote.runtime.output.engine import OutputEngine
 
     class Report(BaseModel):
         count: int
@@ -200,7 +212,7 @@ async def test_output_correction_budget_bounds_model_turns(make_engine):
     )
     channel = FakeChannel(terminal=True)
     b = make_engine(
-        think_engine=FakeThinkEngine(content="still invalid"),
+        inference_engine=FakeThinkEngine(content="still invalid"),
         channel=channel,
         output_engine=engine,
     )
@@ -209,7 +221,7 @@ async def test_output_correction_budget_bounds_model_turns(make_engine):
     with pytest.raises(OutputCorrectionExhaustedError) as caught:
         await b.engine.run()
 
-    assert len(b.think_engine.start_calls) == 3
+    assert len(b.inference_engine.start_calls) == 3
     assert engine.correction_attempts == 2
     assert len(channel.output_feedback) == 2
     assert caught.value.code.value == "OUTPUT_CORRECTION_EXHAUSTED"
@@ -274,7 +286,7 @@ async def test_run_acts_several_rounds_then_finishes(make_engine):
     )
     executor = FakeExecutor(results={"Read": FakeResult(output="data")})
     b = make_engine(
-        think_engine=engine,
+        inference_engine=engine,
         channel=channel,
         executor=executor,
     )
@@ -323,7 +335,7 @@ async def test_run_budget_stop_halts_before_think(make_engine):
 
     assert b.provider.enforce_budget_calls == 1
     assert b.provider.prepare_calls == 0  # never assembled a think request
-    assert b.think_engine.start_calls == []  # never touched the LLM
+    assert b.inference_engine.start_calls == []  # never touched the LLM
     assert executor.calls == []  # never acted
     assert rsp.presentation.content == "budget-halt"
     assert rsp.presentation.cause_by == CauseBy.RUN_COMMAND.value

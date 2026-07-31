@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mote.contracts.events import EventId, EventType, StreamId
-from mote.contracts.ports.event_journal import UncommittedFact
-from mote.contracts.ports.event_subscription import (
+from mote.contracts.events.envelope import EventId, EventType, StreamId
+from mote.contracts.ports.events.journal import UncommittedFact
+from mote.contracts.ports.events.subscription import (
     EventFilter,
     Ordering,
     OverflowPolicy,
@@ -16,7 +16,7 @@ from mote.contracts.ports.event_subscription import (
     SubscriptionIdentity,
     SubscriptionSpec,
 )
-from mote.contracts.ports.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.runtime.events.backends.subscription_state import SQLiteSubscriptionStateStore
 from mote.runtime.events.dispatcher import SubscriptionBinding, SubscriptionManifest
 from mote.runtime.events.fabric import EventFabric, EventFabricReadOnly, EventFabricUnavailable

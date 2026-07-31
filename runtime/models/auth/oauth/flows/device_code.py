@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.config.oauth import OAuthProviderConfig
+from mote.contracts.config.model.oauth import OAuthProviderConfig
 from mote.runtime.models.auth.oauth.client import OAuthClient
 from mote.runtime.models.auth.oauth.errors import OAuthConfigError
 from mote.runtime.models.auth.oauth.flows.callbacks import LoginCallbacks
