@@ -35,7 +35,7 @@ from mote.product.interaction.turn import TurnRunner, format_turn_error
 from mote.product.presentation.input_events import is_presentation_input
 from mote.product.presentation.projection.base import BaseProjector
 from mote.product.presentation.projection.projector import ViewProjector
-from mote.runtime.events import TelemetryHandle, TypedTelemetryBinding
+from mote.runtime.events import TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
 _format_turn_error = format_turn_error
@@ -109,17 +109,15 @@ class ConnectionScope:
         telemetry = getattr(self._role, "telemetry", None)
         if telemetry is not None and self._telemetry_handle is None:
             try:
-                self._telemetry_handle = await telemetry.subscribe(
-                    TypedTelemetryBinding(
-                        TelemetrySubscriptionSpec(
-                            identity=self._telemetry_identity,
-                            capacity=4096,
-                            overflow=TelemetryOverflow.DROP_OLDEST,
-                        ),
-                        is_presentation_input,
-                        self._projector,
-                        self._projector,
-                    ).erase()
+                self._telemetry_handle = await telemetry.subscribe_typed(
+                    TelemetrySubscriptionSpec(
+                        identity=self._telemetry_identity,
+                        capacity=4096,
+                        overflow=TelemetryOverflow.DROP_OLDEST,
+                    ),
+                    is_presentation_input,
+                    self._projector,
+                    self._projector,
                 )
             except Exception as exc:  # noqa: BLE001 — rendering is best-effort
                 logger.warning(f"ConnectionScope: projector subscribe failed: {exc}")

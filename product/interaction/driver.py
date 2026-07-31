@@ -38,7 +38,7 @@ from mote.product.presentation.input_events import is_presentation_input
 from mote.product.presentation.projection.base import BaseProjector
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.engine import EngineAgentRequest
-from mote.runtime.events import TelemetryHandle, TypedTelemetryBinding
+from mote.runtime.events import TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
 _format_turn_error = format_turn_error
@@ -238,17 +238,15 @@ class SessionDriver:
         if telemetry is None or telemetry in self._telemetry_handles:
             return
         try:
-            handle = await telemetry.subscribe(
-                TypedTelemetryBinding(
-                    TelemetrySubscriptionSpec(
-                        identity=self._telemetry_identity,
-                        capacity=4096,
-                        overflow=TelemetryOverflow.DROP_OLDEST,
-                    ),
-                    is_presentation_input,
-                    self._projector,
-                    self._projector,
-                ).erase()
+            handle = await telemetry.subscribe_typed(
+                TelemetrySubscriptionSpec(
+                    identity=self._telemetry_identity,
+                    capacity=4096,
+                    overflow=TelemetryOverflow.DROP_OLDEST,
+                ),
+                is_presentation_input,
+                self._projector,
+                self._projector,
             )
             self._telemetry_handles[telemetry] = handle
         except Exception as exc:  # noqa: BLE001 — rendering is best-effort

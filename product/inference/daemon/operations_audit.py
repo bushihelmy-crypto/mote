@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from types import MappingProxyType
 
-from mote.contracts.events.envelope import EventId, EventType, JsonValue, StreamId
-from mote.contracts.ports.events.journal import UncommittedFact
+from mote.contracts.events.envelope import StreamId
+from mote.product.inference.daemon.operations_audit_codec import (
+    OperationsAuditEvent,
+    encode_operations_audit_event,
+)
 from mote.runtime.events import LocalEventJournal
 
 _STREAM = StreamId("inference/shared-operations")
@@ -29,22 +31,14 @@ class SharedOperationsAudit:
         return self._journal.path_for(_STREAM)
 
     async def record(self, operation: str, outcome: str, **details: object) -> None:
-        payload: dict[str, JsonValue] = {
-            "operation": operation,
-            "outcome": outcome,
-            "details": {key: str(value) for key, value in details.items()},
-        }
+        event = OperationsAuditEvent(
+            operation=operation,
+            outcome=outcome,
+            details=MappingProxyType({key: str(value) for key, value in details.items()}),
+        )
         result = await self._journal.append(
             _STREAM,
-            (
-                UncommittedFact(
-                    event_id=EventId(str(uuid4())),
-                    event_type=EventType("mote.inference.operations-audit"),
-                    schema_version=1,
-                    occurred_at=datetime.now(timezone.utc),
-                    payload=payload,
-                ),
-            ),
+            (encode_operations_audit_event(event),),
             expected_version=self._version,
         )
         self._version = result.current_version

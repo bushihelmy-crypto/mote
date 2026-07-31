@@ -32,6 +32,7 @@ from mote.contracts.task.graph_errors import (
     GraphRouterError,
 )
 from mote.orchestration.workflows.channels import apply_updates
+from mote.orchestration.workflows.control import PauseReason
 from mote.orchestration.workflows.deferred import BgTaskResult, GraphMeta
 from mote.orchestration.workflows.events import report_progress
 from mote.orchestration.workflows.notify import (
@@ -44,7 +45,7 @@ from mote.orchestration.workflows.notify import (
     push_started_notification,
     push_terminal_notification,
 )
-from mote.orchestration.workflows.types import END, BgStatus, GraphPause, GraphRunState, GraphState, PauseReason, Stage
+from mote.orchestration.workflows.types import END, BgStatus, GraphPause, GraphRunState, GraphState, Stage
 from mote.runtime.errors import GraphError, RecoveryAction, RecoveryRunner
 from mote.runtime.events.scope import ScopeRef, push_scope
 

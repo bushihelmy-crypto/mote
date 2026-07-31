@@ -17,7 +17,6 @@ from mote.runtime.events.telemetry import (
     TelemetryManifest,
     TelemetryRuntime,
     TelemetryState,
-    TypedTelemetryBinding,
 )
 
 
@@ -144,7 +143,9 @@ async def test_coalesce_keeps_latest_pending_observation() -> None:
 @pytest.mark.asyncio
 async def test_sync_emit_is_enqueued_and_processed_by_owner_task() -> None:
     handler = _SyncHandler()
-    typed = TypedTelemetryBinding(
+    runtime = TelemetryRuntime(TelemetryManifest(()))
+    runtime.start()
+    await runtime.subscribe_typed(
         TelemetrySubscriptionSpec(
             TelemetryIdentity("mote.test.sync"),
             4,
@@ -154,8 +155,6 @@ async def test_sync_emit_is_enqueued_and_processed_by_owner_task() -> None:
         handler,
         handler,
     )
-    runtime = TelemetryRuntime(TelemetryManifest((typed.erase(),)))
-    runtime.start()
 
     runtime.emit_sync(_Event(1))
     assert handler.values == []
@@ -168,7 +167,9 @@ async def test_sync_emit_is_enqueued_and_processed_by_owner_task() -> None:
 @pytest.mark.asyncio
 async def test_typed_binding_filters_both_paths_and_skips_missing_sync_handler() -> None:
     handler = _Handler()
-    typed = TypedTelemetryBinding(
+    runtime = TelemetryRuntime(TelemetryManifest(()))
+    runtime.start()
+    await runtime.subscribe_typed(
         TelemetrySubscriptionSpec(
             TelemetryIdentity("mote.test.typed"),
             4,
@@ -177,8 +178,6 @@ async def test_typed_binding_filters_both_paths_and_skips_missing_sync_handler()
         _accepts_event,
         handler,
     )
-    runtime = TelemetryRuntime(TelemetryManifest((typed.erase(),)))
-    runtime.start()
 
     await runtime.emit(object())
     await runtime.emit(_Event(1))

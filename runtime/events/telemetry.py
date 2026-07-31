@@ -44,7 +44,7 @@ EventT = TypeVar("EventT")
 
 
 @dataclass(frozen=True)
-class TypedTelemetryBinding(Generic[EventT]):
+class _TypedTelemetryBinding(Generic[EventT]):
     spec: TelemetrySubscriptionSpec
     accepts: EventNarrower[EventT]
     handler: TelemetryHandler[EventT]
@@ -369,6 +369,17 @@ class TelemetryRuntime:
         self._workers[identity] = worker
         return TelemetryHandle(self, identity)
 
+    async def subscribe_typed(
+        self,
+        spec: TelemetrySubscriptionSpec,
+        accepts: EventNarrower[EventT],
+        handler: TelemetryHandler[EventT],
+        sync_handler: SyncTelemetryHandler[EventT] | None = None,
+    ) -> TelemetryHandle:
+        """Register one typed binding and erase it inside the Runtime boundary."""
+
+        return await self.subscribe(_TypedTelemetryBinding(spec, accepts, handler, sync_handler).erase())
+
     async def unsubscribe(self, identity: TelemetryIdentity) -> None:
         worker = self._workers.pop(identity, None)
         if worker is not None:
@@ -404,5 +415,4 @@ __all__ = [
     "TelemetryRuntime",
     "TelemetryState",
     "TelemetrySubscriptionSnapshot",
-    "TypedTelemetryBinding",
 ]

@@ -15,6 +15,7 @@ from mote.contracts.task.graph_errors import (
 )
 from mote.orchestration.workflows.base_node import BaseNode, From
 from mote.orchestration.workflows.channels import NoOutput, Output
+from mote.orchestration.workflows.control import PauseReason
 from mote.orchestration.workflows.definition import (
     Cancelled,
     Failed,
@@ -36,7 +37,6 @@ from mote.orchestration.workflows.types import (
     GraphRunState,
     GraphState,
     NodeRecord,
-    PauseReason,
     Stage,
 )
 

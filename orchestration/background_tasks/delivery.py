@@ -12,7 +12,12 @@ from typing import Any, Callable, Optional
 from mote.contracts.conversation import CauseBy
 from mote.orchestration.background_tasks.model import BackgroundTaskNotification
 from mote.runtime.events import TaskProgressEvent, observe_event_sync
-from mote.runtime.events.progress_scope import ProgressWriter, bind_progress_writer, current_progress_writer
+from mote.runtime.events.progress_scope import (
+    ProgressWriter,
+    bind_progress_writer,
+    current_progress_writer,
+    reset_progress_writer,
+)
 from mote.runtime.telemetry.logging import logger
 
 END = "__end__"

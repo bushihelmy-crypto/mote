@@ -20,13 +20,7 @@ MIGRATION_FORBIDDEN_EDGES: set[tuple[str, str]] = set()
 
 # Discovery is temporarily exact-scoped to these reviewed call sites. The
 # owning migration replaces them with immutable, Application-owned catalogs.
-DYNAMIC_IMPORT_MIGRATION_FACTS = {
-    "product/agents/discovery.py:24",
-    "product/agents/discovery.py:28",
-    "product/toolsets/__init__.py:30",
-    "product/toolsets/__init__.py:32",
-    "product/interfaces/textual/__init__.py:48",
-}
+DYNAMIC_IMPORT_MIGRATION_FACTS = {"product/interfaces/textual/__init__.py:48"}
 
 FORBIDDEN_TARGETS = {
     "config": {

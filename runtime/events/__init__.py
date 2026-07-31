@@ -120,7 +120,6 @@ from mote.runtime.events.telemetry import (
     TelemetryManifest,
     TelemetryRuntime,
     TelemetryState,
-    TypedTelemetryBinding,
 )
 
 __all__ = [
@@ -133,7 +132,6 @@ __all__ = [
     "TelemetryManifest",
     "TelemetryRuntime",
     "TelemetryState",
-    "TypedTelemetryBinding",
     "bind_telemetry",
     "current_telemetry",
     "observe_event",

@@ -6,42 +6,61 @@ ledgering, snapshots, settlement, and audit remain mandatory Runtime concerns.
 
 from __future__ import annotations
 
-import importlib
-import pkgutil
 from collections.abc import Callable, Mapping
 from typing import Any
 
 from mote.contracts.tool import CommandProtocol
+from mote.product.toolsets.builtin.agent_tool import Agent
+from mote.product.toolsets.builtin.bash import Bash
+from mote.product.toolsets.builtin.cancel_tasks import CancelTasks
+from mote.product.toolsets.builtin.canvas import Canvas
+from mote.product.toolsets.builtin.device_use import DeviceUse
+from mote.product.toolsets.builtin.edit import Edit
+from mote.product.toolsets.builtin.generate_media.generate_media_tool import GenerateMedia
+from mote.product.toolsets.builtin.human import AskUser, AskUserQuestion, ReplyToUser
+from mote.product.toolsets.builtin.python import Python
+from mote.product.toolsets.builtin.read import Read
+from mote.product.toolsets.builtin.search import Search
+from mote.product.toolsets.builtin.search_tools import SearchTools
+from mote.product.toolsets.builtin.skill_tool import Skill
+from mote.product.toolsets.builtin.sleep import Sleep
+from mote.product.toolsets.builtin.terminal import Terminal
+from mote.product.toolsets.builtin.web_browser import WebBrowser
+from mote.product.toolsets.builtin.web_search import WebSearch
 from mote.product.workflows.run_graph.tool import RunGraph
 from mote.runtime.tools.provider import AnyToolset
-from mote.runtime.tools.tool_registry import NativeCatalogToolset, ToolCatalog, XmlCatalogToolset, declared_tool_catalog
+from mote.runtime.tools.tool_registry import NativeCatalogToolset, ToolCatalog, XmlCatalogToolset
 
-_BUILTIN_PACKAGE = ("mote.product.toolsets.builtin",)
-_builtin_tools_discovered = False
-
-
-def discover_builtin_tools() -> None:
-    """Import the Product-owned built-in tool modules exactly once."""
-    global _builtin_tools_discovered
-    if _builtin_tools_discovered:
-        return
-    _builtin_tools_discovered = True
-    for package in _BUILTIN_PACKAGE:
-        module = importlib.import_module(package)
-        for child in pkgutil.walk_packages(module.__path__, prefix=module.__name__ + "."):
-            importlib.import_module(child.name)
+_BUILTIN_TOOL_TYPES = (
+    Agent,
+    AskUser,
+    AskUserQuestion,
+    Bash,
+    CancelTasks,
+    Canvas,
+    DeviceUse,
+    Edit,
+    GenerateMedia,
+    Python,
+    Read,
+    ReplyToUser,
+    RunGraph,
+    Search,
+    SearchTools,
+    Skill,
+    Sleep,
+    Terminal,
+    WebBrowser,
+    WebSearch,
+)
 
 
 def builtin_tool_catalog() -> ToolCatalog:
     """Freeze bundled tool declarations into an Application-owned snapshot."""
 
-    discover_builtin_tools()
-    declarations = declared_tool_catalog()
     assert RunGraph.name == "RunGraph"
     builtin_names = set().union(*BUILTIN_TOOL_GROUPS.values())
-    return ToolCatalog.from_types(
-        tool_type for name, tool_type in declarations.all_tools().items() if name in builtin_names
-    )
+    return ToolCatalog.from_types(tool_type for tool_type in _BUILTIN_TOOL_TYPES if tool_type.name in builtin_names)
 
 
 WORKSPACE_TOOLS = frozenset({"Read", "Edit", "Search"})
@@ -114,5 +133,4 @@ __all__ = [
     "WORKSPACE_TOOLS",
     "builtin_toolsets",
     "builtin_tool_catalog",
-    "discover_builtin_tools",
 ]
