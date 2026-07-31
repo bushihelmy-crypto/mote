@@ -7,20 +7,28 @@ activation are sync seams, and refreshes are infrequent.
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
 
 import httpx
 
-from mote.contracts.config.oauth import GrantType, OAuthProviderConfig
-from mote.runtime.logging import log_class
+from mote.contracts.config.model.oauth import GrantType, OAuthProviderConfig
 from mote.runtime.models.auth.oauth.errors import OAuthConfigError, OAuthRefreshError, classify_refresh_failure
 from mote.runtime.models.auth.oauth.jwt_utils import JWTDecodeError, parse_claims
 from mote.runtime.models.auth.oauth.models import DeviceCodeInfo, OAuthToken
+from mote.runtime.telemetry.logging import log_class
 
 _DEFAULT_TIMEOUT = 30.0
 _DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _DEVICE_FLOW_DEFAULT_EXPIRY = 900  # seconds; fallback when server omits expires_in
+
+
+def _resolved_token_url(config: OAuthProviderConfig) -> str:
+    token_url = config.token_url or ""
+    if config.token_url_env_override:
+        return os.environ.get(config.token_url_env_override) or token_url
+    return token_url
 
 
 @log_class(level="DEBUG")
@@ -113,7 +121,7 @@ class OAuthClient:
         window = expires_in if expires_in is not None else _DEVICE_FLOW_DEFAULT_EXPIRY
         deadline = time.time() + window
         delay = max(1, int(interval or 5))
-        token_url = self.config.resolved_token_url()
+        token_url = _resolved_token_url(self.config)
         while True:
             if time.time() >= deadline:
                 raise OAuthRefreshError(
@@ -148,7 +156,7 @@ class OAuthClient:
         revoke_url = self.config.issuer
         # P1 has no dedicated revoke_url field; derive from token_url when the
         # issuer doesn't expose one. Callers in P1 generally won't use this.
-        url = revoke_url or self.config.resolved_token_url().replace("/token", "/revoke")
+        url = revoke_url or _resolved_token_url(self.config).replace("/token", "/revoke")
         data = {"token": token, "client_id": self.config.client_id}
         if token_type_hint:
             data["token_type_hint"] = token_type_hint
@@ -195,7 +203,7 @@ class OAuthClient:
         )
 
     def _token_request(self, data: dict) -> OAuthToken:
-        url = self.config.resolved_token_url()
+        url = _resolved_token_url(self.config)
         with httpx.Client(timeout=self._timeout) as client:
             resp = client.post(url, data=data, headers={"Accept": "application/json"})
         if not resp.is_success:

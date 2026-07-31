@@ -43,7 +43,18 @@ later (``register_hook``) is picked up.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Optional
+from typing import Callable, Generic, Iterable, Optional, TypeVar, cast
+
+ComponentT = TypeVar("ComponentT", covariant=True)
+RoleT = TypeVar("RoleT")
+StateT = TypeVar("StateT")
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentKey(Generic[ComponentT]):
+    """Nominal graph key carrying the component's static value type."""
+
+    name: str
 
 
 class ComponentGraphError(Exception):
@@ -64,7 +75,7 @@ class ComponentCycleError(ComponentGraphError):
 
 
 @dataclass(frozen=True)
-class ComponentSpec:
+class ComponentSpec(Generic[RoleT, StateT, ComponentT]):
     """The declarative description of one buildable component.
 
     - ``name``: the registry key (also the Role's public attribute name).
@@ -76,12 +87,16 @@ class ComponentSpec:
       when it returns ``False`` the component resolves to ``None`` (not cached).
     """
 
-    name: str
-    build: Callable[["BuildContext"], Any]
-    available: Optional[Callable[[Any, Any], bool]] = None
+    key: ComponentKey[ComponentT]
+    build: Callable[["BuildContext[RoleT, StateT]"], ComponentT]
+    available: Optional[Callable[[RoleT, StateT], bool]] = None
+
+    @property
+    def name(self) -> str:
+        return self.key.name
 
 
-class BuildContext:
+class BuildContext(Generic[RoleT, StateT]):
     """The narrow surface a :class:`ComponentSpec.build` sees while constructing.
 
     Exposes the role and its mutable extras (``state``) plus the two sibling-edge
@@ -98,28 +113,31 @@ class BuildContext:
 
     __slots__ = ("role", "state", "dep", "defer")
 
-    def __init__(self, graph: "ComponentGraph", role: Any, state: Any):
+    role: RoleT
+    state: StateT
+
+    def __init__(self, graph: "ComponentGraph[RoleT, StateT]", role: RoleT, state: StateT):
         self.role = role
         self.state = state
 
         # ``dep`` / ``defer`` close over the resolver so it is never an attribute
         # on ``ctx``: a builder gets exactly these two edge primitives and no
         # other path back to ``get`` / ``seed`` / ``_slots``.
-        def dep(name: str) -> Any:
+        def dep(key: ComponentKey[ComponentT]) -> ComponentT:
             """Resolve sibling ``name`` now — an eager edge, cycle-tracked (it
             re-enters the resolver with this component on the stack)."""
-            return graph.get(name)
+            return graph.get(key)
 
-        def defer(name: str) -> Callable[[], Any]:
+        def defer(key: ComponentKey[ComponentT]) -> Callable[[], ComponentT]:
             """Return a thunk resolving sibling ``name`` on call — a deferred edge
             (no build now), for a sibling only read later."""
-            return lambda: graph.get(name)
+            return lambda: graph.get(key)
 
         self.dep = dep
         self.defer = defer
 
 
-class ComponentGraph:
+class ComponentGraph(Generic[RoleT, StateT]):
     """Lazy, cycle-checked resolver over a set of :class:`ComponentSpec`.
 
     ``get(name)`` returns the (cached) component, building it — and, transitively,
@@ -129,21 +147,27 @@ class ComponentGraph:
     paths).
     """
 
-    def __init__(self, role: Any, state: Any, specs: Iterable[ComponentSpec]):
+    def __init__(
+        self,
+        role: RoleT,
+        state: StateT,
+        specs: Iterable[ComponentSpec[RoleT, StateT, object]],
+    ):
         self._role = role
         self._state = state
-        self._specs: dict[str, ComponentSpec] = {}
+        self._specs: dict[str, ComponentSpec[RoleT, StateT, object]] = {}
         for spec in specs:
             if spec.name in self._specs:
                 raise ComponentGraphError(f"Duplicate component spec: {spec.name!r}")
             self._specs[spec.name] = spec
-        self._slots: dict[str, Any] = {}
+        self._slots: dict[str, object] = {}
         self._resolving: list[str] = []
 
-    def get(self, name: str) -> Any:
+    def get(self, key: ComponentKey[ComponentT]) -> ComponentT:
         """Resolve (and cache) component ``name``; ``None`` for an unavailable layer."""
+        name = key.name
         if name in self._slots:
-            return self._slots[name]
+            return cast(ComponentT, self._slots[name])
 
         try:
             spec = self._specs[name]
@@ -154,7 +178,7 @@ class ComponentGraph:
         # a later engagement (e.g. register_hook flipping the hook layer on) is
         # picked up on the next access.
         if spec.available is not None and not spec.available(self._role, self._state):
-            return None
+            return cast(ComponentT, None)
 
         if name in self._resolving:
             path = " -> ".join([*self._resolving, name])
@@ -170,19 +194,21 @@ class ComponentGraph:
         # cached — mirrors the historic "slot stays None => rebuilt next time".
         if value is not None:
             self._slots[name] = value
-        return value
+        return cast(ComponentT, value)
 
-    def peek(self, name: str) -> Any:
+    def peek(self, key: ComponentKey[ComponentT]) -> ComponentT | None:
         """The built component if it already exists, else ``None`` (no build)."""
+        name = key.name
         if name not in self._specs:
             raise UnknownComponentError(name)
-        return self._slots.get(name)
+        return cast(ComponentT | None, self._slots.get(name))
 
-    def is_built(self, name: str) -> bool:
+    def is_built(self, key: ComponentKey[object]) -> bool:
         """Whether ``name`` has a cached (non-None) component."""
+        name = key.name
         return name in self._slots
 
-    def seed(self, name: str, value: Any) -> None:
+    def seed(self, key: ComponentKey[ComponentT], value: ComponentT) -> None:
         """Pre-populate a slot, bypassing the builder (test/DI injection seam).
 
         Stamps ``value`` into the cache for ``name`` (which must be a registered
@@ -191,6 +217,7 @@ class ComponentGraph:
         place of the real collaborator, mirroring the old "assign the private
         slot" pattern but going through the one resolver.
         """
+        name = key.name
         if name not in self._specs:
             raise UnknownComponentError(name)
         self._slots[name] = value
@@ -198,6 +225,7 @@ class ComponentGraph:
 
 __all__ = [
     "BuildContext",
+    "ComponentKey",
     "ComponentSpec",
     "ComponentGraph",
     "ComponentGraphError",

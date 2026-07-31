@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace as NS
 
-from mote.product.integrations.models.openai_chat import OpenAILLM
+from mote.product.models.providers.openai_chat import OpenAILLM
 
 
 class _FakeLLM:

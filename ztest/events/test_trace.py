@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 
 from mote.runtime.events import SpanEndEvent, SpanStartEvent, bind_telemetry, current_span_id, span
-from mote.runtime.logging import bind_trace
+from mote.runtime.telemetry.logging import bind_trace
 from mote.ztest.telemetry import InlineTelemetry
 
 

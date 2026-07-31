@@ -6,21 +6,20 @@ import os
 import uuid
 from collections.abc import Callable
 
-from mote.contracts.fileops.errors import StaleSnapshotError
-from mote.contracts.fileops.models import (
-    AbsentVersion,
-    BlobRef,
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.errors import StaleSnapshotError
+from mote.contracts.file.identity import AbsentVersion, FileSnapshot
+from mote.contracts.file.mutations import (
     CreateMutation,
     DeleteMutation,
-    FileSnapshot,
     Mutation,
     MutationSet,
     RecoveryPolicy,
     ReplaceMutation,
 )
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
 from mote.runtime.fileops.identity import name_identity, path_token, project_identity
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 
 
 class MutationFactory:
@@ -52,7 +51,7 @@ class MutationFactory:
     def replacement_from_artifact(
         self,
         snapshot: FileSnapshot,
-        after: BlobRef,
+        after: ContentIdentity,
     ) -> ReplaceMutation:
         self.artifacts.verify(snapshot.artifact)
         self.artifacts.verify(snapshot.metadata)
@@ -75,7 +74,7 @@ class MutationFactory:
     def creation_from_artifact(
         self,
         path: str | bytes,
-        after: BlobRef,
+        after: ContentIdentity,
         *,
         scope: ArtifactWriteScope,
     ) -> CreateMutation:

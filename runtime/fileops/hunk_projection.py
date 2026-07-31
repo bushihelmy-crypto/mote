@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from mote.contracts.fileops.models import BlobRef, HunkRecord, MutationSet
-from mote.contracts.text.hunks import split_hunks
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.mutations import MutationSet
+from mote.contracts.file.transactions import HunkRecord
 from mote.runtime.fileops.edit_plans import EditPlanReviewFact
+from mote.runtime.fileops.hunks import split_hunks
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
 
 
 class EditPlanHunkProjector:
@@ -50,7 +52,7 @@ class EditPlanHunkProjector:
                 )
         return tuple(records)
 
-    def _read_text(self, artifact: BlobRef) -> str:
+    def _read_text(self, artifact: ContentIdentity) -> str:
         raw = self.artifacts.read_bytes(artifact)
         text = raw.decode("utf-8", errors="strict")
         if "\r" in text:

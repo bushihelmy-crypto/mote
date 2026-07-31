@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.handoff import HandoffOutcome, HandoffStatus
-from mote.contracts.runtimes import RuntimeRef
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.interaction.handoff import HandoffOutcome, HandoffStatus
+from mote.contracts.runtime import RuntimeRef
+from mote.contracts.tool.effects import ToolEffect
 from mote.product.toolsets.builtin.canvas import Canvas
 from mote.product.toolsets.builtin.device_use import DeviceUse
 from mote.product.toolsets.builtin.python import Python
 from mote.product.toolsets.builtin.terminal import Terminal
 from mote.product.toolsets.builtin.web_browser import WebBrowser
 from mote.runtime.interactive import RuntimeHost
-from mote.runtime.tools.dependency._canvas import CanvasRuntimeDriver
+from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 
 
 @pytest.mark.parametrize(

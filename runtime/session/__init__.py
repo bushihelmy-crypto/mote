@@ -13,12 +13,10 @@ from mote.runtime.session.attribution import HunkAttribution, HunkView, SessionS
 from mote.runtime.session.checkpoint import CheckpointEntry, list_checkpoints
 from mote.runtime.session.committer import SessionFactCommitter
 from mote.runtime.session.events import (
-    BrowserStateEvent,
     CheckpointEvent,
     ContextCompactedFact,
     FileHistoryImportedEvent,
     HistoryEditedFact,
-    KernelStateEvent,
     MessageEvent,
     MetaUpdateEvent,
     RuntimeCheckpointEvent,
@@ -28,7 +26,6 @@ from mote.runtime.session.events import (
     RuntimeHandoffResolvedEvent,
     RuntimeProjectionAcknowledgedEvent,
     SessionMetaEvent,
-    TerminalStateEvent,
     TurnContextEvent,
 )
 from mote.runtime.session.history import SnapshotEntry, diff_snapshot, file_history, restore
@@ -55,9 +52,6 @@ __all__ = [
     "MetaUpdateEvent",
     "FileHistoryImportedEvent",
     "CheckpointEvent",
-    "TerminalStateEvent",
-    "KernelStateEvent",
-    "BrowserStateEvent",
     "RuntimeCheckpointEvent",
     "RuntimeCommitEvent",
     "RuntimeHandoffPreparedEvent",

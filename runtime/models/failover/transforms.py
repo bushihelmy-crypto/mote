@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 
-from mote.contracts.constants.messages import CACHE_INTENT
-from mote.contracts.models.failover import EndpointDescriptor, FailureDisposition, RequestTransform
-from mote.contracts.models.invocation import CanonicalMessage, CanonicalToolCall, GenerateInput, ModelInvocation
-from mote.contracts.ports import ContextReducer
+from mote.contracts.conversation.fields import CACHE_INTENT
+from mote.contracts.model.failover import EndpointDescriptor, FailureDisposition, RequestTransform
+from mote.contracts.model.invocation import CanonicalMessage, CanonicalToolCall, GenerateInput, ModelInvocation
+from mote.contracts.ports.conversation.context_reducer import ContextReducer
 from mote.runtime.models.clients.transformers import downgrade_tool_content, shrink_image, strip_request_state
 
 _DEFAULT_CONTEXT_TOKENS = 128_000

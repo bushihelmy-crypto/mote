@@ -4,12 +4,12 @@ from contextlib import contextmanager
 
 import pytest
 
-from mote.contracts.fileops import MutationSet, RecoveryPolicy, ReplaceMutation, TransactionStatus
-from mote.contracts.fileops.errors import FilePublishError
-from mote.runtime.fileops.artifact_budgets import snapshot_budget
-from mote.runtime.fileops.facade import FileOperations
+from mote.contracts.file import MutationSet, RecoveryPolicy, ReplaceMutation, TransactionStatus
+from mote.contracts.file.errors import FilePublishError
 from mote.runtime.fileops.identity import project_identity
+from mote.runtime.fileops.resource_limits import snapshot_budget
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path) -> FileOperations:

@@ -5,13 +5,13 @@ import os
 
 import pytest
 
-from mote.contracts.canvas import CanvasDocument, CanvasElement, CanvasOperation
-from mote.contracts.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
-from mote.contracts.runtimes import RuntimeRef
-from mote.product.cli.surfaces.canvas import CanvasWindowPresentationSession
+from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import RuntimeRef
+from mote.contracts.surface import CanvasDocument, CanvasElement, CanvasOperation
+from mote.product.interfaces.textual.surfaces.canvas import CanvasWindowPresentationSession
+from mote.runtime.interactive.canvas.backends.drawio import DrawioCanvasBackend
+from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 from mote.runtime.interactive.surface import RuntimeLiveSurfaceSession
-from mote.runtime.tools.dependency._canvas import CanvasRuntimeDriver
-from mote.runtime.tools.dependency.canvas_backends.drawio import DrawioCanvasBackend
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("MOTE_RUN_DRAWIO_LIVE") != "1",

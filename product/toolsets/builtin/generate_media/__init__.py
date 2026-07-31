@@ -1,1 +1,1 @@
-"""GenerateMedia package — async media creators for the GenerateMedia tool."""
+"""Model-facing adapter for the Media Generation capability."""

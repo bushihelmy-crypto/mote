@@ -22,9 +22,23 @@ jobs:
       # pre-commit hooks run as language: system, so the tools they invoke must
       # be present on PATH (isort / black / flake8 / pyright).
       - name: Install lint tooling
-        run: pip install pre-commit black isort flake8 pyright
+        run: pip install pre-commit black isort flake8 pyright==1.1.411
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
+      - name: Verify static type contracts
+        run: python typecheck/verify_type_contract_cases.py
+      - name: Verify migration diagnostic manifest
+        run: python typecheck/verify_migration_diagnostics.py
+      - name: Check contracts type island
+        run: pyright -p typecheck/pyright.contracts.json
+      - name: Check execution type island
+        run: pyright -p typecheck/pyright.execution.json
+      - name: Check Runtime tools type island
+        run: pyright -p typecheck/pyright.runtime-tools.json
+      - name: Check orchestration type island
+        run: pyright -p typecheck/pyright.orchestration.json
+      - name: Check presentation type island
+        run: pyright -p typecheck/pyright.presentation.json
 
   test:
     name: Tests (py${{ matrix.python-version }})
@@ -32,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

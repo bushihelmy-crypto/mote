@@ -24,8 +24,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 
-from mote.product.cli.consumers.render.markdown import BrandMarkdown, themed_markdown
-from mote.product.cli.consumers.render.palette import Palette
+from mote.product.presentation.rich_rendering.markdown import BrandMarkdown, themed_markdown
+from mote.product.presentation.rich_rendering.palette import Palette
 
 # ``Palette.BRAND`` (#d77757) emitted as a truecolor foreground SGR.
 _BRAND_SGR = "38;2;215;119;87"
@@ -119,7 +119,7 @@ def test_theme_travels_with_the_renderable_across_hosts():
 def test_brand_markdown_registers_the_brand_heading():
     # The heading element is swapped via rich's public ``elements`` registry, not
     # a monkeypatch, so the base ``Markdown`` class stays untouched.
-    from mote.product.cli.consumers.render.markdown import BrandHeading
+    from mote.product.presentation.rich_rendering.markdown import BrandHeading
 
     assert BrandMarkdown.elements["heading_open"] is BrandHeading
     assert Markdown.elements["heading_open"] is not BrandHeading  # base untouched
@@ -132,14 +132,14 @@ _OSC8 = "\x1b]8;;"
 
 
 def test_linkify_markdown_wraps_a_bare_url_as_an_autolink():
-    from mote.product.cli.consumers.render.markdown import linkify_markdown
+    from mote.product.presentation.rich_rendering.markdown import linkify_markdown
 
     out = linkify_markdown("see https://example.com for more")
     assert "<https://example.com>" in out
 
 
 def test_linkify_markdown_leaves_existing_markdown_link_untouched():
-    from mote.product.cli.consumers.render.markdown import linkify_markdown
+    from mote.product.presentation.rich_rendering.markdown import linkify_markdown
 
     src = "click [here](https://example.com) now"
     # The inline URL inside a ``[t](u)`` link must not get double-wrapped.
@@ -147,21 +147,21 @@ def test_linkify_markdown_leaves_existing_markdown_link_untouched():
 
 
 def test_linkify_markdown_leaves_existing_autolink_untouched():
-    from mote.product.cli.consumers.render.markdown import linkify_markdown
+    from mote.product.presentation.rich_rendering.markdown import linkify_markdown
 
     src = "at <https://example.com> already"
     assert linkify_markdown(src) == src
 
 
 def test_linkify_markdown_skips_urls_inside_inline_code():
-    from mote.product.cli.consumers.render.markdown import linkify_markdown
+    from mote.product.presentation.rich_rendering.markdown import linkify_markdown
 
     src = "run `curl https://example.com` here"
     assert linkify_markdown(src) == src
 
 
 def test_linkify_markdown_skips_urls_inside_fenced_code():
-    from mote.product.cli.consumers.render.markdown import linkify_markdown
+    from mote.product.presentation.rich_rendering.markdown import linkify_markdown
 
     src = "```\ncurl https://example.com\n```"
     assert linkify_markdown(src) == src
@@ -185,7 +185,7 @@ _MATH_BG_SGR = "48;2;51;37;31"
 def test_flatten_preserves_script_grouping():
     # The pure single-line helper: ^{…}/_{…} grouping survives (2¹⁰, not the lossy
     # 2¹0) and macros expand to their symbols.
-    from mote.product.cli.consumers.render.mathbox import flatten
+    from mote.product.presentation.rich_rendering.mathbox import flatten
 
     assert flatten("2^{10}") == "2¹⁰"
     assert flatten(r"\sum_{i=1}^{n} i") == "∑ᵢ₌₁ⁿ i"
@@ -303,7 +303,7 @@ def test_display_matrix_uses_stretchy_brackets():
 def test_flatten_maps_nested_exponent():
     # ``e^{x^2}`` used to degrade to ``e^x^2`` (the inner ``^`` aborted the run);
     # the nested script is converted first so it maps fully to ``eˣ²``.
-    from mote.product.cli.consumers.render.mathbox import flatten
+    from mote.product.presentation.rich_rendering.mathbox import flatten
 
     assert flatten("e^{x^2}") == "eˣ²"
     assert flatten("e^{-x^2}") == "e⁻ˣ²"
@@ -313,7 +313,7 @@ def test_flatten_maps_nested_exponent():
 def test_flatten_parenthesises_unmappable_compound_exponent():
     # Euler's identity: ``π`` has no superscript glyph, so ``e^{i\pi}`` can't map
     # fully — it parenthesises as ``e^(iπ)`` rather than leaking a bare ``e^iπ``.
-    from mote.product.cli.consumers.render.mathbox import flatten
+    from mote.product.presentation.rich_rendering.mathbox import flatten
 
     assert flatten(r"e^{i\pi} + 1 = 0") == "e^(iπ) + 1 = 0"
     assert flatten(r"e^{i\theta}") == "e^(iθ)"
@@ -323,7 +323,7 @@ def test_flatten_parenthesises_unmappable_compound_exponent():
 
 def test_flatten_maps_derivative_primes():
     # ``''`` used to mangle into a curly quote (``”``); real prime glyphs now.
-    from mote.product.cli.consumers.render.mathbox import flatten
+    from mote.product.presentation.rich_rendering.mathbox import flatten
 
     assert flatten("f'(x)") == "f′(x)"
     assert flatten("f''(x)") == "f″(x)"
@@ -335,7 +335,7 @@ def test_flatten_maps_derivative_primes():
 
 def test_display_sum_stacks_limits_over_the_symbol():
     # ``\sum_{i=1}^{n}`` in display math puts ``n`` above and ``i=1`` below ``∑``.
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     box = build_box(r"\sum_{i=1}^{n} i", display=True)
     lines = box.render_lines()
@@ -348,7 +348,7 @@ def test_display_sum_stacks_limits_over_the_symbol():
 def test_display_integral_sets_limits_beside_a_tall_sign():
     # ``\int_0^1`` draws a stretched sign (``⌠⎮⌡``) carrying its bounds at the
     # top-/bottom-right — the conventional display-integral layout.
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     box = build_box(r"\int_0^1 f\,dx", display=True)
     lines = box.render_lines()
@@ -359,7 +359,7 @@ def test_display_integral_sets_limits_beside_a_tall_sign():
 
 def test_display_integral_macro_bound_is_captured():
     # A macro upper bound (``\infty``) after a fused ``_0^`` is bound as the sup.
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     box = build_box(r"\int_0^\infty x^2\,dx", display=True)
     lines = box.render_lines()
@@ -369,7 +369,7 @@ def test_display_integral_macro_bound_is_captured():
 
 def test_display_lim_subscript_is_placed_under_the_word():
     # ``\lim_{x \to 0}`` stacks the bound under ``lim`` instead of leaking ``_``.
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     box = build_box(r"\lim_{x \to 0} f(x)", display=True)
     lines = box.render_lines()
@@ -381,7 +381,7 @@ def test_display_lim_subscript_is_placed_under_the_word():
 def test_inline_lim_parenthesises_unmappable_bound():
     # Inline, ``x→0`` has no subscript glyphs, so the bound is parenthesised and
     # attached (``lim(x→0)``) rather than leaking ``lim_x →0``.
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     line = build_box(r"\lim_{x \to 0} f(x)", display=False).to_line()
     assert "lim(" in line and "_" not in line
@@ -389,7 +389,7 @@ def test_inline_lim_parenthesises_unmappable_bound():
 
 def test_inline_sum_keeps_unicode_scripts():
     # Fully-mappable scripts stay as compact Unicode subscripts inline.
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     line = build_box(r"\sum_{i=1}^{n} i", display=False).to_line()
     assert "∑ᵢ₌₁ⁿ" in line
@@ -400,7 +400,7 @@ def test_inline_improper_integral_marks_both_bounds_and_keeps_the_gap():
     # parenthesised SYMMETRICALLY (``_(…)^(…)`` — not a bare sub with a lone
     # ``^`` sup), and the space before the integrand survives the box glue so it
     # doesn't abut the operator (``…^(+∞) e⁻ˣ²`` not ``…^(+∞)e⁻ˣ²``).
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     line = build_box(r"\int_{-\infty}^{+\infty} e^{-x^2}\,dx", display=False).to_line()
     assert "∫_(-∞)^(+∞)" in line  # symmetric sub/sup markers
@@ -411,7 +411,7 @@ def test_inline_improper_integral_marks_both_bounds_and_keeps_the_gap():
 
 
 def test_mathbox_frac_puts_baseline_on_the_bar():
-    from mote.product.cli.consumers.render.mathbox import atom, frac
+    from mote.product.presentation.rich_rendering.mathbox import atom, frac
 
     box = frac(atom("1"), atom("i²"))
     assert box.lines[box.baseline].startswith("─")  # baseline row is the rule
@@ -419,7 +419,7 @@ def test_mathbox_frac_puts_baseline_on_the_bar():
 
 
 def test_mathbox_hconcat_aligns_on_baseline():
-    from mote.product.cli.consumers.render.mathbox import atom, frac, hconcat
+    from mote.product.presentation.rich_rendering.mathbox import atom, frac, hconcat
 
     # gluing a tall fraction to a plain atom lifts the atom onto the shared axis.
     box = hconcat([atom("x="), frac(atom("1"), atom("2"))])
@@ -428,7 +428,7 @@ def test_mathbox_hconcat_aligns_on_baseline():
 
 
 def test_mathbox_sqrt_puts_checkmark_on_baseline_under_a_vinculum():
-    from mote.product.cli.consumers.render.mathbox import atom, sqrt
+    from mote.product.presentation.rich_rendering.mathbox import atom, sqrt
 
     box = sqrt(atom("x+1"))
     # Top row is the overline; the radicand row (baseline) carries the √.
@@ -438,7 +438,7 @@ def test_mathbox_sqrt_puts_checkmark_on_baseline_under_a_vinculum():
 
 
 def test_build_box_falls_back_gracefully_on_unknown():
-    from mote.product.cli.consumers.render.mathbox import build_box
+    from mote.product.presentation.rich_rendering.mathbox import build_box
 
     # An unmodelled construct still yields a (flat) box, never None/raw soup.
     box = build_box(r"\alpha + \beta", display=True)

@@ -6,7 +6,7 @@ import os
 import subprocess
 import tempfile
 
-from mote.contracts.fileops.errors import SearchDiscoveryError
+from mote.contracts.file.errors import SearchDiscoveryError
 from mote.runtime.fileops.identity import path_token
 from mote.runtime.fileops.query_semantics import CandidateDiscovery, CandidateDiscoveryRequest
 from mote.runtime.fileops.ripgrep import find_ripgrep
@@ -62,7 +62,15 @@ class CandidateDiscoveryService:
         ripgrep = find_ripgrep()
         if ripgrep is None:
             raise SearchDiscoveryError("ripgrep is required for candidate discovery")
-        args = [ripgrep, "--files", "--hidden", "--sort", "path", "-0"]
+        args = [
+            ripgrep,
+            "--files",
+            "--hidden",
+            "--no-require-git",
+            "--sort",
+            "path",
+            "-0",
+        ]
         if single_file:
             args.extend(("--max-depth", "1"))
         for directory in (*_VCS_DIRECTORIES, *_HEAVY_DIRECTORIES):

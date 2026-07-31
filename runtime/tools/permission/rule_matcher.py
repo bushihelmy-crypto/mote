@@ -22,7 +22,7 @@ from __future__ import annotations
 from fnmatch import fnmatch
 from typing import Optional
 
-from mote.contracts.permissions import PermissionBehavior, PermissionRule, RuleSource
+from mote.contracts.authorization import PermissionBehavior, PermissionRule, RuleSource
 from mote.runtime.tools.permission.command_parse import command_prefix, prefix_tokens
 
 # Sentinel separating an MCP server from its tool name, e.g. ``mcp__github__search``.

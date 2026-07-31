@@ -15,23 +15,22 @@ from dataclasses import replace
 
 import pytest
 
-from mote.contracts.fileops import ReviewStatus
-from mote.contracts.fileops.errors import SnapshotDurabilityError
-from mote.contracts.fileops.events import (
+from mote.contracts.conversation import UserMessage
+from mote.contracts.events.file.facts import (
     FileTransactionAbortedEvent,
     FileTransactionCommittedEvent,
     FileTransactionInDoubtEvent,
     FileTransactionPreparedEvent,
     HunkDetectedEvent,
 )
-from mote.contracts.fileops.models import ReplaceMutation
-from mote.contracts.schema import UserMessage
-from mote.contracts.tools import CommandProtocol, ToolsetIdentity
-from mote.runtime.fileops import FileOperations
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.contracts.file import ReviewStatus
+from mote.contracts.file.errors import SnapshotDurabilityError
+from mote.contracts.file.mutations import ReplaceMutation
+from mote.contracts.tool import CommandProtocol, ToolsetIdentity
 from mote.runtime.fileops.edit_plans import LiteralEditPlanRequest
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.codec import decode_session_event, iter_file_operations_events
 from mote.runtime.session.events import ContextCompactedFact, MessageEvent, SessionMetaEvent
@@ -41,6 +40,7 @@ from mote.runtime.session.hunk_ops import HunkOps
 from mote.runtime.session.listing import list_sessions
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _seed(
@@ -262,7 +262,8 @@ def test_fork_file_history_independent_of_parent(tmp_path):
     child = _operations(child_log, tmp_path)
     child_prepared = next(event for event in _events(child_log) if isinstance(event, FileTransactionPreparedEvent))
 
-    assert child.artifacts.root != parent.artifacts.root
+    assert child.artifacts.root == parent.artifacts.root
+    assert child.artifacts.catalog.root != parent.artifacts.catalog.root
     for ref in _replacement_refs(child_prepared):
         assert child.artifacts.read_bytes(child.artifacts.resolve_live(ref.digest)) == (
             parent.artifacts.read_bytes(parent.artifacts.resolve_live(ref.digest))
@@ -350,7 +351,7 @@ def test_fork_uses_one_exact_unique_artifact_budget_per_transaction_event(
     original_write_scope = ArtifactRepository.write_scope
 
     def record_write_scope(repository, *, owner, maximum_bytes, ttl_seconds):
-        if repository.root == tmp_path / "child" / "blobs":
+        if repository.catalog.root == tmp_path / "child" / "artifact-lifecycle":
             observed_budgets.append(maximum_bytes)
         return original_write_scope(
             repository,
@@ -414,7 +415,8 @@ def test_fork_inherits_final_review_status_and_artifacts(tmp_path, final_status)
     assert child_record.hunk_id == f"fork:parent:{parent_record.hunk_id}"
     assert child_record.session_id == "child"
     assert child_record.status == final_status
-    assert child.artifacts.root != parent.artifacts.root
+    assert child.artifacts.root == parent.artifacts.root
+    assert child.artifacts.catalog.root != parent.artifacts.catalog.root
     assert _artifact_bytes(child, child_record.pre_hash) == _artifact_bytes(
         parent,
         parent_record.pre_hash,
@@ -492,9 +494,10 @@ def test_fork_drops_non_committed_transaction(tmp_path, terminal_event):
 @pytest.mark.asyncio
 async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypatch):
     from mote.kernel.output import text_output_contract
+    from mote.product.paths import default_runtime_paths
     from mote.runtime.agent import AgentDependencies, AgentWiring, Role
     from mote.runtime.models.clients.context import Context
-    from mote.ztest.model_fakes import offline_config
+    from mote.ztest.model_fakes import FakeModelGateway, offline_config
 
     class OfflineLLM:
         def __init__(self, model):
@@ -506,28 +509,46 @@ async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypa
         async def aask(self, _msg, system_msgs=None, stream=True, **_kwargs):
             return "offline-summary"
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "mote.runtime.session.log._default_base_dir",
+        lambda: tmp_path / ".agent_sessions",
+    )
+
+    from mote.ztest.model_fakes import FakeApplicationComposition, bind_fake_runtime
+
+    context = Context(config=offline_config())
+    composition = FakeApplicationComposition(FakeModelGateway(OfflineLLM("test")))
+    paths = default_runtime_paths(
+        user_config_root=tmp_path / "config",
+        workspace_root=tmp_path,
+    )
 
     parent = Role(
         name="P",
         wiring=AgentWiring.for_context(
-            Context(
-                config=offline_config(),
-                provider_factory=lambda config: OfflineLLM(config.model),
-            ),
+            context,
+            application_composition=composition,
             dependencies=AgentDependencies(
                 deps=None,
                 output_contract=text_output_contract(),
                 routing_strategy_builders={"squilla": object},
+                user_config_root=paths.user_config_root,
+                session_workspace_root=paths.session_workspace_root,
+                browser_profiles_root=paths.browser_profiles_root,
+                sandbox_ca_root=paths.sandbox_ca_root,
+                secrets_root=paths.secrets_root,
+                oauth_root=paths.oauth_root,
             ),
         ),
     )
+    bind_fake_runtime(parent, OfflineLLM("test"))
     await parent._components.start_event_fabric()
     await parent._emit_session_start()
     await parent.context_manager.add(UserMessage(content="one"))
     await parent.context_manager.add(UserMessage(content="two"))
 
     child = await parent.fork_session()
+    bind_fake_runtime(child, OfflineLLM("test"))
     assert child.state.parent_session_id == parent.session_id
     assert child.session_id != parent.session_id
     assert child.state.recovered is True

@@ -10,16 +10,15 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.config.llm import LLMConfig
-from mote.contracts.config.models import ModelsConfig
-from mote.contracts.config.resilience import ResilienceConfig
-from mote.runtime.config.schema import Config
+from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
+from mote.product.config.resilience import ResilienceConfig
+from mote.product.config.schema import Config
 from mote.runtime.models.clients.context import Context
 from mote.runtime.resilience import BreakerConfig, ResourceHealthRegistry
 
 
 def _context(resilience: ResilienceConfig | None = None) -> Context:
-    kwargs = {"models": ModelsConfig(default=LLMConfig(api_key="sk-x", model="gpt-4o"))}
+    kwargs = {"models": ShortcutModelsConfig(default=ProductEndpointInput(api_key="sk-x", model="gpt-4o"))}
     if resilience is not None:
         kwargs["resilience"] = resilience
     return Context(config=Config(**kwargs))
@@ -82,7 +81,7 @@ class TestWiring:
     def test_parsing_config_does_not_mutate_runtime_registry(self):
         reg = ResourceHealthRegistry()
         Config(
-            models=ModelsConfig(default=LLMConfig(api_key="sk-x", model="gpt-4o")),
+            models=ShortcutModelsConfig(default=ProductEndpointInput(api_key="sk-x", model="gpt-4o")),
             resilience=ResilienceConfig(min_samples=9),
         )
         assert reg._config == BreakerConfig()

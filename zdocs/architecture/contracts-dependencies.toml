@@ -1,0 +1,1215 @@
+schema_version = 1
+baseline_id = "sha256:2553d30ee82ebd16ed0f64499c01e88399be2ac0200475856dc4bb643d8b7404"
+generated_by = "ztest.architecture.contracts_governance@1"
+generated_at = "2026-07-29T15:56:04.706518Z"
+canonicalization_version = 1
+
+[[edge]]
+source = "mote.contracts"
+target = "mote.contracts.background_tasks"
+status = "current"
+
+[[edge]]
+source = "mote.contracts"
+target = "mote.contracts.model_actions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts"
+target = "mote.contracts.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts"
+target = "mote.contracts.output"
+status = "current"
+
+[[edge]]
+source = "mote.contracts"
+target = "mote.contracts.tools"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.artifacts"
+target = "mote.contracts.content"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.background_tasks"
+target = "mote.contracts.ports.message_activity"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.background_tasks"
+target = "mote.contracts.ports.message_sink"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.context"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.langfuse"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.llm"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.llm"
+target = "mote.contracts.config.oauth"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.llm"
+target = "mote.contracts.errors.config"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.llm"
+target = "mote.contracts.models.constants"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.mcp"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.mcp"
+target = "mote.contracts.config.oauth"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.model_failover"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.model_failover"
+target = "mote.contracts.config.llm"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.model_failover"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.models"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.models"
+target = "mote.contracts.config.llm"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.models"
+target = "mote.contracts.config.model_failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.multimodal"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.oauth"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.observability"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.observability"
+target = "mote.contracts.config.langfuse"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.observability"
+target = "mote.contracts.config.sentry"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.resilience"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.resilience"
+target = "mote.contracts.resilience"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.routing"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.secrets"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.sentry"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.tools"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.tools"
+target = "mote.contracts.schema"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.tools"
+target = "mote.contracts.settings.device"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.tools"
+target = "mote.contracts.settings.web_search"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.ui"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.config.workspace"
+target = "mote.contracts.config.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors"
+target = "mote.contracts.errors.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors"
+target = "mote.contracts.errors.report"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors"
+target = "mote.contracts.errors.routing"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors"
+target = "mote.contracts.errors.services"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.artifacts"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.artifacts"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.base"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.config"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.config"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.environment"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.environment"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.graph"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.graph"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.graph"
+target = "mote.contracts.errors.report"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.models"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.models"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.output"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.output"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.report"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.report"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.routing"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.runtimes"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.runtimes"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.services"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.services"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.tasks"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.tasks"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.tools"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.errors.tools"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.events"
+target = "mote.contracts.events.envelope"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.events.envelope"
+target = "mote.contracts.content"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.events.types"
+target = "mote.contracts.artifacts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.events.types"
+target = "mote.contracts.errors"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.events.types"
+target = "mote.contracts.fileops.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.events.types"
+target = "mote.contracts.schema"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.execution"
+target = "mote.contracts.output"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops"
+target = "mote.contracts.fileops.errors"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops"
+target = "mote.contracts.fileops.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops"
+target = "mote.contracts.fileops.ports"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.errors"
+target = "mote.contracts.errors.base"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.errors"
+target = "mote.contracts.errors.codes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.event_codec"
+target = "mote.contracts.fileops.events"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.events"
+target = "mote.contracts.fileops.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.events"
+target = "mote.contracts.fileops.serialization"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.models"
+target = "mote.contracts.content"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.ports"
+target = "mote.contracts.fileops.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.fileops.serialization"
+target = "mote.contracts.fileops.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.handoff"
+target = "mote.contracts.runtimes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.handoff"
+target = "mote.contracts.surfaces"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.hooks"
+target = "mote.contracts.hooks.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.hooks"
+target = "mote.contracts.hooks.types"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.hooks.invocation"
+target = "mote.contracts.permissions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.hooks.types"
+target = "mote.contracts.permissions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models"
+target = "mote.contracts.models.model_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models"
+target = "mote.contracts.models.responses"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models"
+target = "mote.contracts.models.routing"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.capabilities"
+target = "mote.contracts.models.profile"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.failover"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.invocation"
+target = "mote.contracts.artifacts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.model_journal"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.model_journal"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.routing"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.transport"
+target = "mote.contracts.config.llm"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.models.transport"
+target = "mote.contracts.models.capabilities"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.policy"
+target = "mote.contracts.policy.compaction"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.policy"
+target = "mote.contracts.policy.prompt"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.policy"
+target = "mote.contracts.policy.run_completion"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.policy"
+target = "mote.contracts.policy.spawn"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.policy"
+target = "mote.contracts.policy.tool"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.agent_catalog"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.agent_factory"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.artifact_store"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.canvas_backend"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.code_map"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.commit_fence"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.compaction_policy"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.completion_policy"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.context_reducer"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.event_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.file_changes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.hook_runner"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.human_interaction"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.lease"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.llm_client"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.lsp"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.message_activity"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.message_sink"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.message_store"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.model_call_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.model_endpoint"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.model_gateway"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.model_operator"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.model_request_transformer"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.output"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.output_migration"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.prompt_policy"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.request_assembler"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.resource_loader"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.routing"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.run_completion_policy"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.run_lease"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.runtime_checkpoint"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.runtime_driver"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.runtime_handoff"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.runtime_operation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.runtime_projection"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.service_call_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.service_endpoint"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.service_gateway"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.session_facts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.skills"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.spawn_policy"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.surface_presenter"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.tool_policy"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.turn_context"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports"
+target = "mote.contracts.ports.window_surface"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.artifact_store"
+target = "mote.contracts.artifacts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.canvas_backend"
+target = "mote.contracts.canvas"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.compaction_policy"
+target = "mote.contracts.policy.compaction"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.completion_policy"
+target = "mote.contracts.completion"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.completion_policy"
+target = "mote.contracts.model_actions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.event_journal"
+target = "mote.contracts.events.envelope"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.event_subscription"
+target = "mote.contracts.events"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.file_changes"
+target = "mote.contracts.fileops.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.hook_runner"
+target = "mote.contracts.hooks"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.human_interaction"
+target = "mote.contracts.handoff"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.human_interaction"
+target = "mote.contracts.surfaces"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.llm_client"
+target = "mote.contracts.models"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.message_sink"
+target = "mote.contracts.schema"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.message_store"
+target = "mote.contracts.schema"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_call_journal"
+target = "mote.contracts.models.model_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_endpoint"
+target = "mote.contracts.artifacts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_endpoint"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_endpoint"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_gateway"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_gateway"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_gateway"
+target = "mote.contracts.ports.artifact_store"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_gateway"
+target = "mote.contracts.ports.model_request_transformer"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_gateway"
+target = "mote.contracts.ports.session_facts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_operator"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_request_transformer"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.model_request_transformer"
+target = "mote.contracts.models.invocation"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.output"
+target = "mote.contracts.model_actions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.output"
+target = "mote.contracts.output"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.prompt_policy"
+target = "mote.contracts.policy.prompt"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.request_assembler"
+target = "mote.contracts.schema"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.routing"
+target = "mote.contracts.models.routing"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.run_completion_policy"
+target = "mote.contracts.policy.run_completion"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_checkpoint"
+target = "mote.contracts.runtimes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_driver"
+target = "mote.contracts.handoff"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_driver"
+target = "mote.contracts.runtimes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_driver"
+target = "mote.contracts.surfaces"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_handoff"
+target = "mote.contracts.handoff"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_handoff"
+target = "mote.contracts.runtimes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_operation"
+target = "mote.contracts.runtimes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_projection"
+target = "mote.contracts.artifacts"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.runtime_projection"
+target = "mote.contracts.runtimes"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.service_call_journal"
+target = "mote.contracts.service_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.service_endpoint"
+target = "mote.contracts.services"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.service_gateway"
+target = "mote.contracts.services"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.session_facts"
+target = "mote.contracts.ports.event_journal"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.spawn_policy"
+target = "mote.contracts.policy.spawn"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.surface_presenter"
+target = "mote.contracts.surfaces"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.tool_policy"
+target = "mote.contracts.permissions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.tool_policy"
+target = "mote.contracts.policy.tool"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.ports.window_surface"
+target = "mote.contracts.surfaces"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.context"
+target = "mote.contracts.constants.context"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.document"
+target = "mote.contracts.serialization"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.env"
+target = "mote.contracts.schema.messages"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.env"
+target = "mote.contracts.serialization"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.gym_env"
+target = "mote.contracts.schema.env"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.messages"
+target = "mote.contracts.constants.messages"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.messages"
+target = "mote.contracts.schema.document"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.messages"
+target = "mote.contracts.tools.calls"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.queue"
+target = "mote.contracts.schema.messages"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.schema.tool_config"
+target = "mote.contracts.constants.tool_output"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.service_journal"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.service_journal"
+target = "mote.contracts.services"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.services"
+target = "mote.contracts.models.failover"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.settings.permissions"
+target = "mote.contracts.permissions"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.settings.permissions"
+target = "mote.contracts.settings.sandbox"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.settings.sandbox"
+target = "mote.contracts.net"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.ansi"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.elision"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.hashing"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.html"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.humanize"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.hunks"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.markers"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.paths"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.plural"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text"
+target = "mote.contracts.text.whitespace"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.text.markers"
+target = "mote.contracts.constants.tool_output"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools"
+target = "mote.contracts.tools.calls"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools"
+target = "mote.contracts.tools.catalog"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools"
+target = "mote.contracts.tools.effects"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools"
+target = "mote.contracts.tools.execution"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools"
+target = "mote.contracts.tools.identity"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools"
+target = "mote.contracts.tools.protocol"
+status = "current"
+
+[[edge]]
+source = "mote.contracts.tools.identity"
+target = "mote.contracts.tools.protocol"
+status = "current"

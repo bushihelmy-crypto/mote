@@ -6,7 +6,7 @@ import ctypes
 import msvcrt
 from ctypes import wintypes
 
-from mote.contracts.fileops.models import LockMode
+from mote.contracts.file.identity import LockMode
 
 _LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
 _LOCKFILE_EXCLUSIVE_LOCK = 0x00000002

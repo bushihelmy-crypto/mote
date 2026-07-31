@@ -13,10 +13,13 @@ import json
 import os
 import stat
 
+from mote.runtime.interactive.browser.profile import BrowserProfileStore
 from mote.runtime.secrets.cipher import AesGcmCipher
-from mote.runtime.tools.dependency.browser_profile import BrowserProfileStore
 
-_STATE = {"cookies": [{"name": "sid", "value": "secret-token", "domain": ".x.com"}], "origins": []}
+_STATE = {
+    "cookies": [{"name": "sid", "value": "secret-token", "domain": ".x.com"}],
+    "origins": [],
+}
 
 
 def _store(tmp_path, *, key: bytes = b"\x01" * 32):

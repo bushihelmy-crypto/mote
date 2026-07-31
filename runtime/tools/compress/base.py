@@ -21,10 +21,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
 
-# ANSI stripping is owned by the bottom-layer text authority; re-exported here so
-# ``compress`` consumers keep importing ``strip_ansi`` from this module.
-from mote.contracts.text import strip_ansi  # noqa: F401  (re-export)
-
 
 @dataclass
 class CompressionResult:

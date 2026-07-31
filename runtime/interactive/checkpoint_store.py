@@ -5,15 +5,15 @@ import hashlib
 import re
 from dataclasses import replace
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactPublishRequest,
     ArtifactRepresentationInput,
     ArtifactRetention,
     ArtifactSensitivity,
 )
-from mote.contracts.errors.artifacts import ArtifactNotFoundError
-from mote.contracts.ports import ArtifactStore
-from mote.contracts.runtimes import RuntimeCheckpoint
+from mote.contracts.artifact.errors import ArtifactNotFoundError
+from mote.contracts.ports.artifact.store import ArtifactStore
+from mote.contracts.runtime import RuntimeCheckpoint
 from mote.runtime.interactive.checkpoint_codec import decode_inline_bytes, inline_checkpoint
 from mote.runtime.secrets.cipher import VaultCipher
 

@@ -1,4 +1,5 @@
-from mote.contracts import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction, ToolEffect
+from mote.contracts.model.turn import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
+from mote.contracts.tool import ToolEffect
 
 
 def test_model_turn_round_trip_uses_stable_discriminators() -> None:

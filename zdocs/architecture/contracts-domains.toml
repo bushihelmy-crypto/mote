@@ -1,0 +1,94 @@
+schema_version = 1
+baseline_id = "sha256:2553d30ee82ebd16ed0f64499c01e88399be2ac0200475856dc4bb643d8b7404"
+generated_by = "manual:contracts-governance-v10"
+generated_at = "2026-07-29T00:00:00Z"
+canonicalization_version = 1
+[domains.foundation]
+facade = "mote.contracts.foundation"
+owner = "architecture"
+
+[domains.content]
+facade = "mote.contracts.content"
+owner = "content"
+
+[domains.authorization]
+facade = "mote.contracts.authorization"
+owner = "authorization"
+
+[domains.interaction]
+facade = "mote.contracts.interaction"
+owner = "interaction"
+
+[domains.agent]
+facade = "mote.contracts.agent"
+ports = "mote.contracts.ports.agent"
+owner = "agent"
+
+[domains.artifact]
+facade = "mote.contracts.artifact"
+ports = "mote.contracts.ports.artifact"
+owner = "artifact"
+
+[domains.file]
+facade = "mote.contracts.file"
+ports = "mote.contracts.ports.file"
+events = "mote.contracts.events.file"
+owner = "file"
+
+[domains.tool]
+facade = "mote.contracts.tool"
+ports = "mote.contracts.ports.tool"
+events = "mote.contracts.events.tool"
+config = "mote.contracts.config.tool"
+owner = "tool"
+
+[domains.conversation]
+facade = "mote.contracts.conversation"
+ports = "mote.contracts.ports.conversation"
+events = "mote.contracts.events.conversation"
+config = "mote.contracts.config.conversation"
+owner = "conversation"
+
+[domains.model]
+facade = "mote.contracts.model"
+ports = "mote.contracts.ports.model"
+events = "mote.contracts.events.model"
+config = "mote.contracts.config.model"
+owner = "model-platform"
+
+[domains.service]
+facade = "mote.contracts.service"
+ports = "mote.contracts.ports.service"
+events = "mote.contracts.events.service"
+owner = "service"
+
+[domains.output]
+facade = "mote.contracts.output"
+ports = "mote.contracts.ports.output"
+owner = "output"
+
+[domains.surface]
+facade = "mote.contracts.surface"
+ports = "mote.contracts.ports.surface"
+owner = "surface"
+
+[domains.session]
+facade = "mote.contracts.session"
+ports = "mote.contracts.ports.session"
+events = "mote.contracts.events.session"
+owner = "session"
+
+[domains.runtime]
+facade = "mote.contracts.runtime"
+ports = "mote.contracts.ports.runtime"
+owner = "runtime"
+
+[domains.task]
+facade = "mote.contracts.task"
+ports = "mote.contracts.ports.task"
+events = "mote.contracts.events.task"
+owner = "task"
+
+[deployment]
+aggregate = "mote.contracts.config.deployment"
+owner = "product-composition"

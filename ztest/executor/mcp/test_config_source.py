@@ -17,10 +17,10 @@ import json
 
 import pytest
 
-from mote.contracts.config.mcp import MCPTransportType
-from mote.runtime import paths
-from mote.runtime.tools.mcp import config_source
-from mote.runtime.tools.mcp.config_source import MCP_CONFIG_FILE_NAME, load_mcp_servers, mcp_config_paths
+from mote.contracts.tool.transport import MCPTransportType
+from mote.product.config.adapters import mcp as config_source
+from mote.product.config.adapters.mcp import MCP_CONFIG_FILE_NAME, load_mcp_servers, mcp_config_paths
+from mote.product.paths import default_runtime_paths, mote_layered_files
 
 
 @pytest.fixture
@@ -32,7 +32,11 @@ def mcp_file(tmp_path, monkeypatch):
     function to return ``[path]`` (only when it exists) redirects every read here.
     """
     path = tmp_path / MCP_CONFIG_FILE_NAME
-    monkeypatch.setattr(config_source, "mcp_config_paths", lambda cwd=None: [path] if path.is_file() else [])
+    monkeypatch.setattr(
+        config_source,
+        "mcp_config_paths",
+        lambda provider=None: [path] if path.is_file() else [],
+    )
     return path
 
 
@@ -50,14 +54,14 @@ class TestMcpConfigPaths:
         # lives in ``common.const.paths.mote_layered_files``, so patch there.
         user_file = tmp_path / MCP_CONFIG_FILE_NAME
         user_file.write_text("{}", encoding="utf-8")
-        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)
-        monkeypatch.setattr(paths, "mote_project_files", lambda name, cwd=None: [])
-        assert mcp_config_paths() == [user_file]
+        paths = default_runtime_paths(user_config_root=tmp_path)
+        assert mcp_config_paths(mote_layered_files("mcp.json", tmp_path, user_config_root=paths.user_config_root)) == [
+            user_file
+        ]
 
     def test_paths_empty_when_nothing_configured(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(paths, "CONFIG_ROOT", tmp_path)  # no mcp.json inside
-        monkeypatch.setattr(paths, "mote_project_files", lambda name, cwd=None: [])
-        assert mcp_config_paths() == []
+        paths = default_runtime_paths(user_config_root=tmp_path)
+        assert mcp_config_paths(mote_layered_files("mcp.json", tmp_path, user_config_root=paths.user_config_root)) == []
 
 
 class TestLoadMissingOrEmpty:
@@ -96,7 +100,10 @@ class TestLoadMissingOrEmpty:
 
 class TestTransportInference:
     def test_command_infers_stdio(self, mcp_file):
-        _write(mcp_file, {"mcpServers": {"fs": {"command": "npx", "args": ["-y", "server-fs"]}}})
+        _write(
+            mcp_file,
+            {"mcpServers": {"fs": {"command": "npx", "args": ["-y", "server-fs"]}}},
+        )
         servers = load_mcp_servers()
         assert len(servers) == 1
         s = servers[0]
@@ -120,7 +127,10 @@ class TestTransportInference:
 
     def test_url_wins_when_both_present(self, mcp_file):
         # A url is checked first, so it takes precedence over a stray command.
-        _write(mcp_file, {"mcpServers": {"both": {"url": "https://x/sse", "command": "npx"}}})
+        _write(
+            mcp_file,
+            {"mcpServers": {"both": {"url": "https://x/sse", "command": "npx"}}},
+        )
         servers = load_mcp_servers()
         assert servers[0].type == MCPTransportType.SSE
 
@@ -206,7 +216,10 @@ class TestBestEffortEntries:
         assert servers[0].oauth is None
 
     def test_non_object_oauth_ignored(self, mcp_file):
-        _write(mcp_file, {"mcpServers": {"remote": {"url": "https://x/sse", "oauth": "nope"}}})
+        _write(
+            mcp_file,
+            {"mcpServers": {"remote": {"url": "https://x/sse", "oauth": "nope"}}},
+        )
         assert load_mcp_servers()[0].oauth is None
 
     def test_multiple_servers_preserve_order(self, mcp_file):

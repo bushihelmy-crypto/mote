@@ -19,24 +19,23 @@ import threading
 from pathlib import Path
 from typing import Awaitable, Callable, Iterator, Mapping, Optional
 
-from mote.contracts.events import EventEnvelope, JsonValue, StreamId
-from mote.contracts.ports.event_journal import AppendResult
-from mote.runtime.disk import DiskWriter
-from mote.runtime.disk.async_io import run_disk_io
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
+from mote.contracts.ports.events.journal import AppendResult
 from mote.runtime.events.journal import LocalEventJournal
-from mote.runtime.logging import log_class
-from mote.runtime.paths import DEFAULT_WORKSPACE_ROOT, ROLLOUT_FILENAME, SESSIONS_SUBDIR
+from mote.runtime.persistence import DiskWriter
+from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.codec import encode_session_event, session_stream_id
 from mote.runtime.session.events import SessionEvent, SessionMetaEvent
-from mote.runtime.session.migrations.gateway import SessionSchemaGateway
+from mote.runtime.session.layout import SessionLayout
+from mote.runtime.telemetry.logging import log_class
 
-#: Directory name under the workspace root holding all session logs. Back-compat
-#: Alias for the centralized :data:`mote.runtime.paths.SESSIONS_SUBDIR`.
-SESSIONS_DIRNAME = SESSIONS_SUBDIR
+#: Directory name under the workspace root holding all session logs.
+SESSIONS_DIRNAME = SessionLayout().sessions_dir
+ROLLOUT_FILENAME = SessionLayout().rollout_file
 
 
 def _default_base_dir() -> Path:
-    return Path(DEFAULT_WORKSPACE_ROOT) / SESSIONS_DIRNAME
+    raise ValueError("SessionLog requires an explicit base directory")
 
 
 @log_class(level="DEBUG", exclude={"path", "exists"})
@@ -61,12 +60,6 @@ class SessionLog:
             self._stream_id,
             writer=writer,
         )
-        self._schema_gateway = SessionSchemaGateway(
-            session_id=session_id,
-            path=self._path,
-            schema_lock_root=self._runtime_root / "session-schema",
-            journal_lock_root=self._runtime_root / "file-locks",
-        )
         self._schema_checked = False
         self._version = 0
         self._append_lock = threading.Lock()
@@ -83,6 +76,17 @@ class SessionLog:
     @property
     def runtime_root(self) -> Path:
         return self._runtime_root
+
+    @property
+    def sessions_root(self) -> Path:
+        return self._dir.parent
+
+    @property
+    def workspace_root(self) -> Path:
+        sessions_root = self.sessions_root
+        if sessions_root.name == SESSIONS_DIRNAME:
+            return sessions_root.parent
+        return sessions_root
 
     @property
     def stream_id(self) -> StreamId:
@@ -162,7 +166,6 @@ class SessionLog:
         if self._schema_checked:
             return
         self.writer.flush_inline()
-        self._schema_gateway.ensure_current()
         report = self._journal.verify_committed(self._stream_id)
         if not report.valid:
             issue = report.issues[0]

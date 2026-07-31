@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for :mod:`mote.product.cli.backend` — the single engine-binding seam.
+"""Tests for :mod:`mote.product.entrypoints.cli.backend` — the single engine-binding seam.
 
 Two concerns: the **accessors** (pure attribute pokes — verified against
 lightweight fakes so we assert the operation, not the engine) and the
@@ -14,13 +14,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.constants.messages import IMAGES
-from mote.product.cli import backend
-from mote.product.container import ProductContainer
+from mote.contracts.conversation.fields import IMAGES
+from mote.product.agents.catalog import AgentCatalog
+from mote.product.agents.factory import CodingAgentFactory
+from mote.product.composition.container import ProductContainer
+from mote.product.entrypoints.cli import backend
 from mote.runtime.agent import Role
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.services import EngineServices
-from mote.runtime.tools.agent_registry import AgentCatalog
 from mote.ztest.model_fakes import offline_config
 
 # --------------------------------------------------------------------------
@@ -123,7 +124,7 @@ def test_turn_message_without_images_sets_no_metadata():
 
 
 @pytest.mark.asyncio
-async def test_rewind_files_runs_blocking_read_and_mutation_off_loop(monkeypatch):
+async def test_rewind_files_runs_blocking_read_and_mutation_off_loop(monkeypatch, tmp_path):
     calls = []
     target = SimpleNamespace(
         working_dir="/workspace",
@@ -150,6 +151,7 @@ async def test_rewind_files_runs_blocking_read_and_mutation_off_loop(monkeypatch
         ),
         context=SimpleNamespace(disk_writer=object()),
         file_operations=SimpleNamespace(rewind=rewind),
+        _components=SimpleNamespace(workspace_store=SimpleNamespace(sessions_root=tmp_path)),
     )
 
     result = await backend.rewind_files(role, 0)
@@ -199,7 +201,8 @@ def test_discover_mcps_empty_when_unconfigured(monkeypatch):
 
 
 def test_discover_mcps_names_every_configured_server(monkeypatch):
-    from mote.contracts.config.mcp import MCPServerConfig, MCPTransportType
+    from mote.contracts.tool.transport import MCPTransportType
+    from mote.runtime.config.mcp import MCPServerConfig
 
     servers = [
         MCPServerConfig(name="fs", type=MCPTransportType.STDIO, enabled=True, command="npx"),
@@ -233,7 +236,7 @@ def test_generic_role_enables_file_watch_hot_reload(tmp_path):
 
 def test_generic_role_hot_reload_does_not_add_git_root(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "mote.runtime.agent.runtime_modules.watching.find_git_root",
+        "mote.runtime.agent.components.watching.find_git_root",
         lambda cwd: "/proj/repo",
     )
     role = _build_role(name="Tester", cwd=str(tmp_path))
@@ -250,12 +253,11 @@ def test_generic_role_uses_curated_default_when_none_passed():
     # surface), NOT the full registered toolbox. So the CLI reports exactly the
     # declared set, not every registered internal control verb.
     assert role.role_schema.tools == RoleSchema.model_fields["tools"].get_default(call_default_factory=True)
-    assert "Read" in role.role_schema.tools
+    assert role.role_schema.deferred_tools == RoleSchema.model_fields["deferred_tools"].get_default(
+        call_default_factory=True
+    )
     assert "Handoff" not in role.role_schema.tools
     assert "Handoff" not in role.executor.tool_names()
-    # Skill is now a DEFERRED tool (discovered via SearchTools), so it lives on
-    # the deferred surface rather than the always-visible ``tools`` list.
-    assert "Skill" in role.role_schema.deferred_tools
 
 
 def test_generic_role_explicit_tools_are_respected():
@@ -302,13 +304,13 @@ def test_build_role_unknown_agent_type_returns_none():
 
 
 def test_build_role_typed_path_returns_registered_instance():
-    from mote.contracts.agents import BaseAgent
+    from mote.contracts.agent import BaseAgent
 
     class _ThrowawayAgent(BaseAgent, Role):
         agent_name = "ThrowawayAgent"
         description = "A throwaway agent for tests."
 
-    catalog = AgentCatalog.from_types((_ThrowawayAgent,))
+    catalog = AgentCatalog.from_types((_ThrowawayAgent,), CodingAgentFactory())
     role = _build_role(
         name="tw",
         agent_type="ThrowawayAgent",
@@ -318,12 +320,12 @@ def test_build_role_typed_path_returns_registered_instance():
 
 
 def test_list_agent_types_includes_registered():
-    from mote.contracts.agents import BaseAgent
+    from mote.contracts.agent import BaseAgent
 
     class _ListedAgent(BaseAgent, Role):
         agent_name = "ListedAgent"
         description = "A listed agent."
 
-    catalog = AgentCatalog.from_types((_ListedAgent,))
+    catalog = AgentCatalog.from_types((_ListedAgent,), CodingAgentFactory())
     types = backend.list_agent_types(catalog)
     assert ("ListedAgent", "A listed agent.") in types

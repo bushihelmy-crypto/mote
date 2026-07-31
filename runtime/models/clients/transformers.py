@@ -38,8 +38,8 @@ else:
     _pillow_import_error = None
 
 from mote.runtime.errors import RecoveryAction
-from mote.runtime.logging import logger
 from mote.runtime.models.media import parse_data_url
+from mote.runtime.telemetry.logging import logger
 
 # 4 MB target leaves comfortable headroom under Anthropic's hard 5 MB per-image
 # ceiling once the data-URL header + JSON escaping overhead is accounted for.

@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """Shared fixtures for the parser (command-channel) test suite.
 
-The two channels (:class:`~mote.kernel.parser.native_channel.NativeToolChannel`,
-:class:`~mote.kernel.parser.xml_channel.XmlCommandChannel`) only touch three
+The two channels (:class:`~mote.kernel.commands.native.NativeToolChannel`,
+:class:`~mote.kernel.commands.xml.channel.XmlCommandChannel`) only touch three
 collaborators, all of which are duck-typed here so the tests stay offline:
 
 - :class:`FakeThinkEngine` exposes the slice the channels read from a finished
   think round: ``done`` / ``join()`` (the channels block on the task being done
-  before reading) and ``result`` (a real :class:`ThinkResult`). ``join`` flips
+  before reading) and ``result`` (a real :class:`InferenceResult`). ``join`` flips
   ``done`` and counts calls so a test can assert whether the channel awaited it.
 - :class:`FakeMemory` is a tiny :class:`MessageStore`; ``record_turn`` appends to
   it and tests inspect the recorded messages + their metadata.
@@ -23,12 +23,13 @@ from typing import Any, Optional
 
 import pytest
 
-from mote.contracts.schema import Message
-from mote.contracts.think import ThinkResult
+from mote.contracts.conversation import Message
+from mote.contracts.model.inference import InferenceResult
+from mote.kernel.commands.contracts import ExecutedCommand
 
 
 class FakeThinkEngine:
-    """Duck-typed BaseThinkEngine exposing only what the channels read."""
+    """Duck-typed BaseInferenceEngine exposing only what the channels read."""
 
     def __init__(
         self,
@@ -37,7 +38,7 @@ class FakeThinkEngine:
         tool_calls: Optional[list[dict]] = None,
         done: bool = True,
     ):
-        self.result = ThinkResult(content=content, tool_calls=tool_calls)
+        self.result = InferenceResult(content=content, tool_calls=tool_calls)
         self.done = done
         self.join_calls = 0
 
@@ -67,11 +68,9 @@ class FakeExecutor:
     def __init__(self, specs: Optional[list[dict]] = None):
         self._specs = specs
         self.provider_calls: list[str] = []
-        self.model_calls: list[Optional[str]] = []
 
-    def native_tool_specs(self, provider: str, model: Optional[str] = None) -> Optional[list[dict]]:
+    def native_tool_specs(self, provider: str) -> Optional[list[dict]]:
         self.provider_calls.append(provider)
-        self.model_calls.append(model)
         return self._specs
 
     def canonical_tool_specs(self, *, include_hidden: bool = True) -> Optional[list[dict]]:
@@ -89,32 +88,37 @@ def executed_command(
     success: bool = True,
     media: Optional[list[Any]] = None,
     resource_path: Optional[str] = None,
-) -> dict[str, Any]:
+) -> ExecutedCommand:
     """Build one entry of the ``executed`` list that ``record_turn`` consumes."""
-    cmd: dict[str, Any] = {
-        "id": id,
-        "name": name,
-        "args": args or {},
-        "output": output,
-        "success": success,
-    }
+    cmd = ExecutedCommand(
+        action_id=id,
+        name=name,
+        arguments=args or {},
+        output=output,
+        success=success,
+    )
     if media is not None:
-        cmd["media"] = media
+        cmd.media = media
     if resource_path is not None:
-        cmd["resource_path"] = resource_path
+        cmd.resource_path = resource_path
     return cmd
 
 
-async def collect(channel, think_engine, valid_names: set[str]) -> list[dict]:
+async def collect(channel, inference_engine, valid_names: set[str]) -> list[dict]:
     """Drain ``channel.iter_commands`` into a list."""
-    return [cmd async for cmd in channel.iter_commands(think_engine, valid_names)]
+    return [cmd async for cmd in channel.iter_commands(inference_engine.result, valid_names)]
+
+
+async def apply_projection(memory: FakeMemory, projection) -> None:
+    resolved = await projection
+    memory.messages.extend(resolved.messages)
 
 
 class _LLMConfig:
     """Tiny LLMConfig-shaped object retained by parser fixture call sites."""
 
     def __init__(self, model=None, api_type=None, base_url=""):
-        from mote.contracts.config.llm import LLMType
+        from mote.contracts.config.model.llm import LLMType
 
         self.model = model
         self.api_type = api_type if api_type is not None else LLMType.OPENAI

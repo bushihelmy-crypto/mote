@@ -1,0 +1,46 @@
+schema_version: 1
+revision: execution-contracts-v1
+taxonomies:
+  unary_finite_attempt:
+    logical_owner: RuntimeModelGateway
+    runtime_port: InferenceRuntime
+    journal: ModelCallJournal
+    receipt: AttemptReceiptStore
+    permit_granularity: provider_request
+    fallback_boundary: before_external_commit
+    generation_pin: logical_call_to_terminal
+  durable_operation:
+    logical_owner: RuntimeServiceGateway
+    runtime_port: ServiceCommandRuntime
+    journal: ServiceCallJournal
+    receipt: ServiceReceiptStore
+    permit_granularity: provider_command
+    fallback_boundary: before_provider_resource_commit
+    generation_pin: create_intent_to_reconciliation_close
+  long_lived_session:
+    logical_owner: SessionGateway
+    runtime_port: SessionRuntime
+    journal: ProviderSessionJournal
+    receipt: SessionReceiptStore
+    permit_granularity: handshake_or_side_effecting_application_message
+    fallback_boundary: before_session_commit
+    generation_pin: open_intent_to_close_or_reconciliation
+  artifact_transfer:
+    logical_owner: ArtifactTransferWorkflow
+    runtime_port: ProviderArtifactTransferRuntime
+    journal: ArtifactTransferJournal
+    receipt: TransferReceiptStore
+    permit_granularity: initiate_finalize_or_part_range_request
+    fallback_boundary: before_first_external_byte_commit
+    generation_pin: transfer_intent_to_digest_verify_abort_or_reconciliation
+shared_invariants:
+  - one_logical_owner
+  - one_ordered_terminal_channel
+  - one_wire_permit_per_side_effecting_wire_unit
+  - no_transport_retry_or_fallback
+  - generation_and_artifact_digest_pinned
+  - receipt_idempotent_settlement
+  - unknown_external_commit_converges_to_in_doubt
+future_cluster:
+  scope: contract_envelope_only
+  production_implementation: excluded

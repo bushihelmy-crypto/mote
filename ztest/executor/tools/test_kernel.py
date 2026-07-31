@@ -19,13 +19,12 @@ import json
 
 import pytest
 
-from mote.contracts.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
-from mote.contracts.notebook import NOTEBOOK_MEDIA_TYPE, NotebookDocument
-from mote.contracts.runtimes import RuntimeRef, RuntimeState
-from mote.contracts.surfaces import SurfaceInput, SurfacePresentationMode
-from mote.contracts.text import cap_head_tail
+from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import RuntimeRef, RuntimeState
+from mote.contracts.surface import NOTEBOOK_MEDIA_TYPE, NotebookDocument, SurfaceInput, SurfacePresentationMode
 from mote.product.toolsets.builtin.python import Python
-from mote.runtime.tools.dependency._kernel import OUTPUT_MAX_CHARS, KernelRuntimeDriver, KernelSession, _strip_ansi
+from mote.runtime.interactive.kernel.driver import OUTPUT_MAX_CHARS, KernelRuntimeDriver, KernelSession, _strip_ansi
+from mote.runtime.text.elision import cap_head_tail
 from mote.runtime.tools.tool_result import ToolError, ToolResult
 
 from .conftest import CapRole, bind, run

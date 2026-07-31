@@ -1,8 +1,8 @@
 """Policy-bound, integrity-verifying Artifact resolution."""
 from __future__ import annotations
 
-from mote.contracts.artifacts import ArtifactRef, ArtifactResolutionPolicy, ResolvedArtifact
-from mote.contracts.ports import ArtifactStore
+from mote.contracts.artifact import ArtifactRef, ArtifactResolutionPolicy, ResolvedArtifact
+from mote.contracts.ports.artifact.store import ArtifactStore
 
 
 class StoreArtifactResolver:

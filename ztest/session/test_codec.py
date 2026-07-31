@@ -4,21 +4,20 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mote.contracts.events import EventEnvelope, EventId, EventType, StreamId
-from mote.contracts.fileops.events import FileEditPlanStoredEvent
-from mote.contracts.fileops.models import BlobRef
-from mote.contracts.schema import UserMessage
+from mote.contracts.content import ContentIdentity
+from mote.contracts.conversation import UserMessage
+from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, StreamId
+from mote.contracts.events.file.facts import FileEditPlanStoredEvent
 from mote.runtime.session.codec import (
     SESSION_FACT_SCHEMA_VERSION,
     STABLE_SESSION_EVENT_CLASSES,
+    UnsupportedSessionEventError,
     UnsupportedSessionFactVersion,
     decode_session_event,
     encode_session_event,
     iter_file_operations_events,
-    migrated_event_id,
     session_stream_id,
     stable_event_type,
-    unknown_legacy_event_type,
 )
 from mote.runtime.session.events import MESSAGE, MessageEvent
 
@@ -60,7 +59,7 @@ def test_registry_has_one_stable_name_for_every_session_payload_class() -> None:
 
 
 def test_edit_plan_fact_is_projected_through_the_file_operations_port() -> None:
-    event = FileEditPlanStoredEvent("plan-1", BlobRef("a" * 64, 12))
+    event = FileEditPlanStoredEvent("plan-1", ContentIdentity("a" * 64, 12))
     timestamp = datetime(2026, 1, 2, tzinfo=timezone.utc)
     fact = encode_session_event(
         event,
@@ -97,7 +96,8 @@ def test_unknown_fact_is_not_misreported_as_a_known_session_event() -> None:
         payload={"kept": True},
     )
 
-    assert decode_session_event(envelope) is None
+    with pytest.raises(UnsupportedSessionEventError, match="unsupported_session_event"):
+        decode_session_event(envelope)
 
 
 def test_known_fact_with_future_schema_requires_an_explicit_upcaster() -> None:
@@ -113,19 +113,5 @@ def test_known_fact_with_future_schema_requires_an_explicit_upcaster() -> None:
         payload={"content": "future"},
     )
 
-    with pytest.raises(UnsupportedSessionFactVersion):
+    with pytest.raises(UnsupportedSessionFactVersion, match=r"expected=1 actual=2"):
         decode_session_event(envelope)
-
-
-def test_legacy_identity_is_deterministic_and_unknown_type_is_preserved() -> None:
-    inputs = {
-        "session_id": "legacy",
-        "ordinal": 3,
-        "legacy_type": "future_event",
-        "timestamp": "2026-01-01T00:00:00",
-        "payload": {"kept": True},
-    }
-
-    assert migrated_event_id(**inputs) == migrated_event_id(**inputs)
-    assert unknown_legacy_event_type("future_event") == "mote.legacy.future_event"
-    assert str(unknown_legacy_event_type("Future Event")).startswith("mote.legacy.unknown_")

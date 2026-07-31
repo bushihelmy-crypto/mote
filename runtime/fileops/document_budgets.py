@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import zipfile
 
-from mote.contracts.fileops.errors import DocumentResourceLimitError
-from mote.contracts.fileops.models import ExtractionBudget
+from mote.contracts.file.errors import DocumentResourceLimitError
+from mote.contracts.file.views import ExtractionBudget
 
 DEFAULT_EXTRACTION_BUDGET = ExtractionBudget(
     max_archive_uncompressed_bytes=256 * 1_024 * 1_024,

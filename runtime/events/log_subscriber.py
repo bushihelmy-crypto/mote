@@ -22,27 +22,21 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from mote.contracts.events.types import (
-    AgentLifecycleEvent,
+from mote.contracts.events.agent import AgentLifecycleEvent
+from mote.contracts.events.conversation import (
     ContextCompactedEvent,
-    DiagnosticsEvent,
-    FileChangedEvent,
     MessageAppendedEvent,
     PostCompactEvent,
     PromptRejectedEvent,
-    RecoveryEvent,
-    ResourceReportEvent,
-    SessionEndEvent,
-    SessionStartEvent,
-    TaskProgressEvent,
-    ToolCallFinishedEvent,
-    ToolInvocationStartedEvent,
-    TurnEndEvent,
-    TurnStartEvent,
     UserPromptSubmitEvent,
 )
-from mote.contracts.text import collapse_whitespace
-from mote.runtime.logging import logger
+from mote.contracts.events.file.observation import FileChangedEvent
+from mote.contracts.events.session import SessionEndEvent, SessionStartEvent, TurnEndEvent, TurnStartEvent
+from mote.contracts.events.task import TaskProgressEvent
+from mote.contracts.events.telemetry import DiagnosticsEvent, RecoveryEvent, ResourceReportEvent
+from mote.contracts.events.tool import ToolCallFinishedEvent, ToolInvocationStartedEvent
+from mote.runtime.telemetry.logging import logger
+from mote.runtime.tools.text_normalization import collapse_whitespace
 
 
 def _clip(text: str) -> str:

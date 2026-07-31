@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from mote.contracts.tools.effects import ToolEffect
-from mote.runtime.reporting import ArtifactsReporter
+from mote.contracts.tool.effects import ToolEffect
+from mote.runtime.telemetry.reporting import ArtifactsReporter
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import WaitInterruptible
 from mote.runtime.tools.tool_registry import register_tool

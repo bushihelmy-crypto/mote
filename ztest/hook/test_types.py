@@ -1,21 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for the pure-data hook types: HookInput wire shape + fold precedence."""
+"""Tests for typed hook wire shape and fold precedence."""
 from __future__ import annotations
 
-from mote.runtime.hook.types import EMPTY, HookInput, HookOutcome, fold
+from mote.contracts.hook import HookIdentity, PreToolUseInvocation, PreToolUsePayload, StopInvocation, StopPayload
+from mote.runtime.hook.types import EMPTY, HookOutcome, fold
+from mote.runtime.hook.wire import HookWireSerializer
 
 
 def test_to_json_dict_carries_envelope_and_payload():
-    hi = HookInput(
-        hook_event_name="PreToolUse",
-        session_id="sid",
-        cwd="/tmp/proj",
-        transcript_path="/tmp/rollout.jsonl",
+    hi = PreToolUseInvocation(
+        identity=HookIdentity("sid", "/tmp/proj", "/tmp/rollout.jsonl"),
         permission_mode="default",
-        payload={"tool_name": "Bash", "tool_input": {"command": "ls"}},
+        payload=PreToolUsePayload("Bash", {"command": "ls"}),
     )
-    wire = hi.to_json_dict()
+    wire = HookWireSerializer().to_json_dict(hi)
     # Both snake_case and camelCase identity keys present (codex compatible).
     assert wire["hook_event_name"] == "PreToolUse"
     assert wire["hookEventName"] == "PreToolUse"
@@ -28,7 +27,7 @@ def test_to_json_dict_carries_envelope_and_payload():
 
 
 def test_to_json_dict_omits_permission_mode_when_none():
-    wire = HookInput(hook_event_name="Stop").to_json_dict()
+    wire = HookWireSerializer().to_json_dict(StopInvocation(HookIdentity(), StopPayload()))
     assert "permission_mode" not in wire
     assert "permissionMode" not in wire
 

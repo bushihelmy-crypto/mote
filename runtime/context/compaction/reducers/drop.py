@@ -15,8 +15,8 @@ never dropped, and at least the most-recent non-pinned segment is always kept.
 
 from __future__ import annotations
 
-from mote.contracts.constants.context import HEAD_DROPPED_MESSAGE
-from mote.contracts.schema import ContextManagerConfig, Message, UserMessage
+from mote.contracts.conversation import ContextManagerConfig, Message, UserMessage
+from mote.contracts.conversation.constants import HEAD_DROPPED_MESSAGE
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Transcript

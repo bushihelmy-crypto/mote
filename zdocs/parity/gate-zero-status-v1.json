@@ -1,0 +1,242 @@
+{
+  "approval_record_present": false,
+  "checks": {
+    "dependency_supply_chain": {
+      "actual": "pending_license_cve_wheel_and_lock_verification",
+      "artifact": "dependency-plan-v1.yaml",
+      "digest": "sha256:f8dde0f60530ead44ec4b2dc64ab35283463135e2deee273b37b8072ac2c0457",
+      "expected": "passed",
+      "status": "blocked"
+    },
+    "fault_matrix": {
+      "actual": "passed",
+      "artifact": "fault-matrix-v1.yaml",
+      "digest": "sha256:eb1e9b6aa1a523483a6e3bfd8383f08970f598caebda3f89f99afef40128e968",
+      "expected": "passed",
+      "status": "passed"
+    },
+    "provider_certification": {
+      "actual": "awaiting_resource_provisioning",
+      "artifact": "provider-certification-v1.yaml",
+      "digest": "sha256:2adf9d08f5fec465ca235cbbf3f1cbf0c14f6da483286195444ef3277337d931",
+      "expected": "passed",
+      "status": "blocked"
+    },
+    "quality_ratchet": {
+      "actual": "pending",
+      "artifact": "quality-ratchet-result-v1.json",
+      "digest": "sha256:6aed68c48e5391b85f6a11a55af9ae5b2c32ef5f53dfa0cb5c2cc4667f9f988c",
+      "expected": "passed",
+      "status": "blocked"
+    },
+    "slo": {
+      "actual": "candidate_protocol_only",
+      "artifact": "inference-slo-v1.yaml",
+      "digest": "sha256:3e1ac536c1651c477460e09811ef60ce361a3f86b5507585d98b8de5b724db3b",
+      "expected": "frozen",
+      "status": "blocked"
+    },
+    "wire_fixtures": {
+      "actual": "awaiting_recorded_provider_fixtures",
+      "artifact": "wire-fixtures-v1.yaml",
+      "digest": "sha256:b2352505de82db85f2a4237259b3aba778e7d434d9292b55977b98527e89a88a",
+      "expected": "passed",
+      "status": "blocked"
+    }
+  },
+  "evidence": {
+    "backup_and_recovery": {
+      "gateway-daemon-backup-v1.schema.json": {
+        "digest": "sha256:880632a24e36fe8e59a539bd37f893cdcd3aec23d966d962697560dd90a2c711",
+        "present": true
+      },
+      "mote-application-backup-v1.schema.json": {
+        "digest": "sha256:e734b8a940f11b4c74eb92234c8f3602da97804450e6fe220d44c4637c927123",
+        "present": true
+      },
+      "mote-recovery-set-v1.schema.json": {
+        "digest": "sha256:f1a2954fdfa76026d2f52de20cd3f5a1f616013f3dd69072e12ea8b0eb9b4359",
+        "present": true
+      },
+      "recovery-contracts-v1.yaml": {
+        "digest": "sha256:b5bd716e2564dd983256cb007d490787e977dad17a43fed482ecedf3fd04e470",
+        "present": true
+      }
+    },
+    "config_and_network": {
+      "inference-config-semantics-v1.yaml": {
+        "digest": "sha256:ff2f8ff40e9fb06b6d008fdb70e9d04894c6a4b59460aaf3e6b79b1f79fc07c6",
+        "present": true
+      },
+      "inference-config-v1.schema.json": {
+        "digest": "sha256:6d7fba43afacd057fe7b112c6e66bc37438fc3523c12c83c8fcc36d00033ec82",
+        "present": true
+      },
+      "private-network-policy-v1.yaml": {
+        "digest": "sha256:e75e55d6107fcbb5c8a850caccfdd26a921012fa9375d6ff007f995e44464beb",
+        "present": true
+      }
+    },
+    "dependency_supply_chain": {
+      "dependency-plan-v1.yaml": {
+        "digest": "sha256:f8dde0f60530ead44ec4b2dc64ab35283463135e2deee273b37b8072ac2c0457",
+        "present": true
+      },
+      "dependency-platform-matrix-v1.yaml": {
+        "digest": "sha256:dd30ba725b96143b4dbb0c08fca2a46f41fd2de8969bbc5c10b48c97cf40e579",
+        "present": true
+      },
+      "dependency-review-v1.yaml": {
+        "digest": "sha256:4c2d7e65c1a1beba723e15ef74229f70cb797d01bc8c36dbcd45077cf74e3ab8",
+        "present": true
+      },
+      "inference-sbom-v1.cdx.json": {
+        "digest": "sha256:7457930722ae214a2d3f264861468a012af4a6491c98fa81a0a0095161d4c27b",
+        "present": true
+      }
+    },
+    "external_idl_and_rbac": {
+      "admin-rbac-v1.yaml": {
+        "digest": "sha256:743279ed943123832a9cde83a49dde7a1fb123ecf5b754faa33fbc3b94338b7a",
+        "present": true
+      },
+      "idl-baseline-v1.json": {
+        "digest": "sha256:1e4e7d3bf15d4c41cd251c22f5a618d04ed5ed783fce948bf7caa38d8e8a4c3d",
+        "present": true
+      }
+    },
+    "external_release_inputs": {
+      "external-release-inputs-v1.yaml": {
+        "digest": "sha256:d3b1b9f6b6053f6c22ee13b612e13d288b7ec3ee967b434011a3cbf521724cfc",
+        "present": true
+      }
+    },
+    "failure_and_execution_contracts": {
+      "canonical-failure-v2.yaml": {
+        "digest": "sha256:b12123b538d6e48fa76c9246e3e40848167a84fa6de3d53a2621fc3f2a031e77",
+        "present": true
+      },
+      "execution-contracts-v1.yaml": {
+        "digest": "sha256:27147d312acd1bc2adb534864cdaea14c1ca43e90b4bfa9dced3e9e6380f940a",
+        "present": true
+      }
+    },
+    "observability_and_operations": {
+      "observability-operations-v1.yaml": {
+        "digest": "sha256:c47db309c4f7dea604d8915fce05ef19d4a066e8301dc74e09613b4289f46e8c",
+        "present": true
+      },
+      "operations/alert-catalog-v1.yaml": {
+        "digest": "sha256:23f7b7f5e8a39470c6480c5f3643151fc8ad72c3032e11cefddfb2e06f082046",
+        "present": true
+      },
+      "operations/readiness-v1.md": {
+        "digest": "sha256:6cd728cee52e28e09071f6e740f1f87f89405e52699d93ef2d3dec44be0b31d1",
+        "present": true
+      },
+      "release-cli-upgrade-v1.yaml": {
+        "digest": "sha256:66d97e61d163d819c7c24baefb9b088876a4c73f2513a11f3c598beb70a843fc",
+        "present": true
+      }
+    },
+    "parity_manifest": {
+      "bifrost-ec1dd920.yaml": {
+        "digest": "sha256:8a12236a2557dd288b9bca1419d1ee7243bff8ac6b3717ff45c801916d36648b",
+        "present": true
+      }
+    },
+    "provider_certification": {
+      "provider-certification-v1.yaml": {
+        "digest": "sha256:2adf9d08f5fec465ca235cbbf3f1cbf0c14f6da483286195444ef3277337d931",
+        "present": true
+      }
+    },
+    "quality_and_reuse": {
+      "infrastructure-reuse-audit-v1.yaml": {
+        "digest": "sha256:97f8a309fddb3ce042ccf486907f0293303c28cc380dd03a0b8cd89b2bb3711d",
+        "present": true
+      },
+      "quality-ratchet-result-v1.json": {
+        "digest": "sha256:6aed68c48e5391b85f6a11a55af9ae5b2c32ef5f53dfa0cb5c2cc4667f9f988c",
+        "present": true
+      }
+    },
+    "reconciliation": {
+      "reconciliation-actions-v1.yaml": {
+        "digest": "sha256:44e62ff5aea8771dfae4e9907dba6c62c6faac252625210b24c142d5f759b8b1",
+        "present": true
+      },
+      "reconciliation-v1.md": {
+        "digest": "sha256:1f008da5c43e1a83211541c4f56739faefe09f598684e5419496bbea9e3fb56e",
+        "present": true
+      }
+    },
+    "shared_deployment": {
+      "deployment-distribution-scope-v1.yaml": {
+        "digest": "sha256:f5e05f91b0cfc6235fbe17872290b345f8fc81365cc03ea44ae534627101bda2",
+        "present": true
+      },
+      "shared-daemon-v1.md": {
+        "digest": "sha256:13bc847fef0be39ee42b4add04054d79195d6e466e0db05dbabb5144eabeb0ce",
+        "present": true
+      },
+      "shared-sqlite-semantics-v1.yaml": {
+        "digest": "sha256:b3cdea424967b85c921408b3d8fa1d62aaff2019b5206119ec0529fa1e444718",
+        "present": true
+      }
+    },
+    "translation_replay_routing": {
+      "counterfactual-evaluation-v1.yaml": {
+        "digest": "sha256:0e0bc6ae2b61817f5125792ed70ec25433ec123d29573699ad929e800f7556ea",
+        "present": true
+      },
+      "reasoning-replay-v1.yaml": {
+        "digest": "sha256:7465537585803dfc328b5911187eb5649cbbadf9da297f5e971f0bc233340800",
+        "present": true
+      },
+      "routing-decision-v1.yaml": {
+        "digest": "sha256:fc22ff4fd2281a181dfeda0b84e55001346c82831b452f41f346a310361c46b5",
+        "present": true
+      },
+      "translation-profiles-v1.yaml": {
+        "digest": "sha256:f8b4833c86404e89fff8713b7b0078c1976c4d8fab3a65dd0209b5e405b739bd",
+        "present": true
+      }
+    },
+    "validation_and_inspection": {
+      "response-validator-v1.yaml": {
+        "digest": "sha256:92ac23ada1f4586b6accca3006cc262e2347197b21f49c7832af94c007837565",
+        "present": true
+      },
+      "traffic-inspector-v1.yaml": {
+        "digest": "sha256:452c718bd2a608b2d25deb8d866928ab8b1de0b132b4699e2048b01c84705bbc",
+        "present": true
+      }
+    },
+    "wire_fixtures": {
+      "wire-fixtures-v1.yaml": {
+        "digest": "sha256:b2352505de82db85f2a4237259b3aba778e7d434d9292b55977b98527e89a88a",
+        "present": true
+      }
+    },
+    "workgraph_slo_and_faults": {
+      "fault-matrix-v1.yaml": {
+        "digest": "sha256:eb1e9b6aa1a523483a6e3bfd8383f08970f598caebda3f89f99afef40128e968",
+        "present": true
+      },
+      "inference-slo-v1.yaml": {
+        "digest": "sha256:3e1ac536c1651c477460e09811ef60ce361a3f86b5507585d98b8de5b724db3b",
+        "present": true
+      },
+      "inference-workgraph-v1.yaml": {
+        "digest": "sha256:4b3caa6c8362265f178cfa8eace4c544a1f759cf4e0fae93a1a0b9d7a61f4fcb",
+        "present": true
+      }
+    }
+  },
+  "evidence_complete": true,
+  "gate_status": "blocked",
+  "ready_for_architecture_approval": false,
+  "revision": "gate-zero-status-v1",
+  "schema_version": 1
+}

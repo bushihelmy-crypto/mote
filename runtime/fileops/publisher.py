@@ -8,7 +8,8 @@ import secrets
 import stat
 from typing import Optional
 
-from mote.contracts.fileops.errors import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.errors import (
     ContentChangedError,
     FileOperationError,
     FilePublishError,
@@ -16,8 +17,7 @@ from mote.contracts.fileops.errors import (
     StaleSnapshotError,
     UnsupportedFilesystemSemanticsError,
 )
-from mote.contracts.fileops.models import AbsentVersion, BlobRef, FileVersion, PresentVersion
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.contracts.file.identity import AbsentVersion, FileVersion, PresentVersion
 from mote.runtime.fileops.identity import (
     PathLike,
     name_identity,
@@ -27,6 +27,7 @@ from mote.runtime.fileops.identity import (
 )
 from mote.runtime.fileops.metadata import apply_metadata, capture_metadata
 from mote.runtime.fileops.metadata_manifest import MAX_METADATA_MANIFEST_BYTES, decode_metadata_manifest
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -72,9 +73,9 @@ class AtomicPublisher:
     def replace_from_blob(
         self,
         target: PathLike,
-        ref: BlobRef,
+        ref: ContentIdentity,
         *,
-        metadata: BlobRef,
+        metadata: ContentIdentity,
         expected: FileVersion,
     ) -> None:
         native = native_path(target)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from mote.contracts.models.failover import AttemptBudget, RequestTransform
+from mote.contracts.model.failover import AttemptBudget, RequestTransform
 from mote.runtime.errors import (
     ContextWindowExceededError,
     LLMAuthenticationError,

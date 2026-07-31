@@ -1,4 +1,4 @@
-from mote.kernel.models import build_routing_signals
+from mote.kernel.inference import build_routing_signals
 
 
 def test_build_routing_signals_normalizes_messages_and_counts_turns():

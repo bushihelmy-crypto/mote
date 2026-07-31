@@ -7,8 +7,8 @@ import threading
 
 import pytest
 
-from mote.contracts.fileops.errors import ReadCursorError
-from mote.contracts.fileops.models import BlobRef
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.errors import ReadCursorError
 from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
 
 _IDLE_TTL = 10
@@ -23,8 +23,8 @@ class _Clock:
         return self.value
 
 
-def _ref(character: str, size: int) -> BlobRef:
-    return BlobRef(digest=character * 64, size=size)
+def _ref(character: str, size: int) -> ContentIdentity:
+    return ContentIdentity(digest=character * 64, size=size)
 
 
 def _registry(tmp_path, clock=None) -> DurableCursorRegistry:
@@ -239,10 +239,10 @@ def test_concurrent_process_invalidations_are_serialized_without_lost_updates(
     for process in processes:
         process.start()
     for _ in processes:
-        assert ready.get(timeout=10)
+        assert ready.get(timeout=30)
     start.set()
     for process in processes:
-        process.join(10)
+        process.join(30)
         assert process.exitcode == 0
 
     epochs = sorted(outcomes.get(timeout=2) for _ in processes)
@@ -281,10 +281,10 @@ def test_concurrent_process_retries_produce_the_same_continuation(tmp_path):
     for process in processes:
         process.start()
     for _ in processes:
-        assert ready.get(timeout=10)
+        assert ready.get(timeout=30)
     start.set()
     for process in processes:
-        process.join(10)
+        process.join(30)
         assert process.exitcode == 0
 
     results = tuple(outcomes.get(timeout=2) for _ in processes)

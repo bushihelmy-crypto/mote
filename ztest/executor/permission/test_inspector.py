@@ -5,9 +5,9 @@ import asyncio
 
 import pytest
 
-from mote.contracts.permissions import PermissionFacts
-from mote.contracts.policy.tool import ToolCallInspection, ToolCallIntent
-from mote.contracts.ports.tool_policy import ToolCallPolicyExtensionSpec
+from mote.contracts.authorization import PermissionFacts
+from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
+from mote.contracts.tool.policy import ToolCallInspection, ToolCallIntent
 from mote.runtime.tools.permission import ToolCallInspector
 from mote.runtime.tools.policy import DefaultToolCallPolicy
 

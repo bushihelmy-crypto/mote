@@ -32,13 +32,13 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint
+from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint
 from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore, ReliableArtifactPublisher
-from mote.runtime.fileops import FileOperations
 from mote.runtime.interactive import RuntimeHost
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
 from mote.runtime.session.log import SessionLog
 from mote.runtime.tools.base_tool import BaseTool
+from mote.ztest.fileops_factory import FileOperations
 
 # ---------------------------------------------------------------------------
 # Fake Role publishing a capability allowlist
@@ -77,7 +77,7 @@ class CapRole:
         )
         self.artifact_store = DurableArtifactStore(
             Path(self._fileops_dir.name) / "artifacts.sqlite3",
-            ArtifactRepositoryBlobStore(self.file_operations.artifacts),
+            ArtifactRepositoryBlobStore(self.file_operations.artifacts.content_repository),
         )
         self.artifact_publisher = ReliableArtifactPublisher(
             self.artifact_store,
@@ -114,7 +114,7 @@ class CapRole:
         self.browser_client_certs: list[dict] = []
         # DeviceUse backend config (get_device_config). Defaults to a fresh
         # DeviceConfig ("auto"); a test can reassign to force a backend.
-        from mote.contracts.settings.device import DeviceConfig
+        from mote.runtime.config.device import DeviceConfig
 
         self.device_config: Any = DeviceConfig()
         # Named-secret vault stand-in for autonomous login-fill (get_secret).
@@ -144,7 +144,7 @@ class CapRole:
         # executor chokepoint) and ``list_tool_names`` reports the keys, so a
         # graph node can call these fakes exactly as it would a real tool.
         self.fake_tools: dict[str, Callable] = {}
-        # Names treated as graph orchestrators (``is_graph_tool``); run_graph
+        # Names treated as graph orchestrators; run_graph
         # refuses to nest these. Empty unless a test opts in.
         self.graph_tools: set[str] = set()
         # Names that must not appear as a graph node (``graph_excluded``, e.g.

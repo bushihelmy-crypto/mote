@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Protocol
 
-from mote.contracts.fileops.errors import RecoveryInDoubtError
-from mote.contracts.fileops.models import FileOperationKind, LockMode, LockSpec, ProjectIdentity, TransactionStatus
+from mote.contracts.file.errors import RecoveryInDoubtError
+from mote.contracts.file.identity import LockMode, LockSpec, ProjectIdentity
+from mote.contracts.file.transactions import FileOperationKind, TransactionStatus
 from mote.runtime.fileops.fences import ProjectRecoveryFenceStore, RecoveryFence
 from mote.runtime.fileops.locking import PROJECT_LOCK_LEVEL, TIMELINE_LOCK_LEVEL, HierarchicalLockManager
 

@@ -207,7 +207,7 @@ class TestHumanToolsSelfApprove:
     def test_deny_rule_still_wins(self):
         # A user-configured bypass-immune deny rule still overrides self-approval,
         # so explicit gating remains possible.
-        from mote.contracts.permissions import PermissionRule
+        from mote.contracts.authorization import PermissionRule
         from mote.runtime.tools.permission.engine import PermissionEngine
         from mote.runtime.tools.permission.rule_store import RuleStore
 

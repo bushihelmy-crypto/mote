@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.agent.lsp.registry`` — dedup + volume-limited diagnostics."""
+"""Tests for ``mote.runtime.lsp.registry`` — dedup + volume-limited diagnostics."""
 from __future__ import annotations
 
-from mote.runtime.agent.lsp.registry import Diagnostic, DiagnosticRegistry, parse_diagnostic, severity_label
+from mote.runtime.lsp.registry import Diagnostic, DiagnosticRegistry, parse_diagnostic, severity_label
 
 
 def _d(line=0, msg="boom", sev=1):
@@ -81,7 +81,10 @@ def test_cap_prioritizes_severity():
 
 def test_parse_diagnostic_ok():
     raw = {
-        "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 8}},
+        "range": {
+            "start": {"line": 4, "character": 2},
+            "end": {"line": 4, "character": 8},
+        },
         "severity": 2,
         "message": "unused import",
         "source": "pyflakes",

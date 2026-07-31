@@ -1,0 +1,47 @@
+{
+  "gate_status": "passed",
+  "mutations": [
+    {
+      "exit_code": 1,
+      "id": "translation.openai_choice_cardinality",
+      "ratchet": "translation_mutation",
+      "status": "killed",
+      "test": "ztest/inference/test_transport_translation.py"
+    },
+    {
+      "exit_code": 1,
+      "id": "translation.tool_arguments_object",
+      "ratchet": "translation_mutation",
+      "status": "killed",
+      "test": "ztest/inference/test_transport_translation.py"
+    },
+    {
+      "exit_code": 1,
+      "id": "validator.byte_limit_fail_closed",
+      "ratchet": "response_validator_mutation",
+      "status": "killed",
+      "test": "ztest/inference/test_response_validator_limits.py"
+    },
+    {
+      "exit_code": 1,
+      "id": "validator.frame_limit_fail_closed",
+      "ratchet": "response_validator_mutation",
+      "status": "killed",
+      "test": "ztest/inference/test_response_validator_limits.py"
+    },
+    {
+      "exit_code": 1,
+      "id": "failure.unknown_commit_requires_reconcile",
+      "ratchet": "failure_mapping_mutation",
+      "status": "killed",
+      "test": "ztest/contracts/test_inference_gateway_contracts.py"
+    }
+  ],
+  "revision": "mutation-ratchet-result-v1",
+  "schema_version": 1,
+  "scores": {
+    "failure_mapping_mutation": 1.0,
+    "response_validator_mutation": 1.0,
+    "translation_mutation": 1.0
+  }
+}

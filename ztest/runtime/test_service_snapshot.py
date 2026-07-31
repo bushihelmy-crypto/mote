@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.services import ServiceEndpointDescriptor
+from mote.contracts.service import ServiceEndpointDescriptor
 from mote.runtime.service_gateway import ServiceFailoverGroup, ServiceRuntimeSnapshot, merge_service_runtime_snapshots
 
 

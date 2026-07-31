@@ -3,12 +3,12 @@
 """Integration-test harness: drive a *real* Role.run end-to-end.
 
 Unlike the per-subsystem suites (which duck-type every collaborator), these
-tests wire up the real stack — ``Role`` → ``ReActLoop`` → ``ThinkEngine`` +
+tests wire up the real stack — ``Role`` → ``ReActLoop`` → ``InferenceEngine`` +
 ``ToolExecutor`` → ``ContextManager`` → session persistence — and fake only the
 single external dependency: the LLM (the network boundary).
 
 The LLM is scripted through the **native tool-use channel** (the default
-``command_protocol="native"``). ``ThinkEngine`` calls ``llm.aask_tool(...)`` and
+``command_protocol="native"``). ``InferenceEngine`` calls ``llm.aask_tool(...)`` and
 reads back an :class:`LLMResponse` carrying ``content`` + structured
 ``tool_calls``; the loop executes those calls against real tools. A turn that
 returns *no* tool_calls is the native terminal signal (the model "finished"),
@@ -33,11 +33,13 @@ Key pieces:
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
 import pytest
 
-from mote.contracts.models import LLMResponse, LLMToolCall
+from mote.contracts.model import LLMResponse, LLMToolCall
+from mote.runtime.agent.component_keys import ROUTER
 
 # ---------------------------------------------------------------------------
 # Turn scripting
@@ -108,6 +110,17 @@ class ScriptedRouter:
         self.task_calls.append(task)
         return self.llm
 
+    def model_route_for_task(self, task: str):
+        from mote.ztest.model_fakes import model_route
+
+        self.task_calls.append(task)
+        return model_route(self.llm)
+
+    def model_route(self, name=None):
+        from mote.ztest.model_fakes import model_route
+
+        return model_route(self.llm)
+
     def route(self, *, name=None, llm_config=None) -> ScriptedLLM:
         return self.llm
 
@@ -146,9 +159,11 @@ def redirect_sessions(tmp_path, monkeypatch):
 @pytest.fixture
 def context():
     """A real router Context (builds entirely offline, no network)."""
+    from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
+    from mote.product.config.schema import Config
     from mote.runtime.models.clients.context import Context
 
-    return Context()
+    return Context(config=Config(models=ShortcutModelsConfig(default=ProductEndpointInput(model="test"))))
 
 
 def build_role(
@@ -164,15 +179,17 @@ def build_role(
 ):
     """Construct a real ``Role`` wired to a :class:`ScriptedLLM`.
 
-    The role uses the real ContextManager, ToolExecutor, ThinkEngine,
+    The role uses the real ContextManager, ToolExecutor, InferenceEngine,
     ReActLoop and native command channel; only the router (hence the LLM) is
     faked. ``working_dir`` roots the filesystem tools at a tmp workspace.
     """
-    from mote.contracts.settings.permissions import PermissionConfig
     from mote.kernel.output import text_output_contract
+    from mote.product.agents.background_tasks import build_background_task_pool
+    from mote.product.paths import default_runtime_paths
     from mote.product.toolsets import builtin_toolsets
     from mote.runtime.agent import AgentDependencies, AgentWiring, Role
     from mote.runtime.agent.role_schema import RoleSchema
+    from mote.runtime.tools.permission.config import PermissionConfig
 
     if tools is None:
         tools = ["Read", "Edit", "Search"]
@@ -181,6 +198,10 @@ def build_role(
     # (every tool prompts). These tests have no interactive channel, so unless a
     # test is specifically exercising permissions, run wide-open with bypass.
     schema_kwargs.setdefault("permissions", PermissionConfig(mode="bypass"))
+    paths = default_runtime_paths(
+        user_config_root=Path(working_dir) / ".config",
+        workspace_root=Path(working_dir) / ".workspace",
+    )
 
     schema = RoleSchema(name=name, tools=tools, **schema_kwargs)
     role = Role(
@@ -191,6 +212,13 @@ def build_role(
                 deps=None,
                 output_contract=output_contract or text_output_contract(),
                 toolsets=builtin_toolsets(),
+                background_task_pool_builder=build_background_task_pool,
+                user_config_root=paths.user_config_root,
+                session_workspace_root=paths.session_workspace_root,
+                browser_profiles_root=paths.browser_profiles_root,
+                sandbox_ca_root=paths.sandbox_ca_root,
+                secrets_root=paths.secrets_root,
+                oauth_root=paths.oauth_root,
             ),
         ),
     )
@@ -199,7 +227,10 @@ def build_role(
     role.state.project_root = working_dir
 
     llm = ScriptedLLM(turns, model=llm_model)
-    role._components._graph.seed("router", ScriptedRouter(llm))
+    from mote.ztest.model_fakes import install_fake_runtime
+
+    install_fake_runtime(role, llm)
+    role._components._graph.seed(ROUTER, ScriptedRouter(llm))
     # Expose the scripted LLM for assertions.
     role.scripted_llm = llm  # type: ignore[attr-defined]
     return role

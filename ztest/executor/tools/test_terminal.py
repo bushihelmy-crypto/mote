@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from mote.product.toolsets.builtin.terminal import Terminal
-from mote.runtime.tools.dependency._terminal import HeadTailBuffer, TerminalRuntimeDriver
+from mote.runtime.interactive.terminal.driver import HeadTailBuffer, TerminalRuntimeDriver
 from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, run

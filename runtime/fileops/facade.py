@@ -5,55 +5,39 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional, Sequence
 
-from mote.contracts.fileops.events import FileOperationsEvent
-from mote.contracts.fileops.models import (
+from mote.contracts.artifact import ArtifactContentRef
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.file.facts import FileOperationsEvent
+from mote.contracts.file.identity import (
     AbsentVersion,
-    ArtifactGarbageCollectionState,
-    ByteReadRequest,
-    ByteViewMode,
-    ContinueReadRequest,
-    EditCommitChange,
-    EditCommitOutcome,
-    FileByteView,
     FileChangeAttribution,
-    FileOperationsHealth,
     FileSnapshot,
-    FileTextView,
     FileVersion,
     FileVersionTransition,
     LockMode,
     LockSpec,
-    MutationResult,
     PathToken,
+    PresentVersion,
+)
+from mote.contracts.file.recovery import FileOperationsHealth
+from mote.contracts.file.search import SearchOutputMode, SearchResult
+from mote.contracts.file.transactions import EditCommitChange, EditCommitOutcome, MutationResult, TransactionStatus
+from mote.contracts.file.views import (
+    ByteReadRequest,
+    ByteViewMode,
+    ContinueReadRequest,
+    FileByteView,
+    FileTextView,
     PdfReadRequest,
     PdfView,
     PdfViewMode,
-    PresentVersion,
     ReadCursorKind,
     ReadRequest,
-    SearchOutputMode,
-    SearchResult,
     TextReadRequest,
-    TransactionStatus,
 )
-from mote.runtime.fileops.artifact_budgets import (
-    ARTIFACT_GC_BATCH_SIZE,
-    ARTIFACT_HARD_LIMIT_BYTES,
-    ARTIFACT_MINIMUM_QUARANTINE_AGE_NS,
-    ARTIFACT_WRITE_TTL_SECONDS,
-    MAX_MATERIALIZED_TEXT_BYTES,
-    MAX_METADATA_MANIFEST_BYTES,
-    MAX_READ_MANIFEST_BYTES,
-    MAX_SEARCH_MANIFEST_BYTES,
-    MAX_SEARCH_RESULT_BYTES,
-    snapshot_budget,
-)
-from mote.runtime.fileops.artifact_gc import ArtifactGarbageCollectionCycle, ArtifactGarbageCollector
-from mote.runtime.fileops.artifact_owners import artifact_owner
-from mote.runtime.fileops.artifact_reachability import ArtifactReachabilityProjector, ExternalArtifactRootSource
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.artifacts.repository import ArtifactRepository as ContentRepository
 from mote.runtime.fileops.byte_views import ByteViewService
 from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
@@ -71,10 +55,24 @@ from mote.runtime.fileops.hunk_projection import EditPlanHunkProjector
 from mote.runtime.fileops.identity import name_identity, path_token, project_identity
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.locking import TIMELINE_LOCK_LEVEL, HierarchicalLockManager
+from mote.runtime.fileops.mutation.artifact_catalog import ArtifactObjectState
+from mote.runtime.fileops.mutation.artifact_roots import ArtifactReachabilityProjector, ExternalArtifactRootSource
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 from mote.runtime.fileops.mutation_factory import MutationFactory
 from mote.runtime.fileops.pdf_views import PdfViewService
 from mote.runtime.fileops.publisher import AtomicPublisher
 from mote.runtime.fileops.read_cursors import ReadCursorStore
+from mote.runtime.fileops.reservation_owners import artifact_owner
+from mote.runtime.fileops.resource_limits import (
+    ARTIFACT_HARD_LIMIT_BYTES,
+    ARTIFACT_WRITE_TTL_SECONDS,
+    MAX_MATERIALIZED_TEXT_BYTES,
+    MAX_METADATA_MANIFEST_BYTES,
+    MAX_READ_MANIFEST_BYTES,
+    MAX_SEARCH_MANIFEST_BYTES,
+    MAX_SEARCH_RESULT_BYTES,
+    snapshot_budget,
+)
 from mote.runtime.fileops.review import ReviewService
 from mote.runtime.fileops.rewind import RewindCoordinator
 from mote.runtime.fileops.search import SearchEngine
@@ -135,6 +133,8 @@ class FileOperations:
         session_id: str,
         journal_path: Path,
         get_project_root: Callable[[], str],
+        artifact_repository: ContentRepository,
+        artifact_lifecycle_root: Path,
         flush_pending: Optional[Callable[[], None]] = None,
         lock_root: Optional[Path] = None,
         event_sink: Callable[[FileOperationsEvent], object] | None = None,
@@ -144,7 +144,8 @@ class FileOperations:
         self.session_id = session_id
         self._get_project_root = get_project_root
         artifacts = ArtifactRepository(
-            journal_path.parent / "blobs",
+            artifact_repository,
+            lifecycle_root=artifact_lifecycle_root,
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
         )
         reader = SealedSnapshotReader(artifacts)
@@ -222,12 +223,6 @@ class FileOperations:
             edit_plans=self.edit_plan_store,
             journal=journal,
         )
-        self.artifact_gc = ArtifactGarbageCollector(
-            repository=artifacts,
-            reachability=self.artifact_reachability,
-            pins=self.cursor_registry,
-            minimum_quarantine_age_ns=ARTIFACT_MINIMUM_QUARANTINE_AGE_NS,
-        )
         self.edit_planner = EditPlanner(
             artifacts=artifacts,
             sources=self.text_sources,
@@ -263,6 +258,51 @@ class FileOperations:
     def register_artifact_root_source(self, source: ExternalArtifactRootSource) -> None:
         """Protect a durable shared-CAS authority from FileOps collection."""
         self.artifact_reachability.register_root_source(source)
+
+    def artifact_roots(self) -> tuple[ArtifactContentRef, ...]:
+        """Return the FileOps roots that protect objects in the shared CAS."""
+        referenced = list(self._artifact_root_refs())
+        referenced.extend(
+            item.artifact
+            for item in self.artifacts.catalog.gc_snapshot().objects
+            if item.state is not ArtifactObjectState.DELETING
+        )
+        roots = {
+            ref.digest: ArtifactContentRef(
+                identity=ref,
+                locator=f"sha256:{ref.digest}",
+            )
+            for ref in referenced
+        }
+        return tuple(roots[digest] for digest in sorted(roots))
+
+    def prune_artifact_metadata(self, _reachable: Sequence[ArtifactContentRef]) -> None:
+        """Reconcile FileOps lifecycle metadata with shared-CAS reachability."""
+        protected_refs = self._artifact_root_refs()
+        protected = {ref.digest for ref in protected_refs}
+        catalog = self.artifacts.catalog
+        snapshot = catalog.gc_snapshot()
+        candidates = tuple(
+            item.artifact
+            for item in snapshot.objects
+            if item.state is ArtifactObjectState.LIVE and item.artifact.digest not in protected
+        )
+        catalog.quarantine_unreachable(candidates, expected_generation=snapshot.generation)
+        current = catalog.gc_snapshot()
+        reconciled = catalog.reconcile_quarantine(
+            protected_refs,
+            expected_generation=current.generation,
+            minimum_age_ns=0,
+            maximum_deletions=max(1, len(current.objects)),
+        )
+        for item in reconciled.deletion_candidates:
+            catalog.complete_deletion(item.artifact)
+
+    def _artifact_root_refs(self) -> tuple[ContentIdentity, ...]:
+        referenced = list(self.artifact_reachability.scan().artifacts)
+        with self.cursor_registry.freeze_pins() as pins:
+            referenced.extend(pins.artifacts)
+        return tuple(referenced)
 
     def read_view(
         self,
@@ -681,39 +721,7 @@ class FileOperations:
             artifact_quarantined_objects=(artifact_health.quarantined_objects if artifact_health is not None else 0),
             artifact_deleting_objects=(artifact_health.deleting_objects if artifact_health is not None else 0),
             artifact_quota_pressure=(artifact_health.quota_pressure if artifact_health is not None else 0.0),
-            artifact_gc_state=(
-                artifact_health.garbage_collection.state
-                if artifact_health is not None
-                else ArtifactGarbageCollectionState.NEVER_RUN
-            ),
-            artifact_gc_completed_at_ns=(
-                artifact_health.garbage_collection.completed_at_ns if artifact_health is not None else None
-            ),
-            artifact_gc_quarantined_objects=(
-                artifact_health.garbage_collection.quarantined_objects if artifact_health is not None else 0
-            ),
-            artifact_gc_restored_objects=(
-                artifact_health.garbage_collection.restored_objects if artifact_health is not None else 0
-            ),
-            artifact_gc_deletion_candidates=(
-                artifact_health.garbage_collection.deletion_candidates if artifact_health is not None else 0
-            ),
-            artifact_gc_reclaimed_objects=(
-                artifact_health.garbage_collection.reclaimed_objects if artifact_health is not None else 0
-            ),
-            artifact_gc_reclaimed_bytes=(
-                artifact_health.garbage_collection.reclaimed_bytes if artifact_health is not None else 0
-            ),
-            artifact_gc_failure=(artifact_health.garbage_collection.failure if artifact_health is not None else ""),
         )
-
-    def collect_artifacts(
-        self,
-        *,
-        limit: int = ARTIFACT_GC_BATCH_SIZE,
-        expedited: bool = False,
-    ) -> ArtifactGarbageCollectionCycle:
-        return self.artifact_gc.run_cycle(limit=limit, expedited=expedited)
 
     def rewind(
         self,

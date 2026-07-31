@@ -8,8 +8,8 @@ observe() produces a deterministic snapshot with no real device.
 """
 from __future__ import annotations
 
-from mote.runtime.tools.dependency._device.backend import DeviceBackend, DeviceError
-from mote.runtime.tools.dependency._device.outline import RawOutline, parse_uiautomator_xml
+from mote.runtime.interactive.device.backend import DeviceBackend, DeviceError
+from mote.runtime.interactive.device.outline import RawOutline, parse_uiautomator_xml
 
 # A minimal 1x1 PNG (valid header) — enough to prove screenshot bytes flow.
 FAKE_PNG = (

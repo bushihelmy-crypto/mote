@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""End-to-end tests for the ``run_graph`` orchestrator (mote.product.toolsets.builtin.run_graph).
+"""End-to-end tests for the ``run_graph`` orchestrator (mote.product.workflows.run_graph.tool).
 
 ``run_graph`` lets the model wire existing tools into a declarative graph —
 sequential steps, parallel fan-out (``map``), pure computation (``compute``), and
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.product.toolsets.builtin.run_graph import RunGraph
+from mote.product.workflows.run_graph.tool import RunGraph
 from mote.runtime.events import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRESS
 from mote.runtime.events.context import bind_telemetry
 from mote.runtime.tools.execution_context import bind_tool_call_id
@@ -398,14 +398,14 @@ class TestCompute:
         # the real wait_for path with a tiny ceiling + a sleeping eval stub.
         import time
 
-        from mote.orchestration.tasks.bggraph import from_spec
+        from mote.product.workflows.run_graph import compiler
 
         def _slow(expr, symbols, node_id):
             time.sleep(5)
             return 1
 
-        monkeypatch.setattr(from_spec, "_eval_expr", _slow)
-        monkeypatch.setattr(from_spec, "_COMPUTE_TIMEOUT_S", 0.1)
+        monkeypatch.setattr(compiler, "_eval_expr", _slow)
+        monkeypatch.setattr(compiler, "_COMPUTE_TIMEOUT_S", 0.1)
         r = self._compute("1 + 1", {})
         assert r.success is False
         assert "c" in r.output
@@ -598,7 +598,7 @@ class TestGuards:
             _call(role, graph)
 
     def test_cannot_orchestrate_itself(self, workspace):
-        # run_graph is itself a graph tool (is_graph_tool=True), so it appears in
+        # run_graph is itself a workflow tool, so it appears in
         # the graph-tool set and a node naming it is rejected as nesting — the same
         # guard that bars any other graph tool, applied reflexively.
         role = _role()

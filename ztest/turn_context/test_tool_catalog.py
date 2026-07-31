@@ -18,8 +18,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from mote.contracts.ports import EphemeralContextSource
-from mote.runtime.context.turn_context import ToolCatalogContextSource
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
+from mote.runtime.context.turn import ToolCatalogContextSource
 from mote.runtime.events import PostCompactEvent
 
 

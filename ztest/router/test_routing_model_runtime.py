@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from mote.product.routing.squilla.ml.runtime import RoutingModelActivationError, RoutingModelRuntime
-from mote.runtime.lifecycle import LifecycleState
+from mote.runtime.control.lifecycle import LifecycleState
 
 
 class _Engine:

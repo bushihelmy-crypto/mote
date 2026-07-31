@@ -5,13 +5,13 @@ import os
 from contextlib import nullcontext
 from pathlib import Path
 
-from mote.contracts.fileops import ReviewConflictError, ReviewStatus
-from mote.runtime.fileops import FileOperations
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
-from mote.runtime.fileops.artifact_repository import ArtifactWriteScopeState
+from mote.contracts.file import ReviewConflictError, ReviewStatus
 from mote.runtime.fileops.edit_plans import LiteralEditPlanRequest, WholeFileEditPlanRequest
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScopeState
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.session.hunk_ops import HunkOps
+from mote.ztest.fileops_factory import FileOperations
 
 SESSION = "review-session"
 
@@ -104,9 +104,9 @@ def test_review_events_share_rollout_and_survive_new_instance(tmp_path):
     assert projected == accepted
     assert projected.version == 2
     assert not (tmp_path / "session" / "ledger").exists()
-    rollout = (tmp_path / "session" / "rollout.jsonl").read_text(encoding="utf-8")
-    assert '"type": "hunk_detected"' in rollout
-    assert '"type": "hunk_review_transitioned"' in rollout
+    event_types = {event.type for event in second.journal.iter_events()}
+    assert "hunk_detected" in event_types
+    assert "hunk_review_transitioned" in event_types
 
 
 def test_committed_file_transaction_projects_prepared_hunks(tmp_path):

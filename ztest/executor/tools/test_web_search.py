@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.errors.services import ServiceCallExhaustedError
-from mote.contracts.models import WebSearchHit
-from mote.contracts.services import ServiceExecutionSemantics
+from mote.contracts.model import WebSearchHit
+from mote.contracts.service import ServiceExecutionSemantics
+from mote.contracts.service.errors import ServiceCallExhaustedError
 from mote.product.toolsets.builtin.web_search import WebSearch
 from mote.runtime.errors import ToolNotConfiguredError
 from mote.runtime.tools.definitions import native_definition

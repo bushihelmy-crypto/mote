@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from mote.contracts.errors.base import MoteError, NonRetryableError, RetryableError
-from mote.contracts.errors.codes import ErrorCode, RecoveryAction
+from mote.contracts.foundation.errors.base import MoteError, NonRetryableError, RetryableError
+from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
 
 
 class LLMError(MoteError):

@@ -32,12 +32,13 @@ exactly the capability-isolation seam we keep on purpose — so it stays runtime
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, Protocol, TypeAlias, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, TypeAlias, TypedDict
 
-from mote.contracts.background_tasks import BackgroundTaskService
+from mote.contracts.ports.task.operations import BackgroundTaskService
+from mote.contracts.task.models import TaskId
 
 if TYPE_CHECKING:
-    from mote.contracts.fileops import (
+    from mote.contracts.file import (
         EditCommitOutcome,
         FileByteView,
         FileSnapshot,
@@ -47,12 +48,11 @@ if TYPE_CHECKING:
         ReadRequest,
         SearchResult,
     )
-    from mote.contracts.handoff import HandoffOutcome
-    from mote.contracts.interaction import AskUserQuestionAnswers, AskUserQuestionItem
-    from mote.contracts.permissions import ApprovalChoice, ApprovalRequest
-    from mote.contracts.ports import ArtifactStore, ReliableArtifactPublisher
-    from mote.contracts.settings.device import DeviceConfig
-    from mote.runtime.context.skills.skill_pool import SkillPool
+    from mote.contracts.interaction import ApprovalChoice, ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionItem
+    from mote.contracts.interaction.handoff import HandoffOutcome
+    from mote.contracts.ports.artifact.store import ArtifactStore, ReliableArtifactPublisher
+    from mote.contracts.ports.skill.registry import SkillCatalog
+    from mote.runtime.config.device import DeviceConfig
     from mote.runtime.fileops.edit_plans import EditPlan, EditPlanRequest
     from mote.runtime.interactive import RuntimeHost
     from mote.runtime.sandbox import SandboxRuntime
@@ -158,21 +158,11 @@ WaitInterruptible: TypeAlias = Callable[..., Awaitable[float]]
 # ``run_skill_fork`` / ``register_resource`` are keyword-only → ``Callable[...]``.
 # ---------------------------------------------------------------------------
 
-GetSkillPool: TypeAlias = Callable[[], "Optional[SkillPool]"]
-
-AgentT = TypeVar("AgentT")
-
-
-class BuildChildAgent(Protocol):
-    """Tool-facing callable view of the application Agent factory."""
-
-    def __call__(self, agent_cls: type[AgentT], /, **kwargs: Any) -> AgentT:
-        ...
-
+GetSkillPool: TypeAlias = Callable[[], "Optional[SkillCatalog]"]
 
 RunSkillFork: TypeAlias = Callable[..., Awaitable[str]]
 RegisterResource: TypeAlias = Callable[..., None]
-RegisterTaskResult: TypeAlias = Callable[[str, str], None]
+RegisterTaskResult: TypeAlias = Callable[[TaskId, str], None]
 RetireTaskResult: TypeAlias = Callable[[str], None]
 
 # ---------------------------------------------------------------------------
@@ -268,7 +258,6 @@ class CapabilityMap(TypedDict):
     handoff_runtime: HandoffRuntime
     wait_interruptible: WaitInterruptible
     get_skill_pool: GetSkillPool
-    build_child_agent: BuildChildAgent
     run_skill_fork: RunSkillFork
     register_resource: RegisterResource
     register_task_result: RegisterTaskResult

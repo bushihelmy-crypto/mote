@@ -7,17 +7,18 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, TypeVar
 
-from mote.contracts.models.failover import (
+from mote.contracts.model.failover import (
     AttemptBudget,
     DecisionKind,
     FailoverDecision,
     FailureDisposition,
     RequestTransform,
 )
-from mote.runtime.logging import log_class
 from mote.runtime.models.clients.retry import retry_delay
-from mote.runtime.models.failover.admission import AdmissionPermit, AdmissionRejectedError, AdmissionResult
-from mote.runtime.models.failover.policy import DefaultFailoverPolicy, FailoverPolicy, classify_failure
+from mote.runtime.resilience.admission import AdmissionPermit, AdmissionRejectedError, AdmissionResult
+from mote.runtime.resilience.failover.classification import classify_failure
+from mote.runtime.resilience.failover.policy import DefaultFailoverPolicy, FailoverPolicy
+from mote.runtime.telemetry.logging import log_class
 
 ResultT = TypeVar("ResultT")
 RequestT = TypeVar("RequestT")

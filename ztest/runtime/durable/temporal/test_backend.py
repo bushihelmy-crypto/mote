@@ -20,17 +20,17 @@ import pytest
 
 pytest.importorskip("temporalio")
 
-from mote.contracts.schema import ActivityConfig, TemporalConfig
+from mote.contracts.config.tool import ActivityConfig, TemporalConfig
 from mote.runtime.durable import DurableBackend
 from mote.runtime.durable.temporal import TemporalBackend
 from mote.runtime.durable.temporal._activities import StepHandlerRegistry
 from mote.runtime.durable.temporal._backend import _activity_kwargs, _retry_policy
 from mote.runtime.ledger import COMPLETED, FAILED, KIND_THINK, KIND_TIMER, KIND_TOOL, RunJournal
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.session.workspace import SessionWorkspace
 
 
 def _journal(tmp_path, session_id="sess") -> RunJournal:
-    return RunJournal(session_id, store=WorkspaceStore(root=str(tmp_path)))
+    return RunJournal(session_id, store=SessionWorkspace(root=str(tmp_path)))
 
 
 def _backend(tmp_path) -> TemporalBackend:

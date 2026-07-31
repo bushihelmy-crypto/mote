@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 import os
 
-from mote.contracts.ports import EphemeralContextSource
-from mote.runtime.context.turn_context import CodeMapContextSource
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
+from mote.product.code_map.turn_context import CodeMapContextSource
 from mote.runtime.events import PostCompactEvent, SessionStartEvent
 
 
@@ -44,7 +44,11 @@ def test_no_touched_files_returns_none():
 
 
 def test_renders_defined_symbols(tmp_path):
-    p = _write(tmp_path, "m.py", "def foo():\n    pass\n\nclass Bar:\n    def m(self):\n        pass\n")
+    p = _write(
+        tmp_path,
+        "m.py",
+        "def foo():\n    pass\n\nclass Bar:\n    def m(self):\n        pass\n",
+    )
     src = CodeMapContextSource(get_touched_files=lambda: [p])
     out = run(src.render())
     assert out is not None
@@ -229,7 +233,11 @@ def test_folds_large_symbol_list(tmp_path):
 
 
 def test_tier_degrades_under_tiny_budget(tmp_path):
-    p = _write(tmp_path, "c.py", "def helper():\n    pass\n\ndef run(x: int) -> None:\n    helper()\n")
+    p = _write(
+        tmp_path,
+        "c.py",
+        "def helper():\n    pass\n\ndef run(x: int) -> None:\n    helper()\n",
+    )
     full = CodeMapContextSource(get_touched_files=lambda: [p])
     full_out = run(full.render())
     assert "run(x: int) -> None" in full_out  # signatures present at full tier
@@ -736,7 +744,7 @@ def test_ref_symbol_query_capped(tmp_path):
     _write(tmp_path, "api.py", body2)
     _bump_mtime(api)
     run(src.render())
-    from mote.runtime.context.code_map import CodeMap
+    from mote.runtime.code_map import CodeMap
 
     assert len(lsp.ref_calls) <= CodeMap._MAX_REF_SYMBOLS
 
@@ -871,7 +879,11 @@ def test_surface_callers_needs_lsp(tmp_path):
 def test_surface_callers_skips_private_and_nested(tmp_path):
     # Only public top-level symbols are a caller's import surface; a private def
     # and a method must not be queried for callers.
-    api = _write(tmp_path, "api.py", "def _hidden():\n    pass\n\nclass C:\n    def m(self):\n        pass\n")
+    api = _write(
+        tmp_path,
+        "api.py",
+        "def _hidden():\n    pass\n\nclass C:\n    def m(self):\n        pass\n",
+    )
     lsp = _FakeRefLspQuery([])
     src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
     out = run(src.render(cwd=str(tmp_path)))
@@ -888,7 +900,7 @@ def test_surface_callers_capped(tmp_path):
     lsp = _FakeRefLspQuery([])
     src = CodeMapContextSource(get_touched_files=lambda: [api], lsp_query=lsp, surface_callers=True)
     run(src.render())
-    from mote.runtime.context.code_map import CodeMap
+    from mote.runtime.code_map import CodeMap
 
     assert len(lsp.ref_calls) <= CodeMap._MAX_REF_SYMBOLS
 
@@ -937,7 +949,7 @@ def test_surfaced_caller_change_resurfaces_row(tmp_path):
 
 
 def _sym(name: str, qualified_name: str | None = None):
-    from mote.runtime.context.code_map import Symbol
+    from mote.runtime.code_map import Symbol
 
     return Symbol(
         name=name,
@@ -969,7 +981,11 @@ def test_unread_symbols_from_index_without_lsp(tmp_path):
 def test_unread_purpose_from_index(tmp_path):
     # Opt B: the unread target's module purpose renders at tier 0.
     _write(tmp_path, "pkg/__init__.py", "")
-    other = _write(tmp_path, "pkg/other.py", '"""Other things live here."""\ndef thing():\n    pass\n')
+    other = _write(
+        tmp_path,
+        "pkg/other.py",
+        '"""Other things live here."""\ndef thing():\n    pass\n',
+    )
     consumer = _write(tmp_path, "pkg/consumer.py", "import pkg.other\n")
     other_abs = os.path.abspath(other)
     repo = _FakeRepoIndex(summaries={other_abs: "Other things live here."})
@@ -981,8 +997,8 @@ def test_unread_purpose_from_index(tmp_path):
 
 def test_unread_used_by_from_index_capped_and_tier_gated(tmp_path):
     # Opt A: an unread target's whole-repo "used by:" renders (nested) at tier 0,
-    # capped at _UNREAD_USEDBY_CAP, and drops entirely under a tight budget.
-    from mote.runtime.context.turn_context.sources.code_map import _UNREAD_USEDBY_CAP
+    # capped at UNREAD_USED_BY_CAP, and drops entirely under a tight budget.
+    from mote.product.code_map.rendering import UNREAD_USED_BY_CAP
 
     _write(tmp_path, "pkg/__init__.py", "")
     other = _write(tmp_path, "pkg/other.py", "def thing():\n    pass\n")
@@ -996,7 +1012,7 @@ def test_unread_used_by_from_index_capped_and_tier_gated(tmp_path):
     out = run(full.render(cwd=str(tmp_path)))
     assert out is not None
     assert f"{os.path.join('pkg', 'other.py')} used by:" in out
-    overflow = len(importers) - _UNREAD_USEDBY_CAP
+    overflow = len(importers) - UNREAD_USED_BY_CAP
     assert f"(+{overflow} more)" in out  # capped
     assert "dep0.py" in out  # a shown importer
     assert "dep9.py" not in out  # a folded-away importer

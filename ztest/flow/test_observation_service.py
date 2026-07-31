@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.constants.messages import INTERJECTION
-from mote.contracts.schema import CauseBy, Message, MessagePriority, UserMessage
+from mote.contracts.conversation import CauseBy, Message, MessagePriority, UserMessage
+from mote.contracts.conversation.fields import INTERJECTION
 
 from .conftest import make_flow_context
 

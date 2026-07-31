@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.kernel.think.prompt_builder — PromptBuilder + ThinkContext.
+"""Tests for mote.kernel.inference.prompt_builder — PromptBuilder + InferenceContext.
 
 PromptBuilder is a stateless assembler: every method is a pure function over
-ThinkInputs / ThinkContext / the four subsystems. The tests cover the system &
+InferenceInputs / InferenceContext / the four subsystems. The tests cover the system &
 user prompt assembly (placeholder substitution + cache-boundary removal +
 memory/reminder injection), each ``_make_*`` section builder, and the full
 collect_context() integration through the duck-typed fakes in conftest.
@@ -14,9 +14,9 @@ import asyncio
 
 import pytest
 
-from mote.kernel import prompt as R
-from mote.kernel.parser.channel import PROMPT_VAR_KEYS
-from mote.kernel.think.prompt_builder import PromptBuilder, ThinkContext, ThinkInputs, ThinkSubsystems
+from mote.kernel.commands.channel import PROMPT_VAR_KEYS
+from mote.kernel.inference import prompts as R
+from mote.kernel.inference.prompt_builder import InferenceContext, InferenceInputs, InferenceSubsystems, PromptBuilder
 
 from .conftest import FakeExecutor, FakeSkillManager, make_config
 
@@ -37,6 +37,9 @@ class _FakeChannel:
     def lower(self, text: str) -> str:
         return text
 
+    def vocabulary(self) -> dict:
+        return {}
+
     def wants_tool_catalog(self) -> bool:
         return False
 
@@ -46,12 +49,12 @@ class _FakeChannel:
 # --------------------------------------------------------------------------
 class TestDataclasses:
     def test_think_inputs_defaults(self):
-        ti = ThinkInputs()
+        ti = InferenceInputs()
         assert ti.working_dir == ""
         assert ti.memory_dir is None
 
     def test_think_context_defaults(self):
-        tc = ThinkContext()
+        tc = InferenceContext()
         assert tc.env_section == ""
         # The protocol fills default to empty strings until a channel supplies them.
         assert tc.prompt_vars == {k: "" for k in PROMPT_VAR_KEYS}
@@ -64,13 +67,13 @@ class TestRoleInfo:
     def test_role_info_flows_into_system_prompt(self):
         # role_info is a static schema string carried straight through: it lands
         # in ctx.role_info and substitutes into the ${role_info} placeholder.
-        ctx = ThinkContext(role_info="# My charter\nDo the thing.")
+        ctx = InferenceContext(role_info="# My charter\nDo the thing.")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
         assert "# My charter" in sys_p
         assert "${role_info}" not in sys_p
 
     def test_empty_role_info_leaves_no_placeholder(self):
-        ctx = ThinkContext(role_info="")
+        ctx = InferenceContext(role_info="")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
         assert "${role_info}" not in sys_p
 
@@ -89,7 +92,7 @@ class TestJoinSections:
 # --------------------------------------------------------------------------
 class TestBuildSystemPrompt:
     def test_substitutes_and_strips_boundary(self):
-        ctx = ThinkContext(env_section="ENVBLOCK")
+        ctx = InferenceContext(env_section="ENVBLOCK")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
         assert "ENVBLOCK" in sys_p
         # boundary marker removed
@@ -98,13 +101,13 @@ class TestBuildSystemPrompt:
         assert "${env_section}" not in sys_p
 
     def test_static_toolset_instructions_render_in_system_prompt(self):
-        ctx = ThinkContext(tool_instructions="# Toolset instructions\nStay scoped.")
+        ctx = InferenceContext(tool_instructions="# Toolset instructions\nStay scoped.")
         sys_p = PromptBuilder._build_system_prompt(R.SYSTEM_PROMPT, ctx)
         assert "# Toolset instructions\nStay scoped." in sys_p
 
     def test_missing_placeholder_tolerated(self):
         # safe_substitute: a template with an unknown $foo is left intact, no raise.
-        ctx = ThinkContext()
+        ctx = InferenceContext()
         out = PromptBuilder._build_system_prompt("hello $unknown ${env_section}", ctx)
         assert "$unknown" in out
 
@@ -114,24 +117,24 @@ class TestBuildUserPrompt:
         # cwd + timestamp moved off the tail into per-turn reminder sources and the
         # base template is now empty, so with no memory/reminders the tail is empty
         # — no dangling "# Current State" header, no "current directory" line.
-        ctx = ThinkContext(working_dir="/work")
+        ctx = InferenceContext(working_dir="/work")
         out = PromptBuilder._build_user_prompt(R.CMD_PROMPT, ctx)
         assert out == ""
         assert "current directory" not in out
         assert "Current State" not in out
 
     def test_prepends_memory_context(self):
-        ctx = ThinkContext(working_dir="/w", memory_context="# MEMORY.md\nidx")
+        ctx = InferenceContext(working_dir="/w", memory_context="# MEMORY.md\nidx")
         out = PromptBuilder._build_user_prompt(R.CMD_PROMPT, ctx)
         assert out.startswith("# MEMORY.md\nidx")
 
     def test_appends_reminders(self):
-        ctx = ThinkContext(working_dir="/w", reminders="REMIND")
+        ctx = InferenceContext(working_dir="/w", reminders="REMIND")
         out = PromptBuilder._build_user_prompt(R.CMD_PROMPT, ctx)
         assert out.rstrip().endswith("REMIND")
 
     def test_memory_and_reminders_together(self):
-        ctx = ThinkContext(working_dir="/w", memory_context="MEM", reminders="REM")
+        ctx = InferenceContext(working_dir="/w", memory_context="MEM", reminders="REM")
         out = PromptBuilder._build_user_prompt(R.CMD_PROMPT, ctx)
         assert out.startswith("MEM")
         assert out.rstrip().endswith("REM")
@@ -139,7 +142,7 @@ class TestBuildUserPrompt:
 
 class TestBuildTuple:
     def test_build_returns_pair(self):
-        ctx = ThinkContext(env_section="ENVBLOCK", working_dir="/w")
+        ctx = InferenceContext(env_section="ENVBLOCK", working_dir="/w")
         sys_p, usr_p = PromptBuilder.build(R.SYSTEM_PROMPT, R.CMD_PROMPT, ctx)
         assert "ENVBLOCK" in sys_p
         assert isinstance(usr_p, str)
@@ -152,7 +155,7 @@ class TestSubstitutionMaps:
     def test_system_substitutions_keys(self):
         # XML built-ins have one system-prompt slot; MCP/pipeline definitions use
         # the reminder catalog. Protocol sections come from ctx.prompt_vars.
-        ctx = ThinkContext(
+        ctx = InferenceContext(
             env_section="ENVBLOCK",
             prompt_vars={"command_guide": "CG", "tool_usage_guide": "TUG"},
         )
@@ -165,7 +168,7 @@ class TestSubstitutionMaps:
 
     def test_user_substitutions_keys(self):
         # current_state is now empty: cwd + time moved to per-turn reminder sources.
-        ctx = ThinkContext(working_dir="/here")
+        ctx = InferenceContext(working_dir="/here")
         d = PromptBuilder._user_substitutions(ctx)
         assert d["current_state"] == ""
 
@@ -185,7 +188,7 @@ class TestMakeMemory:
         assert "- [A](a.md) — hook" in context
 
     def test_missing_index_uses_empty_state(self, tmp_path):
-        from mote.kernel.prompt.memory import MEMORY_EMPTY_STATE
+        from mote.kernel.inference.memory_prompts import MEMORY_EMPTY_STATE
 
         instructions, context = PromptBuilder._make_memory(tmp_path)
         assert instructions  # still produces instructions
@@ -295,7 +298,7 @@ class TestMakeEnvSection:
 # --------------------------------------------------------------------------
 class TestCollectContext:
     def _subsystems(self, **overrides):
-        return ThinkSubsystems(
+        return InferenceSubsystems(
             config=overrides.get("config", make_config()),
             model_name=overrides.get("model_name", "test-model"),
             executor=overrides.get("executor", FakeExecutor()),
@@ -304,18 +307,18 @@ class TestCollectContext:
         )
 
     def test_basic_assembly(self):
-        inputs = ThinkInputs(working_dir="/work")
+        inputs = InferenceInputs(working_dir="/work")
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
-        assert isinstance(ctx, ThinkContext)
+        assert isinstance(ctx, InferenceContext)
         assert ctx.working_dir == "/work"
 
     def test_xml_builtins_populate_system_prompt_catalog(self):
-        from mote.kernel.parser.xml_channel import XmlCommandChannel
+        from mote.kernel.commands.xml.channel import XmlCommandChannel
 
         executor = FakeExecutor(tools={"Read": {"name": "Read"}})
         ctx = run(
             PromptBuilder.collect_context(
-                ThinkInputs(),
+                InferenceInputs(),
                 self._subsystems(executor=executor, command_channel=XmlCommandChannel()),
             )
         )
@@ -326,7 +329,7 @@ class TestCollectContext:
         executor = FakeExecutor(instructions=("Stay inside the workspace.",))
         ctx = run(
             PromptBuilder.collect_context(
-                ThinkInputs(),
+                InferenceInputs(),
                 self._subsystems(executor=executor),
             )
         )
@@ -334,19 +337,19 @@ class TestCollectContext:
 
     def test_memory_populated_when_dir_set(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("idx-line", encoding="utf-8")
-        inputs = ThinkInputs(memory_dir=tmp_path)
+        inputs = InferenceInputs(memory_dir=tmp_path)
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         assert ctx.memory  # instructions present
         assert "idx-line" in ctx.memory_context
 
     def test_memory_empty_without_dir(self):
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
+        ctx = run(PromptBuilder.collect_context(InferenceInputs(), self._subsystems()))
         assert ctx.memory == ""
         assert ctx.memory_context == ""
 
     def test_language_and_scratchpad(self):
-        # Language now flows from config.models.response_language, not ThinkInputs.
-        inputs = ThinkInputs(scratchpad_dir="/sp")
+        # Language now flows from config.models.response_language, not InferenceInputs.
+        inputs = InferenceInputs(scratchpad_dir="/sp")
         cfg = make_config(response_language="Chinese")
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems(config=cfg)))
         assert "Chinese" in ctx.language
@@ -356,12 +359,12 @@ class TestCollectContext:
         # A channel supplies its protocol fills; collect_context copies them
         # verbatim into ctx.prompt_vars (the single-source path).
         channel = _FakeChannel({k: "FILL-" + k for k in PROMPT_VAR_KEYS})
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(command_channel=channel)))
+        ctx = run(PromptBuilder.collect_context(InferenceInputs(), self._subsystems(command_channel=channel)))
         assert ctx.prompt_vars == {k: "FILL-" + k for k in PROMPT_VAR_KEYS}
 
     def test_prompt_vars_default_when_no_channel(self):
         # No channel -> ctx keeps the empty-string defaults (nothing overrides).
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
+        ctx = run(PromptBuilder.collect_context(InferenceInputs(), self._subsystems()))
         assert ctx.prompt_vars == {k: "" for k in PROMPT_VAR_KEYS}
 
     def test_partial_prompt_vars_rejected(self):
@@ -369,25 +372,25 @@ class TestCollectContext:
         # completeness guard raises instead.
         channel = _FakeChannel({"bogus": "X"})  # missing the required key(s)
         with pytest.raises(ValueError, match="missing required keys"):
-            run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(command_channel=channel)))
+            run(PromptBuilder.collect_context(InferenceInputs(), self._subsystems(command_channel=channel)))
 
     def test_reminders_stub_empty(self):
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems()))
+        ctx = run(PromptBuilder.collect_context(InferenceInputs(), self._subsystems()))
         assert ctx.reminders == ""
 
     def test_role_info_carried_from_inputs(self):
-        inputs = ThinkInputs(role_info="# Charter\nBe helpful.")
+        inputs = InferenceInputs(role_info="# Charter\nBe helpful.")
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         assert ctx.role_info == "# Charter\nBe helpful."
 
     def test_compaction_section_active(self):
         cfg = make_config(compaction_enabled=True)
-        ctx = run(PromptBuilder.collect_context(ThinkInputs(), self._subsystems(config=cfg)))
+        ctx = run(PromptBuilder.collect_context(InferenceInputs(), self._subsystems(config=cfg)))
         assert ctx.compaction
 
     def test_end_to_end_build_from_collected_context(self, tmp_path):
         (tmp_path / "MEMORY.md").write_text("mem-idx", encoding="utf-8")
-        inputs = ThinkInputs(working_dir="/work", memory_dir=tmp_path)
+        inputs = InferenceInputs(working_dir="/work", memory_dir=tmp_path)
         ctx = run(PromptBuilder.collect_context(inputs, self._subsystems()))
         sys_p, usr_p = PromptBuilder.build(R.SYSTEM_PROMPT, R.CMD_PROMPT, ctx)
         assert R.SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in sys_p

@@ -6,14 +6,16 @@ import hashlib
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from mote.contracts.errors.models import (
+from mote.contracts.model.errors import (
     ModelCapabilityUnsatisfiedError,
     ModelGovernanceViolationError,
     ModelRouteUnavailableError,
 )
-from mote.contracts.models.failover import EndpointDescriptor, FailoverPlan
-from mote.contracts.models.invocation import ModelInvocation, ModelOperation, RequestRequirements, ResponseMode
-from mote.runtime.models.failover.snapshot import ModelRuntimeSnapshot, RuntimeFailoverGroup
+from mote.contracts.model.failover import EndpointDescriptor, FailoverPlan
+from mote.contracts.model.invocation import ModelInvocation, ModelOperation, RequestRequirements, ResponseMode
+from mote.contracts.model.topology import RouteId
+from mote.contracts.model.topology_codec import encode_route_id
+from mote.runtime.models.failover.snapshot import CanonicalModelRuntimeSnapshot, RuntimeFailoverGroup
 
 
 class FailoverPlanner:
@@ -21,7 +23,7 @@ class FailoverPlanner:
 
     def __init__(
         self,
-        snapshot: ModelRuntimeSnapshot,
+        snapshot: CanonicalModelRuntimeSnapshot,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -29,7 +31,7 @@ class FailoverPlanner:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @property
-    def snapshot(self) -> ModelRuntimeSnapshot:
+    def snapshot(self) -> CanonicalModelRuntimeSnapshot:
         return self._snapshot
 
     def plan(self, invocation: ModelInvocation) -> FailoverPlan:
@@ -45,7 +47,7 @@ class FailoverPlanner:
             ]
             raise ModelRouteUnavailableError(
                 f"route {invocation.route_id!r} contains unavailable endpoints",
-                route_id=invocation.route_id,
+                route_id=encode_route_id(invocation.route_id),
                 group_id=group.group_id,
                 missing_endpoints=missing,
                 config_revision=self._snapshot.revision,
@@ -57,7 +59,7 @@ class FailoverPlanner:
         if not governed:
             raise ModelGovernanceViolationError(
                 f"no endpoint on route {invocation.route_id!r} satisfies governance",
-                route_id=invocation.route_id,
+                route_id=encode_route_id(invocation.route_id),
                 group_id=group.group_id,
                 required_domain=invocation.requirements.governance_domain,
                 allowed_regions=sorted(invocation.requirements.allowed_regions),
@@ -76,7 +78,7 @@ class FailoverPlanner:
         if not eligible:
             raise ModelCapabilityUnsatisfiedError(
                 f"no endpoint on route {invocation.route_id!r} satisfies requirements",
-                route_id=invocation.route_id,
+                route_id=encode_route_id(invocation.route_id),
                 group_id=group.group_id,
                 missing_by_endpoint=missing_by_endpoint,
                 config_revision=self._snapshot.revision,
@@ -99,15 +101,16 @@ class FailoverPlanner:
             created_at=self._clock(),
         )
 
-    def _resolve_group(self, route_id: str) -> RuntimeFailoverGroup:
-        group = self._snapshot.group(route_id)
-        if group is None:
-            group = self._snapshot.group_for_route(route_id)
+    def _resolve_group(self, route_id: RouteId) -> RuntimeFailoverGroup:
+        group = self._snapshot.group_for_route(route_id)
         if group is None:
             raise ModelRouteUnavailableError(
                 f"unknown model route {route_id!r}",
-                route_id=route_id,
-                available_routes=sorted(route for route, _group in self._snapshot.route_groups),
+                route_id=encode_route_id(route_id),
+                available_routes=sorted(
+                    route if isinstance(route, str) else encode_route_id(route)
+                    for route, _group in self._snapshot.route_groups
+                ),
                 available_groups=sorted(group.group_id for group in self._snapshot.groups),
                 config_revision=self._snapshot.revision,
             )

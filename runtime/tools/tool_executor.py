@@ -3,7 +3,7 @@
 """
 ToolExecutor — unified command dispatch & execution engine.
 
-Separates "what to execute" (Role._think) from "how to execute"
+Separates "what to execute" (Role._inference) from "how to execute"
 (ToolExecutor.run_command).
 
 Design:
@@ -17,29 +17,32 @@ Design:
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Generic, Mapping, TypeVar
 
-from mote.contracts.ports.tool_policy import ToolCallPolicy, ToolResultPolicy
-from mote.contracts.run_context import RunContext
-from mote.contracts.schema import DurableConfig, EffectLedgerConfig, LoopGuardConfig, ToolResultLimitConfig
-from mote.contracts.tools import CommandProtocol, ToolEffect, serialize_tool_call_args
-from mote.kernel.tools.toolset import AnyToolset, validate_toolset_protocols
+from mote.contracts.config.tool import DurableConfig, LoopGuardConfig, RunJournalConfig, ToolResultLimitConfig
+from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
+from mote.contracts.tool import CommandProtocol, ToolEffect, serialize_tool_call_args
+from mote.kernel.execution.run_context import RunContext
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.errors import RecoveryAction, RecoveryRunner, RecoveryStrategy, ToolNotFoundError
 from mote.runtime.events.telemetry import TelemetryManifest, TelemetryRuntime
 from mote.runtime.ledger import RunJournal
-from mote.runtime.logging import log_class
-from mote.runtime.tools import tool_result_limit
+from mote.runtime.resources import spill as tool_result_limit
+from mote.runtime.session.workspace import SessionWorkspace
+from mote.runtime.telemetry.logging import log_class
 from mote.runtime.tools.base_executor import BaseToolExecutor
-from mote.runtime.tools.effect_ledger import EffectLedger
+from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
 from mote.runtime.tools.mcp.lifecycle import McpLifecycle
 from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
+from mote.runtime.tools.provider import NativeToolset, XmlToolset, validate_toolset_protocols
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_catalog import NativeToolCatalog, XmlToolCatalog
 from mote.runtime.tools.tool_lifecycle import ToolLifecycle
 from mote.runtime.tools.tool_pipeline import ToolExecutionPipeline, failed_result
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_settlement import ToolSettlement
 from mote.runtime.tools.tool_views import ToolExecutorViews
-from mote.runtime.workspace import WorkspaceStore
 
 if TYPE_CHECKING:
     from mote.runtime.tools.mcp.universal import UniversalMCP
@@ -57,6 +60,8 @@ _UNKNOWN_AFTER_CRASH = (
     "call only if it is safe to retry."
     "\n</unknown-after-crash>"
 )
+
+AgentDepsT = TypeVar("AgentDepsT")
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +81,7 @@ _UNKNOWN_AFTER_CRASH = (
         "native_tool_specs",
     },
 )
-class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
+class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
     """Dispatch LLM tool calls to BaseTool instances.
 
     Lifecycle:
@@ -96,9 +101,9 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
         self,
         session_id: str,
         tools: list[str] | None = None,
-        role=None,
+        role: ToolCapabilityProvider | None = None,
         limit_config: ToolResultLimitConfig | None = None,
-        ledger_config: EffectLedgerConfig | None = None,
+        journal_config: RunJournalConfig | None = None,
         durable_config: DurableConfig | None = None,
         tool_call_policy: ToolCallPolicy | None = None,
         tool_result_policy: ToolResultPolicy | None = None,
@@ -107,17 +112,18 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
         get_bg_pool: Callable[[], Any] | None = None,
         pipelines_enabled: bool = True,
-        workspace_store: WorkspaceStore | None = None,
+        workspace_store: SessionWorkspace | None = None,
         deferred_tools: set[str] | None = None,
         get_revealed: Callable[[], set[str]] | None = None,
-        toolsets: tuple[AnyToolset, ...] | None = None,
+        toolsets: tuple[XmlToolset[AgentDepsT] | NativeToolset[AgentDepsT], ...] | None = None,
         command_protocol: str | CommandProtocol = CommandProtocol.NATIVE,
+        mcp_servers: list[MCPServerConfig] | None = None,
+        oauth_root: Path | None = None,
     ) -> None:
         self._session_id = session_id
-        # Workspace layout owner used to place a large persisted tool result
-        # under this session's directory. Defaults to the standard workspace
-        # root; a shared instance can be injected via the component graph.
-        self._workspace_store = workspace_store or WorkspaceStore()
+        if workspace_store is None:
+            raise ValueError("ToolExecutor requires an explicit workspace_store")
+        self._workspace_store = workspace_store
         # Two collaborators carry the split state: the catalog owns the bound-tool
         # map + schema views, the lifecycle owns the MCP slot. Tool-search
         # deferral: the catalog hides deferred tools' full descriptions until
@@ -129,7 +135,10 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
         validate_toolset_protocols(self._command_protocol, self._toolsets)
         catalog_type = XmlToolCatalog if self._command_protocol is CommandProtocol.XML else NativeToolCatalog
         self._catalog = catalog_type(deferred=deferred_tools, get_revealed=get_revealed)
-        self._mcp_lifecycle = McpLifecycle()
+        self._mcp_lifecycle = McpLifecycle(
+            servers=mcp_servers,
+            oauth_root=oauth_root,
+        )
         self._get_bg_pool = get_bg_pool
         # Telemetry carries post-operation observations and settlement
         # policy. Pre-invocation control belongs exclusively to ToolCallPolicy.
@@ -152,15 +161,12 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
         # Built once per session, co-located under the session directory via the
         # shared workspace store; ``None`` when disabled → run_command skips all
         # ledger work (identical to the prior no-ledger behavior).
-        self._ledger_config = ledger_config or EffectLedgerConfig()
+        self._journal_config = journal_config or RunJournalConfig()
         self._durable_config = durable_config or DurableConfig()
         self._journal: RunJournal | None = (
             RunJournal(session_id, store=self._workspace_store)
-            if (self._ledger_config.enabled or self._durable_config.enabled)
+            if (self._journal_config.enabled or self._durable_config.enabled)
             else None
-        )
-        self._ledger: EffectLedger | None = (
-            EffectLedger(journal=self._journal) if self._ledger_config.enabled and self._journal is not None else None
         )
 
         # A standalone executor is its own composition root.  The Role path
@@ -183,7 +189,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
             session_id=self._session_id,
             telemetry=self._telemetry,
             get_tool=self._get_tool,
-            ledger=self._ledger,
+            journal=self._journal if self._journal_config.enabled else None,
             limit_config=self._limit_config,
             workspace_store=self._workspace_store,
             policy=self._tool_result_policy,
@@ -203,7 +209,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
             get_tool=self._get_tool,
             available_names=self._catalog.names,
             policy=self._tool_call_policy,
-            ledger=self._ledger,
+            journal=self._journal if self._journal_config.enabled else None,
             recovery_runner=self._recovery_runner,
             get_bg_pool=self._get_bg_pool,
             settlement=self._settlement,
@@ -212,27 +218,47 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
     def prepare(self) -> None:
         self._lifecycle.prepare()
 
-    async def start_run(self, ctx: RunContext[Any]) -> None:
+    async def start_run(self, ctx: RunContext[AgentDepsT]) -> None:
         await self._lifecycle.start_run(ctx)
 
-    async def prepare_run_step(self, ctx: RunContext[Any]) -> None:
+    async def prepare_run_step(self, ctx: RunContext[AgentDepsT]) -> None:
         await self._lifecycle.prepare_run_step(ctx)
 
     async def end_run(self) -> None:
         await self._lifecycle.end_run()
 
     @property
+    def catalog(self):
+        return self._catalog
+
+    @property
+    def limit_config(self) -> ToolResultLimitConfig:
+        return self._limit_config
+
+    @property
+    def journal_config(self) -> RunJournalConfig:
+        return self._journal_config
+
+    @property
+    def durable_config(self) -> DurableConfig:
+        return self._durable_config
+
+    @property
+    def journal(self) -> RunJournal | None:
+        return self._journal
+
+    @property
     def command_protocol(self) -> CommandProtocol:
         return self._command_protocol
 
-    def register_native_tool(self, definition, capability: Any) -> None:
+    def register_native_tool(self, definition: NativeToolDefinition[Any], capability: BaseTool) -> None:
         """Register one runtime-discovered Native definition and capability."""
 
         if self._command_protocol is not CommandProtocol.NATIVE:
             raise TypeError("runtime-discovered Native tool cannot be registered on an XML executor")
         self._lifecycle.register_native(definition, capability)
 
-    def register_xml_tool(self, definition, capability: Any) -> None:
+    def register_xml_tool(self, definition: XmlToolDefinition[Any], capability: BaseTool) -> None:
         """Register one runtime-discovered XML definition and capability."""
 
         if self._command_protocol is not CommandProtocol.XML:
@@ -296,7 +322,8 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor):
         tool = self._get_tool(name)
         return (
             tool is not None
-            and self._ledger is not None
+            and self._journal is not None
+            and self._journal_config.enabled
             and result_id is not None
             and tool.resolve_effect_for(args) is ToolEffect.EXTERNAL
         )

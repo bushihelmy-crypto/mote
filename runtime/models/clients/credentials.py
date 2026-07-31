@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from mote.runtime.models.auth.oauth import OAuthManager
 
 if TYPE_CHECKING:
-    from mote.contracts.config.llm import LLMConfig
+    from mote.contracts.config.model.llm import LLMConfig
 
 
 class CredentialBindingMixin:

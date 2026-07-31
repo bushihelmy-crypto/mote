@@ -10,6 +10,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Generic, Mapping, NewType, Optional, Sequence, TypeAlias, TypeVar, cast
 
+from mote.contracts.content import ContentDigest
+
 EventId = NewType("EventId", str)
 EventType = NewType("EventType", str)
 StreamId = NewType("StreamId", str)
@@ -32,6 +34,8 @@ _EVENT_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$")
 def freeze_json(value: object, *, path: str = "value") -> JsonValue:
     """Validate and deeply freeze one JSON value without coercion."""
 
+    if isinstance(value, ContentDigest):
+        return str(value)
     if value is None or type(value) in {bool, str}:
         return cast(JsonScalar, value)
     if type(value) is int:

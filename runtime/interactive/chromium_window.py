@@ -11,8 +11,8 @@ except ImportError as _playwright_import_error:
 else:
     _playwright_import_error = None
 
-from mote.contracts.ports.window_surface import SurfaceInputHandler
-from mote.contracts.surfaces import SurfaceDescriptor, SurfaceFrame, SurfaceInput
+from mote.contracts.ports.surface.window import SurfaceInputHandler
+from mote.contracts.surface import SurfaceDescriptor, SurfaceFrame, SurfaceInput
 from mote.runtime.interactive.cdp import focus_chromium_page
 from mote.runtime.interactive.chromium_frontends import DEFAULT_CHROMIUM_FRONTENDS, ChromiumSurfaceFrontend
 

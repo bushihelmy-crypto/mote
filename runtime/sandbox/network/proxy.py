@@ -42,9 +42,9 @@ import ssl
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 from urllib.parse import urlsplit
 
-from mote.runtime.logging import logger
 from mote.runtime.sandbox.network.credentials import CredentialBroker
 from mote.runtime.sandbox.network.policy import NetworkPolicy, is_blocked_host
+from mote.runtime.telemetry.logging import logger
 
 if TYPE_CHECKING:
     from mote.runtime.sandbox.network.tls import MitmCa

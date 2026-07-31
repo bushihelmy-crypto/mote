@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from mote.runtime.events.journal import decode_event_record
-from mote.runtime.logging import log_call
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
 from mote.runtime.session.log import ROLLOUT_FILENAME, _default_base_dir
+from mote.runtime.telemetry.logging import log_call
 
 #: How many leading bytes to scan for meta + first message + the head title.
 #: The title is written fire-and-forget during the first turn, so it lands near

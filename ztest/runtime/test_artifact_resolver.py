@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactContentRef,
     ArtifactPublishRequest,
     ArtifactRef,
@@ -12,8 +12,9 @@ from mote.contracts.artifacts import (
     ArtifactResolutionPolicy,
     ArtifactSensitivity,
 )
-from mote.contracts.errors.artifacts import ArtifactNotFoundError
-from mote.contracts.ports import ArtifactResolver
+from mote.contracts.artifact.errors import ArtifactNotFoundError
+from mote.contracts.content import ContentIdentity
+from mote.contracts.ports.artifact.store import ArtifactResolver
 from mote.runtime.artifacts import DurableArtifactStore, StoreArtifactResolver
 
 
@@ -25,13 +26,12 @@ class MemoryBlobs:
         digest = hashlib.sha256(content).hexdigest()
         self.contents[digest] = content
         return ArtifactContentRef(
-            content_ref=f"sha256:{digest}",
-            digest=digest,
-            size=len(content),
+            identity=ContentIdentity(digest, len(content)),
+            locator=f"sha256:{digest}",
         )
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        return self.contents[ref.digest]
+        return self.contents[ref.identity.digest]
 
 
 def policy(

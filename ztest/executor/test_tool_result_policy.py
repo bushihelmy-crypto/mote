@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.policy.tool import ToolResultIntent
-from mote.contracts.schema import LoopGuardConfig
+from mote.contracts.config.tool import LoopGuardConfig
+from mote.contracts.tool.policy import ToolResultIntent
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.tools.policy import build_tool_result_policy
 
@@ -29,7 +29,14 @@ async def test_hook_receives_only_redacted_output_arguments_and_error():
     manager = HookManager()
     manager.register(
         "PostToolUse",
-        lambda hook_input: seen.append(hook_input.payload) or {},
+        lambda hook_input: seen.append(
+            {
+                "tool_input": hook_input.payload.tool_input,
+                "tool_response": hook_input.payload.tool_response,
+                "error": hook_input.payload.error,
+            }
+        )
+        or {},
     )
     policy = build_tool_result_policy(
         hook_manager=manager,

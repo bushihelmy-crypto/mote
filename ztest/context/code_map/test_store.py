@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from mote.runtime.context.code_map.extractor import CallEdge, CodeMapExtractor, FileExtract, ImportBinding, Symbol
-from mote.runtime.context.code_map.store import CodeMapStore
+from mote.runtime.code_map.extractor import CodeMapExtractor
+from mote.runtime.code_map.model import CallEdge, FileExtract, ImportBinding, Symbol
+from mote.runtime.code_map.store import CodeMapStore
 
 
 def _extract(
@@ -39,8 +40,20 @@ def test_symbols_roundtrip_ordered_by_line():
     ex = _extract(
         "/a.py",
         symbols=[
-            Symbol(name="b", qualified_name="b", kind="function", start_line=10, signature="()"),
-            Symbol(name="a", qualified_name="a", kind="function", start_line=2, signature="(x)"),
+            Symbol(
+                name="b",
+                qualified_name="b",
+                kind="function",
+                start_line=10,
+                signature="()",
+            ),
+            Symbol(
+                name="a",
+                qualified_name="a",
+                kind="function",
+                start_line=2,
+                signature="(x)",
+            ),
         ],
     )
     store.upsert_file(ex)
@@ -207,7 +220,15 @@ def test_symbol_summary_roundtrip():
     store.upsert_file(
         _extract(
             "/a.py",
-            symbols=[Symbol(name="f", qualified_name="f", kind="function", start_line=1, summary="Does a thing.")],
+            symbols=[
+                Symbol(
+                    name="f",
+                    qualified_name="f",
+                    kind="function",
+                    start_line=1,
+                    summary="Does a thing.",
+                )
+            ],
         )
     )
     got = store.symbols_in("/a.py")
@@ -227,62 +248,19 @@ def test_module_summary_empty_for_unknown_or_undocumented():
     assert store.module_summary_of("/a.py") == ""
 
 
-def test_migration_adds_columns_to_legacy_db(tmp_path):
-    # A DB created without the summary columns (an older build) is migrated on
-    # open: ADD COLUMN runs, and upsert/read of the new fields works.
+def test_legacy_db_is_rebuilt_without_migrating_rows(tmp_path):
     import sqlite3
 
     db = str(tmp_path / "legacy.db")
     con = sqlite3.connect(db)
-    # The pre-summary shape: nodes/files without the summary columns (edges match
-    # the current schema, which is created idempotently on open).
-    con.executescript(
-        "CREATE TABLE nodes (file_path TEXT NOT NULL, name TEXT NOT NULL, "
-        "qualified_name TEXT NOT NULL, kind TEXT NOT NULL, start_line INTEGER NOT NULL, "
-        "signature TEXT NOT NULL DEFAULT '');"
-        "CREATE TABLE files (path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, indexed_at INTEGER);"
-    )
+    con.executescript("CREATE TABLE edges (source_file TEXT NOT NULL, target TEXT NOT NULL);")
     con.commit()
     con.close()
 
-    store = CodeMapStore(db)  # opening runs _migrate()
-    store.upsert_file(
-        _extract(
-            "/a.py",
-            module_summary="Migrated module.",
-            symbols=[Symbol(name="f", qualified_name="f", kind="function", start_line=1, summary="Migrated sym.")],
-        )
-    )
-    assert store.module_summary_of("/a.py") == "Migrated module."
-    assert store.symbols_in("/a.py")[0].summary == "Migrated sym."
-
-
-def test_migration_folds_legacy_edges_into_imports_and_calls(tmp_path):
-    # A DB from the original build stored imports+calls in one `edges` table.
-    # Opening it must fold those rows into the dedicated imports/calls tables and
-    # drop `edges`, so a warm store keeps its reverse-dep data across the upgrade.
-    import sqlite3
-
-    db = str(tmp_path / "edges.db")
-    con = sqlite3.connect(db)
-    con.executescript(
-        "CREATE TABLE edges (source_file TEXT NOT NULL, target TEXT NOT NULL, kind TEXT NOT NULL, "
-        "caller TEXT NOT NULL DEFAULT '', line INTEGER NOT NULL DEFAULT 0);"
-    )
-    con.execute("INSERT INTO edges (source_file, target, kind, caller, line) VALUES ('/a.py', 'os', 'imports', '', 0)")
-    con.execute(
-        "INSERT INTO edges (source_file, target, kind, caller, line) VALUES ('/a.py', 'helper', 'calls', 'run', 5)"
-    )
-    con.commit()
-    con.close()
-
-    store = CodeMapStore(db)  # opening runs _migrate() -> _migrate_edges()
-    assert store.imports_of("/a.py") == ["os"]
-    calls = store.calls_in("/a.py")
-    assert [(c.caller, c.callee, c.line) for c in calls] == [("run", "helper", 5)]
-    # `edges` is gone; a second open is a no-op (idempotent).
+    store = CodeMapStore(db)
+    assert store.imports_of("/a.py") == []
     assert store._conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'edges'").fetchone() is None
-    CodeMapStore(db)  # does not raise
+    assert store._conn.execute("SELECT version FROM schema_meta").fetchone() == (1,)
 
 
 # -- resolution layer: scope graph + symbol bindings --------------------------
@@ -385,7 +363,7 @@ def test_delete_file_clears_resolution_tables(tmp_path):
 
 
 def test_language_and_skip_class_scope_roundtrip():
-    from mote.runtime.context.code_map.scopes import Scope, ScopeGraph
+    from mote.runtime.code_map.scopes import Scope, ScopeGraph
 
     store = CodeMapStore()
     graph = ScopeGraph(
@@ -404,10 +382,14 @@ def test_language_and_skip_class_scope_roundtrip():
 
 
 def test_python_defaults_skip_class_scope_true():
-    from mote.runtime.context.code_map.scopes import Scope, ScopeGraph
+    from mote.runtime.code_map.scopes import Scope, ScopeGraph
 
     store = CodeMapStore()
-    graph = ScopeGraph(scopes={0: Scope(id=0, kind="module", parent=None, start_line=1)}, defs=[], refs=[])
+    graph = ScopeGraph(
+        scopes={0: Scope(id=0, kind="module", parent=None, start_line=1)},
+        defs=[],
+        refs=[],
+    )
     store.upsert_file(FileExtract(path="/a.py", language="python", scope_graph=graph))
     assert store.graph_of("/a.py").skip_class_scope is True
 

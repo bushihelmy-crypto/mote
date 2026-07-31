@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from mote.runtime.disk.writer import DiskWriter
+from mote.runtime.persistence.writer import DiskWriter
 
 
 def _boom():

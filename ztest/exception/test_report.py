@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.errors.codes import ErrorCode, RecoveryAction
+from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
 from mote.runtime.errors import (
     ErrorReport,
     GraphBatchFailureError,

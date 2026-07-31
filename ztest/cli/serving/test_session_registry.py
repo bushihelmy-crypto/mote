@@ -16,8 +16,8 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.product.cli.serving import session_registry as sr
-from mote.product.cli.serving.session_registry import SessionRegistry
+from mote.product.session_hosting import registry as sr
+from mote.product.session_hosting.registry import SessionRegistry
 from mote.ztest.telemetry import InlineTelemetry
 
 
@@ -60,10 +60,9 @@ def patched_backend(monkeypatch):
         resumed.append(role.session_id)
         return True
 
-    monkeypatch.setattr(sr.backend, "build_control", build_control)
-    monkeypatch.setattr(sr.backend, "resume_role", resume_role)
-    monkeypatch.setattr(sr.backend, "role_session_id", lambda role: role.session_id)
-    monkeypatch.setattr(sr.backend, "role_cleanup", lambda role: getattr(role, "cleanup", None))
+    monkeypatch.setattr(sr, "_build_control", build_control)
+    monkeypatch.setattr(sr, "_resume_role", resume_role)
+    monkeypatch.setattr(sr, "_role_cleanup", lambda role: getattr(role, "cleanup", None))
     return SimpleNamespace(built=built, resumed=resumed)
 
 

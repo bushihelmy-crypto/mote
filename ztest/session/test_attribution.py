@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from mote.runtime.fileops import FileOperations
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.review import ACCEPTED, AGENT, PENDING
 from mote.runtime.session.attribution import HunkAttribution
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _review(tmp_path):

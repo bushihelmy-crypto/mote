@@ -4,7 +4,7 @@ import codecs
 
 import pytest
 
-from mote.contracts.fileops import EncodingRejectedError, EncodingSource
+from mote.contracts.file import EncodingRejectedError, EncodingSource
 from mote.runtime.fileops.encoding import decode_text, editable_text
 
 

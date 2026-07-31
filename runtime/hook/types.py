@@ -11,120 +11,14 @@ place that folds a neutral :class:`HookOutcome` back into a real
 The wire contract is JSON-on-stdin/JSON-on-stdout with decision fields
 (``decision``/``permissionDecision``/``continue``/``additionalContext``/
 ``updatedInput``/``systemMessage``) and aggregation precedence deny > ask > allow.
-Codex compatibility adds a legacy fire-and-forget notify (subsumed here by the
-``Stop`` event).
+The ``Stop`` event is the sole termination signal.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Optional
 
-from mote.contracts.permissions import PermissionBehavior
-
-# ---------------------------------------------------------------------------
-# Enumerations (Literals — no runtime enum machinery)
-# ---------------------------------------------------------------------------
-
-# The lifecycle events a hook may fire on (phase 1 set). Codex-compatible
-# names so external command handlers stay drop-in.
-HookEvent = Literal[
-    "PreToolUse",
-    "PostToolUse",
-    "UserPromptSubmit",
-    "SessionStart",
-    "Stop",
-    "PreCompact",
-    "PostCompact",
-    "FileChanged",
-]
-
-# Alias the canonical allow/deny/ask Literal (single source of truth in
-# ``common/schema/permission_types``) — same values, no duplicated declaration.
-HookBehavior = PermissionBehavior
-
-
-# ---------------------------------------------------------------------------
-# HookInput — what a handler receives
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class HookInput:
-    """The payload handed to a hook handler.
-
-    The common envelope holds the hook input: identity + the event name + the
-    active permission mode, plus a free-form ``payload`` carrying the per-event
-    fields (tool_name/tool_input/tool_response, prompt, trigger, ...).
-
-    ``to_json_dict`` renders the wire shape (camelCase top-level keys merged with
-    the payload) used as the JSON stdin for command handlers.
-    """
-
-    hook_event_name: str
-    session_id: str = ""
-    cwd: str = ""
-    transcript_path: str = ""
-    permission_mode: Optional[str] = None
-    payload: dict = field(default_factory=dict)
-
-    def to_json_dict(self) -> dict:
-        """Render the JSON object delivered on a command handler's stdin.
-
-        Top-level identity keys use camelCase names; the per-event
-        ``payload`` fields are merged in at the top level too (so a handler reads
-        ``toolName``/``toolInput`` directly, matching the reference contract).
-        """
-        wire: dict = {
-            "hook_event_name": self.hook_event_name,
-            "hookEventName": self.hook_event_name,
-            "session_id": self.session_id,
-            "sessionId": self.session_id,
-            "cwd": self.cwd,
-            "transcript_path": self.transcript_path,
-            "transcriptPath": self.transcript_path,
-        }
-        if self.permission_mode is not None:
-            wire["permission_mode"] = self.permission_mode
-            wire["permissionMode"] = self.permission_mode
-        # Per-event fields. Merged last so an event payload can override the
-        # envelope if it ever needs to (it normally carries disjoint keys).
-        wire.update(self.payload)
-        return wire
-
-
-# ---------------------------------------------------------------------------
-# HookOutcome — the aggregated result of firing an event
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class HookOutcome:
-    """The (folded) influence a hook event has on the host.
-
-    Neutral by design — it does NOT reference ``PermissionDecision`` so it can
-    live at the bottom layer. The executor seam translates the ``behavior`` /
-    ``updated_args`` into a real ``PermissionDecision`` for tool-call influence;
-    other consumers read ``additional_context`` / ``system_message`` / ``stop``.
-
-    ``updated_response`` is the output analogue of ``updated_args``. The sealed
-    ToolResultPolicy applies it only to the safe representation; it cannot alter
-    the immutable execution-success fact used for effect settlement.
-    """
-
-    behavior: Optional[HookBehavior] = None
-    updated_args: Optional[dict] = None
-    updated_response: Optional[str] = None
-    additional_context: list[str] = field(default_factory=list)
-    system_message: str = ""
-    stop: bool = False
-    stop_reason: str = ""
-
-    @property
-    def is_blocking(self) -> bool:
-        """True when the outcome blocks the action (deny) or halts the agent."""
-        return self.behavior == "deny" or self.stop
-
+from mote.contracts.hook import HookBehavior, HookEvent, HookOutcome
 
 # A shared, read-only-by-convention empty outcome (the no-op fast path).
 EMPTY = HookOutcome()
@@ -171,7 +65,6 @@ def fold(outcomes: Iterable[HookOutcome]) -> HookOutcome:
 __all__ = [
     "HookEvent",
     "HookBehavior",
-    "HookInput",
     "HookOutcome",
     "EMPTY",
     "fold",

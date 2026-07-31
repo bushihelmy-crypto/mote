@@ -14,10 +14,10 @@ import pytest
 
 pytest.importorskip("textual")
 
-from mote.product.cli.consumers.textual.app import ViewEventMessage
-from mote.product.cli.consumers.textual.consumer import TextualConsumer
-from mote.product.cli.consumers.textual.surface import TextualSurface
-from mote.product.cli.contracts.view import (
+from mote.product.interfaces.textual.app import ViewEventMessage
+from mote.product.interfaces.textual.consumer import TextualConsumer
+from mote.product.interfaces.textual.surface import TextualSurface
+from mote.product.presentation.events import (
     ApprovalRequested,
     ErrorRaised,
     MediaBlock,
@@ -94,7 +94,7 @@ def test_sync_handle_routes_to_post(ev):
 
 
 def test_capabilities_enable_provisional_rollback():
-    from mote.product.cli.contracts.view import TEXTUAL_CAPS
+    from mote.product.presentation.events import TEXTUAL_CAPS
 
     assert TextualConsumer.capabilities is TEXTUAL_CAPS
     assert TextualConsumer.capabilities.provisional_rollback is True

@@ -4,16 +4,16 @@ from __future__ import annotations
 import hashlib
 import json
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactPublicationIntent,
     ArtifactRepresentationInput,
     ArtifactRepresentationIntent,
     ArtifactRetention,
     ArtifactSensitivity,
 )
-from mote.contracts.ports import ArtifactBlobStore
-from mote.contracts.runtimes import RuntimeProjectionIntent
-from mote.runtime.disk.async_io import run_disk_io
+from mote.contracts.ports.artifact.store import ArtifactBlobStore
+from mote.contracts.runtime import RuntimeProjectionIntent
+from mote.runtime.persistence.async_io import run_disk_io
 
 _ARTIFACT_POLICY_OPTIONS = frozenset({"retention", "sensitivity"})
 

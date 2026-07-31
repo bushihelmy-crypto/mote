@@ -5,8 +5,8 @@ from xml.etree import ElementTree
 
 import pytest
 
-from mote.contracts.canvas import CanvasDocument, CanvasElement
-from mote.runtime.tools.dependency.canvas_backends.drawio import (
+from mote.contracts.surface import CanvasDocument, CanvasElement
+from mote.runtime.interactive.canvas.backends.drawio import (
     DrawioCanvasBackend,
     DrawioCanvasSession,
     _DrawioCell,
@@ -167,7 +167,7 @@ async def test_png_export_uses_one_shot_cli_without_presenter(monkeypatch):
             observed["closed"] = True
 
     monkeypatch.setattr(
-        "mote.runtime.tools.dependency.canvas_backends.drawio.ManagedExternalProcess",
+        "mote.runtime.interactive.canvas.backends.drawio.ManagedExternalProcess",
         Process,
     )
 

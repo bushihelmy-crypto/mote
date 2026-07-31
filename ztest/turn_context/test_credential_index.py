@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.ports import EphemeralContextSource, TurnContextPriority
-from mote.runtime.context.turn_context import CredentialIndexContextSource
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource, TurnContextPriority
+from mote.runtime.context.turn import CredentialIndexContextSource
 
 
 def run(coro):

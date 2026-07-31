@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from mote.contracts.output import RunKind
-from mote.runtime.agent.graph_output_service import GraphOutputService
 from mote.runtime.errors import GraphError
+from mote.runtime.output.graph_service import GraphOutputService
 
 
 class _Lease:

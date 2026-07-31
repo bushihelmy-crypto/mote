@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from mote.runtime.paths import CONFIG_ROOT
+from mote.product.paths import default_runtime_paths
 
 # Phase-3 inference bundle name (matches the rsync'd cache dir).
 MODEL_BUNDLE_NAME = "v4.2_phase3_inference"
@@ -24,7 +24,7 @@ _BUNDLED_RUNTIME_YAML = Path(__file__).parent / "router.runtime.yaml"
 
 def default_model_dir() -> Path:
     """Return the cache directory expected to hold the trained model bundle."""
-    return CONFIG_ROOT / "router_models" / MODEL_BUNDLE_NAME
+    return default_runtime_paths().user_config_root / "router_models" / MODEL_BUNDLE_NAME
 
 
 def load_runtime_config(model_dir: str | Path | None = None) -> dict:

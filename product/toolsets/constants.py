@@ -54,7 +54,7 @@ SEARCH_TIMEOUT = 60.0 if _is_wsl() else 20.0  # search timeout in seconds
 # would flood the map (and its per-turn parse). Only the top-N (result order —
 # mtime-sorted, so the most recently touched) become navigation hints.
 GLIMPSE_RECORD_LIMIT = 20
-# Keep this aligned with the providers in runtime.context.code_map._langconfigs.
+# Keep this aligned with the providers in runtime.code_map._langconfigs.
 # Search stays lightweight and does not initialize the native parser runtime.
 GLIMPSE_EXTENSIONS = (
     ".c",

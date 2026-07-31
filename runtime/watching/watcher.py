@@ -8,17 +8,17 @@ import threading
 from fnmatch import fnmatch
 from typing import Awaitable, Callable, Dict, Iterable, List, Optional
 
-from mote.contracts.events.types import FileChangedEvent
-from mote.contracts.fileops.models import (
+from mote.contracts.events.file.observation import FileChangedEvent
+from mote.contracts.file.identity import (
     AbsentVersion,
     FileChangeAttribution,
     FileChangeKind,
     FileVersionTransition,
     PresentVersion,
 )
-from mote.contracts.ports import FileChangePort
-from mote.runtime.logging import log_class
-from mote.runtime.scheduling import PeriodicLoop
+from mote.contracts.ports.file.changes import FileChangePort
+from mote.runtime.control.scheduling import PeriodicLoop
+from mote.runtime.telemetry.logging import log_class
 
 OnChange = Callable[[FileChangedEvent], Awaitable[None]]
 _State = Dict[str, PresentVersion]

@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import re
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Iterable, Iterator, Mapping, Optional, cast
 from uuid import uuid4
 
-from mote.contracts.events import EventEnvelope, EventId, EventType, JsonValue
-from mote.contracts.events.envelope import thaw_json
-from mote.contracts.fileops.events import FileOperationsEvent
-from mote.contracts.ports.event_journal import UncommittedFact
+from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, JsonValue, thaw_json
+from mote.contracts.events.file.facts import FileOperationsEvent
+from mote.contracts.ports.events.journal import UncommittedFact
 from mote.runtime.session.events import (
     FILE_EDIT_PLAN_STORED,
     FILE_HISTORY_IMPORTED,
@@ -50,11 +46,14 @@ _FILEOPS_EVENT_TYPES = frozenset(
         REWIND_IN_DOUBT,
     }
 )
-_SAFE_LEGACY_TYPE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class UnsupportedSessionFactVersion(ValueError):
-    """A known session fact has no upcaster to the current payload model."""
+    """A session fact does not use the one current envelope version."""
+
+
+class UnsupportedSessionEventError(ValueError):
+    """A session stream contains an event outside the current tagged union."""
 
 
 def session_stream_id(session_id: str) -> str:
@@ -63,17 +62,17 @@ def session_stream_id(session_id: str) -> str:
     return f"{SESSION_STREAM_PREFIX}{session_id}"
 
 
-def stable_event_type(legacy_type: str) -> EventType:
-    if legacy_type not in SESSION_EVENT_CLASSES:
-        raise KeyError(f"unknown session event discriminator: {legacy_type!r}")
-    domain = "fileops" if legacy_type in _FILEOPS_EVENT_TYPES else "session"
-    return EventType(f"mote.{domain}.{legacy_type}")
+def stable_event_type(event_type: str) -> EventType:
+    if event_type not in SESSION_EVENT_CLASSES:
+        raise KeyError(f"unknown session event discriminator: {event_type!r}")
+    domain = "fileops" if event_type in _FILEOPS_EVENT_TYPES else "session"
+    return EventType(f"mote.{domain}.{event_type}")
 
 
 STABLE_SESSION_EVENT_CLASSES = MappingProxyType(
-    {stable_event_type(legacy_type): event_class for legacy_type, event_class in SESSION_EVENT_CLASSES.items()}
+    {stable_event_type(event_type): event_class for event_type, event_class in SESSION_EVENT_CLASSES.items()}
 )
-_STABLE_FILEOPS_EVENT_TYPES = frozenset(stable_event_type(legacy_type) for legacy_type in _FILEOPS_EVENT_TYPES)
+_STABLE_FILEOPS_EVENT_TYPES = frozenset(stable_event_type(event_type) for event_type in _FILEOPS_EVENT_TYPES)
 
 
 def encode_session_event(
@@ -85,13 +84,13 @@ def encode_session_event(
 ) -> UncommittedFact:
     """Encode one current typed session event as producer-owned fact data."""
 
-    legacy_type = cast(str, event.type)
-    if legacy_type not in SESSION_EVENT_CLASSES:
+    event_type = cast(str, event.type)
+    if event_type not in SESSION_EVENT_CLASSES:
         raise TypeError(f"unsupported session event: {type(event).__name__}")
     occurred = occurred_at or datetime.now(timezone.utc)
     return UncommittedFact(
         event_id=event_id or EventId(str(uuid4())),
-        event_type=stable_event_type(legacy_type),
+        event_type=stable_event_type(event_type),
         schema_version=SESSION_FACT_SCHEMA_VERSION,
         occurred_at=occurred,
         payload=cast(Mapping[str, JsonValue], event.payload()),
@@ -103,14 +102,17 @@ def encode_session_event(
 
 def decode_session_event(
     envelope: EventEnvelope[Mapping[str, JsonValue]],
-) -> Optional[SessionEvent]:
-    """Decode one known current envelope; return None for another domain fact."""
+) -> SessionEvent:
+    """Decode one current session envelope."""
 
     event_class = STABLE_SESSION_EVENT_CLASSES.get(envelope.event_type)
     if event_class is None:
-        return None
+        raise UnsupportedSessionEventError(f"[unsupported_session_event] event_type={envelope.event_type}")
     if envelope.schema_version != SESSION_FACT_SCHEMA_VERSION:
-        raise UnsupportedSessionFactVersion(f"{envelope.event_type} schema {envelope.schema_version} has no upcaster")
+        raise UnsupportedSessionFactVersion(
+            "[unsupported_session_fact_version] "
+            f"expected={SESSION_FACT_SCHEMA_VERSION} actual={envelope.schema_version}"
+        )
     payload = thaw_json(cast(JsonValue, envelope.payload))
     if type(payload) is not dict:
         raise ValueError("session fact payload must decode to a JSON object")
@@ -126,54 +128,7 @@ def iter_file_operations_events(
         if envelope.event_type not in _STABLE_FILEOPS_EVENT_TYPES:
             continue
         event = decode_session_event(envelope)
-        if event is not None:
-            yield cast(FileOperationsEvent, event)
-
-
-def migrated_event_id(
-    *,
-    session_id: str,
-    ordinal: int,
-    legacy_type: str,
-    timestamp: str,
-    payload: Mapping[str, object],
-) -> EventId:
-    """Derive a repeatable identity for one legacy rollout record."""
-
-    identity = json.dumps(
-        {
-            "legacy_type": legacy_type,
-            "ordinal": ordinal,
-            "payload": payload,
-            "session_id": session_id,
-            "timestamp": timestamp,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return EventId(hashlib.sha256(b"mote-session-v3\0" + identity).hexdigest())
-
-
-def legacy_occurred_at(timestamp: str) -> datetime:
-    """Interpret historic naive timestamps deterministically as UTC."""
-
-    try:
-        value = datetime.fromisoformat(timestamp)
-    except ValueError as exc:
-        raise ValueError("legacy session timestamp is invalid") from exc
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value
-
-
-def unknown_legacy_event_type(legacy_type: str) -> EventType:
-    """Give an unknown historic discriminator a valid stable identity."""
-
-    if _SAFE_LEGACY_TYPE.fullmatch(legacy_type) is not None:
-        return EventType(f"mote.legacy.{legacy_type}")
-    digest = hashlib.sha256(legacy_type.encode("utf-8")).hexdigest()
-    return EventType(f"mote.legacy.unknown_{digest}")
+        yield cast(FileOperationsEvent, event)
 
 
 def _optional_text(event: SessionEvent, name: str) -> Optional[str]:
@@ -186,12 +141,10 @@ __all__ = [
     "SESSION_STREAM_PREFIX",
     "STABLE_SESSION_EVENT_CLASSES",
     "UnsupportedSessionFactVersion",
+    "UnsupportedSessionEventError",
     "decode_session_event",
     "encode_session_event",
-    "legacy_occurred_at",
     "iter_file_operations_events",
-    "migrated_event_id",
     "session_stream_id",
     "stable_event_type",
-    "unknown_legacy_event_type",
 ]

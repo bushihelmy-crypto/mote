@@ -40,10 +40,10 @@ from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from mote.contracts.schema import TemporalConfig
+from mote.contracts.config.tool import TemporalConfig
 from mote.runtime.durable.temporal import TemporalBackend, data_converter
 from mote.runtime.ledger import COMPLETED, KIND_TOOL, RunJournal
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.session.workspace import SessionWorkspace
 
 TASK_QUEUE = "mote-test-tq"
 
@@ -80,7 +80,7 @@ class _RunStepWorkflow:
 
 
 def _journal(tmp_path, session_id="wf-sess") -> RunJournal:
-    return RunJournal(session_id, store=WorkspaceStore(root=str(tmp_path)))
+    return RunJournal(session_id, store=SessionWorkspace(root=str(tmp_path)))
 
 
 def _client(env: WorkflowEnvironment) -> Client:

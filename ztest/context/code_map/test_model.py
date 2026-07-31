@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mote.runtime.context.code_map.model import CallEdge, FileExtract, ImportBinding, ImportRef, Symbol
+from mote.runtime.code_map.model import CallEdge, FileExtract, ImportBinding, ImportRef, Symbol
 
 
 def test_fileextract_language_defaults_empty():
@@ -24,7 +24,7 @@ def test_symbol_kind_is_free_form():
 
 def test_extractor_re_exports_model_dataclasses():
     # ``from ...extractor import Symbol`` must keep working after the move.
-    from mote.runtime.context.code_map import extractor as ex
+    from mote.runtime.code_map import extractor as ex
 
     assert ex.Symbol is Symbol
     assert ex.CallEdge is CallEdge

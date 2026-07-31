@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from mote.contracts.config.oauth import GrantType, OAuthProviderConfig
+from mote.contracts.config.model.oauth import GrantType, OAuthProviderConfig
 from mote.runtime.models.auth.oauth.manager import OAuthManager
 from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.models.auth.oauth.storage.file_store import FileCredentialStore

@@ -21,12 +21,12 @@ Two responsibilities:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Callable, Optional
 
-from mote.contracts.settings.sandbox import SandboxRuntimeConfig
-from mote.runtime.paths import CONFIG_ROOT, browser_profiles_dir
 from mote.runtime.sandbox import SandboxRuntime
 from mote.runtime.sandbox.backend import SandboxPolicy
+from mote.runtime.sandbox.config import SandboxRuntimeConfig
 from mote.runtime.sandbox.network.credentials import CredentialBroker, CredentialRule, SecretLookup
 from mote.runtime.secrets.cipher import KeyFileProvider
 from mote.runtime.secrets.store import secrets_path
@@ -50,7 +50,7 @@ def _metadata_overrides(writable_roots: list[str]) -> list[str]:
     return overrides
 
 
-def _secret_masks() -> list[str]:
+def _secret_masks(secrets_root: Path, sandbox_ca_root: Path) -> list[str]:
     """Absolute paths of secret material to mask from the sandbox.
 
     The read-only root baseline (``--ro-bind / /``) would otherwise expose the
@@ -62,14 +62,14 @@ def _secret_masks() -> list[str]:
     that exist are returned (bwrap errors on a missing bind source).
     """
     candidates = [
-        secrets_path(),  # the encrypted vault
-        KeyFileProvider().path,  # vault.key (decrypts the vault)
-        CONFIG_ROOT / "sandbox_ca" / "ca.key",  # MITM CA private key
+        secrets_path(secrets_root),
+        KeyFileProvider(secrets_root / "vault.key").path,
+        sandbox_ca_root / "ca.key",
     ]
     return [str(p) for p in candidates if p.exists()]
 
 
-def _secret_masked_dirs() -> list[str]:
+def _secret_masked_dirs(browser_profiles_root: Path) -> list[str]:
     """Absolute directory paths of secret material to mask from the sandbox.
 
     The directory sibling of :func:`_secret_masks`. The durable browser-profile
@@ -79,11 +79,18 @@ def _secret_masked_dirs() -> list[str]:
     defense-in-depth: it also hides even the ciphertext + which profiles exist.
     Only returned when the directory actually exists (bwrap errors otherwise).
     """
-    profiles = browser_profiles_dir()
+    profiles = browser_profiles_root
     return [str(profiles)] if profiles.is_dir() else []
 
 
-def build_policy(guard: SandboxGuard, *, cwd: Optional[str] = None) -> SandboxPolicy:
+def build_policy(
+    guard: SandboxGuard,
+    *,
+    cwd: Optional[str] = None,
+    secrets_root: Path,
+    browser_profiles_root: Path,
+    sandbox_ca_root: Path,
+) -> SandboxPolicy:
     """Build a runtime :class:`SandboxPolicy` from the live *guard*.
 
     Recomputes writable roots every call (so an interactive "always" grant via
@@ -96,8 +103,8 @@ def build_policy(guard: SandboxGuard, *, cwd: Optional[str] = None) -> SandboxPo
     return SandboxPolicy(
         writable_roots=list(roots),
         readonly_overrides=_metadata_overrides(roots),
-        masked_paths=_secret_masks(),
-        masked_dirs=_secret_masked_dirs(),
+        masked_paths=_secret_masks(secrets_root, sandbox_ca_root),
+        masked_dirs=_secret_masked_dirs(browser_profiles_root),
         unshare_net=False,  # P1: rely on proxy env injection, not a netns.
         cwd=cwd,
     )
@@ -136,6 +143,9 @@ def build_runtime(
     guard_factory: Callable[[], SandboxGuard],
     resource_guard: Optional[ResourceGuard] = None,
     secret_lookup: Optional[SecretLookup] = None,
+    secrets_root: Path,
+    browser_profiles_root: Path,
+    sandbox_ca_root: Path,
 ) -> SandboxRuntime:
     """Construct a configured :class:`SandboxRuntime`.
 
@@ -161,7 +171,13 @@ def build_runtime(
     broker = _build_broker(config, secret_lookup)
 
     def policy_provider() -> SandboxPolicy:
-        return build_policy(guard, cwd=get_cwd())
+        return build_policy(
+            guard,
+            cwd=get_cwd(),
+            secrets_root=secrets_root,
+            browser_profiles_root=browser_profiles_root,
+            sandbox_ca_root=sandbox_ca_root,
+        )
 
     return SandboxRuntime(
         backend=config.backend,
@@ -174,6 +190,7 @@ def build_runtime(
         policy_provider=policy_provider,
         limits_provider=rguard.limits,
         credential_broker=broker,
+        sandbox_ca_root=sandbox_ca_root,
     )
 
 

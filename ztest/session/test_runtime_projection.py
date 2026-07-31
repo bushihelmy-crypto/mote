@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.ports import RuntimeProjectionJournal
-from mote.contracts.runtimes import (
+from mote.contracts.ports.runtime.projection import RuntimeProjectionJournal
+from mote.contracts.runtime import (
     CheckpointFidelity,
     RuntimeCheckpoint,
     RuntimeCommitFact,

@@ -4,16 +4,17 @@ import hashlib
 
 import pytest
 
-from mote.contracts.fileops.events import FileEditPlanStoredEvent
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScopeState
+from mote.contracts.events.file.facts import FileEditPlanStoredEvent
 from mote.runtime.fileops.control import ProjectOperationControl
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.locking import HierarchicalLockManager
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScopeState
 from mote.runtime.fileops.mutation_factory import MutationFactory
 from mote.runtime.fileops.publisher import AtomicPublisher
 from mote.runtime.fileops.review import ReviewService
 from mote.runtime.fileops.snapshots import SealedSnapshotReader
 from mote.runtime.fileops.transactions import DurableEditPlanArtifacts, MutationCoordinator, ScopedMutationArtifacts
+from mote.ztest.fileops_factory import ArtifactRepository
 
 
 def _components(tmp_path):

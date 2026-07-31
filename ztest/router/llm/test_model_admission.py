@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.models.failover import (
+from mote.contracts.config.model.breaker import BreakerConfig
+from mote.contracts.model.failover import (
     AdmissionGate,
+    CredentialVerdict,
     FailureDisposition,
     FailureDomain,
     FailureReason,
     HealthVerdict,
     OperatorState,
+    QuotaObservation,
     ResourceIdentity,
     Retryability,
 )
-from mote.contracts.models.invocation import ModelQuotaObservation
-from mote.contracts.resilience import BreakerConfig
-from mote.runtime.models.failover.admission import ResourceAdmissionController
+from mote.contracts.model.invocation import ModelQuotaObservation
+from mote.runtime.resilience.admission import ResourceAdmissionController
 
 
 class _MemoryOperatorAudit:
@@ -52,8 +54,14 @@ def _failure(
     return FailureDisposition(
         reason=reason,
         domain=domain,
-        retryability=Retryability.AFTER_CHANGE,
+        retryability=Retryability.NEW_ATTEMPT,
         health_verdict=verdict,
+        credential_verdict=(
+            CredentialVerdict.QUARANTINE if reason is FailureReason.AUTH_REJECTED else CredentialVerdict.NEUTRAL
+        ),
+        quota_observation=(
+            QuotaObservation.RETRY_AFTER if reason is FailureReason.RATE_LIMITED else QuotaObservation.NONE
+        ),
     )
 
 
@@ -77,7 +85,7 @@ def test_credential_failure_does_not_trip_endpoint_availability() -> None:
         _failure(
             FailureReason.AUTH_REJECTED,
             FailureDomain.CREDENTIAL,
-            HealthVerdict.CREDENTIAL_REJECTED,
+            HealthVerdict.NEUTRAL,
         )
     )
 
@@ -100,8 +108,8 @@ def test_quota_and_availability_use_independent_resource_planes() -> None:
     _permit(controller, first).fail(
         _failure(
             FailureReason.RATE_LIMITED,
-            FailureDomain.TRANSPORT,
-            HealthVerdict.QUOTA_LIMITED,
+            FailureDomain.QUOTA,
+            HealthVerdict.NEUTRAL,
         )
     )
 
@@ -112,7 +120,7 @@ def test_quota_and_availability_use_independent_resource_planes() -> None:
         _failure(
             FailureReason.CONNECTION,
             FailureDomain.TRANSPORT,
-            HealthVerdict.AVAILABILITY_FAILURE,
+            HealthVerdict.DEGRADE,
         )
     )
 
@@ -184,7 +192,7 @@ def test_half_open_probe_abandon_releases_lease() -> None:
         _failure(
             FailureReason.CONNECTION,
             FailureDomain.TRANSPORT,
-            HealthVerdict.AVAILABILITY_FAILURE,
+            HealthVerdict.DEGRADE,
         )
     )
     now[0] = 1.0
@@ -216,7 +224,7 @@ def test_request_quota_reservation_prevents_concurrent_over_admission() -> None:
     assert rejected.rejection is not None
     assert rejected.rejection.gate is AdmissionGate.QUOTA
     assert rejected.rejection.reason == "request quota exhausted"
-    assert rejected.rejection.disposition.retry_after_seconds == 10.0
+    assert rejected.rejection.disposition.quota_observation is QuotaObservation.RETRY_AFTER
 
     reserved.abandon()
     _permit(controller, resource).abandon()
@@ -284,6 +292,6 @@ def test_zero_quota_without_reset_uses_bounded_probe_cooldown() -> None:
 
     rejected = controller.acquire(resource, remaining_seconds=30)
     assert rejected.rejection is not None
-    assert rejected.rejection.disposition.retry_after_seconds == 2.0
+    assert rejected.rejection.disposition.quota_observation is QuotaObservation.RETRY_AFTER
     now[0] = 2.0
     _permit(controller, resource).abandon()

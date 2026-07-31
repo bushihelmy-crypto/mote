@@ -2,25 +2,22 @@
 
 from __future__ import annotations
 
-from mote.contracts.policy.compaction import CompactionPolicyContribution
-from mote.contracts.ports.compaction_policy import CompactionPolicyExtensionSpec
+from dataclasses import replace
+
+from mote.contracts.conversation.compaction_policy import CompactionPolicyContribution
+from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
 from mote.kernel.output import text_output_contract
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.models.clients.context import Context
 from mote.runtime.session import log as session_log_module
-from mote.ztest.model_fakes import FakeModelGateway, offline_config
+from mote.ztest.model_fakes import bind_fake_runtime, offline_config
 
 from .conftest import FakeLLM
 
 
 def _context() -> Context:
     llm = FakeLLM()
-    context = Context(
-        config=offline_config(),
-        provider_factory=lambda config: FakeLLM(name=config.model),
-    )
-    context.model_gateway = FakeModelGateway(llm)
-    return context
+    return Context(config=offline_config())
 
 
 def test_compaction_policy_extension_factory_runs_once_per_role(tmp_path, monkeypatch):
@@ -40,9 +37,8 @@ def test_compaction_policy_extension_factory_runs_once_per_role(tmp_path, monkey
         created.append(extension)
         return extension
 
-    dependencies = AgentDependencies(
-        deps=None,
-        output_contract=text_output_contract(),
+    dependencies = replace(
+        AgentWiring.defaults().dependencies,
         compaction_policy_extensions=(CompactionPolicyExtensionSpec("organization", factory),),
     )
     first = Role(
@@ -59,6 +55,8 @@ def test_compaction_policy_extension_factory_runs_once_per_role(tmp_path, monkey
             dependencies=dependencies,
         ),
     )
+    bind_fake_runtime(first, FakeLLM())
+    bind_fake_runtime(second, FakeLLM())
 
     assert created == []
     assert first.context_manager is first.context_manager

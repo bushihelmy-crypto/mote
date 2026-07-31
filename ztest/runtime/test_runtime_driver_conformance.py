@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from mote.contracts.canvas import CanvasElement, CanvasOperation
-from mote.runtime.tools.dependency import _browser_runtime as browser_runtime_module
-from mote.runtime.tools.dependency._browser_runtime import BrowserRuntimeDriver
-from mote.runtime.tools.dependency._canvas import CanvasRuntimeDriver
-from mote.runtime.tools.dependency._device.runtime import DeviceRuntimeDriver
-from mote.runtime.tools.dependency._kernel import KernelRuntimeDriver
-from mote.runtime.tools.dependency._terminal import TerminalRuntimeDriver
+from mote.contracts.surface import CanvasElement, CanvasOperation
+from mote.runtime.interactive.browser import driver as browser_runtime_module
+from mote.runtime.interactive.browser.driver import BrowserRuntimeDriver
+from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
+from mote.runtime.interactive.device.runtime import DeviceRuntimeDriver
+from mote.runtime.interactive.kernel.driver import KernelRuntimeDriver
+from mote.runtime.interactive.terminal.driver import TerminalRuntimeDriver
 from mote.ztest.executor.dependency.device_fakes import FakeDeviceBackend
 from mote.ztest.runtime.runtime_driver_conformance import (
     RuntimeDriverConformanceCase,

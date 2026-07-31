@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from mote.contracts.run_context import RunContext, ToolContext
+from mote.kernel.execution.run_context import RunContext, ToolContext
 from mote.runtime.run_context import bind_run_context
 from mote.runtime.tools.function_toolset import NativeFunctionToolset, XmlFunctionToolset
 from mote.runtime.tools.tool_executor import ToolExecutor
@@ -49,8 +49,11 @@ async def test_native_function_tool_receives_only_projected_dependencies() -> No
     schema = executor.native_tool_specs()[0]
     assert set(schema["input_schema"]["properties"]) == {"query", "limit"}
 
-    with bind_run_context(RunContext(deps=deps, session_id="session", run_id="run")):
+    context = RunContext(deps=deps, session_id="session", run_id="run")
+    await executor.start_run(context)
+    with bind_run_context(context):
         result = await executor.run_command("Search", {"query": "mote", "limit": 2})
+    await executor.end_run()
 
     assert result.success is True
     assert observed[0].deps == SearchDependencies(database=database)
@@ -88,6 +91,9 @@ async def test_xml_function_tool_is_an_explicit_separate_registration() -> None:
         command_protocol="xml",
     )
     assert set(executor.all_xml_tool_schemas()) == {"Echo"}
-    with bind_run_context(RunContext(deps="a", session_id="session", run_id="run")):
+    context = RunContext(deps="a", session_id="session", run_id="run")
+    await executor.start_run(context)
+    with bind_run_context(context):
         result = await executor.run_command("Echo", {"value": "b"})
+    await executor.end_run()
     assert result.output == "ab"

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from mote.contracts.fileops.models import HunkRecord, ReviewStatus
-from mote.contracts.text.hunks import split_hunks
-from mote.runtime.fileops.artifact_repository import ArtifactWriteScope, ArtifactWriteScopeState
+from mote.contracts.file.transactions import HunkRecord, ReviewStatus
+from mote.runtime.fileops.hunks import split_hunks
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, ArtifactWriteScopeState
 
 AGENT = "agent"
 EXTERNAL = "external"

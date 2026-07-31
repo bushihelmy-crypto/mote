@@ -37,8 +37,8 @@ from collections import deque
 from enum import Enum
 from typing import Callable, Deque, Optional, Tuple
 
-from mote.contracts.resilience import BreakerConfig
-from mote.runtime.logging import logger
+from mote.contracts.config.model.breaker import BreakerConfig
+from mote.runtime.telemetry.logging import logger
 
 #: Hard cap on retained window entries — a safety valve so a pathological burst
 #: of outcomes between two evictions can never grow the deque without bound.

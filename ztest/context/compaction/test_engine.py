@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.policy.compaction import CompactionDecision
+from mote.contracts.conversation.compaction_policy import CompactionDecision
 from mote.runtime.context.compaction.engine import ContextEngine
 from mote.runtime.context.compaction.pipeline import ReductionPipeline
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome

@@ -9,16 +9,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from mote.contracts.fileops.errors import ContentChangedError, IdentityChangedError, SnapshotDurabilityError
-from mote.contracts.fileops.models import (
-    BlobRef,
-    EditableTextSnapshot,
-    FileSnapshot,
-    PathToken,
-    PresentVersion,
-    ProjectIdentity,
-)
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.errors import ContentChangedError, IdentityChangedError, SnapshotDurabilityError
+from mote.contracts.file.identity import EditableTextSnapshot, FileSnapshot, PathToken, PresentVersion, ProjectIdentity
 from mote.runtime.fileops.encoding import decode_text, editable_text
 from mote.runtime.fileops.identity import (
     PathLike,
@@ -35,6 +28,7 @@ from mote.runtime.fileops.metadata_manifest import (
     PreservedMetadata,
     encode_metadata_manifest,
 )
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -121,8 +115,8 @@ class SealedSnapshotReader:
         path: PathLike,
         *,
         project_root: Optional[PathLike],
-        first_pass: Callable[[int, int], BlobRef],
-    ) -> tuple[ObservedFileVersion, BlobRef]:
+        first_pass: Callable[[int, int], ContentIdentity],
+    ) -> tuple[ObservedFileVersion, ContentIdentity]:
         requested, target = resolve_existing_target(path)
         source_fd = os.open(target.native, os.O_RDONLY)
         try:
@@ -190,7 +184,7 @@ class SealedSnapshotReader:
             yield chunk
 
     @classmethod
-    def _hash_first_pass(cls, source_fd: int, maximum_bytes: int) -> BlobRef:
+    def _hash_first_pass(cls, source_fd: int, maximum_bytes: int) -> ContentIdentity:
         digest = hashlib.sha256()
         size = 0
         for chunk in cls._read_chunks(source_fd):
@@ -202,7 +196,7 @@ class SealedSnapshotReader:
                     expected_size=maximum_bytes,
                     actual_size=size,
                 )
-        return BlobRef(digest=digest.hexdigest(), size=size)
+        return ContentIdentity(digest=digest.hexdigest(), size=size)
 
     @staticmethod
     def _hash_second_pass(source_fd: int) -> str:

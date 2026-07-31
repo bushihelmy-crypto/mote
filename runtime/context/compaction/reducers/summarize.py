@@ -24,14 +24,14 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-import mote.runtime.context.prompt as compact_prompt
-from mote.contracts.schema import ContextManagerConfig, Message, UserMessage
-from mote.kernel.diagnostics import current_trace_id
-from mote.kernel.models.model_calls import generate
+import mote.runtime.context.compaction.format as compact_prompt
+from mote.contracts.conversation import ContextManagerConfig, Message, UserMessage
+from mote.kernel.telemetry.context import current_trace_id
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Transcript
-from mote.runtime.logging import logger
+from mote.runtime.models.model_calls import generate
+from mote.runtime.telemetry.logging import logger
 
 
 def _summary_message(summary: str, *, recent_preserved: bool) -> UserMessage:

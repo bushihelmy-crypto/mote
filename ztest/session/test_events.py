@@ -5,17 +5,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from mote.contracts.events import EventEnvelope, StreamId
-from mote.contracts.events.envelope import thaw_json
-from mote.contracts.runtimes import (
+import pytest
+
+from mote.contracts.conversation import AIMessage, UserMessage
+from mote.contracts.events.envelope import EventEnvelope, StreamId, thaw_json
+from mote.contracts.runtime import (
     CheckpointFidelity,
     RuntimeCheckpoint,
     RuntimeCommitFact,
     RuntimeProjectionAck,
     RuntimeProjectionIntent,
 )
-from mote.contracts.schema import AIMessage, UserMessage
-from mote.contracts.tools import CommandProtocol, ToolsetIdentity
+from mote.contracts.tool import CommandProtocol, ToolsetIdentity
 from mote.runtime.session.codec import decode_session_event, encode_session_event, session_stream_id, stable_event_type
 from mote.runtime.session.events import (
     CONTEXT_COMPACTED,
@@ -80,6 +81,7 @@ def test_session_meta_event_line():
     identity = ToolsetIdentity("workspace", "2", CommandProtocol.NATIVE)
     ev = SessionMetaEvent(
         session_id="abc",
+        role_class="mote.agent.role.v1",
         working_dir="/w",
         project_root="/p",
         model="gpt-4",
@@ -95,10 +97,9 @@ def test_session_meta_event_line():
     assert restored.toolset_manifest == (identity,)
 
 
-def test_legacy_session_meta_has_no_toolset_manifest() -> None:
-    restored = SessionMetaEvent.from_payload({"session_id": "legacy"})
-
-    assert restored.toolset_manifest is None
+def test_session_meta_requires_current_identity() -> None:
+    with pytest.raises(KeyError):
+        SessionMetaEvent.from_payload({"session_id": "legacy"})
 
 
 def test_message_event_roundtrips_through_message_load():
@@ -296,60 +297,14 @@ def test_output_lifecycle_events_roundtrip():
     assert rebuilt[-2].value == {"count": 1}
 
 
-def test_old_output_fixture_tolerates_missing_new_fields_and_future_extras():
-    event = OutputCommittedEvent.from_payload(
-        {
-            "candidate_id": "legacy-candidate",
-            "contract_id": "legacy.report@1",
-            "schema_fingerprint": "sha",
-            "value": {"count": 1},
-            "future_field": "ignored",
-        }
-    )
-
-    assert isinstance(event, OutputCommittedEvent)
-    assert event.run_id == ""
-    assert event.run_kind == "agent"
-    assert event.fencing_token == 0
-    assert event.value == {"count": 1}
-
-
-def test_terminal_state_event_roundtrips():
-    from mote.runtime.session.events import TERMINAL_STATE, TerminalStateEvent
-
-    ev = TerminalStateEvent(
-        cwd="/tmp/work",
-        env={"FOO": "bar", "BAZ": "qux"},
-        unset=["OLD"],
-        tool="Terminal",
-    )
-    record = _roundtrip(ev)
-    assert record["type"] == TERMINAL_STATE
-    assert record["payload"]["cwd"] == "/tmp/work"
-    assert record["payload"]["env"] == {"FOO": "bar", "BAZ": "qux"}
-    assert record["payload"]["unset"] == ["OLD"]
-
-    rebuilt = _decode(record)
-    assert isinstance(rebuilt, TerminalStateEvent)
-    assert rebuilt.cwd == "/tmp/work"
-    assert rebuilt.env == {"FOO": "bar", "BAZ": "qux"}
-    assert rebuilt.unset == ["OLD"]
-    assert rebuilt.tool == "Terminal"
-
-
-def test_kernel_state_event_roundtrips():
-    from mote.runtime.session.events import KERNEL_STATE, KernelStateEvent
-
-    ev = KernelStateEvent(cwd="/tmp/work", env={"FOO": "bar", "BAZ": "qux"}, unset=["OLD"], tool="Jupyter")
-    record = _roundtrip(ev)
-    assert record["type"] == KERNEL_STATE
-    assert record["payload"]["cwd"] == "/tmp/work"
-    assert record["payload"]["env"] == {"FOO": "bar", "BAZ": "qux"}
-    assert record["payload"]["unset"] == ["OLD"]
-
-    rebuilt = _decode(record)
-    assert isinstance(rebuilt, KernelStateEvent)
-    assert rebuilt.cwd == "/tmp/work"
-    assert rebuilt.env == {"FOO": "bar", "BAZ": "qux"}
-    assert rebuilt.unset == ["OLD"]
-    assert rebuilt.tool == "Jupyter"
+def test_output_event_rejects_legacy_payload_shape():
+    with pytest.raises(ValueError, match="fields must be exactly"):
+        OutputCommittedEvent.from_payload(
+            {
+                "candidate_id": "legacy-candidate",
+                "contract_id": "legacy.report@1",
+                "schema_fingerprint": "sha",
+                "value": {"count": 1},
+                "future_field": "ignored",
+            }
+        )

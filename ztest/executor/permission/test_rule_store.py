@@ -3,8 +3,8 @@
 """Unit tests for ``mote.runtime.tools.permission.rule_store``."""
 from __future__ import annotations
 
-from mote.contracts.permissions import PermissionRule
-from mote.contracts.settings.permissions import PermissionConfig
+from mote.contracts.authorization import PermissionRule
+from mote.runtime.tools.permission.config import PermissionConfig
 from mote.runtime.tools.permission.rule_store import RuleStore
 
 

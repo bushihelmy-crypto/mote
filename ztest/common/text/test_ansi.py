@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.contracts.text.ansi`."""
+"""Behavioral tests for :mod:`mote.runtime.terminal_ansi`."""
 from __future__ import annotations
 
-from mote.contracts.text import strip_ansi
+from mote.runtime.terminal_ansi import strip_ansi
 
 
 class TestStripAnsi:

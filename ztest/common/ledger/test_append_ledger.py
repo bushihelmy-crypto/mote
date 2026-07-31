@@ -171,7 +171,7 @@ class TestBestEffort:
     def test_append_never_raises_when_unwritable(self, tmp_path, monkeypatch):
         # Force the durable write to fail; the in-memory index must still update
         # and the caller must never see an exception.
-        from mote.runtime import disk as disk_mod
+        from mote.runtime import persistence as disk_mod
 
         def boom(*args, **kwargs):
             raise OSError("disk full")
@@ -182,7 +182,7 @@ class TestBestEffort:
         assert ledger.get("a") == _FakeRecord("a", "1")
 
     def test_reap_never_raises_when_rewrite_fails(self, tmp_path, monkeypatch):
-        from mote.runtime import disk as disk_mod
+        from mote.runtime import persistence as disk_mod
 
         ledger = _FakeLedger(tmp_path / "x.jsonl")
         ledger.append(_FakeRecord("a", "1"))

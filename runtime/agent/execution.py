@@ -8,8 +8,8 @@ from typing import Any
 
 from tenacity import RetryError
 
-from mote.contracts.errors import MoteError
-from mote.runtime.logging import logger
+from mote.contracts.foundation.errors.base import MoteError
+from mote.runtime.telemetry.logging import logger
 
 
 def any_to_str(value: Any) -> str:

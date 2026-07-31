@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.config.sources`` — precedence + file discovery."""
+"""Tests for ``mote.product.config.sources`` — precedence + file discovery."""
 from __future__ import annotations
 
-from mote.runtime.config.sources import CONFIG_FILE_NAME, ConfigSource, discover_source_files
+from mote.product.config.sources import CONFIG_FILE_NAME, ConfigSource, discover_source_files
 
 
 def test_precedence_is_strictly_ascending():
@@ -25,7 +25,12 @@ def test_precedence_is_strictly_ascending():
 
 def test_only_workdir_is_untrusted():
     assert ConfigSource.WORKDIR.trusted is False
-    for s in (ConfigSource.SYSTEM, ConfigSource.USER, ConfigSource.PROJECT, ConfigSource.PROGRAMMATIC):
+    for s in (
+        ConfigSource.SYSTEM,
+        ConfigSource.USER,
+        ConfigSource.PROJECT,
+        ConfigSource.PROGRAMMATIC,
+    ):
         assert s.trusted is True
 
 

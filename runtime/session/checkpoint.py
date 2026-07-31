@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from typing import List, Optional
 
-from mote.contracts.fileops.events import (
+from mote.contracts.events.file.facts import (
     RewindAbortedEvent,
     RewindCommittedEvent,
     RewindInDoubtEvent,

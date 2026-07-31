@@ -4,7 +4,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Callable
 
-from mote.contracts.schema import TemporalConfig
+from mote.contracts.config.tool import TemporalConfig
 from mote.runtime.durable.backend import DurableBackend
 from mote.runtime.ledger import RunJournal
 

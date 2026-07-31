@@ -7,10 +7,11 @@ from collections.abc import Callable
 from functools import partial
 from typing import Any
 
-from mote.contracts.introspection.docstrings import description_body, first_line
-from mote.contracts.tools import NativeToolSchema, XmlToolSchema
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
+from mote.contracts.tool import NativeToolSchema, XmlToolSchema
+from mote.contracts.tool.execution import ToolExecutionKind
+from mote.kernel.tools.docstrings import description_body, first_line
 from mote.kernel.tools.spec_adapter import build_json_schema
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_convert import function_docstring_to_schema
 
 
@@ -88,6 +89,7 @@ def xml_definition(
         description=resolved_description,
         summary=first_line(resolved_description),
         search_text=_search_text_from_description(capability_type, resolved_description),
+        execution_kind=getattr(capability_type, "execution_kind", ToolExecutionKind.ATOMIC),
     )
 
 
@@ -111,6 +113,7 @@ def native_definition(
         description=resolved_description,
         summary=first_line(resolved_description),
         search_text=_search_text_from_description(capability_type, resolved_description),
+        execution_kind=getattr(capability_type, "execution_kind", ToolExecutionKind.ATOMIC),
     )
 
 

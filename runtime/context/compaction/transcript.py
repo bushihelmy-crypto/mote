@@ -36,9 +36,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Sequence
 
-from mote.contracts.constants.messages import RETENTION, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
-from mote.contracts.models.tokenization import count_string_tokens
-from mote.contracts.schema import Message
+from mote.contracts.conversation import Message
+from mote.contracts.conversation.fields import RETENTION, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
+from mote.kernel.inference.tokenization import count_string_tokens
 
 _SYSTEM_ROLE = "system"
 

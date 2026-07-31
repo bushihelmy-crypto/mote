@@ -13,16 +13,12 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.events.types import (
-    LLMStreamCommittedEvent,
-    LLMStreamDeltaEvent,
-    LLMStreamDiscardedEvent,
-    OutputCommittedEvent,
-    OutputSnapshotEvent,
-    OutputSnapshotInvalidatedEvent,
-    RuntimeDurabilityChangedEvent,
-)
-from mote.product.cli.view import (
+from mote.contracts.events.model import LLMStreamCommittedEvent, LLMStreamDeltaEvent, LLMStreamDiscardedEvent
+from mote.contracts.events.output import OutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
+from mote.contracts.events.session import RuntimeDurabilityChangedEvent
+from mote.product.i18n import keys as K
+from mote.product.i18n import t
+from mote.product.presentation.projection import (
     AttemptStreamDiscarded,
     BaseProjector,
     Capabilities,
@@ -38,8 +34,6 @@ from mote.product.cli.view import (
     ToolCallStarted,
     ViewProjector,
 )
-from mote.product.i18n import keys as K
-from mote.product.i18n import t
 from mote.ztest.artifact_fakes import artifact_media
 
 from .conftest import (
@@ -488,7 +482,7 @@ def test_history_edited_folds_to_nothing_no_compaction_marker():
     ``ConversationCompacted`` boundary marker. The projector ignores the source
     ``HistoryEditedEvent`` by construction (unknown name → ``[]``), so the delete
     silently prunes history with no "conversation compacted" UI."""
-    from mote.contracts.events.types import HISTORY_EDITED
+    from mote.contracts.events.conversation import HISTORY_EDITED
 
     from .conftest import AgentEvt
 
@@ -517,11 +511,12 @@ def test_post_tool_failure_fills_structured_error_fields():
     scalars (never importing the exception type) so a host can render machine-
     reasonable failure facts alongside the plain-text summary.
     """
-    from types import SimpleNamespace
+    from mote.contracts.foundation.errors.report import ErrorReport
 
-    report = SimpleNamespace(
+    report = ErrorReport(
         error="PermissionError",
         code="tool.permission_denied",
+        message="",
         retryable=False,
         recovery="request access then retry",
     )
@@ -543,9 +538,9 @@ def test_post_tool_failure_prefers_report_message_over_raw_error_xml():
     structured ``ErrorReport.message`` so the machine-facing XML never leaks onto
     the human transcript.
     """
-    from types import SimpleNamespace
+    from mote.contracts.foundation.errors.report import ErrorReport
 
-    report = SimpleNamespace(
+    report = ErrorReport(
         error="PermissionError",
         code="tool.permission_denied",
         retryable=False,
@@ -597,7 +592,7 @@ def test_post_tool_media_block_from_structured_image():
     ``event.media``; the projector resolves the path and emits the block directly,
     independent of the ``tool_response`` text.
     """
-    from mote.product.cli.contracts.view import MediaBlock
+    from mote.product.presentation.events import MediaBlock
     from mote.runtime.tools.tool_result import ToolMedia
 
     p = ViewProjector()
@@ -623,7 +618,7 @@ def test_post_tool_media_block_from_structured_pdf():
 
     This is the P1 gap the old sniff couldn't cover — visual PDF reads now render.
     """
-    from mote.product.cli.contracts.view import MediaBlock
+    from mote.product.presentation.events import MediaBlock
     from mote.runtime.tools.tool_result import ToolMedia
 
     p = ViewProjector()
@@ -648,7 +643,7 @@ def test_post_tool_media_empty_list_emits_no_block():
     field is the structured fact ("this result carries no media") and wins over
     the legacy prefix heuristic.
     """
-    from mote.product.cli.contracts.view import MediaBlock
+    from mote.product.presentation.events import MediaBlock
 
     p = ViewProjector()
     out = p.project(
@@ -665,7 +660,7 @@ def test_post_tool_media_empty_list_emits_no_block():
 def test_post_tool_media_ref_without_path_degrades():
     """A structured artifact with an empty ``ref`` (bytes-only, e.g. a screenshot)
     still emits a block, degrading ``alt`` to the media kind for a text host."""
-    from mote.product.cli.contracts.view import MediaBlock
+    from mote.product.presentation.events import MediaBlock
     from mote.runtime.tools.tool_result import ToolMedia
 
     p = ViewProjector()
@@ -690,7 +685,7 @@ def test_post_tool_file_diff_block_from_structured_change():
     independent of the tool_response text (which says "updated successfully", not a
     diff). The ToolCallCompleted still rides alongside.
     """
-    from mote.product.cli.contracts.view import FileDiffBlock
+    from mote.product.presentation.events import FileDiffBlock
     from mote.runtime.tools.tool_result import FileChange
 
     p = ViewProjector()
@@ -713,7 +708,7 @@ def test_post_tool_file_diff_block_from_structured_change():
 
 def test_post_tool_multiple_file_changes_fold_to_multiple_blocks():
     """A tool may touch several files → one ``FileDiffBlock`` per change."""
-    from mote.product.cli.contracts.view import FileDiffBlock
+    from mote.product.presentation.events import FileDiffBlock
     from mote.runtime.tools.tool_result import FileChange
 
     p = ViewProjector()
@@ -742,7 +737,7 @@ def test_post_tool_no_file_changes_emits_no_diff_block():
     Bash's diff-shaped text still falls to the ``_looks_like_diff`` path in the
     completed event — the structured block is only for old/new-bearing tools.
     """
-    from mote.product.cli.contracts.view import FileDiffBlock
+    from mote.product.presentation.events import FileDiffBlock
 
     p = ViewProjector()
     out = p.project(ev_post_tool("Bash", "some plain output"))
@@ -757,7 +752,7 @@ def test_git_diff_text_classifies_as_diff_without_file_diff_block():
     carries no ``old``/``new`` fact, so it takes the text path and emits no
     ``FileDiffBlock``.
     """
-    from mote.product.cli.contracts.view import RESULT_KIND_DIFF, FileDiffBlock
+    from mote.product.presentation.events import RESULT_KIND_DIFF, FileDiffBlock
 
     p = ViewProjector()
     body = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new"
@@ -775,7 +770,7 @@ def test_structured_change_emits_block_without_text_diff_classification():
     diff text, so the completion is classified ``plain`` — the text-diff path is
     not triggered for a structured change.
     """
-    from mote.product.cli.contracts.view import RESULT_KIND_PLAIN, FileDiffBlock
+    from mote.product.presentation.events import RESULT_KIND_PLAIN, FileDiffBlock
     from mote.runtime.tools.tool_result import FileChange
 
     p = ViewProjector()

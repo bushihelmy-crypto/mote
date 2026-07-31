@@ -1,17 +1,17 @@
 """Agent-to-human ownership transfer for managed interactive runtimes."""
 from __future__ import annotations
 
-from mote.contracts.errors.runtimes import ManagedRuntimeStateError
-from mote.contracts.handoff import (
+from mote.contracts.interaction.handoff import (
     DriverHandoffResult,
     HandoffOutcome,
     HandoffRequest,
     HandoffStatus,
     HumanHandoffOutcome,
 )
-from mote.contracts.ports.human_interaction import HumanInteractionPort
-from mote.contracts.ports.runtime_driver import HandoffRuntimeDriver, LiveSurfaceRuntimeDriver
-from mote.contracts.runtimes import RuntimeCheckpoint
+from mote.contracts.ports.interaction.human import HumanInteractionPort
+from mote.contracts.ports.runtime.driver import HandoffRuntimeDriver, LiveSurfaceRuntimeDriver
+from mote.contracts.runtime import RuntimeCheckpoint
+from mote.contracts.runtime.errors import ManagedRuntimeStateError
 from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.interactive.surface import RuntimeLiveSurfaceSession
 

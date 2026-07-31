@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from mote.contracts.events import StreamId
-from mote.contracts.ports.event_subscription import Reliability, SubscriptionIdentity
+from mote.contracts.events.envelope import StreamId
+from mote.contracts.ports.events.subscription import Reliability, SubscriptionIdentity
 from mote.runtime.events.dispatcher import CommittedEventDispatcher, DispatcherState
 from mote.runtime.events.mailbox import MailboxSnapshot
 from mote.runtime.events.subscription import SubscriptionState

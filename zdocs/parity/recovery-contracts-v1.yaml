@@ -1,0 +1,35 @@
+schema_version: 1
+revision: recovery-contracts-v1
+backup_domains:
+  GatewayDaemonBackup:
+    components: [sqlite_authority, generation_artifacts, daemon_identity, encrypted_artifacts]
+    maximum_consistency: DAEMON_CONSISTENT
+  MoteApplicationBackup:
+    components: [model_journals, service_journals, session_journals, transfer_journals, caller_identity]
+    maximum_consistency: CRASH_CONSISTENT
+  MoteRecoverySet:
+    signed: true
+    components: [GatewayDaemonBackup, MoteApplicationBackup]
+    required_bindings: [backup_epoch, admission_epoch, generation_digests, component_digests, key_versions, participant_list]
+    consistency_levels: [APPLICATION_CONSISTENT, DAEMON_CONSISTENT, CRASH_CONSISTENT]
+barrier:
+  phases: [PREPARE_BACKUP, CALLER_ACK, DAEMON_CHECKPOINT, COMPONENT_BACKUP, SIGN_RECOVERY_SET, RELEASE]
+  permit_rule: no_old_or_new_permit_after_prepare_until_release
+  stale_epoch_first_consumption: reject
+  already_send_committed: preserve_and_reconcile
+  missing_participant: cannot_claim_application_consistent
+restore:
+  order: [verify_signature, verify_components, verify_keys, restore_daemon, restore_callers, reconcile_open_receipts, readiness]
+  digest_or_key_failure: readiness_false
+  empty_directory_drill: required
+reconciliation:
+  evidence_sources: [receipt, provider_query, verified_webhook, artifact_digest, journal]
+  daemon_authority: [collect_evidence, publish_proposal]
+  logical_owner_authority: [accept_or_reject_proposal, append_terminal, settle_usage]
+  owner_command:
+    idempotent: true
+    signed: true
+    acknowledgement_required: true
+    force_terminal_requires_manual_approval: true
+  offline_owner: unresolved
+  no_evidence_terminal: forbidden

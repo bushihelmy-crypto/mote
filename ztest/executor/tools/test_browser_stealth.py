@@ -10,7 +10,7 @@ the AutomationControlled launch flag, and the ``navigator.webdriver`` patch).
 """
 from __future__ import annotations
 
-from mote.runtime.tools.dependency._browser import (
+from mote.runtime.interactive.browser.session import (
     _LOCALE_PROFILES,
     _TMALL_ACCEPT_LANGUAGE,
     _TMALL_REFERER,
@@ -23,7 +23,13 @@ from mote.runtime.tools.dependency._browser import (
 
 
 def _session(stealth: bool, browser_locale: str = "en", proxy: str = "") -> BrowserSession:
-    return BrowserSession(session_key="t", headless=True, stealth=stealth, browser_locale=browser_locale, proxy=proxy)
+    return BrowserSession(
+        session_key="t",
+        headless=True,
+        stealth=stealth,
+        browser_locale=browser_locale,
+        proxy=proxy,
+    )
 
 
 def test_stealth_off_by_default():

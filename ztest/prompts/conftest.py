@@ -3,11 +3,11 @@
 """Shared fixtures + duck-typed fakes for the prompts test suite.
 
 The prompts package is almost entirely pure functions over string templates,
-so the only collaborators that need faking are the four ``ThinkSubsystems``
+so the only collaborators that need faking are the four ``InferenceSubsystems``
 members PromptBuilder queries: ``config`` (only ``config.context`` is read),
 ``llm`` (only ``llm.model``), ``executor`` (two ``get_*_tool_schemas`` calls)
 and ``skill_manager`` (its optional ``injector``). Everything else is data the
-Role would push through ``ThinkInputs``.
+Role would push through ``InferenceInputs``.
 """
 from __future__ import annotations
 

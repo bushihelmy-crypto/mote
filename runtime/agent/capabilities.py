@@ -21,21 +21,31 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Optional
 
-from mote.contracts.background_tasks import BackgroundTaskService
-from mote.contracts.handoff import HandoffOutcome, HandoffRequest, HandoffStatus
+from mote.contracts.agent import (
+    AgentBuilder,
+    AgentConstructionRequest,
+    ContextPolicy,
+    Lifecycle,
+    RunnableAgent,
+    SpawnableAgentDefinition,
+    SpawnPlan,
+)
+from mote.contracts.conversation import UserMessage
 from mote.contracts.interaction import AskUserQuestionAnswers
-from mote.contracts.schema import UserMessage
-from mote.contracts.spawn import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec
+from mote.contracts.interaction.handoff import HandoffOutcome, HandoffRequest, HandoffStatus
+from mote.contracts.model.topology_codec import decode_route_id
+from mote.contracts.ports.task.operations import BackgroundTaskService
+from mote.contracts.task.models import TaskId, TaskResultRecord
 from mote.runtime.agent.control import spawn_and_run
 from mote.runtime.agent.role_state import RoleState
-from mote.runtime.disk.async_io import run_disk_io
 from mote.runtime.durable import begin_timer, complete_timer, resume_timer
 from mote.runtime.interactive import HandoffCoordinator
+from mote.runtime.persistence.async_io import run_disk_io
 
 if TYPE_CHECKING:
-    from mote.contracts.fileops import (
+    from mote.contracts.file import (
         EditCommitOutcome,
         FileByteView,
         FileSnapshot,
@@ -45,9 +55,11 @@ if TYPE_CHECKING:
         ReadRequest,
         SearchResult,
     )
-    from mote.contracts.permissions import ApprovalChoice, ApprovalRequest
+    from mote.contracts.interaction import ApprovalChoice, ApprovalRequest
+    from mote.contracts.ports.skill.registry import SkillCatalog
     from mote.runtime.agent.role import Role
-    from mote.runtime.context.skills.skill_pool import SkillPool
+    from mote.runtime.agent.role_schema import RoleSchema
+    from mote.runtime.agent.wiring import AgentWiring
     from mote.runtime.fileops.edit_plans import EditPlan, EditPlanRequest
 
 
@@ -58,12 +70,31 @@ _MSG_QUESTION_REQUIRED = "Error: 'question' argument is required."
 _MSG_CONTENT_REQUIRED = "Error: 'content' argument is required."
 _MSG_NOT_IN_MOTE_ENV = "Not in MoteEnv, command will not be executed."
 _MSG_STOP_SUFFIX = " The user has asked me to stop because I have encountered a problem."
-_MSG_AGENT_FACTORY_REQUIRED = (
-    "Child Agent construction requires AgentDependencies.agent_factory; "
-    "inject an application-owned AgentFactory at the composition root."
-)
 
-AgentT = TypeVar("AgentT")
+
+class _SkillForkBuilder(AgentBuilder[AgentConstructionRequest, object]):
+    def __init__(
+        self,
+        role_type: type["Role[Any, object]"],
+        child_schema: "RoleSchema",
+        child_state: RoleState,
+        child_config: object,
+        wiring: "AgentWiring[Any, object]",
+    ) -> None:
+        self._role_type = role_type
+        self._child_schema = child_schema
+        self._child_state = child_state
+        self._child_config = child_config
+        self._wiring = wiring
+
+    def build(self, _request: AgentConstructionRequest) -> RunnableAgent[object]:
+        child = self._role_type(
+            role_schema=self._child_schema,
+            state=self._child_state,
+            config=self._child_config,
+            wiring=self._wiring,
+        )
+        return child
 
 
 class RoleCapabilities:
@@ -84,8 +115,8 @@ class RoleCapabilities:
         """
         return self._role.bg_pool
 
-    def get_skill_pool(self) -> Optional["SkillPool"]:
-        """Return the live :class:`SkillPool`, or None when skills are disabled.
+    def get_skill_pool(self) -> Optional["SkillCatalog"]:
+        """Return the live Skill catalog, or None when skills are disabled.
 
         Capability surface for the ``Skill`` bridge tool: it resolves the loaded
         skill pool (so it can look skills up by name, render them, or search the
@@ -93,19 +124,6 @@ class RoleCapabilities:
         None when no skills are configured — the tool reports that itself.
         """
         return self._role.skill_manager.pool
-
-    def build_child_agent(self, agent_cls: type[AgentT], /, **kwargs: Any) -> AgentT:
-        """Construct one child through the application-owned Agent factory.
-
-        This is construction only.  The caller must still submit the returned
-        Agent to AgentControl, which owns admission, lineage, provisioning, and
-        lifecycle enforcement.
-        """
-
-        factory = self._role.wiring.dependencies.agent_factory
-        if factory is None:
-            raise RuntimeError(_MSG_AGENT_FACTORY_REQUIRED)
-        return factory.build(agent_cls, **kwargs)
 
     async def run_skill_fork(
         self,
@@ -139,15 +157,13 @@ class RoleCapabilities:
         child_schema.agents = []
         child_schema.skills = []
 
+        if model:
+            route_id = decode_route_id(model)
+            composition = role._components.current_runtime_composition()
+            if not composition.route_policy.supports(route_id):
+                raise ValueError(f"skill fork route is unavailable: {model!r}")
+            child_schema.model_route = route_id
         child_config = role._config
-        if model and child_config is not None:
-            try:
-                child_config = child_config.model_copy(deep=True)
-                child_config.models.default.model = model
-                if effort:
-                    child_config.models.default.reasoning_effort = effort
-            except Exception:  # noqa: BLE001 — model override is best-effort
-                child_config = role._config
 
         child_state = RoleState(
             parent_session_id=role.state.session_id,
@@ -162,16 +178,14 @@ class RoleCapabilities:
         # longer touches context. The handle always tears the child down (its own
         # terminal/kernel PTY, LSP servers, file-watch loop are session-scoped OS
         # resources that leak if dropped without cleanup()).
-        def role_factory(spawn_ctx: SpawnContext):
-            return type(role)(
-                role_schema=child_schema,
-                state=child_state,
-                config=child_config,
-                wiring=role.wiring,
-            )
-
-        spec = SpawnSpec(
-            role_factory=role_factory,
+        spec = SpawnPlan(
+            definition=SpawnableAgentDefinition(
+                name="skill_fork",
+                aliases=(),
+                description="Run one isolated skill fork.",
+                version="1",
+                builder=_SkillForkBuilder(type(role), child_schema, child_state, child_config, role.wiring),
+            ),
             nickname="skill_fork",
             agent_role="skill_fork",
             parent_id=role.state.session_id,
@@ -239,7 +253,7 @@ class RoleCapabilities:
         """
         self._role.resource_registry.load(id=id, kind=kind, content=content)
 
-    def register_task_result(self, task_id: str, content: str) -> None:
+    def register_task_result(self, task_id: TaskId, content: str) -> None:
         """Register a background task's push-once result for re-projection.
 
         The pool's terminal callback calls this so a graph terminal / agent
@@ -249,6 +263,10 @@ class RoleCapabilities:
         it or the round cap recycles it. Best-effort dict write; does not raise.
         """
         self._role.resource_registry.load(id=task_id, kind="task_result", content=content, sticky=True)
+
+    def unload(self, task_id: TaskId) -> TaskResultRecord | None:
+        content = self._role.resource_registry.unload_content(task_id)
+        return TaskResultRecord(task_id, content) if content is not None else None
 
     def retire_task_result(self, task_id: str) -> None:
         """Stop re-projecting a task result once the model has consumed it.

@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from mote.contracts.fileops import (
+from mote.contracts.file import (
     FileSnapshot,
     HunkRecord,
     MutationResult,
@@ -14,11 +14,11 @@ from mote.contracts.fileops import (
     ReviewConflictError,
     TransactionStatus,
 )
-from mote.contracts.text.hunks import Hunk, HunkApplyError, revert_hunk, slice_lines
 from mote.runtime.fileops import decode_text, editable_text
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
+from mote.runtime.fileops.hunks import Hunk, HunkApplyError, revert_hunk, slice_lines
+from mote.runtime.fileops.mutation import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
 from mote.runtime.fileops.mutation_factory import MutationFactory
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.review import ACCEPTED, PENDING, REJECTED, REJECTING, ReviewService
 from mote.runtime.fileops.transactions import MutationArtifactOwnership, ScopedMutationArtifacts
 from mote.runtime.session.hunk_rehydrate import blob_text

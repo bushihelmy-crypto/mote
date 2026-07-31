@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.runtime.tools.dependency._browser import _html_to_markdown
+from mote.runtime.interactive.browser.session import _html_to_markdown
 
 # The conversion depends on the optional ``markdownify`` library.
 pytest.importorskip("markdownify")

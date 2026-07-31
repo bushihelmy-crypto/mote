@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Iterable, Mapping, Sequence
 
-from mote.contracts.events import EventEnvelope, JsonValue, StreamId
-from mote.contracts.ports.event_journal import AppendResult, EventJournal, JournalIntegrityError
-from mote.contracts.ports.event_subscription import (
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
+from mote.contracts.ports.events.journal import AppendResult, EventJournal, JournalIntegrityError
+from mote.contracts.ports.events.subscription import (
     CommittedEventHandler,
     Reliability,
     SubscriptionIdentity,

@@ -1,6 +1,3 @@
-"""Single-Agent execution semantics."""
+"""Single-Agent execution semantics, organized by capability package."""
 
-from mote.kernel.agent_spec import AgentSpec
-from mote.kernel.run_state import AgentRunState
-
-__all__ = ["AgentRunState", "AgentSpec"]
+__all__: list[str] = []

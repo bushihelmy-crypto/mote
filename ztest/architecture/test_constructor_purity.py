@@ -11,7 +11,7 @@ from typing import Iterator
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 _MANIFESTS = (
-    *sorted((_PACKAGE_ROOT / "runtime/agent/runtime_modules").glob("*.py")),
+    *sorted((_PACKAGE_ROOT / "runtime/agent/components").glob("*.py")),
     _PACKAGE_ROOT / "runtime/agent/role_components.py",
 )
 _ACTIVATION_CALLS = {
@@ -99,5 +99,5 @@ def test_runtime_component_constructors_do_not_activate_resources():
                         f"{path.relative_to(_PACKAGE_ROOT)}:{call.lineno} {node.name}.__init__ calls {name}()"
                     )
     names = {runtime_class.__name__ for runtime_class in discovered}
-    assert {"ToolExecutor", "RepoIndexer", "SessionLog"} <= names
+    assert {"ToolExecutor", "ContextManager", "SessionLog"} <= names
     assert not violations, "constructor activation is forbidden:\n" + "\n".join(violations)

@@ -14,8 +14,8 @@ import os
 
 import pytest
 
-from mote.contracts.schema.messages import UserMessage
-from mote.orchestration.environment.mote.mote_env import MoteEnv
+from mote.contracts.conversation import UserMessage
+from mote.product.interaction.mote_env import MoteEnv
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,11 +30,11 @@ async def test_real_role_processes_routed_message(make_role, tmp_path):
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "from-env"})], "done"],
     )
 
-    env = MoteEnv()
+    env = MoteEnv(residency_dir=tmp_path / "residency", sessions_dir=tmp_path / "sessions")
     env.add_role(role)
 
     env.publish_message(UserMessage(content="please write env.txt", send_to={"worker"}))
-    await env.run(5)
+    await env.run_ready_turns(5)
 
     # The real Role's Write tool executed against the tmp workspace.
     assert os.path.exists(target)
@@ -54,12 +54,12 @@ async def test_unaddressed_role_stays_idle(make_role, tmp_path):
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "nope"})], "done"],
     )
 
-    env = MoteEnv()
+    env = MoteEnv(residency_dir=tmp_path / "residency", sessions_dir=tmp_path / "sessions")
     env.add_role(role)
 
     # Addressed to a non-existent recipient -> not delivered here.
     env.publish_message(UserMessage(content="hi", send_to={"someone_else"}))
-    await env.run(3)
+    await env.run_ready_turns(3)
 
     assert not os.path.exists(target)
     assert role.scripted_llm.tool_calls_seen == []
@@ -82,13 +82,13 @@ async def test_two_real_roles_scheduled_independently(make_role, tmp_path):
         turns=[[("Edit", {"file_path": b_file, "old_string": "", "new_string": "B"})], "done"],
     )
 
-    env = MoteEnv()
+    env = MoteEnv(residency_dir=tmp_path / "residency", sessions_dir=tmp_path / "sessions")
     env.add_role(role_a)
     env.add_role(role_b)
 
     env.publish_message(UserMessage(content="work A", send_to={"alpha"}))
     env.publish_message(UserMessage(content="work B", send_to={"beta"}))
-    await env.run(6)
+    await env.run_ready_turns(6)
 
     assert os.path.exists(a_file)
     assert os.path.exists(b_file)

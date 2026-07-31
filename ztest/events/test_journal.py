@@ -10,8 +10,8 @@ from uuid import uuid4
 import pytest
 
 import mote.runtime.events.journal as journal_module
-from mote.contracts.events import EventId, EventType, StreamId
-from mote.contracts.ports.event_journal import JournalIntegrityError, StreamVersionConflict, UncommittedFact
+from mote.contracts.events.envelope import EventId, EventType, StreamId
+from mote.contracts.ports.events.journal import JournalIntegrityError, StreamVersionConflict, UncommittedFact
 from mote.runtime.events.journal import LocalEventJournal
 
 

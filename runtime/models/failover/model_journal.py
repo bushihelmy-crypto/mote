@@ -10,8 +10,8 @@ from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
-from mote.contracts.models.failover import AttemptState, ModelCallState
-from mote.contracts.models.model_journal import (
+from mote.contracts.model.failover import AttemptState, ModelCallState
+from mote.contracts.model.model_journal import (
     ModelAttemptFinishedRecord,
     ModelAttemptStartedRecord,
     ModelCallFinishedRecord,
@@ -19,10 +19,11 @@ from mote.contracts.models.model_journal import (
     ModelCallPlannedRecord,
     ModelCallRecovery,
     ModelDecisionRecord,
+    ModelWireAuthorizedRecord,
 )
-from mote.runtime.disk.async_io import run_disk_io
-from mote.runtime.logging import log_class
-from mote.runtime.paths import DEFAULT_WORKSPACE_ROOT
+from mote.contracts.model.topology_codec import decode_route_id
+from mote.runtime.persistence.async_io import run_disk_io
+from mote.runtime.telemetry.logging import log_class
 
 MODEL_CALL_JOURNAL_DIRNAME = "model-calls"
 _RECORD_ADAPTER = TypeAdapter(ModelCallJournalRecord)
@@ -173,8 +174,9 @@ class LocalModelCallJournal:
         current_plan = first_plan
         started: dict[str, ModelAttemptStartedRecord] = {}
         finished: set[str] = set()
+        authorized: set[str] = set()
         terminal = False
-        for record in records[1:]:
+        for record_index, record in enumerate(records[1:], start=2):
             if record.model_call_id != call_id:
                 raise ModelCallJournalIntegrityError("model-call journal contains mixed call identities")
             if terminal:
@@ -204,6 +206,18 @@ class LocalModelCallJournal:
                 ):
                     raise ModelCallJournalIntegrityError("model attempt terminal does not match one open attempt")
                 finished.add(record.attempt_id)
+            elif isinstance(record, ModelWireAuthorizedRecord):
+                start = started.get(record.attempt_id)
+                if (
+                    start is None
+                    or record.attempt_id in authorized
+                    or record.attempt_id in finished
+                    or record.ordinal != start.ordinal
+                    or record.resume_generation != start.resume_generation
+                    or record.issued_journal_revision != record_index
+                ):
+                    raise ModelCallJournalIntegrityError("wire authorization does not match one open attempt")
+                authorized.add(record.attempt_id)
             elif isinstance(record, ModelDecisionRecord):
                 if record.resume_generation != current_plan.resume_generation or record.after_attempt_ordinal > len(
                     started
@@ -221,6 +235,8 @@ class LocalModelCallJournal:
         if not records or not isinstance(records[0], ModelCallPlannedRecord):
             raise ModelCallJournalIntegrityError("model call has no plan record")
         plans = tuple(record for record in records if isinstance(record, ModelCallPlannedRecord))
+        for current_plan in plans:
+            decode_route_id(current_plan.route_id)
         plan = plans[-1]
         starts = {record.attempt_id: record for record in records if isinstance(record, ModelAttemptStartedRecord)}
         finish_records = {
@@ -272,8 +288,8 @@ class LocalModelCallJournal:
         )
 
 
-def default_model_call_journal_root() -> Path:
-    return Path(DEFAULT_WORKSPACE_ROOT) / ".runtime" / MODEL_CALL_JOURNAL_DIRNAME
+def model_call_journal_root(workspace_root: Path) -> Path:
+    return workspace_root / ".runtime" / MODEL_CALL_JOURNAL_DIRNAME
 
 
 __all__ = [
@@ -282,5 +298,5 @@ __all__ = [
     "ModelCallJournalError",
     "ModelCallJournalIntegrityError",
     "ModelCallJournalUnavailableError",
-    "default_model_call_journal_root",
+    "model_call_journal_root",
 ]

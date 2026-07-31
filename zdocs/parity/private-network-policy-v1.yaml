@@ -1,0 +1,26 @@
+schema_version: 1
+revision: private-network-policy-v1
+authority: contracts.config.inference.PrivateNetworkPolicy
+default: public_destinations_only
+private_network:
+  opt_in_required: true
+  cidr_allowlist: explicit_canonical_networks_only
+  dns_suffix_allowlist: explicit_canonical_suffixes_only
+always_blocked: [link_local, cloud_metadata_endpoints]
+dns:
+  resolve_then_validate_every_connection: true
+  reject_if_any_selected_address_is_forbidden: true
+  rebinding_revalidation: required
+redirects:
+  default: forbidden
+  target_revalidation_when_enabled: required
+proxy:
+  environment_proxy: forbidden
+tls:
+  verification: mandatory
+  custom_trust_binding: typed_config_only
+invariants:
+  - hostname_allowlist_does_not_override_address_policy
+  - resolved_private_address_requires_private_network_opt_in_and_allowlist
+  - caller_metadata_cannot_override_egress_policy
+  - no_hidden_retry_after_policy_rejection

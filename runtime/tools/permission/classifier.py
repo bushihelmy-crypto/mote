@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from mote.contracts.permissions import RiskLevel
+from mote.contracts.authorization import RiskLevel
 from mote.runtime.tools.permission.command_parse import _basename, parse_segments
 
 # ---------------------------------------------------------------------------

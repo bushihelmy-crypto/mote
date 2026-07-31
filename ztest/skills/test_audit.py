@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.runtime.context.skills.audit — skill-body supply-chain screening."""
+"""Tests for product Skills supply-chain screening."""
 from __future__ import annotations
 
-from mote.runtime.context.skills.audit import Severity, audit_skill_body
+from mote.product.skills.audit import Severity, audit_skill_body
 
 
 class TestClean:

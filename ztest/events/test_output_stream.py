@@ -1,7 +1,8 @@
-from mote.contracts.events.types import OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
-from mote.kernel.output_stream import OutputSnapshotAccumulator, bind_output_snapshot_accumulator
+from mote.contracts.events.output import OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
+from mote.kernel.output.snapshots import OutputSnapshotAccumulator
 from mote.runtime.events import bind_telemetry
 from mote.runtime.events.stream import log_llm_stream
+from mote.runtime.models.output_snapshots import bind_output_snapshot_accumulator
 from mote.ztest.telemetry import InlineTelemetry
 
 
@@ -20,7 +21,7 @@ class Capture:
 def test_native_schema_stream_emits_provisional_snapshot():
     capture = Capture()
     telemetry = InlineTelemetry(capture)
-    accumulator = OutputSnapshotAccumulator(run_id="run-1", schema_fingerprint="sha")
+    accumulator = OutputSnapshotAccumulator(run_id="run-1", schema_fingerprint="sha", observer=capture.handle_sync)
 
     with bind_telemetry(telemetry), bind_output_snapshot_accumulator(accumulator):
         log_llm_stream('{"count":')
@@ -38,7 +39,7 @@ def test_native_schema_stream_emits_provisional_snapshot():
 def test_later_stream_data_invalidates_previous_snapshot():
     capture = Capture()
     telemetry = InlineTelemetry(capture)
-    accumulator = OutputSnapshotAccumulator(run_id="run-1", schema_fingerprint="sha")
+    accumulator = OutputSnapshotAccumulator(run_id="run-1", schema_fingerprint="sha", observer=capture.handle_sync)
 
     with bind_telemetry(telemetry), bind_output_snapshot_accumulator(accumulator):
         log_llm_stream("7")

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.fileops import PdfProcessingError, PdfReadRequest, PdfViewMode, ReadCursorKind, ReadViewStatus
-from mote.runtime.fileops import FileOperations
+from mote.contracts.file import PdfProcessingError, PdfReadRequest, PdfViewMode, ReadCursorKind, ReadViewStatus
+from mote.ztest.fileops_factory import FileOperations
 
 fitz = pytest.importorskip("fitz")
 

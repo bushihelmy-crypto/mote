@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Behavioral tests for :mod:`mote.contracts.text.hashing`."""
+"""Behavioral tests for :mod:`mote.runtime.content_hashing`."""
 from __future__ import annotations
 
 import hashlib
 
-from mote.contracts.text import content_hash
+from mote.runtime.content_hashing import content_hash
 
 
 class TestContentHash:

@@ -1,0 +1,388 @@
+schema_version: 1
+revision: inference-workgraph-v1
+slo_revision: inference-slo-v1
+packages:
+  - id: gate0.contracts_and_evidence
+    owner_layer: contracts
+    inputs: [zdocs/BIFROST_PYTHON_MIGRATION.md]
+    outputs: [zdocs/parity/fault-matrix-v1.yaml]
+    depends_on: []
+    contracts_read: []
+    contracts_write: [contracts/inference]
+    acceptance_tests: [ztest/architecture/test_bifrost_parity_manifest.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {contract_parse_p99_ms: 10}}
+    migration_steps: [freeze_versioned_contracts]
+    rollback: {preconditions: [approval_not_recorded], procedure: revert_versioned_contract_revision, evidence: [contract_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [contracts]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: reuse.existing_mote_foundations
+    owner_layer: runtime
+    inputs: [zdocs/parity/infrastructure-reuse-audit-v1.yaml]
+    outputs: [runtime/inference/generation.py]
+    depends_on: [gate0.contracts_and_evidence]
+    contracts_read: [contracts/inference, contracts/ports/artifact, contracts/ports/events]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_generation.py, ztest/runtime/test_artifact_publication.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {generation_acquire_p99_us: 100}}
+    migration_steps: [reuse_artifact_lifecycle_event_and_admission_owners]
+    rollback: {preconditions: [no_new_receipts], procedure: reactivate_prior_application_generation, evidence: [generation_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [ArtifactStore, ReliableArtifactPublisher, LifecycleStack, EventBus, RuntimeModelGateway, RuntimeServiceGateway]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: durable.receipt_outbox
+    owner_layer: runtime
+    inputs: [contracts/inference/receipt.py]
+    outputs: [product/inference/backends/sqlite.py]
+    depends_on: [reuse.existing_mote_foundations]
+    contracts_read: [contracts/ports/inference/attempt_receipt.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_sqlite_receipts.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {receipt_commit_p99_ms: 20}}
+    migration_steps: [expand_schema, verify, activate_writer, contract_old_columns]
+    rollback: {preconditions: [old_reader_supported], procedure: activate_prior_writer_and_preserve_wal, evidence: [sqlite_quick_check, receipt_count]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [SQLiteAttemptReceiptStore, artifact_publication_outbox]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: durable.ledger_quota_health
+    owner_layer: runtime
+    inputs: [contracts/inference/governance.py]
+    outputs: [runtime/inference/governance.py]
+    depends_on: [durable.receipt_outbox]
+    contracts_read: [contracts/ports/inference/usage_ledger.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_embedded_runtime.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {ledger_reserve_p99_ms: 20}}
+    migration_steps: [bind_reservation_to_receipt_transaction]
+    rollback: {preconditions: [no_open_reservations], procedure: reactivate_prior_generation, evidence: [ledger_reconciliation]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [SQLiteUsageLedger, ResourceAdmissionController]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: core.scheduler_generation
+    owner_layer: runtime
+    inputs: [contracts/inference/generation_artifact.py]
+    outputs: [runtime/inference/dispatcher.py, runtime/models/generation_lifecycle.py]
+    depends_on: [durable.receipt_outbox, durable.ledger_quota_health]
+    contracts_read: [contracts/inference/generation_artifact.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_dispatcher.py, ztest/inference/test_generation.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {queue_admission_p99_ms: 5}}
+    migration_steps: [stage_generation, verify_generation, atomic_activate, drain_prior]
+    rollback: {preconditions: [prior_generation_verified], procedure: reactivate_prior_artifact, evidence: [activation_log, generation_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [ResourceAdmissionController, LifecycleStack]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: transport.protocol_families
+    owner_layer: product
+    inputs: [zdocs/parity/translation-profiles-v1.yaml, zdocs/parity/response-validator-v1.yaml]
+    outputs: [product/models/transports]
+    depends_on: [gate0.contracts_and_evidence]
+    contracts_read: [contracts/ports/inference/provider_transport.py, contracts/model/invocation.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_openai_transport.py, ztest/inference/test_anthropic_transport.py, ztest/inference/test_google_transport.py, ztest/inference/test_bedrock_transport.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {translation_p99_ms: 5, validator_p99_ms: 2}}
+    migration_steps: [install_retry_free_transports, certify_response_automata]
+    rollback: {preconditions: [no_new_wire], procedure: reject_generation_and_reactivate_prior, evidence: [transport_fixture_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [AioHttpConnectionPool]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: provider.adapters
+    owner_layer: product
+    inputs: [zdocs/parity/provider-certification-v1.yaml]
+    outputs: [product/models/artifacts.py, product/models/transports/translation.py, product/models/transports/openai_operations.py, product/models/transports/openai_finite.py, product/models/transports/google_finite.py]
+    depends_on: [transport.protocol_families, durable.ledger_quota_health]
+    contracts_read: [contracts/model/failover.py, contracts/inference/transport.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_transport_translation.py, ztest/inference/test_openai_operation_transport.py, ztest/inference/test_openai_finite_transport.py, ztest/inference/test_google_finite_transport.py, ztest/inference/test_inference_operation_dispatch.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {adapter_p99_ms: 5}}
+    migration_steps: [bind_certified_profile_to_generation]
+    rollback: {preconditions: [profile_not_active], procedure: reject_profile_generation, evidence: [fixture_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [canonical_failure_contract]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: contract.response_validator_automata
+    owner_layer: product
+    inputs: [zdocs/parity/response-validator-v1.yaml]
+    outputs: [product/models/transports/validator.py]
+    depends_on: [transport.protocol_families]
+    contracts_read: [contracts/inference/transport.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_response_validator_limits.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {validator_p99_ms: 2}}
+    migration_steps: [compile_operation_automata, enforce_byte_frame_time_limits]
+    rollback: {preconditions: [prior_validator_revision_retained], procedure: reject_new_generation_and_reactivate_prior_validator, evidence: [validator_fixture_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [canonical_failure_contract]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: failure.compatibility_fixtures
+    owner_layer: product
+    inputs: [zdocs/parity/wire-fixtures-v1.yaml, zdocs/parity/canonical-failure-v2.yaml]
+    outputs: [zdocs/parity/recorded-fixtures]
+    depends_on: [provider.adapters, contract.response_validator_automata]
+    contracts_read: [contracts/model/failover.py]
+    contracts_write: []
+    acceptance_tests: [ztest/architecture/test_bifrost_parity_manifest.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {fixture_freshness_days: 30}}
+    migration_steps: [record_sanitized_fixtures, verify_digests, certify_failure_mapping]
+    rollback: {preconditions: [prior_fixture_revision_unexpired], procedure: restore_prior_signed_fixture_index, evidence: [wire_fixture_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [ArtifactStore]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: gateway.unary
+    owner_layer: runtime
+    inputs: [contracts/inference/attempt.py]
+    outputs: [runtime/inference/runtime.py]
+    depends_on: [core.scheduler_generation, provider.adapters, contract.response_validator_automata, failure.compatibility_fixtures]
+    contracts_read: [contracts/ports/inference/inference_runtime.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_embedded_runtime.py, ztest/inference/test_generation_lifecycle.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {runtime_pre_wire_p99_ms: 25}}
+    migration_steps: [attach_model_gateway]
+    rollback: {preconditions: [no_send_committed], procedure: cancel_uncommitted_and_reactivate_prior_generation, evidence: [receipt_reconciliation]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [FairAdmissionQueue, Dispatcher, model_journal]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: seam.durable_single_command
+    owner_layer: runtime
+    inputs: [contracts/inference/executions.py]
+    outputs: [runtime/inference/command_runtime.py]
+    depends_on: [core.scheduler_generation, provider.adapters, contract.response_validator_automata, failure.compatibility_fixtures]
+    contracts_read: [contracts/ports/inference/command_transport.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_command_runtime.py, ztest/inference/test_shared_command_runtime.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {command_pre_wire_p99_ms: 25}}
+    migration_steps: [attach_service_gateway]
+    rollback: {preconditions: [no_send_committed], procedure: reconcile_open_command_then_reactivate_prior_generation, evidence: [service_journal, command_receipt]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [FairAdmissionQueue, Dispatcher, service_journal]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: gateway.session
+    owner_layer: runtime
+    inputs: [contracts/inference/session.py]
+    outputs: [runtime/inference/session_runtime.py]
+    depends_on: [core.scheduler_generation, provider.adapters, contract.response_validator_automata, failure.compatibility_fixtures]
+    contracts_read: [contracts/ports/inference/session_runtime.py, contracts/ports/inference/session_transport.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_session_runtime.py, ztest/inference/test_shared_session_runtime.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {session_frame_pre_wire_p99_ms: 10}}
+    migration_steps: [attach_session_gateway]
+    rollback: {preconditions: [sessions_drained_or_reconciled], procedure: reject_new_sessions_and_drain_pinned_generation, evidence: [session_receipts]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [FairAdmissionQueue, Dispatcher, session_receipt_store]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: gateway.transfer
+    owner_layer: runtime
+    inputs: [contracts/inference/executions.py]
+    outputs: [runtime/inference/transfer_runtime.py]
+    depends_on: [core.scheduler_generation, provider.adapters, contract.response_validator_automata, failure.compatibility_fixtures]
+    contracts_read: [contracts/ports/inference/transfer_transport.py, contracts/ports/artifact]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_transfer_runtime.py, ztest/inference/test_shared_command_runtime.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {transfer_part_pre_wire_p99_ms: 25}}
+    migration_steps: [attach_artifact_transfer_workflow]
+    rollback: {preconditions: [open_parts_reconciled], procedure: abort_uncommitted_parts_and_retain_verified_artifacts, evidence: [part_receipts, artifact_digests]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [FairAdmissionQueue, Dispatcher, ArtifactStore, ReliableArtifactPublisher]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: product.routing_policy_and_simulator
+    owner_layer: product
+    inputs: [zdocs/parity/routing-decision-v1.yaml]
+    outputs: [runtime/models/routing/service.py]
+    depends_on: [gateway.unary]
+    contracts_read: [contracts/model/routing.py]
+    contracts_write: []
+    acceptance_tests: [ztest/router/test_routing_service.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {routing_p99_ms: 50}}
+    migration_steps: [pin_observation_revision, verify_counterfactual_without_wire]
+    rollback: {preconditions: [policy_revision_retained], procedure: reactivate_prior_policy, evidence: [decision_trace]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [RoutingService]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: product.reasoning_replay_compatibility
+    owner_layer: product
+    inputs: [zdocs/parity/reasoning-replay-v1.yaml]
+    outputs: [product/interfaces/inference_reasoning_replay_api]
+    depends_on: [gateway.unary]
+    contracts_read: [contracts/ports/artifact/store.py]
+    contracts_write: []
+    acceptance_tests: [ztest/runtime/test_artifact_store.py, ztest/inference/test_reasoning_replay_api.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {replay_lookup_p99_ms: 10}}
+    migration_steps: [publish_replay_after_artifact_commit, expose_strong_key_lookup_projection]
+    rollback: {preconditions: [artifact_revision_retained], procedure: disable_lookup_projection_without_deleting_replay_artifacts, evidence: [artifact_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [DurableArtifactStore, ReliableArtifactPublisher, ArtifactGarbageCollector]
+    existing_capability_gap: strong_key_lookup
+    infrastructure_exception_approval: ADR-artifact-lookup-index-v1
+  - id: runtime.response_cache
+    owner_layer: runtime
+    inputs: [zdocs/BIFROST_PYTHON_MIGRATION.md]
+    outputs: [runtime/inference/cache.py, runtime/inference/semantic_cache.py, runtime/models/cached_gateway.py, product/composition/model_builder.py]
+    depends_on: [gateway.unary]
+    contracts_read: [contracts/model/invocation.py, contracts/ports/inference/cache.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_exact_cache.py, ztest/inference/test_cached_model_gateway.py, ztest/inference/test_semantic_cache.py, ztest/integration/test_model_composition_startup.py, ztest/config/test_inference_contract.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {exact_cache_lookup_p99_ms: 10}}
+    migration_steps: [enable_exact_cache_per_tenant_namespace, keep_semantic_cache_opt_in]
+    rollback: {preconditions: [provider_path_available], procedure: disable_lookup_without_deleting_durable_journals, evidence: [cache_policy_revision]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [RuntimeModelGateway]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: product.translation_profiles_and_inspector
+    owner_layer: product
+    inputs: [zdocs/parity/translation-profiles-v1.yaml, zdocs/parity/traffic-inspector-v1.yaml]
+    outputs: [product/interfaces/inference_inspector_api]
+    depends_on: [gateway.unary, seam.durable_single_command, gateway.session, gateway.transfer]
+    contracts_read: [contracts/inference/transport.py, contracts/inference/receipt.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_transport_translation.py, ztest/inference/test_response_validator_limits.py, ztest/inference/test_traffic_inspector.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {inspection_projection_p99_ms: 10}}
+    migration_steps: [pin_translation_profile, expose_read_only_receipt_projection]
+    rollback: {preconditions: [profile_decoder_retained], procedure: retire_profile_for_new_calls_and_keep_pinned_decoder, evidence: [profile_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [transport_registry, attempt_receipt_store]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: operations.backup_restore
+    owner_layer: product
+    inputs: [zdocs/parity/backup-restore-v1.md]
+    outputs: [runtime/inference/backup.py]
+    depends_on: [gateway.unary, seam.durable_single_command, gateway.session, gateway.transfer]
+    contracts_read: [contracts/inference/backup.py]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_backup_barrier.py, ztest/inference/test_shared_daemon_application.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {backup_rpo_seconds: 900}}
+    migration_steps: [raise_epoch, checkpoint_authorities, sign_recovery_set, restore_drill]
+    rollback: {preconditions: [verified_prior_backup], procedure: isolated_restore_then_atomic_authority_swap, evidence: [restore_report, component_digests]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [SQLiteAttemptReceiptStore, ArtifactStore, model_journal, service_journal]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: operations.reconciliation
+    owner_layer: runtime
+    inputs: [zdocs/parity/reconciliation-v1.md]
+    outputs: [runtime/inference/reconciliation.py, runtime/inference/reconciliation_control.py, runtime/inference/receipt_projection.py, product/interfaces/inference_webhook_api/application.py]
+    depends_on: [gateway.unary, seam.durable_single_command, gateway.session, gateway.transfer]
+    contracts_read: [contracts/inference/reconciliation.py, contracts/inference/provider_evidence.py, contracts/ports/inference/reconciliation.py]
+    contracts_write: [contracts/inference/provider_evidence.py, contracts/inference/reconciliation.py, contracts/ports/inference/reconciliation.py]
+    acceptance_tests: [ztest/inference/test_reconciliation.py, ztest/inference/test_reconciliation_control.py, ztest/inference/test_sqlite_reconciliation.py, ztest/inference/test_receipt_projection.py, ztest/inference/test_inference_webhook_api.py, ztest/inference/test_daemon_admin_projection.py, ztest/inference/test_shared_daemon_application.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {reconciliation_oldest_age_seconds: 3600}}
+    migration_steps: [enable_evidence_collection, publish_owner_proposals, require_owner_acknowledgement]
+    rollback: {preconditions: [no_unacknowledged_force_terminal], procedure: stop_pollers_and_preserve_unresolved_receipts, evidence: [proposal_log, owner_acknowledgements]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [SQLiteAttemptReceiptStore, receipt_outbox, model_journal, service_journal]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: operations.alerts_runbooks
+    owner_layer: product
+    inputs: [zdocs/parity/observability-operations-v1.yaml]
+    outputs: [zdocs/parity/operations, product/inference/daemon/admin_projection.py]
+    depends_on: [operations.backup_restore, operations.reconciliation]
+    contracts_read: [contracts/inference/events.py]
+    contracts_write: []
+    acceptance_tests: [ztest/architecture/test_bifrost_parity_manifest.py, ztest/inference/test_gateway_cli.py, ztest/inference/test_daemon_admin_projection.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {alert_projection_p99_ms: 1000}}
+    migration_steps: [install_readiness_checks, bind_alerts_to_runbooks, verify_structured_cli]
+    rollback: {preconditions: [prior_runbook_revision_available], procedure: restore_prior_operations_bundle, evidence: [operations_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [EventBus, telemetry_projection]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: compatibility.apis_plugins
+    owner_layer: product
+    inputs: [zdocs/parity/openapi/inference-v1.json, zdocs/parity/openapi/admin-v1.json, zdocs/parity/asyncapi/realtime-v1.yaml, zdocs/parity/asyncapi/webhooks-v1.yaml]
+    outputs: [product/interfaces/inference_api, product/interfaces/inference_api/operations.py, product/interfaces/inference_api/model_operations.py, product/interfaces/inference_api/runtime_operations.py, product/interfaces/inference_api/composition.py, product/interfaces/inference_admin_api, product/interfaces/inference_webhook_api, product/inference/session_gateway.py, product/inference/command_gateway.py]
+    depends_on: [product.routing_policy_and_simulator, product.reasoning_replay_compatibility, product.translation_profiles_and_inspector, operations.alerts_runbooks]
+    contracts_read: [zdocs/parity/admin-rbac-v1.yaml, zdocs/parity/wire-fixtures-v1.yaml]
+    contracts_write: []
+    acceptance_tests: [ztest/architecture/test_bifrost_parity_manifest.py, ztest/inference/test_inference_compatibility_api.py, ztest/inference/test_inference_operation_dispatch.py, ztest/inference/test_inference_api_composition.py, ztest/inference/test_model_gateway_compatibility_owner.py, ztest/inference/test_command_gateway.py, ztest/inference/test_runtime_operation_owners.py, ztest/inference/test_inference_admin_api.py, ztest/inference/test_inference_webhook_api.py, ztest/inference/test_realtime_session_gateway.py, ztest/inference/test_realtime_compatibility_api.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {api_translation_p99_ms: 10}}
+    migration_steps: [install_versioned_routes, validate_rbac, activate_generation]
+    rollback: {preconditions: [prior_api_revision_available], procedure: reactivate_prior_api_generation, evidence: [openapi_digest, rbac_digest]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [aiohttp_application, EventBus, ArtifactStore]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: shared_process.certification
+    owner_layer: product
+    inputs: [zdocs/parity/shared-daemon-v1.md, zdocs/parity/rpc/gateway-v1.proto]
+    outputs: [product/inference/daemon/application.py, product/inference/daemon/client_port.py, product/inference/daemon/reconnecting_client.py]
+    depends_on: [compatibility.apis_plugins, operations.backup_restore, operations.reconciliation]
+    contracts_read: [contracts/inference/shared.py, contracts/config/inference]
+    contracts_write: []
+    acceptance_tests: [ztest/inference/test_shared_daemon_application.py, ztest/inference/test_shared_grpc.py, ztest/inference/test_shared_daemon_supervisor.py, ztest/inference/test_reconnecting_shared_client.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {shared_rpc_hop_p99_ms: 10, reconnect_p99_ms: 100}}
+    migration_steps: [launch_generation_socket, verify_readiness, publish_discovery, drain_prior_socket]
+    rollback: {preconditions: [prior_socket_compatible_and_ready], procedure: atomically_repoint_discovery_and_drain_failed_generation, evidence: [discovery_record, process_incarnation]}
+    deletes_legacy: []
+    release_scope: current
+    reuses_existing: [SQLiteAttemptReceiptStore, GatewayGenerationOwner, LifecycleStack, EventBus]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: legacy_deletion_release
+    owner_layer: product
+    inputs: [zdocs/parity/quality-ratchet-v1.yaml]
+    outputs: [ztest/architecture/test_model_composition_reachability.py]
+    depends_on: [shared_process.certification]
+    contracts_read: [zdocs/parity/inference-slo-v1.md]
+    contracts_write: []
+    acceptance_tests: [ztest/architecture/test_model_composition_reachability.py, ztest/architecture/test_product_dependencies.py]
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {release_regressions: 0}}
+    migration_steps: [migrate_consumers, delete_legacy_wire_clients, run_release_gate_once]
+    rollback: {preconditions: [before_release_tag], procedure: reactivate_prior_application_artifact_without_restoring_dual_wire, evidence: [release_manifest]}
+    deletes_legacy: [runtime/models/clients/base.py, product/models/providers/openai_chat.py, product/models/providers/openai_responses.py, product/models/providers/anthropic.py, product/models/providers/deepseek.py]
+    release_scope: current
+    reuses_existing: [RuntimeModelGateway]
+    existing_capability_gap: null
+    infrastructure_exception_approval: null
+  - id: future.cluster_ha_certification
+    owner_layer: orchestration
+    inputs: [zdocs/parity/rpc/gateway-v1.proto]
+    outputs: [future/cluster-ha-certification]
+    depends_on: [gate0.contracts_and_evidence]
+    contracts_read: [contracts/inference]
+    contracts_write: []
+    acceptance_tests: []
+    performance_budget: {slo_revision: inference-slo-v1, dimensions: {status: deferred}}
+    migration_steps: []
+    rollback: {preconditions: [not_implemented], procedure: no_action, evidence: []}
+    deletes_legacy: []
+    release_scope: future_cluster
+    reuses_existing: [generation_namespace, receipt_identity, version_envelope]
+    existing_capability_gap: distributed_placement_quorum_and_fencing
+    infrastructure_exception_approval: future_cluster_scope_only

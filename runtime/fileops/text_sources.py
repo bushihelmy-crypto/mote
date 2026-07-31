@@ -6,14 +6,15 @@ import os
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from mote.contracts.fileops.errors import DocumentExtractionError, FileBinaryContentError, FileReadRangeError
-from mote.contracts.fileops.models import EncodingSource, ExtractionBudget, FileSnapshot, TextViewMode
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.file.errors import DocumentExtractionError, FileBinaryContentError, FileReadRangeError
+from mote.contracts.file.identity import EncodingSource, FileSnapshot
+from mote.contracts.file.views import ExtractionBudget, TextViewMode
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
 from mote.runtime.fileops.document_budgets import DEFAULT_EXTRACTION_BUDGET
 from mote.runtime.fileops.documents import extract_document_bytes, is_document
 from mote.runtime.fileops.encoding import decode_text
 from mote.runtime.fileops.identity import PathLike
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 
 
 @dataclass(frozen=True)

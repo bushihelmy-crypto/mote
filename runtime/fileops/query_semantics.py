@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from mote.contracts.fileops.models import PathToken
+from mote.contracts.file.identity import PathToken
 
 
 class RegexPurpose(StrEnum):

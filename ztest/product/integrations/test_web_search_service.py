@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.models import WebSearchHit
-from mote.contracts.models.failover import EndpointCapabilities, EndpointDescriptor
-from mote.contracts.models.invocation import ResolvedModelResponse, WebSearchHitOutput, WebSearchOutput
-from mote.contracts.services import ServiceExecutionSemantics, ServiceInvocation
-from mote.contracts.settings.web_search import WebSearchConfig
-from mote.product.integrations.services.web_search import (
-    WebSearchServiceEndpointResolver,
-    build_web_search_service_snapshot,
-)
-from mote.product.toolsets.builtin.web_search_registry import SearchBackend, builtin_search_backend_registry
+from mote.contracts.model import WebSearchHit
+from mote.contracts.model.failover import EndpointCapabilities, EndpointDescriptor
+from mote.contracts.model.invocation import ResolvedModelResponse, WebSearchHitOutput, WebSearchOutput
+from mote.contracts.service import ServiceExecutionSemantics, ServiceInvocation
+from mote.product.config.web_search import WebSearchConfig
+from mote.product.web_search.registry import SearchBackend, builtin_search_backend_registry
+from mote.product.web_search.service import WebSearchServiceEndpointResolver, build_web_search_service_snapshot
 from mote.runtime.service_gateway import LocalServiceCallJournal, RuntimeServiceGateway, ServiceFailoverPlanner
 
 

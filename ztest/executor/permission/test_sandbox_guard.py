@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from mote.contracts.settings.permissions import SandboxConfig
+from mote.runtime.tools.permission.config import SandboxConfig
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
 

@@ -1,22 +1,4 @@
-"""RunJournal — the durable step journal that generalizes the effect ledger.
-
-The gap it closes: :class:`~mote.runtime.tools.effect_ledger.EffectLedger` records the
-lifecycle of *EXTERNAL tool calls only*, because those were the sole calls whose
-side effect could not be replayed safely after a crash. But a long-lived
-reactive agent has other steps whose *result* is worth surviving a crash even
-when the step itself is replay-safe: an LLM think turn (re-running it re-pays the
-model), a local tool call (re-running it may be expensive), a durable timer
-(re-running it restarts the whole wait). A run-level journal records ALL of them
-under one append-only log so a resume can skip an already-completed step instead
-of blindly re-doing it.
-
-:class:`RunJournal` is a strict superset of :class:`EffectLedger`: an EXTERNAL
-tool record is simply a :class:`StepRecord` with ``kind="tool"`` /
-``effect="external"``. The two share the same on-disk file
-(``ledger/effects.jsonl``) so there is zero migration — an EXTERNAL tool step's
-``step_id`` is its ``tool_call_id``, byte-identical to the key the effect ledger
-already used, and a legacy ``EffectRecord`` line still folds in (its missing
-``kind``/``effect`` default to the EXTERNAL-tool shape, fail-closed).
+"""Crash-durable journal for think, tool, and timer run steps.
 
 Step identity is *self-anchored to the journal itself* — never to the loop's
 ``turn_index``, which resume does NOT restore (so any turn-derived id would
@@ -41,12 +23,11 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
 from mote.runtime.ledger import AppendOnlyLedger
-from mote.runtime.workspace import ArtifactKind, WorkspaceStore
+from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
 
 #: Filename of the append-only journal inside a session's ``ledger/`` space.
-#: Shared with :class:`EffectLedger` (which is a ``kind="tool"`` view over this
-#: same log) so absorbing the effect ledger is zero-migration.
-JOURNAL_FILE_NAME = "effects.jsonl"
+#: Current canonical filename inside a session's ``ledger/`` space.
+JOURNAL_FILE_NAME = "run-journal.jsonl"
 
 #: The step kinds a journal record can carry.
 KIND_THINK = "think"
@@ -54,15 +35,14 @@ KIND_TOOL = "tool"
 KIND_TIMER = "timer"
 
 #: The three lifecycle states a step record can carry (wire-stable strings,
-#: identical to the effect ledger's so a legacy line folds in unchanged).
+#: canonical wire values.
 STARTED = "started"
 COMPLETED = "completed"
 FAILED = "failed"
 
-#: Fail-closed default effect for a legacy line that predates the ``effect``
-#: field: treat an untagged record as EXTERNAL so a resume never blindly replays
-#: a possibly-side-effecting call (matches ``BaseTool.resolve_effect``'s bias).
-_DEFAULT_EFFECT = "external"
+
+class UnsupportedRunJournalRecord(RuntimeError):
+    """A durable journal line does not use the current StepRecord schema."""
 
 
 @dataclass(frozen=True)
@@ -74,10 +54,7 @@ class StepRecord:
     output, or a timer's wall-clock deadline — so a resume can reuse it without
     re-running the step. ``started`` records leave it ``None``.
 
-    The record is a superset of the effect ledger's ``EffectRecord``: for a
-    ``kind="tool"`` step, ``step_id == tool_call_id`` and the JSON also carries
-    the historical ``tool_name`` / ``result`` aliases so the same on-disk line is
-    readable by either reader during the absorption transition.
+    For a tool step, ``step_id`` is its stable ``tool_call_id``.
     """
 
     step_id: str
@@ -106,41 +83,28 @@ class StepRecord:
                 "ended_at": self.ended_at,
                 "payload": self.payload,
                 "success": self.success,
-                # Back-compat aliases so a legacy EffectRecord reader (which reads
-                # ``tool_name`` / ``result``) still parses a tool step's line.
-                "tool_name": self.name,
-                "result": self.payload,
             },
             ensure_ascii=False,
         )
 
     @classmethod
     def from_dict(cls, d: dict) -> "StepRecord":
-        # Tolerant of a legacy EffectRecord line (no step_id/kind/effect/seq):
-        # its ``tool_call_id`` becomes the step id, kind defaults to tool and
-        # effect fail-closed to EXTERNAL, and ``tool_name`` / ``result`` alias
-        # onto ``name`` / ``payload``.
-        tool_call_id = d.get("tool_call_id")
-        step_id = d.get("step_id") or tool_call_id
-        if step_id is None:
-            raise KeyError("step_id")
-        name = d.get("name")
-        if name is None:
-            name = d.get("tool_name", "")
-        payload = d["payload"] if "payload" in d else d.get("result")
-        return cls(
-            step_id=step_id,
-            kind=d.get("kind", KIND_TOOL),
-            effect=d.get("effect", _DEFAULT_EFFECT),
-            status=d.get("status", STARTED),
-            seq=d.get("seq", 0),
-            name=name,
-            tool_call_id=tool_call_id,
-            started_at=d.get("started_at", 0.0),
-            ended_at=d.get("ended_at"),
-            payload=payload,
-            success=d.get("success", True),
-        )
+        names = {
+            "step_id",
+            "kind",
+            "effect",
+            "status",
+            "seq",
+            "name",
+            "tool_call_id",
+            "started_at",
+            "ended_at",
+            "payload",
+            "success",
+        }
+        if set(d) != names:
+            raise UnsupportedRunJournalRecord(f"[unsupported_run_journal_record] expected_fields={sorted(names)!r}")
+        return cls(**d)
 
 
 class RunJournal(AppendOnlyLedger[StepRecord]):
@@ -151,10 +115,10 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
     — e.g. one rebuilt by a resume in a new process — sees the pre-crash state.
     """
 
-    def __init__(self, session_id: str, store: WorkspaceStore | None = None) -> None:
+    def __init__(self, session_id: str, store: SessionWorkspace | None = None) -> None:
         self._session_id = session_id
-        self._store = store or WorkspaceStore()
-        path = self._store.space(session_id, ArtifactKind.LEDGER) / JOURNAL_FILE_NAME
+        self._store = store or SessionWorkspace()
+        path = self._store.space(session_id, SessionSpace.LEDGER) / JOURNAL_FILE_NAME
         super().__init__(path)
 
     @property
@@ -163,7 +127,7 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
         return self._session_id
 
     @property
-    def store(self) -> WorkspaceStore:
+    def store(self) -> SessionWorkspace:
         """The workspace store that resolves this journal's on-disk location."""
         return self._store
 
@@ -270,7 +234,7 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
             StepRecord(
                 step_id=step_id,
                 kind=prior.kind if prior is not None else KIND_TOOL,
-                effect=prior.effect if prior is not None else _DEFAULT_EFFECT,
+                effect=prior.effect if prior is not None else "external",
                 status=status,
                 seq=prior.seq if prior is not None else 0,
                 name=prior.name if prior is not None else "",
@@ -331,4 +295,5 @@ __all__ = [
     "KIND_TOOL",
     "KIND_TIMER",
     "JOURNAL_FILE_NAME",
+    "UnsupportedRunJournalRecord",
 ]

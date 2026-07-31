@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 from typing import ClassVar, Optional
 
-from mote.contracts.fileops import FileOperationError, SearchOutputMode, SearchResult, SearchRow
-from mote.contracts.text import count_noun, display_path, plural
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.file import FileOperationError, SearchOutputMode, SearchResult, SearchRow
+from mote.contracts.tool.effects import ToolEffect
+from mote.product.toolsets.builtin._paths import base_cwd, resolve_path, resolve_permission_path
 from mote.product.toolsets.constants import GLIMPSE_EXTENSIONS, GLIMPSE_RECORD_LIMIT, SEARCH_TIMEOUT
+from mote.runtime.errors import ToolError
+from mote.runtime.file_paths import display_path
+from mote.runtime.presentation import count_noun, plural
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, RecordFileGlimpsed, SearchFiles
-from mote.runtime.tools.dependency._paths import base_cwd, resolve_path, resolve_permission_path
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 
 _MSG_NO_AXIS = "Error: provide 'files' (a glob), 'content' (a regex), or 'cursor' " "to continue a previous search."
 _MSG_INVALID_OUTPUT_MODE = (
@@ -83,14 +85,12 @@ class Search(BaseTool):
         offset: int = 0,
         cursor: Optional[str] = None,
     ) -> ToolResult:
-        """Find files by glob and search sealed file snapshots with one regex.
+        """Find files by glob and search file contents with one regex.
 
         `files` selects candidate paths and `content` matches their extracted
         text. They may be used independently or together. Text files and
-        PDF/DOCX/XLSX documents share the same regex, occurrence counting,
-        skipped-file reporting, ordering, and cursor protocol. A cursor reads
-        the next page from the immutable first-search artifact and never scans
-        live files again.
+        PDF/DOCX/XLSX documents are supported. Use the returned next_cursor to
+        continue the same search result.
 
         Args:
             files: Glob selecting files, such as "**/*.py" or "*.{ts,tsx}".

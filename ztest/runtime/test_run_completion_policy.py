@@ -6,9 +6,9 @@ import asyncio
 
 import pytest
 
-from mote.contracts.policy.run_completion import RunCompletionIntent, RunCompletionPolicyContribution
-from mote.contracts.ports.run_completion_policy import RunCompletionPolicyExtensionSpec
-from mote.runtime.completion import build_run_completion_policy
+from mote.contracts.output.policy import RunCompletionIntent, RunCompletionPolicyContribution
+from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
+from mote.runtime.agent.completion import build_run_completion_policy
 from mote.runtime.hook.manager import HookManager
 
 

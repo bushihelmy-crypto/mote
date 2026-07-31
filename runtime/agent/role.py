@@ -12,27 +12,28 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Generic, Optional, Set, TypeVar, cast
 from uuid import uuid4
 
-from mote.contracts.background_tasks import BackgroundTaskService
-from mote.contracts.constants.messages import MESSAGE_ROUTE_TO_SELF
+from mote.contracts.agent import ContextPolicy, SpawnContext
+from mote.contracts.conversation import AIMessage, CauseBy, Message
+from mote.contracts.conversation.fields import MESSAGE_ROUTE_TO_SELF
+from mote.contracts.conversation.prompt_policy import PromptIntent
 from mote.contracts.output import RunOutcome, RunRejected, RunRejectionKind, RunResult, TranscriptRef
-from mote.contracts.policy.prompt import PromptIntent
-from mote.contracts.policy.run_completion import RunCompletionDecision, RunCompletionIntent
-from mote.contracts.run_context import RunContext
-from mote.contracts.schema import AIMessage, CauseBy, Message
-from mote.contracts.services import ServiceExecutionSemantics, ServiceInvocation
-from mote.kernel.models.model_calls import describe_image as describe_image_with_model
-from mote.kernel.parser import CommandChannel
-from mote.kernel.tools.toolset import toolset_manifest, validate_toolset_protocols
+from mote.contracts.output.policy import RunCompletionDecision, RunCompletionIntent
+from mote.contracts.ports.skill.registry import SkillCatalog, SkillService
+from mote.contracts.ports.task.operations import BackgroundTaskService
+from mote.contracts.service import ServiceExecutionSemantics, ServiceInvocation
+from mote.kernel.commands import CommandChannel
+from mote.kernel.execution.run_context import RunContext
 from mote.runtime.agent.base import BaseRole
-from mote.runtime.agent.context_provider import ContextProvider
+from mote.runtime.agent.components.context_provider import ContextProvider
 from mote.runtime.agent.execution import any_to_str, role_raise_decorator
 from mote.runtime.agent.incarnation import AgentIncarnationBlueprint
 from mote.runtime.agent.role_components import RoleComponents
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.agent.role_state import RoleState
+from mote.runtime.agent.session_manager import RoleSessionManager
 from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.context import ContextManager
-from mote.runtime.context.skills.skill_manager import SkillManager
+from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.errors import RoleContextNotSetError, ToolNotConfiguredError
 from mote.runtime.events import (
     OutputPublicationQueuedEvent,
@@ -44,42 +45,34 @@ from mote.runtime.events import (
     bind_telemetry,
     span,
 )
-from mote.runtime.lifecycle import LifecyclePhase, LifecycleStack
-from mote.runtime.logging import bind_session_logfile, bind_trace, log_class, logger, unbind_session_logfile
+from mote.runtime.models.clients.context import Context
 from mote.runtime.models.gateway import LLMRouter
-from mote.runtime.paths import CONFIG_ROOT
+from mote.runtime.models.model_calls import describe_image as describe_image_with_model
 from mote.runtime.run_context import bind_run_context
 from mote.runtime.services import EngineServices
-from mote.runtime.session import list_sessions as _list
-from mote.runtime.session.attribution import HunkAttribution
 from mote.runtime.session.events import SessionMetaEvent
-from mote.runtime.session.hunk_ops import HunkOps
+from mote.runtime.telemetry.logging import bind_session_logfile, bind_trace, log_class, logger, unbind_session_logfile
 from mote.runtime.tools.execution_context import current_tool_call_id
+from mote.runtime.tools.provider import toolset_manifest, validate_toolset_protocols
 from mote.runtime.tools.tool_executor import ToolExecutor
 
 DepsT = TypeVar("DepsT")
 OutputT = TypeVar("OutputT")
-AgentT = TypeVar("AgentT")
 
 if TYPE_CHECKING:
-    from mote.contracts.artifacts import ArtifactRef
-    from mote.contracts.interaction import AskUserQuestionAnswers, AskUserQuestionItem
-    from mote.contracts.permissions import ApprovalChoice, ApprovalRequest
-    from mote.contracts.ports import (
-        ArtifactResolver,
-        ArtifactStore,
-        PromptPolicy,
-        ReliableArtifactPublisher,
-        RunCompletionPolicy,
-        ToolCallPolicy,
-        ToolResultPolicy,
-    )
-    from mote.contracts.settings.device import DeviceConfig
-    from mote.runtime.context.skills.skill_pool import SkillPool
+    from mote.contracts.artifact import ArtifactRef
+    from mote.contracts.interaction import ApprovalChoice, ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionItem
+    from mote.contracts.ports.artifact.store import ArtifactResolver, ArtifactStore, ReliableArtifactPublisher
+    from mote.contracts.ports.conversation.prompt_policy import PromptPolicy
+    from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicy
+    from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
+    from mote.runtime.config.device import DeviceConfig
+    from mote.runtime.interactive.browser.profile import BrowserProfileStore
     from mote.runtime.sandbox import SandboxRuntime
     from mote.runtime.session import SessionLog
+    from mote.runtime.session.attribution import HunkAttribution
+    from mote.runtime.session.hunk_ops import HunkOps
     from mote.runtime.tools.capability_types import CapabilityMap
-    from mote.runtime.tools.dependency.browser_profile import BrowserProfileStore
     from mote.runtime.tools.tool_result import ToolResult
 
 
@@ -107,14 +100,13 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     Composes:
       - role_schema: RoleSchema (static config, deploy-time)
       - state: RoleState (runtime snapshot, serializable for checkpoint/recovery)
-      - Lazy-init components: ThinkEngine, ToolExecutor, SkillManager, etc.
+      - Lazy-init components: InferenceEngine, ToolExecutor, SkillManager, etc.
 
     Not a Pydantic BaseModel: construction is explicit via __init__.
     Serialization is handled by dump()/load() which delegate to RoleState (Pydantic).
     """
 
     role_type_id = "mote.agent.role.v1"
-    legacy_role_type_ids = ("mote.roles.role.Role",)
 
     def __init__(
         self,
@@ -168,6 +160,10 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         # Post-init
         self._init_addresses()
 
+    def bind_agent_control(self, control: object) -> None:
+        """Attach this Agent to its session-scoped orchestration plane."""
+        self.agent_control = control
+
     def __hash__(self):
         return id(self)
 
@@ -186,8 +182,11 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> "Role":
         """Reconstruct a Role from serialized data."""
-        schema_data = data.get("role_schema", {})
-        state_data = data.get("state", {})
+        expected_fields = {"type_id", "role_schema", "state"}
+        if set(data) != expected_fields:
+            raise ValueError("serialized Role must contain exactly type_id, role_schema, and state")
+        schema_data = data["role_schema"]
+        state_data = data["state"]
         role_schema = RoleSchema.model_validate(schema_data)
         state = RoleState.model_validate(state_data)
         return cls(role_schema=role_schema, state=state)
@@ -257,12 +256,64 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             return self.wiring.services.context
         raise RoleContextNotSetError("Role.context not set. Provide EngineServices through AgentWiring.")
 
+    @property
+    def default_model_name(self) -> str | None:
+        return self._components.current_runtime_composition().default_model.model
+
     def bind_services(self, services: EngineServices, *, owned: bool = False) -> None:
         """Provision this Role with Engine-owned or Role-owned shared services."""
 
         if self.wiring.services is not None and self.wiring.services is not services:
             raise RuntimeError("Role EngineServices cannot be rebound after provisioning")
         self.wiring = self.wiring.with_services(services, owned=owned)
+
+    def build_child_spawn_context(
+        self,
+        *,
+        parent_id: str | None,
+        agent_path: object,
+    ) -> SpawnContext:
+        """Project the stable values needed by a child factory."""
+        return SpawnContext(
+            parent_id=parent_id,
+            agent_path=agent_path,
+            cwd=self.get_cwd(),
+            config=self.config,
+            parent_cost_tracker=self.context.cost_manager,
+            parent_session_id=parent_id or "",
+        )
+
+    def provision_spawned_child(self, child: Any, policy: ContextPolicy) -> None:
+        """Provision a child without exposing Runtime wiring to Orchestration."""
+        services = self.wiring.services
+        if services is None:
+            raise RuntimeError("spawn parent has no provisioned EngineServices")
+        if policy is ContextPolicy.SHARE_PARENT:
+            child.bind_services(services, owned=False)
+            return
+        parent_context = services.context
+        child.bind_services(
+            EngineServices(
+                context=Context(
+                    config=self.config,
+                    service_gateway=parent_context.service_gateway,
+                ),
+                run_lease_coordinator=services.run_lease_coordinator,
+                application_composition=services.application_composition,
+            ),
+            owned=True,
+        )
+
+    def provision_unparented_spawn(self, spawn_context: SpawnContext) -> None:
+        """Provision a child created without a resident parent."""
+        self.bind_services(
+            EngineServices(context=Context(config=spawn_context.config)),
+            owned=True,
+        )
+
+    def spawn_cost_tracker(self):
+        """Return the cost attribution bucket through a public narrow seam."""
+        return self.context.cost_manager
 
     @property
     def deps(self) -> DepsT:
@@ -281,7 +332,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     # using ``role.<component>``; the wiring lives in role_components.py.
 
     @property
-    def skill_manager(self) -> SkillManager:
+    def skill_manager(self) -> SkillService:
         return self._components.skill_manager
 
     @property
@@ -352,18 +403,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     @property
     def hunk_ops(self) -> "HunkOps":
         """Accept / reject / undo over rollout-backed review events."""
-        ops = getattr(self, "_hunk_ops", None)
-        if ops is None:
-            ops = HunkOps(
-                self.review_service,
-                self.file_operations.artifacts,
-                capture_snapshot=self.file_operations.capture,
-                mutation_factory=self.file_operations.mutation_factory,
-                commit_mutation_set=self.file_operations.mutations.commit,
-                resource_lease=self.file_operations.mutations.lease,
-            )
-            self._hunk_ops = ops
-        return ops
+        return self._session_manager.hunk_ops
 
     @property
     def hunk_attribution(self) -> "HunkAttribution":
@@ -374,11 +414,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         and cached — the ledger and blob store it binds to are stable for the
         Role's lifetime.
         """
-        attr = getattr(self, "_hunk_attribution", None)
-        if attr is None:
-            attr = HunkAttribution(self.review_service, self.file_operations.artifacts)
-            self._hunk_attribution = attr
-        return attr
+        return self._session_manager.hunk_attribution
 
     @property
     def resource_registry(self):
@@ -545,7 +581,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         up-front (ToolNotConfiguredError) rather than attach media the model
         silently cannot read.
         """
-        return getattr(self.config.models.default, "model", None)
+        return self.default_model_name
 
     def record_file_glimpsed(self, path: str) -> None:
         """Record that a file surfaced in a search result (Grep/Glob), un-read.
@@ -561,7 +597,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     def is_resource_visible(self, path: str) -> bool:
         """Is the most-recent tool result read from `path` still present in context?
 
-        Delegates to :class:`~mote.runtime.context.visibility.ContextVisibility`. A
+        Delegates to :class:`~mote.runtime.context.history.visibility.ContextVisibility`. A
         deduplicating read tool consults this before returning a "you already
         read this" stub: if the earlier result has been folded/erased by
         compaction the stub would strand the model with no content, so the tool
@@ -581,18 +617,13 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """Return this Role's staged, crash-reconcilable Artifact publisher."""
         return self._components.artifact_publisher
 
-    def get_skill_pool(self) -> Optional[SkillPool]:
+    def get_skill_pool(self) -> Optional[SkillCatalog]:
         """Return the live SkillPool, or None when skills are disabled.
 
         Capability surface for the ``Skill`` bridge tool; delegates to
         :class:`RoleCapabilities`.
         """
         return self._capabilities.get_skill_pool()
-
-    def build_child_agent(self, agent_cls: type[AgentT], /, **kwargs: Any) -> AgentT:
-        """Construct a child via the injected application composition root."""
-
-        return self._capabilities.build_child_agent(agent_cls, **kwargs)
 
     async def run_skill_fork(self, **kwargs) -> str:
         """Run a ``context: fork`` skill inside a fresh, isolated child Role.
@@ -652,7 +683,6 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             "handoff_runtime": self.handoff_runtime,
             "wait_interruptible": self.wait_interruptible,
             "get_skill_pool": self.get_skill_pool,
-            "build_child_agent": self.build_child_agent,
             "run_skill_fork": self.run_skill_fork,
             "register_resource": self._capabilities.register_resource,
             "register_task_result": self._capabilities.register_task_result,
@@ -999,7 +1029,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     def list_graph_tool_names(self) -> list[str]:
         """Names of tools that are themselves graph orchestrators, for ``run_graph``
         to refuse nesting a graph inside a graph. Capability surface over the
-        executor's ``is_graph_tool`` marker set."""
+        executor's immutable execution-kind definitions."""
         return sorted(self.executor.graph_tool_names())
 
     def list_graph_excluded_tool_names(self) -> list[str]:
@@ -1047,7 +1077,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
         Capability surface for ``WebBrowser``'s ``read_image`` action. Routes a
         secondary LLM call via the ``image_description`` task (a multimodal
-        small/fast model — see ``ModelsConfig``) so the caller never touches the
+        small/fast canonical model route so the caller never touches the
         router/Context directly, mirroring every other capability. It reads an
         on-page image as text: normally an image reaches the model directly as
         media (Read → ToolMedia), but the browser has no such wire for an
@@ -1138,8 +1168,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                     working_dir=self.state.working_dir,
                     original_working_dir=self.state.original_working_dir,
                     project_root=self.state.project_root,
-                    model=getattr(self.config.models.default, "model", None),
-                    role_class=f"{type(self).__module__}.{type(self).__qualname__}",
+                    model=self.default_model_name,
+                    role_class=self.role_type_id or type(self).__name__,
                     toolset_manifest=toolset_manifest(self.wiring.dependencies.toolsets),
                 )
             )
@@ -1147,7 +1177,10 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         # Open this session's own log file (logs/{session_id}.txt), named to
         # match its workspace session folder. run() has bound session_id as the
         # trace_id, so the sink's filter routes this session's lines here.
-        bind_session_logfile(self.session_id, CONFIG_ROOT / "logs")
+        config_root = self.wiring.dependencies.user_config_root
+        if config_root is None:
+            raise ValueError("Agent composition requires a user config root")
+        bind_session_logfile(self.session_id, config_root / "logs")
 
         await self.telemetry.emit(
             SessionStartEvent(
@@ -1156,7 +1189,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 working_dir=self.state.working_dir,
                 original_working_dir=self.state.original_working_dir,
                 project_root=self.state.project_root,
-                model=getattr(self.config.models.default, "model", None),
+                model=self.default_model_name,
                 role_class=f"{type(self).__module__}.{type(self).__qualname__}",
                 source="startup",
             )
@@ -1188,7 +1221,10 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             bind_trace(self.session_id),
             bind_telemetry(self.telemetry),
         ):
-            async with span(f"role.run:{self.name}"):
+            async with (
+                self._components.application_scope(),
+                span(f"role.run:{self.name}"),
+            ):
                 await self._ensure_ready()
                 await self._emit_session_start()
 
@@ -1315,7 +1351,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         filters to sessions started under that working dir / project root.
         """
 
-        return _list(base_dir, cwd=cwd)
+        return RoleSessionManager.list_sessions(base_dir, cwd=cwd)
 
     def resume_session(self) -> bool:
         """Rebuild this role's stored history from its durable rollout log.
@@ -1383,7 +1419,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             event = TurnEndEvent(
                 turn_id=uuid4().hex,
                 working_dir=self.state.working_dir,
-                model=getattr(self.config.models.default, "model", None),
+                model=self.default_model_name,
                 token_state=token_state,
             )
             await self._components.session_fact_committer.commit_fact(event)
@@ -1477,6 +1513,13 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             lifecycle.register_close(
                 "tool-executor",
                 executor.cleanup,
+                phase=LifecyclePhase.CLOSE_RESOURCES,
+            )
+        inference_port = self._components.peek_inference_port()
+        if inference_port is not None:
+            lifecycle.register_close(
+                "inference-targets",
+                inference_port.aclose,
                 phase=LifecyclePhase.CLOSE_RESOURCES,
             )
         telemetry = self._components.peek_telemetry()

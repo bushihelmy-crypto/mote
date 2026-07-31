@@ -8,11 +8,11 @@ import pytest
 from docx import Document
 from openpyxl import Workbook
 
-from mote.contracts.fileops import DocumentResourceLimitError, SearchSkipReason
-from mote.runtime.fileops import FileOperations
+from mote.contracts.file import DocumentResourceLimitError, SearchSkipReason
 from mote.runtime.fileops import documents as documents_module
 from mote.runtime.fileops import text_sources as text_sources_module
 from mote.runtime.fileops.documents import ExtractionBudget, extract_document_bytes, extract_pdf_text
+from mote.ztest.fileops_factory import FileOperations
 
 _LARGE_ARCHIVE_ENTRY_BYTES = 8_192
 _ARCHIVE_LIMIT_BYTES = 1_024

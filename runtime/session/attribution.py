@@ -26,8 +26,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mote.contracts.fileops import HunkRecord
-from mote.contracts.text.hunks import slice_lines
+from mote.contracts.file import HunkRecord
+from mote.runtime.fileops.hunks import slice_lines
 from mote.runtime.fileops.review import ACCEPTED, PENDING, REJECTED, ReviewService
 from mote.runtime.session.hunk_rehydrate import blob_text
 

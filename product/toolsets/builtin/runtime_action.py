@@ -1,8 +1,8 @@
 """Shared implementations for model-facing stateful Runtime actions."""
 from __future__ import annotations
 
-from mote.contracts.handoff import HandoffStatus
-from mote.contracts.permissions import PermissionDecision
+from mote.contracts.authorization import PermissionDecision
+from mote.contracts.interaction.handoff import HandoffStatus
 from mote.runtime.tools.capability_types import HandoffRuntime
 from mote.runtime.tools.tool_result import ToolResult
 

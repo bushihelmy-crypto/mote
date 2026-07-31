@@ -20,18 +20,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from mote.contracts.constants.messages import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint
-from mote.contracts.tools import parse_toolset_manifest
-from mote.kernel.tools.toolset import toolset_manifest
+from mote.contracts.conversation.fields import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
+from mote.contracts.tool import parse_toolset_manifest
 from mote.runtime.agent.role_state import RoleState
 from mote.runtime.durable import reconcile_think_journal
 from mote.runtime.errors import SessionResumeIdentityError
-from mote.runtime.interactive.checkpoint_codec import encode_inline_json
+from mote.runtime.session import list_sessions as _list_sessions
+from mote.runtime.session.attribution import HunkAttribution
 from mote.runtime.session.fork import fork
+from mote.runtime.session.hunk_ops import HunkOps
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.reconcile import reconcile_tool_calls
 from mote.runtime.session.replay import replay
+from mote.runtime.tools.provider import toolset_manifest
 
 if TYPE_CHECKING:
     from mote.runtime.agent.role import Role
@@ -42,6 +43,33 @@ class RoleSessionManager:
 
     def __init__(self, role: "Role"):
         self._role = role
+        self._hunk_ops: HunkOps | None = None
+        self._hunk_attribution: HunkAttribution | None = None
+
+    @staticmethod
+    def list_sessions(base_dir: str | None = None, *, cwd: str | None = None) -> list:
+        return _list_sessions(base_dir, cwd=cwd)
+
+    @property
+    def hunk_ops(self) -> HunkOps:
+        if self._hunk_ops is None:
+            file_operations = self._role.file_operations
+            self._hunk_ops = HunkOps(
+                file_operations.review,
+                file_operations.artifacts,
+                capture_snapshot=file_operations.capture,
+                mutation_factory=file_operations.mutation_factory,
+                commit_mutation_set=file_operations.mutations.commit,
+                resource_lease=file_operations.mutations.lease,
+            )
+        return self._hunk_ops
+
+    @property
+    def hunk_attribution(self) -> HunkAttribution:
+        if self._hunk_attribution is None:
+            file_operations = self._role.file_operations
+            self._hunk_attribution = HunkAttribution(file_operations.review, file_operations.artifacts)
+        return self._hunk_attribution
 
     def resume(self) -> bool:
         """Rebuild the role's stored history from its durable rollout log.
@@ -61,7 +89,11 @@ class RoleSessionManager:
         capabilities keep re-projecting after a resume.
         """
         role = self._role
-        log = SessionLog(role.state.session_id, writer=role.context.disk_writer)
+        log = SessionLog(
+            role.state.session_id,
+            base_dir=str(role._components.workspace_store.sessions_root),
+            writer=role.context.disk_writer,
+        )
         if not log.exists():
             return False
 
@@ -88,18 +120,8 @@ class RoleSessionManager:
         role.state.recovered = True
         state_ctl = role._state_ctl
         runtime_checkpoints = getattr(result, "runtime_checkpoints", {}) or {}
-        checkpoint_kinds = {checkpoint.kind for checkpoint in runtime_checkpoints.values()}
         for checkpoint in runtime_checkpoints.values():
             role.runtime_host.stage_checkpoint(checkpoint, alias=checkpoint.alias)
-        # Convert legacy domain state events into managed Runtime checkpoints.
-        # RuntimeHost owns lazy restore staging; tools and RoleState do not carry
-        # one-shot session fields.
-        if result.terminal_state and "terminal" not in checkpoint_kinds:
-            self._stage_runtime_checkpoint("terminal", "terminal-state+json@1", result.terminal_state)
-        if result.kernel_state and "jupyter" not in checkpoint_kinds:
-            self._stage_runtime_checkpoint("jupyter", "jupyter-state+json@1", result.kernel_state)
-        if result.browser_state and "browser" not in checkpoint_kinds:
-            self._stage_runtime_checkpoint("browser", "browser-state+json@1", result.browser_state)
         output_states = getattr(result, "output_states", {}) or {}
         agent_states = [state for state in output_states.values() if state.get("run_kind", "agent") == "agent"]
         output_state = agent_states[-1] if agent_states else result.output_state
@@ -119,32 +141,13 @@ class RoleSessionManager:
         )
         return True
 
-    def _stage_runtime_checkpoint(self, kind: str, codec: str, payload: dict) -> None:
-        role = self._role
-        driver_checkpoint = encode_inline_json(
-            payload,
-            codec=codec,
-            fidelity=CheckpointFidelity.LOGICAL,
-        )
-        role.runtime_host.stage_checkpoint(
-            RuntimeCheckpoint(
-                runtime_id=f"{role.state.session_id}-{kind}-default",
-                kind=kind,
-                epoch=0,
-                revision=0,
-                codec=driver_checkpoint.codec,
-                schema_version=driver_checkpoint.schema_version,
-                payload_ref=driver_checkpoint.payload_ref,
-                digest=driver_checkpoint.digest,
-                sensitivity=driver_checkpoint.sensitivity,
-                fidelity=driver_checkpoint.fidelity or CheckpointFidelity.LOGICAL,
-            )
-        )
-
     @staticmethod
     def _role_identity(role: "Role") -> str:
         """The stable identity string recorded in ``session_meta.role_class``."""
-        return f"{type(role).__module__}.{type(role).__qualname__}"
+        type_id = role.role_type_id
+        if not type_id:
+            raise SessionResumeIdentityError("role has no stable persistence type id")
+        return type_id
 
     def validate_identity(self, meta: Mapping[str, object]) -> None:
         """Refuse to resume a session recorded by a different Role class.
@@ -155,25 +158,18 @@ class RoleSessionManager:
         is refused fail-closed with :class:`SessionResumeIdentityError` (rather
         than silently replaying).
 
-        Deliberately lenient in one direction only: an absent ``role_class`` or
-        ``toolset_manifest`` (pre-dating those fields, or an external writer)
-        carries no value to check. Every recorded value is checked independently,
-        so a legacy missing role class does not suppress a present Toolset
-        manifest. Model is intentionally NOT part of identity (a session may
-        resume under a different model).
+        Model is intentionally not part of identity because a session may resume
+        under a different model.
         """
-        recorded = meta.get("role_class")
-        if recorded:
-            current = self._role_identity(self._role)
-            if recorded != current:
-                raise SessionResumeIdentityError(
-                    f"cannot resume session recorded by role '{recorded}' into role "
-                    f"'{current}': resumed sessions must use the same role class."
-                )
+        recorded = meta["role_class"]
+        current = self._role_identity(self._role)
+        if recorded != current:
+            raise SessionResumeIdentityError(
+                f"cannot resume session recorded by role '{recorded}' into role "
+                f"'{current}': resumed sessions must use the same role class."
+            )
 
-        recorded_toolsets = meta.get("toolset_manifest")
-        if recorded_toolsets is None:
-            return
+        recorded_toolsets = meta["toolset_manifest"]
         expected_manifest = toolset_manifest(self._role.wiring.dependencies.toolsets)
         actual_manifest = parse_toolset_manifest(recorded_toolsets)
         if actual_manifest != expected_manifest:
@@ -199,12 +195,12 @@ class RoleSessionManager:
         A no-op when the executor has no ledger (feature disabled) — the replayed
         history is returned unchanged.
         """
-        ledger = self._role.executor.ledger
-        if ledger is None:
+        journal = self._role.executor.journal
+        if journal is None or not self._role.executor.journal_config.enabled:
             return messages
-        outcome = reconcile_tool_calls(messages, ledger)
+        outcome = reconcile_tool_calls(messages, journal)
         if outcome.resolved_ids:
-            ledger.reap(outcome.resolved_ids)
+            journal.reap(outcome.resolved_ids)
         return outcome.messages
 
     def _reconcile_think_journal(self, messages) -> None:

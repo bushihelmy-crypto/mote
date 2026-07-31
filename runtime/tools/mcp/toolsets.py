@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from mote.kernel.tools.toolset import NativeToolset, XmlToolset
 from mote.runtime.tools.mcp.adapter import MCPToolAdapter
 from mote.runtime.tools.mcp.types import McpDiscoverySource
+from mote.runtime.tools.provider import NativeToolset, XmlToolset
 
 
 class XmlMcpToolset(XmlToolset):

@@ -1,7 +1,7 @@
 """Child-agent spawn vocabulary + ambient control-plane discovery.
 
 This LEAF module holds the *zero-cycle* vocabulary every spawn site shares —
-the lifecycle taxonomy, the immutable spawn request (:class:`SpawnSpec`), the
+the lifecycle taxonomy, the immutable spawn request (:class:`SpawnPlan`), the
 factory's build context (:class:`SpawnContext`) — plus the discovery surface
 that lets a deep call site reach the live control plane without threading it
 through every signature.
@@ -26,9 +26,9 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable, Iterator, Optional
 
-from mote.contracts.errors.environment import AgentLimitReached
-from mote.contracts.spawn import ContextPolicy, Lifecycle, SpawnContext, SpawnSpec
-from mote.runtime.logging import logger
+from mote.contracts.agent import ContextPolicy, Lifecycle, SpawnContext, SpawnPlan
+from mote.contracts.agent.errors import AgentLimitReached
+from mote.runtime.telemetry.logging import logger
 
 # ----------------------------------------------------------------------
 # Ambient discovery (mirrors events/context.py's _ACTIVE_BUS)
@@ -69,7 +69,7 @@ def resolve_control(ctx: Any = None) -> Optional[Any]:
 # Unified spawn → run → release helper
 # ----------------------------------------------------------------------
 async def spawn_and_run(
-    spec: SpawnSpec,
+    spec: SpawnPlan,
     message: Any,
     *,
     ctx: Any = None,
@@ -130,7 +130,7 @@ __all__ = [
     "resolve_control",
     "Lifecycle",
     "ContextPolicy",
-    "SpawnSpec",
+    "SpawnPlan",
     "SpawnContext",
     "spawn_and_run",
     "nullcontext",

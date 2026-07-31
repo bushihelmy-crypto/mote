@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.context.manager.ContextManager`` — the facade.
+"""Tests for ``mote.runtime.context.history.manager.ContextManager`` — the facade.
 
 Two responsibilities:
 
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.schema import ContextManagerConfig, LLMCallContext, UserMessage
+from mote.contracts.conversation import ContextManagerConfig, LLMCallContext, UserMessage
 from mote.runtime.context import ContextManager
 from mote.ztest.model_fakes import model_route
 
@@ -575,7 +575,7 @@ async def test_prepare_request_manage_false_skips_compaction():
 # ---------------------------------------------------------------------------
 # React-unit delete (direct history editing)
 # ---------------------------------------------------------------------------
-from mote.contracts.schema import AIMessage  # noqa: E402
+from mote.contracts.conversation import AIMessage  # noqa: E402
 
 
 class _RecordingTelemetry:
@@ -595,7 +595,7 @@ def _human(content: str) -> UserMessage:
 
 def _reminder() -> UserMessage:
     """A role=user <system-reminder> envelope — NOT a react-unit boundary."""
-    from mote.contracts.text import wrap_system_reminder
+    from mote.runtime.context.markers import wrap_system_reminder
 
     return UserMessage(content=wrap_system_reminder(["injected context"]))
 

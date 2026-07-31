@@ -1,0 +1,37 @@
+schema_version: 1
+revision: inference-config-semantics-v1
+authority: contracts.config.inference.InferenceConfig
+unknown_fields: reject
+deployment:
+  embedded:
+    shared_process: forbidden
+    persistence: [sqlite]
+  shared_process:
+    shared_process: required
+    persistence: [sqlite, postgresql]
+    discovery: generation_suffixed_uds_via_atomic_record
+  future_cluster:
+    implementation: deferred
+    production_activation: forbidden
+reload:
+  owner: application_generation
+  atomic: true
+  mutable_in_place: false
+secrets:
+  config_plaintext: forbidden
+  generation_artifact: forbidden
+  shared_bootstrap: inherited_fd_only
+network:
+  tls_verification: mandatory
+  redirects: forbidden
+  environment_proxy: forbidden
+  private_destinations: explicit_allowlist_only
+limits:
+  response_body: hard_reject
+  stream_frame: hard_reject
+  precommit_bytes_frames_time: hard_reject
+invariants:
+  - one_generation_owner
+  - one_capacity_authority_per_generation
+  - no_untyped_provider_options
+  - no_cluster_production_activation

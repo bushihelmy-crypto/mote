@@ -22,7 +22,11 @@ def _tracker():
         ),
         "claude-opus-4",
     )
-    t.add(TokenUsage(input_tokens=2000, output_tokens=300, total_tokens=2300), "gpt-4o")
+    t.add(
+        TokenUsage(input_tokens=2000, output_tokens=300, total_tokens=2300),
+        "gpt-4o",
+        context_window=128000,
+    )
     return t
 
 

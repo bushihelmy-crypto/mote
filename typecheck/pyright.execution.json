@@ -1,0 +1,16 @@
+{
+  "extends": "../pyrightconfig.json",
+  "include": [
+    "../runtime/engine.py",
+    "../kernel/execution/graph/core.py",
+    "../kernel/execution/engine.py",
+    "../kernel/execution/operations/output.py",
+    "../kernel/execution/state.py",
+    "../kernel/execution/result.py"
+  ],
+  "exclude": ["../ztest"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none"
+}

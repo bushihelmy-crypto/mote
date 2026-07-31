@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from mote.contracts.handoff import RuntimeHandoffIntent, RuntimeHandoffRecovery, RuntimeHandoffResolution
-from mote.contracts.runtimes import RuntimeCheckpoint
+from mote.contracts.runtime import RuntimeCheckpoint
+from mote.contracts.runtime.handoff import RuntimeHandoffIntent, RuntimeHandoffRecovery, RuntimeHandoffResolution
 from mote.runtime.session.events import (
     RuntimeHandoffActivatedEvent,
     RuntimeHandoffPreparedEvent,

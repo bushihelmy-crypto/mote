@@ -1,0 +1,34 @@
+schema_version: 1
+revision: reconciliation-actions-v1
+actions:
+  apply_provider_success:
+    authority: logical_owner
+    required_evidence: [authoritative_provider_terminal, verified_artifact_digest]
+    approvals: 2
+    settles_usage: true
+  apply_provider_failure:
+    authority: logical_owner
+    required_evidence: [authoritative_provider_terminal]
+    approvals: 1
+    settles_usage: true
+  reject_proposal:
+    authority: logical_owner
+    required_evidence: [journal_conflict_or_stale_strategy]
+    approvals: 1
+    settles_usage: false
+  provider_cancel:
+    authority: daemon_data_plane
+    required_evidence: [provider_resource_identity]
+    approvals: 0
+    settles_usage: false
+  artifact_cleanup:
+    authority: existing_artifact_owner
+    required_evidence: [unreferenced_verified_artifact]
+    approvals: 0
+    settles_usage: false
+invariants:
+  - owner_command_is_signed_and_idempotent
+  - owner_acknowledgement_is_required
+  - daemon_cannot_append_logical_terminal
+  - success_without_authoritative_evidence_is_forbidden
+  - permanently_offline_owner_remains_unresolved

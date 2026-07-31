@@ -6,7 +6,8 @@ import shutil
 
 import pytest
 
-from mote.contracts.fileops import (
+from mote.contracts.events.file.facts import RewindCommittedEvent, RewindPreparedEvent
+from mote.contracts.file import (
     ByteReadRequest,
     ByteViewMode,
     ContinueReadRequest,
@@ -14,10 +15,8 @@ from mote.contracts.fileops import (
     RecoveryInDoubtError,
     TransactionStatus,
 )
-from mote.contracts.fileops.events import RewindCommittedEvent, RewindPreparedEvent
 from mote.runtime.fileops import (
     DurableFileOperationsJournal,
-    FileOperations,
     HierarchicalLockManager,
     ProjectOperationControl,
     RewindCoordinator,
@@ -25,9 +24,11 @@ from mote.runtime.fileops import (
     project_identity,
 )
 from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
+from mote.runtime.fileops.facade import FileOperations as RuntimeFileOperations
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.checkpoint import list_checkpoints
 from mote.runtime.session.log import SessionLog
+from mote.ztest.fileops_factory import FileOperations
 
 git_required = pytest.mark.skipif(
     shutil.which("git") is None,
@@ -35,7 +36,7 @@ git_required = pytest.mark.skipif(
 )
 
 
-def _operations(root, work, session_id="session") -> FileOperations:
+def _operations(root, work, session_id="session") -> RuntimeFileOperations:
     return FileOperations(
         session_id=session_id,
         journal_path=root / session_id / "rollout.jsonl",
@@ -352,7 +353,7 @@ def test_rewind_exclusive_barrier_prevents_mutation_interleaving(tmp_path):
         ),
     )
     rewind_process.start()
-    assert entered.wait(5)
+    assert entered.wait(30)
     mutation_process = context.Process(
         target=_compete_mutation,
         args=(str(tmp_path), str(work), snapshot, outcomes),

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mote://schemas/mote-application-backup-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "backup_id", "application_id", "caller_incarnation", "journal_digests", "artifact_checkpoint", "created_at", "signature"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "backup_id": {"type": "string", "minLength": 1},
+    "application_id": {"type": "string", "minLength": 1},
+    "caller_incarnation": {"type": "object"},
+    "journal_digests": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+    "artifact_checkpoint": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "signature": {"type": "string", "minLength": 1}
+  }
+}

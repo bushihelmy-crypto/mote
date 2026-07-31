@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TypeAlias
 
-from mote.contracts.schema.messages import AIMessage, SystemMessage, ToolMessage, UserMessage
+from mote.contracts.conversation import AIMessage, SystemMessage, ToolMessage, UserMessage
 
 ModelMessage: TypeAlias = UserMessage | SystemMessage | AIMessage | ToolMessage
 

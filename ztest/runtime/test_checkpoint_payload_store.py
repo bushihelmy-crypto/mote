@@ -4,8 +4,9 @@ import hashlib
 
 import pytest
 
-from mote.contracts.artifacts import ArtifactContentRef
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint
+from mote.contracts.artifact import ArtifactContentRef
+from mote.contracts.content import ContentIdentity
+from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint
 from mote.runtime.artifacts import DurableArtifactStore
 from mote.runtime.interactive import ArtifactCheckpointPayloadStore
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
@@ -19,10 +20,10 @@ class _MemoryBlobs:
     def put_bytes(self, content: bytes) -> ArtifactContentRef:
         digest = hashlib.sha256(content).hexdigest()
         self.contents[digest] = content
-        return ArtifactContentRef(content_ref=f"sha256:{digest}", digest=digest, size=len(content))
+        return ArtifactContentRef(ContentIdentity(digest, len(content)), f"sha256:{digest}")
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        return self.contents[ref.digest]
+        return self.contents[ref.identity.digest]
 
 
 def _checkpoint(*, sensitivity: str = "private") -> RuntimeCheckpoint:

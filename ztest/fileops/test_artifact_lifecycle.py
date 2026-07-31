@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-from mote.contracts.fileops.models import ArtifactGarbageCollectionState, BlobRef
-from mote.runtime.fileops.artifact_lifecycle import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.runtime.fileops.mutation.artifact_catalog import (
     ArtifactLifecycleCatalog,
     ArtifactLifecycleConflictError,
     ArtifactObjectState,
@@ -16,8 +16,8 @@ from mote.runtime.fileops.artifact_lifecycle import (
 )
 
 
-def _ref(data: bytes) -> BlobRef:
-    return BlobRef(digest=hashlib.sha256(data).hexdigest(), size=len(data))
+def _ref(data: bytes) -> ContentIdentity:
+    return ContentIdentity(digest=hashlib.sha256(data).hexdigest(), size=len(data))
 
 
 def _reserve_concurrently(root: str, ready, start, outcomes) -> None:
@@ -190,40 +190,6 @@ def test_schema_and_limit_are_fail_closed_on_reopen(tmp_path):
     ArtifactLifecycleCatalog(other, hard_limit_bytes=10)
     with pytest.raises(ArtifactLifecycleConflictError, match="hard limit"):
         ArtifactLifecycleCatalog(other, hard_limit_bytes=11)
-
-
-def test_garbage_collection_status_is_exact_and_durable(tmp_path):
-    root = tmp_path / "blobs"
-    catalog = ArtifactLifecycleCatalog(root, hard_limit_bytes=64)
-
-    assert catalog.health().garbage_collection.state == (ArtifactGarbageCollectionState.NEVER_RUN)
-    recorded = catalog.record_garbage_collection_success(
-        quarantined_objects=3,
-        restored_objects=2,
-        deletion_candidates=1,
-        reclaimed_objects=1,
-        reclaimed_bytes=7,
-        now_ns=123,
-    )
-    reopened = ArtifactLifecycleCatalog(root, hard_limit_bytes=64)
-
-    assert reopened.health().garbage_collection == recorded
-    assert recorded.state == ArtifactGarbageCollectionState.SUCCEEDED
-    assert recorded.completed_at_ns is not None
-    assert recorded.reclaimed_bytes == 7
-
-    failed = reopened.record_garbage_collection_failure("injected", now_ns=124)
-    assert (
-        ArtifactLifecycleCatalog(
-            root,
-            hard_limit_bytes=64,
-        )
-        .health()
-        .garbage_collection
-        == failed
-    )
-    assert failed.state == ArtifactGarbageCollectionState.FAILED
-    assert failed.completed_at_ns >= recorded.completed_at_ns
 
 
 def test_begin_immediate_serializes_cross_process_admission(tmp_path):

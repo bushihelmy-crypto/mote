@@ -22,11 +22,11 @@ so it stays a zero-dependency leaf that the core may import unconditionally.
 
 from __future__ import annotations
 
-from mote.contracts.schema import DurableConfig
+from mote.contracts.config.tool import DurableConfig
 from mote.runtime.durable.backend import DurableBackend, JsonlBackend
 from mote.runtime.durable.plugins import load_backend_factory
 from mote.runtime.ledger import RunJournal
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 
 def make_durable_backend(config: DurableConfig, journal: RunJournal) -> DurableBackend:

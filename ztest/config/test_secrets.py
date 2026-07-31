@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.config.secrets`` — api_key_helper resolution."""
+"""Tests for ``mote.product.config.secrets`` — api_key_helper resolution."""
 from __future__ import annotations
 
 import sys
 
 import pytest
 
-from mote.runtime.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
-from mote.runtime.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
+from mote.product.config.layers import CREDENTIAL_DENYLIST, strip_sensitive
+from mote.product.config.secrets import clear_cache, resolve_api_key, run_api_key_helper
 
 
 @pytest.fixture(autouse=True)
@@ -35,14 +35,24 @@ def test_run_helper_nonzero_exit_is_empty():
 
 
 def test_resolve_fills_when_placeholder():
-    merged = {"models": {"api_key_helper": _echo_cmd("sk-real"), "default": {"model": "x", "api_key": "sk-"}}}
+    merged = {
+        "models": {
+            "api_key_helper": _echo_cmd("sk-real"),
+            "default": {"model": "x", "api_key": "sk-"},
+        }
+    }
     out = resolve_api_key(merged, use_cache=False)
     assert out == "sk-real"
     assert merged["models"]["default"]["api_key"] == "sk-real"
 
 
 def test_resolve_skips_when_static_key_present():
-    merged = {"models": {"api_key_helper": _echo_cmd("sk-helper"), "default": {"api_key": "sk-static-real"}}}
+    merged = {
+        "models": {
+            "api_key_helper": _echo_cmd("sk-helper"),
+            "default": {"api_key": "sk-static-real"},
+        }
+    }
     assert resolve_api_key(merged, use_cache=False) is None
     assert merged["models"]["default"]["api_key"] == "sk-static-real"
 

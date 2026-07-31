@@ -1,0 +1,39 @@
+schema_version: 1
+revision: observability-operations-v1
+planes:
+  caller:
+    bus: existing_process_event_bus
+    owns: [logical_call, routing, failover, journal, owner_decision]
+  daemon:
+    bus: existing_process_event_bus
+    owns: [queue, dispatch, receipt, connector, wire, daemon_storage]
+correlation: [trace_id, execution_id, attempt_id, generation_id, receipt_revision]
+forbidden:
+  - daemon_emits_caller_logical_success
+  - raw_principal_in_metric_label
+  - secret_in_log_trace_event_or_diagnostic
+readiness_components:
+  generation: fail_closed
+  scheduler: fail_closed
+  receipt_outbox: fail_closed_on_hard_failure
+  usage_ledger: fail_closed_for_budgeted_requests
+  credential_store: fail_closed_for_affected_bindings
+  artifact_store: fail_closed_for_artifact_operations
+  connection_pool: fail_closed_for_affected_protocol
+  audit: policy_controlled_fail_closed
+  migration: fail_closed
+  disk: hard_watermark_fail_closed_for_new_wire
+alerts:
+  - {id: receipt_in_doubt_age, signal: oldest_in_doubt_seconds, runbook: reconcile-in-doubt}
+  - {id: outbox_backlog_age, signal: oldest_outbox_seconds, runbook: recover-outbox}
+  - {id: disk_hard_watermark, signal: free_bytes, runbook: recover-disk-pressure}
+  - {id: daemon_crash_loop, signal: restarts_per_window, runbook: recover-daemon}
+  - {id: generation_rejected, signal: rejected_generation_count, runbook: rollback-generation}
+  - {id: backup_or_restore_failed, signal: drill_failure, runbook: recover-backup}
+runbook_requirements: [trigger, impact, diagnosis, safe_actions, escalation, recovery_verification, audit_evidence]
+cli:
+  commands: [gateway-validate, gateway-migrate, gateway-backup, gateway-restore, gateway-doctor, gateway-reconcile, gateway-drain, gateway-upgrade-status]
+  structured_output: json
+  stable_exit_codes: true
+  audit_mutations: true
+  destructive_actions_require_approval: true

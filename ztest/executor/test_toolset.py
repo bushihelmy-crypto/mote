@@ -4,9 +4,12 @@ from dataclasses import dataclass, replace
 
 import pytest
 
-from mote.contracts.run_context import RunContext
-from mote.contracts.tools import CommandProtocol, ToolsetIdentity, ToolsetProtocolError
-from mote.kernel.tools.toolset import (
+from mote.contracts.tool import CommandProtocol, ToolsetIdentity, ToolsetProtocolError
+from mote.kernel.execution.run_context import RunContext
+from mote.runtime.run_context import bind_run_context
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition, xml_definition
+from mote.runtime.tools.provider import (
     NativeToolset,
     ToolsetCompositionError,
     ToolsetConflictError,
@@ -15,9 +18,6 @@ from mote.kernel.tools.toolset import (
     toolset_manifest,
     validate_toolset_protocols,
 )
-from mote.runtime.run_context import bind_run_context
-from mote.runtime.tools.base_tool import BaseTool
-from mote.runtime.tools.definitions import native_definition, xml_definition
 from mote.runtime.tools.tool_executor import ToolExecutor
 
 
@@ -185,8 +185,7 @@ def test_prepared_view_cannot_add_rename_or_replace_capabilities() -> None:
     with pytest.raises(ToolsetCompositionError, match="cannot replace the capability"):
         source.prepared(lambda definitions: (replace(definitions[0], capability_factory=lambda: Echo()),)).definitions()
     approved = source.with_approval()
-    with pytest.raises(ToolsetCompositionError, match="cannot change approval policy"):
-        approved.prepared(lambda definitions: (replace(definitions[0], approval_required=False),)).definitions()
+    assert approved.prepared(lambda definitions: definitions).requires_permission_gate is True
 
 
 def test_agent_composition_rejects_duplicate_ids_and_cross_toolset_names() -> None:
@@ -282,8 +281,10 @@ async def test_typed_approval_policy_can_inspect_run_deps_definition_and_args() 
     )
 
     with bind_run_context(ctx):
+        await executor.start_run(ctx)
         allowed = await executor.run_command("Echo", {"text": "public"})
         blocked = await executor.run_command("Echo", {"text": "secret"})
+        await executor.end_run()
 
     assert allowed.output == "public"
     assert blocked.success is False

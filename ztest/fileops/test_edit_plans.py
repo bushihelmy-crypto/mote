@@ -6,11 +6,9 @@ import multiprocessing
 
 import pytest
 
-from mote.contracts.fileops import BlobRef, CreateMutation, MutationSet, ReplaceMutation, TextViewMode
-from mote.contracts.fileops.errors import SnapshotDurabilityError, StaleSnapshotError
-from mote.contracts.fileops.events import FileEditPlanStoredEvent
-from mote.runtime.fileops.artifact_budgets import snapshot_budget
-from mote.runtime.fileops.artifact_repository import ArtifactWriteScope, ArtifactWriteScopeState
+from mote.contracts.events.file.facts import FileEditPlanStoredEvent
+from mote.contracts.file import ContentIdentity, CreateMutation, MutationSet, ReplaceMutation, TextViewMode
+from mote.contracts.file.errors import SnapshotDurabilityError, StaleSnapshotError
 from mote.runtime.fileops.edit_plans import (
     MAX_EDIT_PLAN_MANIFEST_BYTES,
     MAX_EDIT_PLAN_OUTPUT_BYTES,
@@ -26,12 +24,14 @@ from mote.runtime.fileops.edit_plans import (
     ReplacementLimitExceededError,
     WholeFileEditPlanRequest,
 )
-from mote.runtime.fileops.facade import FileOperations
 from mote.runtime.fileops.identity import path_token
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.locking import HierarchicalLockManager
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, ArtifactWriteScopeState
 from mote.runtime.fileops.query_semantics import CandidateDiscovery, RegexProgram
+from mote.runtime.fileops.resource_limits import snapshot_budget
 from mote.runtime.fileops.text_sources import MaterializedText
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path, *, session_id="session") -> FileOperations:
@@ -109,7 +109,7 @@ def _publish_plan_worker(
     try:
         published = journal.publish_edit_plan(
             plan_id,
-            BlobRef(digest=digest, size=1),
+            ContentIdentity(digest=digest, size=1),
         )
     except Exception as exc:
         outcomes.put(("error", type(exc).__name__, str(exc)))

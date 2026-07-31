@@ -1,9 +1,9 @@
 """Composition-root coverage for ToolCallPolicy extensions."""
 from __future__ import annotations
 
-from mote.contracts.permissions import PermissionFacts
-from mote.contracts.policy.tool import ToolCallInspection, ToolCallIntent
-from mote.contracts.ports.tool_policy import ToolCallPolicyExtensionSpec
+from mote.contracts.authorization import PermissionFacts
+from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
+from mote.contracts.tool.policy import ToolCallInspection, ToolCallIntent
 from mote.kernel.output import text_output_contract
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.tools.permission import ToolCallInspector

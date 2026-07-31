@@ -1,0 +1,24 @@
+schema_version: 1
+fixture_format: canonical-json-or-binary-frame
+required_dimensions:
+  - request_translation
+  - unary_success
+  - stream_success
+  - error_in_http_200
+  - html_response
+  - malformed_envelope
+  - truncated_stream
+  - unknown_stream_event
+  - usage_and_cache_tokens
+  - quota_headers
+  - canonical_failure
+  - zero_or_one_wire_count
+storage:
+  payloads: encrypted_artifact_store
+  index: existing_artifact_metadata
+  digest: sha256
+  secrets: forbidden
+freshness:
+  default_max_age_days: 30
+  expired_fixture_blocks_live_certification: true
+gate_status: awaiting_recorded_provider_fixtures

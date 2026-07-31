@@ -26,4 +26,4 @@ def test_non_persisted_events_remain_available_to_other_observers():
 
 def test_rollout_policy_has_no_duplicate_or_instance_order_semantics():
     assert isinstance(ROLLOUT_EVENT_TYPES, frozenset)
-    assert len(ROLLOUT_EVENT_TYPES) == 14
+    assert len(ROLLOUT_EVENT_TYPES) == 15

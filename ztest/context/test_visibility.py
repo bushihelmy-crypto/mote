@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for :class:`mote.runtime.context.visibility.ContextVisibility`.
+"""Tests for :class:`mote.runtime.context.history.visibility.ContextVisibility`.
 
 The service answers one question — "is the most-recent tool result derived from
 resource X still present (real content, not a cleared placeholder)?" — by reading
@@ -10,8 +10,8 @@ and never-read.
 """
 from __future__ import annotations
 
-from mote.contracts.constants.context import TOOL_RESULT_CLEARED_MESSAGE
-from mote.contracts.schema import AIMessage, ToolMessage, UserMessage
+from mote.contracts.conversation import AIMessage, ToolMessage, UserMessage
+from mote.contracts.conversation.constants import TOOL_RESULT_CLEARED_MESSAGE
 from mote.runtime.context import ContextVisibility
 
 

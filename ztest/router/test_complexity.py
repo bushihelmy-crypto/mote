@@ -3,7 +3,7 @@
 """Tests for Kernel complexity signals, scoring, tiers, and rules."""
 from __future__ import annotations
 
-from mote.kernel.models.complexity import (
+from mote.product.routing.squilla.complexity import (
     TIER_THRESHOLDS,
     ComplexitySignals,
     ContextSignals,

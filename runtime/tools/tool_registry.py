@@ -20,8 +20,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from mote.kernel.tools.toolset import NativeToolset, XmlToolset
 from mote.runtime.tools.definitions import native_definition, xml_definition
+from mote.runtime.tools.provider import NativeToolset, XmlToolset
 
 
 def _validate_tool_type(tool_type: type) -> None:
@@ -98,8 +98,6 @@ def _tool_type_identity(tool_type: type) -> str:
     return ":".join(
         (
             getattr(tool_type, "name", "") or tool_type.__name__,
-            tool_type.__module__,
-            tool_type.__qualname__,
             str(getattr(tool_type, "definition_version", "1")),
             source_digest,
         )

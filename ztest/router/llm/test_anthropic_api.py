@@ -14,11 +14,11 @@ import asyncio
 
 import pytest
 
-from mote.contracts.config.llm import LLMConfig, LLMType
-from mote.product.integrations.bootstrap import builtin_provider_registry
-from mote.product.integrations.models.anthropic import AnthropicLLM
+from mote.contracts.config.model.llm import LLMConfig, LLMType
+from mote.contracts.model.transport import resolve_api_type
+from mote.product.models.bootstrap import builtin_provider_registry
+from mote.product.models.providers.anthropic import AnthropicLLM
 from mote.runtime.events import LLMStreamDeltaEvent, bind_telemetry
-from mote.runtime.models.clients.registry import resolve_api_type
 from mote.runtime.models.cost import CostTracker
 from mote.ztest.telemetry import InlineTelemetry
 
@@ -530,7 +530,7 @@ class TestAutoDetection:
         assert isinstance(create_llm_instance(cfg), AnthropicLLM)
 
     def test_gateway_claude_stays_openai(self):
-        from mote.product.integrations.models.openai_chat import OpenAILLM
+        from mote.product.models.providers.openai_chat import OpenAILLM
 
         cfg = LLMConfig(
             api_type="openai", base_url="https://openrouter.ai/api/v1", model="claude-3-5-sonnet", api_key="x"
@@ -555,7 +555,7 @@ class TestAutoDetection:
             assert isinstance(create_llm_instance(cfg), AnthropicLLM)
 
     def test_openai_v1_surface_of_same_vendor_stays_openai(self):
-        from mote.product.integrations.models.openai_chat import OpenAILLM
+        from mote.product.models.providers.openai_chat import OpenAILLM
 
         # The vendor's OpenAI-compatible /v1 surface must NOT match the
         # /anthropic detector — only the explicit anthropic surface takes native.

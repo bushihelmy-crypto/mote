@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from mote.contracts.errors.base import MoteError, NonRetryableError
-from mote.contracts.errors.codes import ErrorCode, RecoveryAction
+from mote.contracts.foundation.errors.base import MoteError, NonRetryableError
+from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
 
 
 class RouterError(MoteError):

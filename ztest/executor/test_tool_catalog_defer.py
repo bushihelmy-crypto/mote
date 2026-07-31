@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_binding import BoundTool
 from mote.runtime.tools.tool_catalog import NativeToolCatalog, XmlToolCatalog
 

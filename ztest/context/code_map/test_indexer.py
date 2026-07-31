@@ -9,7 +9,9 @@ import time
 
 import pytest
 
-from mote.runtime.context.code_map.indexer import RepoIndexer
+from mote.product.code_map.factory import DEFAULT_EXCLUDED_DIRECTORIES
+from mote.runtime.code_map.indexer import RepoIndexer
+from mote.runtime.code_map.languages import registered_extensions
 
 
 def _write(tmp_path, rel: str, source: str) -> str:
@@ -22,12 +24,22 @@ def _write(tmp_path, rel: str, source: str) -> str:
 def _indexer(tmp_path):
     # Persist to a DB inside the tmp tree so the ~/.mote path isn't touched.
     db = str(tmp_path / "codemap.db")
-    return RepoIndexer(str(tmp_path), store_path=db)
+    return RepoIndexer(
+        str(tmp_path),
+        store_path=db,
+        enabled_extensions=registered_extensions(),
+        excluded_directories=set(DEFAULT_EXCLUDED_DIRECTORIES),
+    )
 
 
 def test_constructor_does_not_create_database_or_parent(tmp_path):
     database = tmp_path / "nested" / "codemap.db"
-    indexer = RepoIndexer(str(tmp_path), store_path=str(database))
+    indexer = RepoIndexer(
+        str(tmp_path),
+        store_path=str(database),
+        enabled_extensions=registered_extensions(),
+        excluded_directories=set(DEFAULT_EXCLUDED_DIRECTORIES),
+    )
     assert indexer._map is None
     assert not database.parent.exists()
 
@@ -382,15 +394,17 @@ def test_scan_all_prunes_new_build_dirs(tmp_path):
         idx.close()
 
 
-def test_walk_degrades_to_python_only_without_tree_sitter(tmp_path, monkeypatch):
+def test_walk_degrades_to_python_only_without_tree_sitter(tmp_path):
     # With tree-sitter unavailable the registry is Python-only, so the walk filter
     # is exactly {".py"} — a .ts/.go file is ignored (identical to the old walk).
-    import mote.runtime.context.code_map.indexer as indexer_mod
-
-    monkeypatch.setattr(indexer_mod, "registered_extensions", lambda: {".py"})
     _write(tmp_path, "keep.py", "x = 1\n")
     _write(tmp_path, "skip.ts", "const x = 1;\n")
-    idx = _indexer(tmp_path)
+    idx = RepoIndexer(
+        str(tmp_path),
+        store_path=str(tmp_path / "codemap.db"),
+        enabled_extensions={".py"},
+        excluded_directories=set(DEFAULT_EXCLUDED_DIRECTORIES),
+    )
     try:
         idx.scan_all()
         indexed = set(idx._map._store.all_indexed_paths())

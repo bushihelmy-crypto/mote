@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.tools.effects import ToolEffect
+from mote.contracts.tool.effects import ToolEffect
 from mote.product.toolsets.builtin import device_use as device_use_mod
 from mote.product.toolsets.builtin.device_use import DeviceUse
-from mote.runtime.tools.dependency._device.backend import DeviceError
+from mote.runtime.interactive.device.backend import DeviceError
 from mote.runtime.tools.tool_result import ToolError, ToolResult
 from mote.ztest.executor.dependency.device_fakes import FAKE_PNG, FakeDeviceBackend, RaisingDeviceBackend
 from mote.ztest.executor.tools.conftest import CapRole, bind, run

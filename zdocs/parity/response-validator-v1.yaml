@@ -1,0 +1,37 @@
+schema_version: 1
+revision: response-validator-v1
+default_limits:
+  precommit_bytes: 1048576
+  precommit_frames: 1024
+  precommit_seconds: 15
+  nesting_depth: 64
+  string_bytes: 8388608
+automata:
+  json_unary:
+    states: [headers, bounded_body, decoded, semantic_valid, committed, rejected]
+    commit_from: semantic_valid
+    reject: [non_json_content_type, html, invalid_json, provider_error_envelope, missing_required_terminal_shape]
+  sse_stream:
+    states: [headers, prelude, event, terminal_marker, committed, rejected]
+    commit_from: first_semantically_valid_non_error_event
+    accept_control: [comment, keepalive]
+    reject: [html, malformed_event, error_event, truncated_without_terminal, limit_exceeded]
+  websocket_session:
+    states: [upgrade, session_created, ordered_event, terminal_or_close, committed, rejected]
+    commit_from: session_created
+    reject: [invalid_upgrade, provider_error_event, sequence_regression, invalid_schema, limit_exceeded]
+  eventstream:
+    states: [headers, frame_prelude, frame, terminal_frame, committed, rejected]
+    commit_from: first_semantically_valid_non_error_frame
+    reject: [crc_error, invalid_frame_type, provider_error_frame, truncated_without_terminal, limit_exceeded]
+operation_exceptions:
+  tool_only_completion: accepted
+  empty_embedding_vector: rejected
+  empty_audio_bytes: rejected
+  keepalive_only_stream: rejected_at_deadline
+  asynchronous_acceptance_receipt: accepted_only_with_provider_resource_identity
+invariants:
+  - http_2xx_is_not_success
+  - stream_bytes_are_not_success
+  - rejection_never_triggers_hidden_retry
+  - usage_and_health_follow_semantic_terminal_only

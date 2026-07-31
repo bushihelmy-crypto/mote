@@ -2,11 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from mote.runtime.agent.output_migration import (
-    OutputMigrationRegistry,
-    ValidatorMigrationRegistry,
-    ValidatorVersionMigration,
-)
+from mote.kernel.output.migrations import OutputMigrationGraph, ValidatorMigrationGraph, ValidatorVersionMigration
 
 
 @dataclass(frozen=True)
@@ -36,7 +32,7 @@ def _migration(source, target, source_fp, target_fp, field):
 
 
 def test_unique_multi_step_path_migrates_in_order():
-    registry = OutputMigrationRegistry(
+    registry = OutputMigrationGraph(
         (
             _migration("test.v1@1", "test.v2@1", "fp1", "fp2", "v2"),
             _migration("test.v2@1", "test.v3@1", "fp2", "fp3", "v3"),
@@ -60,7 +56,7 @@ def test_unique_multi_step_path_migrates_in_order():
 
 def test_missing_or_ambiguous_paths_fail_closed():
     direct = _migration("a", "c", "a-fp", "c-fp", "direct")
-    registry = OutputMigrationRegistry(
+    registry = OutputMigrationGraph(
         (
             direct,
             _migration("a", "b", "a-fp", "b-fp", "via_b"),
@@ -87,7 +83,7 @@ def test_missing_or_ambiguous_paths_fail_closed():
 
 
 def test_fingerprint_mismatch_fails_before_migration_runs():
-    registry = OutputMigrationRegistry((_migration("a", "b", "a-fp", "b-fp", "value"),))
+    registry = OutputMigrationGraph((_migration("a", "b", "a-fp", "b-fp", "value"),))
 
     with pytest.raises(ValueError, match="source fingerprint mismatch"):
         registry.migrate(
@@ -103,7 +99,7 @@ def test_fingerprint_mismatch_fails_before_migration_runs():
 async def test_output_engine_migrates_then_recommits_current_contract():
     from mote.contracts.output import OutputContractId, RunKind
     from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder
-    from mote.runtime.agent.output_engine import OutputEngine
+    from mote.runtime.output.engine import OutputEngine
 
     source_decoder = TypeAdapterOutputDecoder(int)
     target_decoder = TypeAdapterOutputDecoder(dict[str, int])
@@ -119,7 +115,7 @@ async def test_output_engine_migrates_then_recommits_current_contract():
     contract = OutputContract(
         OutputContractId("test", "report", "2"),
         target_decoder,
-        migration_registry=OutputMigrationRegistry((migration,)),
+        migration_registry=OutputMigrationGraph((migration,)),
     )
     engine = OutputEngine(
         contract,
@@ -147,7 +143,7 @@ async def test_output_engine_migrates_then_recommits_current_contract():
 def test_validator_identity_migration_preserves_execution_provenance():
     from mote.contracts.output import ValidatorProvenance
 
-    registry = ValidatorMigrationRegistry(
+    registry = ValidatorMigrationGraph(
         (
             ValidatorVersionMigration("policy", "1", "policy", "2"),
             ValidatorVersionMigration("policy", "2", "policy-v3", "3"),

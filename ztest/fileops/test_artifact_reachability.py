@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from mote.contracts.fileops.events import (
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.file.facts import (
     FileEditPlanStoredEvent,
     FileHistoryImportedEvent,
     FileTransactionAbortedEvent,
@@ -12,26 +13,21 @@ from mote.contracts.fileops.events import (
     FileTransactionPreparedEvent,
     HunkDetectedEvent,
 )
-from mote.contracts.fileops.models import (
-    BlobRef,
-    HunkRecord,
-    PresentVersion,
-    ReadCursorKind,
-    SearchOutputMode,
-    SearchSummary,
-    TargetIdentity,
-)
-from mote.contracts.fileops.serialization import blob_to_dict, search_summary_to_dict, snapshot_to_dict
-from mote.runtime.fileops.artifact_budgets import ARTIFACT_WRITE_TTL_SECONDS, MAX_READ_MANIFEST_BYTES
-from mote.runtime.fileops.artifact_reachability import (
+from mote.contracts.file.codec import blob_to_dict, search_summary_to_dict, snapshot_to_dict
+from mote.contracts.file.identity import PresentVersion, TargetIdentity
+from mote.contracts.file.search import SearchOutputMode, SearchSummary
+from mote.contracts.file.transactions import HunkRecord
+from mote.contracts.file.views import ReadCursorKind
+from mote.runtime.fileops.edit_plans import WholeFileEditPlanRequest
+from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifact_roots import (
     ArtifactReachabilityError,
     ArtifactReachabilityProjector,
     ArtifactRoot,
     ArtifactRootKind,
 )
-from mote.runtime.fileops.edit_plans import WholeFileEditPlanRequest
-from mote.runtime.fileops.facade import FileOperations
-from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS, MAX_READ_MANIFEST_BYTES
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path) -> FileOperations:
@@ -210,7 +206,7 @@ def test_search_manifest_missing_child_fails_closed(tmp_path):
     skipped = _put(operations.artifacts, b"")
     forged = _search_manifest(
         operations.artifacts,
-        rows_artifact=BlobRef("f" * 64, 1),
+        rows_artifact=ContentIdentity("f" * 64, 1),
         skipped_artifact=skipped,
     )
 

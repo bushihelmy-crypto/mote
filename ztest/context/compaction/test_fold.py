@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.constants.context import FOLDED_WRITE_MARKER, TOOL_RESULT_CLEARED_MESSAGE
-from mote.contracts.constants.messages import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
-from mote.contracts.schema import ContextManagerConfig
+from mote.contracts.conversation import ContextManagerConfig
+from mote.contracts.conversation.constants import FOLDED_WRITE_MARKER, TOOL_RESULT_CLEARED_MESSAGE
+from mote.contracts.conversation.fields import RESOURCE_STICKY, RETENTION, RETENTION_PIN, TOOL_CALLS
 from mote.runtime.context.compaction.reducers.fold import FoldReducer
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Transcript

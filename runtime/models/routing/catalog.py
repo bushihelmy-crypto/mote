@@ -6,25 +6,27 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from mote.contracts.config.routing import AgentRouterConfig, RouterConfig
-from mote.contracts.models.routing import RouteAdmissionProfile, RouteCandidate, RouteCapabilities
-from mote.contracts.ports import ModelGateway
+from mote.contracts.config.model.routing import AgentRouterConfig, RouterConfig
+from mote.contracts.model.routing import RouteAdmissionProfile, RouteCandidate, RouteCapabilities
+from mote.contracts.model.topology import SemanticRoute
+from mote.contracts.model.topology_codec import encode_route_id
+from mote.contracts.ports.model.gateway import ModelGateway
 
 
 @dataclass(frozen=True)
 class RouteCatalogSnapshot:
     revision: str
     candidates: tuple[RouteCandidate, ...]
-    default_route_id: str
-    class_routes: tuple[tuple[str, str], ...]
+    default_route_id: SemanticRoute
+    class_routes: tuple[tuple[str, SemanticRoute], ...]
 
-    def candidate(self, route_id: str) -> RouteCandidate | None:
+    def candidate(self, route_id: SemanticRoute) -> RouteCandidate | None:
         return next(
             (candidate for candidate in self.candidates if candidate.route_id == route_id),
             None,
         )
 
-    def route_for_class(self, route_class: str) -> str | None:
+    def route_for_class(self, route_class: str) -> SemanticRoute | None:
         return next(
             (route_id for name, route_id in self.class_routes if name == route_class),
             None,
@@ -40,8 +42,9 @@ def build_route_catalog(
 
     route_ids = agent.candidates or tuple(router.routes)
     candidates: list[RouteCandidate] = []
-    for route_id in route_ids:
-        metadata = router.routes[route_id]
+    for route_name in route_ids:
+        route_id = SemanticRoute(name=route_name)
+        metadata = router.routes[route_name]
         if not metadata.enabled or not gateway.supports_route(route_id):
             continue
         profiles = gateway.route_profiles(route_id)
@@ -91,15 +94,17 @@ def build_route_catalog(
 
     public_shape = {
         "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
-        "default": agent.default_route,
+        "default": encode_route_id(SemanticRoute(name=agent.default_route)),
         "class_routes": sorted(agent.class_routes.items()),
     }
     revision = hashlib.sha256(json.dumps(public_shape, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:24]
     return RouteCatalogSnapshot(
         revision=revision,
         candidates=tuple(candidates),
-        default_route_id=agent.default_route,
-        class_routes=tuple(sorted(agent.class_routes.items())),
+        default_route_id=SemanticRoute(name=agent.default_route),
+        class_routes=tuple(
+            (name, SemanticRoute(name=route_id)) for name, route_id in sorted(agent.class_routes.items())
+        ),
     )
 
 

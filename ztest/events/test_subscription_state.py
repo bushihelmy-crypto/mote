@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mote.contracts.events import EventEnvelope, EventId, EventType, StreamId
-from mote.contracts.ports.event_subscription import DeadLetterEntry, SubscriptionCheckpoint, SubscriptionIdentity
+from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, StreamId
+from mote.contracts.ports.events.subscription import DeadLetterEntry, SubscriptionCheckpoint, SubscriptionIdentity
 from mote.runtime.events.backends.subscription_state import (
     CheckpointRegressionError,
     SQLiteSubscriptionStateStore,

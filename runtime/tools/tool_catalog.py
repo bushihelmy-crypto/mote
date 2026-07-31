@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterator
 
-from mote.contracts.models.capabilities import supports_native_tool_search
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
+from mote.contracts.tool.execution import ToolExecutionKind
 from mote.kernel.tools.spec_adapter import to_native_tool_specs
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_binding import BoundTool
 from mote.runtime.tools.tool_classification import is_pipeline_tool
 
@@ -113,7 +113,7 @@ class BoundToolCatalog:
         return isinstance(tool, BoundTool) and tool.definition.category == "mcp"
 
     def _is_pipeline_tool(self, tool: Any) -> bool:
-        """Return True if the tool is backed by a compiled BgGraph pipeline."""
+        """Return True if the tool is backed by a compiled Workflow pipeline."""
         return is_pipeline_tool(tool)
 
     def category(self, tool: Any) -> str:
@@ -305,14 +305,14 @@ class BoundToolCatalog:
     def graph_tool_names(self) -> frozenset[str]:
         """Names (primary + aliases) of bound tools that are graph orchestrators.
 
-        A tool self-declares this via the ``is_graph_tool`` ClassVar. run_graph
-        uses this to refuse referencing another graph tool from a node (no
-        graph-in-graph nesting). Every alias is included so the check matches
-        whichever name a spec used.
+        Classification comes exclusively from the immutable definition. Every
+        alias is included so the check matches whichever name a spec used.
         """
         names: set[str] = set()
         for name, tool in self._tools.items():
-            if getattr(tool, "is_graph_tool", False):
+            definition = getattr(tool, "definition", None)
+            kind = getattr(definition, "execution_kind", ToolExecutionKind.ATOMIC)
+            if kind.is_workflow:
                 names.add(name)
         return frozenset(names)
 
@@ -373,28 +373,16 @@ class NativeToolCatalog(BoundToolCatalog):
             schemas[str(schema["name"])] = schema
         return schemas
 
-    def native_specs(self, provider: str = "anthropic", model: str | None = None) -> list[dict]:
-        prov = provider.lower()
-        server_defer = (
-            bool(self._deferred) and supports_native_tool_search(model) and prov in ("anthropic", "openai_responses")
-        )
+    def native_specs(self, provider: str = "anthropic") -> list[dict]:
         native: dict[str, dict] = {}
-        defer_names: set[str] = set()
         for tool in self.iter_unique():
             if not isinstance(tool, BoundTool) or not isinstance(tool.definition, NativeToolDefinition):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
-            if not server_defer and self._is_hidden(tool):
+            if self._is_hidden(tool):
                 continue
             schema = dict(tool.definition.render(tool.wrapped_tool))
-            if server_defer and self._is_corpus(tool):
-                defer_names.add(tool.name)
             native[str(schema["name"])] = schema
-        specs = to_native_tool_specs(native, provider=provider, model=model)
-        if defer_names:
-            for spec in specs:
-                if spec.get("name") in defer_names:
-                    spec["defer_loading"] = True
-        return specs
+        return to_native_tool_specs(native, provider=provider)
 
     def canonical_specs(self, *, include_hidden: bool = True) -> list[dict]:
         """Return provider-neutral definitions; adapters own wire projection."""

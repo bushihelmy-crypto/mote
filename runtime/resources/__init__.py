@@ -6,7 +6,6 @@ from mote.runtime.resources.registry import (
     POST_COMPACT_TOKEN_BUDGET,
     ResourceRegistry,
 )
-from mote.runtime.resources.task_pointer import build_task_result_pointer
 from mote.runtime.resources.unit import ResourceUnit
 
 __all__ = [
@@ -16,5 +15,4 @@ __all__ = [
     "POST_COMPACT_TOKEN_BUDGET",
     "POST_COMPACT_PER_KIND_BUDGET",
     "POST_COMPACT_MAX_ROUNDS",
-    "build_task_result_pointer",
 ]

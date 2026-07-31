@@ -1,0 +1,1 @@
+"""File-domain event contracts."""

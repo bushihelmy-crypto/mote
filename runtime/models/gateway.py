@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Optional
 from uuid import uuid4
 
-from mote.contracts.models.routing import RoutingDecision, RoutingInput, RoutingSignals
-from mote.contracts.ports import ArtifactResolver, ContextReducer, ModelGateway, ModelRoute, SessionFactSink
+from mote.contracts.model.routing import RoutingDecision, RoutingInput, RoutingSignals
+from mote.contracts.model.topology import DefaultRoute, RouteId, TaskRoute
+from mote.contracts.ports.artifact.store import ArtifactResolver
+from mote.contracts.ports.conversation.context_reducer import ContextReducer
+from mote.contracts.ports.model.gateway import ModelGateway, ModelRoute
+from mote.contracts.ports.session.facts import SessionFactSink
 from mote.runtime.errors import ModelNotFoundError
-from mote.runtime.logging import log_class
 from mote.runtime.models.failover.transforms import CanonicalRequestTransformer
 from mote.runtime.models.routing.service import RoutingService
+from mote.runtime.telemetry.logging import log_class
 
 DEFAULT_MODEL_NAME = "default"
 COMPRESSION_TASK = "compression"
@@ -25,35 +28,34 @@ class LLMRouter:
         gateway: ModelGateway | None,
         *,
         routing_service: RoutingService | None = None,
-        task_map: Optional[dict[str, str]] = None,
+        default_route: RouteId | None = None,
         session_fact_sink: SessionFactSink | None = None,
         artifact_resolver: ArtifactResolver | None = None,
     ) -> None:
         self.gateway = gateway
         self.routing_service = routing_service
+        self.default_route = default_route or DefaultRoute()
         self.routing_enabled = routing_service is not None
-        self.task_map = dict(task_map or {})
         self._session_fact_sink = session_fact_sink
         self._artifact_resolver = artifact_resolver
         self.context_reducer: ContextReducer | None = None
 
-    def map_task(self, task: str, route_id: str) -> None:
-        self.task_map[task] = route_id
-
     def model_route_for_task(self, task: str) -> ModelRoute:
-        return self.model_route(
-            self.task_map.get(task, DEFAULT_MODEL_NAME),
-            compression=task == COMPRESSION_TASK,
+        candidate = TaskRoute(name=task)
+        route_id: RouteId = (
+            candidate if self.gateway is not None and self.gateway.supports_route(candidate) else DefaultRoute()
         )
+        return self.model_route(route_id, compression=task == COMPRESSION_TASK)
 
     def model_route(
         self,
-        route_id: str = DEFAULT_MODEL_NAME,
+        route_id: RouteId | None = None,
         *,
         compression: bool = False,
         routing_decision_id: str | None = None,
     ) -> ModelRoute:
         gateway = self.gateway
+        route_id = route_id or self.default_route
         if gateway is None:
             raise ModelNotFoundError(
                 "Canonical ModelGateway is not installed in the Runtime context",

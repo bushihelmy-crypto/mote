@@ -8,29 +8,15 @@ from dataclasses import dataclass, field, replace
 from typing import AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
-from mote.contracts.errors.runtimes import (
-    ManagedRuntimeAliasConflictError,
-    ManagedRuntimeDurabilityError,
-    ManagedRuntimeNotFoundError,
-    ManagedRuntimeRevisionConflictError,
-    ManagedRuntimeStateError,
-)
-from mote.contracts.events.types import RuntimeDurabilityChangedEvent
-from mote.contracts.handoff import (
-    HandoffRequest,
-    HumanHandoffOutcome,
-    RuntimeHandoffIntent,
-    RuntimeHandoffRecovery,
-    RuntimeHandoffResolution,
-)
-from mote.contracts.leases import LeasePolicy
-from mote.contracts.ports.lease import LeaseCoordinator
-from mote.contracts.ports.runtime_checkpoint import RuntimeCheckpointPayloadStore, RuntimeCheckpointSink
-from mote.contracts.ports.runtime_driver import JournaledRuntimeDriver, ManagedRuntimeDriver
-from mote.contracts.ports.runtime_handoff import RuntimeHandoffJournal
-from mote.contracts.ports.runtime_operation import RuntimeOperationJournal
-from mote.contracts.ports.runtime_projection import RuntimeProjectionJournal
-from mote.contracts.runtimes import (
+from mote.contracts.events.session import RuntimeDurabilityChangedEvent
+from mote.contracts.interaction.handoff import HandoffRequest, HumanHandoffOutcome
+from mote.contracts.ports.runtime.checkpoint import RuntimeCheckpointPayloadStore, RuntimeCheckpointSink
+from mote.contracts.ports.runtime.driver import JournaledRuntimeDriver, ManagedRuntimeDriver
+from mote.contracts.ports.runtime.handoff import RuntimeHandoffJournal
+from mote.contracts.ports.runtime.lease import LeaseCoordinator
+from mote.contracts.ports.runtime.operation import RuntimeOperationJournal
+from mote.contracts.ports.runtime.projection import RuntimeProjectionJournal
+from mote.contracts.runtime import (
     DriverCheckpoint,
     RuntimeAccessMode,
     RuntimeCheckpoint,
@@ -45,8 +31,17 @@ from mote.contracts.runtimes import (
     RuntimeRef,
     RuntimeState,
 )
-from mote.runtime.leases import InMemoryLeaseCoordinator, LeaseHandle
-from mote.runtime.logging import log_call, logger
+from mote.contracts.runtime.errors import (
+    ManagedRuntimeAliasConflictError,
+    ManagedRuntimeDurabilityError,
+    ManagedRuntimeNotFoundError,
+    ManagedRuntimeRevisionConflictError,
+    ManagedRuntimeStateError,
+)
+from mote.contracts.runtime.handoff import RuntimeHandoffIntent, RuntimeHandoffRecovery, RuntimeHandoffResolution
+from mote.contracts.runtime.lease import RuntimeLeasePolicy
+from mote.runtime.control.leases import InMemoryLeaseCoordinator, LeaseHandle
+from mote.runtime.telemetry.logging import log_call, logger
 
 
 @log_call(
@@ -347,7 +342,7 @@ class RuntimeHost:
         self,
         *,
         lease_coordinator: LeaseCoordinator | None = None,
-        lease_policy: LeasePolicy = LeasePolicy(),
+        lease_policy: RuntimeLeasePolicy = RuntimeLeasePolicy(),
         checkpoint_sink: RuntimeCheckpointSink | None = None,
         projection_journal: RuntimeProjectionJournal | None = None,
         operation_journal: RuntimeOperationJournal | None = None,

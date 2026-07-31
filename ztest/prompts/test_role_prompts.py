@@ -12,7 +12,8 @@ from __future__ import annotations
 import re
 from string import Template
 
-from mote.kernel import prompt as R
+from mote.kernel.inference import prompts as R
+from mote.product.toolsets.builtin import agent_prompts as A
 
 
 class TestSystemPromptBoundary:
@@ -69,18 +70,14 @@ class TestDynamicSectionPlaceholders:
 
 class TestAgentPrompts:
     def test_agent_task_prompt_formats(self):
-        out = Template(R.AGENT_TASK_PROMPT).safe_substitute(parent_name="Mike", context="ctx", task="do it")
+        out = Template(A.AGENT_TASK_PROMPT).safe_substitute(parent_name="Mike", context="ctx", task="do it")
         assert "Mike" in out
         assert "ctx" in out
         assert "do it" in out
 
     def test_agent_section_template_formats(self):
-        out = R.AGENT_SECTION_TEMPLATE.format(agent_status="Agent status: idle")
+        out = A.AGENT_SECTION_TEMPLATE.format(agent_status="Agent status: idle")
         assert "Agent status: idle" in out
-
-    def test_backward_compat_aliases(self):
-        assert R.SUBAGENT_SECTION_TEMPLATE is R.AGENT_SECTION_TEMPLATE
-        assert R.SUBAGENT_TASK_PROMPT is R.AGENT_TASK_PROMPT
 
 
 class TestMiscConstants:

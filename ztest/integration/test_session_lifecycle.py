@@ -15,6 +15,8 @@ import os
 
 import pytest
 
+from mote.runtime.agent.component_keys import ROUTER
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -186,7 +188,7 @@ async def test_fork_child_runs_independently(make_role, tmp_path):
 
     c_file = os.path.join(str(tmp_path), "c.txt")
     llm = ScriptedLLM([[("Edit", {"file_path": c_file, "old_string": "", "new_string": "c"})], "child done"])
-    child._components._graph.seed("router", ScriptedRouter(llm))
+    child._components._graph.seed(ROUTER, ScriptedRouter(llm))
     child.scripted_llm = llm  # type: ignore[attr-defined]
 
     await child.run(with_message="child task")
@@ -210,7 +212,7 @@ async def test_resume_reaps_think_already_in_history(make_role, context, tmp_pat
     assistant turn. We seed such a record into the run journal after a real run,
     then prove ``resume_session`` (via ``_reconcile_think_journal``) drops it.
     """
-    from mote.contracts.think import ThinkResult
+    from mote.contracts.model.inference import InferenceResult
     from mote.runtime.agent import AgentWiring, Role
     from mote.runtime.agent.role_schema import RoleSchema
     from mote.runtime.ledger import KIND_THINK
@@ -232,7 +234,7 @@ async def test_resume_reaps_think_already_in_history(make_role, context, tmp_pat
     journal = role.executor.journal
     assert journal is not None
     journal.record_started("think:99", KIND_THINK, "pure", seq=99)
-    journal.record_completed("think:99", payload=ThinkResult(content=last_ai.content or "").model_dump_json())
+    journal.record_completed("think:99", payload=InferenceResult(content=last_ai.content or "").model_dump_json())
     assert journal.replay("think:99") is not None
 
     revived = Role(
@@ -254,7 +256,7 @@ async def test_resume_keeps_unmatched_completed_think(make_role, context, tmp_pa
     turn being recorded. The resume guard must LEAVE it so the loop can reinstate
     it (skip the LLM) on its first think.
     """
-    from mote.contracts.think import ThinkResult
+    from mote.contracts.model.inference import InferenceResult
     from mote.runtime.agent import AgentWiring, Role
     from mote.runtime.agent.role_schema import RoleSchema
     from mote.runtime.ledger import KIND_THINK
@@ -274,7 +276,7 @@ async def test_resume_keeps_unmatched_completed_think(make_role, context, tmp_pa
     assert journal is not None
     journal.record_started("think:99", KIND_THINK, "pure", seq=99)
     journal.record_completed(
-        "think:99", payload=ThinkResult(content="a thought that never reached history").model_dump_json()
+        "think:99", payload=InferenceResult(content="a thought that never reached history").model_dump_json()
     )
 
     revived = Role(

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any, Generic, TypeAlias, TypeVar, cast
+from typing import Any, Generic, TypeAlias, TypeVar
 
-from mote.contracts.run_context import RunContext
-from mote.contracts.tools import ToolsetProtocolError
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
-from mote.kernel.tools.toolset import NativeToolset, XmlToolset
+from mote.contracts.tool import ToolsetProtocolError
+from mote.kernel.execution.run_context import RunContext
+from mote.runtime.tools.provider import NativeToolset, XmlToolset
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 
 AgentDepsT = TypeVar("AgentDepsT")
 XmlToolsetFactory: TypeAlias = Callable[
@@ -71,9 +71,9 @@ class XmlDynamicToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
             )
         if result is self:
             raise RuntimeError(f"dynamic Toolset {self.id!r} cannot return itself")
-        return cast(XmlToolset[AgentDepsT], await result.for_run(ctx))
+        return await result.for_run(ctx)
 
-    async def for_run(self, ctx: RunContext[Any]) -> XmlToolset[AgentDepsT]:
+    async def for_run(self, ctx: RunContext[AgentDepsT]) -> XmlToolset[AgentDepsT]:
         active = XmlDynamicToolset(
             self.id,
             self._factory,
@@ -81,13 +81,14 @@ class XmlDynamicToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
             per_run_step=self._per_run_step,
         )
         if not self._per_run_step:
-            active._inner = await active._evaluate(cast(RunContext[AgentDepsT], ctx))
+            active._inner = await active._evaluate(ctx)
+        active._bind_run_context(ctx)
         return active
 
-    async def for_run_step(self, ctx: RunContext[Any]) -> XmlToolset[AgentDepsT]:
+    async def for_run_step(self, ctx: RunContext[AgentDepsT]) -> XmlToolset[AgentDepsT]:
         if not self._per_run_step:
             return self
-        inner = await self._evaluate(cast(RunContext[AgentDepsT], ctx))
+        inner = await self._evaluate(ctx)
         if inner is self._inner:
             return self
         previous, self._inner = self._inner, None
@@ -166,9 +167,9 @@ class NativeDynamicToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
             )
         if result is self:
             raise RuntimeError(f"dynamic Toolset {self.id!r} cannot return itself")
-        return cast(NativeToolset[AgentDepsT], await result.for_run(ctx))
+        return await result.for_run(ctx)
 
-    async def for_run(self, ctx: RunContext[Any]) -> NativeToolset[AgentDepsT]:
+    async def for_run(self, ctx: RunContext[AgentDepsT]) -> NativeToolset[AgentDepsT]:
         active = NativeDynamicToolset(
             self.id,
             self._factory,
@@ -176,13 +177,14 @@ class NativeDynamicToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
             per_run_step=self._per_run_step,
         )
         if not self._per_run_step:
-            active._inner = await active._evaluate(cast(RunContext[AgentDepsT], ctx))
+            active._inner = await active._evaluate(ctx)
+        active._bind_run_context(ctx)
         return active
 
-    async def for_run_step(self, ctx: RunContext[Any]) -> NativeToolset[AgentDepsT]:
+    async def for_run_step(self, ctx: RunContext[AgentDepsT]) -> NativeToolset[AgentDepsT]:
         if not self._per_run_step:
             return self
-        inner = await self._evaluate(cast(RunContext[AgentDepsT], ctx))
+        inner = await self._evaluate(ctx)
         if inner is self._inner:
             return self
         previous, self._inner = self._inner, None

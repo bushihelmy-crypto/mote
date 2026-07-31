@@ -7,7 +7,7 @@ verifiable without parsing a real file.
 
 from __future__ import annotations
 
-from mote.runtime.context.code_map.scopes import Def, Ref, Scope, ScopeGraph
+from mote.runtime.code_map.scopes import Def, Ref, Scope, ScopeGraph
 
 
 def _module_and_fn(fn_name: str = "run"):
@@ -16,7 +16,14 @@ def _module_and_fn(fn_name: str = "run"):
         0: Scope(id=0, kind="module", parent=None, start_line=1),
         1: Scope(id=1, kind="function", parent=0, start_line=1),
     }
-    fn = Def(name=fn_name, scope=0, line=1, kind="function", qualified_name=fn_name, body_scope=1)
+    fn = Def(
+        name=fn_name,
+        scope=0,
+        line=1,
+        kind="function",
+        qualified_name=fn_name,
+        body_scope=1,
+    )
     return scopes, fn
 
 
@@ -44,7 +51,17 @@ def test_enclosing_scope_visible():
     scopes, fn = _module_and_fn()
     g = ScopeGraph(
         scopes=scopes,
-        defs=[fn, Def(name="helper", scope=0, line=1, kind="function", qualified_name="helper", body_scope=None)],
+        defs=[
+            fn,
+            Def(
+                name="helper",
+                scope=0,
+                line=1,
+                kind="function",
+                qualified_name="helper",
+                body_scope=None,
+            ),
+        ],
         refs=[],
     )
     got = g.resolve(Ref(name="helper", scope=1, line=2, col=4))
@@ -77,7 +94,11 @@ def test_method_body_cannot_see_class_level_name():
     scopes, cls, method = _class_with_method()
     g = ScopeGraph(
         scopes=scopes,
-        defs=[cls, method, Def(name="attr", scope=1, line=2, kind="variable", qualified_name="C.attr")],
+        defs=[
+            cls,
+            method,
+            Def(name="attr", scope=1, line=2, kind="variable", qualified_name="C.attr"),
+        ],
         refs=[],
     )
     # ref to `attr` from within method m must NOT resolve to the class-level attr.
@@ -89,7 +110,11 @@ def test_class_body_ref_sees_class_level_name():
     scopes, cls, method = _class_with_method()
     g = ScopeGraph(
         scopes=scopes,
-        defs=[cls, method, Def(name="attr", scope=1, line=2, kind="variable", qualified_name="C.attr")],
+        defs=[
+            cls,
+            method,
+            Def(name="attr", scope=1, line=2, kind="variable", qualified_name="C.attr"),
+        ],
         refs=[],
     )
     got = g.resolve(Ref(name="attr", scope=1, line=3, col=4))
@@ -104,8 +129,22 @@ def test_via_self_resolves_sibling_method():
         2: Scope(id=2, kind="function", parent=1, start_line=2),  # helper
         3: Scope(id=3, kind="function", parent=1, start_line=4),  # run
     }
-    helper = Def(name="helper", scope=1, line=2, kind="function", qualified_name="C.helper", body_scope=2)
-    run = Def(name="run", scope=1, line=4, kind="function", qualified_name="C.run", body_scope=3)
+    helper = Def(
+        name="helper",
+        scope=1,
+        line=2,
+        kind="function",
+        qualified_name="C.helper",
+        body_scope=2,
+    )
+    run = Def(
+        name="run",
+        scope=1,
+        line=4,
+        kind="function",
+        qualified_name="C.run",
+        body_scope=3,
+    )
     cls = Def(name="C", scope=0, line=1, kind="class", qualified_name="C", body_scope=1)
     g = ScopeGraph(scopes=scopes, defs=[cls, helper, run], refs=[])
     got = g.resolve(Ref(name="helper", scope=3, line=5, col=8, is_call=True, via_self=True))
@@ -136,8 +175,22 @@ def test_nonlocal_redirects_to_enclosing_function():
         1: Scope(id=1, kind="function", parent=0, start_line=1),  # outer
         2: Scope(id=2, kind="function", parent=1, start_line=2),  # inner
     }
-    outer = Def(name="outer", scope=0, line=1, kind="function", qualified_name="outer", body_scope=1)
-    inner = Def(name="inner", scope=1, line=2, kind="function", qualified_name="outer.inner", body_scope=2)
+    outer = Def(
+        name="outer",
+        scope=0,
+        line=1,
+        kind="function",
+        qualified_name="outer",
+        body_scope=1,
+    )
+    inner = Def(
+        name="inner",
+        scope=1,
+        line=2,
+        kind="function",
+        qualified_name="outer.inner",
+        body_scope=2,
+    )
     g = ScopeGraph(
         scopes=scopes,
         defs=[
@@ -163,9 +216,30 @@ def test_call_edges_single_owner_no_double_attribution():
         1: Scope(id=1, kind="function", parent=0, start_line=1),  # outer
         2: Scope(id=2, kind="function", parent=1, start_line=2),  # inner
     }
-    outer = Def(name="outer", scope=0, line=1, kind="function", qualified_name="outer", body_scope=1)
-    inner = Def(name="inner", scope=1, line=2, kind="function", qualified_name="outer.inner", body_scope=2)
-    target = Def(name="target", scope=0, line=5, kind="function", qualified_name="target", body_scope=None)
+    outer = Def(
+        name="outer",
+        scope=0,
+        line=1,
+        kind="function",
+        qualified_name="outer",
+        body_scope=1,
+    )
+    inner = Def(
+        name="inner",
+        scope=1,
+        line=2,
+        kind="function",
+        qualified_name="outer.inner",
+        body_scope=2,
+    )
+    target = Def(
+        name="target",
+        scope=0,
+        line=5,
+        kind="function",
+        qualified_name="target",
+        body_scope=None,
+    )
     g = ScopeGraph(
         scopes=scopes,
         defs=[outer, inner, target],
@@ -182,7 +256,14 @@ def test_call_edges_drops_shadowed_param():
         scopes=scopes,
         defs=[
             fn,
-            Def(name="helper", scope=0, line=1, kind="function", qualified_name="helper", body_scope=None),
+            Def(
+                name="helper",
+                scope=0,
+                line=1,
+                kind="function",
+                qualified_name="helper",
+                body_scope=None,
+            ),
             Def(name="helper", scope=1, line=1, kind="param", qualified_name="helper"),  # param shadows
         ],
         refs=[Ref(name="helper", scope=1, line=2, col=4, is_call=True)],
@@ -194,7 +275,17 @@ def test_call_edges_module_level_owner_is_none():
     scopes, fn = _module_and_fn()
     g = ScopeGraph(
         scopes=scopes,
-        defs=[fn, Def(name="helper", scope=0, line=1, kind="function", qualified_name="helper", body_scope=None)],
+        defs=[
+            fn,
+            Def(
+                name="helper",
+                scope=0,
+                line=1,
+                kind="function",
+                qualified_name="helper",
+                body_scope=None,
+            ),
+        ],
         refs=[Ref(name="helper", scope=0, line=3, col=0, is_call=True)],  # call at module level
     )
     edges = g.call_edges()
@@ -247,7 +338,14 @@ def test_block_never_owns_a_call_edge():
         2: Scope(id=2, kind="block", parent=1, start_line=2),
     }
     fn = Def(name="run", scope=0, line=1, kind="function", qualified_name="run", body_scope=1)
-    target = Def(name="target", scope=0, line=5, kind="function", qualified_name="target", body_scope=None)
+    target = Def(
+        name="target",
+        scope=0,
+        line=5,
+        kind="function",
+        qualified_name="target",
+        body_scope=None,
+    )
     g = ScopeGraph(
         scopes=scopes,
         defs=[fn, target],
@@ -266,7 +364,17 @@ def test_skip_class_scope_false_resolves_sibling_member():
     scopes, cls, method = _class_with_method()
     g = ScopeGraph(
         scopes=scopes,
-        defs=[cls, method, Def(name="sibling", scope=1, line=2, kind="function", qualified_name="C.sibling")],
+        defs=[
+            cls,
+            method,
+            Def(
+                name="sibling",
+                scope=1,
+                line=2,
+                kind="function",
+                qualified_name="C.sibling",
+            ),
+        ],
         refs=[],
         skip_class_scope=False,
     )
@@ -279,7 +387,17 @@ def test_skip_class_scope_true_is_default_and_hides_member():
     scopes, cls, method = _class_with_method()
     g = ScopeGraph(
         scopes=scopes,
-        defs=[cls, method, Def(name="sibling", scope=1, line=2, kind="function", qualified_name="C.sibling")],
+        defs=[
+            cls,
+            method,
+            Def(
+                name="sibling",
+                scope=1,
+                line=2,
+                kind="function",
+                qualified_name="C.sibling",
+            ),
+        ],
         refs=[],
     )
     assert g.skip_class_scope is True

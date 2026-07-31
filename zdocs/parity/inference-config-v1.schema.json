@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mote://schemas/inference-config-v1",
+  "title": "Mote inference configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["persistence"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "deployment": {"enum": ["embedded", "shared_process"]},
+    "capacity": {"$ref": "#/$defs/capacity"},
+    "deadline": {"$ref": "#/$defs/deadline"},
+    "network": {"$ref": "#/$defs/network"},
+    "persistence": {"$ref": "#/$defs/persistence"},
+    "shared_process": {"anyOf": [{"$ref": "#/$defs/shared"}, {"type": "null"}]},
+    "plugins": {"type": "array", "items": {"$ref": "#/$defs/plugin"}, "uniqueItems": true},
+    "compatibility": {"$ref": "#/$defs/compatibility"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"deployment": {"const": "shared_process"}}, "required": ["deployment"]},
+      "then": {"required": ["shared_process"], "properties": {"shared_process": {"$ref": "#/$defs/shared"}}},
+      "else": {"properties": {"shared_process": {"type": "null"}}}
+    }
+  ],
+  "$defs": {
+    "capacity": {"type": "object", "additionalProperties": false, "properties": {"global_in_flight": {"type": "integer", "minimum": 1}, "provider_in_flight": {"type": "integer", "minimum": 1}, "endpoint_in_flight": {"type": "integer", "minimum": 1}, "queue_capacity": {"type": "integer", "minimum": 1}, "event_buffer_capacity": {"type": "integer", "minimum": 1}, "admission_policy": {"enum": ["reject", "wait", "deadline"]}}},
+    "deadline": {"type": "object", "additionalProperties": false, "properties": {"default_seconds": {"type": "number", "exclusiveMinimum": 0}, "clock_skew_guard_seconds": {"type": "number", "minimum": 0}, "maximum_seconds": {"type": "number", "exclusiveMinimum": 0}}},
+    "network": {"type": "object", "additionalProperties": false, "properties": {"allow_private_network": {"type": "boolean"}, "allowed_cidrs": {"type": "array", "items": {"type": "string"}}, "allowed_dns_suffixes": {"type": "array", "items": {"type": "string"}}}},
+    "persistence": {"type": "object", "additionalProperties": false, "required": ["backend", "shared_sqlite"], "properties": {"backend": {"enum": ["sqlite", "postgresql"]}, "shared_sqlite": {"type": "object"}, "postgresql_dsn_secret": {"type": ["string", "null"]}}},
+    "shared": {"type": "object", "additionalProperties": false, "properties": {"runtime_directory": {"type": "string", "minLength": 1}, "peer_credentials_required": {"const": true}, "session_credential_ttl_seconds": {"type": "integer", "minimum": 30, "maximum": 3600}, "rpc_contract_versions": {"type": "array", "items": {"type": "integer", "minimum": 2}, "minItems": 1, "uniqueItems": true}}},
+    "plugin": {"type": "object", "additionalProperties": false, "required": ["name", "isolation", "artifact_digest"], "properties": {"name": {"type": "string", "minLength": 1}, "isolation": {"enum": ["trusted_python", "wasm", "subprocess"]}, "artifact_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "enabled": {"type": "boolean"}}},
+    "compatibility": {"type": "object", "additionalProperties": false, "properties": {"inference_api_enabled": {"type": "boolean"}, "admin_api_enabled": {"type": "boolean"}, "realtime_enabled": {"type": "boolean"}, "webhook_enabled": {"type": "boolean"}, "max_body_bytes": {"type": "integer", "minimum": 1}, "max_stream_frame_bytes": {"type": "integer", "minimum": 1}, "max_precommit_bytes": {"type": "integer", "minimum": 1}, "max_precommit_frames": {"type": "integer", "minimum": 1}, "max_precommit_seconds": {"type": "number", "exclusiveMinimum": 0}}}
+  }
+}

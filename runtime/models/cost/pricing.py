@@ -1,10 +1,11 @@
-"""Runtime cache-aware USD pricing, bridged to Mote's tables.
+"""Runtime cache-aware USD pricing for explicitly supported billing classes.
 
 Prices every token bucket independently (input / output / cache
 *write* / cache *read*) at a per-million-token rate, because cache reads are an
 order of magnitude cheaper than fresh input and cache writes are ~25% dearer.
 Codex, by contrast, computes no dollars at all. We adopt this dollar model and
-feed it from Mote's existing ``TOKEN_COSTS`` (per-1k) so no rate is lost.
+Unknown provider deployments use a conservative estimated tier; canonical
+gateway settlements remain authoritative.
 
 Three pricing *modes*:
 
@@ -20,14 +21,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from mote.contracts.models.tokenization import FIREWORKS_GRADE_TOKEN_COSTS, TOKEN_COSTS
-
-# Anthropic-style derivation factors for models whose table only lists
-# input/output (no explicit cache rates): cache writes cost 1.25x fresh input,
-# cache reads cost 0.1x. Mirrors Anthropic's tier ratios.
-_CACHE_WRITE_FACTOR = 1.25
-_CACHE_READ_FACTOR = 0.1
-
 
 @dataclass(frozen=True)
 class ModelPricing:
@@ -38,25 +31,14 @@ class ModelPricing:
     cache_write: float = 0.0
     cache_read: float = 0.0
 
-    @classmethod
-    def from_per_1k(cls, prompt: float, completion: float) -> "ModelPricing":
-        """Bridge a Mote ``TOKEN_COSTS`` row (per-1k) into per-Mtok rates."""
-        input_m = prompt * 1000.0
-        output_m = completion * 1000.0
-        return cls(
-            input=input_m,
-            output=output_m,
-            cache_write=round(input_m * _CACHE_WRITE_FACTOR, 6),
-            cache_read=round(input_m * _CACHE_READ_FACTOR, 6),
-        )
-
 
 # ---------------------------------------------------------------------------
 # Pricing table
 # ---------------------------------------------------------------------------
-# Explicit cache-aware rates for the headline models (per
-# Mtok). These take precedence over the bridged ``TOKEN_COSTS`` entries.
+# Explicit cache-aware rates for supported billing classes (per Mtok).
 _EXPLICIT_PRICING: dict[str, ModelPricing] = {
+    "gpt-4o": ModelPricing(5.0, 15.0, 6.25, 0.5),
+    "gpt-4o-mini": ModelPricing(0.15, 0.6, 0.1875, 0.015),
     # Claude 3.5/3.7/4.x Sonnet tier: 3 / 15 / 3.75 / 0.3
     "claude-3-5-sonnet": ModelPricing(3.0, 15.0, 3.75, 0.3),
     "claude-3.5-sonnet": ModelPricing(3.0, 15.0, 3.75, 0.3),
@@ -74,12 +56,7 @@ _EXPLICIT_PRICING: dict[str, ModelPricing] = {
 
 
 def _build_table() -> dict[str, ModelPricing]:
-    """Merge bridged ``TOKEN_COSTS`` rows with the explicit cache-aware rates."""
-    table: dict[str, ModelPricing] = {}
-    for model, row in TOKEN_COSTS.items():
-        table[model] = ModelPricing.from_per_1k(row["prompt"], row["completion"])
-    table.update(_EXPLICIT_PRICING)
-    return table
+    return dict(_EXPLICIT_PRICING)
 
 
 PRICING: dict[str, ModelPricing] = _build_table()
@@ -128,18 +105,21 @@ def _fireworks_pricing(model: str) -> ModelPricing:
         return float(m[0]) if m else -1.0
 
     if "mixtral-8x7b" in model:
-        row = FIREWORKS_GRADE_TOKEN_COSTS["mixtral-8x7b"]
+        row = {"prompt": 0.4, "completion": 1.6}
     else:
         size = _model_size(model)
         if 0 < size <= 16:
-            row = FIREWORKS_GRADE_TOKEN_COSTS["16"]
+            row = {"prompt": 0.2, "completion": 0.8}
         elif 16 < size <= 80:
-            row = FIREWORKS_GRADE_TOKEN_COSTS["80"]
+            row = {"prompt": 0.7, "completion": 2.8}
         else:
-            row = FIREWORKS_GRADE_TOKEN_COSTS["-1"]
+            row = {"prompt": 0.0, "completion": 0.0}
     # Fireworks has no cache tiers; reads/writes priced as fresh input.
     return ModelPricing(
-        input=row["prompt"], output=row["completion"], cache_write=row["prompt"], cache_read=row["prompt"]
+        input=row["prompt"],
+        output=row["completion"],
+        cache_write=row["prompt"],
+        cache_read=row["prompt"],
     )
 
 

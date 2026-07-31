@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.runtime.observability.langfuse_integration import LangfuseRuntime
+from mote.runtime.telemetry.observability.langfuse_integration import LangfuseRuntime
 
 
 class _Client:

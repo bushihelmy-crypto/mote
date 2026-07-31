@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-import mote.kernel.parser as parser_pkg
-from mote.kernel.parser import NativeToolChannel, XmlCommandChannel, make_command_channel
+import mote.kernel.commands as parser_pkg
+from mote.kernel.commands import NativeToolChannel, XmlCommandChannel, make_command_channel
 
 
 class TestMakeCommandChannel:
@@ -37,11 +37,11 @@ class TestPackageExports:
             assert hasattr(parser_pkg, name), name
 
     def test_command_channel_is_the_base_class(self):
-        from mote.kernel.parser.channel import CommandChannel
+        from mote.kernel.commands.channel import CommandChannel
 
         assert parser_pkg.CommandChannel is CommandChannel
 
     def test_output_section_reexported(self):
-        from mote.kernel.prompt.output import OUTPUT_SECTION
+        from mote.kernel.commands.prompts import OUTPUT_SECTION
 
         assert parser_pkg.OUTPUT_SECTION is OUTPUT_SECTION

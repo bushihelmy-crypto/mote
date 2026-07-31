@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from mote.contracts.config.routing import AgentRouterConfig, RouterConfig, SemanticRouteConfig
-from mote.contracts.models.failover import EndpointCapabilities, EndpointDescriptor
+from mote.contracts.config.model.routing import AgentRouterConfig, RouterConfig, SemanticRouteConfig
+from mote.contracts.model.failover import EndpointCapabilities, EndpointDescriptor
+from mote.contracts.model.topology import SemanticRoute
 from mote.runtime.models.routing.catalog import build_route_catalog
 
 
@@ -46,7 +47,7 @@ def test_catalog_compiles_only_declared_semantic_routes() -> None:
     catalog = build_route_catalog(router, agent, gateway)
 
     assert tuple(candidate.route_id for candidate in catalog.candidates) == (
-        "interactive.low",
-        "interactive.strong",
+        SemanticRoute(name="interactive.low"),
+        SemanticRoute(name="interactive.strong"),
     )
     assert "summary" not in gateway.profile_requests

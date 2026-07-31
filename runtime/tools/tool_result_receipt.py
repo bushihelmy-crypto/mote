@@ -10,8 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from mote.contracts.artifacts import ArtifactRef, ArtifactRetention, ArtifactSensitivity
-from mote.contracts.errors.report import ErrorReport
+from mote.contracts.artifact import ArtifactRef, ArtifactRetention, ArtifactSensitivity
+from mote.contracts.foundation.errors.report import ErrorReport
 from mote.runtime.tools.tool_result import FileChange, ToolMedia, ToolResult
 
 _CODEC = "tool-result+json@1"

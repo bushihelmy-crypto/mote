@@ -7,8 +7,7 @@ from typing import Any
 
 import pytest
 
-from mote.contracts.errors.services import ServiceCallExhaustedError, ServiceCallInDoubtError
-from mote.contracts.models.failover import (
+from mote.contracts.model.failover import (
     AdmissionGate,
     AdmissionVerdict,
     AttemptBudget,
@@ -20,10 +19,10 @@ from mote.contracts.models.failover import (
     ResourceIdentity,
     Retryability,
 )
-from mote.contracts.service_journal import ServiceAttemptFinishedRecord
-from mote.contracts.services import (
+from mote.contracts.service import (
     ServiceAcceptance,
     ServiceAccepted,
+    ServiceAttemptFinishedRecord,
     ServiceCompleted,
     ServiceEndpointDescriptor,
     ServiceEndpointFailure,
@@ -33,7 +32,8 @@ from mote.contracts.services import (
     ServiceReceipt,
     ServiceResponse,
 )
-from mote.runtime.models.failover.admission import AdmissionResult
+from mote.contracts.service.errors import ServiceCallExhaustedError, ServiceCallInDoubtError
+from mote.runtime.resilience.admission import AdmissionResult
 from mote.runtime.service_gateway import (
     LocalServiceCallJournal,
     RuntimeServiceGateway,
@@ -47,8 +47,8 @@ def _transient() -> FailureDisposition:
     return FailureDisposition(
         reason=FailureReason.CONNECTION,
         domain=FailureDomain.TRANSPORT,
-        retryability=Retryability.SAME_ENDPOINT,
-        health_verdict=HealthVerdict.AVAILABILITY_FAILURE,
+        retryability=Retryability.NEW_ATTEMPT,
+        health_verdict=HealthVerdict.DEGRADE,
     )
 
 
@@ -398,8 +398,8 @@ async def test_concurrent_calls_keep_attempt_cursors_isolated(tmp_path: Path) ->
 async def test_definitive_rejection_can_fallback_endpoint(tmp_path: Path) -> None:
     unavailable = FailureDisposition(
         reason=FailureReason.MODEL_UNAVAILABLE,
-        domain=FailureDomain.ENDPOINT,
-        retryability=Retryability.AFTER_CHANGE,
+        domain=FailureDomain.PROVIDER,
+        retryability=Retryability.NEW_ATTEMPT,
     )
     left = _Adapter(
         [ServiceFailed(failure=unavailable)],
@@ -454,8 +454,8 @@ async def test_admission_rejection_does_not_consume_wire_attempt(
                     resource=resource,
                     disposition=FailureDisposition(
                         reason=FailureReason.OVERLOADED,
-                        domain=FailureDomain.ENDPOINT,
-                        retryability=Retryability.AFTER_CHANGE,
+                        domain=FailureDomain.PROVIDER,
+                        retryability=Retryability.NEW_ATTEMPT,
                     ),
                 )
             )
@@ -484,8 +484,7 @@ async def test_auth_rejection_rotates_credential_without_switching_endpoint(
                 disposition=FailureDisposition(
                     reason=FailureReason.AUTH_REJECTED,
                     domain=FailureDomain.CREDENTIAL,
-                    retryability=Retryability.AFTER_CHANGE,
-                    health_verdict=HealthVerdict.CREDENTIAL_REJECTED,
+                    retryability=Retryability.NEW_ATTEMPT,
                 ),
                 acceptance=ServiceAcceptance.REJECTED,
             )
@@ -534,8 +533,8 @@ async def test_resume_never_resubmits_failed_accepted_operation_window(
     receipt = ServiceReceipt(provider_operation_id="failed-remote", poll_after_seconds=0)
     remote_failure = FailureDisposition(
         reason=FailureReason.SERVER_ERROR,
-        domain=FailureDomain.ENDPOINT,
-        retryability=Retryability.SAME_ENDPOINT,
+        domain=FailureDomain.PROVIDER,
+        retryability=Retryability.NEW_ATTEMPT,
     )
     first = _Adapter(
         [ServiceAccepted(receipt=receipt)],

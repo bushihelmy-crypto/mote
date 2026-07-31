@@ -6,8 +6,8 @@ import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from mote.contracts.models.failover import AttemptBudget
-from mote.contracts.services import ServiceEndpointDescriptor
+from mote.contracts.model.failover import AttemptBudget
+from mote.contracts.service import ServiceEndpointDescriptor
 
 
 @dataclass(frozen=True)

@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from typing import cast
 
-from mote.contracts.events.types import (
+from mote.contracts.events.conversation import (
     ContextCompactedEvent,
     HistoryEditedEvent,
     MessageAppendedEvent,
-    ModelCallFinishedEvent,
     PromptRejectedEvent,
-    RoutingDecisionEvent,
-    TurnEndEvent,
 )
-from mote.contracts.models.failover import ModelCallSummary
-from mote.contracts.ports.event_journal import AppendResult
+from mote.contracts.events.model import ModelCallFinishedEvent, RoutingDecisionEvent
+from mote.contracts.events.session import TurnEndEvent
+from mote.contracts.model.failover import ModelCallSummary
+from mote.contracts.ports.events.journal import AppendResult
 from mote.runtime.events.fabric import EventFabric
 from mote.runtime.session.codec import encode_session_event
 from mote.runtime.session.event_policy import is_rollout_event
@@ -52,8 +51,6 @@ class SessionFactCommitter:
             raise TypeError(f"event is not a session fact: {type(event).__name__}")
         persisted: SessionEvent
         if isinstance(event, MessageAppendedEvent):
-            if event.message is None:
-                return None
             persisted = MessageEvent(message=event.message)
         elif isinstance(event, ModelCallFinishedEvent):
             persisted = LLMCallEvent(
@@ -88,6 +85,7 @@ class SessionFactCommitter:
             persisted = RoutingDecisionFact(
                 decision=dict(event.decision),
                 state=dict(event.state),
+                route_schema_version=event.route_schema_version,
             )
         else:
             persisted = cast(SessionEvent, event)

@@ -20,15 +20,16 @@ import shutil
 
 import pytest
 
-from mote.contracts.events.types import TurnEndEvent
-from mote.contracts.fileops import RewindFailedError
+from mote.contracts.events.session import TurnEndEvent
+from mote.contracts.file import RewindFailedError
 from mote.runtime.events import UserPromptSubmitEvent
-from mote.runtime.fileops import FileOperations, WorktreeCheckpointStore
+from mote.runtime.fileops import WorktreeCheckpointStore
 from mote.runtime.session.checkpoint import list_checkpoints
 from mote.runtime.session.codec import iter_file_operations_events
 from mote.runtime.session.events import CHECKPOINT, CheckpointEvent, SessionMetaEvent
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.subscribers import CheckpointSubscriber
+from mote.ztest.fileops_factory import FileOperations
 
 git_required = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")
 

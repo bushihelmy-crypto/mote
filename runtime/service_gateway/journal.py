@@ -10,20 +10,19 @@ from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
-from mote.contracts.service_journal import (
+from mote.contracts.service import (
     ServiceAttemptFinishedRecord,
     ServiceAttemptStartedRecord,
     ServiceCallFinishedRecord,
     ServiceCallJournalRecord,
     ServiceCallPlannedRecord,
     ServiceCallRecovery,
+    ServiceCallState,
     ServiceDecisionRecord,
     ServiceReceiptAcceptedRecord,
 )
-from mote.contracts.services import ServiceCallState
-from mote.runtime.disk.async_io import run_disk_io
-from mote.runtime.logging import log_class
-from mote.runtime.paths import DEFAULT_WORKSPACE_ROOT
+from mote.runtime.persistence.async_io import run_disk_io
+from mote.runtime.telemetry.logging import log_class
 
 SERVICE_CALL_JOURNAL_DIRNAME = "service-calls"
 _RECORD_ADAPTER = TypeAdapter(ServiceCallJournalRecord)
@@ -246,8 +245,8 @@ class LocalServiceCallJournal:
         )
 
 
-def default_service_call_journal_root() -> Path:
-    return Path(DEFAULT_WORKSPACE_ROOT) / ".runtime" / SERVICE_CALL_JOURNAL_DIRNAME
+def service_call_journal_root(workspace_root: Path) -> Path:
+    return workspace_root / ".runtime" / SERVICE_CALL_JOURNAL_DIRNAME
 
 
 __all__ = [
@@ -256,5 +255,5 @@ __all__ = [
     "ServiceCallJournalError",
     "ServiceCallJournalIntegrityError",
     "ServiceCallJournalUnavailableError",
-    "default_service_call_journal_root",
+    "service_call_journal_root",
 ]

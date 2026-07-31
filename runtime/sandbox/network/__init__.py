@@ -23,6 +23,6 @@ env-proxy when the toolchain (slirp4netns / nft) is absent.
 """
 from __future__ import annotations
 
-from mote.runtime.sandbox.network.policy import NetworkPolicy, is_blocked_host, normalize_host
+from mote.runtime.sandbox.network.policy import NetworkPolicy, is_blocked_host
 
-__all__ = ["NetworkPolicy", "is_blocked_host", "normalize_host"]
+__all__ = ["NetworkPolicy", "is_blocked_host"]

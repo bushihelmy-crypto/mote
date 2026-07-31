@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from mote.contracts.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
-from mote.contracts.runtimes import RuntimeRef
-from mote.contracts.surfaces import SurfaceInput, SurfacePresentationMode
-from mote.runtime.tools.dependency._device.runtime import DeviceRuntimeDriver
+from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.runtime import RuntimeRef
+from mote.contracts.surface import SurfaceInput, SurfacePresentationMode
+from mote.runtime.interactive.device.runtime import DeviceRuntimeDriver
 from mote.ztest.executor.dependency.device_fakes import FakeDeviceBackend
 
 

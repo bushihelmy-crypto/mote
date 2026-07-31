@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "boundaries": [
+    {
+      "name": "heterogeneous-telemetry-core",
+      "file": "runtime/events/telemetry.py",
+      "source": "cross-layer telemetry publishers",
+      "validation": "TypedTelemetryBinding.erase applies its TypeGuard before typed delivery",
+      "owner": "runtime-observability",
+      "review_after": "2027-07-30"
+    },
+    {
+      "name": "heterogeneous-tool-definition-registry",
+      "file": "runtime/tools/provider.py",
+      "source": "dynamic and mixed capability definitions",
+      "validation": "toolset definition materialization validates protocol and unique names",
+      "owner": "runtime-tools",
+      "review_after": "2027-07-30"
+    },
+    {
+      "name": "heterogeneous-role-component-registry",
+      "file": "runtime/agent/component_graph.py",
+      "source": "Role component specifications with heterogeneous value types",
+      "validation": "Immutable ComponentKey[T] identities control every get, peek, seed, and builder dependency edge",
+      "owner": "runtime-agent",
+      "review_after": "2027-07-30"
+    },
+    {
+      "name": "open-view-event-consumer-dispatch",
+      "file": "product/presentation/consumer.py",
+      "source": "Extensible ViewEvent kinds implemented by host-specific on_<kind> handlers",
+      "validation": "Input is statically ViewEvent and reflective lookup is narrowed to a callable ViewEventHandler before invocation",
+      "owner": "product-presentation",
+      "review_after": "2027-07-30"
+    }
+  ]
+}

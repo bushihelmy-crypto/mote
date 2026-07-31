@@ -12,7 +12,8 @@ original output unchanged, so compression can never break a tool call.
 
 from __future__ import annotations
 
-from mote.runtime.tools.compress.base import CompressionResult, Compressor, safe_compress, strip_ansi, unchanged
+from mote.runtime.terminal_ansi import strip_ansi
+from mote.runtime.tools.compress.base import CompressionResult, Compressor, safe_compress, unchanged
 from mote.runtime.tools.compress.registry import lookup_compressor
 from mote.runtime.tools.permission.command_parse import command_prefix, prefix_tokens
 

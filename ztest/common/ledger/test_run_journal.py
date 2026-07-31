@@ -14,14 +14,23 @@ import json
 
 import pytest
 
-from mote.runtime.ledger import COMPLETED, FAILED, KIND_THINK, KIND_TOOL, STARTED, RunJournal, StepRecord
+from mote.runtime.ledger import (
+    COMPLETED,
+    FAILED,
+    KIND_THINK,
+    KIND_TOOL,
+    STARTED,
+    RunJournal,
+    StepRecord,
+    UnsupportedRunJournalRecord,
+)
 from mote.runtime.ledger.run_journal import JOURNAL_FILE_NAME
-from mote.runtime.workspace import ArtifactKind, WorkspaceStore
+from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
 
 
 @pytest.fixture
 def store(tmp_path):
-    return WorkspaceStore(root=tmp_path)
+    return SessionWorkspace(root=tmp_path)
 
 
 @pytest.fixture
@@ -109,7 +118,7 @@ class TestDurability:
         assert journal.replay("tc-1") is None
 
     def test_torn_line_skipped(self, store):
-        path = store.space("sess-a", ArtifactKind.LEDGER) / JOURNAL_FILE_NAME
+        path = store.space("sess-a", SessionSpace.LEDGER) / JOURNAL_FILE_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
         good = StepRecord(step_id="a", kind=KIND_TOOL, effect="external", status=STARTED).to_json()
         path.write_text(good + "\n" + "{garbled" + "\n", encoding="utf-8")
@@ -118,11 +127,9 @@ class TestDurability:
         assert len(journal.records()) == 1
 
 
-class TestLegacyCompat:
-    def test_legacy_effect_record_line_folds_in(self, store):
-        """An old EffectRecord line (no step_id/kind/effect) folds in as an
-        EXTERNAL tool step keyed on its tool_call_id (fail-closed)."""
-        path = store.space("sess-a", ArtifactKind.LEDGER) / JOURNAL_FILE_NAME
+class TestStrictSchema:
+    def test_legacy_effect_record_line_is_rejected(self, store):
+        path = store.space("sess-a", SessionSpace.LEDGER) / JOURNAL_FILE_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
         legacy = json.dumps(
             {
@@ -136,20 +143,25 @@ class TestLegacyCompat:
             }
         )
         path.write_text(legacy + "\n", encoding="utf-8")
-        journal = RunJournal("sess-a", store=store)
-        rec = journal.replay("tc-legacy")
-        assert rec is not None
-        assert rec.kind == KIND_TOOL
-        assert rec.effect == "external"  # fail-closed default
-        assert rec.name == "Bash"
-        assert rec.payload == "legacy output"
-        assert rec.status == COMPLETED
+        with pytest.raises(UnsupportedRunJournalRecord):
+            RunJournal("sess-a", store=store)
 
-    def test_to_json_carries_back_compat_aliases(self):
+    def test_to_json_only_carries_canonical_fields(self):
         rec = StepRecord(step_id="tc", kind=KIND_TOOL, effect="external", status=COMPLETED, name="Bash", payload="out")
         d = json.loads(rec.to_json())
-        assert d["tool_name"] == "Bash"
-        assert d["result"] == "out"
+        assert set(d) == {
+            "step_id",
+            "kind",
+            "effect",
+            "status",
+            "seq",
+            "name",
+            "tool_call_id",
+            "started_at",
+            "ended_at",
+            "payload",
+            "success",
+        }
 
 
 class TestSessionIsolation:

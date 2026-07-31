@@ -1,6 +1,6 @@
 import pytest
 
-from mote.contracts.fileops import DocumentExtractorUnavailableError
+from mote.contracts.file import DocumentExtractorUnavailableError
 from mote.runtime.fileops import documents as _document
 from mote.runtime.fileops.document_budgets import DEFAULT_EXTRACTION_BUDGET
 

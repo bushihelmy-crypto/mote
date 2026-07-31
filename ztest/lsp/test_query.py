@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.settings.lsp import LspServerConfig
-from mote.runtime.agent.lsp.registry import DiagnosticRegistry
-from mote.runtime.agent.lsp.server import LspServerInstance, path_to_uri
+from mote.runtime.config.lsp import LspServerConfig
+from mote.runtime.lsp.registry import DiagnosticRegistry
+from mote.runtime.lsp.server import LspServerInstance, path_to_uri
 
 aio = pytest.mark.asyncio
 

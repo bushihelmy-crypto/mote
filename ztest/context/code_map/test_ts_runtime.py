@@ -6,7 +6,7 @@ import gc
 
 import pytest
 
-from mote.runtime.context.code_map import ts_runtime
+from mote.runtime.code_map import ts_runtime
 
 pytest.importorskip("tree_sitter_language_pack")
 

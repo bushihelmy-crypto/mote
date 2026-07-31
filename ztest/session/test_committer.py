@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from mote.contracts.events.types import MessageAppendedEvent
-from mote.contracts.schema import UserMessage
+from mote.contracts.conversation import UserMessage
+from mote.contracts.events.conversation import MessageAppendedEvent
 from mote.runtime.events.dispatcher import SubscriptionManifest
 from mote.runtime.events.fabric import EventFabric
 from mote.runtime.session.codec import decode_session_event

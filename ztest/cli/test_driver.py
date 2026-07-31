@@ -17,10 +17,11 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.product.cli.contracts.view import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
-from mote.product.cli.driver import SessionDriver, _format_turn_error
+from mote.product.entrypoints.cli import backend as cli_backend
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
+from mote.product.interaction.driver import SessionDriver, _format_turn_error
+from mote.product.presentation.events import ErrorRaised, MessageBlockCompleted, Notice, TranscriptCleared
 
 # --------------------------------------------------------------------------
 # Fakes
@@ -144,6 +145,7 @@ def make_driver(*, agent_id: str = "sess-0001", runtimes: Optional[dict] = None,
         control,
         agent_id,
         role,
+        backend=cli_backend,
         port=port,
         projector=projector,
         role_factory=role_factory,
@@ -184,7 +186,14 @@ def test_announce_tools_flags_builtin_count():
     # startup load the badge reports.
     role = FakeRole(tools=["Read", "Write", "Bash"], mcps=["fs", "remote"])
     control = FakeControl({role.session_id: FakeRuntime(role)})
-    drv = SessionDriver(control, role.session_id, role, port=FakePort(), projector=FakeProjector())
+    drv = SessionDriver(
+        control,
+        role.session_id,
+        role,
+        backend=cli_backend,
+        port=FakePort(),
+        projector=FakeProjector(),
+    )
     drv._announce_tools()
     ev = drv._projector.delivered_sync[-1]
     assert isinstance(ev, Notice)
@@ -198,7 +207,14 @@ def test_announce_tools_annotates_deferred_count():
     # toward the total, and the badge annotates how many of it start deferred.
     role = FakeRole(tools=["Read", "Write", "Bash"], deferred_tools=["WebBrowser", "Agent"])
     control = FakeControl({role.session_id: FakeRuntime(role)})
-    drv = SessionDriver(control, role.session_id, role, port=FakePort(), projector=FakeProjector())
+    drv = SessionDriver(
+        control,
+        role.session_id,
+        role,
+        backend=cli_backend,
+        port=FakePort(),
+        projector=FakeProjector(),
+    )
     drv._announce_tools()
     ev = drv._projector.delivered_sync[-1]
     assert isinstance(ev, Notice)
@@ -209,7 +225,14 @@ def test_announce_tools_no_op_when_no_tools():
     role = FakeRole(tools=[], mcps=[])
     control = FakeControl({role.session_id: FakeRuntime(role)})
     projector = FakeProjector()
-    drv = SessionDriver(control, role.session_id, role, port=FakePort(), projector=projector)
+    drv = SessionDriver(
+        control,
+        role.session_id,
+        role,
+        backend=cli_backend,
+        port=FakePort(),
+        projector=projector,
+    )
     drv._announce_tools()
     assert projector.delivered_sync == []
 
@@ -289,12 +312,10 @@ class RunOncePort:
 
 @pytest.mark.asyncio
 async def test_scheduler_started_and_stopped_across_run(monkeypatch):
-    import mote.product.cli.driver as driver_mod
-
-    monkeypatch.setattr(driver_mod.backend, "role_telemetry", lambda role: None)
-    monkeypatch.setattr(driver_mod.backend, "bind_human_channel", lambda role, ch: None)
-    monkeypatch.setattr(driver_mod.backend, "role_tool_count", lambda role: 0)
-    monkeypatch.setattr(driver_mod.backend, "role_cleanup", lambda role: None)
+    monkeypatch.setattr(cli_backend, "role_telemetry", lambda role: None)
+    monkeypatch.setattr(cli_backend, "bind_human_channel", lambda role, ch: None)
+    monkeypatch.setattr(cli_backend, "role_tool_count", lambda role: 0)
+    monkeypatch.setattr(cli_backend, "role_cleanup", lambda role: None)
 
     role = FakeRole()
     control = FakeControl({role.session_id: FakeRuntime(role)})
@@ -303,6 +324,7 @@ async def test_scheduler_started_and_stopped_across_run(monkeypatch):
         control,
         role.session_id,
         role,
+        backend=cli_backend,
         port=RunOncePort(),
         projector=FakeProjector(),
         scheduler=sched,
@@ -365,9 +387,10 @@ def test_new_agent_without_factory_returns_none():
     assert drv.new_agent("Bob") is None
 
 
-def test_fork_current_without_fork_session_returns_none():
+@pytest.mark.asyncio
+async def test_fork_current_without_fork_session_returns_none():
     drv, _c, _p, _proj = make_driver()  # FakeRole has no fork_session
-    assert drv.fork_current() is None
+    assert await drv.fork_current() is None
 
 
 def test_resume_already_loaded_session_switches():
@@ -385,10 +408,10 @@ def test_resume_already_loaded_session_switches():
 def test_spawn_agent_type_known_adopts_and_returns_id_and_name():
     made = {}
 
-    def factory(*, name="Assistant", session_id=None, agent_type=None):
-        made["agent_type"] = agent_type
-        made["name"] = name
-        return FakeRole(session_id="typed-0001", name=name)
+    def factory(request):
+        made["agent_type"] = request.agent_type
+        made["name"] = request.name
+        return FakeRole(session_id="typed-0001", name=request.name)
 
     drv, control, _p, _proj = make_driver(role_factory=factory)
     sid, name = drv.spawn_agent_type("Coder", "Bob")
@@ -399,8 +422,8 @@ def test_spawn_agent_type_known_adopts_and_returns_id_and_name():
 
 
 def test_spawn_agent_type_defaults_name_to_type():
-    def factory(*, name="Assistant", session_id=None, agent_type=None):
-        return FakeRole(session_id="typed-0002", name=name)
+    def factory(request):
+        return FakeRole(session_id="typed-0002", name=request.name)
 
     drv, _c, _p, _proj = make_driver(role_factory=factory)
     sid, name = drv.spawn_agent_type("Coder", "")
@@ -408,7 +431,8 @@ def test_spawn_agent_type_defaults_name_to_type():
 
 
 def test_spawn_agent_type_unknown_returns_none_message():
-    def factory(*, name="Assistant", session_id=None, agent_type=None):
+    def factory(request):
+        del request
         return None  # unknown/unavailable type
 
     drv, _c, _p, _proj = make_driver(role_factory=factory)
@@ -418,9 +442,7 @@ def test_spawn_agent_type_unknown_returns_none_message():
 
 
 def test_list_agent_types_delegates_to_backend(monkeypatch):
-    import mote.product.cli.driver as driver_mod
-
-    monkeypatch.setattr(driver_mod.backend, "list_agent_types", lambda _catalog: [("Coder", "writes code")])
+    monkeypatch.setattr(cli_backend, "list_agent_types", lambda _catalog: [("Coder", "writes code")])
     drv, _c, _p, _proj = make_driver()
     assert drv.list_agent_types() == [("Coder", "writes code")]
 
@@ -452,8 +474,8 @@ async def test_run_turn_sends_input_and_awaits_quiescence():
 @pytest.mark.asyncio
 async def test_run_turn_attaches_images_as_metadata_and_media_blocks():
     """Prompt-dragged images ride along as ``metadata[IMAGES]`` + a MediaBlock each."""
-    from mote.contracts.constants.messages import IMAGES
-    from mote.product.cli.contracts.view import MediaBlock
+    from mote.contracts.conversation.fields import IMAGES
+    from mote.product.presentation.events import MediaBlock
 
     drv, control, _p, projector = make_driver()
     images = [
@@ -473,8 +495,8 @@ async def test_run_turn_attaches_images_as_metadata_and_media_blocks():
 @pytest.mark.asyncio
 async def test_run_turn_without_images_sets_no_image_metadata():
     """A plain text turn attaches no image metadata and emits no MediaBlock."""
-    from mote.contracts.constants.messages import IMAGES
-    from mote.product.cli.contracts.view import MediaBlock
+    from mote.contracts.conversation.fields import IMAGES
+    from mote.product.presentation.events import MediaBlock
 
     drv, control, _p, projector = make_driver()
     await drv._run_turn("just text")

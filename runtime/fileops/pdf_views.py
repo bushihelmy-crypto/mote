@@ -6,20 +6,14 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from mote.contracts.fileops.errors import PdfProcessingError, ReadCursorError
-from mote.contracts.fileops.models import (
-    BlobRef,
-    FileSnapshot,
-    PdfPageView,
-    PdfView,
-    PdfViewMode,
-    ReadCursorKind,
-    ReadViewStatus,
-)
-from mote.contracts.fileops.serialization import snapshot_from_dict, snapshot_to_dict
-from mote.runtime.fileops.artifact_repository import ArtifactRepository, ArtifactWriteScope
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import snapshot_from_dict, snapshot_to_dict
+from mote.contracts.file.errors import PdfProcessingError, ReadCursorError
+from mote.contracts.file.identity import FileSnapshot
+from mote.contracts.file.views import PdfPageView, PdfView, PdfViewMode, ReadCursorKind, ReadViewStatus
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
 from mote.runtime.fileops.read_cursors import OpenReadCursor, ReadCursorStore
 from mote.runtime.fileops.text_layout import text_layout
 
@@ -225,7 +219,7 @@ class PdfViewService:
         path: str,
         mode: PdfViewMode,
         opened: OpenReadCursor,
-    ) -> tuple[FileSnapshot, BlobRef, int, int, str]:
+    ) -> tuple[FileSnapshot, ContentIdentity, int, int, str]:
         try:
             if opened.kind != self._kind(mode):
                 raise ValueError("cursor PDF mode does not match the request")

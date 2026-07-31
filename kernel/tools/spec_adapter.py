@@ -26,8 +26,7 @@ from typing import Any, Callable, Union
 
 from pydantic import BaseModel
 
-from mote.contracts.introspection.docstrings import parse_section
-from mote.contracts.models.profile import profile_for
+from mote.kernel.tools.docstrings import parse_section
 
 # JSON Schema primitive for each Python type. Mirrors stream_xml.PythonObjectParser.types
 # but maps to JSON Schema's "object" (not the parser's internal "map").
@@ -62,7 +61,7 @@ def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
     return annotation, False
 
 
-def _json_type(annotation: Any) -> dict:
+def _json_type(annotation: Any) -> dict[str, Any]:
     """Map a Python annotation to a JSON Schema type fragment.
 
     Falls back to {"type": "string"} for anything unrecognized — native APIs
@@ -111,7 +110,7 @@ def _parse_arg_descriptions(docstring: str | None) -> dict[str, str]:
     return dict(parse_section(docstring, "Args"))
 
 
-def _hoist_definitions(fragment: dict, definitions: dict[str, dict]) -> None:
+def _hoist_definitions(fragment: dict[str, Any], definitions: dict[str, dict[str, Any]]) -> None:
     """Move nested Pydantic ``$defs`` to the tool-schema root in place."""
     nested = fragment.pop("$defs", {})
     for name, definition in nested.items():
@@ -130,7 +129,7 @@ def _hoist_definitions(fragment: dict, definitions: dict[str, dict]) -> None:
         _hoist_definitions(definition, definitions)
 
 
-def build_json_schema(call_fn: Callable) -> dict:
+def build_json_schema(call_fn: Callable[..., Any]) -> dict[str, Any]:
     """Build a JSON Schema ``object`` for a tool's ``call()`` parameters.
 
     Inspects the signature for parameter names, types, and defaults, and the
@@ -191,7 +190,10 @@ def build_json_schema(call_fn: Callable) -> dict:
 
 
 def to_native_tool_specs(
-    tool_schemas: dict[str, dict], provider: str = "anthropic", model: str | None = None
+    tool_schemas: dict[str, dict],
+    provider: str = "anthropic",
+    *,
+    schema_transformer: Callable[[dict], dict] | None = None,
 ) -> list[dict]:
     """Wrap a {name: schema} mapping into provider-specific native tool specs.
 
@@ -199,12 +201,6 @@ def to_native_tool_specs(
     and a JSON Schema ``input_schema`` (the structured params). Use
     ToolExecutor.native_tool_specs() to obtain a ready mapping; this fn is
     the pure envelope step.
-
-    When ``model`` resolves a :attr:`ModelProfile.json_schema_transformer` (a
-    per-model tool-schema rewrite hook), it is applied to each tool's JSON Schema
-    BEFORE the provider envelope is wrapped — the seam for a model that rejects a
-    schema construct other models accept. ``model=None`` (or a model with no
-    transformer, the common case) → identity, so the wire shape is unchanged.
 
     provider:
       - "anthropic":        {"name", "description", "input_schema": <schema>}
@@ -214,14 +210,13 @@ def to_native_tool_specs(
         Completions' nested ``function`` object.)
     """
     provider = provider.lower()
-    transformer = profile_for(model).json_schema_transformer if model else None
     specs: list[dict] = []
     for schema in tool_schemas.values():
         name = schema["name"]
         description = schema.get("description", "") or ""
         params = schema.get("input_schema") or {"type": "object", "properties": {}}
-        if transformer is not None:
-            params = transformer(params)
+        if schema_transformer is not None:
+            params = schema_transformer(params)
         if provider == "openai_responses":
             specs.append({"type": "function", "name": name, "description": description, "parameters": params})
         elif provider == "openai":

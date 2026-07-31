@@ -1,0 +1,6 @@
+"""Resource limits for the generic Artifact CAS."""
+
+ARTIFACT_HARD_LIMIT_BYTES = 10 * 1_024 * 1_024 * 1_024
+ARTIFACT_MINIMUM_GC_AGE_NS = 24 * 60 * 60 * 1_000_000_000
+
+__all__ = ["ARTIFACT_HARD_LIMIT_BYTES", "ARTIFACT_MINIMUM_GC_AGE_NS"]

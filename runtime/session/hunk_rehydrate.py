@@ -10,7 +10,7 @@ corrupt durable review artifacts fail closed.
 
 from __future__ import annotations
 
-from mote.runtime.fileops.artifact_repository import ArtifactRepository
+from mote.runtime.fileops.mutation import ArtifactRepository
 
 __all__ = ["blob_text"]
 

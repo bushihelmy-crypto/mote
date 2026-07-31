@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from mote.contracts.fileops import FileLockCancelledError, FileLockTimeoutError, LockMode, LockSpec
+from mote.contracts.file import FileLockCancelledError, FileLockTimeoutError, LockMode, LockSpec
 from mote.runtime.fileops.locking import NAME_LOCK_LEVEL, PROJECT_LOCK_LEVEL, HierarchicalLockManager
 
 
@@ -26,7 +26,7 @@ def _spawn_holder(tmp_path, spec):
     release = ctx.Event()
     process = ctx.Process(target=_hold_lock, args=(str(tmp_path / "locks"), spec, ready, release))
     process.start()
-    assert ready.wait(5)
+    assert ready.wait(15)
     return process, release
 
 

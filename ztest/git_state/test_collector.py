@@ -15,7 +15,7 @@ import subprocess
 
 import pytest
 
-from mote.runtime.context.turn_context import GitContextSource, TurnContextBus
+from mote.runtime.context.turn import GitContextSource, TurnContextBus
 from mote.runtime.vcs import collector
 from mote.runtime.vcs.collector import GitState, _parse_status, _read_branch, collect_git_state
 
@@ -144,7 +144,11 @@ async def test_detached_head(tmp_path):
     _git(repo, "commit", "-q", "-m", "c2")
     # Detach onto the first commit.
     head = subprocess.run(
-        ["git", "rev-parse", "HEAD~1"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD~1"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     _git(repo, "checkout", "-q", head)
 

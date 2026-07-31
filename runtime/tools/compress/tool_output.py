@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import uuid
 
-from mote.contracts.schema import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
-from mote.runtime.logging import logger
-from mote.runtime.tools import tool_result_limit
+from mote.contracts.config.tool import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
+from mote.runtime.resources import spill as tool_result_limit
+from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.compress import compress_output
 from mote.runtime.tools.tool_result import ToolResult
 

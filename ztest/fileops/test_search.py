@@ -7,9 +7,9 @@ import os
 
 import pytest
 
-from mote.contracts.fileops import ContentChangedError, SearchCursorError, SearchOutputMode, SearchSkipReason
-from mote.runtime.fileops import FileOperations
+from mote.contracts.file import ContentChangedError, SearchCursorError, SearchOutputMode, SearchSkipReason
 from mote.runtime.fileops import text_sources as text_sources_module
+from mote.ztest.fileops_factory import FileOperations
 
 
 def _operations(tmp_path):
@@ -239,4 +239,7 @@ def test_gitignore_and_path_order_are_candidate_discovery_semantics(tmp_path):
 
     result = operations.search(root=str(project), content="hit")
 
-    assert [os.path.basename(path.display) for path in result.files] == ["a.txt", "z.txt"]
+    assert [os.path.basename(path.display) for path in result.files] == [
+        "a.txt",
+        "z.txt",
+    ]

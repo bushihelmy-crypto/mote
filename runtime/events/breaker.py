@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mote.contracts.events.types import BreakerStateChangeEvent
+from mote.contracts.events.model import BreakerStateChangeEvent
 
 from .context import observe_event_sync
 

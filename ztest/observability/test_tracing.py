@@ -13,13 +13,9 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.events.types import (
-    ModelAttemptFinishedEvent,
-    ModelAttemptStartedEvent,
-    SpanEndEvent,
-    SpanStartEvent,
-)
-from mote.runtime.observability.tracing import TracingSubscriber
+from mote.contracts.events.model import ModelAttemptFinishedEvent, ModelAttemptStartedEvent
+from mote.contracts.events.telemetry import SpanEndEvent, SpanStartEvent
+from mote.runtime.telemetry.observability.tracing import TracingSubscriber
 
 
 def run(coro):

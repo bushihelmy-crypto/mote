@@ -3,27 +3,39 @@
 """Tests the Role's explicit session-fact commit boundary end to end."""
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.runtimes import (
+from mote.contracts.conversation import ResourceMessage, UserMessage
+from mote.contracts.model.routing import RoutingSessionState
+from mote.contracts.runtime import (
     CheckpointFidelity,
     DriverCheckpoint,
     DriverStartResult,
     RuntimeCapabilities,
     RuntimeCheckpoint,
 )
-from mote.contracts.schema import ResourceMessage, UserMessage
 from mote.kernel.output import text_output_contract
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.events.fabric import EventFabricUnavailable
 from mote.runtime.events.telemetry import TelemetryState
-from mote.runtime.interactive.checkpoint_codec import decode_inline_json
+from mote.runtime.interactive.checkpoint_codec import encode_inline_json
 from mote.runtime.models.clients.context import Context
 from mote.runtime.services import EngineServices
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MessageEvent, SessionMetaEvent, TurnContextEvent
+
+_runtime_root: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def _explicit_runtime_paths(tmp_path):
+    global _runtime_root
+    _runtime_root = tmp_path
+    yield
+    _runtime_root = None
 
 
 class _OfflineLLM:
@@ -63,24 +75,53 @@ class _CheckpointCaptureDriver:
 def _offline_context() -> Context:
     from mote.ztest.model_fakes import offline_config
 
-    return Context(
-        config=offline_config(),
-        provider_factory=lambda config: _OfflineLLM(config.model),
-    )
+    return Context(config=offline_config())
 
 
 def _offline_wiring(*, run_lease_coordinator=None, toolsets=()) -> AgentWiring:
+    from mote.product.paths import default_runtime_paths
+    from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway
+
+    assert _runtime_root is not None
+    paths = default_runtime_paths(
+        user_config_root=_runtime_root / "config",
+        workspace_root=_runtime_root,
+    )
     return AgentWiring(
         dependencies=AgentDependencies(
             deps=None,
             output_contract=text_output_contract(),
             toolsets=toolsets,
+            user_config_root=paths.user_config_root,
+            session_workspace_root=paths.session_workspace_root,
+            browser_profiles_root=paths.browser_profiles_root,
+            sandbox_ca_root=paths.sandbox_ca_root,
+            secrets_root=paths.secrets_root,
+            oauth_root=paths.oauth_root,
         ),
         services=EngineServices(
             context=_offline_context(),
             run_lease_coordinator=run_lease_coordinator,
+            application_composition=FakeApplicationComposition(FakeModelGateway(_OfflineLLM("test"))),
         ),
     )
+
+
+def _offline_role(name: str, *, role_type: type[Role] = Role) -> Role:
+    from mote.ztest.model_fakes import bind_fake_runtime
+
+    role = role_type(name=name, wiring=_offline_wiring())
+    bind_fake_runtime(role, _OfflineLLM("test"))
+    return role
+
+
+def _replay_result(**kwargs) -> SimpleNamespace:
+    kwargs.setdefault("routing_state", RoutingSessionState())
+    return SimpleNamespace(**kwargs)
+
+
+def _current_meta(role: Role) -> dict[str, object]:
+    return {"role_class": role.role_type_id, "toolset_manifest": []}
 
 
 async def _initialize_session_log(role: Role) -> None:
@@ -88,7 +129,8 @@ async def _initialize_session_log(role: Role) -> None:
     await role.session_log.append(
         SessionMetaEvent(
             session_id=role.session_id,
-            role_class=f"{type(role).__module__}.{type(role).__qualname__}",
+            role_class=role.role_type_id,
+            toolset_manifest=(),
         )
     )
 
@@ -100,9 +142,13 @@ async def _add_message(role: Role, message) -> None:
 @pytest.fixture
 def role_in_tmp(tmp_path, monkeypatch):
     # Redirect all session logs to the temp dir.
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
     monkeypatch.setattr("mote.runtime.agent.role.bind_session_logfile", lambda *_args: None)
-    return Role(name="Logger", wiring=_offline_wiring())
+    from mote.ztest.model_fakes import bind_fake_runtime
+
+    role = Role(name="Logger", wiring=_offline_wiring())
+    bind_fake_runtime(role, _OfflineLLM("test"))
+    return role
 
 
 @pytest.mark.asyncio
@@ -135,7 +181,7 @@ async def test_emit_turn_end_requires_running_event_fabric(role_in_tmp):
 def test_resume_session_missing_log_returns_false(tmp_path, monkeypatch):
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
     role = Role(name="NoLog", wiring=_offline_wiring())
     assert role.resume_session() is False
     assert role.state.recovered is False
@@ -150,12 +196,9 @@ def test_resume_stages_only_unfinished_output_state(role_in_tmp, monkeypatch):
     }
     monkeypatch.setattr(
         "mote.runtime.agent.session_manager.replay",
-        lambda _log: SimpleNamespace(
-            meta={},
+        lambda _log: _replay_result(
+            meta=_current_meta(role_in_tmp),
             model_context_messages=[],
-            terminal_state=None,
-            kernel_state=None,
-            browser_state=None,
             output_state=unfinished,
         ),
     )
@@ -167,82 +210,30 @@ def test_resume_stages_only_unfinished_output_state(role_in_tmp, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("kind", "field", "codec", "payload"),
-    [
-        (
-            "terminal",
-            "terminal_state",
-            "terminal-state+json@1",
-            {"cwd": "/shell", "env": {}, "unset": []},
-        ),
-        (
-            "jupyter",
-            "kernel_state",
-            "jupyter-state+json@1",
-            {"cwd": "/kernel", "env": {}, "unset": []},
-        ),
-        (
-            "browser",
-            "browser_state",
-            "browser-state+json@1",
-            {"urls": ["about:blank"], "active": 0},
-        ),
-    ],
-)
-async def test_resume_stages_domain_state_as_runtime_checkpoint(
-    role_in_tmp,
-    monkeypatch,
-    kind,
-    field,
-    codec,
-    payload,
-):
-    replayed = {
-        "meta": {},
-        "model_context_messages": [],
-        "terminal_state": None,
-        "kernel_state": None,
-        "browser_state": None,
-        "output_state": None,
-        "output_states": {},
-    }
-    replayed[field] = payload
-    monkeypatch.setattr(
-        "mote.runtime.agent.session_manager.replay",
-        lambda _log: SimpleNamespace(**replayed),
-    )
-    monkeypatch.setattr("mote.runtime.agent.session_manager.SessionLog.exists", lambda _self: True)
-
-    assert role_in_tmp.resume_session() is True
-    driver = _CheckpointCaptureDriver(kind)
-    await role_in_tmp.runtime_host.ensure(driver)
-
-    assert driver.started_with is not None
-    assert decode_inline_json(driver.started_with, codec=codec) == payload
-
-
-@pytest.mark.asyncio
 async def test_resume_prefers_managed_runtime_checkpoint(role_in_tmp, monkeypatch):
+    driver_checkpoint = encode_inline_json(
+        {"cwd": "/managed", "env": {}, "unset": []},
+        codec="terminal-state+json@1",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
     checkpoint = RuntimeCheckpoint(
         runtime_id="terminal-runtime",
         kind="terminal",
         epoch=3,
         revision=9,
-        codec="terminal-state+json@1",
-        schema_version=1,
-        payload_ref="memory:managed",
+        codec=driver_checkpoint.codec,
+        schema_version=driver_checkpoint.schema_version,
+        payload_ref=driver_checkpoint.payload_ref,
+        digest=driver_checkpoint.digest,
+        sensitivity=driver_checkpoint.sensitivity,
         fidelity=CheckpointFidelity.LOGICAL,
     )
     monkeypatch.setattr(
         "mote.runtime.agent.session_manager.replay",
-        lambda _log: SimpleNamespace(
-            meta={},
+        lambda _log: _replay_result(
+            meta=_current_meta(role_in_tmp),
             model_context_messages=[],
             runtime_checkpoints={"terminal": checkpoint},
-            terminal_state={"cwd": "/legacy", "env": {}, "unset": []},
-            kernel_state=None,
-            browser_state=None,
             output_state=None,
             output_states={},
         ),
@@ -268,12 +259,9 @@ def test_resume_never_stages_graph_output_as_agent_output(role_in_tmp, monkeypat
     }
     monkeypatch.setattr(
         "mote.runtime.agent.session_manager.replay",
-        lambda _log: SimpleNamespace(
-            meta={},
+        lambda _log: _replay_result(
+            meta=_current_meta(role_in_tmp),
             model_context_messages=[],
-            terminal_state=None,
-            kernel_state=None,
-            browser_state=None,
             output_state=graph_state,
             output_states={"graph-1": graph_state},
         ),
@@ -287,7 +275,7 @@ def test_resume_never_stages_graph_output_as_agent_output(role_in_tmp, monkeypat
 @pytest.mark.asyncio
 async def test_committed_graph_output_resumes_by_stable_run_id(role_in_tmp):
     from mote.kernel.output import JsonSchemaOutputDecoder
-    from mote.orchestration.tasks.bggraph.spec import GraphOutputContractSpec
+    from mote.product.workflows.run_graph.spec import GraphOutputContractSpec
 
     schema = {"type": "integer"}
     fingerprint = JsonSchemaOutputDecoder(schema).schema.fingerprint
@@ -365,17 +353,17 @@ async def test_role_accepts_replaceable_lease_coordinator(tmp_path):
 async def test_resume_session_rebuilds_history(tmp_path, monkeypatch):
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
 
     # Session A writes history through the explicit durable commit boundary.
-    role_a = Role(name="A", wiring=_offline_wiring())
+    role_a = _offline_role("A")
     await _initialize_session_log(role_a)
     sid = role_a.session_id
     await _add_message(role_a, UserMessage(content="first"))
     await _add_message(role_a, UserMessage(content="second"))
 
     # Session B is a fresh role pinned to the same session_id; resume rebuilds.
-    role_b = Role(name="B", wiring=_offline_wiring())
+    role_b = _offline_role("B")
     role_b.state.session_id = sid
     assert role_b.resume_session() is True
     assert role_b.state.recovered is True
@@ -388,11 +376,11 @@ async def test_resume_refuses_mismatched_role_class(tmp_path, monkeypatch):
     from mote.runtime.errors import SessionResumeIdentityError
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
     monkeypatch.setattr("mote.runtime.agent.role.bind_session_logfile", lambda *_args: None)
 
     # Session A is created (and thus records role_class) by the base Role.
-    role_a = Role(name="A", wiring=_offline_wiring())
+    role_a = _offline_role("A")
     await _initialize_session_log(role_a)
     sid = role_a.session_id
     await _add_message(role_a, UserMessage(content="first"))
@@ -400,7 +388,7 @@ async def test_resume_refuses_mismatched_role_class(tmp_path, monkeypatch):
     class OtherRole(Role):
         pass
 
-    role_b = OtherRole(name="B", wiring=_offline_wiring())
+    role_b = _offline_role("B", role_type=OtherRole)
     role_b.state.session_id = sid
     with pytest.raises(SessionResumeIdentityError):
         role_b.resume_session()
@@ -410,7 +398,7 @@ def test_resume_allows_absent_recorded_role_class(tmp_path, monkeypatch):
     """A log with no recorded role_class carries no identity to check → allowed."""
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
     role = Role(name="Any", wiring=_offline_wiring())
     mgr = role._session_manager
     # Absent / empty recorded identity never raises (backward compatible).
@@ -421,8 +409,8 @@ def test_resume_allows_absent_recorded_role_class(tmp_path, monkeypatch):
 
 
 def test_resume_refuses_mismatched_toolset_manifest() -> None:
-    from mote.kernel.tools.toolset import NativeToolset
     from mote.runtime.errors import SessionResumeIdentityError
+    from mote.runtime.tools.provider import NativeToolset
 
     recorded = NativeToolset("workspace", (), version="1")
     current = NativeToolset("workspace", (), version="2")
@@ -433,7 +421,7 @@ def test_resume_refuses_mismatched_toolset_manifest() -> None:
 
 
 def test_resume_accepts_matching_and_legacy_toolset_manifests() -> None:
-    from mote.kernel.tools.toolset import NativeToolset
+    from mote.runtime.tools.provider import NativeToolset
 
     tools = NativeToolset("workspace", (), version="2")
     role = Role(name="Any", wiring=_offline_wiring(toolsets=(tools,)))
@@ -449,14 +437,14 @@ def test_resume_enforces_persisted_toolset_manifest(
     current_version,
     succeeds,
 ) -> None:
-    from mote.kernel.tools.toolset import NativeToolset
     from mote.runtime.errors import SessionResumeIdentityError
     from mote.runtime.session.log import SessionLog
+    from mote.runtime.tools.provider import NativeToolset
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
     recorded = NativeToolset("workspace", (), version="1")
     session_id = "durable-toolsets"
-    SessionLog(session_id, base_dir=str(tmp_path)).commit_offline(
+    SessionLog(session_id, base_dir=str(tmp_path / ".agent_sessions")).commit_offline(
         SessionMetaEvent(
             session_id=session_id,
             toolset_manifest=(recorded.identity,),
@@ -477,14 +465,14 @@ def test_resume_enforces_persisted_toolset_manifest(
 async def test_resume_does_not_re_record_replayed_history(tmp_path, monkeypatch):
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
 
-    role_a = Role(name="A", wiring=_offline_wiring())
+    role_a = _offline_role("A")
     await _initialize_session_log(role_a)
     sid = role_a.session_id
     await _add_message(role_a, UserMessage(content="one"))
 
-    role_b = Role(name="B", wiring=_offline_wiring())
+    role_b = _offline_role("B")
     role_b.state.session_id = sid
     await role_b._components.start_event_fabric()
     role_b.resume_session()
@@ -496,7 +484,7 @@ async def test_resume_does_not_re_record_replayed_history(tmp_path, monkeypatch)
 
     messages = [
         event.message
-        for envelope in SessionLog(sid, base_dir=str(tmp_path)).iter_events()
+        for envelope in SessionLog(sid, base_dir=str(tmp_path / ".agent_sessions")).iter_events()
         if isinstance((event := decode_session_event(envelope)), MessageEvent)
     ]
     assert [message.content for message in messages] == ["one", "two"]
@@ -506,11 +494,11 @@ async def test_resume_does_not_re_record_replayed_history(tmp_path, monkeypatch)
 async def test_resume_rebuilds_resource_registry(tmp_path, monkeypatch):
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
 
     # Session A records a sticky resource message (carries its id/kind/body in
     # metadata — the subclass identity is lost on dump/load, the metadata isn't).
-    role_a = Role(name="A", wiring=_offline_wiring())
+    role_a = _offline_role("A")
     await _initialize_session_log(role_a)
     sid = role_a.session_id
     await _add_message(
@@ -519,7 +507,7 @@ async def test_resume_rebuilds_resource_registry(tmp_path, monkeypatch):
     )
 
     # Resume as a fresh role -> registry re-seeded from the replayed metadata.
-    role_b = Role(name="B", wiring=_offline_wiring())
+    role_b = _offline_role("B")
     role_b.state.session_id = sid
     assert role_b.resume_session() is True
     registry = role_b.resource_registry
@@ -531,16 +519,16 @@ async def test_resume_rebuilds_resource_registry(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resume_rebuilds_task_result_pointer_with_kind(tmp_path, monkeypatch):
-    from mote.contracts.constants.messages import RESOURCE_KIND
+    from mote.contracts.conversation.fields import RESOURCE_KIND
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
 
     # A push-once bg-task pointer rides the SAME sticky-resource seam: it is
     # recorded as a task_result ResourceMessage, so resume must rebuild it under
     # kind="task_result" (not the "skill" default) so per-kind budgeting / round
     # reaping continue to apply after a restart.
-    role_a = Role(name="A", wiring=_offline_wiring())
+    role_a = _offline_role("A")
     await _initialize_session_log(role_a)
     sid = role_a.session_id
     await _add_message(
@@ -552,7 +540,7 @@ async def test_resume_rebuilds_task_result_pointer_with_kind(tmp_path, monkeypat
         ),
     )
 
-    role_b = Role(name="B", wiring=_offline_wiring())
+    role_b = _offline_role("B")
     role_b.state.session_id = sid
     assert role_b.resume_session() is True
     registry = role_b.resource_registry
@@ -567,14 +555,14 @@ async def test_resume_rebuilds_task_result_pointer_with_kind(tmp_path, monkeypat
 async def test_resume_skips_non_resource_messages(tmp_path, monkeypatch):
     from mote.runtime.models.clients.context import Context
 
-    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
 
-    role_a = Role(name="A", wiring=_offline_wiring())
+    role_a = _offline_role("A")
     await _initialize_session_log(role_a)
     sid = role_a.session_id
     await _add_message(role_a, UserMessage(content="plain history, no resource"))
 
-    role_b = Role(name="B", wiring=_offline_wiring())
+    role_b = _offline_role("B")
     role_b.state.session_id = sid
     role_b.resume_session()
     # No resource markers in history -> registry stays empty.

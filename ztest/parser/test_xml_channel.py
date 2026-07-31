@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Unit tests for :class:`mote.kernel.parser.xml_channel.XmlCommandChannel`.
+"""Unit tests for :class:`mote.kernel.commands.xml.channel.XmlCommandChannel`.
 
 ``iter_commands`` runs the *real* XML lexer (``parse_commands2`` ->
 ``PythonObjectParser``), so the inputs here are genuine XML command blocks in
@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.constants.messages import IMAGES, PDFS
-from mote.kernel.parser.channel import CommandChannel
-from mote.kernel.parser.xml_channel import XmlCommandChannel
-from mote.kernel.prompt.output import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
+from mote.contracts.conversation.fields import IMAGES, PDFS
+from mote.kernel.commands.channel import CommandChannel
+from mote.kernel.commands.prompts import XML_COMMAND_GUIDE, XML_TOOL_USAGE_GUIDE
+from mote.kernel.commands.xml.channel import XmlCommandChannel
+from mote.runtime.models.media_projection import build_media_materializer
 from mote.runtime.tools.tool_result import ToolMedia
 from mote.ztest.artifact_fakes import ArtifactTestResolver, artifact_media
 
-from .conftest import FakeMemory, FakeThinkEngine, collect, executed_command
+from .conftest import FakeMemory, FakeThinkEngine, apply_projection, collect, executed_command
 
 
 def xml_command(name: str, **args: str) -> str:
@@ -53,7 +54,7 @@ class TestContract:
         assert "<end></end>" in guide
 
     def test_prompt_vars_covers_required_keys(self):
-        from mote.kernel.parser.channel import PROMPT_VAR_KEYS
+        from mote.kernel.commands.channel import PROMPT_VAR_KEYS
 
         assert set(XmlCommandChannel().prompt_vars()) >= set(PROMPT_VAR_KEYS)
 
@@ -74,25 +75,25 @@ class TestContract:
 
 class TestJoinCommandOutputs:
     def test_joins_executed_outputs_with_blank_lines(self):
-        from mote.kernel.parser.channel import join_command_outputs
+        from mote.kernel.commands.channel import join_command_outputs
 
-        executed = [{"output": "a"}, {"output": "b"}]
+        executed = [executed_command(output="a"), executed_command(output="b")]
         assert join_command_outputs(executed) == "a\n\nb"
 
     def test_empty_yields_no_commands_notice(self):
-        from mote.kernel.parser.channel import NO_VALID_COMMANDS, join_command_outputs
+        from mote.kernel.commands.channel import NO_VALID_COMMANDS, join_command_outputs
 
         assert join_command_outputs([]) == NO_VALID_COMMANDS
 
     def test_lower_renders_ctl_finish_as_end_marker(self):
         # Under XML, the CTL_FINISH symbol materializes the <end></end> mechanic.
-        from mote.kernel.prompt.refs import CTL_FINISH
+        from mote.kernel.commands.symbols import CTL_FINISH
 
         out = XmlCommandChannel().lower(f"Only {CTL_FINISH} when done.")
         assert "<end></end>" in out
 
     def test_lower_renders_capability_symbols_as_dotted_names(self):
-        from mote.kernel.prompt.refs import CAP_READ
+        from mote.kernel.commands.symbols import CAP_READ
 
         out = XmlCommandChannel().lower(f"Use {CAP_READ} first.")
         assert "Editor.read" in out
@@ -168,8 +169,8 @@ class TestIterCommands:
         rsp = xml_command("Read", path="a.py")
         engine = FakeThinkEngine(content=rsp, done=False)
         await collect(XmlCommandChannel(), engine, {"Read"})
-        assert engine.join_calls == 1
-        assert engine.done is True
+        assert engine.join_calls == 0
+        assert engine.done is False
 
     @pytest.mark.asyncio
     async def test_does_not_join_when_done(self):
@@ -186,7 +187,7 @@ class TestRecordTurn:
             executed_command(name="Read", output="out-1"),
             executed_command(name="Glob", output="out-2"),
         ]
-        await XmlCommandChannel().record_turn(memory, "<Read>...</Read>", executed)
+        await apply_projection(memory, XmlCommandChannel().project_turn("<Read>...</Read>", executed))
         # XML records exactly two messages: assistant text + one merged user msg.
         assert len(memory.messages) == 2
         assert memory.messages[0].content == "<Read>...</Read>"
@@ -195,20 +196,20 @@ class TestRecordTurn:
     @pytest.mark.asyncio
     async def test_single_output_not_joined(self):
         memory = FakeMemory()
-        await XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="solo")])
+        await apply_projection(memory, XmlCommandChannel().project_turn("rsp", [executed_command(output="solo")]))
         assert memory.messages[1].content == "solo"
 
     @pytest.mark.asyncio
     async def test_no_executed_records_placeholder_user_message(self):
         memory = FakeMemory()
-        await XmlCommandChannel().record_turn(memory, "rsp", [])
+        await apply_projection(memory, XmlCommandChannel().project_turn("rsp", []))
         assert len(memory.messages) == 2
         assert "No valid commands found" in memory.messages[1].content
 
     @pytest.mark.asyncio
     async def test_assistant_records_raw_command_rsp(self):
         memory = FakeMemory()
-        await XmlCommandChannel().record_turn(memory, "the raw text", [executed_command(output="x")])
+        await apply_projection(memory, XmlCommandChannel().project_turn("the raw text", [executed_command(output="x")]))
         assert memory.messages[0].content == "the raw text"
 
 
@@ -225,7 +226,8 @@ class TestRecordTurnMedia:
                 ],
             )
         ]
-        await XmlCommandChannel(artifact_resolver=ArtifactTestResolver()).record_turn(memory, "rsp", executed)
+        channel = XmlCommandChannel(media_materializer=build_media_materializer(ArtifactTestResolver()))
+        await apply_projection(memory, channel.project_turn("rsp", executed))
         # assistant + merged-outputs + media.
         assert len(memory.messages) == 3
         media = memory.messages[-1]
@@ -235,7 +237,7 @@ class TestRecordTurnMedia:
     @pytest.mark.asyncio
     async def test_no_media_no_extra_message(self):
         memory = FakeMemory()
-        await XmlCommandChannel().record_turn(memory, "rsp", [executed_command(output="x")])
+        await apply_projection(memory, XmlCommandChannel().project_turn("rsp", [executed_command(output="x")]))
         assert len(memory.messages) == 2
 
 
@@ -243,13 +245,13 @@ class TestTerminalDefault:
     @pytest.mark.asyncio
     async def test_xml_text_is_not_a_final_candidate(self):
         # Plain XML response text is not completion without the protocol marker.
-        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content="x"))
+        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content="x").result)
         assert not turn.final_candidates
         assert turn.actions[0].kind == "text"
 
     @pytest.mark.asyncio
     async def test_end_marker_becomes_semantic_final_candidate(self):
-        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content="final answer\n<end></end>"))
+        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content="final answer\n<end></end>").result)
 
         assert len(turn.final_candidates) == 1
         assert turn.final_candidates[0].raw == "final answer"
@@ -258,7 +260,7 @@ class TestTerminalDefault:
 
     @pytest.mark.asyncio
     async def test_xml_command_is_normalized_without_channel_tool_filtering(self):
-        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content=xml_command("Read", path="a.py")))
+        turn = await XmlCommandChannel().model_turn(FakeThinkEngine(content=xml_command("Read", path="a.py")).result)
 
         calls = [action for action in turn.actions if action.kind == "tool_call"]
         assert len(calls) == 1
@@ -268,7 +270,7 @@ class TestTerminalDefault:
     @pytest.mark.asyncio
     async def test_end_marker_with_tool_call_is_preserved_for_policy_rejection(self):
         turn = await XmlCommandChannel().model_turn(
-            FakeThinkEngine(content=xml_command("Read", path="a.py") + "\n<end></end>")
+            FakeThinkEngine(content=xml_command("Read", path="a.py") + "\n<end></end>").result
         )
 
         assert len(turn.final_candidates) == 1
@@ -276,9 +278,9 @@ class TestTerminalDefault:
 
     def test_turn_signature_is_response_text(self):
         engine = FakeThinkEngine(content="the response")
-        assert XmlCommandChannel().turn_signature(engine) == "the response"
+        assert XmlCommandChannel().turn_signature(engine.result) == "the response"
 
     def test_turn_signature_empty_when_no_content(self):
         engine = FakeThinkEngine(content="")
         engine.result.content = None
-        assert XmlCommandChannel().turn_signature(engine) == ""
+        assert XmlCommandChannel().turn_signature(engine.result) == ""

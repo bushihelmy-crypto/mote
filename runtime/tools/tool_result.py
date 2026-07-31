@@ -5,51 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mote.contracts.artifacts import ArtifactRef
-from mote.contracts.tools.constants import ERROR_PREFIX  # noqa: F401 (re-exported here)
-
-# ToolError lives in the global exception system; re-exported here so tool code
-# can ``from mote.runtime.tools.tool_result import ToolError`` and raise it.
-from mote.runtime.errors import ErrorReport, ToolError  # noqa: F401 (re-exported here)
-
-
-@dataclass
-class ToolMedia:
-    """A media artifact a tool produced (image / pdf), as a *structured fact*.
-
-    The single authoritative record of one media product: the producer stamps
-    it in one place with ``kind`` + opaque durable ``artifact`` + ``ref`` +
-    ``mime``. Carried on ``ToolCallFinishedEvent`` so
-    the view layer folds it into a media block without sniffing the output text
-    or reverse-engineering a path from the tool input.
-    ``ref`` is optional source provenance such as a local path; it is never the
-    byte source. Model and presentation boundaries resolve ``artifact`` under
-    an explicit policy.
-    """
-
-    artifact: ArtifactRef
-    kind: str = "image"  # image | pdf
-    ref: str = ""  # optional source provenance; never a delivery locator
-    mime: Optional[str] = None
-
-
-@dataclass
-class FileChange:
-    """A single-file modification a tool made, as a *structured fact*.
-
-    Carried on ``ToolCallFinishedEvent`` so the view layer can render the change
-    without sniffing the output text or reverse-engineering a diff. The fact is
-    the pair of full contents (``old``/``new``) — a diff is only one *display*
-    of it. A rich host can drive an interactive side-by-side review from
-    old/new; a text host degrades to a synthesized coloured unified diff. For a
-    creation ``old`` is ``""``; for a deletion ``new`` is ``""``.
-    """
-
-    path: str = ""  # absolute path of the changed file
-    old: str = ""  # full content before the change ("" when created)
-    new: str = ""  # full content after the change ("" when deleted)
-    transaction_id: str = ""
-    post_digest: str = ""
+from mote.contracts.artifact import ArtifactRef
+from mote.contracts.tool.result import FileChange, ToolMedia
+from mote.runtime.errors import ErrorReport
 
 
 @dataclass
@@ -99,7 +57,7 @@ class ToolResult:
             derived from, set by *reconstructable* read-only tools (Read stamps
             the file it read). The executor/channel carry it verbatim onto the
             tool_result message's metadata (``TOOL_RESULT_RESOURCE_PATH``), where
-            :class:`~mote.runtime.context.visibility.ContextVisibility` uses it to answer
+            :class:`~mote.runtime.context.history.visibility.ContextVisibility` uses it to answer
             "is this file's last read still present in context?". ``None`` for
             results not tied to a re-readable resource. Pure plumbing here, like
             ``retention``.

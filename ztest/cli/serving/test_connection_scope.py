@@ -23,11 +23,11 @@ from typing import Any, List, Optional
 
 import pytest
 
-from mote.contracts.events.types import MESSAGE_APPENDED
-from mote.product.cli.contracts.base import BaseConsumer
-from mote.product.cli.contracts.view import Capabilities, MessageBlockCompleted
-from mote.product.cli.serving.connection_scope import ConnectionScope, _format_turn_error
-from mote.product.cli.serving.session_registry import ResidentSession
+from mote.contracts.events.conversation import MESSAGE_APPENDED
+from mote.product.presentation.consumer import BaseConsumer
+from mote.product.presentation.events import Capabilities, MessageBlockCompleted
+from mote.product.session_hosting.connection import ConnectionScope, _format_turn_error
+from mote.product.session_hosting.registry import ResidentSession
 
 
 # --------------------------------------------------------------------------
@@ -211,7 +211,7 @@ async def test_run_turn_polls_until_quiescent():
 
 @pytest.mark.asyncio
 async def test_run_turn_errored_surfaces_error_raised():
-    from mote.product.cli.contracts.view import ErrorRaised
+    from mote.product.presentation.events import ErrorRaised
 
     session = make_session("s1", last_error=RuntimeError("boom"))
     consumer = RecordingConsumer()

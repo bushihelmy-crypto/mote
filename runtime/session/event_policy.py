@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from typing import TypeAlias
 
-from mote.contracts.events.types import (
+from mote.contracts.events.conversation import (
     ContextCompactedEvent,
     HistoryEditedEvent,
     MessageAppendedEvent,
-    ModelCallFinishedEvent,
+    PromptRejectedEvent,
+)
+from mote.contracts.events.model import ModelCallFinishedEvent, RoutingDecisionEvent
+from mote.contracts.events.output import (
     OutputAcceptedEvent,
     OutputCandidateReceivedEvent,
     OutputCommitStartedEvent,
@@ -16,10 +19,8 @@ from mote.contracts.events.types import (
     OutputPublicationQueuedEvent,
     OutputPublishedEvent,
     OutputValidationRejectedEvent,
-    PromptRejectedEvent,
-    RoutingDecisionEvent,
-    TurnEndEvent,
 )
+from mote.contracts.events.session import TurnEndEvent
 
 EventType: TypeAlias = type[object]
 

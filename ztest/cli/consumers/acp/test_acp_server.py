@@ -25,10 +25,10 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from mote.contracts.events.types import MESSAGE_APPENDED
-from mote.product.cli.consumers.acp import server as srv
-from mote.product.cli.consumers.acp.server import AcpServer
-from mote.product.cli.serving import SessionRegistry
+from mote.contracts.events.conversation import MESSAGE_APPENDED
+from mote.product.interfaces.acp import server as srv
+from mote.product.interfaces.acp.server import AcpServer
+from mote.product.session_hosting import SessionRegistry
 from mote.ztest.telemetry import InlineTelemetry
 
 
@@ -108,23 +108,14 @@ def make_factory():
 @pytest.fixture
 def patched_backend(monkeypatch):
     """Patch the backend seam at every module the serving/server layer imports."""
-    from mote.product.cli.serving import connection_scope as cs
-    from mote.product.cli.serving import session_registry as sr
+    from mote.product.session_hosting import registry as sr
 
     def build_control(role: FakeRole):
         return EmittingControl(role), SimpleNamespace(role=role)
 
-    monkeypatch.setattr(sr.backend, "build_control", build_control)
-    monkeypatch.setattr(sr.backend, "resume_role", lambda role: False)
-    monkeypatch.setattr(sr.backend, "role_session_id", lambda role: role.session_id)
-    monkeypatch.setattr(sr.backend, "role_cleanup", lambda role: getattr(role, "cleanup", None))
-    monkeypatch.setattr(cs.backend, "role_telemetry", lambda role: role.telemetry)
-    monkeypatch.setattr(cs.backend, "bind_human_channel", lambda role, ch: setattr(role.state, "env", ch))
-    monkeypatch.setattr(
-        srv.backend, "turn_message", lambda text, image_b64s=None: SimpleNamespace(content=text, id="m-1")
-    )
-    # fork_role → a fresh independent role of the same class
-    monkeypatch.setattr(srv.backend, "fork_role", lambda role: FakeRole(session_id=None, name=role.role_schema.name))
+    monkeypatch.setattr(sr, "_build_control", build_control)
+    monkeypatch.setattr(sr, "_resume_role", lambda role: False)
+    monkeypatch.setattr(sr, "_role_cleanup", lambda role: getattr(role, "cleanup", None))
 
 
 # --------------------------------------------------------------------------
@@ -330,7 +321,10 @@ async def test_fork_branches_a_new_session_id(patched_backend):
 @pytest.mark.asyncio
 async def test_fork_degrades_to_fresh_when_engine_cannot_fork(patched_backend, monkeypatch):
     # fork_role returning None → the server degrades to a plain new session.
-    monkeypatch.setattr(srv.backend, "fork_role", lambda role: None)
+    async def no_fork(role):
+        return None
+
+    monkeypatch.setattr(srv, "_fork_role", no_fork)
     client, to_server, from_server = _fresh_client()
     registry = SessionRegistry(make_factory(), name="Assistant")
     server = AcpServer(registry, name="Assistant")
@@ -370,7 +364,7 @@ async def test_unknown_method_is_method_not_found(patched_backend):
 async def test_cancel_interrupts_active_turn(patched_backend):
     # A control that never becomes quiescent until interrupted, so we can cancel
     # mid-turn and observe the prompt resolve.
-    from mote.product.cli.serving import session_registry as sr
+    from mote.product.session_hosting import registry as sr
 
     captured: List[Any] = []
 
@@ -390,7 +384,7 @@ async def test_cancel_interrupts_active_turn(patched_backend):
     import pytest as _pt
 
     mp = _pt.MonkeyPatch()
-    mp.setattr(sr.backend, "build_control", build_control)
+    mp.setattr(sr, "_build_control", build_control)
     try:
         client, to_server, from_server = _fresh_client()
         registry = SessionRegistry(make_factory(), name="Assistant")

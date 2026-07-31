@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from mote.contracts.authorization import PermissionDecision
 from mote.contracts.interaction import AskUserQuestionAnswers, AskUserQuestionInput, AskUserQuestionItem
-from mote.contracts.permissions import PermissionDecision
+from mote.runtime.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import AskUser as AskUserCap
 from mote.runtime.tools.capability_types import AskUserQuestion as AskUserQuestionCap
 from mote.runtime.tools.capability_types import ReplyToUser as ReplyToUserCap
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the raise site).

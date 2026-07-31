@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from mote.contracts.tools import ToolsetProtocolError
-from mote.kernel.tools.toolset import NativeToolset, XmlToolset, validate_toolset_protocols
+from mote.contracts.tool import ToolsetProtocolError
+from mote.runtime.tools.provider import NativeToolset, XmlToolset, validate_toolset_protocols
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 

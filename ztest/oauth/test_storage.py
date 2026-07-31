@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import stat
 
-from mote.contracts.config.oauth import StoreBackend
+from mote.contracts.config.model.oauth import StoreBackend
 from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.models.auth.oauth.storage import get_store
 from mote.runtime.models.auth.oauth.storage.fallback_store import FallbackCredentialStore
@@ -58,14 +58,14 @@ def test_file_mtime_observable(tmp_path):
 
 
 def test_get_store_file_backend(tmp_path):
-    store = get_store("p", StoreBackend.FILE)
+    store = get_store("p", StoreBackend.FILE, base_dir=tmp_path)
     assert isinstance(store, FileCredentialStore)
 
 
 def test_fallback_degrades_to_file(tmp_path):
     # Simulate an unavailable keyring so the fallback uses the file store, and
     # point the file backend at tmp_path so the round-trip stays hermetic.
-    store = FallbackCredentialStore("provfb")
+    store = FallbackCredentialStore("provfb", tmp_path)
     store._keyring = None
     store._file = FileCredentialStore("provfb", base_dir=tmp_path)
 

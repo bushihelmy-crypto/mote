@@ -4,9 +4,7 @@ Several subsystems need the same bookkeeping shape: an append-only log of small
 records, each keyed by a stable id, written durably (fsync) *before* the thing
 it records happens, and folded on read to the latest record per key so a fresh
 instance — e.g. one rebuilt by a resume path in a new process — sees the
-pre-crash state. The :class:`~mote.runtime.tools.effect_ledger.EffectLedger`
-(EXTERNAL tool-effect idempotency) and the session hunk ledger (change
-attribution) are both exactly this.
+pre-crash state. Run-step and file-operation journals use this primitive.
 
 This base owns the mechanics — append / fold / rewrite (bounded growth) /
 best-effort durability — and stays storage-agnostic: it is handed an already
@@ -27,8 +25,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Generic, Iterable, Optional, Protocol, TypeVar, runtime_checkable
 
-from mote.runtime.disk import disk_io
-from mote.runtime.logging import logger
+from mote.runtime.persistence import disk_io
+from mote.runtime.telemetry.logging import logger
 
 
 @runtime_checkable

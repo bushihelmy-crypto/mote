@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.runtime.context.skills.skill_pool.SkillPool."""
+"""Tests for product SkillPool."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from mote.runtime.context.skills.skill_pool import SkillPool
+from mote.product.skills.skill_pool import SkillPool
 
 from .conftest import write_skill
 
@@ -202,7 +202,12 @@ class TestAuditGate:
         assert pool.get_skill_count() == 1
 
     def test_clean_body_loads(self, builtin_dir):
-        write_skill(builtin_dir, "clean", description="d", instructions="Just read the file and summarize.")
+        write_skill(
+            builtin_dir,
+            "clean",
+            description="d",
+            instructions="Just read the file and summarize.",
+        )
         pool = SkillPool(builtin_dir=builtin_dir)
         pool.load_by_names(["clean"])
         assert pool.get_skill_count() == 1
@@ -226,8 +231,8 @@ class TestGetters:
 def test_default_builtin_dir_is_package_dir():
     # No arg -> uses the packaged skills directory.
     pool = SkillPool()
-    assert pool.builtin_dir == Path(__file__).parents[2] / "context" / "skills" / "yamls"
-    assert pool.source_dirs == [Path(__file__).parents[2] / "context" / "skills" / "yamls"]
+    assert pool.builtin_dir == Path(__file__).parents[2] / "product" / "skills" / "yamls"
+    assert pool.source_dirs == [Path(__file__).parents[2] / "product" / "skills" / "yamls"]
 
 
 class TestLoadAll:

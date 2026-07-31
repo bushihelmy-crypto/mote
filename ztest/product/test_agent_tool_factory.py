@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.spawn import SpawnContext
+from mote.contracts.agent import SpawnContext
 from mote.product.toolsets.builtin.agent_tool import Agent
 from mote.runtime.agent.control import set_control
 
@@ -13,6 +13,7 @@ class _AgentDefinition:
 
 class _SpawnedAgent:
     command_channel = SimpleNamespace(lower=lambda text: text)
+    config = SimpleNamespace(router=SimpleNamespace(spawn_routing=False))
     router = SimpleNamespace(strategy=None)
 
 

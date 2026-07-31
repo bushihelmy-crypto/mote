@@ -2,7 +2,7 @@
 
 Satisfies the SAME :class:`~mote.runtime.durable.backend.DurableBackend` protocol the
 loop drives for Tier 1, so the loop's typed façades
-(:class:`~mote.runtime.durable.think_journal.ThinkJournal`) are backend-agnostic — only the
+(:class:`~mote.runtime.durable.inference_journal.InferenceJournal`) are backend-agnostic — only the
 transport of ``run_step`` differs:
 
 * **Inside a workflow** (``workflow.in_workflow()``) — dispatch the step as a
@@ -10,7 +10,7 @@ transport of ``run_step`` differs:
   memoizes. The step's closure is registered process-locally first (see
   :mod:`._activities`), then the serializable :class:`StepInput` descriptor is
   sent to the activity. Retry / timeout come from the per-seam
-  :class:`~mote.contracts.schema.ActivityConfig` mapped onto temporalio's
+  :class:`~mote.contracts.config.tool.ActivityConfig` mapped onto temporalio's
   :class:`RetryPolicy`.
 * **Outside a workflow** (a plain resume, a unit test, or the loop driven without
   a worker) — run the closure INLINE and record to the shared journal directly,
@@ -35,7 +35,7 @@ except ImportError:  # optional durable backend
     workflow = None
     RetryPolicy = None
 
-from mote.contracts.schema import ActivityConfig, TemporalConfig
+from mote.contracts.config.tool import ActivityConfig, TemporalConfig
 from mote.runtime.durable.temporal._activities import RUN_STEP_ACTIVITY, StepActivities, StepHandlerRegistry, StepInput
 from mote.runtime.ledger import KIND_THINK, KIND_TIMER, RunJournal
 

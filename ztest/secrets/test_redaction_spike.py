@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.policy.prompt import PromptIntent
-from mote.contracts.policy.tool import ToolResultIntent
+from mote.contracts.conversation.prompt_policy import PromptIntent
+from mote.contracts.tool.policy import ToolResultIntent
 from mote.runtime.prompt import build_prompt_policy
 from mote.runtime.secrets.cipher import AesGcmCipher
 from mote.runtime.secrets.policy import MIN_REDACT_LENGTH, redact
 from mote.runtime.secrets.store import SecretStore
+from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition
 from mote.runtime.tools.policy import build_tool_result_policy
@@ -206,7 +207,12 @@ class _LeakyEcho(BaseTool):
 class TestExecutorEndToEnd:
     async def test_run_command_output_is_redacted(self, tmp_path):
         policy = build_tool_result_policy(secret_store=_config_store(tmp_path))
-        ex = ToolExecutor("sess", tools=None, tool_result_policy=policy)
+        ex = ToolExecutor(
+            "sess",
+            tools=None,
+            tool_result_policy=policy,
+            workspace_store=SessionWorkspace(tmp_path),
+        )
         tool = _LeakyEcho()
         tool.bind("sess")
         ex.register_native_tool(native_definition(type(tool)), tool)

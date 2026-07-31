@@ -35,14 +35,8 @@ from __future__ import annotations
 import os
 from typing import Awaitable, Callable, Optional
 
-from mote.contracts.permissions import (
-    ApprovalChoice,
-    ApprovalReasonCode,
-    ApprovalRequest,
-    PermissionDecision,
-    PermissionMode,
-    PermissionRule,
-)
+from mote.contracts.authorization import PermissionDecision, PermissionMode, PermissionRule
+from mote.contracts.interaction import ApprovalChoice, ApprovalReasonCode, ApprovalRequest
 from mote.runtime.tools.permission.rule_matcher import suggest_command_rule
 from mote.runtime.tools.permission.rule_store import RuleStore
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard

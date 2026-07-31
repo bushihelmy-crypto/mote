@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.resilience import BreakerConfig
-from mote.runtime.models.failover.availability import AvailabilityBreaker
+from mote.contracts.config.model.breaker import BreakerConfig
 from mote.runtime.resilience import BreakerState
+from mote.runtime.resilience.failover.availability import AvailabilityBreaker
 
 
 class FakeClock:

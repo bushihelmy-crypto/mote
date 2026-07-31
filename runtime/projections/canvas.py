@@ -1,17 +1,18 @@
 """Artifact projection reconstructed from a full Canvas checkpoint."""
 from __future__ import annotations
 
-from mote.contracts.artifacts import ArtifactPublicationIntent, ArtifactRepresentationInput
-from mote.contracts.canvas import CanvasDocument
-from mote.contracts.ports import ArtifactBlobStore, CanvasExportPort
-from mote.contracts.runtimes import RuntimeProjectionRequest
+from mote.contracts.artifact import ArtifactPublicationIntent, ArtifactRepresentationInput
+from mote.contracts.ports.artifact.store import ArtifactBlobStore
+from mote.contracts.ports.surface.canvas_backend import CanvasExportPort
+from mote.contracts.runtime import RuntimeProjectionRequest
+from mote.contracts.surface import CanvasDocument
+from mote.runtime.interactive.canvas.export import CanvasExportService
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json
 from mote.runtime.projections.artifacts import (
     artifact_projection_policy,
     artifact_representation_set_digest,
     materialize_artifact_projection,
 )
-from mote.runtime.tools.dependency.canvas_export import CanvasExportService
 
 
 class CanvasArtifactProjector:

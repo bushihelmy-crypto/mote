@@ -1,0 +1,68 @@
+{
+  "clock": "perf_counter_ns",
+  "dimensions": {
+    "event_persistence_ms": {
+      "median": 3.4696735,
+      "p50": 3.469453,
+      "p99": 10.643502,
+      "p99_9": 13.470801,
+      "samples": 1000,
+      "unit": "ms"
+    },
+    "generation_acquire_release_us": {
+      "median": 1.431,
+      "p50": 1.431,
+      "p99": 1.956,
+      "p99_9": 16.906,
+      "samples": 1000,
+      "unit": "us"
+    },
+    "permit_canonicalize_us": {
+      "median": 5.803,
+      "p50": 5.803,
+      "p99": 8.113,
+      "p99_9": 25.303,
+      "samples": 1000,
+      "unit": "us"
+    },
+    "permit_sign_verify_us": {
+      "median": 96.399,
+      "p50": 96.395,
+      "p99": 252.725,
+      "p99_9": 383.936,
+      "samples": 1000,
+      "unit": "us"
+    },
+    "queue_enqueue_dequeue_us": {
+      "median": 5.946,
+      "p50": 5.945,
+      "p99": 18.668,
+      "p99_9": 98.529,
+      "samples": 1000,
+      "unit": "us"
+    },
+    "receipt_transaction_ms": {
+      "median": 3.534052,
+      "p50": 3.532698,
+      "p99": 10.811438,
+      "p99_9": 13.615163,
+      "samples": 1000,
+      "unit": "ms"
+    }
+  },
+  "environment": {
+    "cpu_count": 14,
+    "implementation": "CPython",
+    "machine": "x86_64",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+    "processor": "x86_64",
+    "python": "3.11.7"
+  },
+  "measured_iterations": 1000,
+  "quantile_method": "nearest_rank",
+  "schema_version": 1,
+  "slo_protocol_digest": "sha256:3d2792ada65ac299575b255ac79aa7d317484967d8ffdaae4eebf8b14d989e79",
+  "slo_revision": "inference-slo-v1",
+  "status": "candidate_not_frozen",
+  "warmup_iterations": 50
+}

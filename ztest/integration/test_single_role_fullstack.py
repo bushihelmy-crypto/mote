@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """End-to-end: a real ``Role.run`` driving real tools via a scripted LLM.
 
-These exercise the whole think→act stack (Role → ReActLoop → ThinkEngine +
+These exercise the whole think→act stack (Role → ReActLoop → InferenceEngine +
 ToolExecutor → ContextManager → native command channel) with only the LLM
 faked. The scripted LLM emits provider-native ``tool_calls``; the loop runs
 them against the real filesystem tools rooted at a tmp workspace, then a final
@@ -67,8 +67,8 @@ async def test_write_then_read_then_finish(make_role, tmp_path):
 
 async def test_role_returns_typed_structured_run_result(make_role, tmp_path):
     from mote.contracts.output import OutputContractId
+    from mote.kernel.commands.native import FINAL_OUTPUT_TOOL_NAME
     from mote.kernel.output import OutputContract, TypeAdapterOutputDecoder
-    from mote.kernel.parser.native_channel import FINAL_OUTPUT_TOOL_NAME
 
     role = make_role(
         working_dir=str(tmp_path),

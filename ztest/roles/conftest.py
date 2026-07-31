@@ -11,7 +11,7 @@ Key facts the fixtures encode:
   LLM call inject the lightweight fakes below instead.
 - ``Role.router`` / ``Role.context_manager`` are lazy and cached. Tests that
   want to bypass them pre-seed the private ``_router`` / ``_context_manager`` /
-  ``_think_engine`` slots with the fakes here.
+  ``_inference_engine`` slots with the fakes here.
 """
 from __future__ import annotations
 
@@ -22,11 +22,31 @@ from mote.runtime.agent import Role
 
 @pytest.fixture(autouse=True)
 def _isolated_session_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "mote.runtime.session.log._default_base_dir",
-        lambda: tmp_path / "workspace" / "sessions",
+    from dataclasses import replace
+
+    from mote.product.paths import default_runtime_paths
+    from mote.runtime.agent import AgentDependencies, AgentWiring
+
+    paths = default_runtime_paths(
+        user_config_root=tmp_path / "config",
+        workspace_root=tmp_path / "workspace",
     )
-    monkeypatch.setattr("mote.runtime.agent.role.CONFIG_ROOT", tmp_path / "config")
+    dependencies = replace(
+        AgentDependencies.text(None),
+        watched_config_files=(),
+        user_config_root=paths.user_config_root,
+        session_workspace_root=paths.session_workspace_root,
+        browser_profiles_root=paths.browser_profiles_root,
+        sandbox_ca_root=paths.sandbox_ca_root,
+        secrets_root=paths.secrets_root,
+        oauth_root=paths.oauth_root,
+    )
+    monkeypatch.setattr(
+        AgentWiring,
+        "defaults",
+        classmethod(lambda cls: AgentWiring(dependencies=dependencies)),
+    )
+    return paths
 
 
 class FakeLLM:
@@ -119,35 +139,50 @@ class FakeEnv:
 @pytest.fixture
 def context():
     """A Runtime Context with an explicitly injected offline provider."""
-    from mote.contracts.config.llm import LLMConfig
-    from mote.contracts.config.models import ModelsConfig
-    from mote.runtime.config.schema import Config
+    from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
+    from mote.product.config.schema import Config
     from mote.runtime.models.clients.context import Context
-    from mote.ztest.model_fakes import FakeModelGateway
+    from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway
 
     context = Context(
-        config=Config(models=ModelsConfig(default=LLMConfig(model="test"))),
-        provider_factory=lambda config: FakeLLM(name=config.model),
+        config=Config(models=ShortcutModelsConfig(default=ProductEndpointInput(model="test"))),
     )
-    context.model_gateway = FakeModelGateway(FakeLLM())
+    object.__setattr__(
+        context,
+        "_test_application_composition",
+        FakeApplicationComposition(FakeModelGateway(FakeLLM())),
+    )
     return context
 
 
 @pytest.fixture
-def role(context):
+def role(context, _isolated_session_root):
     """A bound Role with a real Context but no env."""
     from mote.kernel.output import text_output_contract
-    from mote.orchestration.tasks import build_background_task_pool
+    from mote.product.agents.background_tasks import build_background_task_pool
     from mote.runtime.agent import AgentDependencies, AgentWiring
 
-    return Role(
+    paths = _isolated_session_root
+    built = Role(
         name="Alice",
         wiring=AgentWiring.for_context(
             context,
+            application_composition=context._test_application_composition,
             dependencies=AgentDependencies(
                 deps=None,
                 output_contract=text_output_contract(),
                 background_task_pool_builder=build_background_task_pool,
+                watched_config_files=(),
+                user_config_root=paths.user_config_root,
+                session_workspace_root=paths.session_workspace_root,
+                browser_profiles_root=paths.browser_profiles_root,
+                sandbox_ca_root=paths.sandbox_ca_root,
+                secrets_root=paths.secrets_root,
+                oauth_root=paths.oauth_root,
             ),
         ),
     )
+    application, runtime = context._test_application_composition.test_lease_pair()
+    built._components._state.application_lease = application
+    built._components._state.runtime_composition_lease = runtime
+    return built

@@ -11,8 +11,29 @@ the same decision (the terminal + Textual surfaces only *land* these ops).
 
 from __future__ import annotations
 
-from mote.product.cli.consumers.render.builders import FoldMode
-from mote.product.cli.consumers.transcript import (
+from mote.product.presentation.events import (
+    ActivityCompleted,
+    ActivityStarted,
+    AttemptStreamCommitted,
+    AttemptStreamDiscarded,
+    AttemptStreamInterrupted,
+    ConversationCompacted,
+    ErrorRaised,
+    MessageBlockCompleted,
+    MessageBlockDelta,
+    MessageBlockStarted,
+    Notice,
+    ReasoningDelta,
+    RetryStatus,
+    RuntimeDurabilityStatus,
+    TaskProgress,
+    ToolCallCompleted,
+    ToolCallStarted,
+    TranscriptCleared,
+    UsageUpdated,
+)
+from mote.product.presentation.rich_rendering.builders import FoldMode
+from mote.product.presentation.state import (
     AddToGroup,
     AppendDelta,
     ClearForCompaction,
@@ -35,34 +56,13 @@ from mote.product.cli.consumers.transcript import (
     TranscriptReducer,
     UpdateUsage,
 )
-from mote.product.cli.consumers.transcript.ops import (
+from mote.product.presentation.state.ops import (
     AddActivityToolCall,
     CloseActivity,
     CompleteActivityToolCall,
     OpenActivity,
     UpdateActivityNode,
     UpdateRuntimeDurability,
-)
-from mote.product.cli.contracts.view import (
-    ActivityCompleted,
-    ActivityStarted,
-    AttemptStreamCommitted,
-    AttemptStreamDiscarded,
-    AttemptStreamInterrupted,
-    ConversationCompacted,
-    ErrorRaised,
-    MessageBlockCompleted,
-    MessageBlockDelta,
-    MessageBlockStarted,
-    Notice,
-    ReasoningDelta,
-    RetryStatus,
-    RuntimeDurabilityStatus,
-    TaskProgress,
-    ToolCallCompleted,
-    ToolCallStarted,
-    TranscriptCleared,
-    UsageUpdated,
 )
 
 

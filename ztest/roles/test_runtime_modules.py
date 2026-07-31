@@ -1,19 +1,21 @@
 """Ownership contracts for domain component manifests."""
 
 import asyncio
+from collections.abc import Callable
 
 import pytest
 
-from mote.contracts.artifacts import ArtifactPublicationState, ArtifactPublishRequest, ArtifactRepresentationInput
-from mote.contracts.canvas import CanvasDocument, CanvasElement
-from mote.contracts.config.llm import LLMConfig
-from mote.contracts.config.models import ModelsConfig
-from mote.contracts.fileops import TransactionStatus
-from mote.contracts.ports import ArtifactResolver, ArtifactStore
-from mote.contracts.ports.event_subscription import Reliability
-from mote.contracts.runtimes import CheckpointFidelity, RuntimeCheckpoint, RuntimeCommitFact, RuntimeProjectionIntent
-from mote.contracts.schema import UserMessage
-from mote.runtime.agent.runtime_modules import (
+from mote.contracts.artifact import ArtifactPublicationState, ArtifactPublishRequest, ArtifactRepresentationInput
+from mote.contracts.conversation import UserMessage
+from mote.contracts.file import TransactionStatus
+from mote.contracts.ports.artifact.store import ArtifactResolver, ArtifactStore
+from mote.contracts.ports.events.subscription import Reliability
+from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint, RuntimeCommitFact, RuntimeProjectionIntent
+from mote.contracts.surface import CanvasDocument, CanvasElement
+from mote.kernel.execution import ExecutionEngine
+from mote.runtime.agent.component_graph import ComponentKey
+from mote.runtime.agent.component_keys import ARTIFACT_REPOSITORY_BUNDLE, RUNTIME_PROJECTION_JOURNAL
+from mote.runtime.agent.components import (
     WatchingCallbacks,
     action_component_specs,
     cognition_component_specs,
@@ -23,17 +25,16 @@ from mote.runtime.agent.runtime_modules import (
     session_component_specs,
     watching_component_specs,
 )
-from mote.runtime.agent.runtime_modules.cognition import _task_route_map
 from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore
 from mote.runtime.fileops.edit_plans import WholeFileEditPlanRequest
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.interactive.canvas.svg import render_canvas_svg
 from mote.runtime.interactive.checkpoint_codec import encode_inline_json
 from mote.runtime.projections import artifact_representation_set_digest
 from mote.runtime.projections.session import SESSION_PROJECTION_SUBSCRIPTION
 from mote.runtime.session import MessageEvent
 from mote.runtime.session import log as session_log_module
 from mote.runtime.session.replay import replay
-from mote.runtime.tools.dependency.canvas_svg import render_canvas_svg
 
 
 def _watching_specs():
@@ -52,21 +53,9 @@ def _watching_specs():
     )
 
 
-def test_declarative_unconfigured_tasks_fall_back_to_default_route():
-    models = ModelsConfig(
-        default=LLMConfig(model="legacy"),
-        endpoints={"primary": {"model": "primary-model", "api_key": "key"}},
-        failover_groups={"interactive": {"endpoints": ["primary"]}},
-        routes={
-            "default": "interactive",
-            "tasks": {"session_title": "interactive"},
-        },
-    )
-
-    task_map = _task_route_map(models)
-
-    assert task_map["compression"] == "default"
-    assert task_map["session_title"] == "session_title"
+def _cognition_specs():
+    key: ComponentKey[Callable[[], ExecutionEngine[object]]] = ComponentKey("execution_engine_factory")
+    return cognition_component_specs(key)
 
 
 def test_session_module_owns_complete_component_keyset():
@@ -143,7 +132,6 @@ async def test_history_clear_applies_local_projections_before_return(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setattr(session_log_module, "_default_base_dir", lambda: tmp_path)
     await role._ensure_ready()
     try:
         await role._emit_session_start()
@@ -191,7 +179,6 @@ async def test_role_file_mutation_commits_through_running_fabric(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setattr(session_log_module, "_default_base_dir", lambda: tmp_path)
     role.state.working_dir = str(tmp_path)
     role.state.project_root = str(tmp_path)
     await role._ensure_ready()
@@ -228,10 +215,10 @@ def test_artifact_store_wiring_uses_workspace_artifact_repository(role):
 
     assert isinstance(store, DurableArtifactStore)
     assert isinstance(store, ArtifactStore)
-    workspace_root = role.session_log.path.parent.parent.parent
+    workspace_root = role.session_log.workspace_root
     assert store.index_path == workspace_root / ".artifacts" / "artifacts.sqlite3"
     assert isinstance(store._blobs, ArtifactRepositoryBlobStore)
-    bundle = role.components._graph.get("artifact_repository_bundle")
+    bundle = role.components._graph.get(ARTIFACT_REPOSITORY_BUNDLE)
     assert store._blobs._repository is bundle.repository
     assert bundle.repository is not role.file_operations.artifacts
     assert role.components.artifact_store is store
@@ -290,7 +277,7 @@ async def test_role_readiness_reconciles_runtime_projection_from_checkpoint(role
             ),
             reason="write-commit",
         )
-        journal = role.components._graph.get("runtime_projection_journal")
+        journal = role.components._graph.get(RUNTIME_PROJECTION_JOURNAL)
         await journal.record_commit(fact)
 
         await role._ensure_ready()
@@ -319,7 +306,6 @@ async def test_role_readiness_reconciles_staged_artifact_publications(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(session_log_module, "DEFAULT_WORKSPACE_ROOT", tmp_path)
     request = ArtifactPublishRequest(
         representations=(
             ArtifactRepresentationInput(
@@ -346,7 +332,6 @@ async def test_artifact_reconcile_once_retries_transient_batch_failure(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(session_log_module, "DEFAULT_WORKSPACE_ROOT", tmp_path)
     publisher = role.artifact_publisher
     await role.artifact_store.pending_ids()
     calls = []
@@ -374,7 +359,6 @@ async def test_artifact_reconcile_dead_letters_permanent_item_in_current_role(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(session_log_module, "DEFAULT_WORKSPACE_ROOT", tmp_path)
     request = ArtifactPublishRequest(
         artifact_id="fixed-report",
         expected_revision=0,
@@ -417,7 +401,6 @@ async def test_artifact_reconciliation_drains_more_than_one_batch_in_current_rol
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(session_log_module, "DEFAULT_WORKSPACE_ROOT", tmp_path)
     request = ArtifactPublishRequest(
         representations=(
             ArtifactRepresentationInput(
@@ -463,7 +446,7 @@ def test_domain_manifests_do_not_claim_the_same_component():
         spec.name
         for spec in [
             *action_component_specs(),
-            *cognition_component_specs(),
+            *_cognition_specs(),
             *context_component_specs(),
             *session_component_specs(),
             *integration_component_specs(),
@@ -500,12 +483,14 @@ def test_context_module_owns_complete_component_keyset():
 
 
 def test_cognition_module_owns_complete_component_keyset():
-    assert {spec.name for spec in cognition_component_specs()} == {
+    assert {spec.name for spec in _cognition_specs()} == {
         "router",
+        "inference_port",
+        "tool_snapshot_manager",
         "context_provider",
-        "think_engine_factory",
-        "think_subsystems_factory",
-        "flow_engine_factory",
+        "inference_engine_factory",
+        "inference_subsystems_factory",
+        "execution_engine_factory",
     }
 
 

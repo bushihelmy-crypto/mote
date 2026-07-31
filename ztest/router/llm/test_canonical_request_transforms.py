@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.models.failover import (
+from mote.contracts.model.failover import (
     EndpointCapabilities,
     EndpointDescriptor,
     FailureDisposition,
@@ -12,13 +12,14 @@ from mote.contracts.models.failover import (
     RequestTransform,
     Retryability,
 )
-from mote.contracts.models.invocation import (
+from mote.contracts.model.invocation import (
     CanonicalMessage,
     CanonicalToolCall,
     GenerateInput,
     ModelInvocation,
     ModelOperation,
 )
+from mote.contracts.model.topology import DefaultRoute
 from mote.runtime.models.failover.transforms import CanonicalRequestTransformer
 
 
@@ -38,8 +39,8 @@ def _endpoint() -> EndpointDescriptor:
 def _disposition(reason: FailureReason) -> FailureDisposition:
     return FailureDisposition(
         reason=reason,
-        domain=FailureDomain.REQUEST,
-        retryability=Retryability.AFTER_CHANGE,
+        domain=FailureDomain.PROTOCOL,
+        retryability=Retryability.NEW_ATTEMPT,
         health_verdict=HealthVerdict.NEUTRAL,
     )
 
@@ -47,7 +48,7 @@ def _disposition(reason: FailureReason) -> FailureDisposition:
 def _invocation(messages: tuple[CanonicalMessage, ...]) -> ModelInvocation:
     return ModelInvocation(
         model_call_id="call",
-        route_id="default",
+        route_id=DefaultRoute(),
         task="interactive",
         operation=ModelOperation.GENERATE,
         input=GenerateInput(messages=messages),
@@ -107,7 +108,10 @@ async def test_downgrade_tool_content_returns_new_immutable_invocation() -> None
                 tool_call_id="call-1",
                 content=[
                     {"type": "text", "text": "kept"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,x"},
+                    },
                 ],
             ),
         )

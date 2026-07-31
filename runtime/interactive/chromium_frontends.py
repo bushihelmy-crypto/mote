@@ -4,8 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.resources import files
 
-from mote.contracts.notebook import NOTEBOOK_MEDIA_TYPE
-from mote.contracts.terminal import TERMINAL_MEDIA_TYPE
+from mote.contracts.surface import NOTEBOOK_MEDIA_TYPE, TERMINAL_MEDIA_TYPE
 
 _SHELL_STYLE = r"""
     :root { color-scheme: dark; font: 13px system-ui, sans-serif; }

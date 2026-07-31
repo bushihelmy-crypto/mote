@@ -20,11 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, NamedTuple, Optional
 
-from mote.contracts.constants.context import MODEL_CONTEXT_WINDOW_DEFAULT
-from mote.contracts.models.tokenization import TOKEN_MAX
-from mote.runtime.logging import logger
+from mote.contracts.conversation.constants import MODEL_CONTEXT_WINDOW_DEFAULT
 from mote.runtime.models.cost.pricing import PricingMode, cost_of
 from mote.runtime.models.cost.usage import TokenUsage
+from mote.runtime.telemetry.logging import logger
 
 
 class Costs(NamedTuple):
@@ -38,7 +37,12 @@ class Costs(NamedTuple):
     @classmethod
     def zero(cls) -> "Costs":
         """An all-zero ``Costs`` for the no-cost-manager / empty case."""
-        return cls(total_prompt_tokens=0, total_completion_tokens=0, total_cost=0.0, total_budget=0.0)
+        return cls(
+            total_prompt_tokens=0,
+            total_completion_tokens=0,
+            total_cost=0.0,
+            total_budget=0.0,
+        )
 
 
 # Codex reserves a baseline (prompts + tools + room to compact) so the window
@@ -80,7 +84,7 @@ class CostTracker:
     has_unknown_model_cost: bool = False
 
     # ------------------------------------------------------------------ record
-    def add(self, usage: TokenUsage, model: Optional[str]) -> float:
+    def add(self, usage: TokenUsage, model: Optional[str], *, context_window: int = 0) -> float:
         """Record one call's *usage* under *model*; returns its USD cost.
 
         No-ops on an all-zero usage so synthetic/placeholder calls don't pollute
@@ -90,7 +94,7 @@ class CostTracker:
             return 0.0
         model = model or "unknown"
         cost, known = cost_of(usage, model, self.mode)
-        self._record(usage, model, cost, known=known)
+        self._record(usage, model, cost, known=known, context_window=context_window)
         return cost
 
     def record_settled(
@@ -98,12 +102,20 @@ class CostTracker:
         usage: TokenUsage,
         model: Optional[str],
         cost_usd: float,
+        *,
+        context_window: int = 0,
     ) -> None:
         """Record usage whose authoritative cost was settled by ModelGateway."""
 
         if usage is None or usage.is_zero():
             return
-        self._record(usage, model or "unknown", cost_usd, known=True)
+        self._record(
+            usage,
+            model or "unknown",
+            cost_usd,
+            known=True,
+            context_window=context_window,
+        )
 
     def _record(
         self,
@@ -112,6 +124,7 @@ class CostTracker:
         cost: float,
         *,
         known: bool,
+        context_window: int = 0,
     ) -> None:
         if not known:
             self.has_unknown_model_cost = True
@@ -119,7 +132,7 @@ class CostTracker:
 
         bucket = self.model_usage.get(model)
         if bucket is None:
-            bucket = ModelUsage(context_window=context_window_for(model))
+            bucket = ModelUsage(context_window=context_window or context_window_for(model))
             self.model_usage[model] = bucket
         bucket.usage.add(usage)
         bucket.cost_usd += cost
@@ -181,7 +194,7 @@ class CostTracker:
         total = self.total_token_usage()
         return Costs(total.input_tokens, total.output_tokens, self.total_cost, self.total_budget)
 
-    # legacy attribute access (old code read these off the pydantic model)
+    # Stable property form used by provider adapters and status projections.
     @property
     def total_prompt_tokens(self) -> int:
         return self.get_total_prompt_tokens()
@@ -199,7 +212,12 @@ class CostTracker:
         from both sides so a fresh conversation reads ~100%.
         """
         model = model or self.last_model
-        window = context_window_for(model)
+        usage_bucket = self.model_usage.get(model or "")
+        window = (
+            usage_bucket.context_window
+            if usage_bucket is not None and usage_bucket.context_window > 0
+            else context_window_for(model)
+        )
         used = self.last_usage.total_tokens
         if window <= BASELINE_TOKENS:
             return {"window": window, "used": used, "remaining": 0, "percent_left": 0}
@@ -207,17 +225,14 @@ class CostTracker:
         used_over = max(0, used - BASELINE_TOKENS)
         remaining = max(0, effective - used_over)
         percent = round(min(100.0, max(0.0, remaining / effective * 100.0)))
-        return {"window": window, "used": used, "remaining": remaining, "percent_left": percent}
+        return {
+            "window": window,
+            "used": used,
+            "remaining": remaining,
+            "percent_left": percent,
+        }
 
 
 def context_window_for(model: Optional[str]) -> int:
-    """The model's context window (``TOKEN_MAX``), or the default if unknown."""
-    if not model:
-        return MODEL_CONTEXT_WINDOW_DEFAULT
-    if model in TOKEN_MAX:
-        return TOKEN_MAX[model]
-    best = None
-    for key in TOKEN_MAX:
-        if key in model and (best is None or len(key) > len(best)):
-            best = key
-    return TOKEN_MAX[best] if best else MODEL_CONTEXT_WINDOW_DEFAULT
+    """Conservative fallback for calls lacking canonical endpoint metadata."""
+    return MODEL_CONTEXT_WINDOW_DEFAULT

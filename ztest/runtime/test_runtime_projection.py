@@ -4,19 +4,25 @@ import hashlib
 
 import pytest
 
-from mote.contracts.artifacts import (
+from mote.contracts.artifact import (
     ArtifactContentRef,
     ArtifactPublicationIntent,
     ArtifactRepresentationInput,
     ArtifactRepresentationIntent,
 )
-from mote.contracts.canvas import CanvasDocument, CanvasElement, CanvasExportRepresentation
-from mote.contracts.notebook import NotebookCell, NotebookDocument
-from mote.contracts.runtimes import (
+from mote.contracts.content import ContentIdentity
+from mote.contracts.runtime import (
     CheckpointFidelity,
     RuntimeCheckpoint,
     RuntimeProjectionIntent,
     RuntimeProjectionRequest,
+)
+from mote.contracts.surface import (
+    CanvasDocument,
+    CanvasElement,
+    CanvasExportRepresentation,
+    NotebookCell,
+    NotebookDocument,
 )
 from mote.runtime.artifacts import DurableArtifactStore, ReliableArtifactPublisher
 from mote.runtime.interactive.checkpoint_codec import encode_inline_json
@@ -37,13 +43,12 @@ class MemoryBlobs:
         digest = hashlib.sha256(content).hexdigest()
         self.data[digest] = content
         return ArtifactContentRef(
-            content_ref=f"sha256:{digest}",
-            digest=digest,
-            size=len(content),
+            identity=ContentIdentity(digest, len(content)),
+            locator=f"sha256:{digest}",
         )
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
-        return self.data[ref.digest]
+        return self.data[ref.identity.digest]
 
 
 class Journal:

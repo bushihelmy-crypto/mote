@@ -1,7 +1,7 @@
 """Temporal client / worker lifecycle for the Tier-2 durable backend.
 
 The bootstrap half of Part B: connect a Temporal ``Client`` (with mote's pydantic
-data converter so ``ThinkResult``/``Message``/``ToolResult`` serialize without a
+data converter so ``InferenceResult``/``Message``/``ToolResult`` serialize without a
 custom converter) and build a ``Worker`` that registers the backend's generic
 ``run_step`` activity. Kept deliberately small and OPTIONAL — reached only when
 ``DurableConfig.backend="temporal"``; the core never imports any of this.
@@ -24,7 +24,7 @@ except ImportError:  # optional durable backend
     Client = None
     Worker = None
 
-from mote.contracts.schema import TemporalConfig
+from mote.contracts.config.tool import TemporalConfig
 from mote.runtime.durable.temporal._backend import TemporalBackend
 from mote.runtime.durable.temporal._converter import data_converter
 

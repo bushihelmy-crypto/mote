@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 
-from mote.contracts.text import count_noun
+from mote.runtime.presentation import count_noun
 from mote.runtime.tools.compress.base import CompressionResult, applied, unchanged
 
 # ``path:line:col: CODE message`` — ruff and flake8 share this shape.

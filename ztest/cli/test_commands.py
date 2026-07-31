@@ -16,7 +16,7 @@ from typing import Any, List, Optional, Tuple
 
 import pytest
 
-from mote.product.cli.commands.registry import Command, CommandRegistry, default_registry
+from mote.product.interaction.commands.catalog import Command, CommandRegistry, default_registry
 
 
 class FakeCtx:
@@ -65,7 +65,7 @@ class FakeCtx:
         self.calls.append(("new_agent", name))
         return self.new_result
 
-    def fork_current(self):
+    async def fork_current(self):
         self.calls.append(("fork_current", None))
         return self.fork_result
 

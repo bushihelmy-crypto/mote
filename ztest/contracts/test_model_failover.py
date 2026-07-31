@@ -3,13 +3,14 @@ from decimal import Decimal
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from mote.contracts.models import (
+from mote.contracts.model import (
     AdmissionGate,
     AdmissionVerdict,
     AttemptBudget,
     AttemptState,
     CanonicalMessage,
     EndpointDescriptor,
+    ExternalCommitState,
     FailoverPlan,
     FailureDisposition,
     FailureDomain,
@@ -27,17 +28,19 @@ from mote.contracts.models import (
     ModelOperation,
     OperatorState,
     OperatorTransition,
+    ReconcileStrategy,
     RequestRequirements,
     ResolvedModelResponse,
     ResourceIdentity,
     Retryability,
 )
+from mote.contracts.model.topology import TaskRoute
 
 
 def test_model_invocation_round_trip_preserves_discriminators() -> None:
     invocation = ModelInvocation(
         model_call_id="call-1",
-        route_id="interactive",
+        route_id=TaskRoute(name="interactive"),
         task="interactive",
         operation=ModelOperation.GENERATE,
         input=GenerateInput(messages=(CanonicalMessage(role="user", content="hello"),)),
@@ -111,8 +114,7 @@ def test_admission_verdict_round_trip_is_typed_and_secret_opaque() -> None:
         disposition=FailureDisposition(
             reason=FailureReason.AUTH_REJECTED,
             domain=FailureDomain.CREDENTIAL,
-            retryability=Retryability.AFTER_CHANGE,
-            health_verdict=HealthVerdict.CREDENTIAL_REJECTED,
+            retryability=Retryability.NEW_ATTEMPT,
         ),
     )
 
@@ -120,6 +122,25 @@ def test_admission_verdict_round_trip_is_typed_and_secret_opaque() -> None:
 
     assert restored == verdict
     assert "api-key" not in verdict.model_dump_json()
+
+
+def test_failure_disposition_v2_requires_reconciliation_for_unknown_commit() -> None:
+    with pytest.raises(ValidationError, match="unknown external commit"):
+        FailureDisposition(
+            reason=FailureReason.CONNECTION,
+            domain=FailureDomain.TRANSPORT,
+            retryability=Retryability.NEW_ATTEMPT,
+            external_commit_state=ExternalCommitState.UNKNOWN,
+        )
+
+    disposition = FailureDisposition(
+        reason=FailureReason.CONNECTION,
+        domain=FailureDomain.TRANSPORT,
+        retryability=Retryability.RECONCILE_ONLY,
+        external_commit_state=ExternalCommitState.UNKNOWN,
+        reconcile_strategy=ReconcileStrategy.PROVIDER_QUERY,
+    )
+    assert disposition.schema_version == 2
 
 
 def test_operator_transition_round_trip_is_revisioned_and_secret_opaque() -> None:
@@ -157,6 +178,8 @@ def test_model_call_journal_records_round_trip_through_discriminated_union() -> 
             model_call_id="call-1",
             plan_id="plan-1",
             route_id="default",
+            runtime_generation_id="runtime-test",
+            topology_revision="topology-test",
             config_revision="revision-1",
             endpoint_ids=("primary",),
             budget=AttemptBudget(),

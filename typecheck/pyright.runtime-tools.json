@@ -1,0 +1,22 @@
+{
+  "extends": "../pyrightconfig.json",
+  "include": [
+    "../runtime/agent/component_graph.py",
+    "../runtime/agent/components/action.py",
+    "../runtime/events/telemetry.py",
+    "../runtime/tools/provider_definitions.py",
+    "../runtime/tools/provider.py",
+    "../runtime/tools/function_toolset.py",
+    "../runtime/tools/tool_binding.py",
+    "../runtime/tools/dynamic_toolset.py",
+    "../runtime/tools/tool_lifecycle.py",
+    "../runtime/tools/tool_executor.py",
+    "../runtime/agent/wiring.py"
+  ],
+  "exclude": ["../ztest"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none",
+  "reportUnnecessaryIsInstance": "none"
+}

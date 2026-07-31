@@ -4,9 +4,10 @@ import hashlib
 
 import pytest
 
-from mote.contracts.artifacts import ArtifactRef
-from mote.contracts.models import EndpointDescriptor
-from mote.contracts.models.invocation import (
+from mote.contracts.artifact import ArtifactRef
+from mote.contracts.conversation import AIMessage, ToolMessage, UserMessage
+from mote.contracts.model import EndpointDescriptor
+from mote.contracts.model.invocation import (
     CanonicalToolCall,
     GenerateOutput,
     ImageDescriptionOutput,
@@ -15,9 +16,9 @@ from mote.contracts.models.invocation import (
     WebSearchHitOutput,
     WebSearchOutput,
 )
-from mote.contracts.ports import ModelRoute
-from mote.contracts.schema import AIMessage, ToolMessage, UserMessage
-from mote.kernel.models.model_calls import describe_image, generate, web_search
+from mote.contracts.model.topology import DefaultRoute
+from mote.contracts.ports.model.gateway import ModelRoute
+from mote.runtime.models.model_calls import describe_image, generate, web_search
 
 
 class _Gateway:
@@ -27,8 +28,8 @@ class _Gateway:
         self.request_transformers = []
         self.streams = []
 
-    def supports_route(self, route_id: str) -> bool:
-        return route_id == "default"
+    def supports_route(self, route_id) -> bool:
+        return route_id == DefaultRoute()
 
     async def execute(self, invocation, *, request_transformer=None, stream=False, **_kwargs):
         self.invocations.append(invocation)
@@ -50,7 +51,7 @@ class _Gateway:
 def _route(gateway, *, routing_decision_id=None):
     return ModelRoute(
         gateway=gateway,
-        route_id="default",
+        route_id=DefaultRoute(),
         routing_decision_id=routing_decision_id,
         profile=EndpointDescriptor(
             endpoint_id="endpoint",
@@ -90,7 +91,7 @@ async def test_text_call_projects_message_history_and_system_prompt() -> None:
 
     assert result.content == "answer"
     invocation = gateway.invocations[0]
-    assert invocation.route_id == "default"
+    assert invocation.route_id == DefaultRoute()
     assert invocation.routing_decision_id == "decision-1"
     assert invocation.requirements.response_mode is ResponseMode.TEXT
     assert invocation.input.system_prompt == "system"

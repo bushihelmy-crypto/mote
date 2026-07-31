@@ -14,7 +14,7 @@ import time
 import pytest
 
 import mote.runtime.models.auth.oauth.client as client_mod
-from mote.contracts.config.oauth import GrantType, OAuthProviderConfig
+from mote.contracts.config.model.oauth import GrantType, OAuthProviderConfig
 from mote.runtime.models.auth.oauth.client import OAuthClient
 from mote.runtime.models.auth.oauth.errors import OAuthRefreshError
 

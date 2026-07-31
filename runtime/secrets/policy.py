@@ -28,7 +28,7 @@ MIN_REDACT_LENGTH = 8
 
 # Config/env values that mean "no real secret yet" — never redact these. Reuses
 # the same placeholder set the config secret-helper recognises
-# (mote.runtime.config.secrets._PLACEHOLDER_KEYS) plus the redaction marker itself.
+# (mote.product.config.secrets._PLACEHOLDER_KEYS) plus the redaction marker itself.
 _PLACEHOLDER_VALUES = frozenset({"", "sk-", "YOUR_API_KEY", "***", "None", "null"})
 
 

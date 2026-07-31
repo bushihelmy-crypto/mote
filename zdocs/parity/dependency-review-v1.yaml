@@ -1,0 +1,25 @@
+schema_version: 1
+revision: dependency-review-v1
+inputs:
+  plan: zdocs/parity/dependency-plan-v1.yaml
+  lock: requirements/inference.lock
+  sbom: zdocs/parity/inference-sbom-v1.cdx.json
+  platform_matrix: zdocs/parity/dependency-platform-matrix-v1.yaml
+license_review:
+  status: pending
+  reviewer: null
+  reviewed_at: null
+  evidence_digest: null
+cve_review:
+  status: pending
+  database_snapshot: null
+  scanner: null
+  scanned_at: null
+  result_digest: null
+  policy_exceptions: []
+platform_review:
+  status: passed
+  scope: [linux_x86_64, linux_aarch64]
+  python_versions: [3.9.2, "3.10", "3.11", "3.12"]
+  matrix_digest: sha256:dd30ba725b96143b4dbb0c08fca2a46f41fd2de8969bbc5c10b48c97cf40e579
+gate_status: pending_license_cve_and_platform_review

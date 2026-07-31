@@ -1,0 +1,1588 @@
+"""Single-writer SQLite receipt/outbox authority for Embedded and Shared Process."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import sqlite3
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from mote.contracts.inference.generation_artifact import GenerationArtifact
+from mote.contracts.inference.governance import BudgetReservation, ReservationState, UsageSettlement
+from mote.contracts.inference.persisted_event import PersistedLifecycleEvent
+from mote.contracts.inference.provider_evidence import ProviderEvidence, ProviderEvidenceConflictError
+from mote.contracts.inference.receipt import (
+    TERMINAL_RECEIPT_STATES,
+    AttemptReceipt,
+    ReceiptState,
+    validate_receipt_transition,
+)
+from mote.contracts.inference.reconciliation import (
+    OwnerAcknowledgement,
+    OwnerCommand,
+    ReconciliationState,
+    ResolutionProposal,
+)
+from mote.contracts.inference.session import (
+    TERMINAL_SESSION_STATES,
+    SessionReceipt,
+    SessionReceiptState,
+    validate_session_receipt_transition,
+)
+from mote.runtime.inference.generation import GenerationState
+from mote.runtime.inference.reconciliation import ReconciliationRecord, acknowledge_owner_action, require_owner_action
+from mote.runtime.persistence.async_io import run_disk_io as _run_disk_io
+
+
+class ReceiptConflictError(RuntimeError):
+    pass
+
+
+class ReceiptFencedError(RuntimeError):
+    pass
+
+
+class SQLiteIntegrityError(RuntimeError):
+    pass
+
+
+class SQLiteBusyError(RuntimeError):
+    pass
+
+
+async def run_disk_io(operation, *args):
+    try:
+        return await _run_disk_io(operation, *args)
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if "locked" in message or "busy" in message:
+            raise SQLiteBusyError("SQLite authority remained busy past deadline") from exc
+        raise
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteStartupReport:
+    integrity: str
+    free_bytes: int
+    database_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxRecord:
+    sequence: int
+    attempt_id: str
+    generation_id: str
+    receipt_revision: int
+    payload: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderEvidenceRecord:
+    evidence: ProviderEvidence
+    generation_id: str
+    digest: str
+    received_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationOutboxRecord:
+    sequence: int
+    proposal: ResolutionProposal
+
+
+class SQLiteAttemptReceiptStore:
+    """Durable receipt CAS and transactional outbox in one SQLite authority."""
+
+    def __init__(self, path: Path, *, busy_timeout_seconds: float = 5.0) -> None:
+        if busy_timeout_seconds <= 0:
+            raise ValueError("busy timeout must be positive")
+        self._path = path
+        self._busy_timeout_ms = int(busy_timeout_seconds * 1000)
+        self._failed_startup_image: bytes | None = None
+
+    async def initialize(self) -> None:
+        await run_disk_io(self._initialize)
+
+    async def verify_startup(self, *, hard_min_free_bytes: int) -> SQLiteStartupReport:
+        if hard_min_free_bytes < 0:
+            raise ValueError("hard disk watermark cannot be negative")
+        return await run_disk_io(self._verify_startup, hard_min_free_bytes)
+
+    async def backup_to(self, destination: Path) -> None:
+        await run_disk_io(self._backup_to, destination)
+
+    async def verify_backup(self, source: Path) -> str:
+        return await run_disk_io(self._verify_backup, source)
+
+    async def restore_from(self, source: Path) -> None:
+        await run_disk_io(self._restore_from, source)
+
+    async def preserve_corrupt_copy(self) -> Path:
+        return await run_disk_io(self._preserve_corrupt_copy)
+
+    async def reconcile_incomplete(self) -> tuple[int, int]:
+        return await run_disk_io(self._reconcile_incomplete)
+
+    async def stage_generation(self, artifact: GenerationArtifact) -> None:
+        await run_disk_io(self._stage_generation, artifact)
+
+    async def activate_generation(self, generation_id: str, artifact_digest: str) -> None:
+        await run_disk_io(self._activate_generation, generation_id, artifact_digest)
+
+    async def load_generations(
+        self,
+    ) -> tuple[tuple[GenerationArtifact, GenerationState], ...]:
+        return await run_disk_io(self._load_generations)
+
+    async def append_event(self, event: PersistedLifecycleEvent) -> PersistedLifecycleEvent:
+        return await run_disk_io(self._append_event, event)
+
+    async def read_events(
+        self, execution_id: str, *, after_sequence: int, limit: int = 256
+    ) -> tuple[PersistedLifecycleEvent, ...]:
+        if not execution_id or after_sequence < 0 or limit <= 0:
+            raise ValueError("invalid lifecycle event cursor")
+        return await run_disk_io(self._read_events, execution_id, after_sequence, limit)
+
+    async def get(self, attempt_id: str, generation_id: str) -> AttemptReceipt | None:
+        return await run_disk_io(self._get, attempt_id, generation_id)
+
+    async def list_receipts(self, *, state: ReceiptState | None = None, limit: int = 100) -> tuple[AttemptReceipt, ...]:
+        if limit <= 0 or limit > 1000:
+            raise ValueError("receipt projection limit is invalid")
+        return await run_disk_io(self._list_receipts, state, limit)
+
+    async def accept(self, receipt: AttemptReceipt) -> AttemptReceipt:
+        return await run_disk_io(self._accept, receipt)
+
+    async def compare_and_swap(
+        self,
+        receipt: AttemptReceipt,
+        *,
+        expected_revision: int,
+        fencing_token: int,
+    ) -> AttemptReceipt:
+        return await run_disk_io(self._compare_and_swap, receipt, expected_revision, fencing_token)
+
+    async def read_outbox(self, *, after_sequence: int = 0, limit: int = 100) -> tuple[OutboxRecord, ...]:
+        if after_sequence < 0 or limit <= 0:
+            raise ValueError("invalid outbox cursor or limit")
+        return await run_disk_io(self._read_outbox, after_sequence, limit)
+
+    async def mark_published(self, sequence: int) -> None:
+        if sequence <= 0:
+            raise ValueError("outbox sequence must be positive")
+        await run_disk_io(self._mark_published, sequence)
+
+    def _initialize(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self._path.parent, 0o700)
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS attempt_receipts (
+                    attempt_id TEXT NOT NULL,
+                    generation_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    fencing_token INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    permit_digest TEXT,
+                    request_digest TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (attempt_id, generation_id),
+                    UNIQUE (permit_digest)
+                );
+                CREATE TABLE IF NOT EXISTS receipt_outbox (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    attempt_id TEXT NOT NULL,
+                    generation_id TEXT NOT NULL,
+                    receipt_revision INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    published INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (attempt_id, generation_id, receipt_revision)
+                );
+                CREATE TABLE IF NOT EXISTS usage_budgets (
+                    tenant_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    limit_units INTEGER NOT NULL,
+                    settled_units INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (tenant_id, project_id)
+                );
+                CREATE TABLE IF NOT EXISTS usage_reservations (
+                    reservation_id TEXT PRIMARY KEY,
+                    attempt_id TEXT NOT NULL UNIQUE,
+                    tenant_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    units INTEGER NOT NULL,
+                    fencing_token INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS usage_settlements (
+                    settlement_id TEXT PRIMARY KEY,
+                    reservation_id TEXT NOT NULL,
+                    attempt_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    FOREIGN KEY (reservation_id) REFERENCES usage_reservations(reservation_id)
+                );
+                CREATE TABLE IF NOT EXISTS session_receipts (
+                    session_id TEXT NOT NULL,
+                    generation_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    fencing_token INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (session_id, generation_id)
+                );
+                CREATE TABLE IF NOT EXISTS session_outbox (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    generation_id TEXT NOT NULL,
+                    receipt_revision INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    published INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (session_id, generation_id, receipt_revision)
+                );
+                CREATE TABLE IF NOT EXISTS lifecycle_events (
+                    execution_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    receipt_revision INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    terminal INTEGER NOT NULL,
+                    payload BLOB NOT NULL,
+                    contract TEXT NOT NULL,
+                    PRIMARY KEY (execution_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS reconciliation_bindings (
+                    execution_id TEXT PRIMARY KEY,
+                    generation_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    strategy_id TEXT NOT NULL,
+                    UNIQUE (execution_id, generation_id)
+                );
+                CREATE TABLE IF NOT EXISTS provider_evidence (
+                    provider TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    execution_id TEXT NOT NULL,
+                    generation_id TEXT NOT NULL,
+                    digest TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (provider, event_id),
+                    UNIQUE (digest),
+                    FOREIGN KEY (execution_id)
+                        REFERENCES reconciliation_bindings(execution_id)
+                );
+                CREATE TABLE IF NOT EXISTS reconciliation_records (
+                    proposal_id TEXT PRIMARY KEY,
+                    execution_id TEXT NOT NULL UNIQUE,
+                    generation_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    proposal TEXT NOT NULL,
+                    acknowledgement TEXT,
+                    FOREIGN KEY (execution_id)
+                        REFERENCES reconciliation_bindings(execution_id)
+                );
+                CREATE TABLE IF NOT EXISTS reconciliation_outbox (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    proposal_id TEXT NOT NULL UNIQUE,
+                    payload TEXT NOT NULL,
+                    published INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (proposal_id)
+                        REFERENCES reconciliation_records(proposal_id)
+                );
+                CREATE TABLE IF NOT EXISTS owner_command_outbox (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    command_id TEXT NOT NULL UNIQUE,
+                    owner_id TEXT NOT NULL,
+                    proposal_id TEXT NOT NULL UNIQUE,
+                    payload TEXT NOT NULL,
+                    published INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (proposal_id)
+                        REFERENCES reconciliation_records(proposal_id)
+                );
+                CREATE TABLE IF NOT EXISTS gateway_generations (
+                    generation_id TEXT PRIMARY KEY,
+                    artifact_digest TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL,
+                    artifact TEXT NOT NULL,
+                    activation_sequence INTEGER
+                );
+                """
+            )
+        os.chmod(self._path, 0o600)
+
+    def _verify_startup(self, hard_min_free_bytes: int) -> SQLiteStartupReport:
+        if not self._path.is_file():
+            raise SQLiteIntegrityError("SQLite authority does not exist")
+        free_bytes = shutil.disk_usage(self._path.parent).free
+        if free_bytes < hard_min_free_bytes:
+            raise SQLiteIntegrityError(f"SQLite disk hard watermark reached: {free_bytes} bytes free")
+        startup_image = self._path.read_bytes()
+        try:
+            with self._connect() as connection:
+                row = connection.execute("PRAGMA quick_check").fetchone()
+        except sqlite3.DatabaseError as exc:
+            self._failed_startup_image = startup_image
+            raise SQLiteIntegrityError("SQLite quick_check could not run") from exc
+        integrity = str(row[0]) if row else "missing-result"
+        if integrity != "ok":
+            self._failed_startup_image = startup_image
+            raise SQLiteIntegrityError(f"SQLite quick_check failed: {integrity}")
+        self._failed_startup_image = None
+        return SQLiteStartupReport(
+            integrity=integrity,
+            free_bytes=free_bytes,
+            database_bytes=self._path.stat().st_size,
+        )
+
+    def _backup_to(self, destination: Path) -> None:
+        if destination == self._path:
+            raise ValueError("SQLite backup destination must differ from authority")
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            with self._connect() as source, sqlite3.connect(temporary) as target:
+                source.backup(target)
+                result = target.execute("PRAGMA quick_check").fetchone()
+                if result is None or result[0] != "ok":
+                    raise SQLiteIntegrityError("SQLite backup verification failed")
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, destination)
+            self._fsync_directory(destination.parent)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def _restore_from(self, source: Path) -> None:
+        if not source.is_file() or source == self._path:
+            raise ValueError("SQLite restore source is invalid")
+        with sqlite3.connect(source) as candidate:
+            result = candidate.execute("PRAGMA quick_check").fetchone()
+        if result is None or result[0] != "ok":
+            raise SQLiteIntegrityError("SQLite restore source failed verification")
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{self._path.name}.restore.", dir=self._path.parent)
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            with sqlite3.connect(source) as backup, sqlite3.connect(temporary) as target:
+                backup.backup(target)
+                verified = target.execute("PRAGMA quick_check").fetchone()
+                if verified is None or verified[0] != "ok":
+                    raise SQLiteIntegrityError("restored SQLite copy failed verification")
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, self._path)
+            self._fsync_directory(self._path.parent)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _verify_backup(source: Path) -> str:
+        if not source.is_file():
+            raise ValueError("SQLite backup source does not exist")
+        try:
+            with sqlite3.connect(f"file:{source}?mode=ro&immutable=1", uri=True) as candidate:
+                result = candidate.execute("PRAGMA quick_check").fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise SQLiteIntegrityError("SQLite backup verification could not run") from exc
+        if result is None or result[0] != "ok":
+            raise SQLiteIntegrityError("SQLite backup failed verification")
+        return "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+
+    def _preserve_corrupt_copy(self) -> Path:
+        if not self._path.is_file():
+            raise SQLiteIntegrityError("SQLite authority does not exist")
+        # WAL pages are part of the authority's durable state.  Checkpoint a
+        # healthy database before taking the evidence image so the copied
+        # main file contains the same state as the live authority (and is not
+        # merely a stale pre-WAL snapshot).  A corrupt database cannot be
+        # opened, so preserve its bytes verbatim below.
+        original = self._failed_startup_image or self._path.read_bytes()
+        try:
+            with sqlite3.connect(f"file:{self._path}?mode=ro&immutable=1", uri=True) as probe:
+                result = probe.execute("PRAGMA quick_check").fetchone()
+            healthy = result is not None and result[0] == "ok"
+        except sqlite3.DatabaseError:
+            healthy = False
+        if healthy and self._failed_startup_image is None:
+            with self._connect() as connection:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        destination = self._path.with_name(f"{self._path.name}.corrupt-{timestamp}")
+        if healthy and self._failed_startup_image is None:
+            shutil.copy2(self._path, destination)
+        else:
+            destination.write_bytes(original)
+        os.chmod(destination, 0o600)
+        self._fsync_directory(destination.parent)
+        return destination
+
+    def _reconcile_incomplete(self) -> tuple[int, int]:
+        attempt_count = 0
+        session_count = 0
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempts = connection.execute("SELECT payload FROM attempt_receipts").fetchall()
+            for row in attempts:
+                receipt = AttemptReceipt.model_validate_json(row[0])
+                if receipt.state in TERMINAL_RECEIPT_STATES or receipt.state in {
+                    ReceiptState.ACCEPTED,
+                    ReceiptState.SEND_INTENT_DURABLE,
+                }:
+                    continue
+                reconciled = receipt.model_copy(
+                    update={
+                        "revision": receipt.revision + 1,
+                        "state": ReceiptState.IN_DOUBT,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+                validate_receipt_transition(receipt, reconciled)
+                payload = reconciled.model_dump_json()
+                connection.execute(
+                    "UPDATE attempt_receipts SET revision = ?, state = ?, payload = ? "
+                    "WHERE attempt_id = ? AND generation_id = ? AND revision = ?",
+                    (
+                        reconciled.revision,
+                        reconciled.state.value,
+                        payload,
+                        reconciled.attempt_id,
+                        reconciled.generation_id,
+                        receipt.revision,
+                    ),
+                )
+                self._append_outbox(connection, reconciled, payload)
+                attempt_count += 1
+            sessions = connection.execute("SELECT payload FROM session_receipts").fetchall()
+            for row in sessions:
+                receipt = SessionReceipt.model_validate_json(row[0])
+                if receipt.state in TERMINAL_SESSION_STATES or receipt.state is SessionReceiptState.ACCEPTED:
+                    continue
+                reconciled = receipt.model_copy(
+                    update={
+                        "revision": receipt.revision + 1,
+                        "state": SessionReceiptState.IN_DOUBT,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+                validate_session_receipt_transition(receipt, reconciled)
+                payload = reconciled.model_dump_json()
+                connection.execute(
+                    "UPDATE session_receipts SET revision = ?, state = ?, payload = ? "
+                    "WHERE session_id = ? AND generation_id = ? AND revision = ?",
+                    (
+                        reconciled.revision,
+                        reconciled.state.value,
+                        payload,
+                        reconciled.session_id,
+                        reconciled.generation_id,
+                        receipt.revision,
+                    ),
+                )
+                SQLiteSessionReceiptStore._append_outbox(connection, reconciled, payload)
+                session_count += 1
+            connection.commit()
+        return attempt_count, session_count
+
+    def _stage_generation(self, artifact: GenerationArtifact) -> None:
+        payload = artifact.model_dump_json()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT artifact_digest, artifact FROM gateway_generations " "WHERE generation_id = ?",
+                (artifact.generation_id,),
+            ).fetchone()
+            if row is not None:
+                if row != (artifact.artifact_digest, payload):
+                    raise ReceiptConflictError("generation identity reused with different artifact")
+                connection.commit()
+                return
+            connection.execute(
+                "INSERT INTO gateway_generations "
+                "(generation_id, artifact_digest, state, artifact) "
+                "VALUES (?, ?, ?, ?)",
+                (artifact.generation_id, artifact.artifact_digest, GenerationState.STAGED.value, payload),
+            )
+            connection.commit()
+
+    def _activate_generation(self, generation_id: str, artifact_digest: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT artifact_digest, state FROM gateway_generations " "WHERE generation_id = ?",
+                (generation_id,),
+            ).fetchone()
+            if row is None:
+                raise ReceiptConflictError("unknown durable generation")
+            if row[0] != artifact_digest:
+                raise ReceiptConflictError("generation artifact digest mismatch")
+            if row[1] not in {GenerationState.STAGED.value, GenerationState.DRAINING.value}:
+                raise ReceiptConflictError(f"generation cannot activate from {row[1]}")
+            sequence = connection.execute(
+                "SELECT COALESCE(MAX(activation_sequence), 0) + 1 " "FROM gateway_generations"
+            ).fetchone()[0]
+            connection.execute(
+                "UPDATE gateway_generations SET state = ? " "WHERE state = ? AND generation_id != ?",
+                (GenerationState.DRAINING.value, GenerationState.ACTIVE.value, generation_id),
+            )
+            connection.execute(
+                "UPDATE gateway_generations SET state = ?, activation_sequence = ? " "WHERE generation_id = ?",
+                (GenerationState.ACTIVE.value, sequence, generation_id),
+            )
+            connection.commit()
+
+    def _load_generations(
+        self,
+    ) -> tuple[tuple[GenerationArtifact, GenerationState], ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT artifact, state FROM gateway_generations " "ORDER BY COALESCE(activation_sequence, 0), rowid"
+            ).fetchall()
+        return tuple((GenerationArtifact.model_validate_json(row[0]), GenerationState(row[1])) for row in rows)
+
+    def _append_event(self, event: PersistedLifecycleEvent) -> PersistedLifecycleEvent:
+        contract = event.model_dump_json()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT contract FROM lifecycle_events " "WHERE execution_id = ? AND sequence = ?",
+                (event.execution_id, event.sequence),
+            ).fetchone()
+            if row is not None:
+                existing = PersistedLifecycleEvent.model_validate_json(row[0])
+                if existing != event:
+                    raise ReceiptConflictError("lifecycle sequence reused with different event")
+                connection.commit()
+                return existing
+            previous = connection.execute(
+                "SELECT sequence, terminal FROM lifecycle_events "
+                "WHERE execution_id = ? ORDER BY sequence DESC LIMIT 1",
+                (event.execution_id,),
+            ).fetchone()
+            if previous is not None:
+                if previous[1]:
+                    raise ReceiptConflictError("lifecycle event follows terminal")
+                if event.sequence != previous[0] + 1:
+                    raise ReceiptConflictError("lifecycle event sequence has a gap")
+            elif event.sequence != 1:
+                raise ReceiptConflictError("first lifecycle event sequence must be one")
+            connection.execute(
+                "INSERT INTO lifecycle_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.execution_id,
+                    event.sequence,
+                    event.receipt_revision,
+                    event.event_type,
+                    int(event.terminal),
+                    event.payload,
+                    contract,
+                ),
+            )
+            connection.commit()
+        return event
+
+    def _read_events(self, execution_id: str, after_sequence: int, limit: int) -> tuple[PersistedLifecycleEvent, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT contract FROM lifecycle_events "
+                "WHERE execution_id = ? AND sequence > ? "
+                "ORDER BY sequence LIMIT ?",
+                (execution_id, after_sequence, limit),
+            ).fetchall()
+        return tuple(PersistedLifecycleEvent.model_validate_json(row[0]) for row in rows)
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _get(self, attempt_id: str, generation_id: str) -> AttemptReceipt | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM attempt_receipts WHERE attempt_id = ? AND generation_id = ?",
+                (attempt_id, generation_id),
+            ).fetchone()
+        return AttemptReceipt.model_validate_json(row[0]) if row else None
+
+    def _list_receipts(self, state: ReceiptState | None, limit: int) -> tuple[AttemptReceipt, ...]:
+        query = "SELECT payload FROM attempt_receipts"
+        parameters: tuple[object, ...]
+        if state is None:
+            parameters = (limit,)
+        else:
+            query += " WHERE state = ?"
+            parameters = (state.value, limit)
+        query += " ORDER BY rowid DESC LIMIT ?"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return tuple(AttemptReceipt.model_validate_json(row[0]) for row in rows)
+
+    def _accept(self, receipt: AttemptReceipt) -> AttemptReceipt:
+        payload = receipt.model_dump_json()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM attempt_receipts WHERE attempt_id = ? AND generation_id = ?",
+                (receipt.attempt_id, receipt.generation_id),
+            ).fetchone()
+            if row:
+                existing = AttemptReceipt.model_validate_json(row[0])
+                if existing.request_digest != receipt.request_digest:
+                    raise ReceiptConflictError("receipt identity reused with different request digest")
+                connection.commit()
+                return existing
+            connection.execute(
+                "INSERT INTO attempt_receipts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    receipt.attempt_id,
+                    receipt.generation_id,
+                    receipt.revision,
+                    receipt.fencing_token,
+                    receipt.state.value,
+                    receipt.permit_digest,
+                    receipt.request_digest,
+                    payload,
+                ),
+            )
+            self._append_outbox(connection, receipt, payload)
+            connection.commit()
+            return receipt
+
+    def _compare_and_swap(
+        self,
+        receipt: AttemptReceipt,
+        expected_revision: int,
+        fencing_token: int,
+    ) -> AttemptReceipt:
+        payload = receipt.model_dump_json()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload, revision, fencing_token FROM attempt_receipts "
+                "WHERE attempt_id = ? AND generation_id = ?",
+                (receipt.attempt_id, receipt.generation_id),
+            ).fetchone()
+            if row is None:
+                raise ReceiptConflictError("receipt does not exist")
+            current = AttemptReceipt.model_validate_json(row[0])
+            if row[1] != expected_revision:
+                raise ReceiptConflictError(f"receipt expected revision {expected_revision}, actual {row[1]}")
+            if fencing_token < row[2] or receipt.fencing_token != fencing_token:
+                raise ReceiptFencedError("receipt fencing token is stale or mismatched")
+            validate_receipt_transition(current, receipt)
+            updated = connection.execute(
+                "UPDATE attempt_receipts SET revision = ?, fencing_token = ?, state = ?, "
+                "permit_digest = ?, request_digest = ?, payload = ? "
+                "WHERE attempt_id = ? AND generation_id = ? AND revision = ? AND fencing_token <= ?",
+                (
+                    receipt.revision,
+                    receipt.fencing_token,
+                    receipt.state.value,
+                    receipt.permit_digest,
+                    receipt.request_digest,
+                    payload,
+                    receipt.attempt_id,
+                    receipt.generation_id,
+                    expected_revision,
+                    fencing_token,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ReceiptConflictError("receipt compare-and-swap lost race")
+            self._append_outbox(connection, receipt, payload)
+            connection.commit()
+            return receipt
+
+    def _read_outbox(self, after_sequence: int, limit: int) -> tuple[OutboxRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT sequence, attempt_id, generation_id, receipt_revision, payload "
+                "FROM receipt_outbox WHERE published = 0 AND sequence > ? ORDER BY sequence LIMIT ?",
+                (after_sequence, limit),
+            ).fetchall()
+        return tuple(OutboxRecord(*row) for row in rows)
+
+    def _mark_published(self, sequence: int) -> None:
+        with self._connect() as connection:
+            updated = connection.execute(
+                "UPDATE receipt_outbox SET published = 1 WHERE sequence = ?",
+                (sequence,),
+            )
+            if updated.rowcount != 1:
+                raise ReceiptConflictError("unknown or already removed outbox sequence")
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._path, timeout=self._busy_timeout_ms / 1000, isolation_level=None)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
+        return connection
+
+    @staticmethod
+    def _append_outbox(connection: sqlite3.Connection, receipt: AttemptReceipt, payload: str) -> None:
+        connection.execute(
+            "INSERT INTO receipt_outbox " "(attempt_id, generation_id, receipt_revision, payload) VALUES (?, ?, ?, ?)",
+            (receipt.attempt_id, receipt.generation_id, receipt.revision, payload),
+        )
+
+
+class SQLiteReconciliationAuthority:
+    """Immutable evidence and owner-controlled reconciliation in one authority."""
+
+    def __init__(self, authority: SQLiteAttemptReceiptStore) -> None:
+        self._authority = authority
+
+    async def bind_execution(
+        self,
+        *,
+        execution_id: str,
+        generation_id: str,
+        provider: str,
+        owner_id: str,
+        strategy_id: str,
+    ) -> None:
+        values = (execution_id, generation_id, provider, owner_id, strategy_id)
+        if any(not value for value in values):
+            raise ValueError("reconciliation binding fields must be non-empty")
+        await run_disk_io(self._bind_execution, *values)
+
+    async def append(self, evidence: ProviderEvidence) -> bool:
+        return await run_disk_io(self._append, evidence)
+
+    async def provider_for(self, execution_id: str, generation_id: str) -> str:
+        if not execution_id or not generation_id:
+            raise ValueError("reconciliation execution identity is required")
+        return await run_disk_io(self._provider_for, execution_id, generation_id)
+
+    async def list_evidence(self, execution_id: str, *, limit: int = 100) -> tuple[ProviderEvidenceRecord, ...]:
+        if not execution_id or limit <= 0 or limit > 1000:
+            raise ValueError("invalid provider evidence query")
+        return await run_disk_io(self._list_evidence, execution_id, limit)
+
+    async def propose(self, execution_id: str) -> ReconciliationRecord:
+        if not execution_id:
+            raise ValueError("execution identity is required")
+        return await run_disk_io(self._propose, execution_id)
+
+    async def get(self, execution_id: str) -> ReconciliationRecord | None:
+        if not execution_id:
+            raise ValueError("execution identity is required")
+        return await run_disk_io(self._get, execution_id)
+
+    async def list_records(
+        self, *, state: ReconciliationState | None = None, limit: int = 100
+    ) -> tuple[ReconciliationRecord, ...]:
+        if limit <= 0 or limit > 1000:
+            raise ValueError("reconciliation projection limit is invalid")
+        return await run_disk_io(self._list_records, state, limit)
+
+    async def acknowledge(self, acknowledgement: OwnerAcknowledgement) -> ReconciliationRecord:
+        return await run_disk_io(self._acknowledge, acknowledgement)
+
+    async def read_outbox(self, *, after_sequence: int = 0, limit: int = 100) -> tuple[ReconciliationOutboxRecord, ...]:
+        if after_sequence < 0 or limit <= 0 or limit > 1000:
+            raise ValueError("invalid reconciliation outbox cursor")
+        return await run_disk_io(self._read_outbox, after_sequence, limit)
+
+    async def mark_published(self, sequence: int) -> None:
+        if sequence <= 0:
+            raise ValueError("outbox sequence must be positive")
+        await run_disk_io(self._mark_published, sequence)
+
+    async def read_owner_commands(
+        self, owner_id: str, *, after_sequence: int = 0, limit: int = 100
+    ) -> tuple[tuple[int, OwnerCommand], ...]:
+        if not owner_id or after_sequence < 0 or limit <= 0 or limit > 1000:
+            raise ValueError("invalid owner command cursor")
+        return await run_disk_io(self._read_owner_commands, owner_id, after_sequence, limit)
+
+    def _bind_execution(
+        self,
+        execution_id: str,
+        generation_id: str,
+        provider: str,
+        owner_id: str,
+        strategy_id: str,
+    ) -> None:
+        identity = (execution_id, generation_id, provider, owner_id, strategy_id)
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT execution_id, generation_id, provider, owner_id, strategy_id "
+                "FROM reconciliation_bindings WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if row is not None:
+                if tuple(row) != identity:
+                    raise ReceiptConflictError("reconciliation execution binding conflict")
+                connection.commit()
+                return
+            connection.execute(
+                "INSERT INTO reconciliation_bindings VALUES (?, ?, ?, ?, ?)",
+                identity,
+            )
+            connection.commit()
+
+    def _provider_for(self, execution_id: str, generation_id: str) -> str:
+        with self._authority._connect() as connection:
+            row = connection.execute(
+                "SELECT provider FROM reconciliation_bindings " "WHERE execution_id = ? AND generation_id = ?",
+                (execution_id, generation_id),
+            ).fetchone()
+        if row is None:
+            raise ReceiptConflictError("unknown reconciliation execution generation")
+        return str(row[0])
+
+    @staticmethod
+    def _evidence_payload(evidence: ProviderEvidence) -> str:
+        return json.dumps(
+            evidence.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+
+    def _append(self, evidence: ProviderEvidence) -> bool:
+        payload = self._evidence_payload(evidence)
+        digest = "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
+        received_at = datetime.now(timezone.utc)
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            binding = connection.execute(
+                "SELECT generation_id, provider FROM reconciliation_bindings " "WHERE execution_id = ?",
+                (evidence.execution_id,),
+            ).fetchone()
+            if binding is None:
+                raise ProviderEvidenceConflictError("provider evidence has no registered execution binding")
+            if binding[1] != evidence.provider:
+                raise ProviderEvidenceConflictError("provider evidence identity conflict")
+            existing = connection.execute(
+                "SELECT execution_id, digest FROM provider_evidence " "WHERE provider = ? AND event_id = ?",
+                (evidence.provider, evidence.event_id),
+            ).fetchone()
+            if existing is not None:
+                if existing != (evidence.execution_id, digest):
+                    raise ProviderEvidenceConflictError("provider event identity reused with different evidence")
+                connection.commit()
+                return False
+            proposal = connection.execute(
+                "SELECT proposal_id FROM reconciliation_records " "WHERE execution_id = ?",
+                (evidence.execution_id,),
+            ).fetchone()
+            if proposal is not None:
+                raise ProviderEvidenceConflictError("provider evidence arrived after proposal snapshot")
+            resource_rows = connection.execute(
+                "SELECT payload FROM provider_evidence WHERE execution_id = ?",
+                (evidence.execution_id,),
+            ).fetchall()
+            existing_evidence = tuple(ProviderEvidence.model_validate_json(row[0]) for row in resource_rows)
+            resource_ids = {
+                item.provider_resource_id for item in existing_evidence if item.provider_resource_id is not None
+            }
+            if (
+                evidence.provider_resource_id is not None
+                and resource_ids
+                and evidence.provider_resource_id not in resource_ids
+            ):
+                raise ProviderEvidenceConflictError("provider resource identity changed within execution")
+            connection.execute(
+                "INSERT INTO provider_evidence VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    evidence.provider,
+                    evidence.event_id,
+                    evidence.execution_id,
+                    binding[0],
+                    digest,
+                    received_at.isoformat(),
+                    payload,
+                ),
+            )
+            connection.commit()
+            return True
+
+    def _list_evidence(self, execution_id: str, limit: int) -> tuple[ProviderEvidenceRecord, ...]:
+        with self._authority._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload, generation_id, digest, received_at "
+                "FROM provider_evidence WHERE execution_id = ? "
+                "ORDER BY received_at, provider, event_id LIMIT ?",
+                (execution_id, limit),
+            ).fetchall()
+        return tuple(
+            ProviderEvidenceRecord(
+                evidence=ProviderEvidence.model_validate_json(row[0]),
+                generation_id=row[1],
+                digest=row[2],
+                received_at=datetime.fromisoformat(row[3]),
+            )
+            for row in rows
+        )
+
+    def _propose(self, execution_id: str) -> ReconciliationRecord:
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._get_with_connection(connection, execution_id)
+            if existing is not None:
+                connection.commit()
+                return existing
+            binding = connection.execute(
+                "SELECT generation_id, owner_id, strategy_id " "FROM reconciliation_bindings WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if binding is None:
+                raise ReceiptConflictError("unknown reconciliation execution")
+            evidence_rows = connection.execute(
+                "SELECT digest FROM provider_evidence WHERE execution_id = ? "
+                "ORDER BY received_at, provider, event_id",
+                (execution_id,),
+            ).fetchall()
+            if not evidence_rows:
+                raise ReceiptConflictError("reconciliation proposal requires durable provider evidence")
+            digests = tuple(row[0] for row in evidence_rows)
+            proposal_seed = json.dumps(
+                [binding[1], execution_id, binding[0], binding[2], digests],
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode()
+            proposal = ResolutionProposal(
+                proposal_id="proposal:sha256:" + hashlib.sha256(proposal_seed).hexdigest(),
+                owner_id=binding[1],
+                execution_id=execution_id,
+                generation_id=binding[0],
+                strategy_id=binding[2],
+                evidence_digests=digests,
+            )
+            record = require_owner_action(proposal)
+            connection.execute(
+                "INSERT INTO reconciliation_records VALUES (?, ?, ?, ?, ?, NULL)",
+                (proposal.proposal_id, execution_id, binding[0], record.state.value, proposal.model_dump_json()),
+            )
+            connection.execute(
+                "INSERT INTO reconciliation_outbox (proposal_id, payload) " "VALUES (?, ?)",
+                (proposal.proposal_id, proposal.model_dump_json()),
+            )
+            command = OwnerCommand(
+                command_id=f"owner-command:{proposal.proposal_id}",
+                proposal_id=proposal.proposal_id,
+                owner_id=proposal.owner_id,
+                execution_id=proposal.execution_id,
+                generation_id=proposal.generation_id,
+                strategy_id=proposal.strategy_id,
+                evidence_digests=proposal.evidence_digests,
+                issued_at=proposal.created_at,
+            )
+            connection.execute(
+                "INSERT INTO owner_command_outbox " "(command_id, owner_id, proposal_id, payload) VALUES (?, ?, ?, ?)",
+                (command.command_id, command.owner_id, command.proposal_id, command.model_dump_json()),
+            )
+            connection.commit()
+            return record
+
+    def _get(self, execution_id: str) -> ReconciliationRecord | None:
+        with self._authority._connect() as connection:
+            return self._get_with_connection(connection, execution_id)
+
+    @staticmethod
+    def _get_with_connection(connection: sqlite3.Connection, execution_id: str) -> ReconciliationRecord | None:
+        row = connection.execute(
+            "SELECT state, proposal, acknowledgement FROM reconciliation_records " "WHERE execution_id = ?",
+            (execution_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ReconciliationRecord(
+            proposal=ResolutionProposal.model_validate_json(row[1]),
+            state=ReconciliationState(row[0]),
+            acknowledgement=(OwnerAcknowledgement.model_validate_json(row[2]) if row[2] is not None else None),
+        )
+
+    def _list_records(self, state: ReconciliationState | None, limit: int) -> tuple[ReconciliationRecord, ...]:
+        query = "SELECT state, proposal, acknowledgement " "FROM reconciliation_records"
+        parameters: tuple[object, ...]
+        if state is None:
+            parameters = (limit,)
+        else:
+            query += " WHERE state = ?"
+            parameters = (state.value, limit)
+        query += " ORDER BY rowid DESC LIMIT ?"
+        with self._authority._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return tuple(
+            ReconciliationRecord(
+                proposal=ResolutionProposal.model_validate_json(row[1]),
+                state=ReconciliationState(row[0]),
+                acknowledgement=(OwnerAcknowledgement.model_validate_json(row[2]) if row[2] is not None else None),
+            )
+            for row in rows
+        )
+
+    def _acknowledge(self, acknowledgement: OwnerAcknowledgement) -> ReconciliationRecord:
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT execution_id FROM reconciliation_records " "WHERE proposal_id = ?",
+                (acknowledgement.proposal_id,),
+            ).fetchone()
+            if row is None:
+                raise ReceiptConflictError("unknown reconciliation proposal")
+            current = self._get_with_connection(connection, row[0])
+            if current is None:
+                raise ReceiptConflictError("reconciliation record disappeared")
+            updated = acknowledge_owner_action(current, acknowledgement)
+            if updated is current:
+                connection.commit()
+                return current
+            connection.execute(
+                "UPDATE reconciliation_records SET state = ?, acknowledgement = ? " "WHERE proposal_id = ?",
+                (updated.state.value, acknowledgement.model_dump_json(), acknowledgement.proposal_id),
+            )
+            connection.commit()
+            return updated
+
+    def _read_outbox(self, after_sequence: int, limit: int) -> tuple[ReconciliationOutboxRecord, ...]:
+        with self._authority._connect() as connection:
+            rows = connection.execute(
+                "SELECT sequence, payload FROM reconciliation_outbox "
+                "WHERE published = 0 AND sequence > ? ORDER BY sequence LIMIT ?",
+                (after_sequence, limit),
+            ).fetchall()
+        return tuple(
+            ReconciliationOutboxRecord(
+                sequence=row[0],
+                proposal=ResolutionProposal.model_validate_json(row[1]),
+            )
+            for row in rows
+        )
+
+    def _mark_published(self, sequence: int) -> None:
+        with self._authority._connect() as connection:
+            updated = connection.execute(
+                "UPDATE reconciliation_outbox SET published = 1 " "WHERE sequence = ? AND published = 0",
+                (sequence,),
+            )
+            if updated.rowcount != 1:
+                raise ReceiptConflictError("unknown or already published reconciliation outbox sequence")
+
+    def _read_owner_commands(
+        self, owner_id: str, after_sequence: int, limit: int
+    ) -> tuple[tuple[int, OwnerCommand], ...]:
+        with self._authority._connect() as connection:
+            rows = connection.execute(
+                "SELECT sequence, payload FROM owner_command_outbox "
+                "WHERE owner_id = ? AND sequence > ? ORDER BY sequence LIMIT ?",
+                (owner_id, after_sequence, limit),
+            ).fetchall()
+        return tuple((row[0], OwnerCommand.model_validate_json(row[1])) for row in rows)
+
+
+class SQLiteSessionReceiptStore:
+    def __init__(self, authority: SQLiteAttemptReceiptStore) -> None:
+        self._authority = authority
+
+    async def get(self, session_id: str, generation_id: str) -> SessionReceipt | None:
+        return await run_disk_io(self._get, session_id, generation_id)
+
+    async def accept(self, receipt: SessionReceipt) -> SessionReceipt:
+        return await run_disk_io(self._accept, receipt)
+
+    async def compare_and_swap(
+        self,
+        receipt: SessionReceipt,
+        *,
+        expected_revision: int,
+        fencing_token: int,
+    ) -> SessionReceipt:
+        return await run_disk_io(
+            self._compare_and_swap,
+            receipt,
+            expected_revision,
+            fencing_token,
+        )
+
+    def _get(self, session_id: str, generation_id: str) -> SessionReceipt | None:
+        with self._authority._connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM session_receipts " "WHERE session_id = ? AND generation_id = ?",
+                (session_id, generation_id),
+            ).fetchone()
+        return SessionReceipt.model_validate_json(row[0]) if row else None
+
+    def _accept(self, receipt: SessionReceipt) -> SessionReceipt:
+        payload = receipt.model_dump_json()
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM session_receipts " "WHERE session_id = ? AND generation_id = ?",
+                (receipt.session_id, receipt.generation_id),
+            ).fetchone()
+            if row:
+                existing = SessionReceipt.model_validate_json(row[0])
+                if (
+                    existing.generation_artifact_digest != receipt.generation_artifact_digest
+                    or existing.endpoint_binding_id != receipt.endpoint_binding_id
+                ):
+                    raise ReceiptConflictError("session receipt identity conflict")
+                connection.commit()
+                return existing
+            connection.execute(
+                "INSERT INTO session_receipts VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    receipt.session_id,
+                    receipt.generation_id,
+                    receipt.revision,
+                    receipt.fencing_token,
+                    receipt.state.value,
+                    payload,
+                ),
+            )
+            self._append_outbox(connection, receipt, payload)
+            connection.commit()
+            return receipt
+
+    def _compare_and_swap(
+        self,
+        receipt: SessionReceipt,
+        expected_revision: int,
+        fencing_token: int,
+    ) -> SessionReceipt:
+        payload = receipt.model_dump_json()
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload, revision, fencing_token FROM session_receipts "
+                "WHERE session_id = ? AND generation_id = ?",
+                (receipt.session_id, receipt.generation_id),
+            ).fetchone()
+            if row is None:
+                raise ReceiptConflictError("session receipt does not exist")
+            current = SessionReceipt.model_validate_json(row[0])
+            if row[1] != expected_revision:
+                raise ReceiptConflictError("session receipt revision conflict")
+            if fencing_token < row[2] or receipt.fencing_token != fencing_token:
+                raise ReceiptFencedError("session receipt fencing token rejected")
+            validate_session_receipt_transition(current, receipt)
+            updated = connection.execute(
+                "UPDATE session_receipts SET revision = ?, fencing_token = ?, "
+                "state = ?, payload = ? WHERE session_id = ? AND generation_id = ? "
+                "AND revision = ? AND fencing_token <= ?",
+                (
+                    receipt.revision,
+                    receipt.fencing_token,
+                    receipt.state.value,
+                    payload,
+                    receipt.session_id,
+                    receipt.generation_id,
+                    expected_revision,
+                    fencing_token,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ReceiptConflictError("session receipt CAS conflict")
+            self._append_outbox(connection, receipt, payload)
+            connection.commit()
+            return receipt
+
+    @staticmethod
+    def _append_outbox(
+        connection: sqlite3.Connection,
+        receipt: SessionReceipt,
+        payload: str,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO session_outbox " "(session_id, generation_id, receipt_revision, payload) VALUES (?, ?, ?, ?)",
+            (
+                receipt.session_id,
+                receipt.generation_id,
+                receipt.revision,
+                payload,
+            ),
+        )
+
+
+class SQLiteUsageLedger:
+    """Budget authority sharing the receipt store's SQLite transaction domain."""
+
+    def __init__(self, authority: SQLiteAttemptReceiptStore) -> None:
+        self._authority = authority
+
+    async def configure_budget(self, tenant_id: str, project_id: str, limit_units: int) -> None:
+        if not tenant_id or not project_id or limit_units < 0:
+            raise ValueError("invalid budget configuration")
+        await run_disk_io(self._configure_budget, tenant_id, project_id, limit_units)
+
+    async def reserve(
+        self,
+        *,
+        reservation_id: str,
+        attempt_id: str,
+        tenant_id: str,
+        project_id: str,
+        units: int,
+        ttl_seconds: float,
+    ) -> BudgetReservation:
+        if units <= 0 or ttl_seconds <= 0:
+            raise ValueError("reservation units and ttl must be positive")
+        return await run_disk_io(
+            self._reserve,
+            reservation_id,
+            attempt_id,
+            tenant_id,
+            project_id,
+            units,
+            ttl_seconds,
+        )
+
+    async def settle(
+        self,
+        reservation: BudgetReservation,
+        *,
+        settlement_id: str,
+        actual_units: int,
+    ) -> UsageSettlement:
+        if actual_units < 0:
+            raise ValueError("actual usage cannot be negative")
+        return await run_disk_io(
+            self._settle,
+            reservation,
+            settlement_id,
+            actual_units,
+            ReservationState.SETTLED,
+        )
+
+    async def release(self, reservation: BudgetReservation, *, settlement_id: str) -> UsageSettlement:
+        return await run_disk_io(
+            self._settle,
+            reservation,
+            settlement_id,
+            0,
+            ReservationState.RELEASED,
+        )
+
+    async def pending_reconciliation(self, reservation: BudgetReservation, *, settlement_id: str) -> UsageSettlement:
+        return await run_disk_io(
+            self._settle,
+            reservation,
+            settlement_id,
+            0,
+            ReservationState.PENDING_RECONCILIATION,
+        )
+
+    async def reconcile(
+        self,
+        reservation: BudgetReservation,
+        *,
+        settlement_id: str,
+        actual_units: int,
+        fencing_token: int,
+    ) -> UsageSettlement:
+        if actual_units < 0 or fencing_token <= reservation.fencing_token:
+            raise ValueError("reconciliation requires known usage and a higher fencing token")
+        return await run_disk_io(
+            self._reconcile,
+            reservation,
+            settlement_id,
+            actual_units,
+            fencing_token,
+        )
+
+    async def reclaim_expired(self, *, now: datetime, fencing_token: int) -> tuple[UsageSettlement, ...]:
+        if now.utcoffset() is None or fencing_token <= 0:
+            raise ValueError("expiry recovery requires aware time and positive fencing token")
+        return await run_disk_io(self._reclaim_expired, now, fencing_token)
+
+    def _configure_budget(self, tenant_id: str, project_id: str, limit_units: int) -> None:
+        with self._authority._connect() as connection:
+            connection.execute(
+                "INSERT INTO usage_budgets (tenant_id, project_id, limit_units) VALUES (?, ?, ?) "
+                "ON CONFLICT (tenant_id, project_id) DO UPDATE SET limit_units = excluded.limit_units",
+                (tenant_id, project_id, limit_units),
+            )
+
+    def _reserve(
+        self,
+        reservation_id: str,
+        attempt_id: str,
+        tenant_id: str,
+        project_id: str,
+        units: int,
+        ttl_seconds: float,
+    ) -> BudgetReservation:
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT payload FROM usage_reservations WHERE reservation_id = ? OR attempt_id = ?",
+                (reservation_id, attempt_id),
+            ).fetchone()
+            if existing:
+                reservation = BudgetReservation.model_validate_json(existing[0])
+                if (
+                    reservation.reservation_id != reservation_id
+                    or reservation.attempt_id != attempt_id
+                    or reservation.tenant_id != tenant_id
+                    or reservation.project_id != project_id
+                    or reservation.units != units
+                ):
+                    raise ReceiptConflictError("budget reservation identity conflict")
+                connection.commit()
+                return reservation
+            budget = connection.execute(
+                "SELECT limit_units, settled_units FROM usage_budgets WHERE tenant_id = ? AND project_id = ?",
+                (tenant_id, project_id),
+            ).fetchone()
+            if budget is None:
+                raise ReceiptConflictError("budget is not configured")
+            active = connection.execute(
+                "SELECT COALESCE(SUM(units), 0) FROM usage_reservations "
+                "WHERE tenant_id = ? AND project_id = ? AND state IN (?, ?)",
+                (
+                    tenant_id,
+                    project_id,
+                    ReservationState.RESERVED.value,
+                    ReservationState.PENDING_RECONCILIATION.value,
+                ),
+            ).fetchone()[0]
+            if budget[1] + active + units > budget[0]:
+                raise ReceiptConflictError("budget exhausted")
+            reservation = BudgetReservation(
+                reservation_id=reservation_id,
+                attempt_id=attempt_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                units=units,
+                fencing_token=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+            )
+            connection.execute(
+                "INSERT INTO usage_reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    reservation.reservation_id,
+                    reservation.attempt_id,
+                    reservation.tenant_id,
+                    reservation.project_id,
+                    reservation.units,
+                    reservation.fencing_token,
+                    reservation.state.value,
+                    reservation.expires_at.isoformat(),
+                    reservation.model_dump_json(),
+                ),
+            )
+            connection.commit()
+            return reservation
+
+    def _settle(
+        self,
+        reservation: BudgetReservation,
+        settlement_id: str,
+        actual_units: int,
+        state: ReservationState,
+    ) -> UsageSettlement:
+        if actual_units > reservation.units:
+            raise ReceiptConflictError("actual usage exceeds reserved budget")
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT payload FROM usage_settlements WHERE settlement_id = ?",
+                (settlement_id,),
+            ).fetchone()
+            if existing:
+                settlement = UsageSettlement.model_validate_json(existing[0])
+                if (
+                    settlement.reservation_id != reservation.reservation_id
+                    or settlement.attempt_id != reservation.attempt_id
+                    or settlement.actual_units != actual_units
+                    or settlement.state is not state
+                ):
+                    raise ReceiptConflictError("settlement identity conflict")
+                connection.commit()
+                return settlement
+            row = connection.execute(
+                "SELECT payload, state FROM usage_reservations WHERE reservation_id = ?",
+                (reservation.reservation_id,),
+            ).fetchone()
+            if row is None:
+                raise ReceiptConflictError("unknown budget reservation")
+            current = BudgetReservation.model_validate_json(row[0])
+            if current != reservation or row[1] != ReservationState.RESERVED.value:
+                if row[1] != ReservationState.RESERVED.value:
+                    raise ReceiptConflictError("budget reservation already settled")
+                raise ReceiptConflictError("budget reservation payload mismatch")
+            settlement = UsageSettlement(
+                settlement_id=settlement_id,
+                reservation_id=reservation.reservation_id,
+                attempt_id=reservation.attempt_id,
+                actual_units=actual_units,
+                state=state,
+            )
+            updated_reservation = reservation.model_copy(update={"state": state})
+            connection.execute(
+                "UPDATE usage_reservations SET state = ?, payload = ? WHERE reservation_id = ?",
+                (
+                    state.value,
+                    updated_reservation.model_dump_json(),
+                    reservation.reservation_id,
+                ),
+            )
+            if state is ReservationState.SETTLED:
+                connection.execute(
+                    "UPDATE usage_budgets SET settled_units = settled_units + ? "
+                    "WHERE tenant_id = ? AND project_id = ?",
+                    (actual_units, reservation.tenant_id, reservation.project_id),
+                )
+            connection.execute(
+                "INSERT INTO usage_settlements VALUES (?, ?, ?, ?)",
+                (
+                    settlement.settlement_id,
+                    settlement.reservation_id,
+                    settlement.attempt_id,
+                    settlement.model_dump_json(),
+                ),
+            )
+            connection.commit()
+            return settlement
+
+    def _reconcile(
+        self,
+        reservation: BudgetReservation,
+        settlement_id: str,
+        actual_units: int,
+        fencing_token: int,
+    ) -> UsageSettlement:
+        if actual_units > reservation.units:
+            raise ReceiptConflictError("actual usage exceeds reserved budget")
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT payload FROM usage_settlements WHERE settlement_id = ?",
+                (settlement_id,),
+            ).fetchone()
+            if existing:
+                settlement = UsageSettlement.model_validate_json(existing[0])
+                if (
+                    settlement.reservation_id != reservation.reservation_id
+                    or settlement.attempt_id != reservation.attempt_id
+                    or settlement.actual_units != actual_units
+                    or settlement.state is not ReservationState.SETTLED
+                ):
+                    raise ReceiptConflictError("reconciliation identity conflict")
+                connection.commit()
+                return settlement
+            row = connection.execute(
+                "SELECT payload FROM usage_reservations WHERE reservation_id = ?",
+                (reservation.reservation_id,),
+            ).fetchone()
+            if row is None:
+                raise ReceiptConflictError("unknown budget reservation")
+            current = BudgetReservation.model_validate_json(row[0])
+            if not self._same_reservation_identity(current, reservation):
+                raise ReceiptConflictError("budget reservation payload mismatch")
+            if current.state is not ReservationState.PENDING_RECONCILIATION:
+                raise ReceiptConflictError("budget reservation is not pending reconciliation")
+            if fencing_token <= current.fencing_token:
+                raise ReceiptFencedError("reconciliation fencing token is stale")
+            settlement = UsageSettlement(
+                settlement_id=settlement_id,
+                reservation_id=reservation.reservation_id,
+                attempt_id=reservation.attempt_id,
+                actual_units=actual_units,
+                state=ReservationState.SETTLED,
+            )
+            updated = current.model_copy(
+                update={
+                    "state": ReservationState.SETTLED,
+                    "fencing_token": fencing_token,
+                }
+            )
+            connection.execute(
+                "UPDATE usage_reservations SET fencing_token = ?, state = ?, payload = ? " "WHERE reservation_id = ?",
+                (
+                    fencing_token,
+                    ReservationState.SETTLED.value,
+                    updated.model_dump_json(),
+                    reservation.reservation_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE usage_budgets SET settled_units = settled_units + ? " "WHERE tenant_id = ? AND project_id = ?",
+                (actual_units, reservation.tenant_id, reservation.project_id),
+            )
+            connection.execute(
+                "INSERT INTO usage_settlements VALUES (?, ?, ?, ?)",
+                (
+                    settlement.settlement_id,
+                    settlement.reservation_id,
+                    settlement.attempt_id,
+                    settlement.model_dump_json(),
+                ),
+            )
+            connection.commit()
+            return settlement
+
+    def _reclaim_expired(self, now: datetime, fencing_token: int) -> tuple[UsageSettlement, ...]:
+        settlements: list[UsageSettlement] = []
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT payload FROM usage_reservations " "WHERE state = ? AND expires_at <= ? AND fencing_token < ?",
+                (ReservationState.RESERVED.value, now.isoformat(), fencing_token),
+            ).fetchall()
+            for row in rows:
+                current = BudgetReservation.model_validate_json(row[0])
+                settlement = UsageSettlement(
+                    settlement_id=f"expiry:{current.reservation_id}:{fencing_token}",
+                    reservation_id=current.reservation_id,
+                    attempt_id=current.attempt_id,
+                    actual_units=0,
+                    state=ReservationState.RELEASED,
+                )
+                updated = current.model_copy(
+                    update={
+                        "state": ReservationState.RELEASED,
+                        "fencing_token": fencing_token,
+                    }
+                )
+                connection.execute(
+                    "UPDATE usage_reservations SET fencing_token = ?, state = ?, payload = ? "
+                    "WHERE reservation_id = ?",
+                    (
+                        fencing_token,
+                        ReservationState.RELEASED.value,
+                        updated.model_dump_json(),
+                        current.reservation_id,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO usage_settlements VALUES (?, ?, ?, ?)",
+                    (
+                        settlement.settlement_id,
+                        settlement.reservation_id,
+                        settlement.attempt_id,
+                        settlement.model_dump_json(),
+                    ),
+                )
+                settlements.append(settlement)
+            connection.commit()
+        return tuple(settlements)
+
+    @staticmethod
+    def _same_reservation_identity(left: BudgetReservation, right: BudgetReservation) -> bool:
+        return (
+            left.reservation_id == right.reservation_id
+            and left.attempt_id == right.attempt_id
+            and left.tenant_id == right.tenant_id
+            and left.project_id == right.project_id
+            and left.units == right.units
+        )

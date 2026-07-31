@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from mote.contracts.fileops import CreateMutation, FileOperationError, ReplaceMutation, TransactionStatus
-from mote.contracts.text import count_noun, verb_agree
+from mote.contracts.file import CreateMutation, FileOperationError, ReplaceMutation, TransactionStatus
+from mote.product.toolsets.builtin._paths import resolve_path, resolve_permission_path
+from mote.runtime.errors import ToolError
 from mote.runtime.fileops.edit_plans import (
     AbsentEditPlanSource,
     EditPlanManifestError,
@@ -16,11 +17,11 @@ from mote.runtime.fileops.edit_plans import (
     WholeFileEditPlanRequest,
 )
 from mote.runtime.fileops.identity import path_token
+from mote.runtime.presentation import count_noun, verb_agree
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import CommitEditPlan, GetCwd, PlanFileEdit
-from mote.runtime.tools.dependency._paths import resolve_path, resolve_permission_path
 from mote.runtime.tools.tool_registry import register_tool
-from mote.runtime.tools.tool_result import FileChange, ToolError, ToolResult
+from mote.runtime.tools.tool_result import FileChange, ToolResult
 
 _MSG_FILE_PATH_REQUIRED = "Error: 'file_path' argument is required."
 _MSG_STRINGS_REQUIRED = "Error: 'old_string' and 'new_string' are required."
@@ -71,12 +72,21 @@ class Edit(BaseTool):
         old_string: str = "",
         replace_all: bool = False,
     ) -> ToolResult:
-        """Create, overwrite, or replace exact text in one managed file.
+        """Create, overwrite, or replace exact text in one file.
 
         An empty ``old_string`` means whole-file create/overwrite. A non-empty
         ``old_string`` is matched exactly and must occur once unless
         ``replace_all`` is true. Existing files must have been read in this
         session; creation requires an existing parent directory.
+
+        Args:
+            file_path: Absolute path or path relative to the working directory.
+            new_string: Replacement text, or the complete file content when
+                old_string is empty.
+            old_string: Exact text to replace. Leave empty to create or overwrite
+                the whole file.
+            replace_all: Replace every occurrence of old_string instead of
+                requiring exactly one match.
         """
         self._validate_arguments(file_path, old_string, new_string)
         full_path = resolve_path(self.get_cwd, file_path.strip())

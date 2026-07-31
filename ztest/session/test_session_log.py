@@ -12,8 +12,8 @@ import asyncio
 
 import pytest
 
-from mote.contracts.ports.event_journal import JournalIntegrityError
-from mote.contracts.schema import UserMessage
+from mote.contracts.conversation import UserMessage
+from mote.contracts.ports.events.journal import JournalIntegrityError
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MessageEvent, SessionMetaEvent
 from mote.runtime.session.log import ROLLOUT_FILENAME, SessionLog

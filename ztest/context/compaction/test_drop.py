@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.constants.context import HEAD_DROPPED_MESSAGE
-from mote.contracts.schema import ContextManagerConfig, Message
+from mote.contracts.conversation import ContextManagerConfig, Message
+from mote.contracts.conversation.constants import HEAD_DROPPED_MESSAGE
 from mote.runtime.context.compaction.reducers.drop import HeadDropReducer
 from mote.runtime.context.compaction.request import ReductionReason, ReductionRequest, Urgency
 from mote.runtime.context.compaction.transcript import Transcript

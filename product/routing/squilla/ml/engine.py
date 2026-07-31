@@ -17,7 +17,7 @@ from typing import Optional
 from mote.product.routing.squilla.ml.config import default_model_dir, load_runtime_config
 from mote.product.routing.squilla.ml.inference.core import InferenceCore
 from mote.product.routing.squilla.ml.inference.types import InferenceRequest, InferenceResult
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 
 class SquillaMLEngine:

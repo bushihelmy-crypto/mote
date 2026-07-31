@@ -5,14 +5,15 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from mote.contracts.fileops.errors import RewindFailedError
-from mote.contracts.fileops.events import (
+from mote.contracts.events.file.facts import (
     RewindAbortedEvent,
     RewindCommittedEvent,
     RewindInDoubtEvent,
     RewindPreparedEvent,
 )
-from mote.contracts.fileops.models import FileOperationKind, RewindRecord, RewindResult, TransactionStatus
+from mote.contracts.file.errors import RewindFailedError
+from mote.contracts.file.recovery import RewindRecord, RewindResult
+from mote.contracts.file.transactions import FileOperationKind, TransactionStatus
 from mote.runtime.fileops.checkpoints import WorktreeCheckpointStore
 from mote.runtime.fileops.control import ProjectOperationControl
 from mote.runtime.fileops.cursor_registry import DurableCursorRegistry

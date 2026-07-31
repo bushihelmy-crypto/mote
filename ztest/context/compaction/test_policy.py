@@ -7,8 +7,8 @@ from typing import Any, cast
 
 import pytest
 
-from mote.contracts.policy.compaction import CompactionIntent, CompactionPolicyContribution
-from mote.contracts.ports.compaction_policy import CompactionPolicyExtensionSpec
+from mote.contracts.conversation.compaction_policy import CompactionIntent, CompactionPolicyContribution
+from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
 from mote.runtime.context.compaction.policy import build_compaction_policy
 from mote.runtime.hook.manager import HookManager
 

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mote.contracts.constants.messages import RETENTION, RETENTION_ERASABLE, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
-from mote.contracts.schema import AIMessage, ContextManagerConfig
+from mote.contracts.conversation import AIMessage, ContextManagerConfig
+from mote.contracts.conversation.fields import RETENTION, RETENTION_ERASABLE, RETENTION_PIN, TOOL_CALL_ID, TOOL_CALLS
 from mote.runtime.context.compaction.reducers.erase import EraseReducer
 from mote.runtime.context.compaction.reducers.fold import FoldReducer
 from mote.runtime.context.compaction.request import ReductionRequest

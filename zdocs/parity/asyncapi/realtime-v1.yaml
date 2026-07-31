@@ -1,0 +1,15 @@
+asyncapi: 3.0.0
+info: {title: Mote Realtime API, version: 1.0.0}
+channels:
+  realtime:
+    address: /v1/realtime
+    messages:
+      clientEvent: {$ref: '#/components/messages/ClientEvent'}
+      serverEvent: {$ref: '#/components/messages/ServerEvent'}
+operations:
+  realtimeReceive: {action: receive, channel: {$ref: '#/channels/realtime'}, messages: [{$ref: '#/channels/realtime/messages/clientEvent'}]}
+  realtimeSend: {action: send, channel: {$ref: '#/channels/realtime'}, messages: [{$ref: '#/channels/realtime/messages/serverEvent'}]}
+components:
+  messages:
+    ClientEvent: {payload: {type: object, additionalProperties: false, required: [type, sequence], properties: {type: {type: string}, sequence: {type: integer, minimum: 1}, idempotency_key: {type: string}}}}
+    ServerEvent: {payload: {type: object, additionalProperties: false, required: [type, sequence, receipt_revision], properties: {type: {type: string}, sequence: {type: integer, minimum: 1}, receipt_revision: {type: integer, minimum: 1}}}}

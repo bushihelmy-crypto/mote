@@ -9,7 +9,7 @@ import stat
 
 import pytest
 
-from mote.contracts.settings.hooks import HookCommandHandler, HookConfig, HookMatcherGroup
+from mote.runtime.config.hook import HookCommandHandler, HookConfig, HookMatcherGroup
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.hook.types import HookOutcome
 

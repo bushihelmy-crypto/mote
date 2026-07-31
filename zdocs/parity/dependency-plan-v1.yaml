@@ -1,0 +1,148 @@
+schema_version: 1
+revision: dependency-plan-v1
+lockfile: requirements/inference.lock
+policy:
+  one_client_owner_per_protocol: true
+  runtime_imports_optional_clients: false
+  required_scope: [current_embedded, current_shared]
+components:
+  - name: aiohttp
+    version_range: ">=3.10,<4"
+    license: Apache-2.0
+    purpose: canonical HTTP/SSE/WebSocket transport and connection pool
+    optional: false
+    release_scope: [current_embedded, current_shared]
+    import_layer: product
+    owner: product.models.transports.connections
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: [httpx, requests]
+    sbom_component: pkg:pypi/aiohttp
+    native_binary: true
+    platforms: [linux_x86_64, linux_aarch64]
+  - name: grpcio
+    version_range: ">=1.74,<2"
+    license: Apache-2.0
+    purpose: Shared Process UDS gRPC/HTTP2 runtime
+    optional: true
+    release_scope: [current_shared]
+    extra: inference-shared
+    import_layer: product
+    owner: product.inference.daemon
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: [grpclib]
+    sbom_component: pkg:pypi/grpcio
+    native_binary: true
+    platforms: [linux_x86_64, linux_aarch64]
+  - name: cryptography
+    version_range: ">=43,<46"
+    license: Apache-2.0 OR BSD-3-Clause
+    purpose: Ed25519 permit/artifact signatures and envelope encryption
+    optional: false
+    release_scope: [current_embedded, current_shared]
+    import_layer: product
+    owner: product.inference.identity
+    cve_policy: {max_severity: medium, remediation_sla_days: 7}
+    alternatives_considered: [PyNaCl]
+    sbom_component: pkg:pypi/cryptography
+    native_binary: true
+    platforms: [linux_x86_64, linux_aarch64]
+  - name: asyncpg
+    version_range: ">=0.30,<1"
+    license: Apache-2.0
+    purpose: PostgreSQL durable authority adapter
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-postgres
+    import_layer: product
+    owner: product.inference.backends.postgres
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: [psycopg]
+    sbom_component: pkg:pypi/asyncpg
+    native_binary: true
+    platforms: [linux_x86_64, linux_aarch64]
+  - name: wasmtime
+    version_range: ">=36,<40"
+    license: Apache-2.0
+    purpose: untrusted WASM plugin isolation
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-wasm
+    import_layer: product
+    owner: product.inference.plugins.wasm
+    cve_policy: {max_severity: high, remediation_sla_days: 7}
+    alternatives_considered: [wasmer]
+    sbom_component: pkg:pypi/wasmtime
+    native_binary: true
+    platforms: [linux_x86_64, linux_aarch64]
+  - name: redis
+    version_range: ">=5,<7"
+    license: MIT
+    purpose: disposable cache and acceleration projection only
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-redis
+    import_layer: product
+    owner: product.inference.backends.redis
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: []
+    sbom_component: pkg:pypi/redis
+    native_binary: false
+    platforms: [any]
+  - name: qdrant-client
+    version_range: ">=1.14,<2"
+    license: Apache-2.0
+    purpose: Qdrant semantic-cache backend
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-qdrant
+    import_layer: product
+    owner: product.inference.backends.qdrant
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: [weaviate-client, pinecone]
+    sbom_component: pkg:pypi/qdrant-client
+    native_binary: false
+    platforms: [any]
+  - name: aioboto3
+    version_range: ">=13,<16"
+    license: Apache-2.0
+    purpose: S3 implementation of existing artifact blob port
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-s3
+    import_layer: product
+    owner: product.inference.backends.s3
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: [boto3]
+    sbom_component: pkg:pypi/aioboto3
+    native_binary: false
+    platforms: [any]
+  - name: google-cloud-storage
+    version_range: ">=3,<4"
+    license: Apache-2.0
+    purpose: GCS implementation of existing artifact blob port
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-gcs
+    import_layer: product
+    owner: product.inference.backends.gcs
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: []
+    sbom_component: pkg:pypi/google-cloud-storage
+    native_binary: false
+    platforms: [any]
+  - name: aiortc
+    version_range: ">=1.13,<2"
+    license: BSD-3-Clause
+    purpose: Realtime WebRTC session transport
+    optional: true
+    release_scope: [current_embedded, current_shared]
+    extra: inference-webrtc
+    import_layer: product
+    owner: product.models.transports.connections.webrtc
+    cve_policy: {max_severity: high, remediation_sla_days: 14}
+    alternatives_considered: []
+    sbom_component: pkg:pypi/aiortc
+    native_binary: true
+    platforms: [linux_x86_64, linux_aarch64]
+future_cluster_dependencies: []
+gate_status: pending_license_cve_wheel_and_lock_verification

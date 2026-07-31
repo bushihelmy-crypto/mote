@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
-from mote.contracts.events.types import FILE_CHANGED, POST_COMPACT, SESSION_START
+from mote.contracts.events.conversation import POST_COMPACT
+from mote.contracts.events.file.observation import FILE_CHANGED
+from mote.contracts.events.session import SESSION_START
 
 if TYPE_CHECKING:
     pass

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.runtime.agent.context_provider — ContextProvider + ThinkRequest.
+"""Tests for the Agent ContextProvider composition adapter.
 
 Focus on the pure, side-effect-free assembly the provider does by READING the
 Role: loop_context() packing, property forwarders, env-derived strings, and the
@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import asyncio
 
+from mote.contracts.model.topology import DefaultRoute, SemanticRoute
 from mote.contracts.output import OutputRepresentationCapabilities
-from mote.kernel.flow import FlowContext
-from mote.kernel.output_binding import negotiate_output_binding
+from mote.kernel.execution import ExecutionContext
+from mote.kernel.execution.context_provider import BaseContextProvider
+from mote.kernel.inference.request import InferenceRequest
+from mote.kernel.output.binding import negotiate_output_binding
 from mote.runtime.agent import Role
-from mote.runtime.agent.context_provider import ContextProvider
-from mote.runtime.agent.context_provider.base import BaseContextProvider
-from mote.runtime.agent.context_provider.request import ThinkRequest
+from mote.runtime.agent.components.context_provider import ContextProvider
 
 from .conftest import FakeEnv
 
@@ -27,7 +28,7 @@ def _routing_request(messages):
         is_text=True,
         capabilities=OutputRepresentationCapabilities(supports_text=True),
     )
-    return ThinkRequest(
+    return InferenceRequest(
         req=messages,
         system_prompt="",
         tool_specs=None,
@@ -44,7 +45,7 @@ class TestThinkRequest:
             is_text=True,
             capabilities=OutputRepresentationCapabilities(supports_text=True),
         )
-        tr = ThinkRequest(
+        tr = InferenceRequest(
             req=[1],
             system_prompt="sys",
             tool_specs=["t"],
@@ -80,8 +81,8 @@ class TestFlowContext:
         role.role_schema.enable_memory = False
         role.role_schema.observe_all_msg_from_buffer = False
 
-        lc = role.context_provider.flow_context()
-        assert isinstance(lc, FlowContext)
+        lc = role.context_provider.execution_context()
+        assert isinstance(lc, ExecutionContext)
         assert lc.name == role.name
         assert lc.display_name == role.role_schema.display_name
         assert lc.tools == ["Read", "Bash"]
@@ -94,31 +95,32 @@ class TestFlowContext:
     def test_reevaluated_per_call(self, role):
         cp = role.context_provider
         role.role_schema.tools = ["Read"]
-        assert cp.flow_context().tools == ["Read"]
+        assert cp.execution_context().tools == ["Read"]
         role.role_schema.tools = ["Read", "Write"]
-        assert cp.flow_context().tools == ["Read", "Write"]
+        assert cp.execution_context().tools == ["Read", "Write"]
 
 
-class TestResolveModelRoute:
+class TestResolveInferenceTarget:
     def test_fixed_model_when_router_disabled(self, role):
         # router.routing_enabled is the single routing gate; the default config
         # (strategy None) leaves it False, so the fixed models.default is used.
         assert role.router.routing_enabled is False
-        route = asyncio.run(role.context_provider.resolve_model_route())
+        route = asyncio.run(role.context_provider.resolve_inference_target())
         # Should resolve to a concrete provider (fixed config.llm path).
-        assert route.route_id == "default"
+        assert route.route_id == DefaultRoute()
 
     def test_no_messages_uses_fixed_even_if_enabled(self, role, monkeypatch):
         # With routing on but no messages, the provider must use the fixed model
         # (it never invokes the async router without signals to route on).
-        sentinel = role.router.model_route("summary")
+        sentinel = role.router.model_route(SemanticRoute(name="summary"))
         role.router.routing_enabled = True
         monkeypatch.setattr(role.router, "model_route", lambda *args, **kwargs: sentinel)
-        out = asyncio.run(role.context_provider.resolve_model_route(request=None))
-        assert out == sentinel
+        out = asyncio.run(role.context_provider.resolve_inference_target(request=None))
+        assert out.route_id == sentinel.route_id
+        assert role.context_provider._inference_port.profile(out) == sentinel.profile
 
     def test_routes_when_enabled_with_messages(self, role, monkeypatch):
-        sentinel = role.router.model_route("summary")
+        sentinel = role.router.model_route(SemanticRoute(name="summary"))
         # A routing role has ``routing_enabled`` True (set by _build_router for
         # any concrete strategy); the default config leaves it False.
         role.router.routing_enabled = True
@@ -131,12 +133,13 @@ class TestResolveModelRoute:
 
         monkeypatch.setattr(role.router, "aroute_model", fake_aroute)
         out = asyncio.run(
-            role.context_provider.resolve_model_route(
+            role.context_provider.resolve_inference_target(
                 _routing_request([{"role": "user", "content": "hi"}]),
                 model_call_id="call-1",
             )
         )
-        assert out == sentinel
+        assert out.route_id == sentinel.route_id
+        assert role.context_provider._inference_port.profile(out) == sentinel.profile
         # L2: routing state must be keyed to this role's session, not "default".
         assert captured["session_key"] == role.session_id
         assert captured["session_key"] != "default"
@@ -144,7 +147,7 @@ class TestResolveModelRoute:
     def test_finalize_reprofiles_binding_and_tool_specs_for_routed_llm(self, role, monkeypatch):
         from types import SimpleNamespace
 
-        routed = role.router.model_route("summary")
+        routed = role.router.model_route(SemanticRoute(name="summary"))
         binding = negotiate_output_binding(
             is_text=True,
             capabilities=OutputRepresentationCapabilities(
@@ -160,8 +163,8 @@ class TestResolveModelRoute:
                 assert is_text is True
                 return binding
 
-            def tool_specs(self, executor, output_contract):
-                assert executor is role.executor
+            def tool_specs(self, catalog, output_contract):
+                assert catalog.identity.catalog_id == "runtime-tools"
                 assert output_contract is role.output_contract
                 return ["routed-spec"]
 
@@ -177,7 +180,8 @@ class TestResolveModelRoute:
             output_schema={},
         )
 
-        result = role.context_provider.finalize_for_model(request, routed)
+        target = role.context_provider._inference_port.pin_route(routed)
+        result = role.context_provider.finalize_for_model(request, target)
 
         assert result is request
         assert result.output_binding is binding
@@ -193,9 +197,10 @@ class TestResolveModelRoute:
             raise AssertionError("must not route when routing_enabled is False")
 
         monkeypatch.setattr(role.router, "aroute_model", fail_aroute)
-        sentinel = role.router.model_route("summary")
+        sentinel = role.router.model_route(SemanticRoute(name="summary"))
         monkeypatch.setattr(role.router, "model_route", lambda *args, **kwargs: sentinel)
         out = asyncio.run(
-            role.context_provider.resolve_model_route(_routing_request([{"role": "user", "content": "hi"}]))
+            role.context_provider.resolve_inference_target(_routing_request([{"role": "user", "content": "hi"}]))
         )
-        assert out == sentinel
+        assert out.route_id == sentinel.route_id
+        assert role.context_provider._inference_port.profile(out) == sentinel.profile

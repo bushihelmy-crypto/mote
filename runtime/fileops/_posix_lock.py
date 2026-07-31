@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import fcntl
 
-from mote.contracts.fileops.models import LockMode
+from mote.contracts.file.identity import LockMode
 
 
 def try_os_lock(fd: int, mode: LockMode) -> bool:

@@ -1,5 +1,5 @@
-from mote.contracts.model_actions import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
-from mote.kernel.flow.services.actions import ActionDispatcher
+from mote.contracts.model.turn import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
+from mote.kernel.execution.operations.actions import ActionDispatcher
 
 
 def test_projects_only_tool_actions():

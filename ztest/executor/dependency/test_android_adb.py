@@ -5,9 +5,9 @@ import asyncio
 
 import pytest
 
-from mote.runtime.tools.dependency._device import android_adb
-from mote.runtime.tools.dependency._device.android_adb import AndroidAdbBackend
-from mote.runtime.tools.dependency._device.backend import DeviceError
+from mote.runtime.interactive.device import android_adb
+from mote.runtime.interactive.device.android_adb import AndroidAdbBackend
+from mote.runtime.interactive.device.backend import DeviceError
 from mote.ztest.executor.dependency.device_fakes import FAKE_PNG, FAKE_XML
 
 
@@ -57,7 +57,14 @@ def test_available_reflects_which(monkeypatch):
 
 def test_adb_argv_includes_serial():
     b = AndroidAdbBackend(adb_path="adb", serial="XYZ")
-    assert b._adb("shell", "input", "tap") == ["adb", "-s", "XYZ", "shell", "input", "tap"]
+    assert b._adb("shell", "input", "tap") == [
+        "adb",
+        "-s",
+        "XYZ",
+        "shell",
+        "input",
+        "tap",
+    ]
     b2 = AndroidAdbBackend(adb_path="adb", serial="")
     assert b2._adb("shell") == ["adb", "shell"]
 
@@ -65,7 +72,16 @@ def test_adb_argv_includes_serial():
 def test_tap_emits_input_tap(backend_and_exec):
     backend, rec = backend_and_exec
     _run(backend.tap(100, 200))
-    assert _last(rec) == ["adb", "-s", "emulator-5554", "shell", "input", "tap", "100", "200"]
+    assert _last(rec) == [
+        "adb",
+        "-s",
+        "emulator-5554",
+        "shell",
+        "input",
+        "tap",
+        "100",
+        "200",
+    ]
 
 
 def test_long_press_is_zero_distance_swipe(backend_and_exec):

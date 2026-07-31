@@ -12,7 +12,7 @@ would be stringized (``'int'`` instead of ``int``) under PEP 563.
 """
 import pytest
 
-from mote.runtime.tools.agent_registry import AgentRegistry
+from mote.product.agents.registry import AgentRegistry
 from mote.runtime.tools.mcp.adapter import MCPToolAdapter, McpXmlSchemaError
 from mote.runtime.tools.mcp.toolsets import NativeMcpToolset, XmlMcpToolset
 from mote.runtime.tools.mcp.types import DiscoveredMcpTool
@@ -25,17 +25,16 @@ from mote.runtime.tools.tool_executor import ToolExecutor
 
 
 class TestFunctionDocstringToSchema:
-    def test_sync_function_type(self):
+    def test_schema_contains_only_call_contract(self):
         def fn(x: str) -> str:
             """One liner."""
             return x
 
         schema = function_docstring_to_schema(fn, fn.__doc__)
-        assert schema["type"] == "function"
-        assert schema["description"] == "One liner."
+        assert set(schema) == {"signature", "parameters"}
         assert schema["signature"] == "(x: str) -> str"
 
-    def test_async_function_type(self):
+    def test_async_function_signature_and_parameters(self):
         async def fn(a: int, b: str = "z") -> str:
             """Does a thing.
 
@@ -46,7 +45,6 @@ class TestFunctionDocstringToSchema:
             return ""
 
         schema = function_docstring_to_schema(fn, fn.__doc__)
-        assert schema["type"] == "async_function"
         assert schema["signature"] == "(a: int, b: str = 'z') -> str"
         assert "the a." in schema["parameters"]
 
@@ -155,7 +153,11 @@ def mcp_schema():
     return {
         "name": "server:search",
         "description": "search the web",
-        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
+        "parameters": {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+        },
     }
 
 

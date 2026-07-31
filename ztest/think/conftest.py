@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """Shared fixtures for the think-engine test suite.
 
-The fixtures keep ``ThinkEngine._run`` fully offline and deterministic:
+The fixtures keep ``InferenceEngine._run`` fully offline and deterministic:
 
 - :class:`FakeLLM` is a duck-typed :class:`~mote.contracts.ports.LLMClient`.
   ``aask`` returns the next queued reply (or a constant); ``aask_tool`` returns a
-  pre-built :class:`~mote.contracts.models.LLMResponse`. Both record
+  pre-built :class:`~mote.contracts.model.LLMResponse`. Both record
   their calls so tests can assert which channel fired.
 - :class:`FakeMemory` is a tiny in-memory :class:`MessageStore`; tests seed it
   with history so the dedup checks have something to compare against.
@@ -20,8 +20,9 @@ from typing import Optional
 
 import pytest
 
-from mote.contracts.constants.messages import TOOL_CALLS
-from mote.contracts.models import (
+from mote.contracts.conversation import Message, UserMessage
+from mote.contracts.conversation.fields import TOOL_CALLS
+from mote.contracts.model import (
     CanonicalModelResponse,
     EndpointDescriptor,
     GenerateOutput,
@@ -29,8 +30,8 @@ from mote.contracts.models import (
     LLMToolCall,
     ResponseMode,
 )
-from mote.contracts.ports import ModelRoute
-from mote.contracts.schema import Message, UserMessage
+from mote.contracts.model.topology import SemanticRoute
+from mote.contracts.ports.model.gateway import ModelRoute
 
 
 class _FakeGateway:
@@ -95,7 +96,7 @@ class FakeLLM:
         self.format_msg_calls: list = []
         self.route = ModelRoute(
             gateway=_FakeGateway(self),
-            route_id="fake",
+            route_id=SemanticRoute(name="fake"),
             profile=EndpointDescriptor(
                 endpoint_id="fake",
                 transport="fake",
@@ -172,7 +173,7 @@ class FakeReporter:
 def patch_reporter(monkeypatch):
     """Replace ThoughtReporter so _run never opens a stream / posts a callback."""
     FakeReporter.instances.clear()
-    monkeypatch.setattr("mote.kernel.think.think_engine._NullThoughtReporter", FakeReporter)
+    monkeypatch.setattr("mote.kernel.inference.engine._NullThoughtReporter", FakeReporter)
     return FakeReporter
 
 

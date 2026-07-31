@@ -9,11 +9,12 @@ import asyncio
 
 import pytest
 
-from mote.contracts.schema import MessageQueue
-from mote.orchestration.tasks.bggraph import END, START, BgGraph, GraphState, Stage
-from mote.orchestration.tasks.pool import BackgroundTaskPool
-from mote.orchestration.tasks.types import BgStatus
-from mote.product.toolsets.builtin.get_node_state import GetNodeState
+from mote.contracts.conversation import MessageQueue
+from mote.orchestration.background_tasks.model import BgStatus
+from mote.orchestration.background_tasks.pool import BackgroundTaskPool
+from mote.orchestration.workflows import END, START, GraphState, Stage, WorkflowBuilder
+from mote.product.agents.background_tasks import AgentBackgroundTasks
+from mote.product.workflows.run_graph.get_node_state import GetNodeState
 from mote.runtime.tools.tool_result import ToolError
 
 pytestmark = pytest.mark.asyncio
@@ -46,11 +47,11 @@ def boom_node():
 
 @pytest.fixture
 def pool():
-    return BackgroundTaskPool(MessageQueue(), max_concurrency=10)
+    return AgentBackgroundTasks(BackgroundTaskPool(MessageQueue(), max_concurrency=10), "test-inspection")
 
 
 def _failing_graph():
-    g = BgGraph("failing", state_schema=SimpleState, recursion_limit=10)
+    g = WorkflowBuilder("failing", state_schema=SimpleState, recursion_limit=10)
     g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node("b", boom_node())
     g.add_edge(START, "a")
@@ -72,7 +73,7 @@ def _ring_graph():
     while ``n`` remains, else on to ``done``. The node's ``attempts`` therefore
     equals the number of laps (batches), NOT a retry count.
     """
-    g = BgGraph("ring", state_schema=RingState, recursion_limit=50)
+    g = WorkflowBuilder("ring", state_schema=RingState, recursion_limit=50)
 
     async def work(state):
         async def submit():
@@ -94,7 +95,7 @@ def _ring_graph():
 
 def _detail_graph():
     """a doubles x; b consumes a's output (declared param) then fails."""
-    g = BgGraph("detail", state_schema=SimpleState, recursion_limit=10)
+    g = WorkflowBuilder("detail", state_schema=SimpleState, recursion_limit=10)
     g.add_node("a", sync_node(lambda s: s.x * 2, field="a"))
     g.add_node(
         "b",
@@ -185,7 +186,7 @@ class TestGetNodeState:
 
     async def test_consumers_resolve_across_renamed_fields(self, pool):
         """A node writing a differently-named channel still links to consumers."""
-        g = BgGraph("renamed", state_schema=SimpleState, recursion_limit=10)
+        g = WorkflowBuilder("renamed", state_schema=SimpleState, recursion_limit=10)
         # producer writes field 'data' (name != node name); consumer reads it.
         g.add_node("producer", sync_node(lambda s: {"data": s.x + 1}))
         g.add_node(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mote.contracts.artifacts import ArtifactRetention
+from mote.contracts.artifact import ArtifactRetention
 
 _GLOBAL_OWNER_ID = "global"
 

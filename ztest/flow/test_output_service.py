@@ -4,18 +4,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.model_actions import FinalCandidateAction
-from mote.contracts.output import OutputEvaluation
-from mote.contracts.think import ThinkResult
-from mote.kernel.flow.services.output import FlowOutputService
+from mote.contracts.execution.models import MutationResult, MutationStatus
+from mote.contracts.model.inference import InferenceResult
+from mote.contracts.model.turn import FinalCandidateAction
+from mote.contracts.output import AcceptedOutput, OutputEvaluation
+from mote.kernel.commands.contracts import HistoryProjection
+from mote.kernel.execution.operations.output import OutputOperation
 
 
 class Channel:
     def __init__(self, events):
         self.events = events
 
-    async def record_output_candidate(self, memory, content, candidate, *, accepted, feedback=None):
+    async def project_output_candidate(self, content, candidate, *, accepted, feedback=None):
         self.events.append(("record", accepted, feedback))
+        return HistoryProjection((), "history")
 
 
 class Writer:
@@ -26,44 +29,60 @@ class Writer:
         self.events.append(("drain",))
 
 
+class Transaction:
+    def __init__(self, events):
+        self.events = events
+
+    def context(self, operation_id):
+        return operation_id
+
+    async def stage_accepted_output(self, context, output, history):
+        self.events.append(("complete",))
+        self.events.append(("drain",))
+        return MutationResult(MutationStatus.APPLIED)
+
+    async def reject_output(self, context, history):
+        self.events.append(("complete",))
+        self.events.append(("drain",))
+        self.events.append(("reap",))
+        return MutationResult(MutationStatus.APPLIED)
+
+
 def service(events):
-    think = SimpleNamespace(result=ThinkResult(content="answer", tool_calls=None))
+    think = SimpleNamespace(result=InferenceResult(content="answer", tool_calls=None))
 
     async def join():
         events.append(("join",))
 
     think.join = join
-    return FlowOutputService(
+    output_engine = SimpleNamespace(staged_output=AcceptedOutput("candidate", "contract", "1", "schema", "answer"))
+    return OutputOperation(
         context=lambda: SimpleNamespace(name="agent"),
         channel=lambda: Channel(events),
-        think_engine=think,
-        memory=SimpleNamespace(),
-        output_engine=SimpleNamespace(),
-        report_think_result=lambda result: events.append(("report",)),
-        complete_think=lambda: events.append(("complete",)),
-        reap_think=lambda: events.append(("reap",)),
-        drain_writes=Writer(events).drain,
+        inference_engine=think,
+        transaction=Transaction(events),
+        output_engine=output_engine,
+        report_inference_result=lambda result: events.append(("report",)),
     )
 
 
 @pytest.mark.asyncio
-async def test_accept_is_durable_before_think_checkpoint_reap():
+async def test_accept_is_durable_before_inference_checkpoint_reap():
     events = []
 
     await service(events).accept(FinalCandidateAction(raw="answer", representation="native_text"))
 
     assert events == [
         ("report",),
-        ("complete",),
         ("record", True, None),
+        ("complete",),
         ("drain",),
-        ("reap",),
         ("join",),
     ]
 
 
 @pytest.mark.asyncio
-async def test_rejection_feedback_is_durable_before_think_checkpoint_reap():
+async def test_rejection_feedback_is_durable_before_inference_checkpoint_reap():
     events = []
     evaluation = OutputEvaluation(
         accepted=False,
@@ -79,5 +98,5 @@ async def test_rejection_feedback_is_durable_before_think_checkpoint_reap():
         FinalCandidateAction(raw="bad", representation="native_text"),
     )
 
-    assert events[2][0:2] == ("record", False)
-    assert events[3:] == [("drain",), ("reap",), ("join",)]
+    assert events[1][0:2] == ("record", False)
+    assert events[2:] == [("complete",), ("drain",), ("reap",), ("join",)]

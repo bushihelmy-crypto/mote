@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mote://schemas/mote-recovery-set-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "recovery_set_id", "daemon_backup_id", "application_backup_ids", "required_participants", "acknowledged_participants", "missing_participants", "backup_epoch", "admission_epoch", "consistency", "component_digests", "signature"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "recovery_set_id": {"type": "string", "minLength": 1},
+    "daemon_backup_id": {"type": "string", "minLength": 1},
+    "application_backup_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "required_participants": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+    "acknowledged_participants": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "missing_participants": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "backup_epoch": {"type": "integer", "minimum": 1},
+    "admission_epoch": {"type": "integer", "minimum": 1},
+    "consistency": {"enum": ["application_consistent", "daemon_consistent", "crash_consistent"]},
+    "component_digests": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+    "signature": {"type": "string", "minLength": 1}
+  }
+}

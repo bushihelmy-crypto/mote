@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``mote.runtime.durable.think_journal`` — the durable think façade.
+"""Tests for ``mote.runtime.durable.inference_journal`` — the durable think façade.
 
-``ThinkJournal`` memoizes each think round's post-dedup :class:`ThinkResult` in
+``InferenceJournal`` memoizes each think round's post-dedup :class:`InferenceResult` in
 the shared :class:`RunJournal` so a resume can *reinstate* a completed think
 (skip the model) instead of re-paying it — closing the G1 re-pay window. The two
 module functions are the single matching authority shared by the flow
@@ -11,11 +11,11 @@ reap decision), so they can never drift.
 """
 from __future__ import annotations
 
-from mote.contracts.constants.messages import TOOL_CALLS
-from mote.contracts.schema import AIMessage, UserMessage
-from mote.contracts.think import ThinkResult
+from mote.contracts.conversation import AIMessage, UserMessage
+from mote.contracts.conversation.fields import TOOL_CALLS
+from mote.contracts.model.inference import InferenceResult
 from mote.runtime.durable import (
-    ThinkJournal,
+    InferenceJournal,
     assistant_message_present,
     begin_timer,
     complete_timer,
@@ -25,16 +25,16 @@ from mote.runtime.durable import (
 from mote.runtime.durable.backend import JsonlBackend
 from mote.runtime.events import JournalEvent, bind_telemetry
 from mote.runtime.ledger import COMPLETED, KIND_THINK, KIND_TIMER, STARTED, RunJournal
-from mote.runtime.workspace import WorkspaceStore
+from mote.runtime.session.workspace import SessionWorkspace
 from mote.ztest.telemetry import InlineTelemetry
 
 
 def _journal(tmp_path, session_id="sess") -> RunJournal:
-    return RunJournal(session_id, store=WorkspaceStore(root=str(tmp_path)))
+    return RunJournal(session_id, store=SessionWorkspace(root=str(tmp_path)))
 
 
-def _runner(tmp_path, session_id="sess") -> ThinkJournal:
-    return ThinkJournal(JsonlBackend(_journal(tmp_path, session_id)))
+def _runner(tmp_path, session_id="sess") -> InferenceJournal:
+    return InferenceJournal(JsonlBackend(_journal(tmp_path, session_id)))
 
 
 # ----------------------------------------------------------------------
@@ -43,20 +43,20 @@ def _runner(tmp_path, session_id="sess") -> ThinkJournal:
 
 
 def test_native_result_matched_by_tool_call_id():
-    result = ThinkResult(content="", tool_calls=[{"id": "c1", "command_name": "Read", "args": {}}])
+    result = InferenceResult(content="", tool_calls=[{"id": "c1", "command_name": "Read", "args": {}}])
     msgs = [AIMessage(content="", tool_calls=[{"id": "c1", "name": "Read", "args": {}}])]
     assert assistant_message_present(msgs, result) is True
 
 
 def test_native_result_absent_when_id_missing():
-    result = ThinkResult(content="", tool_calls=[{"id": "c1", "command_name": "Read", "args": {}}])
+    result = InferenceResult(content="", tool_calls=[{"id": "c1", "command_name": "Read", "args": {}}])
     msgs = [AIMessage(content="", tool_calls=[{"id": "other", "name": "Read", "args": {}}])]
     assert assistant_message_present(msgs, result) is False
 
 
 def test_native_result_requires_all_ids_present():
     # A turn with two calls is only "present" when BOTH ids are durable.
-    result = ThinkResult(
+    result = InferenceResult(
         content="",
         tool_calls=[
             {"id": "c1", "command_name": "Read", "args": {}},
@@ -68,29 +68,29 @@ def test_native_result_requires_all_ids_present():
 
 
 def test_xml_result_matched_by_exact_content():
-    result = ThinkResult(content="<command>End</command>", tool_calls=None)
+    result = InferenceResult(content="<command>End</command>", tool_calls=None)
     msgs = [AIMessage(content="<command>End</command>")]
     assert assistant_message_present(msgs, result) is True
 
 
 def test_xml_result_absent_when_content_differs():
-    result = ThinkResult(content="the thought", tool_calls=None)
+    result = InferenceResult(content="the thought", tool_calls=None)
     msgs = [AIMessage(content="a different thought")]
     assert assistant_message_present(msgs, result) is False
 
 
 def test_empty_callless_result_is_degenerately_present():
     # Nothing meaningful to reinstate → treated as already present.
-    assert assistant_message_present([], ThinkResult(content="", tool_calls=None)) is True
+    assert assistant_message_present([], InferenceResult(content="", tool_calls=None)) is True
 
 
 def test_user_message_never_matches():
-    result = ThinkResult(content="hello", tool_calls=None)
+    result = InferenceResult(content="hello", tool_calls=None)
     assert assistant_message_present([UserMessage(content="hello")], result) is False
 
 
 # ----------------------------------------------------------------------
-# ThinkJournal — begin / complete / reap / reinstate
+# InferenceJournal — begin / complete / reap / reinstate
 # ----------------------------------------------------------------------
 
 
@@ -106,7 +106,10 @@ def test_started_think_persists_model_call_identity_for_resume(tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think("model-call-1")
 
-    assert runner.resume_candidate() == (step_id, "model-call-1")
+    resumed = runner.resume_candidate()
+    assert resumed is not None
+    assert resumed[0] == step_id
+    assert resumed[1].model_call_id == "model-call-1"
 
 
 def test_reconcile_preserves_resumable_started_think(tmp_path):
@@ -115,13 +118,16 @@ def test_reconcile_preserves_resumable_started_think(tmp_path):
 
     reconcile_think_journal(runner.journal, [])
 
-    assert runner.resume_candidate() == (step_id, "model-call-1")
+    resumed = runner.resume_candidate()
+    assert resumed is not None
+    assert resumed[0] == step_id
+    assert resumed[1].model_call_id == "model-call-1"
 
 
 def test_begin_think_seq_increments_across_unreaped_records(tmp_path):
     runner = _runner(tmp_path)
     first = runner.begin_think()
-    runner.complete_think(first, ThinkResult(content="one"))
+    runner.complete_think(first, InferenceResult(content="one"))
     # Not reaped → next seq is 1 + max existing think seq.
     second = runner.begin_think()
     assert second == "think:2"
@@ -130,17 +136,20 @@ def test_begin_think_seq_increments_across_unreaped_records(tmp_path):
 def test_complete_think_records_completed_payload(tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    result = ThinkResult(content="the answer", tool_calls=None)
+    result = InferenceResult(content="the answer", tool_calls=None)
     runner.complete_think(step_id, result)
     rec = runner.journal.replay(step_id)
     assert rec is not None and rec.status == COMPLETED
-    assert ThinkResult.model_validate_json(rec.payload or "").content == "the answer"
+    import json
+
+    payload = json.loads(rec.payload or "{}")
+    assert InferenceResult.model_validate(payload["result"]).content == "the answer"
 
 
 def test_reap_think_drops_the_record(tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    runner.complete_think(step_id, ThinkResult(content="x"))
+    runner.complete_think(step_id, InferenceResult(content="x"))
     runner.reap_think(step_id)
     assert runner.journal.replay(step_id) is None
 
@@ -172,7 +181,7 @@ def test_fail_think_frees_seq_for_a_fresh_rethink(tmp_path):
 def test_reinstate_candidate_returns_completed_unmatched(tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    result = ThinkResult(content="unrecorded thought", tool_calls=None)
+    result = InferenceResult(content="unrecorded thought", tool_calls=None)
     runner.complete_think(step_id, result)
     # History has no matching assistant message → this is the reinstate target.
     found = runner.reinstate_candidate([])
@@ -190,7 +199,7 @@ def test_reinstate_candidate_none_when_started(tmp_path):
 def test_reinstate_candidate_none_when_assistant_present(tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    result = ThinkResult(content="done", tool_calls=None)
+    result = InferenceResult(content="done", tool_calls=None)
     runner.complete_think(step_id, result)
     # The assistant message already reached history → nothing to reinstate.
     assert runner.reinstate_candidate([AIMessage(content="done")]) is None
@@ -201,7 +210,7 @@ def test_reinstate_candidate_survives_journal_rebuild(tmp_path):
     # process — the folded journal still surfaces the reinstate candidate.
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    runner.complete_think(step_id, ThinkResult(content="carried", tool_calls=None))
+    runner.complete_think(step_id, InferenceResult(content="carried", tool_calls=None))
     rebuilt = _runner(tmp_path)
     found = rebuilt.reinstate_candidate([])
     assert found is not None and found[0] == step_id and found[1].content == "carried"
@@ -224,7 +233,7 @@ def test_reconcile_reaps_completed_already_in_history(tmp_path):
     # is already durable MUST be reaped (reinstating would double-record it).
     journal = _journal(tmp_path)
     journal.record_started("think:1", KIND_THINK, "pure", seq=1)
-    journal.record_completed("think:1", payload=ThinkResult(content="done").model_dump_json())
+    journal.record_completed("think:1", payload=InferenceResult(content="done").model_dump_json())
     reconcile_think_journal(journal, [AIMessage(content="done")])
     assert journal.replay("think:1") is None
 
@@ -232,7 +241,7 @@ def test_reconcile_reaps_completed_already_in_history(tmp_path):
 def test_reconcile_leaves_the_single_unmatched_completed(tmp_path):
     journal = _journal(tmp_path)
     journal.record_started("think:1", KIND_THINK, "pure", seq=1)
-    journal.record_completed("think:1", payload=ThinkResult(content="unrecorded").model_dump_json())
+    journal.record_completed("think:1", payload=InferenceResult(content="unrecorded").model_dump_json())
     reconcile_think_journal(journal, [])
     rec = journal.replay("think:1")
     assert rec is not None and rec.status == COMPLETED
@@ -250,9 +259,9 @@ def test_reconcile_mixed_reaps_matched_keeps_unmatched(tmp_path):
     journal = _journal(tmp_path)
     # think:1 completed + present in history (reap); think:2 completed + absent (keep).
     journal.record_started("think:1", KIND_THINK, "pure", seq=1)
-    journal.record_completed("think:1", payload=ThinkResult(content="in-history").model_dump_json())
+    journal.record_completed("think:1", payload=InferenceResult(content="in-history").model_dump_json())
     journal.record_started("think:2", KIND_THINK, "pure", seq=2)
-    journal.record_completed("think:2", payload=ThinkResult(content="lost-turn").model_dump_json())
+    journal.record_completed("think:2", payload=InferenceResult(content="lost-turn").model_dump_json())
     reconcile_think_journal(journal, [AIMessage(content="in-history")])
     assert journal.replay("think:1") is None
     assert journal.replay("think:2") is not None
@@ -369,7 +378,7 @@ def test_think_lifecycle_emits_started_completed_reaped(tmp_path):
     runner = _runner(tmp_path)
     with bind_telemetry(telemetry):
         step_id = runner.begin_think()
-        runner.complete_think(step_id, ThinkResult(content="x"))
+        runner.complete_think(step_id, InferenceResult(content="x"))
         runner.reap_think(step_id)
     assert _phases(obs) == [
         (KIND_THINK, "started", step_id),
@@ -419,5 +428,5 @@ def test_journal_event_carries_effect_and_seq(tmp_path):
 def test_no_telemetry_bound_is_silent_noop(tmp_path):
     runner = _runner(tmp_path)
     step_id = runner.begin_think()
-    runner.complete_think(step_id, ThinkResult(content="x"))
+    runner.complete_think(step_id, InferenceResult(content="x"))
     runner.reap_think(step_id)  # must not raise

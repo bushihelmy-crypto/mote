@@ -5,7 +5,7 @@ results here. Runtime infrastructure such as leases, journals, fences, and
 migration engines remains in its owning package.
 """
 from mote.contracts.output import RunResult, ValidationIssue
-from mote.contracts.ports import OutputValidator
+from mote.contracts.ports.output.evaluation import OutputValidator
 from mote.kernel.output import OutputContract, OutputRetryPolicy
 
 __all__ = [

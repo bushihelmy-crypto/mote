@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.ports.event_subscription import (
+from mote.contracts.conversation import UserMessage
+from mote.contracts.ports.events.subscription import (
     EventFilter,
     Ordering,
     OverflowPolicy,
@@ -10,7 +11,6 @@ from mote.contracts.ports.event_subscription import (
     RetryPolicy,
     SubscriptionSpec,
 )
-from mote.contracts.schema import UserMessage
 from mote.runtime.events import EventFabric, SubscriptionBinding, SubscriptionManifest
 from mote.runtime.events.backends import SQLiteSubscriptionStateStore
 from mote.runtime.projections.session import (

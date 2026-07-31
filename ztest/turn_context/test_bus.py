@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.runtime.context.turn_context.bus.TurnContextBus.
+"""Tests for mote.runtime.context.turn.bus.TurnContextBus.
 
 The bus is a stateless aggregator: it renders each EphemeralContextSource
 concurrently, drops empty/failed blocks, and merges the survivors into one
@@ -12,8 +12,8 @@ import asyncio
 
 import pytest
 
-from mote.contracts.events.types import HistoryEditedEvent, PostCompactEvent
-from mote.runtime.context.turn_context import TurnContextBus
+from mote.contracts.events.conversation import HistoryEditedEvent, PostCompactEvent
+from mote.runtime.context.turn import TurnContextBus
 
 
 def run(coro):

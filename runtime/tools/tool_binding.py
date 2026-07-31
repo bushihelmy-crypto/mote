@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import inspect
-from types import MappingProxyType
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
-from mote.contracts.permissions import PermissionDecision
-from mote.kernel.tools.definitions import NativeToolDefinition, XmlToolDefinition
-from mote.runtime.run_context import current_run_context
+from mote.contracts.authorization import PermissionDecision
+from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
+
+
+@dataclass(frozen=True, slots=True)
+class BoundApprovalPolicy:
+    evaluate: Callable[[Mapping[str, Any]], bool]
 
 
 class BoundTool:
@@ -18,9 +23,11 @@ class BoundTool:
         self,
         definition: XmlToolDefinition[Any] | NativeToolDefinition[Any],
         capability: Any,
+        approval_policy: BoundApprovalPolicy | None = None,
     ) -> None:
         self.definition = definition
         self._capability = capability
+        self._approval_policy = approval_policy
         self.name = definition.name
 
     @property
@@ -33,29 +40,26 @@ class BoundTool:
 
         return self._capability.call
 
-    def check_permissions(self, args: dict) -> PermissionDecision | None:
+    def check_permissions(self, args: dict[str, Any]) -> PermissionDecision | None:
         decision = self._capability.check_permissions(args)
         if decision is not None and decision.behavior == "deny":
             return decision
-        predicate = self.definition.approval_predicate
-        context = current_run_context() if predicate is not None else None
         selected = False
-        if predicate is not None and context is not None:
-            selected = predicate(context, MappingProxyType(dict(args)))
+        if self._approval_policy is not None:
+            selected = self._approval_policy.evaluate(args)
             if inspect.isawaitable(selected):
                 if inspect.iscoroutine(selected):
                     selected.close()
                 raise TypeError("Toolset approval policy must return bool, not an awaitable")
-            if not isinstance(selected, bool):
-                raise TypeError("Toolset approval policy must return bool")
-        if self.definition.approval_required or (predicate is not None and (context is None or selected)):
+            if not selected and not self.definition.approval_required:
+                return PermissionDecision.allow(
+                    "toolset",
+                    f"Toolset policy allows '{self.name}'.",
+                )
+        if self.definition.approval_required or selected:
             return PermissionDecision.ask(
                 "toolset",
-                (
-                    f"Toolset policy requires approval for '{self.name}'."
-                    if context is not None or predicate is None
-                    else f"Toolset policy for '{self.name}' requires an active RunContext."
-                ),
+                f"Toolset policy requires approval for '{self.name}'.",
             )
         return decision
 
@@ -68,4 +72,4 @@ class BoundTool:
         return getattr(self._capability, name)
 
 
-__all__ = ["BoundTool"]
+__all__ = ["BoundApprovalPolicy", "BoundTool"]

@@ -1,0 +1,41 @@
+schema_version: 1
+revision: translation-profiles-v1
+profiles:
+  openai_family_v1:
+    wire_families: [openai_chat, openai_responses, openai_realtime]
+    preserve_unknown_fields: response_only
+    reasoning: {preserve_opaque: true, expose_summary_only: true}
+    tools: {round_trip: exact, unknown_tool_type: reject_pre_wire}
+    cache_control: {round_trip: exact_when_supported, unsupported: explicit_rejection}
+    stream_unknown_event: preserve_opaque_before_commit
+  anthropic_messages_v1:
+    wire_families: [anthropic_messages, bedrock_anthropic]
+    preserve_unknown_fields: response_only
+    reasoning: {preserve_signature: true, expose_summary_only: true}
+    tools: {round_trip: exact, input_json_streaming: incremental_validated}
+    cache_control: {round_trip: exact, ttl: preserved}
+    stream_unknown_event: preserve_opaque_before_commit
+  google_generate_content_v1:
+    wire_families: [gemini_generate_content, vertex_generate_content]
+    preserve_unknown_fields: response_only
+    reasoning: {preserve_thought_signature: true, expose_summary_only: true}
+    tools: {round_trip: exact, parallel_calls: preserved}
+    cache_control: {named_content_reference: preserved}
+    stream_unknown_event: preserve_opaque_before_commit
+client_profiles:
+  canonical_v1:
+    selection: explicit_version_header
+    user_agent_inference: forbidden
+    unknown_revision: reject
+    conflicting_revision: reject
+    decoder_retention: max_resume_receipt_and_artifact_retention
+    resume_profile_switch: forbidden
+headers:
+  forbidden_upstream: [authorization, proxy-authorization, connection, keep-alive, transfer-encoding, upgrade]
+  provider_allowlist_required: true
+  response_secret_redaction_required: true
+invariants:
+  - no_strip_and_retry
+  - no_implicit_second_wire_request
+  - no_openai_minimum_common_denominator
+  - profile_revision_pinned_to_generation_and_journal

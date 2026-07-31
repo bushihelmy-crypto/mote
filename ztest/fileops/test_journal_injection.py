@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.fileops.events import FileTransactionAbortedEvent
+from mote.contracts.events.file.facts import FileTransactionAbortedEvent
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.locking import HierarchicalLockManager
 

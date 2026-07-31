@@ -12,7 +12,7 @@ missing journal scans as empty.
 """
 from __future__ import annotations
 
-from mote.runtime.disk.journal import Journal
+from mote.runtime.persistence.journal_writer import Journal
 
 
 def test_append_and_iter_roundtrip(tmp_path):

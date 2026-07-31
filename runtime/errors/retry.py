@@ -2,7 +2,7 @@
 
 from tenacity import RetryCallState
 
-from mote.runtime.logging import logger
+from mote.runtime.telemetry.logging import logger
 
 
 def log_and_reraise(retry_state: RetryCallState) -> None:

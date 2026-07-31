@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.models.routing import RouteCandidate, RouteCapabilities, RoutingSessionState
+from mote.contracts.model.routing import RouteCandidate, RouteCapabilities, RoutingSessionState
+from mote.contracts.model.topology import SemanticRoute
 from mote.runtime.models.routing.catalog import RouteCatalogSnapshot
 from mote.runtime.models.routing.policy import DeterministicRoutingPolicy
 from mote.runtime.models.routing.service import RoutingService
@@ -35,7 +36,7 @@ def router():
     gateway = FakeModelGateway(FakeLLM(name="gateway"))
     candidates = tuple(
         RouteCandidate(
-            route_id=name,
+            route_id=SemanticRoute(name=name),
             quality_class=f"R{rank}",
             quality_rank=rank,
             context_tokens=context_tokens,
@@ -50,7 +51,7 @@ def router():
         )
     ) + (
         RouteCandidate(
-            route_id="default",
+            route_id=SemanticRoute(name="default"),
             quality_class="R1",
             quality_rank=1,
             context_tokens=200_000,
@@ -72,11 +73,11 @@ def router():
         RouteCatalogSnapshot(
             revision="test-catalog",
             candidates=candidates,
-            default_route_id="default",
+            default_route_id=SemanticRoute(name="default"),
             class_routes=(),
         ),
-        DeterministicRoutingPolicy("default"),
-        DeterministicRoutingPolicy("default"),
+        DeterministicRoutingPolicy(SemanticRoute(name="default")),
+        DeterministicRoutingPolicy(SemanticRoute(name="default")),
         Store(),
         deadline_ms=50,
     )

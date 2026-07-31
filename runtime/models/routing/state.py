@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from mote.contracts.models.routing import RoutingSessionState
+from mote.contracts.model.routing import RoutingSessionState
 
 
 class RoleRoutingStateStore:

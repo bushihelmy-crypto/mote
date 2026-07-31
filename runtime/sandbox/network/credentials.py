@@ -11,7 +11,7 @@ that ever sees both the secret and the request.
 Two collaborators, no I/O of its own:
 
   * a list of :class:`CredentialRule` (compiled from
-    :class:`~mote.contracts.settings.sandbox.CredentialConfig`), each
+    :class:`~mote.runtime.sandbox.config.CredentialConfig`), each
     binding a set of host globs to a secret **key** + a header shape;
   * a ``secret_lookup`` closure resolving that key to a plaintext value lazily,
     per request (so a hot-rotated secret is honoured without a restart) — the
@@ -28,7 +28,7 @@ import base64
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from mote.contracts.net import matches_pattern, normalize_host
+from mote.runtime.sandbox.network.patterns import matches_pattern, normalize_host
 
 #: Resolve a secret *key* to its plaintext value (or ``None`` if unknown).
 SecretLookup = Callable[[str], Optional[str]]

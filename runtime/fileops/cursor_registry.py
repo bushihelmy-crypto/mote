@@ -15,9 +15,10 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from mote.contracts.fileops.errors import ReadCursorError
-from mote.contracts.fileops.models import BlobRef, FileSnapshot, PathToken
-from mote.contracts.fileops.serialization import path_to_dict, snapshot_from_dict, snapshot_to_dict
+from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.file.codec import path_to_dict, snapshot_from_dict, snapshot_to_dict
+from mote.contracts.file.errors import ReadCursorError
+from mote.contracts.file.identity import FileSnapshot, PathToken
 
 _SCHEMA_VERSION = 1
 _MAX_INTEGER = (1 << 63) - 1
@@ -159,8 +160,8 @@ class CursorLease:
     lease_id: str
     namespace: str
     epoch: int
-    root_manifest: BlobRef
-    pinned_artifacts: tuple[BlobRef, ...]
+    root_manifest: ContentIdentity
+    pinned_artifacts: tuple[ContentIdentity, ...]
     issued_at_ns: int
     expires_at_ns: int
     hard_expires_at_ns: int
@@ -188,7 +189,7 @@ class CursorRegistryHealth:
 class ArtifactPinSnapshot:
     epoch: int
     revision: int
-    artifacts: tuple[BlobRef, ...]
+    artifacts: tuple[ContentIdentity, ...]
 
 
 class DurableCursorRegistry:
@@ -468,8 +469,8 @@ class DurableCursorRegistry:
         self,
         *,
         namespace: str,
-        root_manifest: BlobRef,
-        pinned_artifacts: Iterable[BlobRef],
+        root_manifest: ContentIdentity,
+        pinned_artifacts: Iterable[ContentIdentity],
         position: int,
         expected_epoch: int,
     ) -> str:
@@ -708,7 +709,7 @@ class DurableCursorRegistry:
     ) -> ArtifactPinSnapshot:
         epoch, _, pin_revision, _ = self._timeline_row(connection)
         refs = [
-            BlobRef(digest=digest, size=size)
+            ContentIdentity(digest=digest, size=size)
             for digest, size in connection.execute(
                 """
                 SELECT p.digest, p.size
@@ -729,8 +730,8 @@ class DurableCursorRegistry:
         ):
             refs.extend(
                 (
-                    BlobRef(artifact_digest, artifact_size),
-                    BlobRef(metadata_digest, metadata_size),
+                    ContentIdentity(artifact_digest, artifact_size),
+                    ContentIdentity(metadata_digest, metadata_size),
                 )
             )
         return ArtifactPinSnapshot(
@@ -825,7 +826,7 @@ class DurableCursorRegistry:
     @staticmethod
     def _open_cursor(connection: sqlite3.Connection, row: tuple) -> OpenCursor:
         pins = tuple(
-            BlobRef(digest=digest, size=size)
+            ContentIdentity(digest=digest, size=size)
             for digest, size in connection.execute(
                 """
                 SELECT digest, size FROM cursor_pins
@@ -839,7 +840,7 @@ class DurableCursorRegistry:
                 lease_id=row[0],
                 namespace=row[1],
                 epoch=row[2],
-                root_manifest=BlobRef(digest=row[3], size=row[4]),
+                root_manifest=ContentIdentity(digest=row[3], size=row[4]),
                 pinned_artifacts=pins,
                 issued_at_ns=row[7],
                 expires_at_ns=row[8],
@@ -914,9 +915,9 @@ class DurableCursorRegistry:
     @classmethod
     def _canonical_pins(
         cls,
-        root: BlobRef,
-        refs: Iterable[BlobRef],
-    ) -> tuple[BlobRef, ...]:
+        root: ContentIdentity,
+        refs: Iterable[ContentIdentity],
+    ) -> tuple[ContentIdentity, ...]:
         try:
             values = {root, *(cls._validate_ref(ref) for ref in refs)}
         except TypeError as exc:
@@ -937,7 +938,7 @@ class DurableCursorRegistry:
         return tuple(sorted(values, key=lambda ref: (ref.digest, ref.size)))
 
     @classmethod
-    def _canonical_refs(cls, refs: Iterable[BlobRef]) -> tuple[BlobRef, ...]:
+    def _canonical_refs(cls, refs: Iterable[ContentIdentity]) -> tuple[ContentIdentity, ...]:
         sizes: dict[str, int] = {}
         for ref in refs:
             validated = cls._validate_ref(ref)
@@ -947,13 +948,13 @@ class DurableCursorRegistry:
                     "pinned artifact digest resolves to conflicting sizes",
                     digest=validated.digest,
                 )
-        return tuple(BlobRef(digest, size) for digest, size in sorted(sizes.items()))
+        return tuple(ContentIdentity(digest, size) for digest, size in sorted(sizes.items()))
 
     @staticmethod
-    def _validate_ref(ref: BlobRef) -> BlobRef:
+    def _validate_ref(ref: ContentIdentity) -> ContentIdentity:
         if (
-            type(ref) is not BlobRef
-            or type(ref.digest) is not str
+            type(ref) is not ContentIdentity
+            or not isinstance(ref.digest, str)
             or len(ref.digest) != 64
             or any(character not in _DIGEST_CHARACTERS for character in ref.digest)
             or type(ref.size) is not int

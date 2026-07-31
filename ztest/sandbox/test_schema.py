@@ -9,8 +9,8 @@ the lazy registration in ``common.schema`` (no eager import), and that
 """
 from __future__ import annotations
 
-from mote.contracts.settings.permissions import PermissionConfig, SandboxConfig
-from mote.contracts.settings.sandbox import SandboxRuntimeConfig
+from mote.runtime.sandbox.config import SandboxRuntimeConfig
+from mote.runtime.tools.permission.config import PermissionConfig, SandboxConfig
 
 
 class TestSandboxRuntimeConfig:

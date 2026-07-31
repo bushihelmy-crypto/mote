@@ -8,16 +8,9 @@ discriminators, default fields, and re-export from ``mote.runtime.events``.
 from __future__ import annotations
 
 import mote.runtime.events as ev
-from mote.contracts.events.types import (
-    PROMPT_REJECTED,
-    RECOVERY,
-    RESOURCE_REPORT,
-    TASK_PROGRESS,
-    PromptRejectedEvent,
-    RecoveryEvent,
-    ResourceReportEvent,
-    TaskProgressEvent,
-)
+from mote.contracts.events.conversation import PROMPT_REJECTED, PromptRejectedEvent
+from mote.contracts.events.task import TASK_PROGRESS, TaskProgressEvent
+from mote.contracts.events.telemetry import RECOVERY, RESOURCE_REPORT, RecoveryEvent, ResourceReportEvent
 
 
 def test_recovery_event_classvars_and_fields():

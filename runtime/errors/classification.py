@@ -22,7 +22,7 @@ import json
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from mote.contracts.errors.base import MoteError
+from mote.contracts.foundation.errors.base import MoteError
 from mote.runtime.errors.handlers import handle_exception
 from mote.runtime.errors.llm import (
     ContextWindowExceededError,

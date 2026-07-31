@@ -1,9 +1,9 @@
 """Stable, protocol-explicit public Toolset facade."""
 
-from mote.contracts.tools import CommandProtocol, ToolsetIdentity, ToolsetProtocolError
-from mote.kernel.tools.toolset import NativeApprovalPolicy, NativeToolset, Toolset, XmlApprovalPolicy, XmlToolset
+from mote.contracts.tool import CommandProtocol, ToolsetIdentity, ToolsetProtocolError
 from mote.runtime.tools.dynamic_toolset import NativeDynamicToolset, XmlDynamicToolset
 from mote.runtime.tools.function_toolset import NativeFunctionToolset, XmlFunctionToolset
+from mote.runtime.tools.provider import NativeApprovalPolicy, NativeToolset, Toolset, XmlApprovalPolicy, XmlToolset
 
 __all__ = [
     "CommandProtocol",
