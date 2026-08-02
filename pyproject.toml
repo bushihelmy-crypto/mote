@@ -95,7 +95,7 @@ dev = ["pytest", "black", "isort", "flake8", "pyright==1.1.411", "pre-commit"]
 # existing pydantic dep (no custom converter).
 temporal = ["temporalio>=1.7"]
 inference-shared = ["grpcio>=1.74,<2"]
-inference-postgres = ["asyncpg>=0.30,<1"]
+inference-postgres = ["asyncpg>=0.31.0,<1"]
 inference-wasm = ["wasmtime>=36,<40"]
 inference-redis = ["redis>=5,<7"]
 inference-qdrant = ["qdrant-client>=1.14,<2"]
